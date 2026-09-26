@@ -1043,6 +1043,8 @@ class EngineManagerInitialStartupSynchronizationTest {
       engine.publishReady();
       assertTrue(failed.await(2, TimeUnit.SECONDS));
       assertEquals(engine.boardSynchronizationFailure, presented.get());
+      // The completion claim releases its endpoints after the failure callback returns.
+      assertTrue(engine.boardSynchronizationCallbackCompleted.await(2, TimeUnit.SECONDS));
       assertLifecycleReservationReleased(engine);
       assertEquals(0, engine.ponderCount);
     }
