@@ -153,7 +153,11 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
         open.set(true);
         recordConnect("ok", started);
         recorded = true;
-        writeStderrLine("自建算力已连接：" + remoteUri);
+        writeStderrLine(
+            java.text.MessageFormat.format(
+                RemoteComputeConfig.localizedText(
+                    "RemoteCompute.status.customConnected", "Custom compute connected: {0}"),
+                RemoteComputeConfig.displayNameForCustomWebSocketUrl(remoteUri.toString())));
       }
     } catch (Exception e) {
       open.set(false);

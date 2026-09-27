@@ -13,12 +13,19 @@ import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.LoggingSettings;
 import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.net.Authenticator;
 import java.net.CookieHandler;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
 import java.net.ProxySelector;
+import java.net.ServerSocket;
+import java.net.Socket;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -28,11 +35,14 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
@@ -991,6 +1001,110 @@ public class KataGoAnalysisWebSocketTransportTest {
     }
   }
 
+  @Test
+  void connectNoticeOmitsCredentialsPathAndQueryWhilePreservingServerRequestTarget()
+      throws Exception {
+    AtomicReference<String> serverRequestTarget = new AtomicReference<>();
+    CountDownLatch connectedLatch = new CountDownLatch(1);
+
+    try (ServerSocket serverSocket = new ServerSocket()) {
+      serverSocket.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+      int port = serverSocket.getLocalPort();
+
+      Thread serverThread =
+          new Thread(
+              () -> {
+                try (Socket socket = serverSocket.accept()) {
+                  ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+                  byte[] chunk = new byte[1024];
+                  int read;
+                  while ((read = socket.getInputStream().read(chunk)) != -1) {
+                    buffer.write(chunk, 0, read);
+                    byte[] bytes = buffer.toByteArray();
+                    int headerEnd = findHeaderEnd(bytes);
+                    if (headerEnd != -1) {
+                      String headers = new String(bytes, 0, headerEnd, StandardCharsets.ISO_8859_1);
+                      String[] lines = headers.split("\r\n");
+                      if (lines.length > 0) {
+                        String[] requestLine = lines[0].split(" ");
+                        if (requestLine.length > 1) {
+                          serverRequestTarget.set(requestLine[1]);
+                        }
+                      }
+                      String key = "";
+                      for (String line : lines) {
+                        if (line.toLowerCase(Locale.ROOT).startsWith("sec-websocket-key:")) {
+                          key = line.substring(line.indexOf(':') + 1).trim();
+                          break;
+                        }
+                      }
+                      String accept =
+                          Base64.getEncoder()
+                              .encodeToString(
+                                  MessageDigest.getInstance("SHA-1")
+                                      .digest(
+                                          (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                                              .getBytes(StandardCharsets.ISO_8859_1)));
+                      String response =
+                          "HTTP/1.1 101 Switching Protocols\r\n"
+                              + "Upgrade: websocket\r\n"
+                              + "Connection: Upgrade\r\n"
+                              + "Sec-WebSocket-Accept: "
+                              + accept
+                              + "\r\n\r\n";
+                      socket.getOutputStream().write(response.getBytes(StandardCharsets.ISO_8859_1));
+                      socket.getOutputStream().flush();
+                      connectedLatch.countDown();
+                      try {
+                        socket.getInputStream().read();
+                      } catch (IOException ignored) {
+                      }
+                      break;
+                    }
+                  }
+                } catch (Exception ignored) {
+                }
+              },
+              "ws-test-server");
+      serverThread.setDaemon(true);
+      serverThread.start();
+
+      String rawUrl =
+          "ws://user:CANARY_REMOTE@"
+              + InetAddress.getLoopbackAddress().getHostAddress()
+              + ":"
+              + port
+              + "/custom-path?canary=query";
+      KataGoAnalysisWebSocketTransport transport = new KataGoAnalysisWebSocketTransport(rawUrl);
+      try {
+        transport.start();
+        assertTrue(
+            connectedLatch.await(5, TimeUnit.SECONDS), "WebSocket handshake did not complete");
+
+        BufferedReader reader =
+            new BufferedReader(new InputStreamReader(transport.stderr(), StandardCharsets.UTF_8));
+        String notice = reader.readLine();
+        assertNotNull(notice, "Notice line expected on stderr");
+
+        assertTrue(
+            notice.contains(InetAddress.getLoopbackAddress().getHostAddress()),
+            "Notice should retain endpoint host: " + notice);
+        assertTrue(notice.contains(String.valueOf(port)), "Notice should retain port: " + notice);
+        assertFalse(notice.contains("CANARY_REMOTE"), "Notice leaked password: " + notice);
+        assertFalse(notice.contains("user"), "Notice leaked user: " + notice);
+        assertFalse(notice.contains("custom-path"), "Notice leaked path: " + notice);
+        assertFalse(notice.contains("canary=query"), "Notice leaked query: " + notice);
+
+        assertEquals(
+            "/custom-path?canary=query",
+            serverRequestTarget.get(),
+            "Server must receive original request target");
+      } finally {
+        transport.close();
+      }
+    }
+  }
+
   private static String sendGtp(KataGoAnalysisWebSocketTransport transport, String command)
       throws Exception {
     OutputStream stdin = transport.stdin();
@@ -1028,6 +1142,18 @@ public class KataGoAnalysisWebSocketTransportTest {
   private static void assertEof(InputStream input) {
     assertTimeoutPreemptively(
         Duration.ofSeconds(1), () -> assertEquals(-1, input.read()), "stream did not reach EOF");
+  }
+
+  private static int findHeaderEnd(byte[] bytes) {
+    for (int i = 0; i < bytes.length - 3; i++) {
+      if (bytes[i] == '\r'
+          && bytes[i + 1] == '\n'
+          && bytes[i + 2] == '\r'
+          && bytes[i + 3] == '\n') {
+        return i + 4;
+      }
+    }
+    return -1;
   }
 
   private static JSONObject analysisResponse(
