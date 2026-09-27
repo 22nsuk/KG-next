@@ -52,6 +52,7 @@ public class SetKataEngines extends JDialog {
   private final boolean remoteManagedThreads;
   private JCheckBox chkEditThreads;
   private JFontTextField txtThreads;
+  private JFontLabel lblThreadReadStatus;
   private JFontButton btnApply;
   private JFontButton btnCancel;
   private boolean threadInputEdited;
@@ -509,6 +510,9 @@ public class SetKataEngines extends JDialog {
     txtThreads.setEnabled(false);
     txtThreads.setToolTipText(Lizzie.resourceBundle.getString("SetKataEngines.threadUnknown"));
     getContentPane().add(txtThreads);
+    lblThreadReadStatus = new JFontLabel("");
+    lblThreadReadStatus.setBounds(threadSettingsX + 141, 89, 150, 24);
+    getContentPane().add(lblThreadReadStatus);
     chkEditThreads.addActionListener(event -> {
       if (remoteManagedThreads && !chkEditThreads.isSelected() && runtimeThreads != null
           && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
@@ -839,7 +843,12 @@ public class SetKataEngines extends JDialog {
           && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON;
       chkEditThreads.setSelected(active);
       txtThreads.setEnabled(active);
-      txtThreads.setText("");
+      Integer confirmed = runtimeThreads == null ? null : runtimeThreads.lastConfirmedValue();
+      txtThreads.setText(confirmed == null ? "" : confirmed.toString());
+      lblThreadReadStatus.setText(runtimeThreads == null ? ""
+          : Lizzie.resourceBundle.getString(confirmed == null
+              ? "SetKataEngines.threadReading" : "SetKataEngines.threadRefreshing"));
+      lblThreadReadStatus.setToolTipText(null);
       updateThreadTooltip();
     }
     super.setVisible(visible);
@@ -858,11 +867,20 @@ public class SetKataEngines extends JDialog {
     threadInputEdited = false;
     runtimeThreads.query().whenComplete((value, failure) ->
         SwingUtilities.invokeLater(() -> {
-          if (generation != threadQueryGeneration || !isVisible() || !runtimeThreads.isCurrent())
+          if (generation != threadQueryGeneration || !isVisible()) return;
+          if (!runtimeThreads.isCurrent()) {
+            if (!threadInputEdited) txtThreads.setText("");
+            lblThreadReadStatus.setText(Lizzie.resourceBundle.getString("SetKataEngines.threadReadFailed"));
+            lblThreadReadStatus.setToolTipText(Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
+            updateThreadTooltip();
             return;
-          Integer confirmed = failure == null ? value : runtimeThreads.lastConfirmedValue();
-          if (!threadInputEdited) {
-            txtThreads.setText(confirmed == null ? "" : confirmed.toString());
+          }
+          lblThreadReadStatus.setText(failure == null ? ""
+              : Lizzie.resourceBundle.getString("SetKataEngines.threadReadFailed"));
+          lblThreadReadStatus.setToolTipText(failure == null ? null
+              : Lizzie.resourceBundle.getString("SetKataEngines.threadReadFailedHint"));
+          if (failure == null && !threadInputEdited) {
+            txtThreads.setText(value.toString());
             threadInputEdited = false;
           }
           updateThreadTooltip();

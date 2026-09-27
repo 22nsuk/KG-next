@@ -7,6 +7,7 @@ All notable maintenance updates to this fork are documented here.
 - Restore opt-in search-thread changes for the current KataGo process, including explicit remote requests, with confirmed readback and stale-process isolation; preserve saved thread sources and PDA/WRN auto-loading, and make advanced-parameter help match the dialog theme (#558).
 - Keep the advanced-parameter thread checkbox reachable by mouse at all three font sizes (#558).
 - Keep confirmed thread overrides checked for the same KataGo process; clearing a local override confirms a safe restart from the current saved source, while remote connections explain unsupported source reset and unknown reconnect provenance (#558).
+- Show the current process's last confirmed thread count immediately while refreshing in the background; indicate loading or refresh failure and preserve in-progress edits (#558).
 - Update the bundled default B11 Transformer to the official 2026-09-12 `kata1-tf3-b11c768-s11750M-d6216M.bin.gz`, with verified size and SHA-256 across Auto Setup and all release package checks; keep the pinned KataGo engine, optional B10/HumanSL models, and existing users' weights unchanged by core updates.
 - Capture SGF save snapshots on the event thread and write them safely in the background; unify save dialogs under the main window and preserve the full live variation tree when exporting the current branch.
 - Preserve all installed weight candidates after switching models, so bundled weights remain available without downloading again.
