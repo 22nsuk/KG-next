@@ -24,6 +24,10 @@ public final class ExportSanitizer {
   private static final Pattern SAFE_JSON_FIELD_NAME =
       Pattern.compile("[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}");
   private static final String REDACTED_FIELD_PREFIX = "redacted-field-";
+  // Captured argv has already lost its outer quotes. Spaces and literal quotes in an
+  // override value are data; commas separate KataGo's key=value overrides.
+  private static final Pattern ARGUMENT_ASSIGNMENT =
+      Pattern.compile("((?:^|,)([A-Za-z][A-Za-z0-9_-]*)\\s*=)[^,\\r\\n]*");
 
   private final PersistenceSanitizer persistence = new PersistenceSanitizer();
   private final SyncDiagnosticsExportSanitizer shareTime = new SyncDiagnosticsExportSanitizer();
@@ -250,6 +254,16 @@ public final class ExportSanitizer {
   }
 
   private String sanitizeUntaggedString(String key, String text) {
+    if ("arguments".equals(key)) {
+      text =
+          ARGUMENT_ASSIGNMENT.matcher(text)
+              .replaceAll(
+                  match ->
+                      Matcher.quoteReplacement(
+                          PersistenceSanitizer.isCredentialName(match.group(2))
+                              ? match.group(1) + "<redacted>"
+                              : match.group()));
+    }
     if (key != null) {
       String normalized = key.toLowerCase(Locale.ROOT);
       if (isSecretKey(normalized)) {
