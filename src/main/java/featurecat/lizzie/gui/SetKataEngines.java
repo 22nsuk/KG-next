@@ -530,16 +530,15 @@ public class SetKataEngines extends JDialog {
             ? "SetKataEngines.threadRemoteTooltip" : "SetKataEngines.threadLocalTooltip");
     int threadSettingsX =
         Lizzie.config.isFrameFontSmall() ? 482 : (Lizzie.config.isFrameFontMiddle() ? 591 : 711);
+    int threadEnableX = threadSettingsX - 31;
     JFontLabel lblNumSearchThreads =
         new JFontLabel(Lizzie.resourceBundle.getString("SetKataEngines.lblNumSearchThreads"));
-    lblNumSearchThreads.setBounds(10, 88, threadSettingsX - 20, 25);
+    lblNumSearchThreads.setBounds(10, 88, threadEnableX - 20, 25);
     lblNumSearchThreads.setToolTipText(threadTooltip);
     getContentPane().add(lblNumSearchThreads);
 
     chkEditThreads = new JCheckBox();
-    chkEditThreads.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 451 : (Lizzie.config.isFrameFontMiddle() ? 560 : 680),
-        89, 25, 23);
+    chkEditThreads.setBounds(threadEnableX, 89, 25, 23);
     chkEditThreads.setToolTipText(threadTooltip);
     getContentPane().add(chkEditThreads);
 
