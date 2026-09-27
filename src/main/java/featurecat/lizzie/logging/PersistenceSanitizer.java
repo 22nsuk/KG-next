@@ -16,7 +16,7 @@ public class PersistenceSanitizer {
       Pattern.compile(
           "(?i)(?<![A-Za-z0-9_-])([\\\"']?(?:proxy-authorization|authorization|set-cookie|cookie)[\\\"']?\\s*(?:[:=]\\s*|\\s+))[^\\r\\n]*");
   private static final String CREDENTIAL_NAME =
-      "(?:password|passwd|token|secret|connectPassword|zhizi-account-token|zz-socketio-token|machine[-_]?key|(?:x[-_]?)?api[-_]?key|(?:x[-_]?)?access[-_]?token|refresh[-_]?token|client[-_]?secret)";
+      "(?:pw|password|passwd|token|secret|connectPassword|zhizi-account-token|zz-socketio-token|machine[-_]?key|(?:x[-_]?)?api[-_]?key|(?:x[-_]?)?access[-_]?token|refresh[-_]?token|client[-_]?secret)";
   private static final Pattern EXACT_CREDENTIAL_NAME =
       Pattern.compile("(?i)^" + CREDENTIAL_NAME + "$");
   private static final Pattern EXACT_SENSITIVE_HEADER_NAME =
@@ -29,6 +29,15 @@ public class PersistenceSanitizer {
     return EXACT_CREDENTIAL_NAME.matcher(name).matches()
         || EXACT_SENSITIVE_HEADER_NAME.matcher(name).matches();
   }
+  // Utils.splitCommand separates arguments on literal spaces; tabs can belong to a password.
+  // Keep command values whole instead of applying JSON/query-string punctuation boundaries.
+  private static final Pattern COMMAND_CREDENTIAL_PARAMETER =
+      Pattern.compile(
+          "(?i)((?<![A-Za-z0-9_-])[\"']?(?:--?|/)"
+              + CREDENTIAL_NAME
+              + "[\"']?\\s+)(?>(?:\"(?>(?:\\\\[\\s\\S])|[^\"\\\\])*(?:\"|$))"
+              + "|(?:'(?>(?:\\\\[\\s\\S])|[^'\\\\])*(?:'|$))"
+              + "|\\\\[\\s\\S]|[^ \"'\\\\])+");
   private static final Pattern QUOTED_CREDENTIAL_PARAMETER =
       Pattern.compile(
           "(?i)((?<![A-Za-z0-9_-])(?:--?|/)?[\\\"']?"
@@ -71,7 +80,8 @@ public class PersistenceSanitizer {
   }
 
   private static String sanitizeCanonical(String text) {
-    String safe = redactPercentEncodedCredentials(text);
+    String safe = COMMAND_CREDENTIAL_PARAMETER.matcher(text).replaceAll("$1<redacted>");
+    safe = redactPercentEncodedCredentials(safe);
     safe = SENSITIVE_HEADER.matcher(safe).replaceAll("$1<redacted>");
     safe =
         QUOTED_CREDENTIAL_PARAMETER.matcher(safe).replaceAll("$1$2<redacted>$2");

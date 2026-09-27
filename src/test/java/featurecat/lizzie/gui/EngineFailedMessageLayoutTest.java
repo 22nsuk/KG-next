@@ -121,6 +121,27 @@ class EngineFailedMessageLayoutTest {
   }
 
   @Test
+  void plinkPasswordsNeverReachFailureTextOrDiagnosticCommands() {
+    for (String value : List.of("CANARY_PLINK", "CANARY_PLINK suffix",
+        "CANARY_PLINK&suffix;end,rest}final", "CANARY_PLINK\tsuffix")) {
+      String command = "plink -pw \"" + value + "\" -P 22";
+      JScrollPane pane = EngineFailedMessage.createScrollableText(
+          command, new Font(Font.MONOSPACED, Font.PLAIN, 14));
+      List<String> arguments = List.of("plink", "-pw", value, "-P", "22");
+      for (String safe : List.of(
+          ((JTextArea) pane.getViewport().getView()).getText(),
+          EngineFailedMessage.redactSensitiveText(command),
+          EngineFailedMessage.buildDiagnosticCommand(arguments, command),
+          EngineFailedMessage.buildDiagnosticCommand(List.of(), command))) {
+        assertFalse(safe.contains("CANARY_PLINK"));
+        assertFalse(safe.contains("suffix"));
+        assertTrue(safe.contains("<redacted>"));
+      }
+      assertEquals(value, arguments.get(2));
+    }
+  }
+
+  @Test
   void sensitiveValuesNeverReachVisibleOrPersistedDiagnosticText() {
     String password = "qa-password-do-not-leak";
     String passwd = "qa-passwd-do-not-leak";
