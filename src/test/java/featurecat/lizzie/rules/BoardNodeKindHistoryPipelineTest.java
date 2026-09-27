@@ -35,9 +35,6 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Calendar;
-import java.util.Date;
-import java.util.GregorianCalendar;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -3451,12 +3448,11 @@ class BoardNodeKindHistoryPipelineTest {
     TestEnvironment env = TestEnvironment.open();
     try {
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[3]AB[aa]AW[cc]PL[W];B[ba])", false);
-      Date fixedDate = fixedLocalDate(2020, Calendar.JANUARY, 2);
       history.getGameInfo().setPlayerBlack("Black");
       history.getGameInfo().setPlayerWhite("White");
       history.getGameInfo().setResult("");
       history.getGameInfo().setKomiNoMenu(6.5);
-      history.getGameInfo().setDate(fixedDate);
+      history.getGameInfo().setDate("2020-01-02");
       Lizzie.board.setHistory(history);
 
       String expected =
@@ -3484,8 +3480,7 @@ class BoardNodeKindHistoryPipelineTest {
     TestEnvironment env = TestEnvironment.open();
     try {
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[3]AB[aa];W[bb])", false);
-      Date fixedDate = fixedLocalDate(2020, Calendar.JANUARY, 2);
-      history.getGameInfo().setDate(fixedDate);
+      history.getGameInfo().setDate("2020-01-02");
       Lizzie.board.setHistory(history);
 
       assertTrue(
@@ -3536,7 +3531,7 @@ class BoardNodeKindHistoryPipelineTest {
       root.addProperty("AE", "ab");
       root.addProperty("LB", "ab:X");
       BoardHistoryList history = new BoardHistoryList(root);
-      history.getGameInfo().setDate(fixedLocalDate(2020, Calendar.JANUARY, 3));
+      history.getGameInfo().setDate("2020-01-03");
       Lizzie.board.setHistory(history);
 
       String firstSave = SGFParser.saveToString(false);
@@ -3596,7 +3591,7 @@ class BoardNodeKindHistoryPipelineTest {
               0);
       root.addProperty("AB", "aa");
       BoardHistoryList history = new BoardHistoryList(root);
-      history.getGameInfo().setDate(fixedLocalDate(2020, Calendar.JANUARY, 4));
+      history.getGameInfo().setDate("2020-01-04");
       Lizzie.board.setHistory(history);
 
       String exported = SGFParser.saveToString(false);
@@ -5699,13 +5694,6 @@ class BoardNodeKindHistoryPipelineTest {
 
   private static int boardIndex(int x, int y, int boardHeight) {
     return x * boardHeight + y;
-  }
-
-  private static Date fixedLocalDate(int year, int month, int dayOfMonth) {
-    GregorianCalendar calendar = new GregorianCalendar();
-    calendar.clear();
-    calendar.set(year, month, dayOfMonth, 12, 0, 0);
-    return calendar.getTime();
   }
 
   private static void assertTempFileEventuallyDeleted(Path path, String message)

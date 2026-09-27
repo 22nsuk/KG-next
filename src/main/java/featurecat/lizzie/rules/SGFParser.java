@@ -18,7 +18,6 @@ import featurecat.lizzie.util.EncodingDetector;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,7 +35,6 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 
 public class SGFParser {
-  private static final SimpleDateFormat SGF_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
   private static final int DEFAULT_BOARD_SIZE = 19;
   private static final Pattern BOARD_SIZE_PATTERN =
       Pattern.compile("(?s).*?SZ\\[([\\d:]+)\\](?s).*");
@@ -933,6 +931,7 @@ public class SGFParser {
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
     gameInfo.setResult(result);
+    gameInfo.setDate(gameProperties.get("DT"));
     // Rewind to game start
     while (Lizzie.board.previousMove(false))
       ;
@@ -1371,7 +1370,7 @@ public class SGFParser {
       String result = gameInfo.getResult();
       Double komi = gameInfo.getKomi();
       Integer handicap = gameInfo.getHandicap();
-      String date = SGF_DATE_FORMAT.format(gameInfo.getDate());
+      String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
 
       // add SGF header
       StringBuilder builder = new StringBuilder("(;");
@@ -1502,6 +1501,9 @@ public class SGFParser {
       // Game properties
       BoardData rootData = history.getData().clone();
       rootData.addProperties(generalProps.toString());
+      if (gameInfo.getDate() == null) {
+        rootData.getProperties().remove("DT");
+      }
       if (rootData.isSnapshotNode()) {
         builder.append(materializedRootSnapshotProperties(rootData, history.getStones()));
       } else {
@@ -4190,6 +4192,7 @@ public class SGFParser {
       if (gameProperties.size() > 0) {
         history.getData().addProperties(gameProperties);
       }
+      history.getGameInfo().setDate(gameProperties.get("DT"));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
           parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();

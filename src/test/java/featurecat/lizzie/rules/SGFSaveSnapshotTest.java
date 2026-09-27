@@ -73,8 +73,8 @@ class SGFSaveSnapshotTest {
       BoardHistoryList history = board.getHistory();
       CountDownLatch cloningPayload = new CountDownLatch(1);
       CountDownLatch releaseClone = new CountDownLatch(1);
-      String originalDate =
-          new java.text.SimpleDateFormat("yyyy-MM-dd").format(history.getGameInfo().getDate());
+      history.getGameInfo().setDate("2026-09-12,13");
+      String originalDate = history.getGameInfo().getDate();
       BoardHistoryNode root =
           new BoardHistoryNode(history.getData()) {
             @Override
@@ -97,8 +97,7 @@ class SGFSaveSnapshotTest {
         assertNotNull(
             move.get(5, TimeUnit.SECONDS), "payload copies must not hold the history lock");
         history.getGameInfo().setPlayerBlack("changed after topology capture");
-        java.util.Date liveDate = history.getGameInfo().getDate();
-        liveDate.setTime(liveDate.getTime() + TimeUnit.DAYS.toMillis(2));
+        history.getGameInfo().setDate("2026-09-27");
         releaseClone.countDown();
         String sgf = saved.get(5, TimeUnit.SECONDS);
         assertFalse(sgf.contains(";B[aa]"));
