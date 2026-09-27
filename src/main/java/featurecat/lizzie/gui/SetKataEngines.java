@@ -13,7 +13,9 @@ import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.IOException;
+import java.text.MessageFormat;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletableFuture;
 import javax.imageio.ImageIO;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
@@ -44,7 +46,9 @@ public class SetKataEngines extends JDialog {
   private JFontTextField txtRPT;
   private JCheckBox chkAutoRPT;
   private JFontLabel lblHint;
-  private final Leelaz.RuntimeSearchThreads runtimeThreads;
+  private Leelaz.RuntimeSearchThreads runtimeThreads;
+  private final Leelaz openingEngine;
+  private final boolean isPdaEngine;
   private final boolean remoteManagedThreads;
   private JCheckBox chkEditThreads;
   private JFontTextField txtThreads;
@@ -57,10 +61,10 @@ public class SetKataEngines extends JDialog {
   public SetKataEngines() {
     // this.setModal(true);
     // setType(Type.POPUP);
-    Leelaz openingEngine = Lizzie.leelaz;
+    openingEngine = Lizzie.leelaz;
     runtimeThreads = openingEngine == null ? null : openingEngine.captureRuntimeSearchThreads();
     remoteManagedThreads = EngineThreadPolicy.isRemoteManaged(openingEngine);
-    boolean isPdaEngine = openingEngine != null && openingEngine.isKataGoPda;
+    isPdaEngine = openingEngine != null && openingEngine.isKataGoPda;
     setResizable(false);
     setTitle(Lizzie.resourceBundle.getString("SetKataEngines.title")); // ("设置KataGo引擎高级参数");
     setAlwaysOnTop(true);
@@ -84,49 +88,7 @@ public class SetKataEngines extends JDialog {
 
     btnApply =
         new JFontButton(Lizzie.resourceBundle.getString("SetKataEngines.btnApply")); // ("确定");
-    btnApply.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            if (applyingThreads) return;
-            if (chkEditThreads.isSelected()) {
-              int threads;
-              try {
-                threads = Integer.parseInt(txtThreads.getText().trim());
-                if (threads < 1 || threads > 1024) throw new NumberFormatException();
-              } catch (NumberFormatException ex) {
-                showThreadError("SetKataEngines.threadInvalid");
-                txtThreads.requestFocusInWindow();
-                return;
-              }
-              if (runtimeThreads == null || !runtimeThreads.isCurrent()) {
-                showThreadError("SetKataEngines.threadStale");
-                return;
-              }
-              int generation = threadQueryGeneration;
-              int previousCloseOperation = getDefaultCloseOperation();
-              setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-              applyingThreads = true;
-              btnApply.setEnabled(false);
-              btnCancel.setEnabled(false);
-              runtimeThreads.apply(threads).whenComplete((value, failure) ->
-                  SwingUtilities.invokeLater(() -> {
-                    applyingThreads = false;
-                    setDefaultCloseOperation(previousCloseOperation);
-                    btnApply.setEnabled(true);
-                    btnCancel.setEnabled(true);
-                    if (generation != threadQueryGeneration || !isVisible()) return;
-                    if (failure != null || !runtimeThreads.isCurrent()) {
-                      showThreadError(runtimeThreads.isCurrent()
-                          ? "SetKataEngines.threadFailed" : "SetKataEngines.threadStale", failure);
-                      return;
-                    }
-                    applyExistingSettings(isPdaEngine);
-                  }));
-              return;
-            }
-            applyExistingSettings(isPdaEngine);
-          }
-        });
+    btnApply.addActionListener(event -> confirmSettings());
     btnApply.setBounds(
         Lizzie.config.isFrameFontSmall() ? 278 : (Lizzie.config.isFrameFontMiddle() ? 340 : 440),
         173,
@@ -547,7 +509,14 @@ public class SetKataEngines extends JDialog {
     txtThreads.setEnabled(false);
     txtThreads.setToolTipText(Lizzie.resourceBundle.getString("SetKataEngines.threadUnknown"));
     getContentPane().add(txtThreads);
-    chkEditThreads.addActionListener(event -> txtThreads.setEnabled(chkEditThreads.isSelected()));
+    chkEditThreads.addActionListener(event -> {
+      if (remoteManagedThreads && !chkEditThreads.isSelected() && runtimeThreads != null
+          && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
+        chkEditThreads.setSelected(true);
+        showThreadError("SetKataEngines.threadRemoteRestoreUnsupported");
+      }
+      txtThreads.setEnabled(chkEditThreads.isSelected());
+    });
     txtThreads.getDocument().addDocumentListener(new DocumentListener() {
       public void insertUpdate(DocumentEvent event) { threadInputEdited = true; }
       public void removeUpdate(DocumentEvent event) { threadInputEdited = true; }
@@ -632,8 +601,164 @@ public class SetKataEngines extends JDialog {
     }
   }
 
-  private void applyExistingSettings(boolean isPdaEngine) {
-            Lizzie.config.showWRNInMenu = chkWRNInMenu.isSelected();
+  private void confirmSettings() {
+    if (applyingThreads) return;
+    if (runtimeThreads != null && !runtimeThreads.isCurrent()) {
+      showThreadError("SetKataEngines.threadStale");
+      return;
+    }
+    Leelaz.RuntimeThreadOverrideState state = runtimeThreads == null
+        ? Leelaz.RuntimeThreadOverrideState.OFF : runtimeThreads.overrideState();
+    if (!chkEditThreads.isSelected()) {
+      if (state == Leelaz.RuntimeThreadOverrideState.ON) {
+        if (remoteManagedThreads) {
+          chkEditThreads.setSelected(true);
+          txtThreads.setEnabled(true);
+          showThreadError("SetKataEngines.threadRemoteRestoreUnsupported");
+          return;
+        }
+        restoreSource();
+      } else {
+        applyExistingSettings(openingEngine, true);
+      }
+      return;
+    }
+    int threads;
+    try {
+      threads = Integer.parseInt(txtThreads.getText().trim());
+      if (threads < 1 || threads > 1024) throw new NumberFormatException();
+    } catch (NumberFormatException failure) {
+      showThreadError("SetKataEngines.threadInvalid");
+      txtThreads.requestFocusInWindow();
+      return;
+    }
+    if (runtimeThreads == null) {
+      showThreadError("SetKataEngines.threadStale");
+      return;
+    }
+    if (state == Leelaz.RuntimeThreadOverrideState.ON && !threadInputEdited
+        && runtimeThreads.lastConfirmedValue() != null
+        && threads == runtimeThreads.lastConfirmedValue()) {
+      applyExistingSettings(openingEngine, true);
+      return;
+    }
+    beginThreadOperation();
+    int generation = threadQueryGeneration;
+    runtimeThreads.apply(threads).whenComplete((value, failure) ->
+        SwingUtilities.invokeLater(() -> {
+          endThreadOperation();
+          if (generation != threadQueryGeneration || !isVisible()) return;
+          if (failure != null || !runtimeThreads.isCurrent()) {
+            showThreadError(runtimeThreads.isCurrent()
+                ? "SetKataEngines.threadFailed" : "SetKataEngines.threadStale", failure);
+          } else {
+            applyExistingSettings(openingEngine, true);
+          }
+        }));
+  }
+
+  private int previousCloseOperation;
+
+  private void beginThreadOperation() {
+    previousCloseOperation = getDefaultCloseOperation();
+    setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+    applyingThreads = true;
+    btnApply.setEnabled(false);
+    btnCancel.setEnabled(false);
+  }
+
+  private void endThreadOperation() {
+    applyingThreads = false;
+    setDefaultCloseOperation(previousCloseOperation);
+    btnApply.setEnabled(true);
+    btnCancel.setEnabled(true);
+  }
+
+  private void restoreSource() {
+    Leelaz.RuntimeThreadSourceRestore restore;
+    try {
+      restore = runtimeThreads.prepareRestore();
+    } catch (RuntimeException failure) {
+      if (runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
+        chkEditThreads.setSelected(true);
+        txtThreads.setEnabled(true);
+      }
+      showThreadError("SetKataEngines.threadRestoreFailed", failure);
+      return;
+    }
+    String source = Lizzie.resourceBundle.getString(
+        "SetKataEngines.threadSource" + restore.source().name());
+    String recommendation = restore.recommendedThreads() == null
+        ? Lizzie.resourceBundle.getString("SetKataEngines.threadSourceUnknown")
+        : restore.recommendedThreads().toString();
+    String warning = MessageFormat.format(
+        Lizzie.resourceBundle.getString("SetKataEngines.threadRestoreConfirm"),
+        source, recommendation);
+    if (JOptionPane.showConfirmDialog(this, warning,
+        Lizzie.resourceBundle.getString("SetKataEngines.title"), JOptionPane.OK_CANCEL_OPTION,
+        JOptionPane.WARNING_MESSAGE) != JOptionPane.OK_OPTION) {
+      chkEditThreads.setSelected(true);
+      txtThreads.setEnabled(true);
+      return;
+    }
+
+    beginThreadOperation();
+    int generation = threadQueryGeneration;
+    try {
+      restore.execute(successor -> {
+        CompletableFuture<Void> applied = new CompletableFuture<>();
+        SwingUtilities.invokeLater(() -> {
+          try {
+            if (generation != threadQueryGeneration || !isVisible()
+                || Lizzie.leelaz != openingEngine || !successor.isCurrent()) {
+              throw new IllegalStateException(
+                  Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
+            }
+            applyExistingSettings(openingEngine, false);
+            runtimeThreads = successor;
+            applied.complete(null);
+          } catch (Throwable failure) {
+            applied.completeExceptionally(failure);
+          }
+        });
+        return applied;
+      }).whenComplete((successor, failure) -> SwingUtilities.invokeLater(() -> {
+        endThreadOperation();
+        if (failure == null) {
+          if (isVisible()) setVisible(false);
+        } else {
+          updateThreadTooltip();
+          if (runtimeThreads != null
+              && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
+            chkEditThreads.setSelected(true);
+            txtThreads.setEnabled(true);
+          }
+          if (isVisible()) showThreadError("SetKataEngines.threadRestoreFailed", failure);
+        }
+      }));
+    } catch (RuntimeException failure) {
+      endThreadOperation();
+      if (runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
+        chkEditThreads.setSelected(true);
+        txtThreads.setEnabled(true);
+      }
+      updateThreadTooltip();
+      showThreadError("SetKataEngines.threadRestoreFailed", failure);
+    }
+  }
+
+  private void updateThreadTooltip() {
+    String key = runtimeThreads != null
+        && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.UNKNOWN
+        ? "SetKataEngines.threadProvenanceUnknown"
+        : remoteManagedThreads ? "SetKataEngines.threadRemoteTooltip"
+            : "SetKataEngines.threadLocalTooltip";
+    chkEditThreads.setToolTipText(Lizzie.resourceBundle.getString(key));
+    txtThreads.setToolTipText(Lizzie.resourceBundle.getString(key));
+  }
+
+  private void applyExistingSettings(Leelaz engine, boolean resume) {
+    Lizzie.config.showWRNInMenu = chkWRNInMenu.isSelected();
             Lizzie.config.uiConfig.put("show-wrn-in-menu", Lizzie.config.showWRNInMenu);
 
             Lizzie.config.showPDAInMenu = chkPDAInMenu.isSelected();
@@ -644,13 +769,13 @@ public class SetKataEngines extends JDialog {
               Lizzie.config.autoLoadKataEnginePDA = chkAutoLoadPDA.isSelected();
               Lizzie.config.txtKataEnginePDA = txtPDA.getText();
               if (Lizzie.config.chkKataEnginePDA) {
-                Lizzie.leelaz.setPda(Lizzie.config.txtKataEnginePDA);
+                engine.setPda(Lizzie.config.txtKataEnginePDA);
                 if (Lizzie.config.autoLoadKataEnginePDA) {
                   Lizzie.config.autoLoadTxtKataEnginePDA = Lizzie.config.txtKataEnginePDA;
                   Lizzie.config.uiConfig.put(
                       "auto-load-txt-kata-engine-pda", Lizzie.config.autoLoadTxtKataEnginePDA);
                 }
-              } else Lizzie.leelaz.setPda("0");
+              } else engine.setPda("0");
               LizzieFrame.menu.setUseGfPda(
                   Lizzie.config.chkKataEnginePDA, Lizzie.config.txtKataEnginePDA);
             }
@@ -660,7 +785,7 @@ public class SetKataEngines extends JDialog {
             Lizzie.config.autoLoadKataEngineWRN = chkAutoLoadWRN.isSelected();
             Lizzie.config.txtKataEngineWRN = txtWRN.getText();
             if (Lizzie.config.chkKataEngineWRN) {
-              Lizzie.leelaz.sendCommand(
+              engine.sendCommand(
                   "kata-set-param analysisWideRootNoise " + Lizzie.config.txtKataEngineWRN);
               Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
               if (Lizzie.config.autoLoadKataEngineWRN) {
@@ -669,7 +794,7 @@ public class SetKataEngines extends JDialog {
                     "auto-load-txt-kata-engine-wrn", Lizzie.config.autoLoadTxtKataEngineWRN);
               }
 
-            } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise 0");
+            } else engine.sendCommand("kata-set-param analysisWideRootNoise 0");
             LizzieFrame.menu.setUseWrn(
                 Lizzie.config.chkKataEngineWRN, Lizzie.config.txtKataEngineWRN);
             //  }
@@ -699,9 +824,9 @@ public class SetKataEngines extends JDialog {
             Lizzie.config.uiConfig.put(
                 "autoload-kata-engine-wrn", Lizzie.config.autoLoadKataEngineWRN);
             Lizzie.config.uiConfig.put("txt-kata-engine-wrn", Lizzie.config.txtKataEngineWRN);
-            setVisible(false);
+            if (resume) setVisible(false);
             LizzieFrame.menu.updateMenuStatusForEngine();
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
+            if (resume && engine.isPondering()) engine.ponder();
   }
 
   @Override
@@ -709,10 +834,13 @@ public class SetKataEngines extends JDialog {
     if (!visible) threadQueryGeneration++;
     boolean opening = visible && !isVisible();
     if (opening && chkEditThreads != null) {
-      chkEditThreads.setSelected(false);
-      txtThreads.setEnabled(false);
+      threadInputEdited = false;
+      boolean active = runtimeThreads != null
+          && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON;
+      chkEditThreads.setSelected(active);
+      txtThreads.setEnabled(active);
       txtThreads.setText("");
-      txtThreads.setToolTipText(Lizzie.resourceBundle.getString("SetKataEngines.threadUnknown"));
+      updateThreadTooltip();
     }
     super.setVisible(visible);
     if (opening) queryThreads();
@@ -737,10 +865,7 @@ public class SetKataEngines extends JDialog {
             txtThreads.setText(confirmed == null ? "" : confirmed.toString());
             threadInputEdited = false;
           }
-          txtThreads.setToolTipText(confirmed == null
-              ? Lizzie.resourceBundle.getString("SetKataEngines.threadUnknown")
-              : Lizzie.resourceBundle.getString(remoteManagedThreads
-                  ? "SetKataEngines.threadRemoteTooltip" : "SetKataEngines.threadLocalTooltip"));
+          updateThreadTooltip();
         }));
   }
 

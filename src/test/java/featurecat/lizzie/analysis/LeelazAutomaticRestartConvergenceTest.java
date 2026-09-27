@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -314,6 +315,184 @@ class LeelazAutomaticRestartConvergenceTest {
       assertEngineMatchesBoard(engine, board, 19, 19);
     }
   }
+  @Test
+  void runtimeSourceRestoreRestartsDespiteUnchangedSourceAndWaitsForContinuation() throws Exception {
+    try (RestartTestEnvironment env = RestartTestEnvironment.open()) {
+      ConvergingRestartLeelaz engine = new ConvergingRestartLeelaz();
+      engine.freshReaderOnStart = true;
+      env.publish(engine, boardWithHistory(snapshotHistoryWithTail(false)));
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      Leelaz.RuntimeSearchThreads original = engine.captureRuntimeSearchThreads();
+      var set = original.apply(10);
+      assertEquals(10, set.get(2, TimeUnit.SECONDS));
+      assertEquals(Leelaz.RuntimeThreadOverrideState.ON, original.overrideState());
+      engine.Pondering();
+      CompletableFuture<Void> continuation = new CompletableFuture<>();
+      AtomicInteger callbacks = new AtomicInteger();
+      var prepared = original.prepareRestore();
+      assertEquals(Leelaz.RuntimeThreadSource.CFG, prepared.source());
+      var restored = prepared.execute(successor -> {
+        callbacks.incrementAndGet();
+        assertFalse(original.isCurrent());
+        assertEquals(Leelaz.RuntimeThreadOverrideState.OFF, successor.overrideState());
+        assertEquals(0, engine.resumeCount.get());
+        assertTrue(engineModeAdmissionOpen(engine), "continuation runs after endpoint release");
+        return continuation;
+      });
+      assertThrows(java.util.concurrent.ExecutionException.class,
+          () -> prepared.execute(successor -> CompletableFuture.completedFuture(null)).get(2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertFalse(restored.isDone());
+      invokeFenceResponse(engine);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      while (callbacks.get() == 0 && System.nanoTime() < deadline) Thread.sleep(5);
+      if (restored.isCompletedExceptionally()) restored.get(2, TimeUnit.SECONDS);
+      assertEquals(1, callbacks.get());
+      assertFalse(restored.isDone());
+      continuation.complete(null);
+      assertEquals(Leelaz.RuntimeThreadOverrideState.OFF,
+          restored.get(2, TimeUnit.SECONDS).overrideState());
+      assertEquals(1, engine.resumeCount.get(), "captured ponder intent resumes only after handback");
+      assertEquals(1, callbacks.get());
+    }
+  }
+
+  @Test
+  void runtimeSourceRestoreFenceFailureCannotReportSuccessOrResume() throws Exception {
+    try (RestartTestEnvironment env = RestartTestEnvironment.open()) {
+      ConvergingRestartLeelaz engine = new ConvergingRestartLeelaz();
+      engine.freshReaderOnStart = true;
+      env.publish(engine, boardWithHistory(snapshotHistoryWithTail(false)));
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      engine.failFence = true;
+      Leelaz.RuntimeSearchThreads original = engine.captureRuntimeSearchThreads();
+      assertEquals(10, original.apply(10).get(2, TimeUnit.SECONDS));
+      AtomicInteger callbacks = new AtomicInteger();
+      var restored = original.prepareRestore().execute(successor -> {
+        callbacks.incrementAndGet();
+        return CompletableFuture.completedFuture(null);
+      });
+      assertThrows(java.util.concurrent.ExecutionException.class,
+          () -> restored.get(3, TimeUnit.SECONDS));
+      assertEquals(0, callbacks.get());
+      assertEquals(0, engine.resumeCount.get());
+      assertEquals(Leelaz.RuntimeThreadOverrideState.UNKNOWN, original.overrideState());
+    }
+  }
+
+  @Test
+  void runtimeRestorePreflightDoesNotHoldEngineWhileWaitingForPrimary() throws Exception {
+    try (RestartTestEnvironment env = RestartTestEnvironment.open()) {
+      ConvergingRestartLeelaz engine = new ConvergingRestartLeelaz();
+      engine.freshReaderOnStart = true;
+      env.publish(engine, boardWithHistory(snapshotHistoryWithTail(false)));
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      var original = engine.captureRuntimeSearchThreads();
+      assertEquals(10, original.apply(10).get(2, TimeUnit.SECONDS));
+      CountDownLatch reserved = new CountDownLatch(1);
+      CountDownLatch proceed = new CountDownLatch(1);
+      AtomicReference<Thread> worker = new AtomicReference<>();
+      engine.onRestartAttempt = attempt -> {
+        worker.set(Thread.currentThread());
+        reserved.countDown();
+        try { assertTrue(proceed.await(2, TimeUnit.SECONDS)); }
+        catch (InterruptedException failure) { throw new AssertionError(failure); }
+      };
+      var restored = original.prepareRestore().execute(next -> CompletableFuture.completedFuture(null));
+      assertTrue(reserved.await(2, TimeUnit.SECONDS));
+      var primary = (java.util.concurrent.locks.ReentrantLock)
+          privateField(Lizzie.class, null, "PRIMARY_ENGINE_LOCK");
+      Object arbitration = privateField(Leelaz.class, engine, "engineArbitrationLock");
+      boolean holdsEngine = false;
+      primary.lock();
+      try {
+        proceed.countDown();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!primary.hasQueuedThread(worker.get()) && System.nanoTime() < deadline) Thread.sleep(5);
+        assertTrue(primary.hasQueuedThread(worker.get()));
+        var info = java.lang.management.ManagementFactory.getThreadMXBean()
+            .getThreadInfo(new long[] {worker.get().getId()}, true, true)[0];
+        for (var monitor : info.getLockedMonitors()) {
+          holdsEngine |= monitor.getIdentityHashCode() == System.identityHashCode(arbitration);
+        }
+      } finally {
+        primary.unlock();
+      }
+      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      invokeFenceResponse(engine);
+      restored.get(3, TimeUnit.SECONDS);
+      assertFalse(holdsEngine, "restore must not invert the primary-before-engine lock order");
+    }
+  }
+
+  @Test
+  void runtimeRestoreRejectsAReaderReplacedAtEndpointRelease() throws Exception {
+    try (RestartTestEnvironment env = RestartTestEnvironment.open()) {
+      ConvergingRestartLeelaz engine = new ConvergingRestartLeelaz();
+      engine.freshReaderOnStart = true;
+      env.publish(engine, boardWithHistory(snapshotHistoryWithTail(false)));
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      var original = engine.captureRuntimeSearchThreads();
+      assertEquals(10, original.apply(10).get(2, TimeUnit.SECONDS));
+      engine.onRestartAttempt = attempt -> {
+        try {
+          Object operation = privateField(attempt.getClass(), attempt, "operation");
+          Object claim = privateField(operation.getClass(), operation, "completionClaim");
+          var method = claim.getClass().getDeclaredMethod("runAfterEndpointRelease", Runnable.class);
+          method.setAccessible(true);
+          method.invoke(claim, (Runnable) () -> engine.installFreshCommandOutputForTest(engine.transport));
+        } catch (Exception failure) { throw new AssertionError(failure); }
+      };
+      AtomicInteger callbacks = new AtomicInteger();
+      var restored = original.prepareRestore().execute(next -> {
+        callbacks.incrementAndGet();
+        return CompletableFuture.completedFuture(null);
+      });
+      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      invokeFenceResponse(engine);
+      assertThrows(java.util.concurrent.ExecutionException.class, () -> restored.get(3, TimeUnit.SECONDS));
+      assertEquals(0, callbacks.get());
+      assertEquals(0, engine.resumeCount.get());
+    }
+  }
+
+  @Test
+  void runtimeRestoreRejectsSourceChangeDuringParameterHandoff() throws Exception {
+    try (RestartTestEnvironment env = RestartTestEnvironment.open()) {
+      ConvergingRestartLeelaz engine = new ConvergingRestartLeelaz();
+      engine.freshReaderOnStart = true;
+      env.publish(engine, boardWithHistory(snapshotHistoryWithTail(false)));
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      engine.savedEntryId = "handoff-source";
+      org.json.JSONObject policy = new org.json.JSONObject().put("source", "CFG");
+      Lizzie.config.uiConfig = new org.json.JSONObject().put("engine-thread-policy-migrated", true);
+      Lizzie.config.leelazConfig = new org.json.JSONObject().put("engine-settings-list",
+          new org.json.JSONArray().put(new org.json.JSONObject().put("id", engine.savedEntryId)
+              .put("command", "controlled-engine").put("threadPolicy", policy)));
+      var original = engine.captureRuntimeSearchThreads();
+      assertEquals(10, original.apply(10).get(2, TimeUnit.SECONDS));
+      var restored = original.prepareRestore().execute(next -> {
+        policy.put("source", "BENCHMARK").put("katago-benchmark-threads", 6);
+        return CompletableFuture.completedFuture(null);
+      });
+      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      invokeFenceResponse(engine);
+      assertThrows(java.util.concurrent.ExecutionException.class, () -> restored.get(3, TimeUnit.SECONDS));
+      assertEquals(true, privateField(Leelaz.class, engine, "threadPolicyReloadPending"));
+      assertEquals(0, engine.resumeCount.get());
+    }
+  }
+
+  private static Object privateField(Class<?> type, Object target, String name) throws Exception {
+    Field field = type.getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(target);
+  }
+
   @Test
   void automaticRestartPublishesReadyWithoutResumingPonder() throws Exception {
     Menu previousMenu = LizzieFrame.menu;
@@ -1956,6 +2135,8 @@ class LeelazAutomaticRestartConvergenceTest {
     private boolean blockSecondLoadSgf;
     private boolean blockThirdLoadSgf;
     private boolean productionReadyHandoff;
+    private boolean freshReaderOnStart;
+    private java.util.function.Consumer<AutomaticRestartAttempt> onRestartAttempt;
     private boolean failFence;
     private boolean throwFenceStart;
     private boolean shortStartupTimeout;
@@ -2049,6 +2230,13 @@ class LeelazAutomaticRestartConvergenceTest {
     }
 
     @Override
+    public AutomaticRestartAttempt beginAutomaticEngineRestartAttempt() {
+      AutomaticRestartAttempt attempt = super.beginAutomaticEngineRestartAttempt();
+      if (onRestartAttempt != null) onRestartAttempt.accept(attempt);
+      return attempt;
+    }
+
+    @Override
     public void startEngine(int index) {
       bindCurrentPrimaryEngineGeneration();
       started = true;
@@ -2062,6 +2250,7 @@ class LeelazAutomaticRestartConvergenceTest {
         throw new IllegalStateException(failure);
       }
       installProtocol();
+      if (freshReaderOnStart) installFreshCommandOutputForTest(transport);
       startCompleted.countDown();
     }
 
