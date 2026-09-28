@@ -215,6 +215,15 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 一致且无需恢复的重复快照不重新捕获恢复或重启合法分析流。普通首次同步直接采用最终视图，不以先回退再延迟前进触发额外分析。
 - 无引擎时仍完成本地 board/history 更新；GMA 和对局 continuation 保持独立的路由与 ownership exclusion。手动导航、手动分析恢复及普通棋谱加载策略保持原契约。
 
+### GMA 退出后的普通自动落子授权
+
+- 已有 GMA 准备、物理请求或恢复工作时，普通 `play>` 只登记最新切换意图，并撤销旧 GMA 的落子授权；不得提前发送普通分析或与恢复冲突的位置命令。新 `play>` 替换旧意图，不替换旧物理工作的收尾责任。
+- 收尾结果绑定原 reservation 和 reader incarnation，只有必需恢复成功且实际释放 reservation 后才可报告成功。准备阶段的零副作用取消可成功；错误、超时、终止、reader 替换或 quarantine 不授权普通分析。session terminal 和 reservation 字段为空均不能单独证明成功。
+- 等待期间的权威快照继续更新本地 Board/history，只更新待恢复目标。收尾成功后，切换 owner 通过既有 Board/位置确认流程确认最新目标及全部 required position ACK、最终 fence，再一次性消费仍有效的意图。旧目标被后来的权威快照取代时，跟进最新目标确认；当前目标确认失败仍不启动分析。
+- 停止、暂停、手动导航、Board/history/helper 替换、引擎切换或重启永久取消旧意图；重新开启或切回不复活旧回调。重新选择 GMA 即使被资源准入拒绝，也取消先前等待中的普通意图。最终分析准入与取消、替换共享串行边界，旧回调不能在取消完成后重新启动。切换等待期间的普通同步恢复与候选落子暂缓，不能绕过该 owner。
+- 显式普通 `play>` 保留主动启动语义，不受后台同步的 `readBoardPonder` 开关抑制；普通同步恢复仍遵守其原设置。GMA 活跃期间不发送普通分析，只有退出 GMA 后的新有效授权可以启动它。
+
+
 ## SGF 会话规则确认（Issue #448）
 
 - adopted `BoardHistoryList` 拥有独立于 root `RU` 元数据和引擎观测的 immutable 会话规则目标；外部采用和手动成功选择递增规则 revision，普通导航、SNAPSHOT 与试下还原不重新解释 root `RU`。

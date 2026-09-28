@@ -601,6 +601,7 @@ public class Leelaz {
       new ReadBoardGmaRuntimeParam("ponderingEnabled");
   private volatile Object readBoardGmaLock;
   private volatile EngineModeReservation readBoardGmaReservation;
+  private volatile ReadBoardGmaReservation lastReadBoardGmaReservation;
   private volatile ReadBoardGmaRestoreBarrier readBoardGmaRestoreBarrier;
   private volatile ReadBoardGmaPreparation readBoardGmaPreparation;
   private volatile ReadBoardGmaResponseBinding readBoardGmaResponseBinding;
@@ -8492,7 +8493,8 @@ public class Leelaz {
     if (this != Lizzie.leelaz) return;
     if (Lizzie.frame != null
         && Lizzie.frame.readBoard != null
-        && Lizzie.frame.readBoard.isReadBoardGmaAutoPlayActive()) return;
+        && (Lizzie.frame.readBoard.isReadBoardGmaAutoPlayActive()
+            || Lizzie.frame.readBoard.isNormalAutoPlayTransitionPending())) return;
     if (LizzieFrame.toolbar.isAutoPlay) {
       if ((Lizzie.board.getHistory().isBlacksTurn()
               && LizzieFrame.toolbar.chkAutoPlayBlack.isSelected())
@@ -17188,6 +17190,64 @@ public class Leelaz {
     }
   }
 
+  private final class ReadBoardGmaReservation extends EngineModeReservation {
+    private final ReaderStreamBinding binding = currentReaderStreamBinding();
+    private final CompletableFuture<Boolean> drained = new CompletableFuture<>();
+    private final AtomicBoolean released = new AtomicBoolean();
+    private volatile boolean failed;
+
+    private ReadBoardGmaReservation(Object owner) {
+      super(Leelaz.this, owner);
+    }
+
+    private void release(boolean restored) {
+      if (!released.compareAndSet(false, true)) return;
+      boolean success = restored && !failed && !engineStateUnrestored
+          && currentReaderStreamBinding() == binding && !binding.terminated;
+      super.close();
+      drained.complete(success);
+    }
+
+    @Override
+    public void close() {
+      release(false);
+    }
+  }
+
+  /** Captures the current drain, reserving idle GMA parameter restoration when necessary. */
+  CompletableFuture<Boolean> prepareReadBoardGmaDrain() {
+    synchronized (engineArbitrationLock()) {
+      synchronized (readBoardGmaLock()) {
+        if (engineStateUnrestored) return CompletableFuture.completedFuture(false);
+        if (readBoardGmaReservation == null
+            && (hasReadBoardGmaRuntimeState(readBoardGmaPondering)
+                || hasReadBoardGmaRuntimeState(readBoardGmaMaxTime)
+                || hasReadBoardGmaRuntimeState(readBoardGmaMaxVisits))
+            && !beginReadBoardGmaSession()) return CompletableFuture.completedFuture(false);
+        ReadBoardGmaReservation reservation = lastReadBoardGmaReservation;
+        return reservation != null
+                && (readBoardGmaReservation == reservation || !reservation.drained.isDone())
+            ? reservation.drained : null;
+      }
+    }
+  }
+
+  void invalidateReadBoardGmaDrain(
+      ReadBoardGmaSession.ReservationReleaseCapability capability) {
+    if (capability.reservationOwner() instanceof ReadBoardGmaReservation reservation) {
+      reservation.failed = true;
+    }
+  }
+
+  boolean isReadBoardGmaDraining() {
+    ReadBoardGmaReservation reservation = lastReadBoardGmaReservation;
+    return reservation != null && !reservation.drained.isDone();
+  }
+
+  private void releaseRestoredReadBoardGmaReservation(EngineModeReservation reservation) {
+    ((ReadBoardGmaReservation) reservation).release(true);
+  }
+
   public static final class ExactSnapshotRestoreAdmission {
     private final Leelaz authority;
     private final Leelaz mirror;
@@ -20964,7 +21024,7 @@ public class Leelaz {
       readBoardGmaReservation = null;
     }
     if (reservation != null) {
-      reservation.close();
+      releaseRestoredReadBoardGmaReservation(reservation);
     }
   }
 
@@ -20981,7 +21041,8 @@ public class Leelaz {
         if (!beginExclusiveGtpLifecycleTransition(owner)) {
           return false;
         }
-        readBoardGmaReservation = new EngineModeReservation(this, owner);
+        lastReadBoardGmaReservation = new ReadBoardGmaReservation(owner);
+        readBoardGmaReservation = lastReadBoardGmaReservation;
         return true;
       }
     }
@@ -21343,7 +21404,7 @@ public class Leelaz {
       timeout.cancel();
     }
     if (reservation != null) {
-      reservation.close();
+      releaseRestoredReadBoardGmaReservation(reservation);
     }
     if (staleFailure != null) {
       staleFailure.accept(
