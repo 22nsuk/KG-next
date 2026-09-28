@@ -14,6 +14,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
 import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.Utils;
 import java.awt.Component;
+import java.awt.Point;
 import java.awt.Robot;
 import java.awt.Window;
 import java.io.ByteArrayInputStream;
@@ -38,6 +39,7 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JTextArea;
+import javax.swing.JViewport;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -168,6 +170,14 @@ class B11SpeedNoticeDesktopTest {
             });
         new Robot().waitForIdle();
         KataGoAutoSetupDialog dialog = shown.get();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              ((JList<?>) field(dialog, "sectionNav")).requestFocusInWindow();
+              var notice = (B11SpeedNoticePanel) field(dialog, "benchmarkModelNotice");
+              var viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, notice);
+              viewport.setViewPosition(new Point(0, 0));
+            });
+        new Robot().waitForIdle();
         for (String state :
             List.of("EMPTY", "RUNNING", "COMPLETE", "CANCELLED", "FAILED", "LEGACY")) {
           SwingUtilities.invokeAndWait(
@@ -192,6 +202,15 @@ class B11SpeedNoticeDesktopTest {
               invoke(dialog, "updateBenchmarkInfo");
             });
         new Robot().waitForIdle();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              var notice = (B11SpeedNoticePanel) field(dialog, "benchmarkModelNotice");
+              var viewport = (JViewport) SwingUtilities.getAncestorOfClass(JViewport.class, notice);
+              assertEquals(
+                  0,
+                  viewport.getViewPosition().y,
+                  "Read-only result updates must not scroll the report");
+            });
         ImageIO.write(
             new Robot().createScreenCapture(dialog.getBounds()),
             "png",

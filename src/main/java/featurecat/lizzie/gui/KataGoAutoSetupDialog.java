@@ -7214,7 +7214,7 @@ public class KataGoAutoSetupDialog extends JDialog {
       int width = Math.max(0, getWidth() - insets.left - insets.right);
       int height = Math.max(0, getHeight() - insets.top - insets.bottom);
       if (useCompactLayout(width)) {
-        int topHeight = Math.min(metricHeight(), Math.max(116, height * 52 / 100));
+        int topHeight = Math.min(metricHeight(), Math.max(0, height - GAP));
         int metricWidth = Math.max(0, (width - GAP) / 2);
         nnMetric.setBounds(insets.left, insets.top, metricWidth, topHeight);
         visitsMetric.setBounds(insets.left + metricWidth + GAP, insets.top, metricWidth, topHeight);
