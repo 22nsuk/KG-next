@@ -22,7 +22,7 @@ public final class EngineStartupDiagnostic {
     if (command != null && !command.isBlank()) {
       resolvedCommand = command.trim();
     } else if (commands != null && !commands.isEmpty()) {
-      resolvedCommand = String.join(" ", commands);
+      resolvedCommand = renderCommand(commands);
     }
     String resolvedDetail = detail == null ? "" : detail;
     boolean windows =
@@ -71,6 +71,18 @@ public final class EngineStartupDiagnostic {
             .put("truncated", false);
 
     return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES);
+  }
+
+  static String renderCommand(List<String> command) {
+    // Preserve argv boundaries so redaction cannot expose the suffix of a quoted secret.
+    StringBuilder text = new StringBuilder();
+    for (String argument : command) {
+      if (text.length() > 0) text.append(' ');
+      text.append('"')
+          .append(argument.replace("\\", "\\\\").replace("\"", "\\\""))
+          .append('"');
+    }
+    return text.toString();
   }
 
   EngineStartupDiagnostic(JSONObject value, int maxBytes) {
