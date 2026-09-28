@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.PersistenceSanitizer;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -371,7 +372,8 @@ public final class AnalysisResourceCoordinator {
     if (command == null) {
       return "";
     }
-    String redacted = SENSITIVE_ARGUMENT.matcher(command).replaceAll("$1$2<redacted>");
+    String redacted = new PersistenceSanitizer().sanitize(command);
+    redacted = SENSITIVE_ARGUMENT.matcher(redacted).replaceAll("$1$2<redacted>");
     return URL_SECRET.matcher(redacted).replaceAll("$1<redacted>");
   }
 

@@ -83,6 +83,40 @@ class DiagnosticBundleExporterTest {
   }
 
   @Test
+  void plinkPasswordsAreRedactedOnDiskAndWhenReexportingLegacyLogs() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
+    List<String> values = List.of("CANARY_PLINK_SIMPLE", "\"CANARY_PLINK_SPACE suffix\"",
+        "CANARY_PLINK_SPECIAL&suffix;end,rest}final");
+    for (String value : values) {
+      EngineObservation.recordProcessDetails("plink-probe", "process-started", "probe", 1,
+          "plink -P 22 -pw " + value + " ./start-engine.sh");
+    }
+    runtime.awaitIdle();
+    Path log = runtime.logsDirectory().resolve("app.log");
+    String persisted = Files.readString(log);
+    assertFalse(persisted.contains("CANARY_PLINK"));
+    assertFalse(persisted.contains("suffix"));
+    assertTrue(persisted.contains("-pw <redacted> ./start-engine.sh"));
+    String template = persisted.lines().filter(line -> line.contains("process-started"))
+        .findFirst().orElseThrow();
+    for (String value : values) {
+      Files.writeString(log, template.replace("-pw <redacted>", "-pw " + value) + "\n",
+          StandardOpenOption.APPEND);
+    }
+    assertTrue(Files.readString(log).contains("CANARY_PLINK"));
+    Map<String, byte[]> entries = unzipEntries(exportDefault(runtime));
+    String exported = new String(entries.get("logs/lizzie/app.log"), StandardCharsets.UTF_8);
+    assertEquals(6, exported.lines().filter(line -> line.contains("process-started")).count());
+    assertTrue(exported.contains("-pw <redacted> ./start-engine.sh"));
+    for (byte[] bytes : entries.values()) {
+      String content = new String(bytes, StandardCharsets.UTF_8);
+      assertFalse(content.contains("CANARY_PLINK"));
+      assertFalse(content.contains("suffix;end,rest}final"));
+    }
+  }
+
+  @Test
   void defaultExportWritesAtomicPackageWithManifestAndSafeSources() throws Exception {
     LoggingRuntime runtime = start();
     LoggerFactory.getLogger(LogCategories.APP).info("app-evidence");

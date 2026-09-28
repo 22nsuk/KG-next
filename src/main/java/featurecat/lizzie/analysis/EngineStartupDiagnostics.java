@@ -108,6 +108,18 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private ScheduledFuture<?> tailTask;
     private EngineStartupDiagnostic published;
 
+    private String renderCommand(List<String> command) {
+      // Preserve argument boundaries for downstream redaction, including embedded quotes.
+      StringBuilder text = new StringBuilder();
+      for (String argument : command) {
+        if (text.length() > 0) text.append(' ');
+        text.append('"')
+            .append(argument.replace("\\", "\\\\").replace("\"", "\\\""))
+            .append('"');
+      }
+      return text.toString();
+    }
+
     private Attempt(String engineId, String purpose, List<String> command, boolean local) {
       launch
           .put("engineId", limited(engineId, 128))
@@ -116,7 +128,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
           .put("environmentState", "not-formed")
           .put("local", local)
           .put("platform", windows ? "windows" : "non-windows")
-          .put("configuredCommand", launchText(String.join(" ", command), 16384));
+          .put("configuredCommand", launchText(renderCommand(command), 16384));
     }
 
     public String id() {

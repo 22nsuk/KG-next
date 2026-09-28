@@ -7,6 +7,7 @@ import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.ObservationText;
+import featurecat.lizzie.logging.PersistenceSanitizer;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -875,7 +876,7 @@ public class EngineFailedMessage extends JDialog {
     if (text == null || text.isEmpty()) {
       return "";
     }
-    return redactSensitiveRemainder(text);
+    return redactSensitiveRemainder(new PersistenceSanitizer().sanitize(text));
   }
 
   private static String redactSensitiveRemainder(String text) {
