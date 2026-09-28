@@ -337,6 +337,51 @@ class PositionConfirmedAnalysisTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void olderRestoreTailCannotDisplaceNewerCapturedRestore(boolean withMirror) throws Exception {
+    try (Fixture fixture = new Fixture(withMirror)) {
+      Leelaz.PositionRestore older = fixture.engine.capturePositionRestore(fixture.mirror);
+      java.util.concurrent.atomic.AtomicReference<Leelaz.PositionRestore> latest =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      older.execute(
+          () -> {
+            fixture.engine.sendCommandNoLeelaz2("clear_board");
+            if (withMirror) fixture.mirror.sendCommandNoLeelaz2("clear_board");
+            latest.set(fixture.engine.capturePositionRestore(fixture.mirror));
+            fixture.engine.sendCommandNoLeelaz2("play B D4");
+            if (withMirror) fixture.mirror.sendCommandNoLeelaz2("play B D4");
+          });
+      try {
+        latest.get().execute(
+            () -> {
+              fixture.engine.sendCommandNoLeelaz2("clear_board");
+              if (withMirror) fixture.mirror.sendCommandNoLeelaz2("clear_board");
+            });
+        older.cancel();
+        latest.get().confirm(
+            () -> fixture.engine.sendCommandNoLeelaz2("kata-analyze B 10"),
+            detail -> fail(detail));
+        assertEquals(
+            List.of("clear_board", "play B D4", "clear_board", "name"),
+            fixture.transport.commands());
+        for (int index = 0; index < 4; index++) fixture.respond(index, "=");
+        if (withMirror) {
+          assertEquals(4, fixture.transport.commands().size());
+          for (int index = 0; index < 3; index++) fixture.respondMirror(index, "=");
+          assertEquals(4, fixture.transport.commands().size());
+          fixture.respondMirror(3, "=");
+        }
+        assertEquals(
+            List.of("clear_board", "play B D4", "clear_board", "name", "kata-analyze B 10"),
+            fixture.transport.commands());
+      } finally {
+        older.cancel();
+        latest.get().cancel();
+      }
+    }
+  }
+
   private static final class ShortTimeoutLeelaz extends Leelaz {
     private final AtomicLong timeoutMillis = new AtomicLong(10L);
 
