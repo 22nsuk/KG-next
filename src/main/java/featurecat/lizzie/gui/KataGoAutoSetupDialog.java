@@ -4,6 +4,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.util.B11ModelNotice;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.DiscoverySource;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.DownloadCancelledException;
@@ -263,6 +264,9 @@ public class KataGoAutoSetupDialog extends JDialog {
   private final JLabel lblBenchmarkEngineValue = new JFontLabel();
   private final JLabel lblBenchmarkConfigValue = new JFontLabel();
   private final JTextArea benchmarkPolicyDetails = new JTextArea();
+  private B11SpeedNoticePanel benchmarkModelNotice;
+  private SetupSnapshot benchmarkNoticeSnapshot;
+  private long benchmarkNoticeGeneration;
   private String benchmarkFailureDetail = "";
   private final JLabel lblSelectedWeightName = new JFontLabel();
   private final JLabel lblSelectedWeightMeta = new JFontLabel();
@@ -653,6 +657,7 @@ public class KataGoAutoSetupDialog extends JDialog {
     EngineData entry =
         featurecat.lizzie.util.EngineThreadPolicy.findSavedEntry(selectedBenchmarkEntryId);
     if (entry == null) {
+      snapshot = null;
       benchmarkDisplayState = BenchmarkDisplayState.FAILED;
       benchmarkTransientStatus = featurecat.lizzie.util.EngineThreadPolicy.message("targetDeleted");
       renderBenchmarkReport(null, benchmarkDisplayState, benchmarkTransientStatus);
@@ -1751,7 +1756,13 @@ public class KataGoAutoSetupDialog extends JDialog {
             .deriveFont(Font.BOLD, lblBenchmarkReportStatus.getFont().getSize2D() + 2f));
     lblBenchmarkReportStatus.setHorizontalAlignment(SwingConstants.RIGHT);
     statusRow.add(lblBenchmarkReportStatus, BorderLayout.EAST);
-    report.add(statusRow, BorderLayout.NORTH);
+    JPanel reportHeader = new JPanel(new BorderLayout(0, 6));
+    reportHeader.setOpaque(false);
+    benchmarkModelNotice = new B11SpeedNoticePanel(Lizzie.resourceBundle, new JFontLabel().getFont());
+    benchmarkModelNotice.setVisible(false);
+    reportHeader.add(benchmarkModelNotice, BorderLayout.NORTH);
+    reportHeader.add(statusRow, BorderLayout.SOUTH);
+    report.add(reportHeader, BorderLayout.NORTH);
 
     JPanel nnMetric =
         createBenchmarkMetric(
@@ -3245,6 +3256,9 @@ public class KataGoAutoSetupDialog extends JDialog {
                 : KataGoRuntimeHelper.benchmarkUnavailableReason(null);
     KataGoRuntimeHelper.BenchmarkResult result =
         KataGoRuntimeHelper.getStoredBenchmarkResult(targetEntry);
+    String environment =
+        targetEntry == null ? "" : featurecat.lizzie.util.EngineThreadPolicy.environmentStatus(targetEntry);
+    boolean benchmarkResultIsHistorical = result != null && !environment.isBlank();
     BenchmarkDisplayState displayState = benchmarkDisplayState;
     if (displayState == BenchmarkDisplayState.IDLE && !unavailableReason.isBlank()) {
       displayState = BenchmarkDisplayState.UNAVAILABLE;
@@ -3252,6 +3266,8 @@ public class KataGoAutoSetupDialog extends JDialog {
     if (displayState == BenchmarkDisplayState.IDLE) {
       if (result == null) {
         displayState = BenchmarkDisplayState.EMPTY;
+      } else if (benchmarkResultIsHistorical) {
+        displayState = BenchmarkDisplayState.STALE;
       } else if (result.nnEvalsPerSecond > 0.0 && result.visitsPerSecond > 0.0) {
         displayState = BenchmarkDisplayState.COMPLETE;
       } else {
@@ -3267,13 +3283,13 @@ public class KataGoAutoSetupDialog extends JDialog {
                       == featurecat.lizzie.util.EngineThreadPolicy.Source.CFG
                   ? "cfg"
                   : "benchmark"));
-      String environment = featurecat.lizzie.util.EngineThreadPolicy.environmentStatus(targetEntry);
       if (!environment.isBlank()) details.add(environment);
       if (KataGoRuntimeHelper.hasEffectiveNumSearchThreadsOverride(
           snapshot == null ? List.of() : snapshot.sourceArguments)) {
         details.add(featurecat.lizzie.util.EngineThreadPolicy.message("explicitOverride"));
       }
     }
+    if (benchmarkResultIsHistorical) details.add(text("B11SpeedNotice.historicalResult"));
     if (!unavailableReason.isBlank()) details.add(unavailableReason);
     if (engineValidationResult != null && !engineValidationResult.isValid()) {
       details.add(lblEngineValidationValue.getText());
@@ -3350,6 +3366,7 @@ public class KataGoAutoSetupDialog extends JDialog {
       KataGoRuntimeHelper.BenchmarkResult result,
       BenchmarkDisplayState displayState,
       String transientStatus) {
+    updateBenchmarkModelNotice();
     boolean hasNn = result != null && result.nnEvalsPerSecond > 0.0;
     boolean hasVisits = result != null && result.visitsPerSecond > 0.0;
     renderBenchmarkMetric(
@@ -3414,10 +3431,31 @@ public class KataGoAutoSetupDialog extends JDialog {
     lblBenchmarkReportStatus.getAccessibleContext().setAccessibleName(accessibleSummary);
   }
 
+  private void updateBenchmarkModelNotice() {
+    if (snapshot == benchmarkNoticeSnapshot) return;
+    benchmarkNoticeSnapshot = snapshot;
+    long generation = ++benchmarkNoticeGeneration;
+    SetupSnapshot source = snapshot;
+    benchmarkModelNotice.setVisible(B11ModelNotice.isB11(catalogModelName(source)));
+    if (source == null || source.weightCatalog != null || source.activeWeightPath == null) return;
+    // Benchmark admission creates a fresh snapshot without a catalog. Read only its header off EDT.
+    createUiBackgroundWorker(
+            () -> B11ModelNotice.isB11(KataGoAutoSetupHelper.readWeightModelName(source.activeWeightPath)),
+            b11 -> {
+              if (generation != benchmarkNoticeGeneration || source != snapshot) return;
+              benchmarkModelNotice.setVisible(b11);
+              benchmarkModelNotice.getParent().revalidate();
+              benchmarkModelNotice.repaint();
+            },
+            ignored -> {})
+        .execute();
+  }
+
   private void updateBenchmarkOptimizeButton(BenchmarkDisplayState displayState) {
     String buttonText =
         displayState == BenchmarkDisplayState.COMPLETE
                 || displayState == BenchmarkDisplayState.LEGACY
+                || displayState == BenchmarkDisplayState.STALE
             ? text("AutoSetup.optimizePerformanceAgain")
             : text("AutoSetup.optimizePerformance");
     if (!buttonText.equals(btnOptimizePerformance.getText())) {
@@ -3465,6 +3503,8 @@ public class KataGoAutoSetupDialog extends JDialog {
         return text("AutoSetup.benchmarkDone");
       case LEGACY:
         return text("AutoSetup.benchmarkLegacyResult");
+      case STALE:
+        return text("B11SpeedNotice.historicalStatus");
       case RUNNING:
         return text("AutoSetup.benchmarking");
       case CANCELLED:
@@ -3488,6 +3528,7 @@ public class KataGoAutoSetupDialog extends JDialog {
       case UNAVAILABLE:
         return ERROR_COLOR();
       case LEGACY:
+      case STALE:
       case RUNNING:
       case CANCELLED:
         return WARN_COLOR();
@@ -5019,6 +5060,7 @@ public class KataGoAutoSetupDialog extends JDialog {
 
   @Override
   public void dispose() {
+    ++benchmarkNoticeGeneration;
     if (measuredTuningDialog != null) measuredTuningDialog.invalidate();
     super.dispose();
   }
@@ -7074,6 +7116,7 @@ public class KataGoAutoSetupDialog extends JDialog {
     IDLE,
     EMPTY,
     LEGACY,
+    STALE,
     RUNNING,
     COMPLETE,
     CANCELLED,

@@ -5,6 +5,7 @@ import featurecat.lizzie.EngineStartupStatus;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.analysis.remote.EngineTransport;
+import featurecat.lizzie.analysis.remote.ZhiziGtpTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlayMode;
 import featurecat.lizzie.enginegame.EngineGameSide;
@@ -24,6 +25,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.Stone;
+import featurecat.lizzie.util.B11ModelNotice;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
@@ -1286,6 +1288,9 @@ public class Leelaz {
   }
 
   private void startEngineOwned(int index) throws IOException {
+    ReaderStreamBinding previousModelBinding = readerStreamBinding;
+    if (previousModelBinding != null) previousModelBinding.speedModelLookup = null;
+    List<String> modelLaunchCommands = List.of();
     storePendingTensorRtRepairContext(null);
     EngineManager.EngineGameOwnerTransaction engineGameStartupTransaction =
         engineGameStartupCommandContext.get();
@@ -1500,6 +1505,7 @@ public class Leelaz {
             "Using stable NVIDIA OpenCL compatibility mode...");
       }
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
+      modelLaunchCommands = List.copyOf(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
       processBuilder.redirectErrorStream(false);
@@ -1585,6 +1591,13 @@ public class Leelaz {
     // new Thread(this::read).start();
     // can stop engine for switching weights
     ReaderStreamBinding startedReaderStreamBinding = currentReaderStreamBinding();
+    if (startedReaderStreamBinding.remoteTransport instanceof ZhiziGtpTransport zhizi) {
+      startedReaderStreamBinding.speedModelLookup =
+          B11ModelNotice.known(B11ModelNotice.isZhiziB11(zhizi.modelIdentifier()));
+    } else if (!useRemoteCompute && !useJavaSSH && !isSSH && !modelLaunchCommands.isEmpty()) {
+      startedReaderStreamBinding.speedModelLookup =
+          B11ModelNotice.local(modelLaunchCommands, startedReaderStreamBinding.processWorkingDirectory);
+    }
     ScheduledExecutorService stdoutExecutor = Executors.newSingleThreadScheduledExecutor();
     ScheduledExecutorService stderrExecutor = Executors.newSingleThreadScheduledExecutor();
     if (!startReaderExecutors(startedReaderStreamBinding, stdoutExecutor, stderrExecutor)) {
@@ -1603,6 +1616,17 @@ public class Leelaz {
       return false;
     }
     return classifyCommandAsBenchmark();
+  }
+
+  /** Nonblocking, filesystem-free identity of this engine's current process/connection. */
+  public boolean usesB11ForSpeedNotice() {
+    ReaderStreamBinding binding = readerStreamBinding;
+    B11ModelNotice.Lookup lookup = binding == null ? null : binding.speedModelLookup;
+    return binding != null
+        && !binding.terminated
+        && !binding.readerShutdownRequested
+        && lookup != null
+        && lookup.isB11();
   }
 
   public boolean hasGtpCapability() {
@@ -5002,6 +5026,7 @@ public class Leelaz {
     private volatile Object analysisOutputRecoveryToken;
     private volatile Integer confirmedRuntimeSearchThreads;
     private volatile RuntimeThreadOverrideState runtimeThreadOverrideState;
+    private volatile B11ModelNotice.Lookup speedModelLookup;
 
     private long runtimeThreadWriteSequence;
     private long confirmedRuntimeThreadSequence;
