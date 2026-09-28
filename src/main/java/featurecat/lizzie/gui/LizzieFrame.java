@@ -7820,15 +7820,6 @@ public class LizzieFrame extends JFrame {
     BufferedImage wallpaper = boardRenderer.getWallpaper();
     int drawWidth = max(wallpaper.getWidth(), mainPanel.getWidth());
     int drawHeight = max(wallpaper.getHeight(), mainPanel.getHeight());
-    if (AppleStyleSupport.useNeutralWorkspaceBackground()) {
-      Color surface = new Color(48, 54, 51);
-      g.setColor(surface);
-      g.fillRect(0, 0, width, height);
-      backgroundPaint = surface;
-      Lizzie.board.setForceRefresh(true);
-      redrawBackgroundAnyway = false;
-      return g;
-    }
     // Support seamless texture
     if (Lizzie.config.usePureBackground) {
       g.setColor(Lizzie.config.pureBackgroundColor);

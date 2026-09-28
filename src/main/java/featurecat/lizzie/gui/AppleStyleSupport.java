@@ -4,7 +4,6 @@ import featurecat.lizzie.AppLocale;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.theme.MorandiPalette;
-import featurecat.lizzie.theme.Theme;
 import featurecat.lizzie.util.LocaleFontSupport;
 import java.awt.BasicStroke;
 import java.awt.Color;
@@ -655,22 +654,6 @@ public final class AppleStyleSupport {
 
   static Color workspaceError() {
     return isAppleStyleEnabled() ? new Color(246, 160, 151) : new Color(170, 51, 51);
-  }
-
-  static boolean useNeutralWorkspaceBackground() {
-    if (!isClassicEnabled() || isAppleStyleEnabled() || Lizzie.config.usePureBackground)
-      return false;
-    String theme = Lizzie.config.uiConfig.optString("theme", "default");
-    return (theme.isEmpty() || "default".equals(theme))
-        && !Lizzie.config.uiConfig.has("background-image")
-        && Lizzie.config.uiConfig.optString(Theme.CUSTOM_BACKGROUND_IMAGE_KEY, "").isBlank()
-        && (Lizzie.config.theme == null
-            || (!Lizzie.config.theme.config.has("background-image")
-                && Lizzie.config
-                    .theme
-                    .config
-                    .optString(Theme.CUSTOM_BACKGROUND_IMAGE_KEY, "")
-                    .isBlank()));
   }
 
   public static Font workspaceFont(int style, float size) {
