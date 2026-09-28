@@ -2244,13 +2244,10 @@ class LeelazAutomaticRestartConvergenceTest {
       isCheckingName = delayReadyAfterStart;
       isNormalEnd = false;
       isDownWithError = false;
-      try {
-        setField(this, "endGetCommandList", true);
-      } catch (Exception failure) {
-        throw new IllegalStateException(failure);
-      }
       installProtocol();
       if (freshReaderOnStart) installFreshCommandOutputForTest(transport);
+      // A replacement reader must discover its own capabilities, just like a real restart.
+      advertiseCommandsForTest(List.of("protocol_version", "loadsgf", "kata-analyze"));
       startCompleted.countDown();
     }
 
