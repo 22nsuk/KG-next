@@ -338,6 +338,244 @@ class SGFParserSemanticRoundTripTest {
     }
   }
 
+  @Test
+  void foxStandaloneHandicapNormalizesToWhiteToPlayAndPreservesRoundTrip() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(19)) {
+      String source = "(;SZ[19]HA[7]KM[0.5];AB[pd][dp][dd][pp][dj][pj][jj];W[fq];B[qq])";
+      BoardHistoryList history = SGFParser.parseSgf(source, true);
+      assertNotNull(history);
+
+      BoardHistoryNode root = history.getStart();
+      BoardData rootData = root.getData();
+      assertEquals(BoardNodeKind.SNAPSHOT, rootData.getNodeKind());
+      assertFalse(rootData.isHistoryActionNode());
+      assertEquals(0, rootData.moveNumber);
+      assertTrue(rootData.blackToPlay, "empty root defaults to Black to play");
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(root, 7, 19, 19),
+          "empty root with HA should not be recognized as initial handicap setup");
+
+      BoardHistoryNode setupNode = root.next().orElseThrow();
+      BoardData setupData = setupNode.getData();
+      assertEquals(BoardNodeKind.SNAPSHOT, setupData.getNodeKind());
+      assertFalse(setupData.isHistoryActionNode());
+      assertEquals(0, setupData.moveNumber);
+      assertFalse(
+          setupData.blackToPlay,
+          "eligible standalone initial handicap setup must be normalized to White to play");
+      assertTrue(
+          InitialHandicapSetup.isInitialHandicap(setupNode, 7, 19, 19),
+          "standalone setup with 7 valid black stones and HA=7 must be recognized");
+
+      BoardHistoryNode move1 = setupNode.next().orElseThrow();
+      BoardData move1Data = move1.getData();
+      assertEquals(BoardNodeKind.MOVE, move1Data.getNodeKind());
+      assertTrue(move1Data.isHistoryActionNode());
+      assertEquals(Stone.WHITE, move1Data.lastMoveColor);
+      assertEquals(1, move1Data.moveNumber);
+      assertTrue(move1Data.blackToPlay);
+
+      BoardHistoryNode move2 = move1.next().orElseThrow();
+      BoardData move2Data = move2.getData();
+      assertEquals(BoardNodeKind.MOVE, move2Data.getNodeKind());
+      assertTrue(move2Data.isHistoryActionNode());
+      assertEquals(Stone.BLACK, move2Data.lastMoveColor);
+      assertEquals(2, move2Data.moveNumber);
+      assertFalse(move2Data.blackToPlay);
+
+      Lizzie.board.setHistory(history);
+      String written = SGFParser.saveToString(false);
+      BoardHistoryList roundTrip = SGFParser.parseSgf(written, true);
+      assertNotNull(roundTrip);
+
+      BoardHistoryNode rtRoot = roundTrip.getStart();
+      BoardHistoryNode rtSetup = rtRoot.next().orElseThrow();
+      BoardHistoryNode rtMove1 = rtSetup.next().orElseThrow();
+      BoardHistoryNode rtMove2 = rtMove1.next().orElseThrow();
+
+      assertEquals(BoardNodeKind.SNAPSHOT, rtRoot.getData().getNodeKind());
+      assertEquals(0, rtRoot.getData().moveNumber);
+      assertTrue(rtRoot.getData().blackToPlay);
+
+      assertEquals(BoardNodeKind.SNAPSHOT, rtSetup.getData().getNodeKind());
+      assertEquals(0, rtSetup.getData().moveNumber);
+      assertFalse(rtSetup.getData().blackToPlay);
+      assertArrayEquals(setupData.stones, rtSetup.getData().stones);
+
+      assertEquals(BoardNodeKind.MOVE, rtMove1.getData().getNodeKind());
+      assertEquals(Stone.WHITE, rtMove1.getData().lastMoveColor);
+      assertEquals(1, rtMove1.getData().moveNumber);
+
+      assertEquals(BoardNodeKind.MOVE, rtMove2.getData().getNodeKind());
+      assertEquals(Stone.BLACK, rtMove2.getData().lastMoveColor);
+      assertEquals(2, rtMove2.getData().moveNumber);
+
+      assertTreeSemanticsEqual(history, roundTrip);
+    }
+  }
+
+  @Test
+  void foxStandaloneHandicapExplicitWhiteToPlayPreserved() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(19)) {
+      String source = "(;SZ[19]HA[7]KM[0.5];AB[pd][dp][dd][pp][dj][pj][jj]PL[W];W[fq];B[qq])";
+      BoardHistoryList history = SGFParser.parseSgf(source, true);
+      assertNotNull(history);
+
+      BoardHistoryNode root = history.getStart();
+      assertTrue(root.getData().blackToPlay);
+
+      BoardHistoryNode setupNode = root.next().orElseThrow();
+      assertEquals(0, setupNode.getData().moveNumber);
+      assertFalse(setupNode.getData().blackToPlay, "explicit PL[W] must be White to play");
+      assertTrue(
+          InitialHandicapSetup.isInitialHandicap(setupNode, 7, 19, 19),
+          "explicit PL[W] initial handicap must be recognized");
+
+      BoardHistoryNode move1 = setupNode.next().orElseThrow();
+      assertEquals(Stone.WHITE, move1.getData().lastMoveColor);
+      assertEquals(1, move1.getData().moveNumber);
+
+      BoardHistoryNode move2 = move1.next().orElseThrow();
+      assertEquals(Stone.BLACK, move2.getData().lastMoveColor);
+      assertEquals(2, move2.getData().moveNumber);
+
+      Lizzie.board.setHistory(history);
+      String written = SGFParser.saveToString(false);
+      BoardHistoryList roundTrip = SGFParser.parseSgf(written, true);
+      assertNotNull(roundTrip);
+      assertTreeSemanticsEqual(history, roundTrip);
+    }
+  }
+
+  @Test
+  void foxStandaloneHandicapExplicitBlackToPlayPreservedAndNotRecognized() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(19)) {
+      String source = "(;SZ[19]HA[7]KM[0.5];AB[pd][dp][dd][pp][dj][pj][jj]PL[B];B[fq];W[qq])";
+      BoardHistoryList history = SGFParser.parseSgf(source, true);
+      assertNotNull(history);
+
+      BoardHistoryNode root = history.getStart();
+      assertTrue(root.getData().blackToPlay);
+
+      BoardHistoryNode setupNode = root.next().orElseThrow();
+      assertEquals(0, setupNode.getData().moveNumber);
+      assertTrue(
+          setupNode.getData().blackToPlay,
+          "explicit PL[B] must remain Black to play and must not be overwritten to White");
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(setupNode, 7, 19, 19),
+          "explicit PL[B] must not be recognized as initial handicap setup");
+
+      BoardHistoryNode move1 = setupNode.next().orElseThrow();
+      assertEquals(Stone.BLACK, move1.getData().lastMoveColor);
+      assertEquals(1, move1.getData().moveNumber);
+
+      BoardHistoryNode move2 = move1.next().orElseThrow();
+      assertEquals(Stone.WHITE, move2.getData().lastMoveColor);
+      assertEquals(2, move2.getData().moveNumber);
+
+      Lizzie.board.setHistory(history);
+      String written = SGFParser.saveToString(false);
+      BoardHistoryList roundTrip = SGFParser.parseSgf(written, true);
+      assertNotNull(roundTrip);
+      assertTreeSemanticsEqual(history, roundTrip);
+    }
+  }
+
+  @Test
+  void legacyRootHandicapSetupPreservesWhiteToPlayAndRoundTrip() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(19)) {
+      String withoutPl = "(;SZ[19]HA[2]AB[dp][pd];W[pp];B[dd])";
+      BoardHistoryList history1 = SGFParser.parseSgf(withoutPl, true);
+      assertNotNull(history1);
+
+      BoardHistoryNode root1 = history1.getStart();
+      assertEquals(0, root1.getData().moveNumber);
+      assertFalse(root1.getData().blackToPlay, "root handicap setup without PL defaults to White to play");
+      assertTrue(InitialHandicapSetup.isInitialHandicap(root1, 2, 19, 19));
+
+      BoardHistoryNode move1 = root1.next().orElseThrow();
+      assertEquals(Stone.WHITE, move1.getData().lastMoveColor);
+      assertEquals(1, move1.getData().moveNumber);
+
+      BoardHistoryNode move2 = move1.next().orElseThrow();
+      assertEquals(Stone.BLACK, move2.getData().lastMoveColor);
+      assertEquals(2, move2.getData().moveNumber);
+
+      Lizzie.board.setHistory(history1);
+      String written1 = SGFParser.saveToString(false);
+      BoardHistoryList roundTrip1 = SGFParser.parseSgf(written1, true);
+      assertNotNull(roundTrip1);
+      assertTreeSemanticsEqual(history1, roundTrip1);
+
+      String withPlW = "(;SZ[19]HA[2]AB[dp][pd]PL[W];W[pp];B[dd])";
+      BoardHistoryList history2 = SGFParser.parseSgf(withPlW, true);
+      assertNotNull(history2);
+      BoardHistoryNode root2 = history2.getStart();
+      assertFalse(root2.getData().blackToPlay);
+      assertTrue(InitialHandicapSetup.isInitialHandicap(root2, 2, 19, 19));
+    }
+  }
+
+  @Test
+  void invalidOrConflictingSetupsAreNotRecognizedAsInitialHandicap() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(19)) {
+      // 1. Count conflict: HA=5 but only 2 stones placed
+      String countConflict = "(;SZ[19]HA[5]KM[0.5];AB[pd][dp];W[fq])";
+      BoardHistoryList historyConflict = SGFParser.parseSgf(countConflict, true);
+      assertNotNull(historyConflict);
+      BoardHistoryNode conflictNode = historyConflict.getStart().next().orElseThrow();
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(conflictNode, 5, 19, 19),
+          "count conflict (2 stones vs HA=5) must not be recognized as initial handicap");
+      assertTrue(
+          conflictNode.getData().blackToPlay,
+          "unrecognized setup node must not be normalized to White");
+
+      // 2. Setup with AW (preset white stone)
+      String withAw = "(;SZ[19]HA[2]KM[0.5];AB[pd][dp]AW[dd];W[fq])";
+      BoardHistoryList historyAw = SGFParser.parseSgf(withAw, true);
+      assertNotNull(historyAw);
+      BoardHistoryNode awNode = historyAw.getStart().next().orElseThrow();
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(awNode, 2, 19, 19),
+          "setup with AW must not be recognized as initial handicap");
+      assertTrue(
+          awNode.getData().blackToPlay,
+          "unrecognized setup with AW must not be normalized to White");
+
+      // 3. Setup with AE
+      String withAe = "(;SZ[19]HA[2]KM[0.5];AB[pd][dp]AE[dd];W[fq])";
+      BoardHistoryList historyAe = SGFParser.parseSgf(withAe, true);
+      assertNotNull(historyAe);
+      BoardHistoryNode aeNode = historyAe.getStart().next().orElseThrow();
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(aeNode, 2, 19, 19),
+          "setup with AE must not be recognized as initial handicap");
+
+      // 4. Midgame setup: setup node appears after real moves
+      String midgame = "(;SZ[19]HA[2]KM[0.5];B[dp];W[pd];AB[dd][pp];W[fq])";
+      BoardHistoryList historyMidgame = SGFParser.parseSgf(midgame, true);
+      assertNotNull(historyMidgame);
+      BoardHistoryNode b1 = historyMidgame.getStart().next().orElseThrow();
+      BoardHistoryNode w1 = b1.next().orElseThrow();
+      BoardHistoryNode midSetup = w1.next().orElseThrow();
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(midSetup, 2, 19, 19),
+          "midgame setup with genuine move ancestors must not be recognized as initial handicap");
+
+      // 5. Empty root with HA
+      String emptyRootSgf = "(;SZ[19]HA[7]KM[0.5];W[fq])";
+      BoardHistoryList historyEmptyRoot = SGFParser.parseSgf(emptyRootSgf, true);
+      assertNotNull(historyEmptyRoot);
+      BoardHistoryNode emptyRoot = historyEmptyRoot.getStart();
+      assertFalse(
+          InitialHandicapSetup.isInitialHandicap(emptyRoot, 7, 19, 19),
+          "empty root must not be recognized as initial handicap");
+      assertTrue(emptyRoot.getData().blackToPlay, "empty root must remain Black to play");
+    }
+  }
+
   private static BoardHistoryNode findCaptureNode(BoardHistoryNode root) {
     ArrayList<BoardHistoryNode> pending = new ArrayList<>();
     pending.add(root);

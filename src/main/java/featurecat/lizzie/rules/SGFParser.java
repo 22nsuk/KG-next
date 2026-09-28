@@ -3573,17 +3573,38 @@ public class SGFParser {
   }
 
   private static void stabilizeRootSetupSideToPlay(BoardHistoryList history) {
-    if (history == null) {
+    if (history == null || history.getStart() == null) {
       return;
     }
-    BoardData rootData = history.getStart().getData();
-    String explicitPl = rootData.getProperty("PL");
+    int declaredHandicap =
+        history.getGameInfo() == null ? 0 : history.getGameInfo().getHandicap();
+    int[] boardSize = resolveHistoryBoardSize(history);
+    stabilizeEligibleSetupSubtree(
+        history.getStart(), declaredHandicap, boardSize[0], boardSize[1]);
+  }
+
+  private static void stabilizeEligibleSetupSubtree(
+      BoardHistoryNode node, int declaredHandicap, int width, int height) {
+    if (node == null) {
+      return;
+    }
+    BoardData data = node.getData();
+    if (data == null || data.isHistoryActionNode() || data.dummy) {
+      return;
+    }
+
+    String explicitPl = data.getProperty("PL");
     if (!Utils.isBlank(explicitPl)) {
-      applyCurrentPlayerProperty(rootData, explicitPl);
+      applyCurrentPlayerProperty(data, explicitPl);
+    } else if (InitialHandicapSetup.isInitialHandicap(node, declaredHandicap, width, height)) {
+      data.blackToPlay = false;
       return;
+    } else if (node.previous().isEmpty() && hasRootSetupStoneProperties(data)) {
+      data.blackToPlay = true;
     }
-    if (hasRootSetupStoneProperties(rootData)) {
-      rootData.blackToPlay = !isHandicapRootSetup(history, rootData);
+
+    for (BoardHistoryNode child : node.getVariations()) {
+      stabilizeEligibleSetupSubtree(child, declaredHandicap, width, height);
     }
   }
 
@@ -3592,18 +3613,6 @@ public class SGFParser {
     return properties.containsKey("AB")
         || properties.containsKey("AW")
         || properties.containsKey("AE");
-  }
-
-  private static boolean isHandicapRootSetup(BoardHistoryList history, BoardData rootData) {
-    if (rootData == null || !rootData.getProperties().containsKey("AB")) {
-      return false;
-    }
-    int handicap =
-        history == null || history.getGameInfo() == null ? 0 : history.getGameInfo().getHandicap();
-    if (handicap <= 0) {
-      handicap = parseHandicapProperty(rootData.getProperty("HA"));
-    }
-    return handicap >= 2;
   }
 
   private static int parseHandicapProperty(String rawHandicap) {

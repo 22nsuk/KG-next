@@ -1915,6 +1915,7 @@ public class Board {
       return Optional.empty();
     }
     BoardData position;
+    ExactSnapshotEngineRestore.FrozenHistoryPosition restorePosition;
     BoardHistoryList capturedHistory;
     BoardHistoryNode capturedCurrentNode;
     long capturedContextRevision;
@@ -1944,6 +1945,10 @@ public class Board {
           capturedBoardWidth == capturedBoardHeight
               ? String.valueOf(capturedBoardWidth)
               : capturedBoardWidth + ":" + capturedBoardHeight);
+      restorePosition = ExactSnapshotEngineRestore.freezeHistoryPosition(
+          capturedCurrentNode,
+          history.getGameInfo() == null ? 0 : history.getGameInfo().getHandicap(),
+          position.komi);
     }
     if (Lizzie.capturePrimaryEngineGeneration(engine) != generation) {
       return Optional.empty();
@@ -1962,7 +1967,7 @@ public class Board {
             capturedContextRevision,
             capturedBoardWidth,
             capturedBoardHeight,
-            position));
+            position, restorePosition));
   }
 
   public static final class FrozenPrimaryPosition {
@@ -1976,6 +1981,7 @@ public class Board {
     private final int capturedBoardWidth;
     private final int capturedBoardHeight;
     private final BoardData position;
+    private final ExactSnapshotEngineRestore.FrozenHistoryPosition restorePosition;
 
     private FrozenPrimaryPosition(
         Board owner,
@@ -1987,7 +1993,7 @@ public class Board {
         long capturedContextRevision,
         int capturedBoardWidth,
         int capturedBoardHeight,
-        BoardData position) {
+        BoardData position, ExactSnapshotEngineRestore.FrozenHistoryPosition restorePosition) {
       this.owner = owner;
       this.engine = engine;
       this.primaryGeneration = primaryGeneration;
@@ -1998,6 +2004,7 @@ public class Board {
       this.capturedBoardWidth = capturedBoardWidth;
       this.capturedBoardHeight = capturedBoardHeight;
       this.position = position;
+      this.restorePosition = restorePosition;
     }
 
     /** Captures admission after companion close, then executes a strict ACK-backed restore. */
@@ -2010,10 +2017,7 @@ public class Board {
       Leelaz.ExactSnapshotRestoreAdmission admission =
           engine.captureHistoryNavigationExactSnapshotRestoreAdmission(mirror);
       ExactSnapshotEngineRestore.PreparedRestore prepared =
-          engine.useRemoteCompute
-              ? ExactSnapshotEngineRestore.prepareCurrentHistoryPosition(
-                  admission, capturedCurrentNode)
-              : ExactSnapshotEngineRestore.prepareCurrentPosition(admission, position);
+          restorePosition.prepare(admission);
       Leelaz.PositionRestore confirmation = engine.capturePositionRestore(mirror);
       if (Lizzie.board != owner
           || Lizzie.capturePrimaryEngineGeneration(engine) != primaryGeneration

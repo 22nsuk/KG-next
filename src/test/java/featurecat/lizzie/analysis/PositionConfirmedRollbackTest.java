@@ -1261,7 +1261,6 @@ class PositionConfirmedRollbackTest {
               .isSnapshotNode());
       assertEquals(1, payloadCount(output, "clear_board"));
       assertEquals(1, payloadCount(output, "loadsgf"));
-      assertEquals(0, payloadCount(output, "play"));
       assertTrue(harness.engine.engineRulesResult().isConfirmed());
       assertEquals(0, harness.frame.rulesFailurePromptCount);
       harness.frame.scheduledResume.run();
