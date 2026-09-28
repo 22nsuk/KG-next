@@ -4,16 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
-import java.awt.Component;
 import java.awt.CardLayout;
+import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Rectangle;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
-import javax.swing.JTextArea;
 import javax.swing.JPanel;
+import javax.swing.JTextArea;
 import javax.swing.JViewport;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
@@ -34,7 +34,8 @@ class B11SpeedNoticePanelTest {
     assertTrue(cards.getScrollableTracksViewportWidth());
     JPanel metadata = new JPanel();
     metadata.setPreferredSize(new Dimension(500, 220));
-    var report = new KataGoAutoSetupDialog.BenchmarkReportBody(new JPanel(), new JPanel(), metadata);
+    var report =
+        new KataGoAutoSetupDialog.BenchmarkReportBody(new JPanel(), new JPanel(), metadata);
     report.setSize(520, 500);
     report.setSize(520, report.getPreferredSize().height);
     report.doLayout();
