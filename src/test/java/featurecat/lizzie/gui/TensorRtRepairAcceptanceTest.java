@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.sun.jna.Platform;
 import com.sun.jna.platform.win32.Kernel32;
 import com.sun.jna.platform.win32.WinBase;
 import com.sun.jna.platform.win32.WinNT;
@@ -1803,7 +1802,9 @@ public final class TensorRtRepairAcceptanceTest {
     List<WinNT.HANDLE> nativeHandles = new ArrayList<>();
     boolean interrupted = Thread.interrupted();
     try {
-      if (Platform.isWindows()) {
+      // Platform's cached JNA identity can come from an earlier simulated-OS test.
+      // Only the real Windows cleanup path may initialize Windows native APIs.
+      if (System.getProperty("os.name", "").startsWith("Windows")) {
         // Pin the process objects before termination. Windows publishes an exit code before
         // releasing inherited output handles; ProcessHandle.isAlive() alone is not a barrier.
         for (ProcessHandle handle : handles) {
