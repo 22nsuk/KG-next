@@ -2,6 +2,8 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.AppLocale;
+import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
@@ -9,6 +11,7 @@ import featurecat.lizzie.util.B11ModelNotice;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
+import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.Utils;
 import java.awt.Component;
 import java.awt.Robot;
@@ -129,6 +132,11 @@ class B11SpeedNoticeDesktopTest {
       for (String language : List.of("zh-CN", "en-US", "zh-TW", "zh-HK", "ja-JP", "ko", "th-TH")) {
         Lizzie.resourceBundle =
             ResourceBundle.getBundle("l10n.DisplayStrings", Locale.forLanguageTag(language));
+        Lizzie.config.useLanguage =
+            AppLocale.fromSystemLocale(Locale.forLanguageTag(language)).configValue();
+        Lizzie.config.uiFontName =
+            LocaleFontSupport.resolveConfiguredFontName(
+                null, Locale.forLanguageTag(language), Config.sysDefaultFontName);
         AtomicReference<KataGoAutoSetupDialog> shown = new AtomicReference<>();
         SwingUtilities.invokeAndWait(
             () -> {
@@ -255,6 +263,9 @@ class B11SpeedNoticeDesktopTest {
       assertTrue(notice.contains(component.getX(), component.getY()));
       assertTrue(component.getY() + component.getHeight() <= notice.getHeight());
       assertTrue(component.getHeight() >= component.getPreferredSize().height);
+      if (component instanceof JTextArea text) {
+        assertEquals(-1, text.getFont().canDisplayUpTo(text.getText()), "Missing glyphs in notice");
+      }
     }
   }
 

@@ -1787,6 +1787,8 @@ public class KataGoAutoSetupDialog extends JDialog {
     benchmarkPolicyDetails.setLineWrap(true);
     benchmarkPolicyDetails.setWrapStyleWord(true);
     benchmarkPolicyDetails.setForeground(TEXT_SECONDARY());
+    ((javax.swing.text.DefaultCaret) benchmarkPolicyDetails.getCaret())
+        .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
     report.add(benchmarkPolicyDetails, BorderLayout.SOUTH);
     content.add(report, BorderLayout.NORTH);
 

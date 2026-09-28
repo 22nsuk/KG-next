@@ -67,6 +67,9 @@ class B11SpeedNoticePanelTest {
                   assertTrue(area.getLineWrap());
                   assertTrue(area.getHeight() >= area.getPreferredSize().height);
                   assertFalse(area.isEditable());
+                  assertEquals(
+                      javax.swing.text.DefaultCaret.NEVER_UPDATE,
+                      ((javax.swing.text.DefaultCaret) area.getCaret()).getUpdatePolicy());
                 }
               }
             }

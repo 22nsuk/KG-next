@@ -46,6 +46,8 @@ final class B11SpeedNoticePanel extends JPanel {
         };
     area.setFont(font);
     area.setEditable(false);
+    ((javax.swing.text.DefaultCaret) area.getCaret())
+        .setUpdatePolicy(javax.swing.text.DefaultCaret.NEVER_UPDATE);
     area.setFocusable(false);
     area.setOpaque(false);
     area.setLineWrap(true);
