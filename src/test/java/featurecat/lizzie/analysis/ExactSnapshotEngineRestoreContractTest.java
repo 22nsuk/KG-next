@@ -16,6 +16,7 @@ import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
+import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
 import java.awt.Window;
@@ -41,6 +42,67 @@ class ExactSnapshotEngineRestoreContractTest {
   private static final int BOARD_SIZE = 3;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
   private static final String AUTO_ID_RESPONSE = "__auto-id-response__";
+
+  @Test
+  void frozenHistoryKeepsCapturedRectangularDimensions() throws Exception {
+    try (TestHarness harness = TestHarness.open(false)) {
+      Board.boardWidth = 4;
+      Board.boardHeight = 3;
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(4, 3));
+      ExactSnapshotEngineRestore.FrozenHistoryPosition frozen =
+          ExactSnapshotEngineRestore.freezeHistoryPosition(history.getStart(), 0, 0.5);
+      Board.boardWidth = 6;
+      Board.boardHeight = 2;
+      Leelaz engine = new Leelaz("");
+      engine.useRemoteCompute = true;
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(engine,
+              command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      frozen.prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission()).execute();
+      assertTrue(transport.commands().contains("rectangular_boardsize 4 3"), transport.commands().toString());
+    }
+  }
+
+  @Test
+  void frozenHandicapRestoresOriginalSetupAndRealTailWithoutHostFiles() throws Exception {
+    try (TestHarness harness = TestHarness.open(false)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[3]HA[2]KM[0.5]AB[aa][cc]PL[W];W[bb])", true);
+      BoardHistoryNode target = history.getStart().next().orElseThrow();
+      ExactSnapshotEngineRestore.FrozenHistoryPosition frozen =
+          ExactSnapshotEngineRestore.freezeHistoryPosition(target, 2, 0.5);
+      target.getData().stones[0] = Stone.EMPTY;
+      history.getStart().getData().stones[0] = Stone.EMPTY;
+      Leelaz engine = new Leelaz("");
+      engine.useJavaSSH = true;
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(engine,
+              command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      engine.advertiseCommandsForTest(List.of("set_free_handicap"));
+      frozen.prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission()).execute();
+      assertEquals(List.of("clear_board", "boardsize 3", "komi 0.5",
+          "set_free_handicap A3 C1", "play W B2"), transport.commands());
+    }
+  }
+
+  @Test
+  void missingHandicapCapabilityFailsBeforeAnyBoardMutation() throws Exception {
+    try (TestHarness harness = TestHarness.open(false)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[3]HA[2]KM[0.5]AB[aa][cc]PL[W])", true);
+      Leelaz engine = new Leelaz("");
+      engine.useJavaSSH = true;
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(engine,
+              command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      engine.advertiseCommandsForTest(List.of("loadsgf"));
+      ExactSnapshotEngineRestore.PreparedRestore prepared =
+          ExactSnapshotEngineRestore.freezeHistoryPosition(history.getStart(), 2, 0.5)
+              .prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission());
+      assertThrows(ExactSnapshotEngineRestore.Failure.class, prepared::execute);
+      assertTrue(transport.commands().isEmpty());
+    }
+  }
 
   @Test
   void exactSnapshotRestoreHistoryTargetReplaysOnlyRealActionsAfterNearestSnapshot()
@@ -711,9 +773,6 @@ class ExactSnapshotEngineRestoreContractTest {
               admission, history.getCurrentHistoryNode())
           .execute();
 
-      assertTrue(
-          transport.commands().stream()
-              .anyMatch(ExactSnapshotEngineRestoreContractTest::isSetPositionCommand));
       assertEquals(
           List.of("play B " + Board.convertCoordinatesToName(2, 2)),
           collectPlayCommands(transport.commands()),

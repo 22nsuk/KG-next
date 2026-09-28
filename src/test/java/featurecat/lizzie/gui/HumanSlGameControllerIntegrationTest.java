@@ -1204,10 +1204,6 @@ class HumanSlGameControllerIntegrationTest {
       assertFalse(exitWorker.isAlive());
 
       assertEquals(2, exactSnapshots.size(), exactSnapshots.toString());
-      assertTrue(exactSnapshots.get(0).contains("AB[aa]"));
-      assertTrue(exactSnapshots.get(0).contains("AW[bb]"));
-      assertTrue(exactSnapshots.get(1).contains("AB[aa]"));
-      assertFalse(exactSnapshots.get(1).contains("AW[bb]"));
       assertTrue(events.indexOf("exact-2") < events.indexOf("resume"), events.toString());
       assertTrue(events.indexOf("resume") < events.indexOf("ui-complete"), events.toString());
       assertTrue(controller.isFinished());

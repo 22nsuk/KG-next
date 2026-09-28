@@ -315,6 +315,43 @@ class BoardPrimaryEngineSyncTest {
   }
 
   @Test
+  void frozenPrimaryRestoresInitialHandicapThroughExternalTransport() throws Exception {
+    try (TestHarness harness = TestHarness.open()) {
+      for (String sgf : List.of(
+          "(;SZ[3]HA[2]AB[aa][cc]PL[W];W[bb])",
+          "(;SZ[3]HA[2]AB[aa][cc];W[bb])",
+          "(;SZ[3]HA[5];AB[aa][ac][ca][cc][ab];W[bb])",
+          "(;SZ[3]HA[7];AB[aa][ac][ca][cc][ab][ba][bc];W[bb])",
+          "(;SZ[3]HA[7]AB[aa][ac][ca][cc][ab][ba][bc];W[bb])")) {
+        BoardHistoryList history = SGFParser.parseSgf(sgf, true);
+        while (history.next().isPresent()) {}
+        Lizzie.board.setHistory(history);
+        Leelaz engine = new Leelaz("");
+        engine.useJavaSSH = true;
+        engine.isLoaded = true;
+        setStarted(engine, true);
+        ExactSnapshotRestoreProtocolFixture.Transport transport =
+            ExactSnapshotRestoreProtocolFixture.install(engine,
+                command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+        java.lang.reflect.Method advertise = Leelaz.class.getDeclaredMethod(
+            "advertiseCommandsForTest", List.class);
+        advertise.setAccessible(true);
+        advertise.invoke(engine, List.of("set_free_handicap"));
+        Lizzie.leelaz = engine;
+        Board.FrozenPrimaryPosition frozen =
+            Lizzie.board.freezeCurrentPositionForPrimaryEngineExactRestore().orElseThrow();
+        assertTrue(frozen.execute());
+        assertTrue(frozen.matchesCurrentBoardAndPrimary());
+        assertEquals(List.of("play W B2"), transport.commands().stream()
+            .filter(command -> command.startsWith("play ")).toList());
+        assertEquals(1, transport.commands().stream()
+            .filter(command -> command.startsWith("set_free_handicap ")).count());
+        assertFalse(transport.commands().stream().anyMatch(command -> command.startsWith("loadsgf ")));
+      }
+    }
+  }
+
+  @Test
   void frozenExactRestoreRejectsReplacedBoardBeforeSendingAdmissionCommands() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Board original = Lizzie.board;

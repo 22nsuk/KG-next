@@ -590,6 +590,8 @@ public class Leelaz {
   public List<String> commandLists = new ArrayList<String>();
   private boolean startGetCommandList = false;
   private boolean endGetCommandList = false;
+  private volatile ReaderStreamBinding commandListBinding;
+  private volatile ReaderStreamBinding commandListPendingBinding;
   private boolean readBoardGmaUnsupportedPromptShown = false;
   private final ReadBoardGmaRuntimeParam readBoardGmaMaxTime =
       new ReadBoardGmaRuntimeParam("maxTime");
@@ -1888,6 +1890,8 @@ public class Leelaz {
           isCheckingName = true;
           endGetCommandList = false;
           startGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
           commandLists.clear();
           readBoardGmaUnsupportedPromptShown = false;
           if (!engineStateUnrestored) {
@@ -4449,6 +4453,11 @@ public class Leelaz {
             clearLeela0110PonderStateLocked();
           }
           readerStreamBinding = nextBinding;
+          startGetCommandList = false;
+          endGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
+          commandLists.clear();
           if (suppressGlobalEnginePresentationUntilOwned) {
             nextBinding.suppressGlobalEnginePresentation = true;
           }
@@ -4495,6 +4504,11 @@ public class Leelaz {
             clearLeela0110PonderStateLocked();
           }
           readerStreamBinding = nextBinding;
+          startGetCommandList = false;
+          endGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
+          commandLists.clear();
           if (suppressGlobalEnginePresentationUntilOwned) {
             nextBinding.suppressGlobalEnginePresentation = true;
           }
@@ -7665,12 +7679,31 @@ public class Leelaz {
   }
 
   private boolean consumeCommandListResponseLine(String line) {
+    return consumeCommandListResponseLine(line, currentReaderStreamBinding());
+  }
+
+  private boolean consumeCommandListResponseLine(String line, ReaderStreamBinding binding) {
     if (!startGetCommandList) {
       return false;
     }
+    ReaderStreamBinding current = currentReaderStreamBinding();
+    if (binding == null
+        || binding != current
+        || binding != commandListPendingBinding
+        || binding.terminated) {
+      synchronized (engineArbitrationLock()) {
+        startGetCommandList = false;
+        commandListPendingBinding = null;
+      }
+      return false;
+    }
     if (line.trim().isEmpty()) {
-      startGetCommandList = false;
-      endGetCommandList = true;
+      synchronized (engineArbitrationLock()) {
+        startGetCommandList = false;
+        endGetCommandList = true;
+        commandListBinding = binding;
+        commandListPendingBinding = null;
+      }
       if (Lizzie.frame != null && Lizzie.frame.readBoard != null) {
         Lizzie.frame.readBoard.onReadBoardGmaCapabilityReady();
       }
@@ -7680,7 +7713,9 @@ public class Leelaz {
     if (command.startsWith("=") || command.startsWith("?")) {
       return false;
     }
-    commandLists.add(command);
+    synchronized (engineArbitrationLock()) {
+      commandLists.add(command);
+    }
     return true;
   }
 
@@ -8059,8 +8094,18 @@ public class Leelaz {
         isCommandLine = true;
         String[] params = line.trim().split(" ");
         if (params.length == 1) return;
-        if (!endGetCommandList && params.length == 2 && params[1].equals("protocol_version")) {
-          startGetCommandList = true;
+        if (!endGetCommandList
+            && ((params.length == 2 && params[1].equals("protocol_version"))
+                || (params.length > 1 && params[params.length - 1].equals("protocol_version")))) {
+          ReaderStreamBinding currentBinding = currentReaderStreamBinding();
+          if (sourceEngineIncarnation == null || sourceEngineIncarnation == currentBinding) {
+            synchronized (engineArbitrationLock()) {
+              startGetCommandList = true;
+              commandListPendingBinding = currentBinding;
+              commandListBinding = null;
+              commandLists.clear();
+            }
+          }
         }
         if (isInputCommand) {
           //	getGenmoveInfoPrevious = true;
@@ -10182,7 +10227,7 @@ public class Leelaz {
           endReaderLine(binding);
           continue;
         }
-        if (consumeCommandListResponseLine(line)) {
+        if (consumeCommandListResponseLine(line, binding)) {
           lineInProgress = false;
           endReaderLine(binding);
           continue;
@@ -11227,7 +11272,7 @@ public class Leelaz {
   }
 
   void dispatchReaderLineForTest(String line) throws IOException {
-    if (consumeCommandListResponseLine(line)) {
+    if (consumeCommandListResponseLine(line, currentReaderStreamBinding())) {
       isCommandLine = false;
       return;
     }
@@ -12190,6 +12235,51 @@ public class Leelaz {
             ? binding.processWorkingDirectory
             : null;
     return new SnapshotFileAccess(this, binding, workingDirectory);
+  }
+
+  final boolean requiresInBandSnapshotRestore(ExactSnapshotRestoreAdmission admission) {
+    requireExactSnapshotRestoreAdmission(admission);
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    if (binding.terminated) {
+      throw new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.ADMISSION_STALE,
+          "Exact snapshot restore engine process is no longer current.");
+    }
+    return useRemoteCompute
+        || useJavaSSH
+        || isSSH
+        || binding.remoteTransport != null
+        || binding.javaSSH != null
+        || binding.snapshotFileAccessKind == SnapshotFileAccessKind.UNSUPPORTED;
+  }
+
+  final boolean supportsHandicapSnapshotRestore(ExactSnapshotRestoreAdmission admission) {
+    requireExactSnapshotRestoreAdmission(admission);
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    if (binding.terminated) {
+      throw new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.ADMISSION_STALE,
+          "Exact snapshot restore engine process is no longer current.");
+    }
+    synchronized (engineArbitrationLock()) {
+      return endGetCommandList
+          && commandListBinding == binding
+          && commandLists.contains("set_free_handicap");
+    }
+  }
+
+  void advertiseCommandsForTest(List<String> commands) {
+    synchronized (engineArbitrationLock()) {
+      ReaderStreamBinding binding = currentReaderStreamBinding();
+      commandLists.clear();
+      if (commands != null) {
+        commandLists.addAll(commands);
+      }
+      startGetCommandList = false;
+      commandListPendingBinding = null;
+      endGetCommandList = true;
+      commandListBinding = binding;
+    }
   }
 
   void trustDirectLocalSnapshotFileAccessForTest() {
@@ -24546,6 +24636,7 @@ public class Leelaz {
   public void enableAutoSettleMatchRulesForTest() {
     autoSettleMatchRulesForTest = true;
     endGetCommandList = true;
+    commandListBinding = currentReaderStreamBinding();
     isKatago = true;
     if (!commandLists.contains("kata-set-rules")) {
       commandLists.add("kata-set-rules");
