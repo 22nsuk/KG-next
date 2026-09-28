@@ -38,6 +38,21 @@ public class PersistenceSanitizer {
               + "[\"']?\\s+)(?>(?:\"(?>(?:\\\\[\\s\\S])|[^\"\\\\])*(?:\"|$))"
               + "|(?:'(?>(?:\\\\[\\s\\S])|[^'\\\\])*(?:'|$))"
               + "|\\\\[\\s\\S]|[^ \"'\\\\])+");
+  private static final Pattern QUOTED_ASSIGNMENT_CREDENTIAL_PARAMETER =
+      Pattern.compile(
+          "(?i)(?<![A-Za-z0-9_-])([\"'])((?:--?|/)?"
+              + CREDENTIAL_NAME
+              + "\\s*=\\s*)"
+              + "(?>(?:\\\\[\\s\\S])|(?!\\1)[^,\\r\\n])*"
+              + "(\\1|,|$)");
+  private static final Pattern COMMA_CREDENTIAL_PARAMETER =
+      Pattern.compile(
+          "(?i)(?:(?<![A-Za-z0-9_-])((?:--?|/)?"
+              + CREDENTIAL_NAME
+              + "\\s*=\\s*)(?>(?:\\\\[\\s\\S])|[^\\\"',\\r\\n])+(?=,)"
+              + "|(?<=,)((?:--?|/)?"
+              + CREDENTIAL_NAME
+              + "\\s*=\\s*)(?>(?:\\\\[\\s\\S])|[^\\\"',\\r\\n])+(?=[,\\\"']|$))");
   private static final Pattern QUOTED_CREDENTIAL_PARAMETER =
       Pattern.compile(
           "(?i)((?<![A-Za-z0-9_-])(?:--?|/)?[\\\"']?"
@@ -83,6 +98,12 @@ public class PersistenceSanitizer {
     String safe = COMMAND_CREDENTIAL_PARAMETER.matcher(text).replaceAll("$1<redacted>");
     safe = redactPercentEncodedCredentials(safe);
     safe = SENSITIVE_HEADER.matcher(safe).replaceAll("$1<redacted>");
+    safe =
+        QUOTED_ASSIGNMENT_CREDENTIAL_PARAMETER.matcher(safe).replaceAll("$1$2<redacted>$3");
+    safe =
+        COMMA_CREDENTIAL_PARAMETER
+            .matcher(safe)
+            .replaceAll(mr -> (mr.group(1) != null ? mr.group(1) : mr.group(2)) + "<redacted>");
     safe =
         QUOTED_CREDENTIAL_PARAMETER.matcher(safe).replaceAll("$1$2<redacted>$2");
     safe = CREDENTIAL_PARAMETER.matcher(safe).replaceAll("$1<redacted>");

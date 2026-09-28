@@ -116,6 +116,53 @@ class DiagnosticBundleExporterTest {
     }
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"true, false", "true, true", "false, false"})
+  void contributionCredentialsAreRedactedAcrossLogsAndFailureExports(
+      boolean withNeighbor, boolean withApostrophe) throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
+    String secret = "CANARY_CONTRIB" + (withApostrophe ? "'" : " ") + "space&suffix;end";
+    String command = "katago contribute -override-config \"password=" + secret + "\""
+        + (withNeighbor ? ",\"maxSimultaneousGames=1\"" : "");
+    EngineObservation.recordProcessDetails("contribution", "process-started", "probe", 1, command);
+    runtime.awaitIdle();
+    Path log = runtime.logsDirectory().resolve("app.log");
+    String persisted = Files.readString(log);
+    assertFalse(persisted.contains("CANARY_CONTRIB"));
+    assertFalse(persisted.contains("suffix;end"));
+    if (withNeighbor) assertTrue(persisted.contains("maxSimultaneousGames=1"));
+    String template = persisted.lines().filter(line -> line.contains("process-started"))
+        .findFirst().orElseThrow();
+    Files.writeString(log, template.substring(0, template.indexOf("command="))
+        + "command=" + command + "\n", StandardOpenOption.APPEND);
+    try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var parts = featurecat.lizzie.util.Utils.splitCommand(command);
+      var builder = new ProcessBuilder(parts);
+      var attempt = service.begin("contribution", "CONTRIBUTE", parts, true);
+      attempt.capture(builder);
+      var diagnostic = attempt.fail("process-create", "fixture failure");
+      assertFalse(diagnostic.shareText().contains("suffix;end"));
+      var request = new DiagnosticBundleRequest(runtime, EnumSet.noneOf(TraceScope.class),
+          false, false, new JSONObject(), emptySnapshot(), ReadBoardLoggingSnapshot.detached(),
+          "next-dev", "unknown", diagnostic);
+      var entries = unzipEntries(new DiagnosticBundleExporter(tempDir.resolve("contribution-export"))
+          .export(request));
+      if (withNeighbor) {
+        assertTrue(text(entries, "snapshots/engine-startup-failure.json")
+            .contains("maxSimultaneousGames=1"));
+      }
+      assertEquals(2, text(entries, "logs/lizzie/app.log").lines()
+          .filter(line -> line.contains("process-started")).count());
+      for (byte[] bytes : entries.values()) {
+        String value = new String(bytes, StandardCharsets.UTF_8);
+        assertFalse(value.contains("CANARY_CONTRIB"));
+        assertFalse(value.contains("suffix;end"));
+      }
+      assertEquals(parts, builder.command());
+    }
+  }
+
   @Test
   void defaultExportWritesAtomicPackageWithManifestAndSafeSources() throws Exception {
     LoggingRuntime runtime = start();

@@ -110,6 +110,10 @@ ZIP 中的 `logs/lizzie/app.log` 和 `logs/lizzie/crash.log` 使用 LF 行尾，
 
 启动失败快照中的命令文本保留各参数的引号边界，使含空格的口令在失败详情和诊断附件中也能完整脱敏。
 
+KataGo contribution 的 `-override-config` 中，`password=...` 引号赋值及分词后的逗号分隔赋值也会完整脱敏，保留相邻的 `maxSimultaneousGames` 等非敏感配置；实际传给进程的口令不变。此保护覆盖日志落盘、启动失败快照和诊断包中的旧日志副本。
+
+自建 WebSocket 算力连接成功提示仅显示端点名称、主机和端口，不显示 URL 用户信息、路径或查询参数；实际握手仍使用原始连接地址。
+
 相关入口：
 
 - [安装指南](INSTALL.md)
