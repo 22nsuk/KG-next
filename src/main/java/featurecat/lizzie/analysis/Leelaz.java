@@ -8493,7 +8493,7 @@ public class Leelaz {
     if (this != Lizzie.leelaz) return;
     if (Lizzie.frame != null
         && Lizzie.frame.readBoard != null
-        && (Lizzie.frame.readBoard.isReadBoardGmaAutoPlayActive()
+        && (Lizzie.frame.readBoard.isReadBoardGmaEngineBusy()
             || Lizzie.frame.readBoard.isNormalAutoPlayTransitionPending())) return;
     if (LizzieFrame.toolbar.isAutoPlay) {
       if ((Lizzie.board.getHistory().isBlacksTurn()

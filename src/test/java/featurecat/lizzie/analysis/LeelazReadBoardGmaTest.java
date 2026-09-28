@@ -281,6 +281,10 @@ class LeelazReadBoardGmaTest {
       readBoard.parseLine("play>black>5 1000 0");
       var drained = engine.prepareReadBoardGmaDrain();
       readBoard.parseLine("play>black>5 1000 0 gma");
+      engine.parseAnalysisLineForTest(
+          "info move D4 visits 2000 winrate 0.6 prior 0.7 lcb 0.6 scoreMean 1 scoreStdev 2 order 0 pv D4");
+      assertFalse(output.commands().stream().anyMatch(c -> c.startsWith("play ")),
+          () -> "retired GMA info triggered ordinary placement: " + output.commands());
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(engine,
               c -> ExactSnapshotRestoreProtocolFixture.Response.success());
@@ -5310,6 +5314,9 @@ class LeelazReadBoardGmaTest {
 
     @Override
     public void refresh() {}
+
+    @Override
+    public void requestAnalysisRefresh() {}
 
     @Override
     public void reSetLoc() {}
