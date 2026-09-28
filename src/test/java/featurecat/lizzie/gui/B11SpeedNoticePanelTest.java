@@ -5,16 +5,42 @@ import static org.junit.jupiter.api.Assertions.*;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import java.awt.Component;
+import java.awt.CardLayout;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Rectangle;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
 import javax.swing.JTextArea;
+import javax.swing.JPanel;
+import javax.swing.JViewport;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 
 class B11SpeedNoticePanelTest {
+  @Test
+  void veryNarrowBenchmarkUsesSafeScrollingAndMetadataDeterminesHeight() {
+    var cards = new KataGoAutoSetupDialog.ViewportWidthPanel(new CardLayout());
+    JPanel page = new JPanel();
+    page.putClientProperty("readable-viewport-width", 640);
+    cards.add(page);
+    JViewport viewport = new JViewport();
+    viewport.setView(cards);
+    viewport.setSize(120, 200);
+    assertFalse(cards.getScrollableTracksViewportWidth());
+    assertEquals(640, cards.getPreferredSize().width);
+    viewport.setSize(800, 600);
+    assertTrue(cards.getScrollableTracksViewportWidth());
+    JPanel metadata = new JPanel();
+    metadata.setPreferredSize(new Dimension(500, 220));
+    var report = new KataGoAutoSetupDialog.BenchmarkReportBody(new JPanel(), new JPanel(), metadata);
+    report.setSize(520, 500);
+    report.setSize(520, report.getPreferredSize().height);
+    report.doLayout();
+    assertTrue(metadata.getHeight() >= 220);
+  }
+
   @Test
   void allLanguagesWrapAtDesktopAndNarrowWidthsAtEveryRequestedFontScale() throws Exception {
     SwingUtilities.invokeAndWait(

@@ -414,7 +414,7 @@ public class KataGoAutoSetupDialog extends JDialog {
     detailCards.add(createAccelerationSection(), CARD_ACCELERATION);
     JScrollPane detailScrollPane = new JScrollPane(detailCards);
     detailScrollPane.setBorder(null);
-    detailScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+    detailScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_AS_NEEDED);
     detailScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
     detailScrollPane.getVerticalScrollBar().setUnitIncrement(14);
     detailScrollPane.getViewport().setOpaque(false);
@@ -1726,6 +1726,7 @@ public class KataGoAutoSetupDialog extends JDialog {
 
   private JPanel createBenchmarkSection() {
     JPanel section = new JPanel(new BorderLayout(0, 32));
+    section.putClientProperty("readable-viewport-width", 640);
     section.setOpaque(false);
     section.setBorder(BorderFactory.createEmptyBorder(28, 0, 0, 0));
 
@@ -2055,6 +2056,26 @@ public class KataGoAutoSetupDialog extends JDialog {
       super(layout);
     }
 
+    private int readableWidth() {
+      for (Component component : getComponents()) {
+        if (component.isVisible() && component instanceof JComponent page) {
+          Object width = page.getClientProperty("readable-viewport-width");
+          if (width instanceof Integer value) return value;
+        }
+      }
+      return 0;
+    }
+
+    @Override
+    public Dimension getPreferredSize() {
+      Dimension size = super.getPreferredSize();
+      int minimum = readableWidth();
+      if (minimum > 0 && getParent() != null) {
+        size.width = Math.max(minimum, getParent().getWidth());
+      }
+      return size;
+    }
+
     @Override
     public Dimension getPreferredScrollableViewportSize() {
       return getPreferredSize();
@@ -2072,7 +2093,7 @@ public class KataGoAutoSetupDialog extends JDialog {
 
     @Override
     public boolean getScrollableTracksViewportWidth() {
-      return true;
+      return getParent() == null || getParent().getWidth() >= readableWidth();
     }
 
     @Override
@@ -7150,7 +7171,18 @@ public class KataGoAutoSetupDialog extends JDialog {
 
     @Override
     public Dimension getPreferredSize() {
-      return new Dimension(760, preferredHeightForWidth(preferredLayoutWidth()));
+      int width = preferredLayoutWidth();
+      int metricsHeight = metricHeight();
+      int contentHeight =
+          useCompactLayout(width)
+              ? metricsHeight + GAP + metadata.getPreferredSize().height
+              : Math.max(metricsHeight, metadata.getPreferredSize().height);
+      return new Dimension(760, Math.max(preferredHeightForWidth(width), contentHeight));
+    }
+
+    private int metricHeight() {
+      return Math.max(
+          150, Math.max(nnMetric.getPreferredSize().height, visitsMetric.getPreferredSize().height));
     }
 
     @Override
@@ -7180,7 +7212,7 @@ public class KataGoAutoSetupDialog extends JDialog {
       int width = Math.max(0, getWidth() - insets.left - insets.right);
       int height = Math.max(0, getHeight() - insets.top - insets.bottom);
       if (useCompactLayout(width)) {
-        int topHeight = Math.min(150, Math.max(116, height * 52 / 100));
+        int topHeight = Math.min(metricHeight(), Math.max(116, height * 52 / 100));
         int metricWidth = Math.max(0, (width - GAP) / 2);
         nnMetric.setBounds(insets.left, insets.top, metricWidth, topHeight);
         visitsMetric.setBounds(insets.left + metricWidth + GAP, insets.top, metricWidth, topHeight);
