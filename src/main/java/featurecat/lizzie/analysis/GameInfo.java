@@ -5,7 +5,7 @@ import featurecat.lizzie.enginegame.EngineGameRecord;
 import featurecat.lizzie.enginegame.EngineGameRecordContext;
 import featurecat.lizzie.enginegame.EngineGameSaveSnapshot;
 import featurecat.lizzie.gui.LizzieFrame;
-import java.util.Date;
+import java.time.LocalDate;
 import java.util.Objects;
 
 public class GameInfo {
@@ -15,7 +15,8 @@ public class GameInfo {
 
   private String playerBlack = "";
   private String playerWhite = "";
-  private Date date = new Date();
+  // SGF DT expression, including partial dates and lists; null means no imported DT.
+  private String date = LocalDate.now().toString();
   private double komi = DEFAULT_KOMI;
   private int handicap = 0;
   private String result = "";
@@ -37,11 +38,11 @@ public class GameInfo {
     return playerBlack;
   }
 
-  public Date getDate() {
+  public String getDate() {
     return date;
   }
 
-  public void setDate(Date date) {
+  public void setDate(String date) {
     this.date = date;
   }
 
@@ -146,7 +147,7 @@ public class GameInfo {
     GameInfo copy = new GameInfo();
     copy.playerBlack = playerBlack;
     copy.playerWhite = playerWhite;
-    copy.date = date == null ? null : new Date(date.getTime());
+    copy.date = date;
     copy.komi = komi;
     copy.changedKomi = changedKomi;
     copy.handicap = handicap;
@@ -165,7 +166,7 @@ public class GameInfo {
     this.handicap = 0;
     this.playerBlack = "";
     this.playerWhite = "";
-    this.date = new Date();
+    this.date = LocalDate.now().toString();
     this.result = "";
     clearEngineGameHistory();
     Lizzie.frame.setResult("");
