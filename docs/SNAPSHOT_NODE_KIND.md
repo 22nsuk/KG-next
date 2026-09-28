@@ -205,8 +205,10 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 已有节点命中保留原节点 identity 和全部已证明历史，不克隆目标、补造 MOVE/PASS/SNAPSHOT 或删除尾部。前次同步尚未确认或已失败时，新目标使用自己的完整恢复路线，不把未确认的本地起点当作引擎盘面。
 - 增量同步继承起点已有的位置 response lineage，包含本次接受前已排队或已写出的普通位置命令；前置 play/undo 失败不能被新同步 capture 清除。只有完整 root/exact 替换路线可建立独立恢复 lineage，且仍须确认本次全部 required responses。
 - ReadBoard 是本次 final resume disposition owner；延迟回调与 Board 确认两者均已完成后，才允许对同一目标最多启动一次普通分析。回调不再调用棋谱加载恢复，不发第二次 clear/replay/loadsgf，也不启动自动棋谱快析。
+- 普通分析驱动的 ReadBoard 自动落子也走上述收集、盘面确认和单次 final resume；`isPondering` 或 `analysis-started` 仅表示分析意图，不能替代物理分析命令及有效输出。确认后的自动落子恢复由 ReadBoard 专属入口执行，不放开通用棋谱加载恢复对自动落子模式的排除（Issue #560）。
 - 最终 resume 重查 sync epoch、confirmed-local-move 保护、Board identity/context revision、目标节点、captured primary generation、引擎可用性和 read-board 分析设置；错误、发送失败、超时及过期目标恢复零次。
 - 用户分析暂停立即失效 pending ReadBoard resume，并继续遵守普通队列及 selected-before-write 取消规则。暂停后用户再次继续分析，也不能使旧同步回调重新取得恢复资格。
+- 停止同步、关闭自动落子、切换自动落子执子方或模式都会失效旧的 pending resume；随后重新开启也不能复活旧回调。最终恢复还须满足当前自动落子启用、非用户暂停及既有自动分析/对局互斥条件。GMA 仍由其独立调度器负责，不转入普通 `kata-analyze` 路径（Issue #560）。
 - 一致且无需恢复的重复快照不重新捕获恢复或重启合法分析流。普通首次同步直接采用最终视图，不以先回退再延迟前进触发额外分析。
 - 无引擎时仍完成本地 board/history 更新；GMA 和对局 continuation 保持独立的路由与 ownership exclusion。手动导航、手动分析恢复及普通棋谱加载策略保持原契约。
 
