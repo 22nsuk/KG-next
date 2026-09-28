@@ -193,6 +193,7 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - Board 在首次位置转发前冻结目标节点、context revision、轮次、盘尺寸、主引擎 generation 与 captured mirror；exact plan 或 root 命令序列同时冻结。后续恢复和 completion 不重新选择当前 history 或引擎槽位。
 - 普通 resend、跨静态节点的历史导航与 removed-stone 节点恢复共用 Board owner 的目标确认。恢复中的真实 MOVE/PASS 不单独触发最终目标分析；成功 disposition 必须同时满足冻结目标仍有效、用户未暂停分析和捕获引擎身份仍有效。
 - capture 已完成但首条位置命令尚未入队时，普通分析请求也保持等待；同一原队列允许其依赖的位置命令和最终 fence 先执行。owner 确认后释放该请求；取消或失败只退休所属 capture，不影响后继恢复。
+- 新完整恢复 capture 建立后，旧恢复的后续位置命令仍归属旧 lineage，不得把 endpoint 的最新 queued lineage 改回旧值；新 owner 等待自己的全部响应和 fence。旧恢复的失败或取消不影响新 capture 的确认与分析恢复。
 - 用户分析暂停同时退休原普通队列及已选中但尚未取得物理写出许可的普通分析请求，包括恢复等待期间新增的请求；取消与 `beginOutputWrite` 竞争同一命令状态，计数只退休一次。位置命令、foreground restore 与 engine-game owner 的命令不随此取消；已经取得写出许可的命令沿用既有停止流程。
 - `Leelaz.PositionRestore` 仅提供捕获、作用域内命令执行与 callback confirmation，复用 ordinary queue、精确 response identity、timeout 和 retirement。一次复合恢复的 clear、尺寸/komi、loadsgf/set-position 与真实 tail 共用所属 endpoint 的失败 lineage；中间完整替换命令不得重置本次先前失败。
 - 最终 board synchronization fence 同时等待 captured authority/mirror 的全部 required position responses 与各自最终 name 响应。单独的 name 成功不能覆盖先前位置命令错误、发送失败或超时；迟到响应只结清原操作，不能结算或使不同后继操作失效。
@@ -207,8 +208,10 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 已有节点命中保留原节点 identity 和全部已证明历史，不克隆目标、补造 MOVE/PASS/SNAPSHOT 或删除尾部。前次同步尚未确认或已失败时，新目标使用自己的完整恢复路线，不把未确认的本地起点当作引擎盘面。
 - 增量同步继承起点已有的位置 response lineage，包含本次接受前已排队或已写出的普通位置命令；前置 play/undo 失败不能被新同步 capture 清除。只有完整 root/exact 替换路线可建立独立恢复 lineage，且仍须确认本次全部 required responses。
 - ReadBoard 是本次 final resume disposition owner；延迟回调与 Board 确认两者均已完成后，才允许对同一目标最多启动一次普通分析。回调不再调用棋谱加载恢复，不发第二次 clear/replay/loadsgf，也不启动自动棋谱快析。
+- 普通分析驱动的 ReadBoard 自动落子也走上述收集、盘面确认和单次 final resume；`isPondering` 或 `analysis-started` 仅表示分析意图，不能替代物理分析命令及有效输出。确认后的自动落子恢复由 ReadBoard 专属入口执行，不放开通用棋谱加载恢复对自动落子模式的排除（Issue #560）。
 - 最终 resume 重查 sync epoch、confirmed-local-move 保护、Board identity/context revision、目标节点、captured primary generation、引擎可用性和 read-board 分析设置；错误、发送失败、超时及过期目标恢复零次。
 - 用户分析暂停立即失效 pending ReadBoard resume，并继续遵守普通队列及 selected-before-write 取消规则。暂停后用户再次继续分析，也不能使旧同步回调重新取得恢复资格。
+- 停止同步、关闭自动落子、切换自动落子执子方或模式都会失效旧的 pending resume；随后重新开启也不能复活旧回调。最终恢复还须满足当前自动落子启用、非用户暂停及既有自动分析/对局互斥条件。GMA 仍由其独立调度器负责，不转入普通 `kata-analyze` 路径（Issue #560）。
 - 一致且无需恢复的重复快照不重新捕获恢复或重启合法分析流。普通首次同步直接采用最终视图，不以先回退再延迟前进触发额外分析。
 - 无引擎时仍完成本地 board/history 更新；GMA 和对局 continuation 保持独立的路由与 ownership exclusion。手动导航、手动分析恢复及普通棋谱加载策略保持原契约。
 

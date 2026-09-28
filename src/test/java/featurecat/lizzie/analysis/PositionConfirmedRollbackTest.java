@@ -275,11 +275,14 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void acceptedCaptureResumesOnlyAfterItsFinalMove() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void acceptedCaptureResumesOnlyAfterItsFinalMove(boolean autoPlay) throws Exception {
     BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
     try (Harness harness = Harness.open()) {
       LizzieFrame.boardRenderer = allocate(SilentBoardRenderer.class);
+      harness.setAutoPlay(autoPlay);
+      harness.engine.requireResponseBeforeSend = false;
       Stone[] before = emptyStones(BOARD_SIZE, BOARD_SIZE);
       before[Board.getIndex(0, 1)] = Stone.BLACK;
       before[Board.getIndex(1, 0)] = Stone.BLACK;
@@ -318,11 +321,18 @@ class PositionConfirmedRollbackTest {
               0);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
-              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+              harness.engine,
+              command -> command.startsWith("play ")
+                  ? null
+                  : ExactSnapshotRestoreProtocolFixture.Response.success());
       harness.engine.ponder();
       awaitRawCommand(transport, "kata-analyze", 0);
       harness.acceptSnapshot(new BoardHistoryNode(expected));
+      String move = awaitRawCommand(transport, "play B B17", 0);
       harness.frame.scheduledResume.run();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(1, payloadCount(transport, "kata-analyze"));
+      acknowledge(harness.engine, move);
       awaitRawCommand(transport, "kata-analyze", 1);
       assertEquals(List.of("play B B17"), commandsWithPrefix(transport, "play "));
       assertEquals(2, payloadCount(transport, "kata-analyze"));
@@ -333,6 +343,13 @@ class PositionConfirmedRollbackTest {
       assertArrayEquals(after, actual.stones);
       assertEquals(1, actual.blackCaptures);
       assertFalse(actual.blackToPlay);
+      harness.engine.parseAnalysisLineForTest(info(1_234, 0.6));
+      assertAnalysis(actual, 1_234, 60);
+      List<String> beforeRepeatedFrame = transport.commands();
+      harness.acceptSnapshot(history.getCurrentHistoryNode());
+      harness.frame.scheduledResume.run();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(beforeRepeatedFrame, transport.commands());
     } finally {
       LizzieFrame.boardRenderer = previousRenderer;
     }
@@ -390,18 +407,24 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void replacingEngineWhileSyncIsPendingCannotResumeTheReplacement() throws Exception {
-    assertReplacedSyncDoesNotResume(true);
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void replacingEngineWhileSyncIsPendingCannotResumeTheReplacement(boolean autoPlay)
+      throws Exception {
+    assertReplacedSyncDoesNotResume(true, autoPlay);
   }
 
-  @Test
-  void overwritingHistoryWhileSyncIsPendingCannotResumeTheReplacementHistory() throws Exception {
-    assertReplacedSyncDoesNotResume(false);
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void overwritingHistoryWhileSyncIsPendingCannotResumeTheReplacementHistory(boolean autoPlay)
+      throws Exception {
+    assertReplacedSyncDoesNotResume(false, autoPlay);
   }
 
-  private void assertReplacedSyncDoesNotResume(boolean replaceEngine) throws Exception {
+  private void assertReplacedSyncDoesNotResume(boolean replaceEngine, boolean autoPlay)
+      throws Exception {
     try (Harness harness = Harness.open()) {
+      harness.setAutoPlay(autoPlay);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
               harness.engine,
@@ -439,10 +462,12 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void disablingReadBoardAnalysisBeforeConfirmationKeepsAcceptedPositionWithoutResume()
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void disablingReadBoardAnalysisBeforeConfirmationKeepsAcceptedPositionWithoutResume(boolean autoPlay)
       throws Exception {
     try (Harness harness = Harness.open()) {
+      harness.setAutoPlay(autoPlay);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
               harness.engine,
@@ -462,9 +487,38 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void userPauseRetiresOldSyncResumeEvenAfterExplicitContinue() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"stopAutoPlay", "noboth"})
+  void stoppedAutoPlayCannotBeRevivedByOldConfirmationAfterReenable(String stop) throws Exception {
     try (Harness harness = Harness.open()) {
+      harness.setAutoPlay(true);
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine,
+              command -> command.equals("undo")
+                  ? null
+                  : ExactSnapshotRestoreProtocolFixture.Response.success());
+      harness.acceptEmptySnapshot();
+      String undo = awaitRawCommand(transport, "undo", 0);
+      Runnable oldResume = harness.frame.scheduledResume;
+      harness.readBoard.parseLine(stop);
+      harness.setAutoPlay(true);
+      oldResume.run();
+      acknowledge(harness.engine, undo);
+      awaitRawCommand(transport, "name", 0);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      oldResume.run();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(0, payloadCount(transport, "kata-analyze"));
+      assertSame(harness.p0, harness.board.getHistory().getCurrentHistoryNode());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void userPauseRetiresOldSyncResumeEvenAfterExplicitContinue(boolean autoPlay) throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.setAutoPlay(autoPlay);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
               harness.engine,
@@ -2455,6 +2509,15 @@ class PositionConfirmedRollbackTest {
           transport,
           p0,
           p1);
+    }
+
+    private void setAutoPlay(boolean enabled) {
+      frame.isAnaPlayingAgainstLeelaz = enabled;
+      frame.bothSync = enabled;
+      LizzieFrame.toolbar.isAutoPlay = enabled;
+      LizzieFrame.toolbar.chkAutoPlay = new javax.swing.JCheckBox();
+      LizzieFrame.toolbar.chkAutoPlayBlack = new javax.swing.JCheckBox();
+      LizzieFrame.toolbar.chkAutoPlayWhite = new javax.swing.JCheckBox();
     }
 
     private void acceptEmptySnapshot() throws Exception {

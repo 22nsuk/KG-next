@@ -898,6 +898,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
         Lizzie.frame.floatBoard.setEditButton();
     }
     if (line.startsWith("noboth")) {
+      invalidatePendingSyncAnalysisResume();
       clearReadBoardGmaAutoPlay("noboth");
       readBoardTurnTrusted = false;
       synchronized (LOCAL_MOVE_CONFIRMATION_LOCK) {
@@ -908,11 +909,13 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
         Lizzie.frame.floatBoard.setEditButton();
     }
     if (line.startsWith("stopAutoPlay")) {
+      invalidatePendingSyncAnalysisResume();
       clearReadBoardGmaAutoPlay("stopAutoPlay");
       LizzieFrame.toolbar.chkAutoPlay.setSelected(false);
       LizzieFrame.toolbar.isAutoPlay = false;
     }
     if (line.startsWith("endsync")) {
+      invalidatePendingSyncAnalysisResume();
       stopLocalMoveConfirmation();
       clearReadBoardGmaAutoPlay("endsync");
       noMsg = true;
@@ -929,6 +932,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       publishCurrentReadBoardDiagnosticsSnapshot();
     }
     if (line.startsWith("stopsync")) {
+      invalidatePendingSyncAnalysisResume();
       stopLocalMoveConfirmation();
       clearReadBoardGmaAutoPlay("stopsync");
       clearPendingRemoteContext();
@@ -970,6 +974,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
             && autoPlayColor != readBoardGmaAutoPlayColor) {
           invalidateReadBoardGmaPhysicalRequestIfPending("play-color-switch");
         }
+        invalidatePendingSyncAnalysisResume();
         clearFailedLocalMoveStateIfAutoPlaySideChanged(autoPlayColor);
         if (hasFailedLocalMoveStateToPreserve()) {
           localMoveSyncDebug(
@@ -1084,6 +1089,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
     }
 
     if (line.trim().equals("noponder")) {
+      invalidatePendingSyncAnalysisResume();
       clearReadBoardGmaAutoPlay("noponder");
       if (Lizzie.frame.isPlayingAgainstLeelaz) {
         Lizzie.frame.isPlayingAgainstLeelaz = false;
@@ -1595,9 +1601,9 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       trackingFrameProcessing = processing;
     }
     try {
-      if (isReadBoardGmaEngineBusy()
-          || Lizzie.frame.isPlayingAgainstLeelaz
-          || Lizzie.frame.isAnaPlayingAgainstLeelaz) {
+      if (readBoardGmaAutoPlayActive
+          || isReadBoardGmaEngineBusy()
+          || Lizzie.frame.isPlayingAgainstLeelaz) {
         synchronized (Lizzie.board) {
           applySyncBoardStones(isSecondTime);
           publishAcceptedTrackingEligibility(processing);
@@ -5526,10 +5532,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
               + pendingLocalMoveState());
       clearFailedLocalMoveSuppression();
       clearFailedLocalMoveRecovery();
-      if (!Lizzie.leelaz.isPondering()) {
-        Lizzie.leelaz.ponder();
-      }
-      return true;
+      return resumeAutoPlayAnalysisAfterSyncIfNeeded(reason, targetNode);
     }
     localMoveSyncDebug(
         "failed local move recovery skip no active game reason="
@@ -5605,11 +5608,19 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
 
   private boolean resumeAutoPlayAnalysisAfterSyncIfNeeded(
       String reason, BoardHistoryNode targetNode) {
+    return resumeAutoPlayAnalysisAfterSyncIfNeeded(reason, targetNode, false);
+  }
+
+  private boolean resumeAutoPlayAnalysisAfterSyncIfNeeded(
+      String reason, BoardHistoryNode targetNode, boolean confirmed) {
     if (Lizzie.frame == null || !Lizzie.frame.isAnaPlayingAgainstLeelaz) {
       return false;
     }
     if (readBoardGmaAutoPlayActive) {
       return scheduleReadBoardGmaIfNeeded(reason + "-resume-auto-play");
+    }
+    if (shutdownStarted || !Lizzie.frame.canResumeReadBoardAutoPlayAnalysis()) {
+      return true;
     }
     if (hasFailedLocalMoveStateToPreserve()) {
       if (failedLocalMoveAwaitingRemoteObservation) {
@@ -5674,7 +5685,13 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
               + isReadBoardAnalysisEngineAvailable());
       return false;
     }
-    if (Lizzie.leelaz.isPondering()) {
+    if (isCollectingSyncRecovery()) {
+      // Ordinary frame changes already registered their final target. A stable NO_CHANGE frame
+      // must not replace an in-flight confirmation or restart the accepted analysis stream.
+      if (!"sync".equals(reason)) scheduleResumeAnalysisAfterSync(targetNode);
+      return true;
+    }
+    if (!confirmed && Lizzie.leelaz.isPondering()) {
       if ("rebuild".equals(reason)) {
         localMoveSyncDebug(
             "resume auto-play analysis already pondering reason="
@@ -5691,13 +5708,17 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
             + historyNodeSummary(targetNode)
             + " readBoardPonder="
             + (Lizzie.config != null && Lizzie.config.readBoardPonder));
-    Lizzie.leelaz.ponder();
+    if (confirmed) {
+      Lizzie.leelaz.ponder();
+    } else {
+      scheduleResumeAnalysisAfterSync(targetNode);
+    }
     return true;
   }
 
   private void resumeAnalysisAfterSyncIfStillCurrent(
       long scheduledEpoch, BoardHistoryNode targetNode) {
-    if (scheduledEpoch != syncAnalysisEpoch) {
+    if (shutdownStarted || scheduledEpoch != syncAnalysisEpoch) {
       localMoveSyncDebug(
           "resumeAnalysisAfterSync skip stale epoch scheduled="
               + scheduledEpoch
@@ -5747,6 +5768,10 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
             + historyNodeSummary(targetNode)
             + " enginePonderingBefore="
             + (Lizzie.leelaz != null && Lizzie.leelaz.isPondering()));
+    if (Lizzie.frame.isAnaPlayingAgainstLeelaz) {
+      resumeAutoPlayAnalysisAfterSyncIfNeeded("confirmed-sync", targetNode, true);
+      return;
+    }
     boolean resumed = Lizzie.frame.ensureAnalysisResumedAfterSyncLoad();
     localMoveSyncDebug(
         "resumeAnalysisAfterSync result resumed="

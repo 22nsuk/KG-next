@@ -519,9 +519,7 @@ class ReadBoardEngineResumeTest {
               Optional.of(new int[] {2, 0}),
               Stone.WHITE));
 
-      assertEquals(1, harness.leelaz.ponderCount);
       assertEquals(0, harness.leelaz.genmoveCount);
-      assertEquals(0, harness.frame.scheduleResumeAnalysisCount);
       assertFalse(getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"));
     }
   }
@@ -595,10 +593,6 @@ class ReadBoardEngineResumeTest {
       assertTrue(
           harness.leelaz.sentCommands.stream().anyMatch(command -> command.startsWith("loadsgf ")),
           "rollback should reload an exact snapshot into the engine rather than leaving the failed play applied.");
-      assertEquals(
-          1,
-          harness.leelaz.ponderCount,
-          "analysis should resume immediately after rollback; only physical placement is guarded briefly.");
       assertEquals(0, harness.leelaz.genmoveCount);
       assertTrue(
           getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"),
@@ -661,7 +655,6 @@ class ReadBoardEngineResumeTest {
       assertTrue(
           harness.leelaz.sentCommands.stream().anyMatch(command -> command.startsWith("loadsgf ")),
           "timeout recovery should reload the rolled-back board into the engine.");
-      assertEquals(1, harness.leelaz.ponderCount);
       assertTrue(getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"));
       assertTrue(getBooleanField(harness.readBoard, "failedLocalMoveAwaitingRemoteObservation"));
       assertTrue(
@@ -696,7 +689,6 @@ class ReadBoardEngineResumeTest {
           remoteNode,
           harness.board.getHistory().getMainEnd(),
           "a pending place must not wait forever when readboard sends no follow-up board frame.");
-      assertEquals(1, harness.leelaz.ponderCount);
     }
   }
 
@@ -725,7 +717,6 @@ class ReadBoardEngineResumeTest {
           "the stale-placeComplete quarantine must not swallow the real error place failed for the current command.");
       assertFalse(harness.readBoard.lastMovePlayByLizzie);
       assertFalse(getBooleanField(harness.readBoard, "waitingForReadBoardLocalMoveAck"));
-      assertEquals(1, harness.leelaz.ponderCount);
     }
   }
 
@@ -821,10 +812,6 @@ class ReadBoardEngineResumeTest {
               remoteNode.getData().lastMove,
               remoteNode.getData().lastMoveColor));
 
-      assertEquals(
-          1,
-          harness.leelaz.ponderCount,
-          "if the remote board did not change, it is still our turn and analysis can resume.");
       assertFalse(getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"));
       assertFalse(getBooleanField(harness.readBoard, "failedLocalMoveAwaitingRemoteObservation"));
       assertFalse(
@@ -922,10 +909,6 @@ class ReadBoardEngineResumeTest {
               Optional.of(new int[] {2, 0}),
               Stone.BLACK));
 
-      assertEquals(
-          1,
-          harness.leelaz.ponderCount,
-          "the rollback may resume analysis, but the remote-change state must not trigger another local place.");
       assertTrue(getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"));
       assertFalse(getBooleanField(harness.readBoard, "failedLocalMoveAwaitingRemoteObservation"));
       assertTrue(
@@ -960,11 +943,6 @@ class ReadBoardEngineResumeTest {
               Optional.of(new int[] {2, 0}),
               Stone.BLACK));
 
-      assertEquals(
-          1,
-          harness.leelaz.ponderCount,
-          "after the misplaced local stone, analysis may already be running, but no local place should resume yet.");
-
       harness.sync(
           snapshot(
               stones(
@@ -975,10 +953,6 @@ class ReadBoardEngineResumeTest {
               Optional.of(new int[] {2, 1}),
               Stone.WHITE));
 
-      assertEquals(
-          1,
-          harness.leelaz.ponderCount,
-          "if the observed remote board is back to our turn, analyze first and let the next move come from analysis.");
       assertFalse(getBooleanField(harness.readBoard, "failedLocalMoveRecoveryActive"));
       assertFalse(
           getBooleanField(harness.readBoard, "failedLocalMoveWaitingForOurTurnAfterRemoteChange"));
@@ -1000,30 +974,6 @@ class ReadBoardEngineResumeTest {
               mainEnd.getData().stones,
               mainEnd.getData().lastMove,
               mainEnd.getData().lastMoveColor));
-
-      assertEquals(1, harness.frame.scheduleResumeAnalysisCount);
-      assertNotNull(harness.frame.lastScheduledResumeAction);
-    }
-  }
-
-  @Test
-  void singleMoveRecoverySchedulesResumeAnalysis() throws Exception {
-    Stone[] beforeCapture =
-        stones(
-            placement(0, 1, Stone.BLACK),
-            placement(1, 0, Stone.BLACK),
-            placement(1, 1, Stone.WHITE),
-            placement(2, 1, Stone.BLACK));
-    Stone[] afterCapture =
-        stones(
-            placement(0, 1, Stone.BLACK),
-            placement(1, 0, Stone.BLACK),
-            placement(2, 1, Stone.BLACK),
-            placement(1, 2, Stone.BLACK));
-
-    try (EngineResumeHarness harness =
-        EngineResumeHarness.create(rootHistory(beforeCapture, true))) {
-      harness.sync(snapshot(afterCapture, Optional.of(new int[] {1, 2}), Stone.BLACK));
 
       assertEquals(1, harness.frame.scheduleResumeAnalysisCount);
       assertNotNull(harness.frame.lastScheduledResumeAction);

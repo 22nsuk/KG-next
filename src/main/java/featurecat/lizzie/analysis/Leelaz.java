@@ -12098,19 +12098,25 @@ public class Leelaz {
     boolean positionMutation = analysisStateMutation(command.command) != AnalysisStateMutation.NONE;
     if (binding != null
         && (positionMutation || isAnalysisOutputOwnershipCommand(command.command))) {
-      AnalysisStateLineage scopedLineage = positionRestoreLineageContext.get();
+      AnalysisStateLineage capturedRestoreLineage = positionRestoreLineageContext.get();
+      AnalysisStateLineage scopedLineage = capturedRestoreLineage;
       if (scopedLineage == null && command.restoreAdmission != null) {
         scopedLineage = command.restoreAdmission.lineageFor(this);
       }
       if (binding.queuedAnalysisStateLineage == null) {
         binding.queuedAnalysisStateLineage = binding.analysisStateLineage;
       }
-      if (positionMutation && scopedLineage != null) {
+      if (positionMutation && scopedLineage != null && capturedRestoreLineage == null) {
         binding.queuedAnalysisStateLineage = scopedLineage;
-      } else if (positionMutation && startsFreshAnalysisStateLineage(command.command)) {
+      } else if (positionMutation
+          && scopedLineage == null
+          && startsFreshAnalysisStateLineage(command.command)) {
         binding.queuedAnalysisStateLineage = new AnalysisStateLineage();
       }
-      command.bindAnalysisStateLineage(binding.queuedAnalysisStateLineage, binding);
+      // A captured restore already published its lineage. Its remaining commands must retain
+      // that lineage without replacing a newer capture made while this restore was in flight.
+      command.bindAnalysisStateLineage(
+          scopedLineage != null ? scopedLineage : binding.queuedAnalysisStateLineage, binding);
       if (positionMutation) {
         command.registerAnalysisStateResponse();
         analysisOutputGeneration.incrementAndGet();

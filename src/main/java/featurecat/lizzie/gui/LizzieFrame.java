@@ -13719,6 +13719,9 @@ public class LizzieFrame extends JFrame {
       deferUntilHumanSlExit(this::stopAiPlayingAndPolicy);
       return true;
     }
+    if (isAnaPlayingAgainstLeelaz && readBoard != null) {
+      readBoard.invalidatePendingSyncAnalysisResume();
+    }
     if (Lizzie.leelaz == null) {
       return false;
     }
@@ -21501,19 +21504,29 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean ensureAnalysisResumedAfterSyncLoad() {
-    if (isUserAnalysisPaused()
-        || manualAutoAnalysisStarting
-        || isWholeGameAnalysisStartingOrRunning()
-        || Lizzie.leelaz == null
-        || EngineManager.isEmpty
-        || EngineGamePresentation.current().startingOrPlaying()
-        || isPlayingAgainstLeelaz
-        || isAnaPlayingAgainstLeelaz) {
+    if (!canResumeAnalysisAfterSync() || isAnaPlayingAgainstLeelaz) {
       return false;
     }
     Lizzie.leelaz.ponder();
     refresh();
     return true;
+  }
+
+  public boolean canResumeReadBoardAutoPlayAnalysis() {
+    return canResumeAnalysisAfterSync()
+        && isAnaPlayingAgainstLeelaz
+        && toolbar != null
+        && toolbar.isAutoPlay;
+  }
+
+  private boolean canResumeAnalysisAfterSync() {
+    return !isUserAnalysisPaused()
+        && !manualAutoAnalysisStarting
+        && !isWholeGameAnalysisStartingOrRunning()
+        && Lizzie.leelaz != null
+        && !EngineManager.isEmpty
+        && !EngineGamePresentation.current().startingOrPlaying()
+        && !isPlayingAgainstLeelaz;
   }
 
   private boolean shouldAutoQuickAnalyzeLoadedGame() {

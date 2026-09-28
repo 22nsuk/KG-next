@@ -1796,6 +1796,9 @@ public class BottomToolbar extends JPanel {
           public void actionPerformed(ActionEvent e) {
             // TBD
             setTxtUnfocuse();
+            if (Lizzie.frame.readBoard != null) {
+              Lizzie.frame.readBoard.invalidatePendingSyncAnalysisResume();
+            }
             isAutoPlay = chkAutoPlay.isSelected();
           }
         });
@@ -1907,6 +1910,9 @@ public class BottomToolbar extends JPanel {
           public void actionPerformed(ActionEvent e) {
             // TBD
             setTxtUnfocuse();
+            if (Lizzie.frame.readBoard != null) {
+              Lizzie.frame.readBoard.invalidatePendingSyncAnalysisResume();
+            }
           }
         });
     chkAutoPlayWhite.addActionListener(
@@ -1915,6 +1921,9 @@ public class BottomToolbar extends JPanel {
           public void actionPerformed(ActionEvent e) {
             // TBD
             setTxtUnfocuse();
+            if (Lizzie.frame.readBoard != null) {
+              Lizzie.frame.readBoard.invalidatePendingSyncAnalysisResume();
+            }
           }
         });
     lblAutoPlayBlack = new JLabel(text("BottomToolbar.detail.black", "黑"));
