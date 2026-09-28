@@ -2059,8 +2059,10 @@ class LeelazExclusiveRemoteGtpSessionTest {
   }
 
   private static void installInput(Leelaz engine, InputStream input) throws Exception {
+    List<String> commands = List.copyOf(engine.commandLists);
     engine.installFreshCommandStreamsForTest(
         input, new ByteArrayOutputStream(), new ByteArrayInputStream(new byte[0]));
+    engine.advertiseCommandsForTest(commands);
   }
 
   private static void invokeRead(Leelaz engine) throws Exception {
