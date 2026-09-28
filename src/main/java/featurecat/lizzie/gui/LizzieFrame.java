@@ -7820,15 +7820,6 @@ public class LizzieFrame extends JFrame {
     BufferedImage wallpaper = boardRenderer.getWallpaper();
     int drawWidth = max(wallpaper.getWidth(), mainPanel.getWidth());
     int drawHeight = max(wallpaper.getHeight(), mainPanel.getHeight());
-    if (AppleStyleSupport.useNeutralWorkspaceBackground()) {
-      Color surface = new Color(48, 54, 51);
-      g.setColor(surface);
-      g.fillRect(0, 0, width, height);
-      backgroundPaint = surface;
-      Lizzie.board.setForceRefresh(true);
-      redrawBackgroundAnyway = false;
-      return g;
-    }
     // Support seamless texture
     if (Lizzie.config.usePureBackground) {
       g.setColor(Lizzie.config.pureBackgroundColor);
@@ -13727,6 +13718,9 @@ public class LizzieFrame extends JFrame {
       // engine modes, but defer every mutation when AI Coach still owns a companion/restore lease.
       deferUntilHumanSlExit(this::stopAiPlayingAndPolicy);
       return true;
+    }
+    if (isAnaPlayingAgainstLeelaz && readBoard != null) {
+      readBoard.invalidatePendingSyncAnalysisResume();
     }
     if (Lizzie.leelaz == null) {
       return false;
@@ -21510,19 +21504,29 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean ensureAnalysisResumedAfterSyncLoad() {
-    if (isUserAnalysisPaused()
-        || manualAutoAnalysisStarting
-        || isWholeGameAnalysisStartingOrRunning()
-        || Lizzie.leelaz == null
-        || EngineManager.isEmpty
-        || EngineGamePresentation.current().startingOrPlaying()
-        || isPlayingAgainstLeelaz
-        || isAnaPlayingAgainstLeelaz) {
+    if (!canResumeAnalysisAfterSync() || isAnaPlayingAgainstLeelaz) {
       return false;
     }
     Lizzie.leelaz.ponder();
     refresh();
     return true;
+  }
+
+  public boolean canResumeReadBoardAutoPlayAnalysis() {
+    return canResumeAnalysisAfterSync()
+        && isAnaPlayingAgainstLeelaz
+        && toolbar != null
+        && toolbar.isAutoPlay;
+  }
+
+  private boolean canResumeAnalysisAfterSync() {
+    return !isUserAnalysisPaused()
+        && !manualAutoAnalysisStarting
+        && !isWholeGameAnalysisStartingOrRunning()
+        && Lizzie.leelaz != null
+        && !EngineManager.isEmpty
+        && !EngineGamePresentation.current().startingOrPlaying()
+        && !isPlayingAgainstLeelaz;
   }
 
   private boolean shouldAutoQuickAnalyzeLoadedGame() {

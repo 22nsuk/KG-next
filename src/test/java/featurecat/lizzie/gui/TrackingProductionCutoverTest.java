@@ -335,6 +335,9 @@ class TrackingProductionCutoverTest {
       environment.dispatch("=" + oldId);
       environment.dispatch("");
       assertEquals(Leelaz.MoveFocusCapability.UNKNOWN, environment.engine.moveFocusCapability());
+      Method advertise = Leelaz.class.getDeclaredMethod("advertiseCommandsForTest", List.class);
+      advertise.setAccessible(true);
+      advertise.invoke(environment.engine, List.of("stop", "kata-analyze"));
       environment.startSupportedAnalysis();
       assertEquals(1, environment.commands().lines().filter(line -> line.contains("focus pass")).count());
     }

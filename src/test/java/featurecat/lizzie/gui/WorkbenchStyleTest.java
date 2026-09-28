@@ -135,29 +135,6 @@ class WorkbenchStyleTest {
   }
 
   @Test
-  void explicitThemesAndWallpaperAreNotOverwritten() {
-    Config previous = Lizzie.config;
-    try {
-      Config config = ConfigTestHelper.createForTests(tempDir);
-      config.uiConfig = new JSONObject().put("theme", "default");
-      Lizzie.config = config;
-      assertTrue(AppleStyleSupport.useNeutralWorkspaceBackground());
-      config.uiConfig.put("theme", "my-theme");
-      assertFalse(AppleStyleSupport.useNeutralWorkspaceBackground());
-      config.uiConfig.put("theme", "default").put("background-image", "custom.png");
-      assertFalse(AppleStyleSupport.useNeutralWorkspaceBackground());
-      config.uiConfig.remove("background-image");
-      config.uiConfig.put("custom-window-background-image", "my-wallpaper.png");
-      assertFalse(AppleStyleSupport.useNeutralWorkspaceBackground());
-      config.uiConfig.remove("custom-window-background-image");
-      config.usePureBackground = true;
-      assertFalse(AppleStyleSupport.useNeutralWorkspaceBackground());
-    } finally {
-      Lizzie.config = previous;
-    }
-  }
-
-  @Test
   void disabledComboKeepsThemedSurfaceAndReadableLabel() throws Exception {
     Config previous = Lizzie.config;
     try {

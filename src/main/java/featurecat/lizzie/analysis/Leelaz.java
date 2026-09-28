@@ -92,6 +92,8 @@ public class Leelaz {
   private static final AtomicInteger BENCHMARK_TASK_THREAD_SEQUENCE = new AtomicInteger();
   private static final Executor COMMAND_DISPATCH_EXECUTOR =
       Executors.newCachedThreadPool(Leelaz::newCommandDispatchThread);
+  private static final ScheduledExecutorService RUNTIME_THREAD_TIMEOUT_EXECUTOR =
+      Executors.newSingleThreadScheduledExecutor(Leelaz::newCommandDispatchThread);
 
   public enum ExclusiveGtpLeaseAvailability {
     AVAILABLE,
@@ -294,6 +296,7 @@ public class Leelaz {
   private final AtomicInteger exclusiveGtpResponseCommandIds = new AtomicInteger(800000000);
   private final AtomicInteger boardSynchronizationResponseCommandIds =
       new AtomicInteger(900000000);
+  private volatile long runtimeSearchThreadsTimeoutMillis = TimeUnit.SECONDS.toMillis(8);
   private final long engineArbitrationOrder = ENGINE_ARBITRATION_ORDER_SEQUENCE.incrementAndGet();
   private volatile boolean currentCommandResponseError;
   private volatile String currentCommandResponseLine = "";
@@ -587,6 +590,8 @@ public class Leelaz {
   public List<String> commandLists = new ArrayList<String>();
   private boolean startGetCommandList = false;
   private boolean endGetCommandList = false;
+  private volatile ReaderStreamBinding commandListBinding;
+  private volatile ReaderStreamBinding commandListPendingBinding;
   private boolean readBoardGmaUnsupportedPromptShown = false;
   private final ReadBoardGmaRuntimeParam readBoardGmaMaxTime =
       new ReadBoardGmaRuntimeParam("maxTime");
@@ -1885,6 +1890,8 @@ public class Leelaz {
           isCheckingName = true;
           endGetCommandList = false;
           startGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
           commandLists.clear();
           readBoardGmaUnsupportedPromptShown = false;
           if (!engineStateUnrestored) {
@@ -4446,6 +4453,11 @@ public class Leelaz {
             clearLeela0110PonderStateLocked();
           }
           readerStreamBinding = nextBinding;
+          startGetCommandList = false;
+          endGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
+          commandLists.clear();
           if (suppressGlobalEnginePresentationUntilOwned) {
             nextBinding.suppressGlobalEnginePresentation = true;
           }
@@ -4492,6 +4504,11 @@ public class Leelaz {
             clearLeela0110PonderStateLocked();
           }
           readerStreamBinding = nextBinding;
+          startGetCommandList = false;
+          endGetCommandList = false;
+          commandListBinding = null;
+          commandListPendingBinding = null;
+          commandLists.clear();
           if (suppressGlobalEnginePresentationUntilOwned) {
             nextBinding.suppressGlobalEnginePresentation = true;
           }
@@ -4983,6 +5000,11 @@ public class Leelaz {
     private final Path processWorkingDirectory;
     private final SnapshotFileAccessKind snapshotFileAccessKind;
     private volatile Object analysisOutputRecoveryToken;
+    private volatile Integer confirmedRuntimeSearchThreads;
+    private volatile RuntimeThreadOverrideState runtimeThreadOverrideState;
+
+    private long runtimeThreadWriteSequence;
+    private long confirmedRuntimeThreadSequence;
     private long startupPrimaryEngineGeneration;
     /** Bootstrap-only quarantine; released solely by deferred engine-game recovery settlement. */
     private volatile boolean deferredEngineGameRecoveryPresentationSuppressed;
@@ -7657,12 +7679,31 @@ public class Leelaz {
   }
 
   private boolean consumeCommandListResponseLine(String line) {
+    return consumeCommandListResponseLine(line, currentReaderStreamBinding());
+  }
+
+  private boolean consumeCommandListResponseLine(String line, ReaderStreamBinding binding) {
     if (!startGetCommandList) {
       return false;
     }
+    ReaderStreamBinding current = currentReaderStreamBinding();
+    if (binding == null
+        || binding != current
+        || binding != commandListPendingBinding
+        || binding.terminated) {
+      synchronized (engineArbitrationLock()) {
+        startGetCommandList = false;
+        commandListPendingBinding = null;
+      }
+      return false;
+    }
     if (line.trim().isEmpty()) {
-      startGetCommandList = false;
-      endGetCommandList = true;
+      synchronized (engineArbitrationLock()) {
+        startGetCommandList = false;
+        endGetCommandList = true;
+        commandListBinding = binding;
+        commandListPendingBinding = null;
+      }
       if (Lizzie.frame != null && Lizzie.frame.readBoard != null) {
         Lizzie.frame.readBoard.onReadBoardGmaCapabilityReady();
       }
@@ -7672,7 +7713,9 @@ public class Leelaz {
     if (command.startsWith("=") || command.startsWith("?")) {
       return false;
     }
-    commandLists.add(command);
+    synchronized (engineArbitrationLock()) {
+      commandLists.add(command);
+    }
     return true;
   }
 
@@ -8051,8 +8094,18 @@ public class Leelaz {
         isCommandLine = true;
         String[] params = line.trim().split(" ");
         if (params.length == 1) return;
-        if (!endGetCommandList && params.length == 2 && params[1].equals("protocol_version")) {
-          startGetCommandList = true;
+        if (!endGetCommandList
+            && ((params.length == 2 && params[1].equals("protocol_version"))
+                || (params.length > 1 && params[params.length - 1].equals("protocol_version")))) {
+          ReaderStreamBinding currentBinding = currentReaderStreamBinding();
+          if (sourceEngineIncarnation == null || sourceEngineIncarnation == currentBinding) {
+            synchronized (engineArbitrationLock()) {
+              startGetCommandList = true;
+              commandListPendingBinding = currentBinding;
+              commandListBinding = null;
+              commandLists.clear();
+            }
+          }
         }
         if (isInputCommand) {
           //	getGenmoveInfoPrevious = true;
@@ -10174,7 +10227,7 @@ public class Leelaz {
           endReaderLine(binding);
           continue;
         }
-        if (consumeCommandListResponseLine(line)) {
+        if (consumeCommandListResponseLine(line, binding)) {
           lineInProgress = false;
           endReaderLine(binding);
           continue;
@@ -11219,7 +11272,7 @@ public class Leelaz {
   }
 
   void dispatchReaderLineForTest(String line) throws IOException {
-    if (consumeCommandListResponseLine(line)) {
+    if (consumeCommandListResponseLine(line, currentReaderStreamBinding())) {
       isCommandLine = false;
       return;
     }
@@ -12045,19 +12098,25 @@ public class Leelaz {
     boolean positionMutation = analysisStateMutation(command.command) != AnalysisStateMutation.NONE;
     if (binding != null
         && (positionMutation || isAnalysisOutputOwnershipCommand(command.command))) {
-      AnalysisStateLineage scopedLineage = positionRestoreLineageContext.get();
+      AnalysisStateLineage capturedRestoreLineage = positionRestoreLineageContext.get();
+      AnalysisStateLineage scopedLineage = capturedRestoreLineage;
       if (scopedLineage == null && command.restoreAdmission != null) {
         scopedLineage = command.restoreAdmission.lineageFor(this);
       }
       if (binding.queuedAnalysisStateLineage == null) {
         binding.queuedAnalysisStateLineage = binding.analysisStateLineage;
       }
-      if (positionMutation && scopedLineage != null) {
+      if (positionMutation && scopedLineage != null && capturedRestoreLineage == null) {
         binding.queuedAnalysisStateLineage = scopedLineage;
-      } else if (positionMutation && startsFreshAnalysisStateLineage(command.command)) {
+      } else if (positionMutation
+          && scopedLineage == null
+          && startsFreshAnalysisStateLineage(command.command)) {
         binding.queuedAnalysisStateLineage = new AnalysisStateLineage();
       }
-      command.bindAnalysisStateLineage(binding.queuedAnalysisStateLineage, binding);
+      // A captured restore already published its lineage. Its remaining commands must retain
+      // that lineage without replacing a newer capture made while this restore was in flight.
+      command.bindAnalysisStateLineage(
+          scopedLineage != null ? scopedLineage : binding.queuedAnalysisStateLineage, binding);
       if (positionMutation) {
         command.registerAnalysisStateResponse();
         analysisOutputGeneration.incrementAndGet();
@@ -12182,6 +12241,51 @@ public class Leelaz {
             ? binding.processWorkingDirectory
             : null;
     return new SnapshotFileAccess(this, binding, workingDirectory);
+  }
+
+  final boolean requiresInBandSnapshotRestore(ExactSnapshotRestoreAdmission admission) {
+    requireExactSnapshotRestoreAdmission(admission);
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    if (binding.terminated) {
+      throw new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.ADMISSION_STALE,
+          "Exact snapshot restore engine process is no longer current.");
+    }
+    return useRemoteCompute
+        || useJavaSSH
+        || isSSH
+        || binding.remoteTransport != null
+        || binding.javaSSH != null
+        || binding.snapshotFileAccessKind == SnapshotFileAccessKind.UNSUPPORTED;
+  }
+
+  final boolean supportsHandicapSnapshotRestore(ExactSnapshotRestoreAdmission admission) {
+    requireExactSnapshotRestoreAdmission(admission);
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    if (binding.terminated) {
+      throw new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.ADMISSION_STALE,
+          "Exact snapshot restore engine process is no longer current.");
+    }
+    synchronized (engineArbitrationLock()) {
+      return endGetCommandList
+          && commandListBinding == binding
+          && commandLists.contains("set_free_handicap");
+    }
+  }
+
+  void advertiseCommandsForTest(List<String> commands) {
+    synchronized (engineArbitrationLock()) {
+      ReaderStreamBinding binding = currentReaderStreamBinding();
+      commandLists.clear();
+      if (commands != null) {
+        commandLists.addAll(commands);
+      }
+      startGetCommandList = false;
+      commandListPendingBinding = null;
+      endGetCommandList = true;
+      commandListBinding = binding;
+    }
   }
 
   void trustDirectLocalSnapshotFileAccessForTest() {
@@ -13294,6 +13398,31 @@ public class Leelaz {
                         transactionlessAnalysisWrite,
                         exactAnalysisOutputContext);
               }
+              if (queuedCommand.onResponse instanceof RuntimeSearchThreadsResponse) {
+                RuntimeSearchThreadsResponse runtime =
+                    (RuntimeSearchThreadsResponse) queuedCommand.onResponse;
+                boolean admitted =
+                    Lizzie.runIfPrimaryEngine(
+                        this,
+                        runtime.target.primaryGeneration,
+                        () -> {
+                          if (!isCurrentLiveEngineIncarnation(runtime.target.binding)
+                              || outputBinding != runtime.target.binding
+                              || outputBinding.output != currentOutputStream
+                              || outputStream != currentOutputStream
+                              || runtime.result.isDone()) {
+                            throw new IllegalStateException("Runtime thread command lost its reader binding");
+                          }
+                          synchronized (outputBinding) {
+                            runtime.writeSequence = ++outputBinding.runtimeThreadWriteSequence;
+                          }
+                        });
+                if (!admitted) {
+                  throw new IllegalStateException("Runtime thread command lost foreground selection");
+                }
+              }
+              // Selection admission is short; transport IO must not hold the global primary lock.
+              // normalCommandSendInProgress keeps this exact reader/output owned until completion.
               currentOutputStream.write((commandLine + "\n").getBytes());
               currentOutputStream.flush();
               if (isOrdinaryPositionAnalysisCommand(command)
@@ -17446,6 +17575,8 @@ public class Leelaz {
         new AtomicReference<>(AutomaticRestartState.RESERVED);
     private final AtomicBoolean barriersEnded = new AtomicBoolean(false);
     private final AtomicBoolean completionNotified = new AtomicBoolean(false);
+    private boolean deferResumeUntilCompletion;
+    private ReaderStreamBinding restartedBinding;
     private AutomaticRestartRound pendingRound;
     private ExclusiveGtpLifecycleReservation roundReservation;
     private Runnable afterBoardRestore;
@@ -17488,6 +17619,7 @@ public class Leelaz {
         isLoaded = false;
         canCheckAlive = false;
         startEngine(index);
+        if (deferResumeUntilCompletion) restartedBinding = currentReaderStreamBinding();
         Thread synchronization =
             new Thread(
                 withCurrentRestartBootstrapReceipt(this::awaitReadinessAndConverge),
@@ -17611,7 +17743,9 @@ public class Leelaz {
       if (engineStateUnrestored) {
         completeReadBoardGmaRecoveryAfterBoardSync();
       }
-      resumeClosedEngineAfterBoardSynchronization(resumePonder);
+      if (!deferResumeUntilCompletion) {
+        resumeClosedEngineAfterBoardSynchronization(resumePonder);
+      }
       if (state.compareAndSet(
           AutomaticRestartState.FENCE_PENDING, AutomaticRestartState.COMPLETED)) {
         notifyCompletionAfterEndpointRelease();
@@ -20367,6 +20501,373 @@ public class Leelaz {
     return currentReaderStreamBinding();
   }
 
+  public enum RuntimeThreadOverrideState { OFF, ON, UNKNOWN }
+
+  public enum RuntimeThreadSource { CFG, BENCHMARK, COMMAND }
+  private volatile boolean runtimeThreadRestoreReserved;
+
+  private EngineData findRuntimeThreadSavedEntry(String id) {
+    if (Lizzie.config == null || Lizzie.config.leelazConfig == null
+        || Lizzie.config.leelazConfig.optJSONArray("engine-settings-list") == null) {
+      throw new IllegalStateException("Saved engine entry is unavailable");
+    }
+    return EngineThreadPolicy.findSavedEntry(id);
+  }
+
+  private final class RuntimeThreadSourceSnapshot {
+    private final String entryId;
+    private final String command;
+    private final String policy;
+    private final RuntimeThreadSource source;
+    private final Integer recommendation;
+
+    private RuntimeThreadSourceSnapshot(
+        String entryId, String command, String policy, RuntimeThreadSource source, Integer recommendation) {
+      this.entryId = entryId;
+      this.command = command;
+      this.policy = policy;
+      this.source = source;
+      this.recommendation = recommendation;
+    }
+
+    private boolean stillCurrent() {
+      if (!Objects.equals(savedEntryId, entryId) || !Objects.equals(engineCommand, command)) return false;
+      EngineData entry = entryId.isBlank() ? null : findRuntimeThreadSavedEntry(entryId);
+      return entryId.isBlank()
+          ? entry == null
+          : entry != null
+              && command.equals(entry.commands)
+              && !EngineThreadPolicy.isRemoteManaged(entry.commands, entry.useJavaSSH)
+              && Objects.equals(policy, entry.threadPolicy == null ? null : entry.threadPolicy.toString());
+    }
+  }
+
+  private RuntimeThreadSourceSnapshot captureRuntimeThreadSourceSnapshot() {
+    String id = savedEntryId == null ? "" : savedEntryId;
+    String command = engineCommand;
+    if (command == null || command.isBlank() || EngineThreadPolicy.isRemoteManaged(this)) {
+      throw new IllegalStateException("Local KataGo launch context is unavailable");
+    }
+    EngineData entry = id.isBlank() ? null : findRuntimeThreadSavedEntry(id);
+    if (!id.isBlank() && (entry == null || !command.equals(entry.commands)
+        || EngineThreadPolicy.isRemoteManaged(entry.commands, entry.useJavaSSH))) {
+      throw new IllegalStateException("Saved KataGo engine entry changed or was removed");
+    }
+    RuntimeThreadSource source = KataGoRuntimeHelper.hasEffectiveNumSearchThreadsOverride(Utils.splitCommand(command))
+        ? RuntimeThreadSource.COMMAND
+        : entry != null && EngineThreadPolicy.source(entry) == EngineThreadPolicy.Source.BENCHMARK
+            ? RuntimeThreadSource.BENCHMARK : RuntimeThreadSource.CFG;
+    Integer recommendation = source == RuntimeThreadSource.BENCHMARK
+        ? EngineThreadPolicy.recommendedThreads(entry) : null;
+    if (source == RuntimeThreadSource.BENCHMARK && recommendation <= 0) {
+      throw new IllegalStateException("Saved KataGo benchmark recommendation is invalid");
+    }
+    return new RuntimeThreadSourceSnapshot(id, command,
+        entry == null || entry.threadPolicy == null ? null : entry.threadPolicy.toString(), source, recommendation);
+  }
+
+  public final class RuntimeThreadSourceRestore {
+    private final RuntimeSearchThreads original;
+    private final RuntimeThreadSourceSnapshot snapshot;
+    private final AtomicBoolean consumed = new AtomicBoolean();
+
+    private RuntimeThreadSourceRestore(RuntimeSearchThreads original, RuntimeThreadSourceSnapshot snapshot) {
+      this.original = original;
+      this.snapshot = snapshot;
+    }
+
+    public RuntimeThreadSource source() { return snapshot.source; }
+
+    public Integer recommendedThreads() { return snapshot.recommendation; }
+
+    public CompletableFuture<RuntimeSearchThreads> execute(
+        java.util.function.Function<RuntimeSearchThreads, CompletableFuture<Void>> beforeResume) {
+      if (!consumed.compareAndSet(false, true)) {
+        return CompletableFuture.failedFuture(new IllegalStateException("Source restore already executed"));
+      }
+      Objects.requireNonNull(beforeResume);
+      CompletableFuture<RuntimeSearchThreads> result = new CompletableFuture<>();
+      COMMAND_DISPATCH_EXECUTOR.execute(() -> runRestore(beforeResume, result));
+      return result;
+    }
+
+    private void runRestore(
+        java.util.function.Function<RuntimeSearchThreads, CompletableFuture<Void>> beforeResume,
+        CompletableFuture<RuntimeSearchThreads> result) {
+      AutomaticRestartAttempt attempt = null;
+      try {
+        if (!original.isCurrent() || original.overrideState() != RuntimeThreadOverrideState.ON
+            || !snapshot.stillCurrent() || EngineThreadPolicy.isRemoteManaged(Leelaz.this)
+            || KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+          throw new IllegalStateException("KataGo source restore target changed or is unavailable");
+        }
+        attempt = beginAutomaticEngineRestartAttempt();
+        if (attempt == null) throw new IllegalStateException("KataGo engine is occupied");
+        boolean admitted = Lizzie.runIfPrimaryEngine(Leelaz.this, original.primaryGeneration, () -> {
+          synchronized (engineArbitrationLock()) {
+            if (!original.isCurrent() || original.overrideState() != RuntimeThreadOverrideState.ON
+                || !snapshot.stillCurrent()) {
+              throw new IllegalStateException("KataGo source changed before restart");
+            }
+            runtimeThreadRestoreReserved = true;
+          }
+        });
+        if (!admitted) throw new IllegalStateException("KataGo foreground selection changed before restart");
+        AutomaticRestartAttempt owned = attempt;
+        AutomaticRestartOperation operation = owned.operation;
+        operation.deferResumeUntilCompletion = true;
+        boolean resumePonder = operation.resumePonder;
+        AtomicReference<String> failure = new AtomicReference<>();
+        normalQuit();
+        shutdown();
+        owned.restartClosedEngine(currentEngineN,
+            () -> COMMAND_DISPATCH_EXECUTOR.execute(() -> {
+              try {
+              runtimeThreadRestoreReserved = false;
+              String detail = failure.get();
+              if (detail != null) {
+                result.completeExceptionally(new IllegalStateException(detail));
+                return;
+              }
+              if (!snapshot.stillCurrent()) {
+                threadPolicyReloadPending = true;
+                result.completeExceptionally(new IllegalStateException("KataGo source changed during restart"));
+                return;
+              }
+              RuntimeSearchThreads successor =
+                  new RuntimeSearchThreads(operation.restartedBinding, original.primaryGeneration);
+              if (successor.binding == original.binding || !successor.isCurrent()) {
+                result.completeExceptionally(new IllegalStateException("KataGo restart successor is unavailable"));
+                return;
+              }
+              successor.query().handle((value, queryFailure) -> null)
+                  .thenComposeAsync(ignored -> {
+                    if (!successor.isCurrent()) {
+                      return CompletableFuture.failedFuture(new IllegalStateException("KataGo restart successor changed"));
+                    }
+                    return Objects.requireNonNull(beforeResume.apply(successor));
+                  }, COMMAND_DISPATCH_EXECUTOR).whenCompleteAsync((ignored, continuationFailure) -> {
+                    if (continuationFailure != null) {
+                      result.completeExceptionally(continuationFailure);
+                    } else if (!successor.isCurrent()) {
+                      result.completeExceptionally(new IllegalStateException("KataGo restart successor changed"));
+                    } else {
+                      try {
+                        if (!snapshot.stillCurrent()) {
+                          threadPolicyReloadPending = true;
+                          throw new IllegalStateException("KataGo source changed during parameter handoff");
+                        }
+                        threadPolicyReloadPending = false;
+                        resumeClosedEngineAfterBoardSynchronization(resumePonder);
+                        result.complete(successor);
+                      } catch (RuntimeException | Error resumeFailure) {
+                        result.completeExceptionally(resumeFailure);
+                      }
+                    }
+                  }, COMMAND_DISPATCH_EXECUTOR);
+              } catch (RuntimeException | Error receiptFailure) {
+                threadPolicyReloadPending = true;
+                result.completeExceptionally(receiptFailure);
+              }
+            }), failure::set);
+      } catch (IOException | RuntimeException | Error error) {
+        runtimeThreadRestoreReserved = false;
+        if (attempt != null) attempt.close();
+        result.completeExceptionally(error);
+      }
+    }
+  }
+
+
+  /** A single foreground KataGo reader, not a saved or launch-time thread policy. */
+  public final class RuntimeSearchThreads {
+    private final ReaderStreamBinding binding;
+    private final long primaryGeneration;
+
+    private RuntimeSearchThreads(ReaderStreamBinding binding, long primaryGeneration) {
+      this.binding = binding;
+      this.primaryGeneration = primaryGeneration;
+    }
+
+    public boolean isCurrent() {
+      return primaryGeneration >= 0
+          && Lizzie.capturePrimaryEngineGeneration(Leelaz.this) == primaryGeneration
+          && isCurrentLiveEngineIncarnation(binding)
+          && isKatago;
+    }
+
+    public RuntimeThreadOverrideState overrideState() {
+      return isCurrent() ? (binding.runtimeThreadOverrideState == null
+          ? EngineThreadPolicy.isRemoteManaged(Leelaz.this)
+              ? RuntimeThreadOverrideState.UNKNOWN : RuntimeThreadOverrideState.OFF
+          : binding.runtimeThreadOverrideState) : RuntimeThreadOverrideState.UNKNOWN;
+    }
+
+    public RuntimeThreadSourceRestore prepareRestore() {
+      if (!isCurrent() || overrideState() != RuntimeThreadOverrideState.ON) {
+        throw new IllegalStateException("Current confirmed KataGo thread override is unavailable");
+      }
+      if (EngineThreadPolicy.isRemoteManaged(Leelaz.this)) {
+        throw new IllegalStateException("Remote thread source cannot be restored from this client");
+      }
+      return new RuntimeThreadSourceRestore(this, captureRuntimeThreadSourceSnapshot());
+    }
+
+    public Integer lastConfirmedValue() {
+      return isCurrent() ? binding.confirmedRuntimeSearchThreads : null;
+    }
+
+    public CompletableFuture<Integer> query() {
+      return requestRuntimeSearchThreads(this, null);
+    }
+
+    public CompletableFuture<Integer> apply(int threads) {
+      if (threads < 1 || threads > 1024) {
+        return CompletableFuture.failedFuture(
+            new IllegalArgumentException("numSearchThreads must be between 1 and 1024"));
+      }
+      return requestRuntimeSearchThreads(this, threads);
+    }
+  }
+
+  public RuntimeSearchThreads captureRuntimeSearchThreads() {
+    long generation = Lizzie.capturePrimaryEngineGeneration(this);
+    return new RuntimeSearchThreads(currentReaderStreamBinding(), generation);
+  }
+
+  private CompletableFuture<Integer> requestRuntimeSearchThreads(
+      RuntimeSearchThreads target, Integer requested) {
+    CompletableFuture<Integer> result = new CompletableFuture<>();
+    COMMAND_DISPATCH_EXECUTOR.execute(
+        () -> {
+          if (!target.isCurrent()) {
+            result.completeExceptionally(new IllegalStateException("KataGo process or foreground selection changed"));
+            return;
+          }
+          String command =
+              requested == null
+                  ? "kata-get-param numSearchThreads"
+                  : "kata-set-param numSearchThreads " + requested;
+          RuntimeSearchThreadsResponse handler = new RuntimeSearchThreadsResponse(target, requested, result);
+          boolean[] admitted = new boolean[1];
+          try {
+            boolean selected =
+                Lizzie.runIfPrimaryEngine(
+                    this,
+                    target.primaryGeneration,
+                    () -> {
+                      synchronized (engineArbitrationLock()) {
+                        if (!isCurrentLiveEngineIncarnationLocked(target.binding)
+                            || !isKatago
+                            || isRulesMutationOccupied()
+                            || isOrdinaryForwardingOccupied()
+                            || runtimeThreadRestoreReserved
+
+                            || readBoardGmaReservation != null
+                            || engineStateUnrestored
+                            || activeUpdateEngineStartAttempt != null) {
+                          return;
+                        }
+                        admitted[0] =
+                            enqueueOrdinaryCommand(
+                                command, handler, handler::fail, true, null, true, false, true,
+                                target.binding, null, false);
+                      }
+                    });
+            if (!selected || !admitted[0]) {
+              handler.fail(new IllegalStateException("KataGo process is unavailable or occupied"));
+              return;
+            }
+            var timeout =
+                RUNTIME_THREAD_TIMEOUT_EXECUTOR.schedule(
+                    () -> {
+                      boolean timedOut;
+                      synchronized (result) {
+                        timedOut = result.completeExceptionally(
+                            new IllegalStateException("Timed out waiting for KataGo thread response"));
+                      }
+                      if (timedOut) retireTimedOutNormalCommand(handler);
+                    },
+                    Math.max(1L, runtimeSearchThreadsTimeoutMillis),
+                    TimeUnit.MILLISECONDS);
+            result.whenComplete((value, failure) -> timeout.cancel(false));
+            trySendCommandFromQueue();
+          } catch (RuntimeException failure) {
+            handler.fail(failure);
+            retireTimedOutNormalCommand(handler);
+          }
+        });
+    return result;
+  }
+
+  private final class RuntimeSearchThreadsResponse implements Runnable {
+    private final RuntimeSearchThreads target;
+    private final Integer requested;
+    private final CompletableFuture<Integer> result;
+    private long writeSequence;
+
+    private RuntimeSearchThreadsResponse(
+        RuntimeSearchThreads target, Integer requested, CompletableFuture<Integer> result) {
+      this.target = target;
+      this.requested = requested;
+      this.result = result;
+    }
+
+    private void fail(RuntimeException failure) {
+      result.completeExceptionally(failure);
+    }
+
+    @Override
+    public void run() {
+      if (result.isDone()) return;
+      if (!target.isCurrent()) {
+        fail(new IllegalStateException("KataGo process or foreground selection changed"));
+        return;
+      }
+      if (isCurrentCommandResponseError()) {
+        fail(new IllegalStateException("KataGo rejected numSearchThreads: " + currentCommandResponseLine()));
+        return;
+      }
+      int confirmed;
+      if (requested != null) {
+        confirmed = requested;
+      } else {
+        String payload = gtpResponsePayload(currentCommandResponseLine());
+        try {
+          confirmed = Integer.parseInt(payload);
+        } catch (NumberFormatException invalid) {
+          fail(new IllegalStateException("Invalid KataGo numSearchThreads response: " + payload));
+          return;
+        }
+        if (confirmed < 1 || confirmed > 1024) {
+          fail(new IllegalStateException("Invalid KataGo numSearchThreads response: " + payload));
+          return;
+        }
+      }
+      synchronized (result) {
+        if (!result.isDone() && target.isCurrent()) {
+          synchronized (target.binding) {
+            if (requested != null) {
+              target.binding.runtimeThreadOverrideState = RuntimeThreadOverrideState.ON;
+            }
+            if (writeSequence > target.binding.confirmedRuntimeThreadSequence) {
+              target.binding.confirmedRuntimeThreadSequence = writeSequence;
+
+              target.binding.confirmedRuntimeSearchThreads = confirmed;
+            }
+            confirmed = target.binding.confirmedRuntimeSearchThreads;
+          }
+          result.complete(confirmed);
+        } else if (!result.isDone()) {
+          fail(new IllegalStateException("KataGo process or foreground selection changed"));
+        }
+      }
+    }
+  }
+
+  void setRuntimeSearchThreadsTimeoutForTest(long millis) {
+    runtimeSearchThreadsTimeoutMillis = millis;
+  }
   boolean isCurrentEngineIncarnation(Object expectedIncarnation) {
     return expectedIncarnation != null && readerStreamBinding == expectedIncarnation;
   }
@@ -22851,18 +23352,39 @@ public class Leelaz {
   }
 
   /** Called by the manager only after its existing startup-failure presentation fence succeeds. */
-  boolean showRetainedStartupDiagnostic() {
-    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
-    if (attempt == null || attempt.snapshot() == null || GraphicsEnvironment.isHeadless())
+  boolean showStartupFailureDiagnostic(String detail) {
+    if (GraphicsEnvironment.isHeadless()) {
       return false;
-    if (engineFailedMessage != null
-        && engineFailedMessage.isVisible()
-        && presentedStartupDiagnosticAttempt == attempt) return true;
+    }
+    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
+    if (engineFailedMessage != null && engineFailedMessage.isVisible()) {
+      if (presentedStartupDiagnosticAttempt == attempt) {
+        return true;
+      }
+      engineFailedMessage.dispose();
+      engineFailedMessage = null;
+    }
+    boolean hasSnapshot = attempt != null && attempt.snapshot() != null;
+    String fallbackMessage =
+        Lizzie.resourceBundle != null
+            ? Lizzie.resourceBundle.getString("Leelaz.engineFailed")
+            : "";
+    String message;
+    if (hasSnapshot) {
+      String originalError = attempt.snapshot().toJson().optString("originalError");
+      message =
+          originalError != null && !originalError.isBlank()
+              ? originalError
+              : (detail != null && !detail.isBlank() ? detail : fallbackMessage);
+    } else {
+      message = detail != null && !detail.isBlank() ? detail : fallbackMessage;
+    }
+    boolean canUseCmdDiagnostic = OS.isWindows() && !useJavaSSH && !isSSH && !useRemoteCompute;
     EngineFailedMessage.showDialog(
         commands,
-        engineCommand,
-        attempt.snapshot().toJson().optString("originalError"),
-        !useJavaSSH && OS.isWindows(),
+        engineCommand != null ? engineCommand : "",
+        message,
+        canUseCmdDiagnostic,
         true,
         false,
         false,
@@ -22870,7 +23392,9 @@ public class Leelaz {
         dialog -> {
           engineFailedMessage = dialog;
           presentedStartupDiagnosticAttempt = attempt;
-          dialog.bindStartupDiagnostic(attempt);
+          if (hasSnapshot) {
+            dialog.bindStartupDiagnostic(attempt);
+          }
         });
     return true;
   }
@@ -24118,6 +24642,7 @@ public class Leelaz {
   public void enableAutoSettleMatchRulesForTest() {
     autoSettleMatchRulesForTest = true;
     endGetCommandList = true;
+    commandListBinding = currentReaderStreamBinding();
     isKatago = true;
     if (!commandLists.contains("kata-set-rules")) {
       commandLists.add("kata-set-rules");

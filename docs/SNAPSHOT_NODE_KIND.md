@@ -136,14 +136,16 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 没有可用静态锚点时，调用方保留既有 root replay；默认空 root 不是 exact 锚点。exact 一旦开始，`loadsgf`、tail 或 arbitration 失败都原样失败，禁止猜测性 root fallback。
 - lifecycle exact/root 抛错时，owner 将 frozen target 标为 unavailable，并在既有 completion boundary 释放 reservation；不因本票据新建 `ENGINE_STATE_UNRESTORED` 或通用 retry。ReadBoard GMA 固定点既有 quarantine/retirement 行为保持独立。
 - ponder 只由 lifecycle owner 在全部目标恢复和自身 board fence 成功后按 capture 时的 disposition 决定；restore module 不擅自停止或启动 ponder。
+- 当前进程线程覆盖的来源恢复复用自动 restart owner。该操作可将 captured ponder 延后到 final fence 与 endpoint release 之后：只向同一 Leelaz 的精确后继 reader 回读线程值、异步交接 PDA/WRN 草稿；交接成功且原 foreground identity 仍有效才执行一次既有 resume。失败或替换不恢复分析，普通 restart caller 的完成时序不变。
 - 回滚恢复的初始化若将 KataGo 能力探测明确延迟到当前 lifecycle completion claim 释放 endpoint 后，允许同一 reader incarnation 先提交恢复；在后续分析命令实际写出前，旧分析输出仍保持隔离。需要继续分析且未延迟的恢复继续要求新的物理分析 owner，不能把 READY 或排队成功当作分析所有权。
 - tail replay 的 module 完成边界不等同于每条 GTP response 完成；后续 response/error、超时和 late-response isolation 继续由 `Leelaz` 管理。
 - exact module 在任何 `clear_board`、Remote Compute restore 或其他 engine mutation 之前，为全部本地 target 完成 SGF 落盘、可读性检查与 process-incarnation 复验；任一 target 无安全路径或落盘失败时，清理本轮已创建文件并以 snapshot-preparation failure 终止，不能留下半恢复状态。
 - `Leelaz` 在最终 `ProcessBuilder` 配置（含 bundled runtime cwd override）完成后，把本地文件系统类别与显式 cwd 绑定到实际 reader/process incarnation；pre-start 捕获的 restore route 在执行时只采用新 admitted incarnation 的证据。落盘后 process rebind、退休或 admission 失效时，旧文件不能生成替换实例的 `loadsgf` 命令。
 - GTP 文件参数必须是非空 printable ASCII（字符 33–126）且不含 `#`。候选顺序固定为：安全的默认临时目录绝对路径；有最终 cwd 证据时该 cwd 下的唯一 ASCII 相对文件名；既有应用 runtime / Windows 共享目录约定下的安全绝对路径。相对参数保持相对，不能在 dispatch 时重新绝对化。
-- direct local engine 即使没有可信 cwd，仍可使用安全共享绝对路径；已知 SSH、WSL、Wine、container 或其他隔离文件系统 transport 必须 fail-closed。Remote Compute 继续只用既有 in-band restore，不走 host `loadsgf`。
+- direct local engine 即使没有可信 cwd，仍可使用安全共享绝对路径；已知 SSH、WSL、Wine、container 或其他隔离文件系统 transport 不得使用 host `loadsgf`。仅当 frozen history 证明初始让子（HA 与实际黑子一致、无此前真实动作及冲突 setup/PL）且当前 admitted reader 完成 `set_free_handicap` 能力发现时，允许通过实际坐标的 in-band handicap 命令恢复，再重放真实 tail。空黑先根节点只清空，不提前应用后续让子。其他隔离 transport 的任意快照继续 fail-closed；Remote Compute 的任意快照保留既有 in-band 路径。
 - 双引擎 cwd 相同且安全绝对路径可用时共享同一物理文件；cwd 不同时可各自持有独立文件。所有本轮物理文件的删除边界覆盖全部 target 的 ACK/error/timeout/late-response retirement 以及真实 tail replay，首个 ACK 不能提前删除任一文件。
 - 安全路径选择只改变物理文件地址与 GTP 参数；SGF 语义仍由 frozen plan 唯一生成，必须保留 `SZ`、可用 `KM`、`PL`、`AB/AW` 与 rectangular / extended-coordinate 行为。
+- Board primary owner 在冻结目标时同时冻结锚点、让子来源与真实 tail；执行时才绑定 admission，不重新读取可变历史。独立初始让子 setup 无显式 PL 时默认白先，保持独立 SNAPSHOT、moveNumber=0；显式 PL 优先，空根节点不改为白先。所有 target 的 capability/路径 preflight 必须先于任何棋盘 mutation。
 - `exact snapshot restore` 的 `loadsgf` 生命周期按固定顺序执行：
   1. `loadsgf` 临时 SGF 准备完成后，命令先入队再发出。
   2. 命令发出前，当前次 `loadsgf` 的 pending response handler 与 dispatch 归属绑定完成，并持续到退休或完成。
@@ -191,6 +193,7 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - Board 在首次位置转发前冻结目标节点、context revision、轮次、盘尺寸、主引擎 generation 与 captured mirror；exact plan 或 root 命令序列同时冻结。后续恢复和 completion 不重新选择当前 history 或引擎槽位。
 - 普通 resend、跨静态节点的历史导航与 removed-stone 节点恢复共用 Board owner 的目标确认。恢复中的真实 MOVE/PASS 不单独触发最终目标分析；成功 disposition 必须同时满足冻结目标仍有效、用户未暂停分析和捕获引擎身份仍有效。
 - capture 已完成但首条位置命令尚未入队时，普通分析请求也保持等待；同一原队列允许其依赖的位置命令和最终 fence 先执行。owner 确认后释放该请求；取消或失败只退休所属 capture，不影响后继恢复。
+- 新完整恢复 capture 建立后，旧恢复的后续位置命令仍归属旧 lineage，不得把 endpoint 的最新 queued lineage 改回旧值；新 owner 等待自己的全部响应和 fence。旧恢复的失败或取消不影响新 capture 的确认与分析恢复。
 - 用户分析暂停同时退休原普通队列及已选中但尚未取得物理写出许可的普通分析请求，包括恢复等待期间新增的请求；取消与 `beginOutputWrite` 竞争同一命令状态，计数只退休一次。位置命令、foreground restore 与 engine-game owner 的命令不随此取消；已经取得写出许可的命令沿用既有停止流程。
 - `Leelaz.PositionRestore` 仅提供捕获、作用域内命令执行与 callback confirmation，复用 ordinary queue、精确 response identity、timeout 和 retirement。一次复合恢复的 clear、尺寸/komi、loadsgf/set-position 与真实 tail 共用所属 endpoint 的失败 lineage；中间完整替换命令不得重置本次先前失败。
 - 最终 board synchronization fence 同时等待 captured authority/mirror 的全部 required position responses 与各自最终 name 响应。单独的 name 成功不能覆盖先前位置命令错误、发送失败或超时；迟到响应只结清原操作，不能结算或使不同后继操作失效。
@@ -205,8 +208,10 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 已有节点命中保留原节点 identity 和全部已证明历史，不克隆目标、补造 MOVE/PASS/SNAPSHOT 或删除尾部。前次同步尚未确认或已失败时，新目标使用自己的完整恢复路线，不把未确认的本地起点当作引擎盘面。
 - 增量同步继承起点已有的位置 response lineage，包含本次接受前已排队或已写出的普通位置命令；前置 play/undo 失败不能被新同步 capture 清除。只有完整 root/exact 替换路线可建立独立恢复 lineage，且仍须确认本次全部 required responses。
 - ReadBoard 是本次 final resume disposition owner；延迟回调与 Board 确认两者均已完成后，才允许对同一目标最多启动一次普通分析。回调不再调用棋谱加载恢复，不发第二次 clear/replay/loadsgf，也不启动自动棋谱快析。
+- 普通分析驱动的 ReadBoard 自动落子也走上述收集、盘面确认和单次 final resume；`isPondering` 或 `analysis-started` 仅表示分析意图，不能替代物理分析命令及有效输出。确认后的自动落子恢复由 ReadBoard 专属入口执行，不放开通用棋谱加载恢复对自动落子模式的排除（Issue #560）。
 - 最终 resume 重查 sync epoch、confirmed-local-move 保护、Board identity/context revision、目标节点、captured primary generation、引擎可用性和 read-board 分析设置；错误、发送失败、超时及过期目标恢复零次。
 - 用户分析暂停立即失效 pending ReadBoard resume，并继续遵守普通队列及 selected-before-write 取消规则。暂停后用户再次继续分析，也不能使旧同步回调重新取得恢复资格。
+- 停止同步、关闭自动落子、切换自动落子执子方或模式都会失效旧的 pending resume；随后重新开启也不能复活旧回调。最终恢复还须满足当前自动落子启用、非用户暂停及既有自动分析/对局互斥条件。GMA 仍由其独立调度器负责，不转入普通 `kata-analyze` 路径（Issue #560）。
 - 一致且无需恢复的重复快照不重新捕获恢复或重启合法分析流。普通首次同步直接采用最终视图，不以先回退再延迟前进触发额外分析。
 - 无引擎时仍完成本地 board/history 更新；GMA 和对局 continuation 保持独立的路由与 ownership exclusion。手动导航、手动分析恢复及普通棋谱加载策略保持原契约。
 
@@ -277,6 +282,13 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 “当前局面一致”的判定必须包含盘面内容。
 
 marker、手数、轮次只能辅助比对，不能单独触发 `NO_CHANGE` 或同步命中。
+
+- 野狐 marker 的颜色抖动可以忽略，但 marker 所在交点必须已有棋子；空交点不能命中该帧。
+- 连续同步中，已接受且仍显示在 `mainEnd` 的真实 `MOVE`，若整盘与新帧一致而直播标题
+  手数仅落后一手，保留该节点及真实历史，判为 `NO_CHANGE`。标记有无／颜色抖动沿用
+  既有盘面比对规则，不能因此切回缺子的祖先或重建为 `SNAPSHOT`。
+- 上述标题滞后处理不跨同步重启、房间身份冲突或强制重建，也不适用于棋谱浏览窗口。
+  真实盘面回退、其他手数差异及 `PASS/SNAPSHOT` 仍走既有历史匹配／重建流程。
 
 1. `NO_CHANGE`
    当前局面和目标局面一致，保留当前节点。

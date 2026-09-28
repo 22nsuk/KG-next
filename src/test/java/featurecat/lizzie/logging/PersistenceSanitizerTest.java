@@ -53,6 +53,165 @@ class PersistenceSanitizerTest {
           "body=opaque%2525252520token=CANARY_PERCENT_OVERDEPTH_BOUNDARY_17");
 
   @Test
+  void quotedFlagsAndControlCharactersUseLaunchArgumentBoundaries() {
+    PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+    for (String flag : List.of("-pw", "\"-pw\"", "'-pw'")) {
+      for (String value : List.of("CANARY&SUFFIX;END", "CANARY\tSUFFIX", "CANARY\nSUFFIX")) {
+        String command = "plink " + flag + " " + value + " -P 22";
+        assertEquals(value, featurecat.lizzie.util.Utils.splitCommand(command).get(2));
+        assertEquals("plink " + flag + " <redacted> -P 22", sanitizer.sanitize(command));
+      }
+    }
+  }
+
+  @Test
+  void plinkPasswordsAreWholeArgumentsRatherThanQueryValues() {
+    PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+    for (String value : List.of(
+        "CANARY_PW_SIMPLE",
+        "\"CANARY_PW_SPACE tail\"",
+        "'CANARY_PW_SINGLE tail'",
+        "CANARY_PW_SPECIAL&suffix;end,rest}final",
+        "\"CANARY_PW_ESCAPED\\\" suffix\"",
+        "CANARY_PW_PREFIX\" spaced suffix\"",
+        "CANARY_PW_ESCAPED\\ suffix")) {
+      assertEquals(
+          "command=plink user@host -P 22 -pw <redacted> ./start-engine.sh",
+          sanitizer.sanitize("command=plink user@host -P 22 -pw " + value + " ./start-engine.sh"));
+    }
+    assertEquals("plink -pwfile file.txt -P 22", sanitizer.sanitize("plink -pwfile file.txt -P 22"));
+  }
+
+  @Test
+  void structuredPlinkArgumentsRedactTheWholeValueWithoutMutatingInput() {
+    org.json.JSONObject input = new org.json.JSONObject().put("arguments",
+        new org.json.JSONArray(List.of("plink", "-pw", "CANARY_PW & suffix", "-P", "22")));
+    org.json.JSONArray safe = new ExportSanitizer().sanitizeJsonObject(input).getJSONArray("arguments");
+    assertEquals("<redacted>", safe.getString(2));
+    assertEquals("-P", safe.getString(3));
+    assertEquals("22", safe.getString(4));
+    assertEquals("CANARY_PW & suffix", input.getJSONArray("arguments").getString(2));
+  }
+
+  @Test
+  void structuredOverridesPreserveLiteralReplacementMetacharacters() {
+    String argument = "runLabel=run$archive\\segment,password=CANARY secret,maxSimultaneousGames=1";
+    org.json.JSONObject input = new org.json.JSONObject().put("arguments",
+        new org.json.JSONArray(List.of("katago", "contribute", "-override-config", argument)));
+    org.json.JSONArray safe = new ExportSanitizer().sanitizeJsonObject(input).getJSONArray("arguments");
+    assertEquals("runLabel=run$archive\\segment,password=<redacted>,maxSimultaneousGames=1",
+        safe.getString(3));
+    assertEquals(argument, input.getJSONArray("arguments").getString(3));
+  }
+
+  @Test
+  void ordinaryCredentialFieldsPreserveFollowingDiagnosticContext() {
+    String safe = new PersistenceSanitizer().sanitize(
+        "token=CANARY_TOKEN password=CANARY_PASSWORD stage=install status=failed");
+    assertFalse(safe.contains("CANARY"));
+    assertTrue(safe.contains("stage=install status=failed"));
+  }
+
+  @Test
+  void contributionPasswordAssignmentsAreCompletelyRedactedAcrossRawSplitAndRenderedForms() {
+    PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+    String raw =
+        "katago contribute -override-config"
+            + " \"password=CANARY_CONTRIB space&suffix;end\",\"maxSimultaneousGames=1\"";
+    assertEquals(
+        "katago contribute -override-config \"password=<redacted>\",\"maxSimultaneousGames=1\"",
+        sanitizer.sanitize(raw));
+
+    List<String> splitTokens = featurecat.lizzie.util.Utils.splitCommand(raw);
+    assertEquals("password=CANARY_CONTRIB space&suffix;end,maxSimultaneousGames=1", splitTokens.get(3));
+    assertEquals(
+        "password=<redacted>,maxSimultaneousGames=1",
+        sanitizer.sanitize(splitTokens.get(3)));
+    assertEquals(
+        "maxSimultaneousGames=1,password=<redacted>",
+        sanitizer.sanitize("maxSimultaneousGames=1,password=CANARY_CONTRIB space&suffix;end"));
+    assertEquals(
+        "threads=4,password=<redacted>,maxSimultaneousGames=1",
+        sanitizer.sanitize("threads=4,password=CANARY_CONTRIB space&suffix;end,maxSimultaneousGames=1"));
+
+    String rendered =
+        "\"katago\" \"contribute\" \"-override-config\" \"password=CANARY_CONTRIB space&suffix;end,maxSimultaneousGames=1\"";
+    assertEquals(
+        "\"katago\" \"contribute\" \"-override-config\" \"password=<redacted>,maxSimultaneousGames=1\"",
+        sanitizer.sanitize(rendered));
+
+    assertEquals(
+        "-override-config \"maxSimultaneousGames=1,rules=chinese\"",
+        sanitizer.sanitize("-override-config \"maxSimultaneousGames=1,rules=chinese\""));
+    assertEquals(
+        "-override-config \"maxSimultaneousGames=1\",\"rules=chinese\"",
+        sanitizer.sanitize("-override-config \"maxSimultaneousGames=1\",\"rules=chinese\""));
+  }
+
+  @Test
+  void contributionPasswordSupportsOrdinarySpacesPunctuationAndQuoteEscapes() {
+    PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+
+    assertEquals(
+        "\"password=<redacted>\"",
+        sanitizer.sanitize("\"password=CANARY\\\"quote suffix\""));
+    assertEquals(
+        "\"password=<redacted>\"",
+        sanitizer.sanitize("\"password=CANARY'single quote suffix\""));
+    assertEquals(
+        "'password=<redacted>'",
+        sanitizer.sanitize("'password=CANARY single quote suffix'"));
+    assertEquals(
+        "'password=<redacted>'",
+        sanitizer.sanitize("'password=CANARY\\'single quote suffix'"));
+    assertEquals(
+        "'password=<redacted>'",
+        sanitizer.sanitize("'password=CANARY\\\"double quote suffix'"));
+    assertEquals(
+        "\"password=<redacted>\"",
+        sanitizer.sanitize("\"password=CANARY\\\\path suffix\""));
+
+    assertEquals(
+        "\"password=<redacted>\"",
+        sanitizer.sanitize("\"password=CANARY space&suffix;end#foo!bar?baz=123\""));
+    assertEquals(
+        "password=<redacted>,maxSimultaneousGames=1",
+        sanitizer.sanitize("password=CANARY space&suffix;end#foo!bar?baz=123,maxSimultaneousGames=1"));
+    assertEquals(
+        "maxSimultaneousGames=1,password=<redacted>",
+        sanitizer.sanitize("maxSimultaneousGames=1,password=CANARY space&suffix;end#foo!bar?baz=123"));
+  }
+
+  @Test
+  void pwCredentialAssignmentsAndArgumentsAreRedactedWithoutBreakingPwFlags() {
+    PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+
+    String raw =
+        "katago contribute -override-config"
+            + " \"pw=CANARY_PW space&suffix;end\",\"maxSimultaneousGames=1\"";
+    assertEquals(
+        "katago contribute -override-config \"pw=<redacted>\",\"maxSimultaneousGames=1\"",
+        sanitizer.sanitize(raw));
+    assertEquals(
+        "\"katago\" \"contribute\" \"-override-config\" \"pw=<redacted>,maxSimultaneousGames=1\"",
+        sanitizer.sanitize(
+            "\"katago\" \"contribute\" \"-override-config\" \"pw=CANARY_PW space&suffix;end,maxSimultaneousGames=1\""));
+    assertEquals(
+        "pw=<redacted>,maxSimultaneousGames=1",
+        sanitizer.sanitize("pw=CANARY_PW space&suffix;end,maxSimultaneousGames=1"));
+    assertEquals(
+        "maxSimultaneousGames=1,pw=<redacted>",
+        sanitizer.sanitize("maxSimultaneousGames=1,pw=CANARY_PW space&suffix;end"));
+
+    assertEquals(
+        "plink -pw <redacted> -P 22",
+        sanitizer.sanitize("plink -pw \"CANARY_PW_SPACE tail\" -P 22"));
+    assertEquals(
+        "plink -pwfile file.txt -P 22",
+        sanitizer.sanitize("plink -pwfile file.txt -P 22"));
+  }
+
+  @Test
   void encodedCredentialFormsAreRedactedWithoutCopyingCanaries() {
     assertSanitized(new PersistenceSanitizer());
   }

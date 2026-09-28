@@ -8,6 +8,38 @@ import org.junit.jupiter.api.Test;
 
 class EngineStartupDiagnosticsTest {
   @Test
+  void basicFailureRetainsCredentialArgumentBoundaries() {
+    for (String secret : List.of("CANARY space&suffix;end", "CANARY\"quote suffix", "CANARY\\path suffix")) {
+      var command = List.of("plink", "-pw", secret, "remote-engine");
+      for (String missingCommand : new String[] {null, "", "   "}) {
+        String shared = EngineStartupDiagnostic.basic(command, missingCommand, "fixture failure").shareText();
+        assertFalse(shared.contains("CANARY"), shared);
+        assertFalse(shared.contains("suffix"), shared);
+        assertTrue(shared.contains("remote-engine"), shared);
+        assertEquals(secret, command.get(2));
+      }
+    }
+  }
+
+  @Test
+  void sharedFailureRetainsCredentialArgumentBoundaries() {
+    for (String secret : List.of("CANARY space&suffix;end", "CANARY\"quote suffix", "CANARY\\path suffix")) {
+      try (var service =
+          new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+        var command = List.of("plink", "-pw", secret, "remote-engine");
+        var builder = new ProcessBuilder(command);
+        var attempt = service.begin("eng-secret", "MAIN_BOARD", command, true);
+        attempt.capture(builder);
+        String shared = attempt.fail("startup-exit", "fixture failure").shareText();
+        assertFalse(shared.contains("CANARY"), shared);
+        assertFalse(shared.contains("suffix"), shared);
+        assertTrue(shared.contains("remote-engine"), shared);
+        assertEquals(command, builder.command());
+      }
+    }
+  }
+
+  @Test
   void decodesWindowsBitPatternsWithoutGuessingUnknownCodes() {
     assertEquals("STATUS_DLL_NOT_FOUND", EngineStartupDiagnostic.windowsStatus(-1073741515));
     assertEquals("STATUS_INVALID_IMAGE_FORMAT", EngineStartupDiagnostic.windowsStatus(0xC000007B));

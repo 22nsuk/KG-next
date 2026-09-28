@@ -18,7 +18,6 @@ import featurecat.lizzie.util.EncodingDetector;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
 import java.lang.reflect.Field;
-import java.text.SimpleDateFormat;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -36,7 +35,6 @@ import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 
 public class SGFParser {
-  private static final SimpleDateFormat SGF_DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd");
   private static final int DEFAULT_BOARD_SIZE = 19;
   private static final Pattern BOARD_SIZE_PATTERN =
       Pattern.compile("(?s).*?SZ\\[([\\d:]+)\\](?s).*");
@@ -933,6 +931,7 @@ public class SGFParser {
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
     gameInfo.setResult(result);
+    gameInfo.setDate(gameProperties.get("DT"));
     // Rewind to game start
     while (Lizzie.board.previousMove(false))
       ;
@@ -1371,7 +1370,7 @@ public class SGFParser {
       String result = gameInfo.getResult();
       Double komi = gameInfo.getKomi();
       Integer handicap = gameInfo.getHandicap();
-      String date = SGF_DATE_FORMAT.format(gameInfo.getDate());
+      String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
 
       // add SGF header
       StringBuilder builder = new StringBuilder("(;");
@@ -1502,6 +1501,9 @@ public class SGFParser {
       // Game properties
       BoardData rootData = history.getData().clone();
       rootData.addProperties(generalProps.toString());
+      if (gameInfo.getDate() == null) {
+        rootData.getProperties().remove("DT");
+      }
       if (rootData.isSnapshotNode()) {
         builder.append(materializedRootSnapshotProperties(rootData, history.getStones()));
       } else {
@@ -3573,17 +3575,38 @@ public class SGFParser {
   }
 
   private static void stabilizeRootSetupSideToPlay(BoardHistoryList history) {
-    if (history == null) {
+    if (history == null || history.getStart() == null) {
       return;
     }
-    BoardData rootData = history.getStart().getData();
-    String explicitPl = rootData.getProperty("PL");
+    int declaredHandicap =
+        history.getGameInfo() == null ? 0 : history.getGameInfo().getHandicap();
+    int[] boardSize = resolveHistoryBoardSize(history);
+    stabilizeEligibleSetupSubtree(
+        history.getStart(), declaredHandicap, boardSize[0], boardSize[1]);
+  }
+
+  private static void stabilizeEligibleSetupSubtree(
+      BoardHistoryNode node, int declaredHandicap, int width, int height) {
+    if (node == null) {
+      return;
+    }
+    BoardData data = node.getData();
+    if (data == null || data.isHistoryActionNode() || data.dummy) {
+      return;
+    }
+
+    String explicitPl = data.getProperty("PL");
     if (!Utils.isBlank(explicitPl)) {
-      applyCurrentPlayerProperty(rootData, explicitPl);
+      applyCurrentPlayerProperty(data, explicitPl);
+    } else if (InitialHandicapSetup.isInitialHandicap(node, declaredHandicap, width, height)) {
+      data.blackToPlay = false;
       return;
+    } else if (node.previous().isEmpty() && hasRootSetupStoneProperties(data)) {
+      data.blackToPlay = true;
     }
-    if (hasRootSetupStoneProperties(rootData)) {
-      rootData.blackToPlay = !isHandicapRootSetup(history, rootData);
+
+    for (BoardHistoryNode child : node.getVariations()) {
+      stabilizeEligibleSetupSubtree(child, declaredHandicap, width, height);
     }
   }
 
@@ -3592,18 +3615,6 @@ public class SGFParser {
     return properties.containsKey("AB")
         || properties.containsKey("AW")
         || properties.containsKey("AE");
-  }
-
-  private static boolean isHandicapRootSetup(BoardHistoryList history, BoardData rootData) {
-    if (rootData == null || !rootData.getProperties().containsKey("AB")) {
-      return false;
-    }
-    int handicap =
-        history == null || history.getGameInfo() == null ? 0 : history.getGameInfo().getHandicap();
-    if (handicap <= 0) {
-      handicap = parseHandicapProperty(rootData.getProperty("HA"));
-    }
-    return handicap >= 2;
   }
 
   private static int parseHandicapProperty(String rawHandicap) {
@@ -4190,6 +4201,7 @@ public class SGFParser {
       if (gameProperties.size() > 0) {
         history.getData().addProperties(gameProperties);
       }
+      history.getGameInfo().setDate(gameProperties.get("DT"));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
           parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();

@@ -116,7 +116,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
           .put("environmentState", "not-formed")
           .put("local", local)
           .put("platform", windows ? "windows" : "non-windows")
-          .put("configuredCommand", launchText(String.join(" ", command), 16384));
+          .put("configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
     }
 
     public String id() {

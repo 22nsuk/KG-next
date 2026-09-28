@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
+import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtFailureKind;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtInstallStatus;
@@ -118,6 +119,27 @@ class EngineFailedMessageLayoutTest {
     assertFalse(summary.contains("do-not-display"));
     assertFalse(summary.contains("C:\\Users\\alice"));
     assertTrue(summary.length() < 5_000);
+  }
+
+  @Test
+  void plinkPasswordsNeverReachFailureTextOrDiagnosticCommands() {
+    for (String value : List.of("CANARY_PLINK", "CANARY_PLINK suffix",
+        "CANARY_PLINK&suffix;end,rest}final", "CANARY_PLINK\tsuffix")) {
+      String command = "plink -pw \"" + value + "\" -P 22";
+      JScrollPane pane = EngineFailedMessage.createScrollableText(
+          command, new Font(Font.MONOSPACED, Font.PLAIN, 14));
+      List<String> arguments = List.of("plink", "-pw", value, "-P", "22");
+      for (String safe : List.of(
+          ((JTextArea) pane.getViewport().getView()).getText(),
+          EngineFailedMessage.redactSensitiveText(command),
+          EngineFailedMessage.buildDiagnosticCommand(arguments, command),
+          EngineFailedMessage.buildDiagnosticCommand(List.of(), command))) {
+        assertFalse(safe.contains("CANARY_PLINK"));
+        assertFalse(safe.contains("suffix"));
+        assertTrue(safe.contains("<redacted>"));
+      }
+      assertEquals(value, arguments.get(2));
+    }
   }
 
   @Test
@@ -611,6 +633,52 @@ class EngineFailedMessageLayoutTest {
         throw new RuntimeException(failure.get());
       }
     }
+  }
+
+  @Test
+  void basicDiagnosticConstructionSeamPreservesCommandDetailAndRedactsSecrets() {
+    String secretPassword = "super-secret-password-12345";
+    String secretToken = "super-secret-token-67890";
+    String command = "controlled-engine.exe --password " + secretPassword + " --mode gtp";
+    String detail = "Engine startup timeout; token=" + secretToken + " while connecting";
+
+    EngineStartupDiagnostic diagnostic =
+        EngineStartupDiagnostic.basic(
+            List.of("controlled-engine.exe", "--password", secretPassword, "--mode", "gtp"),
+            command,
+            detail);
+    assertNotNull(diagnostic);
+    assertNotNull(diagnostic.attemptId());
+    assertTrue(diagnostic.attemptId().startsWith("failure-"));
+    assertEquals("unknown", diagnostic.engineId());
+
+    JSONObject json = diagnostic.toJson();
+    assertTrue(json.isNull("exitCode"));
+    assertTrue(json.isNull("exitHex"));
+    assertEquals("unavailable", json.getString("statusName"));
+    assertEquals("unavailable", json.getString("outcome"));
+    assertEquals(detail, json.getString("originalError"));
+    assertEquals(command, json.getJSONObject("launch").getString("configuredCommand"));
+    assertEquals("unavailable", json.getJSONObject("launch").getString("environmentState"));
+    assertEquals("unavailable", json.getJSONObject("launch").getString("startedAt"));
+    assertEquals("unavailable", json.getString("failedAt"));
+    assertEquals("", json.getString("stdout"));
+    assertEquals("", json.getString("stderr"));
+    assertEquals(0, json.getJSONArray("findings").length());
+
+    JSONObject basicSource = json.getJSONObject("sources").getJSONObject("basic");
+    assertEquals("unavailable", basicSource.getString("collectionState"));
+    assertEquals("evidence-unavailable", basicSource.getString("checkedScope"));
+
+    String shareText = diagnostic.shareText();
+    assertNotNull(shareText);
+    assertFalse(shareText.contains(secretPassword));
+    assertFalse(shareText.contains(secretToken));
+    assertTrue(shareText.contains("<redacted>"));
+
+    JSONObject parsedShare = new JSONObject(shareText);
+    assertTrue(parsedShare.isNull("exitCode"));
+    assertTrue(parsedShare.getString("attemptId").startsWith("failure-"));
   }
 
   @SuppressWarnings("unchecked")
