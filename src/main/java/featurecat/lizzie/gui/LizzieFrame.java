@@ -207,7 +207,6 @@ public class LizzieFrame extends JFrame {
   public int subBoardYmouse;
   public int subBoardLengthmouse;
   private static VariationTree variationTree;
-  private static VariationTreeBig variationTreeBig;
   public static WinrateGraph winrateGraph;
   public static Menu menu;
   public static BottomToolbar toolbar;
@@ -618,6 +617,7 @@ public class LizzieFrame extends JFrame {
   private java.util.Set<String> trackingVisibilityPoints = java.util.Set.of();
   private boolean redrawWinratePaneOnly = false;
   private boolean redrawBoardSurfacesOnly = false;
+  private boolean redrawVariationTreeOnly;
   private javax.swing.Timer deferredMoveUiRefreshTimer;
   private static final int DEFERRED_MOVE_UI_REFRESH_MS = 180;
   public boolean mouseOverChanged = false;
@@ -674,7 +674,6 @@ public class LizzieFrame extends JFrame {
     boardRenderer = new BoardRenderer(false);
     subBoardRenderer = new SubBoardRenderer(false);
     variationTree = new VariationTree();
-    variationTreeBig = new VariationTreeBig();
     winrateGraph = new WinrateGraph();
     toolbar = new BottomToolbar();
     topPanel = new TopHeaderPanel();
@@ -5961,9 +5960,9 @@ public class LizzieFrame extends JFrame {
   // screenshot/web-board helpers) is never drawn into.
   private BufferedImage paintBufferA;
   private BufferedImage paintBufferB;
-  public int varBigX;
-  public int varBigY;
-  private BufferedImage cachedVariationTreeBigImage;
+  private final VariationTreeImage variationTreeImages = new VariationTreeImage();
+  private VariationTreeImage.View requestedVariationTreeView;
+  private VariationTreeImage.Result publishedVariationTree;
   public Paint backgroundPaint;
   private int cachedBackgroundWidth = 0, cachedBackgroundHeight = 0;
   public boolean redrawBackgroundAnyway = false;
@@ -6057,7 +6056,12 @@ public class LizzieFrame extends JFrame {
             && cachedImage != null
             && cachedImage.getWidth() == panelWidth
             && cachedImage.getHeight() == panelHeight;
-    if (canPaintIncrementally && (redrawBoardSurfacesOnly || redrawWinratePaneOnly)) {
+    if (canPaintIncrementally
+        && (redrawBoardSurfacesOnly
+            || redrawWinratePaneOnly
+            || (redrawVariationTreeOnly
+                && publishedVariationTree != null
+                && isCurrentVariationTreeView(publishedVariationTree.view())))) {
       if (redrawBoardSurfacesOnly) {
         BufferedImage incrementalFrame = acquireIncrementalPaintBuffer(panelWidth, panelHeight);
         redrawDynamicBoardSurfaces(incrementalFrame);
@@ -6072,6 +6076,7 @@ public class LizzieFrame extends JFrame {
       redrawBoardSurfacesOnly = false;
       redrawWinratePaneOnly = false;
       isSmallCap = false;
+      redrawVariationTreeOnly = false;
       int width = panelWidth;
       int height = panelHeight;
 
@@ -7548,10 +7553,12 @@ public class LizzieFrame extends JFrame {
     g0.drawImage(cachedImage, 0, 0, null);
     if (Lizzie.config.showWinrateGraph && cachedWinrateImage != null && !showControls)
       g0.drawImage(cachedWinrateImage, grx, gry, null);
-    if (Lizzie.config.showVariationGraph
-        && shouldShowSimpleVariation()
-        && cachedVariationTreeBigImage != null
-        && !showControls) g0.drawImage(cachedVariationTreeBigImage, varBigX, varBigY, null);
+    redrawVariationTreeOnly = false;
+    VariationTreeImage.Result tree = currentVariationTreeImage();
+    if (tree != null) {
+      VariationTreeImage.View view = tree.view();
+      g0.drawImage(tree.image(), view.x(), view.y(), null);
+    }
   }
 
   private String getLoadingText() {
@@ -7707,6 +7714,8 @@ public class LizzieFrame extends JFrame {
     // 分开各部分刷新,1代表来自info move的刷新
     redrawWinratePaneOnly = false;
     redrawBoardSurfacesOnly = false;
+    redrawVariationTreeOnly = false;
+    requestedVariationTreeView = null;
     if (independentSubBoard != null && independentSubBoard.isVisible())
       independentSubBoard.refresh();
     if (independentMainBoard != null && independentMainBoard.isVisible())
@@ -9384,10 +9393,13 @@ public class LizzieFrame extends JFrame {
     // if (Lizzie.config.showSubBoard && subBoardRenderer.isInside(x, y)) {
     // Lizzie.config.toggleLargeSubBoard();
     // }
-    if (shouldShowSimpleVariation()
-        && Lizzie.config.showVariationGraph
+    if (publishedVariationTree != null
+        && isCurrentVariationTreeView(publishedVariationTree.view())
         && !EngineGamePresentation.current().playing()) {
-      variationTreeBig.onClicked(x, y);
+      VariationTreeImage.View view = publishedVariationTree.view();
+      synchronized (view.board()) {
+        publishedVariationTree.renderer().onClicked(x - view.x(), y - view.y());
+      }
     }
   }
 
@@ -13218,29 +13230,59 @@ public class LizzieFrame extends JFrame {
         || !Lizzie.config.showScrollVariation;
   }
 
+  // Image/node seam shared by painting and desktop acceptance; obsolete images are never exposed.
+  VariationTreeImage.Result currentVariationTreeImage() {
+    return publishedVariationTree != null
+            && isCurrentVariationTreeView(publishedVariationTree.view())
+        ? publishedVariationTree
+        : null;
+  }
+
+  private boolean isCurrentVariationTreeView(VariationTreeImage.View view) {
+    return view == requestedVariationTreeView
+        && view.hasCurrentHistory()
+        && view.panelWidth() == mainPanel.getWidth()
+        && view.panelHeight() == mainPanel.getHeight()
+        && Lizzie.config.showVariationGraph
+        && shouldShowSimpleVariation()
+        && !showControls;
+  }
+
   private void createVarTreeImage(int vx, int vy, int vw, int vh, Graphics2D g) {
     g.setColor(new Color(0, 0, 0, 130));
     g.fillRect(vx, vy, vw, vh);
     if (!Lizzie.config.showVariationGraph) return;
     if (shouldShowSimpleVariation()) {
-      new Thread() {
-        public void run() {
-          BufferedImage variationTreeBigImage = new BufferedImage(vw, vh, TYPE_INT_ARGB);
-          Graphics2D g1 = (Graphics2D) variationTreeBigImage.getGraphics();
-          g1.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-          g1.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-          try {
-            variationTreeBig.draw(g1, 0, 0, vw, vh);
-          } catch (Exception e) {
-          }
-          varBigX = vx;
-          varBigY = vy;
-          cachedVariationTreeBigImage = variationTreeBigImage;
-          if (varTreeScrollPane.isVisible()) {
+      if (vw <= 0 || vh <= 0) {
+        requestedVariationTreeView = null;
+        return;
+      }
+      VariationTreeImage.View view;
+      synchronized (Lizzie.board) {
+        view =
+            new VariationTreeImage.View(
+                Lizzie.board,
+                Lizzie.board.getHistory(),
+                getDisplayNode(),
+                Lizzie.board.getHistory().getCurrentHistoryNode(),
+                Lizzie.board.getContextRevision(),
+                vx,
+                vy,
+                vw,
+                vh,
+                mainPanel.getWidth(),
+                mainPanel.getHeight());
+      }
+      requestedVariationTreeView = view;
+      variationTreeImages.request(
+          view,
+          () -> isCurrentVariationTreeView(view),
+          result -> {
+            publishedVariationTree = result;
             varTreeScrollPane.setVisible(false);
-          }
-        }
-      }.start();
+            redrawVariationTreeOnly = true;
+            mainPanel.repaint();
+          });
       return;
     } else if (vw < 10 || vh < 10) {
       varTreeScrollPane.setVisible(false);
