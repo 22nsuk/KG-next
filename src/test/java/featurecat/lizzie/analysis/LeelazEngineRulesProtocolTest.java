@@ -895,6 +895,7 @@ class LeelazEngineRulesProtocolTest {
     private final GtpConsolePane previousConsole;
     private final Board previousBoard;
     private final LizzieFrame previousFrame;
+    private final Menu previousMenu;
     private final EngineManager previousManager;
     final Leelaz engine;
     final ByteArrayOutputStream output;
@@ -910,6 +911,7 @@ class LeelazEngineRulesProtocolTest {
       previousConsole = Lizzie.gtpConsole;
       previousBoard = Lizzie.board;
       previousFrame = Lizzie.frame;
+      previousMenu = LizzieFrame.menu;
       previousManager = Lizzie.engineManager;
       Lizzie.config = ConfigTestHelper.createForTests(Files.createTempDirectory("engine-rules"));
       Lizzie.gtpConsole = null;
@@ -960,7 +962,7 @@ class LeelazEngineRulesProtocolTest {
           throw new AssertionError(failure);
         }
       });
-      frame.menu = toolbar;
+      LizzieFrame.menu = toolbar;
       Lizzie.frame = frame;
       return toolbar;
     }
@@ -1015,6 +1017,7 @@ class LeelazEngineRulesProtocolTest {
       Lizzie.gtpConsole = previousConsole;
       Lizzie.board = previousBoard;
       Lizzie.frame = previousFrame;
+      LizzieFrame.menu = previousMenu;
       Lizzie.engineManager = previousManager;
     }
   }
