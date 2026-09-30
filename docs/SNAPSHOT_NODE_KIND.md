@@ -127,6 +127,8 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - foreground/GMA adapter 只负责把自己的 session/reservation identity 映射为 opaque admission，再调用 generic history/current-position capture；产品-specific stop、name、komi、clear、quarantine 与 completion policy 留在 adapter/owner。
 - 自动/直接 restart 的 exact 与 root 路线都经过同一个 owner board synchronization fence；owner 只能在 fence 成功后恢复 captured ponder，失败或不可用时不启动分析，并在既有 completion boundary 释放 reservation。
 - `Leelaz` 继续唯一拥有 ordinary command queue、response handler、timeout、late-response retirement、output-stream invalidation 与 engine arbitration；exact module 只通过窄 admission-aware seam 使用这些能力。
+- 普通 KataGo 启动的 PDA/WRN 回读由 `Leelaz` 持有独立轮次，绑定既有 numbered pending response 与 reader incarnation；规则 operation 的成功、失败和超时不结算参数轮次。startup-post 查询仍遵守原有实际写出／失败关闭边界。
+- PDA/WRN 仅在同一有效轮次两项有限数值均成功回读后，通过现有工具栏路径发布完整一对；回复次序不影响结果，合法零值不是空白。错误、格式错误、缺失或超时不以自动载入配置／默认零补齐成功。取消、替换及旧 timeout 不影响后继轮次；EDT 发布时复验原前台 generation、reader 与轮次，隔离启动不得更新全局显示。
 - 手动终止 genmove 对局后，空 numbered ACK 仍是非终态；迟到的合法 analyze `play` 只结清原 reader binding 的 pending handler，不追加应用的真实 `MOVE/PASS` 或比赛结果。缺失终态继续按既有五秒物理请求 watchdog 回收。
 - 已停止对局的前台引擎在物理请求退役后，由 `EngineManager` 异步冻结并执行当前应用盘面的 root/exact 恢复；退役屏障保留到既有稳定 board synchronization fence 完成。恢复命令仅获该 lifecycle owner 对原 binding 的写入授权，失败将原目标标为 unavailable，替换实例不受旧归还影响；手动停止不自动恢复 ponder。
 - 对局中所有贴目入口统一提交给当前 engine-game owner；界面区分已确认贴目与待应用目标，连续输入只保留最新目标，不修改 frozen opening plan 或后续批次默认值。GENMOVE 已发出的当前合法手须先完成并由对手接受，再开始贴目切换。

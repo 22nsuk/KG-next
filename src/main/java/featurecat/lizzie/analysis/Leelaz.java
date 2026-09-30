@@ -380,10 +380,8 @@ public class Leelaz {
   public boolean isThinking = false;
   public boolean isInputCommand = false;
 
-  public volatile boolean getRcentLine = false;
-  private final Object parameterReadTimeoutLock = new Object();
-  private long parameterReadTimeoutGeneration;
-  private int recentLineNumber = 0;
+  private final Object parameterReadLock = new Object();
+  private ParameterRead activeParameterRead;
   public volatile String recentRulesLine = "";
   public int usingSpecificRules = -1; // 1=中国规则2=中古规则3=日本规则4=TT规则5=其他规则
   private final Object engineRulesLock = new Object();
@@ -6669,10 +6667,7 @@ public class Leelaz {
     if (binding.startupDiagnostic != null)
       binding.startupDiagnostic.fail("startup-handshake", failure.toString());
     isCheckingPda = false;
-    synchronized (parameterReadTimeoutLock) {
-      parameterReadTimeoutGeneration++;
-      getRcentLine = false;
-    }
+    cancelParameterRead();
     try {
       rememberRecentLine(
           recentStderrLines,
@@ -6728,7 +6723,7 @@ public class Leelaz {
       setKataEnginePara();
       confirmKataRulesAfterStartup(isolatedEngineGameStartup);
       if (!isolatedEngineGameStartup) {
-        getParameterScadule(true);
+        readKataParameters();
       }
     } catch (RuntimeException | Error startupFailure) {
       if (pdaQueryCleanup != null) {
@@ -14026,17 +14021,11 @@ public class Leelaz {
             && queuedCommand.isEngineGameCommand()
             && !queuedCommand.isOrdinaryEngineGameBootstrap())
         || exactLoadSgf
-        || (getRcentLine && isRecentParameterReadCommand(command))
         || (command != null
             && handler != NO_OP_RESPONSE_HANDLER
             && (command.startsWith("kata-get-param ") || command.startsWith("kata-set-param ")));
   }
 
-  private static boolean isRecentParameterReadCommand(String command) {
-    return "kata-get-param playoutDoublingAdvantage".equals(command)
-        || "kata-get-param analysisWideRootNoise".equals(command)
-        || "kata-get-rules".equals(command);
-  }
 
   private int nextResponseCommandId(
       String command, Runnable handler, QueuedCommand queuedCommand) {
@@ -14066,9 +14055,6 @@ public class Leelaz {
     }
     if (queuedCommand != null && queuedCommand.isEngineGameCommand()) {
       return engineGameResponseCommandIds.getAndIncrement();
-    }
-    if (getRcentLine && isRecentParameterReadCommand(command)) {
-      return readBoardGmaResponseCommandIds.getAndIncrement();
     }
     if (command != null
         && handler != NO_OP_RESPONSE_HANDLER
@@ -14415,31 +14401,10 @@ public class Leelaz {
       afterEngineRulesResponseHandlerPeek();
       return line.startsWith("?") || line.startsWith("=");
     }
-    if (!isRecentParameterReadCommand(pending.command)) {
-      return false;
-    }
-    if (!line.startsWith("=") || !getRcentLine) {
-      // Matching errors and late successes still belong exclusively to this pending command.
-      return line.startsWith("?") || line.startsWith("=");
-    }
-    String payload = gtpResponsePayload(line);
-    if (pending.command.equals("kata-get-rules")) {
-      return true;
-    }
-    try {
-      double value = Double.parseDouble(payload);
-      if (pending.command.equals("kata-get-param playoutDoublingAdvantage")) {
-        pda = value;
-        recentLineNumber = Math.max(recentLineNumber, 1);
-      } else if (pending.command.equals("kata-get-param analysisWideRootNoise")) {
-        wrn = value;
-        recentLineNumber = Math.max(recentLineNumber, 2);
-        Lizzie.frame.setPdaAndWrn(pda, wrn);
-      }
-    } catch (NumberFormatException ignored) {
-      // A malformed payload belongs to the matched command but must not corrupt the cached value.
-    }
-    return true;
+    // The callback owns the captured parameter round. Even an expired round's reply must be
+    // consumed here rather than interpreted as an ordinary move or console command response.
+    return pending.handler instanceof ParameterReadResponseHandler
+        && (line.startsWith("?") || line.startsWith("="));
   }
 
   /** Freezes the exact engine-game startup owner before the parser dispatches post-name work. */
@@ -24556,7 +24521,6 @@ public class Leelaz {
       completed = engineRulesResult.confirmed(observed);
       publishEngineRulesResultLocked(operation, completed);
       recentRulesLine = observedRulesLine;
-      getRcentLine = false;
       getSuicidalAndRules();
       if (!isolated && this == Lizzie.leelaz && Lizzie.config != null) {
         Lizzie.config.currentKataGoRules = recentRulesLine;
@@ -24852,50 +24816,144 @@ public class Leelaz {
     return true;
   }
 
-  public void getParameterScadule(boolean sendCommand) {
-    getParameterScadule(sendCommand, TimeUnit.SECONDS.toMillis(30));
+  private void readKataParameters() {
+    readKataParameters(TimeUnit.SECONDS.toMillis(30));
   }
 
-  void getParameterScadule(boolean sendCommand, long timeoutMillis) {
-    final long timeoutGeneration;
-    boolean queryRules = false;
-    synchronized (parameterReadTimeoutLock) {
-      timeoutGeneration = ++parameterReadTimeoutGeneration;
-      getRcentLine = true;
-      if (sendCommand) {
-        recentLineNumber = 0;
-        sendCommand("kata-get-param playoutDoublingAdvantage");
-        sendCommand("kata-get-param analysisWideRootNoise");
-        queryRules = engineRulesResult.status() != EngineRulesResult.Status.PENDING;
+  void readKataParameters(long timeoutMillis) {
+    long primaryGeneration = Lizzie.capturePrimaryEngineGeneration(this);
+    ParameterRead read = new ParameterRead(currentReaderStreamBinding(), primaryGeneration);
+    synchronized (parameterReadLock) {
+      activeParameterRead = read;
+    }
+    try {
+      sendParameterRead(read, "playoutDoublingAdvantage", true);
+      sendParameterRead(read, "analysisWideRootNoise", false);
+      if (engineRulesResult.status() != EngineRulesResult.Status.PENDING) {
+        queryEngineRulesOperationImmediately(timeoutMillis);
       }
+      scheduleParameterReadTimeout(
+          () -> {
+            synchronized (parameterReadLock) {
+              if (activeParameterRead == read && !read.complete()) activeParameterRead = null;
+            }
+          }, timeoutMillis);
+    } catch (RuntimeException | Error failure) {
+      retireParameterRead(read);
+      throw failure;
     }
-    if (queryRules) {
-      queryEngineRulesOperationImmediately(timeoutMillis);
-    }
-    Thread timeoutThread =
-        new Thread(
-            () -> {
-              try {
-                Thread.sleep(Math.max(0L, timeoutMillis));
-              } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                return;
-              }
-              synchronized (parameterReadTimeoutLock) {
-                if (parameterReadTimeoutGeneration == timeoutGeneration) {
-                  getRcentLine = false;
-                }
-              }
-            },
-            "lizzie-katago-parameter-timeout");
+  }
+  void scheduleParameterReadTimeout(Runnable timeout, long timeoutMillis) {
+    Thread timeoutThread = new Thread(() -> {
+      try {
+        Thread.sleep(Math.max(0L, timeoutMillis));
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return;
+      }
+      timeout.run();
+    }, "lizzie-katago-parameter-timeout");
     timeoutThread.setDaemon(true);
     timeoutThread.start();
   }
 
+
+  private void sendParameterRead(ParameterRead read, String parameter, boolean pdaParameter) {
+    String command = "kata-get-param " + parameter;
+    ParameterReadResponseHandler handler = new ParameterReadResponseHandler(read, pdaParameter);
+    CommandSendFailureHandler onFailure = failure -> retireParameterRead(read);
+    Object startupContext = startupPostActionCommandContext.get();
+    if (startupContext instanceof StartupPostActionLease) {
+      ((StartupPostActionLease) startupContext).sendCommand(command, handler, onFailure);
+    } else if (startupContext instanceof ReaderStreamBinding) {
+      sendStartupPostActionCommand(command, (ReaderStreamBinding) startupContext, handler, onFailure);
+    } else if (!sendCommand(command, handler, onFailure, true, false, null, false, read.binding)) {
+      retireParameterRead(read);
+    }
+  }
+
+  private void retireParameterRead(ParameterRead read) {
+    synchronized (parameterReadLock) {
+      if (activeParameterRead == read) activeParameterRead = null;
+    }
+  }
+
   public void cancelParameterRead() {
-    synchronized (parameterReadTimeoutLock) {
-      parameterReadTimeoutGeneration++;
-      getRcentLine = false;
+    synchronized (parameterReadLock) {
+      activeParameterRead = null;
+    }
+  }
+
+  private static final class ParameterRead {
+    private final ReaderStreamBinding binding;
+    private final long primaryGeneration;
+    private boolean hasPda;
+    private boolean hasWrn;
+    private double pda;
+    private double wrn;
+
+    private ParameterRead(ReaderStreamBinding binding, long primaryGeneration) {
+      this.binding = binding;
+      this.primaryGeneration = primaryGeneration;
+    }
+
+    private boolean complete() {
+      return hasPda && hasWrn;
+    }
+  }
+
+  private final class ParameterReadResponseHandler implements Runnable {
+    private final ParameterRead read;
+    private final boolean pdaParameter;
+
+    private ParameterReadResponseHandler(ParameterRead read, boolean pdaParameter) {
+      this.read = read;
+      this.pdaParameter = pdaParameter;
+    }
+
+    @Override
+    public void run() {
+      if (isCurrentCommandResponseError()) {
+        retireParameterRead(read);
+        return;
+      }
+      double value;
+      try {
+        value = Double.parseDouble(gtpResponsePayload(currentCommandResponseLine()));
+      } catch (NumberFormatException invalid) {
+        retireParameterRead(read);
+        return;
+      }
+      if (!Double.isFinite(value)) {
+        retireParameterRead(read);
+        return;
+      }
+      synchronized (engineArbitrationLock()) {
+        synchronized (parameterReadLock) {
+          if (activeParameterRead != read || read.complete()
+              || readerStreamBinding != read.binding || read.binding.terminated) return;
+          if (pdaParameter) {
+            pda = read.pda = value;
+            read.hasPda = true;
+          } else {
+            wrn = read.wrn = value;
+            read.hasWrn = true;
+          }
+          if (!read.complete()) return;
+        }
+      }
+      SwingUtilities.invokeLater(() -> Lizzie.runIfPrimaryEngine(
+          Leelaz.this, read.primaryGeneration, () -> {
+            synchronized (engineArbitrationLock()) {
+              synchronized (parameterReadLock) {
+                if (activeParameterRead == read && readerStreamBinding == read.binding
+                    && !read.binding.terminated && !read.binding.suppressGlobalEnginePresentation
+                    && Lizzie.frame != null) {
+                  Lizzie.frame.setPdaAndWrn(read.pda, read.wrn);
+                }
+              }
+            }
+          }));
     }
   }
 
