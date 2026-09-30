@@ -276,7 +276,11 @@ class LeelazReadBoardGmaTest {
           paused.setAccessible(true);
           paused.setBoolean(Lizzie.frame, false);
           break;
-        case "navigation": readBoard.onLocalHistoryNavigation(); break;
+        case "navigation":
+          setObjectField(readBoard, "localNavigationTracker", new SyncLocalNavigationTracker(() -> true));
+          SwingUtilities.invokeAndWait(readBoard::onLocalHistoryNavigation);
+          assertFalse(readBoard.isNormalAutoPlayTransitionPending());
+          break;
         case "history": Lizzie.board.setHistory(new BoardHistoryList(BoardData.empty(19, 19))); break;
         case "board": Lizzie.board = new SilentPlacementBoard(); break;
         case "helper": Lizzie.frame.readBoard = allocate(ReadBoard.class); break;
@@ -292,7 +296,7 @@ class LeelazReadBoardGmaTest {
       LizzieFrame.toolbar.chkAutoPlayBlack.setSelected(true);
       invokeProcessCommandResponseLine(engine, successResponseForPrefix(transport.rawCommands(), "name"));
       SwingUtilities.invokeAndWait(() -> {});
-      assertFalse(transport.commands().stream().anyMatch(c -> c.startsWith("kata-analyze")),
+      assertFalse(waitForFixtureCommandPrefix(transport, "kata-analyze", 1, TimeUnit.SECONDS),
           () -> cancellation + ": " + transport.commands());
     } finally {
       LizzieFrame.toolbar = previousToolbar;
