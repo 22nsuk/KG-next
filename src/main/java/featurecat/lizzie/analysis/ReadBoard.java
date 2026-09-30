@@ -328,18 +328,43 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
   private long lastProtocolTimestampMillis;
   private volatile NormalAutoPlayIntent normalAutoPlayIntent;
   private volatile Object normalAutoPlayIntentLock;
+  private NormalAutoPlayRestore pendingNormalAutoPlayRestore;
 
-  private static final class NormalAutoPlayIntent {
+  private static final class NormalAutoPlayRestore {
     private final Board board = Lizzie.board;
     private final Leelaz engine = Lizzie.leelaz;
     private final Object incarnation = engine.currentEngineIncarnation();
     private final long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+    private final CompletableFuture<Boolean> drained;
+    private volatile boolean required;
+
+    private NormalAutoPlayRestore(CompletableFuture<Boolean> drained) {
+      this.drained = drained;
+    }
+
+    private boolean isCurrent() {
+      return Lizzie.board == board && Lizzie.leelaz == engine
+          && engine.currentEngineIncarnation() == incarnation
+          && Lizzie.capturePrimaryEngineGeneration(engine) == generation;
+    }
+  }
+
+  private static final class NormalAutoPlayIntent {
+    private final NormalAutoPlayRestore restore;
+    private final Board board;
+    private final Leelaz engine;
+    private final Object incarnation;
+    private final long generation;
     private final Stone color;
     private boolean confirming;
-    private boolean restoreRequired;
 
-    private NormalAutoPlayIntent(Stone color) {
+    private NormalAutoPlayIntent(Stone color, NormalAutoPlayRestore restore) {
       this.color = color;
+      this.restore = restore;
+      board = restore.board;
+      engine = restore.engine;
+      incarnation = restore.incarnation;
+      generation = restore.generation;
     }
   }
 
@@ -1013,10 +1038,9 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
         readBoardGmaTimeSeconds = Math.max(0, time);
         readBoardGmaMaxVisits = Math.max(0, playouts);
         readBoardGmaAwaitingSyncedBoard = useGma;
-        CompletableFuture<Boolean> drained =
-            useGma ? null : Lizzie.leelaz.prepareReadBoardGmaDrain();
+        NormalAutoPlayRestore restore = useGma ? null : prepareNormalAutoPlayRestore();
         NormalAutoPlayIntent intent =
-            drained == null ? null : new NormalAutoPlayIntent(autoPlayColor);
+            restore == null ? null : new NormalAutoPlayIntent(autoPlayColor, restore);
         replaceNormalAutoPlayIntent(intent);
         if (!useGma) {
           readBoardGmaAwaitingSyncedBoard = false;
@@ -1063,7 +1087,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
           if (intent == null) {
             Lizzie.leelaz.ponder();
           } else {
-            drained.whenComplete((restored, failure) -> SwingUtilities.invokeLater(() -> {
+            restore.drained.whenComplete((restored, failure) -> SwingUtilities.invokeLater(() -> {
               if (failure != null || !Boolean.TRUE.equals(restored)) return;
               confirmNormalAutoPlayIntent(intent);
             }));
@@ -1689,7 +1713,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
         BoardHistoryNode target = intent.board.getHistory().getCurrentHistoryNode();
         if (history != intent.board.getHistory() || source != target
             || revision != intent.board.getContextRevision()) {
-          if (!routeReadBoardGmaRestoreIntent(target)) intent.restoreRequired = true;
+          if (!routeReadBoardGmaRestoreIntent(target)) intent.restore.required = true;
         }
       } finally {
         syncRecoveryThread = null;
@@ -3217,6 +3241,25 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
     }
   }
 
+  private NormalAutoPlayRestore prepareNormalAutoPlayRestore() {
+    // A remote frame changes the local board and records its unsent target under this monitor.
+    synchronized (Lizzie.board) {
+      CompletableFuture<Boolean> drained = Lizzie.leelaz.prepareReadBoardGmaDrain();
+      synchronized (normalAutoPlayIntentLock()) {
+        NormalAutoPlayRestore previous = pendingNormalAutoPlayRestore;
+        boolean samePositionOwner = previous != null && previous.isCurrent();
+        if (samePositionOwner
+            && (drained == previous.drained || (drained == null && previous.required))) {
+          return previous;
+        }
+        NormalAutoPlayRestore next = drained == null ? null : new NormalAutoPlayRestore(drained);
+        if (next != null && samePositionOwner) next.required = previous.required;
+        pendingNormalAutoPlayRestore = next;
+        return next;
+      }
+    }
+  }
+
   private void replaceNormalAutoPlayIntent(NormalAutoPlayIntent intent) {
     synchronized (normalAutoPlayIntentLock()) {
       normalAutoPlayIntent = intent;
@@ -3250,7 +3293,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       if (intent.confirming) return;
       intent.confirming = true;
       BoardHistoryNode target = intent.board.getHistory().getCurrentHistoryNode();
-      if (intent.restoreRequired) {
+      if (intent.restore.required) {
         restoreNormalAutoPlayTarget(intent, target);
         return;
       }
@@ -3271,7 +3314,6 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
     } finally {
       localNavigationTracker.endReadBoardNavigation();
     }
-    intent.restoreRequired = false;
     long revision = intent.board.getContextRevision();
     confirmed.whenComplete((ignored, failure) -> SwingUtilities.invokeLater(
         () -> finishNormalAutoPlayIntent(intent, target, revision, failure == null)));
@@ -3294,6 +3336,8 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       synchronized (normalAutoPlayIntentLock()) {
         // Cancellation and replacement share this boundary with the final analysis admission.
         if (!isCurrentNormalAutoPlayIntent(intent)) return;
+        intent.restore.required = false;
+        if (pendingNormalAutoPlayRestore == intent.restore) pendingNormalAutoPlayRestore = null;
         normalAutoPlayIntent = null;
         SYNC_ANALYSIS_EPOCH.incrementAndGet(this);
         if (shouldSkipResumeTargetBeforeConfirmedLocalMove(target)
@@ -4631,31 +4675,6 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
   }
 
   /**
-   * Updates the session's latest-wins authoritative restore intent from the current engine
-   * reservation. A capture conflict keeps the previously frozen intent; the next sync frame
-   * converges any mismatch.
-   */
-  private void updateReadBoardGmaRestoreIntent(BoardHistoryNode restoreNode) {
-    ReadBoardGmaSessionBinding binding = readBoardGmaSessionBinding;
-    ReadBoardGmaSession session = binding == null ? null : binding.session;
-    Leelaz engine = binding == null ? null : binding.engine;
-    if (session == null || engine == null) {
-      return;
-    }
-    Object reservation = engine.currentReadBoardGmaReservation();
-    if (reservation == null) {
-      return;
-    }
-    try {
-      session.updateRestoreIntent(
-          session.helperCapability(),
-          captureReadBoardGmaRestoreIntent(engine, reservation, restoreNode));
-    } catch (RuntimeException failure) {
-      localMoveSyncDebug("ReadBoard GMA restore intent update failed: " + failure.getMessage());
-    }
-  }
-
-  /**
    * Routes an authoritative board change to the active GMA session: while the request is in flight
    * the latest-wins restore intent is updated (the restore itself runs after the terminal is
    * consumed); while the session restore is already converging the newer node is deferred and
@@ -4673,11 +4692,8 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       // failure quarantine is being applied.
       return true;
     }
-    if (session.state() instanceof ReadBoardGmaSession.GmaInFlight) {
-      updateReadBoardGmaRestoreIntent(restoreNode);
-      return true;
-    }
-    if (session.state() instanceof ReadBoardGmaSession.RestoringExact
+    if (session.state() instanceof ReadBoardGmaSession.GmaInFlight
+        || session.state() instanceof ReadBoardGmaSession.RestoringExact
         || session.state() instanceof ReadBoardGmaSession.RestoringRuntime) {
       try {
         Object restoreIntent =
@@ -4685,7 +4701,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
                 binding.engine,
                 session.reservationReleaseCapability().reservationOwner(),
                 restoreNode);
-        boolean deferred = session.deferExactRestore(binding.terminalCapability, restoreIntent);
+        boolean deferred = session.updateRestoreIntent(binding.terminalCapability, restoreIntent);
         if (deferred) {
           return true;
         }

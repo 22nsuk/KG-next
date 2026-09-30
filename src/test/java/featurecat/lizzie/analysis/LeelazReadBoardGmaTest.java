@@ -104,6 +104,94 @@ class LeelazReadBoardGmaTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"play D4", "play pass"})
+  void retiredGmaRestoresRemoteTargetBeforeNormalAnalysis(String terminal) throws Exception {
+    BottomToolbar previousToolbar = LizzieFrame.toolbar;
+    try (Harness harness = Harness.open()) {
+      Leelaz engine = readyReadBoardGmaEngine();
+      Lizzie.leelaz = engine;
+      RecordingOutputStream output = new RecordingOutputStream();
+      setOutputStream(engine, output);
+      ReadBoard readBoard = modeSwitchReadBoard();
+      beginReadBoardGmaSessionHand(readBoard, engine, output, Stone.BLACK, Lizzie.board);
+      readBoard.parseLine("play>black>5 1000 0");
+      acceptSingleBlackSnapshot(readBoard);
+      assertEquals(Stone.BLACK, Lizzie.board.getHistory().getData().stones[Board.getIndex(3, 3)]);
+      AtomicReference<String> restoredSgf = new AtomicReference<>();
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(engine, command -> {
+            if (command.startsWith("loadsgf ")) {
+              restoredSgf.set(Files.readString(Path.of(command.substring(8))));
+            }
+            return ExactSnapshotRestoreProtocolFixture.Response.success();
+          });
+      invokeParseLine(engine, terminal);
+      assertTrue(waitForFixtureCommandPrefix(transport, "kata-analyze", 2, TimeUnit.SECONDS));
+      assertTrue(hasBlackD16(restoredSgf.get()) || transport.commands().contains("play B D16"),
+          () -> "engine must receive the remote target, not merely a successful fence: "
+              + restoredSgf.get() + " " + transport.commands());
+      assertEquals(1, transport.commands().stream().filter(c -> c.startsWith("kata-analyze")).count());
+      assertTrue(transport.commands().contains("kata-analyze W 10"));
+    } finally {
+      LizzieFrame.toolbar = previousToolbar;
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void replacementNormalIntentRetainsUnsynchronizedRemoteTarget(
+      boolean overrideSent, boolean restartAfterDrain) throws Exception {
+    BottomToolbar previousToolbar = LizzieFrame.toolbar;
+    try (Harness harness = Harness.open()) {
+      Leelaz engine = readyReadBoardGmaEngine();
+      Lizzie.leelaz = engine;
+      RecordingOutputStream output = new RecordingOutputStream();
+      setOutputStream(engine, output);
+      ReadBoard readBoard = modeSwitchReadBoard();
+      setBooleanField(readBoard, "readBoardGmaPending", true);
+      setBooleanField(readBoard, "readBoardGmaAutoPlayActive", true);
+      assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
+      if (overrideSent) {
+        invokeProcessCommandResponseLine(engine,
+            parameterValueResponseFor(output.rawCommands(), "ponderingEnabled", "true"));
+      }
+      readBoard.parseLine("play>black>5 1000 0");
+      acceptSingleBlackSnapshot(readBoard);
+      var drained = engine.prepareReadBoardGmaDrain();
+      readBoard.parseLine(restartAfterDrain ? "stopAutoPlay" : "play>white>0 0 0");
+      AtomicReference<String> restoredSgf = new AtomicReference<>();
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(engine, command -> {
+            if (command.startsWith("loadsgf ")) {
+              restoredSgf.set(Files.readString(Path.of(command.substring(8))));
+            }
+            return ExactSnapshotRestoreProtocolFixture.Response.success();
+          });
+      invokeProcessCommandResponseLine(engine, overrideSent
+          ? successResponseFor(output.rawCommands(), "ponderingEnabled")
+          : parameterValueResponseFor(output.rawCommands(), "ponderingEnabled", "true"));
+      if (restartAfterDrain) {
+        assertTrue(drained.get(2, TimeUnit.SECONDS));
+        SwingUtilities.invokeAndWait(() -> {});
+        assertFalse(transport.commands().stream().anyMatch(c -> c.startsWith("kata-analyze")));
+        readBoard.parseLine("play>white>0 0 0");
+      }
+      assertTrue(waitForFixtureCommandPrefix(transport, "kata-analyze", 2, TimeUnit.SECONDS));
+      assertTrue(hasBlackD16(restoredSgf.get()) || transport.commands().contains("play B D16"),
+          () -> "replacement must retain the unsynchronized board: " + restoredSgf.get()
+              + " " + transport.commands());
+      assertTrue(LizzieFrame.toolbar.chkAutoPlayWhite.isSelected());
+      assertEquals(1, transport.commands().stream().filter(c -> c.startsWith("kata-analyze")).count());
+    } finally {
+      LizzieFrame.toolbar = previousToolbar;
+    }
+  }
+
+  private static boolean hasBlackD16(String sgf) {
+    return sgf != null && (sgf.contains("AB[dd]") || sgf.contains(";B[dd]"));
+  }
+
+  @ParameterizedTest
   @CsvSource({"false,false", "true,false", "true,true"})
   void normalModeAfterPreparationCancellationUsesLatestBoard(
       boolean overrideSent, boolean remoteAdvance) throws Exception {
@@ -4750,9 +4838,9 @@ class LeelazReadBoardGmaTest {
       ReadBoard readBoard, BoardHistoryNode restoreNode) throws Exception {
     java.lang.reflect.Method method =
         ReadBoard.class.getDeclaredMethod(
-            "updateReadBoardGmaRestoreIntent", BoardHistoryNode.class);
+            "routeReadBoardGmaRestoreIntent", BoardHistoryNode.class);
     method.setAccessible(true);
-    method.invoke(readBoard, restoreNode);
+    assertTrue((Boolean) method.invoke(readBoard, restoreNode));
   }
 
   private static void setIntField(Object target, String fieldName, int value) throws Exception {
