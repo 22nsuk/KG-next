@@ -35,6 +35,7 @@ public final class B11ModelNotice {
   }
 
   public static Lookup local(List<String> command, Path workingDirectory) {
+    if (!hasHostModelPaths(command)) return known(false);
     List<String> frozenCommand = List.copyOf(command);
     Path directory =
         (workingDirectory == null ? Path.of("") : workingDirectory).toAbsolutePath().normalize();
@@ -42,6 +43,9 @@ public final class B11ModelNotice {
   }
 
   static boolean readLocal(List<String> command, Path workingDirectory) {
+    // An indirect launcher's arguments do not prove a mapping to host model files.
+    // Keep that identity unknown, even if a matching B11 file happens to exist locally.
+    if (!hasHostModelPaths(command)) return false;
     String model = "";
     for (int i = 1; i < command.size(); i++) {
       String part = command.get(i);
@@ -66,6 +70,14 @@ public final class B11ModelNotice {
 
   public static Lookup known(boolean b11) {
     return new Lookup(CompletableFuture.completedFuture(b11));
+  }
+
+  private static boolean hasHostModelPaths(List<String> command) {
+    return command != null
+        && !command.isEmpty()
+        && command.get(0) != null
+        && !command.get(0).isBlank()
+        && !CommandLaunchHelper.isIndirectLauncher(command.get(0));
   }
 
   static Lookup lookup(Supplier<Boolean> reader, Executor executor) {

@@ -69,6 +69,82 @@ class B11ModelNoticeTest {
   }
 
   @Test
+  void indirectLaunchersCannotUseUnrelatedHostModelAsIdentity() throws Exception {
+    Path hostModel = model("default.bin.gz", "kata1-tf3-b11c768-s12002M-d6304M");
+    for (String launcher :
+        List.of(
+            "docker",
+            "podman",
+            "wsl.exe",
+            "wslhost",
+            "ssh",
+            "plink.exe",
+            "python3.12.exe",
+            "pythonw.exe",
+            "py",
+            "pypy3",
+            "java.exe",
+            "javaw21",
+            "node",
+            "nodejs",
+            "bun",
+            "deno",
+            "ruby3.2",
+            "perl",
+            "php8.3",
+            "dotnet",
+            "mono",
+            "cscript",
+            "wscript",
+            "cmd.exe",
+            "pwsh",
+            "powershell",
+            "bash",
+            "sh",
+            "env",
+            "nohup",
+            "wine",
+            "wine64",
+            "flatpak",
+            "snap",
+            "bridge.cmd",
+            "bridge.bat",
+            "bridge.ps1",
+            "bridge.sh",
+            "C:\\Program Files\\Python\\python3.12.exe",
+            "/usr/bin/docker")) {
+      assertFalse(
+          B11ModelNotice.readLocal(
+              List.of(launcher, "bridge", "gtp", "-model", hostModel.toString()), directory),
+          launcher + " must not identify a model in another filesystem namespace");
+      assertFalse(
+          B11ModelNotice.local(
+                  List.of(launcher, "bridge", "gtp", "--model=" + hostModel.getFileName()),
+                  directory)
+              .isB11(),
+          launcher + " asynchronous entry must also remain unknown");
+    }
+  }
+
+  @Test
+  void directNativeLaunchStillReadsActualModelHeader() throws Exception {
+    Path b11 = model("renamed.bin.gz", "kata1-tf3-b11c768-s12002M-d6304M");
+    Path b10 = model("misleading-b11.bin.gz", "b10c512h8nbt3tflrs-fson-silu-rsnh");
+    for (String executable :
+        List.of("katago", "katago.exe", "C:\\engines with space\\katago.exe", "custom-engine")) {
+      assertTrue(
+          B11ModelNotice.readLocal(
+              List.of(executable, "gtp", "-model", b11.getFileName().toString()), directory));
+      assertFalse(
+          B11ModelNotice.readLocal(
+              List.of(executable, "gtp", "-model", b10.toString()), directory));
+    }
+    assertFalse(B11ModelNotice.local(List.of(), directory).isB11());
+    assertFalse(B11ModelNotice.readLocal(List.of(), directory));
+    assertFalse(B11ModelNotice.local(List.of(""), directory).isB11());
+  }
+
+  @Test
   void backgroundLookupIsNonblockingAndLateCompletionDoesNotChangeReplacement() {
     List<Runnable> queued = new ArrayList<>();
     AtomicInteger reads = new AtomicInteger();
