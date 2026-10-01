@@ -5331,9 +5331,6 @@ public class LizzieFrame extends JFrame {
     }
     BoardHistoryList.SessionRulesTarget rulesTarget = history.captureSessionRules();
     pendingKifuRulesConsent = null;
-    Leelaz primary = Lizzie.leelaz;
-    long primaryGeneration = Lizzie.capturePrimaryEngineGeneration(primary);
-    Leelaz mirror = primary == null ? null : primary.activeComparisonEngine();
     // Parsing is complete, so board navigation stays responsive while engine I/O runs on the
     // coordinator worker. Analysis remains gated until rules and position are both confirmed.
     canGoAfterload = false;
@@ -5341,6 +5338,12 @@ public class LizzieFrame extends JFrame {
     Lizzie.board.requireEngineAlignment();
     stopLoadedGameQuickAnalysisRetry();
     if (newAnalysisContext) startNewKifuAnalysisContextAfterSuccessfulLoad();
+    if (deferKifuSyncUntilEngineSwitchSettles(root, rulesTarget, delayMillis, action)) {
+      return;
+    }
+    Leelaz primary = Lizzie.leelaz;
+    long primaryGeneration = Lizzie.capturePrimaryEngineGeneration(primary);
+    Leelaz mirror = primary == null ? null : primary.activeComparisonEngine();
     Runnable submit =
         () ->
             submitKifuEngineSync(
@@ -5350,6 +5353,72 @@ public class LizzieFrame extends JFrame {
       return;
     }
     submit.run();
+  }
+
+  private boolean deferKifuSyncUntilEngineSwitchSettles(
+      BoardHistoryNode root,
+      BoardHistoryList.SessionRulesTarget rulesTarget,
+      int delayMillis,
+      Runnable action) {
+    EngineManager manager = Lizzie.engineManager;
+    if (manager == null) return false;
+    EngineManager.EngineSwitchUiSnapshot startup = manager.engineSwitchUiSnapshot(true);
+    if (startup.phase() != EngineManager.EngineSwitchUiPhase.SWITCHING) return false;
+    // Startup installs the primary and reader asynchronously. Capturing their identities now
+    // would retire this import before it can start its automatic curve. Wait under the same
+    // switch token, then use the normal rules/position restore with freshly captured identities.
+    kifuEngineSyncCoordinator()
+        .submit(
+            new KifuEngineSyncCoordinator.Request() {
+              private boolean sameImport() {
+                BoardHistoryList current = Lizzie.board == null ? null : Lizzie.board.getHistory();
+                return pendingKifuEngineSyncRoot == root
+                    && currentHistoryRoot() == root
+                    && current != null
+                    && current.captureSessionRules() == rulesTarget;
+              }
+
+              @Override
+              public boolean isCurrent() {
+                return sameImport()
+                    && Lizzie.engineManager == manager
+                    && manager.engineSwitchUiSnapshot(true).token() == startup.token();
+              }
+
+              @Override
+              public KifuEngineSyncCoordinator.AttemptResult synchronize() {
+                EngineManager.EngineSwitchUiSnapshot state = manager.engineSwitchUiSnapshot(true);
+                if (state.phase() == EngineManager.EngineSwitchUiPhase.SWITCHING) {
+                  return KifuEngineSyncCoordinator.AttemptResult.RETRY;
+                }
+                return state.phase() == EngineManager.EngineSwitchUiPhase.ACTIVE
+                        && manager.isSnapshotActiveEngineAvailable(state)
+                    ? KifuEngineSyncCoordinator.AttemptResult.COMPLETE
+                    : KifuEngineSyncCoordinator.AttemptResult.PERMANENT_FAILURE;
+              }
+
+              @Override
+              public void onSynchronized() {
+                if (isCurrent()) {
+                  scheduleEngineSyncAndResumeAfterKifuLoad(delayMillis, action, false);
+                }
+              }
+
+              @Override
+              public void onFailed() {
+                if (sameImport()) {
+                  pendingKifuEngineSyncRoot = null;
+                  canGoAfterload = true;
+                  failBatchKifuLoad(root);
+                }
+              }
+
+              @Override
+              public void onContextChanged() {
+                onFailed();
+              }
+            });
+    return true;
   }
 
   private void submitKifuEngineSync(
