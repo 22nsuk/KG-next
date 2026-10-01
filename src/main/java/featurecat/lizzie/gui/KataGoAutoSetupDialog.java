@@ -5,6 +5,7 @@ import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.util.B11ModelNotice;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.DiscoverySource;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.DownloadCancelledException;
@@ -3459,6 +3460,15 @@ public class KataGoAutoSetupDialog extends JDialog {
     benchmarkNoticeSnapshot = snapshot;
     long generation = ++benchmarkNoticeGeneration;
     SetupSnapshot source = snapshot;
+    // A launcher's model path can name an unrelated host file, including in a scanned catalog.
+    if (source == null
+        || source.enginePath == null
+        || CommandLaunchHelper.isIndirectLauncher(source.enginePath.toString())
+        || (!source.sourceArguments.isEmpty()
+            && CommandLaunchHelper.isIndirectLauncher(source.sourceArguments.get(0)))) {
+      benchmarkModelNotice.setVisible(false);
+      return;
+    }
     benchmarkModelNotice.setVisible(B11ModelNotice.isB11(catalogModelName(source)));
     if (source == null || source.weightCatalog != null || source.activeWeightPath == null) return;
     // Benchmark admission creates a fresh snapshot without a catalog. Read only its header off EDT.

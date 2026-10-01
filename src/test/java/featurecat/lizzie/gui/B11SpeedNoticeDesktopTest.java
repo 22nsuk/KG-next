@@ -87,6 +87,43 @@ class B11SpeedNoticeDesktopTest {
       entry.width = entry.height = 19;
       entry.komi = 7.5f;
       entry.commands = command(executable, b11, config);
+
+      Path bridge = Files.writeString(work.resolve("katago-bridge.sh"), "metadata-only script fixture");
+      entry.commands = command(bridge, b11, config);
+      assertTrue(EngineThreadPolicy.isLocalKataGoCommand(entry.commands, false));
+      SetupSnapshot bridgeSnapshot = KataGoAutoSetupHelper.inspectSavedEngine(entry);
+      assertNotNull(bridgeSnapshot);
+      assertTrue(B11ModelNotice.isB11(KataGoAutoSetupHelper.readWeightModelName(b11)));
+      AtomicReference<KataGoAutoSetupDialog> boundaryDialog = new AtomicReference<>();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            KataGoAutoSetupDialog dialog = new KataGoAutoSetupDialog(Lizzie.frame);
+            invoke(dialog, "cancelStateRefresh");
+            set(dialog, "stateRefreshRequestId", ((Long) field(dialog, "stateRefreshRequestId")) + 1L);
+            boundaryDialog.set(dialog);
+          });
+      try {
+        for (boolean catalog : List.of(false, true)) {
+          SetupSnapshot directB11 =
+              KataGoAutoSetupHelper.inspectSavedEngine(directEntry(executable, b11, config));
+          SetupSnapshot directB10 =
+              KataGoAutoSetupHelper.inspectSavedEngine(directEntry(executable, b10, config));
+          if (catalog) {
+            directB11 = directB11.scanWeightCatalog();
+            directB10 = directB10.scanWeightCatalog();
+          }
+          SetupSnapshot indirect = catalog ? bridgeSnapshot.scanWeightCatalog() : bridgeSnapshot;
+          assertBenchmarkNotice(
+              boundaryDialog.get(), directB11, true, "direct B11, catalog=" + catalog);
+          assertBenchmarkNotice(
+              boundaryDialog.get(), indirect, false, "script host collision, catalog=" + catalog);
+          assertBenchmarkNotice(
+              boundaryDialog.get(), directB10, false, "direct B10, catalog=" + catalog);
+        }
+      } finally {
+        SwingUtilities.invokeAndWait(() -> boundaryDialog.get().dispose());
+      }
+      entry.commands = command(executable, b11, config);
       entry.threadPolicy = new JSONObject().put("source", "CFG");
       SetupSnapshot b11Snapshot =
           KataGoAutoSetupHelper.inspectSavedEngine(entry).scanWeightCatalog();
@@ -290,6 +327,34 @@ class B11SpeedNoticeDesktopTest {
 
   private static String command(Path executable, Path model, Path config) {
     return "\"" + executable + "\" gtp -model \"" + model + "\" -config \"" + config + "\"";
+  }
+
+  private static EngineData directEntry(Path executable, Path model, Path config) {
+    EngineData entry = new EngineData();
+    entry.commands = command(executable, model, config);
+    return entry;
+  }
+
+  private static void assertBenchmarkNotice(
+      KataGoAutoSetupDialog dialog, SetupSnapshot target, boolean expected, String context)
+      throws Exception {
+    SwingUtilities.invokeAndWait(
+        () -> {
+          set(dialog, "snapshot", target);
+          invoke(dialog, "updateBenchmarkModelNotice");
+        });
+    if (expected) {
+      await(() -> ((B11SpeedNoticePanel) field(dialog, "benchmarkModelNotice")).isVisible());
+    } else {
+      // Let a wrongly admitted asynchronous header lookup publish before checking the page.
+      Thread.sleep(750);
+    }
+    SwingUtilities.invokeAndWait(
+        () ->
+            assertEquals(
+                expected,
+                ((B11SpeedNoticePanel) field(dialog, "benchmarkModelNotice")).isVisible(),
+                context));
   }
 
   private static Path writeModel(Path path, String identity) throws Exception {
