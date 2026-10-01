@@ -125,7 +125,43 @@ was not marked passed; the EXE command-line SGF path and in-app Fox open action
 provide separate load-path acceptance. Existing repository desktop probes
 exercise dialog keyboard behavior without that helper limitation.
 
-## Release Boundaries
+## Additional PR 581 Acceptance
+
+PR #581 arrived while the release request was being prepared. Publication was
+held until its candidate-preview navigation changes were reviewed and tested
+with the already accepted main. The local combined commit
+`3d1736501fb7788e756243d963be88a983467802` and the author's updated PR head
+`070db3f5354044b3169752acb237030910f02cdf` have the identical Git tree
+`edd97a808acb1383f80e621ce6cbbfa015d63b9e`.
+
+- Full clean-checkout local All gate: **65/65 PASS**, 633.0 seconds;
+  **4600 combined JUnit tests, 0 failures, 0 errors, 107 conditional skips**.
+- Focused `MoveOnlyUiGateTest` and `BoardNodeKindHistoryPipelineTest`:
+  **190 tests, 0 failures/errors/skips** (42 and 148 respectively).
+- Real CUDA `QuickAnalysisAcceptanceIT` and `MoveFocusNativeAcceptanceIT`:
+  **5 tests, 0 failures/errors/skips**, including startup import, pause,
+  batch/retry, foreground restoration and multi-point focus.
+- Real Windows EXE: opened the same 50-move SGF, navigated to move 10,
+  activated a candidate and stepped backward with ordinary Up through the
+  complete preview. At the first-move boundary, further wheel-up and Page Up
+  kept the real game at move 10. Wheel-down expanded the second preview move;
+  leaving the candidate then restored normal history navigation to move 9.
+- Independent-board and double-engine boundary permutations are covered by
+  event-level regressions. The independent board was opened visibly, but its
+  complete boundary sequence was not separately repeated manually.
+- The new PR head's full CI, native Windows focus and B11 window workflows
+  all passed. PR #581 was merged as `6e2f9102`; its product tree has no file
+  differences from the tested combination.
+
+The first exploratory before-fix screenshot (`09-pv-before-history-retreat.png`)
+included Shift+Up, an intentional branch-navigation shortcut. It is **not**
+valid evidence of this bug and is excluded from the acceptance proof. This
+correction was posted in the PR conversation. The accepted post-fix screenshots
+are `10-pv-first-move-fixed.png` and `11-pv-forward-fixed.png`, using ordinary
+Up, wheel input and Page Up. Logs are `pr581-all.log` and `pr581-native.log`;
+the full summary is `target/qa-20261001/pr581-all/local-ci-summary.json`.
+
+## Final Package Boundary
 
 The candidate EXE uses an existing verified launcher and copied bundled runtime
 with the newly built JAR. It is not evidence that a subsequently built release
