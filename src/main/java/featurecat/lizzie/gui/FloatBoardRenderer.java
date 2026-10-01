@@ -698,10 +698,18 @@ public class FloatBoardRenderer {
     }
     showingBranch = false;
     branchOpt = Optional.empty();
-    BoardData mainEndData = Lizzie.board.getHistory().getCurOrMainEnd(editMode).getData();
-    bestMoves = mainEndData.bestMoves;
-    estimateArray = mainEndData.estimateArray;
-    estimateBlackToPlay = mainEndData.blackToPlay;
+    BranchInputCapture capture =
+        BranchInputCapture.begin(
+            Lizzie.board,
+            () -> Lizzie.board.getHistory().getCurrentHistoryNode(),
+            () -> Lizzie.board.getHistory().getCurOrMainEnd(editMode));
+    if (capture == null) return;
+    BoardData mainEndData = capture.analysisData;
+    synchronized (mainEndData) {
+      bestMoves = new ArrayList<>(mainEndData.bestMoves);
+      estimateArray = mainEndData.estimateArray;
+      estimateBlackToPlay = mainEndData.blackToPlay;
+    }
     if (Lizzie.config.showKataGoEstimate
         && estimateArray == null
         && Lizzie.board.getHistory().getCurOrMainEnd(editMode).previous().isPresent()) {
@@ -768,21 +776,18 @@ public class FloatBoardRenderer {
       }
     }
     if (displayedBranchLength == 1 && !Lizzie.config.autoReplayBranch) displayedBranchLength = -2;
-    // List<String>
-    if (!Lizzie.config.noRefreshOnMouseMove
-        || (!isShowingBranch || !mouseOverCoords.equals(suggestedMove.get().coordinate))) {
-      variation = branchPreviewList(suggestedMove.get().variation);
-      pvVistis = branchPreviewList(suggestedMove.get().pvVisits);
-    }
-    if (variation == null) {
-      return;
-    }
-    if (Lizzie.config.noRefreshOnMouseMove
+    boolean refreshVariation =
+        !Lizzie.config.noRefreshOnMouseMove
+            || !isShowingBranch
+            || !mouseOverCoords.equals(suggestedMove.get().coordinate);
+    if (!refreshVariation
+        && variation != null
         && notChangedMouseOverMove
         && variation == cachedVariation
         && displayedBranchLength == cachedDisplayedBranchLengthFroBranch
         && branch != null
         && hasRenderedBranchImages()) {
+      if (!capture.isCurrent()) return;
       mouseOverCoords = suggestedMove.get().coordinate;
       branchOpt = Optional.of(branch);
       variationOpt = Optional.of(variation);
@@ -790,30 +795,21 @@ public class FloatBoardRenderer {
       isShowingBranch = true;
       return;
     }
-    branch = null;
-    //    if (Lizzie.engineManager.isEngineGame && Lizzie.engineManager.engineGameInfo.isGenmove)
-    //      branch =
-    //          new Branch(
-    //              Lizzie.board,
-    //              variation,
-    //              pvVistis,
-    //              true,
-    //              this.displayedBranchLength > 0 ? displayedBranchLength : 199,
-    //              false,
-    //              false,
-    //              null);
-    //    else
-    branch =
-        new Branch(
-            Lizzie.board,
-            variation,
-            pvVistis,
-            this.displayedBranchLength > 0 ? displayedBranchLength : 199,
-            false,
-            false,
+    Branch.Input input =
+        capture.capture(
+            () -> refreshVariation ? suggestedMove.get().variation : variation,
+            () -> refreshVariation ? suggestedMove.get().pvVisits : pvVistis,
+            displayedBranchLength > 0 ? displayedBranchLength : 199,
+            Lizzie.config.removeDeadChainInVariation && !Lizzie.config.noCapture,
+            Lizzie.config.showPvVisitsAllMove || Lizzie.config.showPvVisitsLastMove,
             null,
-            false,
             null);
+    if (input == null) return;
+    if (refreshVariation) {
+      variation = input.variation;
+      pvVistis = input.pvVisits;
+    }
+    branch = new Branch(input);
     mouseOverCoords = suggestedMove.get().coordinate;
     branchOpt = Optional.of(branch);
     variationOpt = Optional.of(variation);
@@ -913,11 +909,6 @@ public class FloatBoardRenderer {
 
   private boolean hasRenderedBranchImages() {
     return branchStonesImage != emptyImage && branchStonesShadowImage != emptyImage;
-  }
-
-  private List<String> branchPreviewList(List<String> source) {
-    if (source == null) return null;
-    return Lizzie.config.noRefreshOnMouseMove ? new ArrayList<String>(source) : source;
   }
 
   private void invalidateBranchImageCache() {

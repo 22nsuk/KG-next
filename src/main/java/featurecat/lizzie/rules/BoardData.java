@@ -12,7 +12,8 @@ public class BoardData {
   public int moveMNNumber;
   public Optional<int[]> lastMove;
   public int[] moveNumberList;
-  public boolean blackToPlay;
+  // Some explicit turn overrides do not advance Board.contextRevision; captures recheck this value.
+  public volatile boolean blackToPlay;
   public boolean dummy;
   // added for change bestmoves when playouts is not increased
 

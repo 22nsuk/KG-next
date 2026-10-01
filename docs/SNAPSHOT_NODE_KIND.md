@@ -453,6 +453,17 @@ quick overview、胜率图、浮动分支预览在 `SNAPSHOT` 处停在静态锚
 
 quick overview、胜率图、浮动分支预览、save-load movelist 都不能为 `SNAPSHOT` 补造真实最后一手。
 
+变化推演 `Branch` 只消费显式的隔离输入：宽高、源棋子、行棋方、节点种类、末手、
+手数/提子数及显示元数据、PV/PV visits、长度和提子/编号选项。空 PV 保留源节点的
+`SNAPSHOT` 与 `dummy`；真实 PASS 消耗一手并清空末手坐标，resign 终止推演且不消耗一手。
+推演只推进私有数组和标量，结束时构造结果，不修改源 history，也不复制未用于显示的 SGF 属性。
+
+GUI 捕获局面使用 Board 短锁，捕获分析列表使用与 BoardData 写入方配对的独立短锁；
+两个阶段后复核 Board/history/current/source/candidate 身份、context revision、宽高及行棋方。
+同节点换手同样使输入失效；锁内不推演、绘图或调用引擎。候选所属节点与推演源分别解析，
+保留前一手、第二路分析、显示节点、浮动窗主线末端/编辑态及副棋盘保留变化的既有来源。
+本次输入隔离仍由原同步显示路径消费；悬停延时、后台调度和发布失效属于后续集成。
+
 胜率图、quick overview、所有基于手数命中的 UI 在 `SNAPSHOT` 处只命中历史边界，不能命中不存在的中间手。
 
 default 胜率图在 `SNAPSHOT` 节点即使 `playouts == 0` 也保留该历史边界命中。
