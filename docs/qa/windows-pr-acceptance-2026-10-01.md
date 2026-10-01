@@ -4,6 +4,7 @@
 
 - Baseline: `8c43fdd24b01acd6485b8b3911708290ae18ab75`.
 - Combined product tree: `c956c727c168e5694157b807fc7187ca111fbaf3`.
+- Repaired product tree: `17fe30c1c049f35bf5eaeeab4f70a57221139ddc`.
 - PRs: #569, #570, #571, #572, #574 and the #569 follow-up #576.
 - Integration PR: [#580](https://github.com/wimi321/lizzieyzy-next/pull/580).
 - Draft #575 is excluded. Its real-account ChatGPT authorization, inference,
@@ -30,8 +31,9 @@ The six PR histories are retained, including contributor attribution.
 
 | Gate | Actual result |
 | --- | --- |
-| `scripts/run_local_ci.ps1 -Profile All -Group All -RequireClean` | PASS, 65/65 steps, 616.5 seconds |
-| Full Maven verification inside that gate | 4574 unit tests and 7 integration tests; 0 failures, 0 errors; 106 conditional skips combined |
+| Final `scripts/run_local_ci.ps1 -Profile All -Group All -RequireClean` | PASS on `17fe30c1`, 65/65 steps, 609.1 seconds |
+| Full Maven verification inside that final gate | 4587 combined JUnit tests; 0 failures, 0 errors; 107 conditional skips |
+| Earlier combined-tree full verification | PASS, 65/65 steps, 616.5 seconds; 4574 unit tests and 7 integration tests; 0 failures/errors, 106 conditional skips |
 | Packaged logging integration | `LoggingProviderSmokeIT` executed successfully against the shaded JAR |
 | Windows credential persistence | 40 tests, 0 failures/errors/skips |
 | Windows product acceptance fixtures | 29 tests, 0 failures/errors |
@@ -102,10 +104,20 @@ Actual EXE observations after the repair:
   third-party GMA match was played on this machine.
 - The native Fox window queried public Ke Jie games and displayed P9 for him
   on both sides, alongside other professional ranks such as P6/P7/P8.
+- Opening a 205-move public Fox game populated the automatic curve and
+  continued foreground analysis. Three consecutive recommended-point clicks
+  placed stones and updated the candidates without a reproduced hang; this
+  is not an instrumented latency benchmark.
+- The one-click setup overview visibly showed the running CUDA backend and
+  B11 model notice. Editing only the test copy's engine configuration to PDA
+  `1.25` and wide-root noise `0.2`, then restarting the EXE, displayed those
+  values in the main controls while real CUDA inference continued.
 
 Screenshots in the evidence root's `screenshots` folder include
 `01-first-launch.png`, `02-flash-complete.png`, `03-readboard.png`,
-`04-startup-curve-fixed.png` and `05-fox-professional-ranks.png`.
+`04-startup-curve-fixed.png`, `05-fox-professional-ranks.png`,
+`06-fox-auto-curve.png`, `07-auto-setup-overview.png` and
+`08-parameter-readback.png`.
 
 The native file chooser was visible, but the desktop automation helper kept
 activating its owner instead of its modal child. File-chooser keyboard input
