@@ -43,6 +43,8 @@ final class SuggestionTableScrollPane extends JScrollPane {
     // restore JTable's preferred size and clamp the retained position during a collapse.
     getViewport().setLayout(null);
     getViewport().addChangeListener(event -> viewportChanged());
+    // Keep the scrollbar's Page Up/Down and Home/End actions reachable after a click.
+    getVerticalScrollBar().setRequestFocusEnabled(true);
     getVerticalScrollBar()
         .addAdjustmentListener(
             event -> {

@@ -6,6 +6,7 @@ All notable maintenance updates to this fork are documented here.
 
 - Show complete suggestion rows within the existing panel, tightening safe cell padding only when it fits one more row; align settled scrolling to row boundaries and preserve browsing position through resizing without changing fonts, candidates, or board sizes (#579).
 - Keep live suggestion values and ordering current while retaining row density and browsing position; clamp the scroll range when candidates shrink or clear, including refreshes during resizing and panel collapse (#579).
+- Let the suggestion scrollbar take focus when clicked so Page Up/Down and Home/End scroll complete rows without selecting a candidate (#579).
 - Restore Chinese ancient rules as a standard engine-game choice using the existing `stone-scoring` preset; recognize equivalent saved rules without rewriting them and preserve non-equivalent custom parameters (#549).
 - Show concrete engine startup and synchronization failures in the diagnostic window even without a retained startup snapshot; preserve the failure reason and command in copy/export actions and keep local Windows command-line diagnostics available (#555).
 - Restore opt-in search-thread changes for the current KataGo process, including explicit remote requests, with confirmed readback and stale-process isolation; preserve saved thread sources and PDA/WRN auto-loading, and make advanced-parameter help match the dialog theme (#558).

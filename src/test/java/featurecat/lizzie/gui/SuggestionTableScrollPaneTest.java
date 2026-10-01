@@ -2,13 +2,19 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Font;
 import java.awt.Point;
+import java.awt.Robot;
 import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseWheelEvent;
 import javax.swing.Action;
 import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JFrame;
 import javax.swing.JScrollBar;
 import javax.swing.JTable;
 import javax.swing.SwingUtilities;
@@ -209,6 +215,63 @@ class SuggestionTableScrollPaneTest {
     edt(() -> ref[0].pane.getVerticalScrollBar().setValue(89));
     settle();
     edt(() -> assertEquals(100, ref[0].y()));
+  }
+
+  @Test
+  void clickingScrollbarRoutesPageAndBoundaryKeysWithoutSelectingCandidates() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Fixture[] ref = new Fixture[1];
+    JFrame[] window = new JFrame[1];
+    JButton initialFocus = new JButton("Initial focus");
+    Point[] thumb = new Point[1];
+    Robot robot = new Robot();
+    robot.setAutoDelay(80);
+    try {
+      edt(
+          () -> {
+            Fixture f = ref[0] = new Fixture(20);
+            f.budget(175);
+            f.pane.setPreferredSize(f.pane.getSize());
+            JFrame frame = window[0] = new JFrame();
+            frame.add(f.pane, BorderLayout.CENTER);
+            frame.add(initialFocus, BorderLayout.SOUTH);
+            frame.pack();
+            frame.setVisible(true);
+            initialFocus.requestFocusInWindow();
+          });
+      robot.waitForIdle();
+      edt(
+          () -> {
+            assertTrue(initialFocus.isFocusOwner(), "Start outside the suggestion pane");
+            JScrollBar bar = ref[0].pane.getVerticalScrollBar();
+            thumb[0] = bar.getLocationOnScreen();
+            thumb[0].translate(bar.getWidth() / 2, bar.getWidth() + 5);
+          });
+      robot.mouseMove(thumb[0].x, thumb[0].y);
+      robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+      robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+      robot.waitForIdle();
+      int[][] keysAndPositions = {
+        {KeyEvent.VK_PAGE_DOWN, 175},
+        {KeyEvent.VK_PAGE_UP, 0},
+        {KeyEvent.VK_END, 325},
+        {KeyEvent.VK_HOME, 0}
+      };
+      for (int[] keyAndPosition : keysAndPositions) {
+        robot.keyPress(keyAndPosition[0]);
+        robot.keyRelease(keyAndPosition[0]);
+        robot.waitForIdle();
+        settle();
+        edt(
+            () -> {
+              assertEquals(keyAndPosition[1], ref[0].y(), KeyEvent.getKeyText(keyAndPosition[0]));
+              ref[0].aligned();
+              assertEquals(-1, ref[0].table.getSelectedRow());
+            });
+      }
+    } finally {
+      edt(() -> { if (window[0] != null) window[0].dispose(); });
+    }
   }
 
   @Test
