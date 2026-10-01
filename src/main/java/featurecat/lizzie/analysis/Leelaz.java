@@ -1364,7 +1364,7 @@ public class Leelaz {
       this.javaSSHClosed = false;
       this.isSSH = false;
       try {
-        this.remoteTransport = RemoteComputeConfig.createTransportForCommand(this.engineCommand);
+        this.remoteTransport = createRemoteTransport();
         recordUpdateEngineStartRemoteTransport(this.remoteTransport);
         this.remoteTransport.start();
         requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
@@ -1605,6 +1605,16 @@ public class Leelaz {
 
     publishEngineStartupPresentation(
         engineGameStartupTransaction, startedReaderStreamBinding);
+  }
+
+  protected EngineTransport createRemoteTransport() throws IOException {
+    return RemoteComputeConfig.createTransportForCommand(engineCommand);
+  }
+
+  public boolean isRemoteSessionRecoveryRequested() {
+    ReaderStreamBinding binding = readerStreamBinding;
+    EngineTransport transport = binding == null ? null : binding.remoteTransport;
+    return useRemoteCompute && transport != null && transport.isRecoveryRequested();
   }
 
   public boolean isBenchmark() {
