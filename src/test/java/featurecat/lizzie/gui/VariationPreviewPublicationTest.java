@@ -51,6 +51,30 @@ class VariationPreviewPublicationTest {
   }
 
   @Test
+  void pendingPresentationDistinguishesReplacementFromRefreshAndCancelledInput() {
+    select("B2", 1);
+    assertTrue(state.isPending());
+    finish();
+    assertFalse(state.isPending());
+    live = selection("B2", 2);
+    request();
+    assertFalse(state.isPending(), "soft refresh keeps a complete visible result");
+    finish();
+    state.setDisplayedLength(1);
+    live = state.selected();
+    request();
+    assertTrue(state.isPending(), "length replacement must not expose idle candidates");
+    finish();
+    select("A3", 3);
+    assertTrue(state.isPending(), "candidate replacement is still preview presentation");
+    state.cancelPreview();
+    assertFalse(state.isPending(), "cancel restores candidates even with retained gesture input");
+    finish();
+    assertFalse(state.isPending());
+    assertNull(state.published());
+  }
+
+  @Test
   void lateA1CannotPublishOverReselectedA2() {
     select("B2", 1);
     worker.remove().run();

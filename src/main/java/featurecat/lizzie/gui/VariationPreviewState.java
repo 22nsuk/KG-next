@@ -97,6 +97,10 @@ final class VariationPreviewState {
     return published;
   }
 
+  boolean isPending() {
+    return requested != null && published == null;
+  }
+
   void select(Selection next) {
     cancelPreview();
     this.selection = next;

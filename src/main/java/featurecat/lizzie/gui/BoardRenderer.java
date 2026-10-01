@@ -1874,6 +1874,7 @@ public class BoardRenderer {
   }
 
   private void renderImagesUnimportant(Graphics2D g) {
+    if (preview.isPending()) return;
     if (!branchOpt.isPresent()) {
       g.drawImage(unImportantSugg, x, y, null);
     }
@@ -2169,6 +2170,7 @@ public class BoardRenderer {
    * Draw all of Leelaz's suggestions as colored stones with winrate/playout statistics overlayed
    */
   private void drawLeelazSuggestions(Graphics2D g) {
+    if (preview.isPending()) return;
     BoardHistoryNode displayNode = Lizzie.frame.getDisplayNode();
     boolean showHeatmap = Lizzie.frame.shouldShowHeatmapFor(displayNode);
     boolean showPolicy = Lizzie.frame.shouldShowPolicyFor(displayNode);
