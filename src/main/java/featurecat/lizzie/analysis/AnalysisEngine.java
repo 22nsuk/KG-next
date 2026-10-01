@@ -434,7 +434,9 @@ public class AnalysisEngine {
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
-      processBuilder.redirectErrorStream(true);
+      // KataGo can write diagnostic fragments while another thread emits a JSON result.
+      // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
+      processBuilder.redirectErrorStream(false);
       if (startupDiagnosticAttempt != null) {
         startupDiagnosticAttempt.capture(processBuilder);
       }
@@ -590,7 +592,7 @@ public class AnalysisEngine {
       String line = "";
       while ((line = readerInput.readLine()) != null) {
         if (attempt != null) {
-          attempt.output(!useJavaSSH && !useRemoteCompute ? "merged" : "stdout", line);
+          attempt.output("stdout", line);
           if (attempt != startupDiagnosticAttempt) continue;
         }
         try {
