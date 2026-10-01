@@ -10649,6 +10649,7 @@ public class LizzieFrame extends JFrame {
     if (hasEnginePkTitile && enginePkTitile != null) {
       sb.append(Lizzie.leelaz.oriEnginename);
       sb.append(visitsString + " ");
+      appendSpeedModelNotice(sb, Lizzie.leelaz);
       setTitle(enginePkTitile + " " + DEFAULT_TITLE + " - " + sb.toString() + webBoardSuffix);
     } else {
       String titlePrefix = sb.toString();
@@ -10664,6 +10665,7 @@ public class LizzieFrame extends JFrame {
       if (!EngineManager.isEmpty) {
         if (Lizzie.leelaz.isPondering()) sb.append(visitsString + " ");
         else sb.append(" - " + Lizzie.resourceBundle.getString("LizzieFrame.speedUnit") + " ");
+        appendSpeedModelNotice(sb, Lizzie.leelaz);
       }
       sb.append(playerTitle);
       sb.append(resultTitle);
@@ -10673,6 +10675,12 @@ public class LizzieFrame extends JFrame {
       //        sb.append(" [" + Lizzie.leelaz.engineCommand() + "]");
       //      else sb.append(" [" + Lizzie.leelaz.engineCommand().substring(0, 100) + "...]");
       setTitle(sb.toString() + webBoardSuffix);
+    }
+  }
+
+  static void appendSpeedModelNotice(StringBuilder title, Leelaz engine) {
+    if (engine != null && engine.usesB11ForSpeedNotice()) {
+      title.append(" · ").append(Lizzie.resourceBundle.getString("B11SpeedNotice.title")).append(" ");
     }
   }
 
