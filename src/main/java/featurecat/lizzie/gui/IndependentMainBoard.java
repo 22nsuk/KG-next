@@ -63,7 +63,6 @@ public class IndependentMainBoard extends JFrame {
   private JButton btnClose;
   public int[] mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
   private transient SuggestionHoverIntent suggestionHoverIntent;
-  public Optional<List<String>> variationOpt;
   private int curSuggestionMoveOrderByNumber = -1;
   private Stone draggedstone;
   private int[] startcoords = new int[2];
@@ -313,7 +312,13 @@ public class IndependentMainBoard extends JFrame {
           }
 
           public void mousePressed(MouseEvent e) {
-            cancelPendingSuggestionHoverPreview();
+            if (SwingUtilities.isMiddleMouseButton(e)) {
+              cancelPendingSuggestionHoverPreview();
+              boardRenderer.beginMiddlePreview();
+              refresh();
+            } else {
+              cancelPendingSuggestionHoverPreview();
+            }
             origin.x = e.getX();
             origin.y = e.getY();
 
@@ -470,32 +475,19 @@ public class IndependentMainBoard extends JFrame {
           public void mouseWheelMoved(MouseWheelEvent e) {
             // TODO Auto-generated method stub
 
-            if (e.getWheelRotation() > 0) {
-              if (boardRenderer.isShowingBranch()) {
-                doBranch(1);
-                refresh();
-              } else {
-                Input.redo();
-              }
-            } else if (e.getWheelRotation() < 0) {
-              if (boardRenderer.isShowingBranch()) {
-                doBranch(-1);
-                refresh();
-              } else {
-                Input.undo();
-              }
-            }
+            processMouseWheelMoved(e);
           }
         });
 
     addMouseListener(
         new MouseAdapter() {
           public void mouseReleased(MouseEvent e) {
-            if (Input.selectMode || (e.isAltDown() && e.getButton() != MouseEvent.BUTTON2)) {
+            if (!SwingUtilities.isMiddleMouseButton(e) && (Input.selectMode || e.isAltDown())) {
               selectReleased(Utils.zoomOut(e.getX()), Utils.zoomOut(e.getY()));
               return;
             }
-            if (Draggedmode
+            if (!SwingUtilities.isMiddleMouseButton(e)
+                && Draggedmode
                 && !Lizzie.frame.isTrying
                 && !LizzieFrame.urlSgf
                 && !Lizzie.frame.isPlayingAgainstLeelaz
@@ -507,7 +499,7 @@ public class IndependentMainBoard extends JFrame {
             if (SwingUtilities.isMiddleMouseButton(e)) {
               // if (Lizzie.frame.syncBoard) return;
               if (Lizzie.frame.isShowingRightMenu) return;
-              Lizzie.frame.playCurrentVariation();
+              Lizzie.frame.playMiddleVariation(boardRenderer);
             }
           }
         });
@@ -570,6 +562,7 @@ public class IndependentMainBoard extends JFrame {
                     clearMoved();
                     needRepaint = true;
                     isMouseOver = true;
+                    boardRenderer.selectHoveredVariation();
                     armSuggestionHoverPreview(curCoords[0], curCoords[1]);
                     if (Lizzie.config.autoReplayBranch) {
                       Lizzie.frame.mouseOverChanged = true;
@@ -648,7 +641,26 @@ public class IndependentMainBoard extends JFrame {
     g1.setTransform(t);
   }
 
+  void processMouseWheelMoved(MouseWheelEvent e) {
+    if (e.getWheelRotation() > 0) {
+      if (boardRenderer.hasSelectedVariation()) {
+        doBranch(1);
+        refresh();
+      } else {
+        LizzieFrame.navigateHistoryNoRefresh(1);
+      }
+    } else if (e.getWheelRotation() < 0) {
+      if (boardRenderer.hasSelectedVariation()) {
+        doBranch(-1);
+        refresh();
+      } else {
+        LizzieFrame.navigateHistoryNoRefresh(-1);
+      }
+    }
+  }
+
   public void doBranch(int moveTo) {
+    if (!boardRenderer.hasSelectedVariation()) return;
     if (moveTo > 0) {
       if (boardRenderer.isShowingNormalBoard()) {
         setDisplayedBranchLength(2);
@@ -694,6 +706,22 @@ public class IndependentMainBoard extends JFrame {
     if (suggestionHoverIntent != null) {
       suggestionHoverIntent.cancel();
     }
+  }
+
+  @Override
+  public void setVisible(boolean visible) {
+    if (!visible && boardRenderer != null) {
+      mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+      clearMoved();
+    }
+    super.setVisible(visible);
+  }
+
+  @Override
+  public void dispose() {
+    mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+    if (boardRenderer != null) clearMoved();
+    super.dispose();
   }
 
   boolean isSuggestionHoverPreviewReady(int x, int y) {
@@ -877,9 +905,11 @@ public class IndependentMainBoard extends JFrame {
       return;
     }
     curSuggestionMoveOrderByNumber = index;
+    isMouseOver = true;
     mouseOverCoordinate =
         Board.convertNameToCoordinates(
             Lizzie.board.getHistory().getData().bestMoves.get(index).coordinate);
+    boardRenderer.selectHoveredVariation();
   }
 
   private void DraggedReleased(int x, int y) {
@@ -914,24 +944,9 @@ public class IndependentMainBoard extends JFrame {
     return LizzieFrame.isNextMoveBlunderTarget(nextData, curCoords);
   }
 
-  private boolean isMouseOver2(int x, int y) {
-
-    return mouseOverCoordinate[0] == x && mouseOverCoordinate[1] == y;
-  }
 
   public boolean isMouseOverSuggestions() {
-    List<MoveData> bestMoves = Lizzie.board.getHistory().getData().bestMoves;
-    for (int i = 0; i < bestMoves.size(); i++) {
-      Optional<int[]> c = Board.asCoordinates(bestMoves.get(i).coordinate);
-      if (c.isPresent()) {
-        if (isMouseOver2(c.get()[0], c.get()[1])) {
-          List<String> variation = bestMoves.get(i).variation;
-          variationOpt = Optional.of(variation);
-          return true;
-        }
-      }
-    }
-    return false;
+    return boardRenderer.hasSelectedVariation();
   }
 
   private boolean openRightClickMenu(int x, int y) {
