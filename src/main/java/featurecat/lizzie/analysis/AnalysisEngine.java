@@ -2665,6 +2665,7 @@ public class AnalysisEngine {
   public synchronized boolean hasRequestLifecycleInProgress() {
     return sharedForegroundLeaseStarting
         || sharedForegroundLeaseActive
+        || sharedForegroundRestoreInProgress
         || isAnalysisInProgress();
   }
 

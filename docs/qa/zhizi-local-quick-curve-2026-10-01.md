@@ -22,6 +22,12 @@ are not covered by this run.
   fragments to prefix JSON responses. Only 33 of 40 responses were consumed in
   one run, leaving quick analysis permanently active. Keep the two pipes and
   their readers separate, including diagnostic provenance.
+- Shared-engine handback: the final result can arrive before the board-restore
+  barrier completes. A retry/navigation timer then retired the task generation,
+  discarding the callback responsible for resuming foreground analysis. Preserve
+  the active generation until that callback, and include restoration in the
+  request lifecycle. A deterministic regression invokes both timers in this
+  interval and verifies exactly one foreground resume.
 
 ## Reproduction tool
 
@@ -55,6 +61,8 @@ Covered assertions:
   resumes growing ordinary analysis after completing the curve.
 - Disconnecting the actual Zhizi Socket retires its reader; reconnect restores
   the game, completes missing points, and resumes ordinary analysis.
+- Three successive imports each complete and resume foreground analysis;
+  replacing a game while its curve is running retains only the new game.
 - Explicit pause remains paused; manual resume works.
 - Disabling automatic quick analysis prevents it on the next import.
 

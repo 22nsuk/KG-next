@@ -104,6 +104,23 @@ public final class LiveQuickAnalysisProbe {
         record("real-disconnect-reconnect PASS");
       }
 
+      for (int i = 0; i < 3; i++) {
+        load(game(41 + i, "Chinese", "7.5"));
+        await(LiveQuickAnalysisProbe::curveComplete, 150, "repeated-import-handback-" + i);
+        assertForegroundGrows(primary);
+      }
+      record("repeated-import-handback PASS count=3");
+
+      load(game(44, "Chinese", "7.5"));
+      await(LiveQuickAnalysisProbe::quickRunning, 45, "curve-before-replacement");
+      load(game(32, "Japanese", "6.5"));
+      await(LiveQuickAnalysisProbe::curveComplete, 150, "replacement-curve-and-handback");
+      check(
+          Lizzie.board.getHistory().getEnd().getData().moveNumber == 32,
+          "Previous game returned after replacement");
+      assertForegroundGrows(primary);
+      record("replace-active-curve PASS");
+
       load(game(39, "Chinese", "7.5"));
       await(LiveQuickAnalysisProbe::quickRunning, 45, "curve-before-pause");
       edt(() -> Lizzie.frame.togglePonderMannul());

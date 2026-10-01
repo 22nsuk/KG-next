@@ -2195,6 +2195,49 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
+  void completedPointsDoNotRetireGenerationBeforeForegroundRestoreCallback() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      AnalysisSyncBoard board = analysisSyncBoardWith(historyWithTargetVisitAnalyzedMove());
+      Lizzie.board = board;
+      TrackingLeelaz leelaz = allocate(TrackingLeelaz.class);
+      Lizzie.leelaz = leelaz;
+      EngineManager.isEmpty = false;
+      QuickAnalysisResumeFrame frame = allocate(QuickAnalysisResumeFrame.class);
+      ResourceTrackingAnalysisEngine engine = allocate(ResourceTrackingAnalysisEngine.class);
+      engine.shared = true;
+      engine.reusable = true;
+      frame.analysisEngine = engine;
+      Lizzie.frame = frame;
+      BoardHistoryNode root = board.getHistory().getStart();
+      armLoadedGameQuickAnalysis(frame, root, true);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            try {
+              Method retry =
+                  LizzieFrame.class.getDeclaredMethod("retryLoadedGameQuickAnalysisIfMissing");
+              retry.setAccessible(true);
+              retry.invoke(frame);
+              frame.continueQuickAnalysisAfterHistoryNavigationWhenIdle();
+            } catch (ReflectiveOperationException failure) {
+              throw new AssertionError(failure);
+            }
+          });
+      assertTrue((boolean) getField(frame, "loadedGameQuickAnalysisActive"));
+      assertEquals(17L, getField(frame, "loadedGameQuickAnalysisGeneration"));
+      assertEquals(0, leelaz.ponderCount, "Do not resume before the restore barrier");
+      invokeFinishLoadedGameQuickAnalysisAttempt(frame, 17L, root, false);
+      drainEdt();
+      assertEquals(1, leelaz.ponderCount);
+      assertEquals(0, board.syncCount, "Shared restore already confirmed the selected position");
+      assertFalse((boolean) getField(frame, "loadedGameQuickAnalysisActive"));
+    } finally {
+      env.close();
+    }
+  }
+
+  @Test
   void completedSharedQuickAnalysisStartsIdleForegroundWithoutReplayingPosition() throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {

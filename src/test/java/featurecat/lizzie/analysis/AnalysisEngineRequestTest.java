@@ -62,6 +62,18 @@ class AnalysisEngineRequestTest {
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
 
   @Test
+  void sharedRestoreRemainsPartOfRequestLifecycleAfterLastResponse() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "sharedForegroundRestoreInProgress", true);
+      assertFalse(engine.isAnalysisInProgress());
+      assertTrue(engine.hasRequestLifecycleInProgress());
+      setField(AnalysisEngine.class, engine, "sharedForegroundRestoreInProgress", false);
+      assertFalse(engine.hasRequestLifecycleInProgress());
+    }
+  }
+
+  @Test
   void localProcessKeepsDiagnosticFragmentsOutOfJsonResponses() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));

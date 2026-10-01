@@ -21153,9 +21153,17 @@ public class LizzieFrame extends JFrame {
     }
     long generation = loadedGameQuickAnalysisGeneration;
     BoardHistoryNode root = loadedGameQuickAnalysisRoot;
-    if (!isCurrentLoadedGameQuickAnalysis(generation, root)
-        || !shouldAutoQuickAnalyzeLoadedGame()) {
+    if (!isCurrentLoadedGameQuickAnalysis(generation, root)) {
       stopLoadedGameQuickAnalysisRetry();
+      return;
+    }
+    if (!shouldAutoQuickAnalyzeLoadedGame()) {
+      // The last point can arrive before the shared engine has restored the board. Only the
+      // completion callback may retire this generation and resume foreground analysis.
+      if (loadedGameQuickAnalysisRunning) return;
+      boolean confirmed = loadedGameQuickAnalysisPositionAlreadyConfirmed;
+      stopLoadedGameQuickAnalysisRetry();
+      resumeForegroundAnalysisAfterQuickAnalysisComplete(confirmed);
       return;
     }
     QuickAnalysisWarmupAction action = currentQuickAnalysisWarmupAction(true);
@@ -21608,6 +21616,9 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (!canContinueQuickAnalysisAfterHistoryNavigation() || !shouldAutoQuickAnalyzeLoadedGame()) {
+      if (loadedGameQuickAnalysisRunning
+          && isCurrentLoadedGameQuickAnalysis(
+              loadedGameQuickAnalysisGeneration, loadedGameQuickAnalysisRoot)) return;
       stopQuickAnalysisNavigationResumeTimer();
       if (loadedGameQuickAnalysisActive) {
         boolean positionAlreadyConfirmed = loadedGameQuickAnalysisPositionAlreadyConfirmed;
