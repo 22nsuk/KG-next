@@ -30,6 +30,8 @@ import java.awt.event.MouseWheelEvent;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.ArrayDeque;
+import java.util.concurrent.Executor;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -321,59 +323,6 @@ class MoveOnlyUiGateTest {
   }
 
 
-  @Test
-  void boardRendererDefersHeavyBranchUntilCandidateHoverSettles() throws Exception {
-    TestEnvironment env = TestEnvironment.open();
-    try {
-      Lizzie.config.showBranch = true;
-      Lizzie.config.showSuggestionVariations = true;
-      Lizzie.config.showBlackCandidates = true;
-      Lizzie.config.showWhiteCandidates = true;
-      Lizzie.config.noRefreshOnMouseMove = true;
-      Lizzie.config.usePureStone = true;
-      TrackingLizzieFrame frame = configuredFrame();
-      frame.priorityMoveCoords = new ArrayList<>();
-      Lizzie.frame = frame;
-      BoardData current = currentData();
-      MoveData suggested = current.bestMoves.get(0);
-      suggested.variation = List.of(suggested.coordinate, Board.convertCoordinatesToName(1, 1));
-      Lizzie.board = boardWith(historyForCurrentNode(current));
-      LizzieFrame.boardRenderer = new CoordinateBoardRenderer(new int[] {0, 1});
-      BoardRenderer renderer = configuredBranchRenderer();
-
-      frame.onMouseMoved(0, 0);
-      assertEquals(
-          0,
-          frame.fullRefreshes,
-          "candidate hover must not rebuild comments and the problem list on the EDT.");
-      invokeDrawBranch(renderer);
-
-      Object emptyImage = getField(BoardRenderer.class, null, "emptyImage");
-      assertTrue(frame.isMouseOver, "candidate marker should still react immediately.");
-      assertFalse(frame.isSuggestionHoverPreviewReady(0, 1));
-      assertSame(
-          emptyImage,
-          getField(BoardRenderer.class, renderer, "branchStonesImage"),
-          "the expensive variation image must not be built during a quick candidate click.");
-
-      SuggestionHoverIntent intent =
-          (SuggestionHoverIntent)
-              getField(LizzieFrame.class, frame, "suggestionHoverIntent");
-      intent.reveal();
-      assertEquals(
-          0,
-          frame.fullRefreshes,
-          "revealing a settled preview must remain a board-only repaint.");
-      invokeDrawBranch(renderer);
-
-      BufferedImage branchImage =
-          (BufferedImage) getField(BoardRenderer.class, renderer, "branchStonesImage");
-      assertNotSame(emptyImage, branchImage, "settled hover should keep the full variation preview.");
-      assertTrue(hasVisiblePaint(branchImage));
-    } finally {
-      env.close();
-    }
-  }
 
   @Test
   void engineAnalysisRefreshSelectsIncrementalBoardAndWinratePainting() throws Exception {
@@ -601,9 +550,6 @@ class MoveOnlyUiGateTest {
       frame.isMouseOver = true;
       renderer.setDisplayedBranchLength(2);
       renderer.selectHoveredVariation();
-      Method arm = LizzieFrame.class.getDeclaredMethod("armSuggestionHoverPreview", int.class, int.class);
-      arm.setAccessible(true);
-      arm.invoke(frame, 2, 0);
       List<String> hovered = renderer.selectedVariation().orElseThrow();
       assertIterableEquals(pending.selectedPv, hovered);
       assertFalse(renderer.isShowingBranch(), "selection must precede image generation.");
@@ -672,7 +618,7 @@ class MoveOnlyUiGateTest {
       frame.isMouseOver = true;
       LizzieFrame.boardRenderer.selectHoveredVariation();
       TrackingIndependentMainBoard independent = allocate(TrackingIndependentMainBoard.class);
-      independent.boardRenderer = new BoardRenderer(true);
+      independent.boardRenderer = configuredBranchRenderer(true);
       independent.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
       frame.independentMainBoard = independent;
       independent.boardRenderer.setDisplayedBranchLength(2);
@@ -831,7 +777,7 @@ class MoveOnlyUiGateTest {
 
   private static TrackingIndependentMainBoard configuredPendingIndependent() throws Exception {
     TrackingIndependentMainBoard independent = allocate(TrackingIndependentMainBoard.class);
-    independent.boardRenderer = new BoardRenderer(true);
+    independent.boardRenderer = configuredBranchRenderer(true);
     independent.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
     setField(IndependentMainBoard.class, independent, "curSuggestionMoveOrderByNumber", -1);
     Lizzie.frame.independentMainBoard = independent;
@@ -1013,6 +959,24 @@ class MoveOnlyUiGateTest {
     Method method = BoardRenderer.class.getDeclaredMethod("drawBranch");
     method.setAccessible(true);
     method.invoke(renderer);
+    VariationPreviewState state =
+        (VariationPreviewState) getField(BoardRenderer.class, renderer, "preview");
+    VariationPreviewScheduler scheduler =
+        (VariationPreviewScheduler) getField(VariationPreviewState.class, state, "scheduler");
+    ((ControlledPreview) getField(VariationPreviewScheduler.class, scheduler, "worker")).finish();
+  }
+
+  private static final class ControlledPreview implements Executor {
+    private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
+
+    @Override
+    public void execute(Runnable task) {
+      tasks.add(task);
+    }
+
+    void finish() {
+      while (!tasks.isEmpty()) tasks.remove().run();
+    }
   }
 
   private static FloatBoardRenderer configuredFloatRenderer() throws Exception {
@@ -1030,7 +994,15 @@ class MoveOnlyUiGateTest {
   }
 
   private static BoardRenderer configuredBranchRenderer() throws Exception {
-    BoardRenderer renderer = new BoardRenderer(false);
+    return configuredBranchRenderer(false);
+  }
+
+  private static BoardRenderer configuredBranchRenderer(boolean independent) throws Exception {
+    BoardRenderer renderer = new BoardRenderer(independent);
+    VariationPreviewState state =
+        (VariationPreviewState) getField(BoardRenderer.class, renderer, "preview");
+    setField(VariationPreviewState.class, state, "scheduler",
+        new VariationPreviewScheduler(new ControlledPreview(), Runnable::run));
     setIntField(renderer, "x", 0);
     setIntField(renderer, "y", 0);
     setIntField(renderer, "boardWidth", CANVAS_SIZE);
@@ -1375,6 +1347,7 @@ class MoveOnlyUiGateTest {
       Lizzie.config.showBlackCandidates = true;
       Lizzie.config.showWhiteCandidates = true;
       Lizzie.config.noRefreshOnMouseMove = true;
+      Lizzie.config.usePureStone = true;
       Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Normal;
       TrackingLizzieFrame frame = (TrackingLizzieFrame) Lizzie.frame;
       frame.priorityMoveCoords = new ArrayList<>();

@@ -44,7 +44,6 @@ public class FloatBoard extends JDialog {
   private boolean isReplayVariation = false;
   // private JButton lockUnlock;
   public int[] mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
-  private transient SuggestionHoverIntent suggestionHoverIntent;
   private int curSuggestionMoveOrderByNumber = -1;
   public int selectCoordsX1;
   public int selectCoordsY1;
@@ -311,10 +310,12 @@ public class FloatBoard extends JDialog {
     addMouseListener(
         new MouseAdapter() {
           public void mousePressed(MouseEvent e) {
-            cancelPendingSuggestionHoverPreview();
             if (e.getButton() == MouseEvent.BUTTON2) {
               boardRenderer.cancelPreview();
               refreshByLis();
+            } else {
+              mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+              clearMoved();
             }
             if (e.getButton() == MouseEvent.BUTTON1) // left click
             {
@@ -396,7 +397,6 @@ public class FloatBoard extends JDialog {
                   needRepaint = true;
                   isMouseOver = true;
                   boardRenderer.selectHoveredVariation();
-                  armSuggestionHoverPreview(curCoords[0], curCoords[1]);
                   if (Lizzie.config.autoReplayBranch) {
                     Lizzie.frame.mouseOverChanged = true;
                     if (!Lizzie.config.autoReplayDisplayEntireVariationsFirst)
@@ -518,21 +518,8 @@ public class FloatBoard extends JDialog {
     boardRenderer.notShowingBranch();
   }
 
-  private SuggestionHoverIntent suggestionHoverIntent() {
-    if (suggestionHoverIntent == null) {
-      suggestionHoverIntent = new SuggestionHoverIntent(this::refreshByLis);
-    }
-    return suggestionHoverIntent;
-  }
-
-  private void armSuggestionHoverPreview(int x, int y) {
-    suggestionHoverIntent().arm(x, y);
-  }
-
   private void cancelPendingSuggestionHoverPreview() {
-    if (suggestionHoverIntent != null) {
-      suggestionHoverIntent.cancel();
-    }
+    if (boardRenderer != null) boardRenderer.cancelPreview();
   }
 
   @Override
@@ -551,9 +538,6 @@ public class FloatBoard extends JDialog {
     super.dispose();
   }
 
-  boolean isSuggestionHoverPreviewReady(int x, int y) {
-    return suggestionHoverIntent == null || suggestionHoverIntent.permits(x, y);
-  }
 
   private void paintMianPanel(Graphics g) {
     if (posWidth <= 40 || posHeight <= 40) return;

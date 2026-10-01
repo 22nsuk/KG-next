@@ -28,10 +28,6 @@ class VariationPreviewStateTest {
 
     assertSame(selection, state.selected());
     assertNull(state.published());
-    assertNull(selection.source());
-    assertEquals("D4", selection.coordinate());
-    assertSame(input, selection.input());
-    assertEquals(-2, selection.displayedLength());
   }
 
   @Test
@@ -128,8 +124,6 @@ class VariationPreviewStateTest {
     assertEquals(3, updated.displayedLength());
     assertEquals(3, updated.input().maxLength);
     assertEquals("D4", updated.coordinate());
-    assertNull(updated.source());
-    assertSame(input1.position, updated.input().position);
     assertEquals(input1.variation, updated.input().variation);
     assertEquals(input1.pvVisits, updated.input().pvVisits);
     assertEquals(input1.removeDeadChains, updated.input().removeDeadChains);

@@ -95,7 +95,6 @@ public class BoardRenderer {
   private boolean isShowingBranch = false;
   private boolean shouldHideMouseOverInfo = false;
   private Branch branch;
-  private VariationPreviewGenerator.Geometry publishedGeometry;
   private VariationPreviewGenerator.Style publishedStyle;
 
   private BufferedImage cachedBackgroundImage = emptyImage;
@@ -1559,7 +1558,8 @@ public class BoardRenderer {
 
   /** Capture the input target at the event boundary, without generating an image. */
   public void selectHoveredVariation() {
-    prepareSelection(false);
+    previewCancelled = false;
+    drawBranch(false);
   }
 
   private VariationPreviewState.Selection prepareSelection(boolean refresh) {
@@ -1675,7 +1675,7 @@ public class BoardRenderer {
       displayedBranchLength = 1;
     }
     if (notChangedMouseOverMove
-        && (!refresh || Lizzie.config.noRefreshOnMouseMove || preview.published() == null)) {
+        && (!refresh || Lizzie.config.noRefreshOnMouseMove)) {
       return selected.withSimulation(
           Lizzie.config.removeDeadChainInVariation && !Lizzie.config.noCapture,
           Lizzie.config.showPvVisitsAllMove || Lizzie.config.showPvVisitsLastMove);
@@ -1704,11 +1704,18 @@ public class BoardRenderer {
   }
 
   private void drawBranch() {
-    VariationPreviewState.Selection replacement = prepareSelection(true);
-    if (replacement == null || previewCancelled || !isSuggestionHoverPreviewReady()
-        || !Lizzie.frame.shouldShowBranchesFor(Lizzie.frame.getDisplayNode())
-        || (displayedBranchLength == 1 && !Lizzie.config.autoReplayBranch)) return;
-    VariationPreviewState.Selection expected = preview.selected();
+    drawBranch(true);
+  }
+
+  private void drawBranch(boolean refresh) {
+    VariationPreviewState.Selection replacement = prepareSelection(refresh);
+    if (replacement == null || previewCancelled) return;
+    if (!Lizzie.frame.shouldShowBranchesFor(Lizzie.frame.getDisplayNode())
+        || (displayedBranchLength == 1 && !Lizzie.config.autoReplayBranch)) {
+      preview.cancelPreview();
+      clearPublishedPreview();
+      return;
+    }
     drawShadowCache();
     int[] hover = isIndependBoard
         ? Lizzie.frame.independentMainBoard.mouseOverCoordinate : Lizzie.frame.mouseOverCoordinate;
@@ -1727,13 +1734,17 @@ public class BoardRenderer {
         Lizzie.config.usePureStone ? null : getScaleStone(false, stoneRadius * 2 + 1),
         Lizzie.config.showStoneShadow ? cachedShadow : null, cachedStoneCenter,
         paint, noFancyColor,
-        VariationPreviewGenerator.captureSourceStones(Lizzie.board.getData().stones, publishedStyle),
+        replacement.source().captureCurrentStones(publishedStyle),
         resourceBundle.getString("BoardRenderer.pass"));
-    if (preview.published() != null && replacement == expected
-        && geometry.equals(publishedGeometry) && style.sameRendering(publishedStyle)) return;
-    VariationPreviewGenerator.Result result =
-        VariationPreviewGenerator.generate(replacement.input(), geometry, style);
-    if (replacement.source().isCurrent() && preview.publish(expected, replacement, result)) {
+    if (style.sourceStones() == null || !replacement.source().isCurrent()) {
+      clearBranch();
+      return;
+    }
+    preview.request(replacement, geometry, style,
+        new VariationPreviewState.Mode(Lizzie.config.extraMode,
+            Lizzie.config.noRefreshOnMouseMove, Lizzie.config.autoReplayBranch),
+        this::drawBranch, () -> {
+      VariationPreviewGenerator.Result result = preview.published();
       branch = result.branch();
       branchOpt = Optional.of(branch);
       branchStonesImage = result.stones();
@@ -1741,25 +1752,15 @@ public class BoardRenderer {
       shouldHideMouseOverInfo = result.hideMouseOverInfo();
       isMouseOverStoneBlack = result.mouseOverStoneBlack();
       isShowingBranch = true;
-      publishedGeometry = geometry;
       publishedStyle = style;
-    }
+      if (isIndependBoard) Lizzie.frame.independentMainBoard.repaint();
+      else Lizzie.frame.repaintSuggestionHoverPreview();
+    });
+    if (preview.published() == null) clearPublishedPreview();
   }
 
 
 
-  private boolean isSuggestionHoverPreviewReady() {
-    if (isIndependBoard) {
-      IndependentMainBoard board = Lizzie.frame.independentMainBoard;
-      if (board == null) {
-        return true;
-      }
-      int[] coords = board.mouseOverCoordinate;
-      return board.isSuggestionHoverPreviewReady(coords[0], coords[1]);
-    }
-    int[] coords = Lizzie.frame.mouseOverCoordinate;
-    return Lizzie.frame.isSuggestionHoverPreviewReady(coords[0], coords[1]);
-  }
 
 
   private Optional<MoveData> mouseOveredMove() {
@@ -4553,6 +4554,7 @@ public class BoardRenderer {
     if (preview.setDisplayedLength(n)) {
       previewCancelled = false;
       clearPublishedPreview();
+      drawBranch(false);
     }
   }
 
@@ -4627,6 +4629,8 @@ public class BoardRenderer {
     branchOpt = Optional.empty();
     branchStonesImage = emptyImage;
     branchStonesShadowImage = emptyImage;
+    branch = null;
+    publishedStyle = null;
   }
 
   public void startNormalBoard() {

@@ -93,6 +93,22 @@ class BranchInputCaptureTest {
     }
   }
 
+  @Test
+  void candidateEmptinessUsesSimulationPositionRatherThanAnalysisPosition() throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      Board board = Lizzie.board;
+      BoardHistoryNode source = board.getHistory().getCurrentHistoryNode();
+      source.getData().stones[Board.getIndex(0, 2)] = Stone.WHITE;
+      BoardHistoryNode analysis = new BoardHistoryList(BoardData.empty(2, 3)).getCurrentHistoryNode();
+      BranchInputCapture capture = BranchInputCapture.begin(board, () -> source, () -> analysis);
+      assertFalse(capture.isEmptyPoint("A1"));
+      assertTrue(capture.isEmptyPoint("B2"));
+      assertTrue(capture.isEmptyPoint("pass"));
+      board.changeNextTurn();
+      assertFalse(capture.isEmptyPoint("B2"), "Retired source cannot admit a candidate");
+    }
+  }
+
   private static BranchInputCapture begin(Board board) {
     return BranchInputCapture.begin(
         board,

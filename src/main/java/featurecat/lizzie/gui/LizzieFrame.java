@@ -263,7 +263,6 @@ public class LizzieFrame extends JFrame {
   public int[] suggestionclick = outOfBoundCoordinate;
   public int[] clickbadmove = outOfBoundCoordinate;
   public int[] mouseOverCoordinate = outOfBoundCoordinate;
-  private transient SuggestionHoverIntent suggestionHoverIntent;
   private int curSuggestionMoveOrderByNumber = -1;
   public boolean showControls = false;
   private long showControlTime;
@@ -9763,7 +9762,6 @@ public class LizzieFrame extends JFrame {
           isMouseOver = true;
           boardRenderer.selectHoveredVariation();
           if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectHoveredVariation();
-          armSuggestionHoverPreview(curCoords[0], curCoords[1]);
           if (Lizzie.config.autoReplayBranch) {
             mouseOverChanged = true;
             if (!Lizzie.config.autoReplayDisplayEntireVariationsFirst)
@@ -9888,14 +9886,7 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private SuggestionHoverIntent suggestionHoverIntent() {
-    if (suggestionHoverIntent == null) {
-      suggestionHoverIntent = new SuggestionHoverIntent(this::repaintSuggestionHoverPreview);
-    }
-    return suggestionHoverIntent;
-  }
-
-  private void repaintSuggestionHoverPreview() {
+  void repaintSuggestionHoverPreview() {
     if (mainPanel == null) {
       return;
     }
@@ -9903,14 +9894,17 @@ public class LizzieFrame extends JFrame {
     mainPanel.repaint();
   }
 
-  private void armSuggestionHoverPreview(int x, int y) {
-    suggestionHoverIntent().arm(x, y);
+  public void cancelPendingSuggestionHoverPreview() {
+    if (boardRenderer != null) boardRenderer.cancelPreview();
+    if (boardRenderer2 != null) boardRenderer2.cancelPreview();
   }
 
-  public void cancelPendingSuggestionHoverPreview() {
-    if (suggestionHoverIntent != null) {
-      suggestionHoverIntent.cancel();
-    }
+  public void shutdownVariationPreviews() {
+    VariationPreviewScheduler.shutdown();
+    if (boardRenderer != null) boardRenderer.clearBranch();
+    if (boardRenderer2 != null) boardRenderer2.clearBranch();
+    if (independentMainBoard != null) independentMainBoard.boardRenderer.clearBranch();
+    if (floatBoard != null) floatBoard.boardRenderer.clearBranch();
   }
 
   @Override
@@ -9956,9 +9950,6 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  boolean isSuggestionHoverPreviewReady(int x, int y) {
-    return suggestionHoverIntent == null || suggestionHoverIntent.permits(x, y);
-  }
 
   //  public void clearMoved2() {
   //    isReplayVariation = false;

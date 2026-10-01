@@ -46,14 +46,17 @@ mvn -B -Dfmt.skip=true -Djava.awt.headless=true -Dtest=KataGoAccelerationLayoutT
 
 ## 候选变化预览
 
-主棋盘、独立棋盘、浮动棋盘分别观察实际窗口；可用隔离配置、受控候选和 Xvfb 运行真实 Swing 处理器。预览尚未生成的场景应在同一 EDT 回合完成选择和输入，或使用受控发布点，不依赖睡眠恰好抢在绘制之前。
+主棋盘、独立棋盘、浮动棋盘分别观察实际窗口；可用隔离配置、受控候选和 Xvfb 运行真实 Swing 处理器。预览在输入事件中立即提交，共用单个后台 worker，没有固定悬停延时。使用受控执行器阻塞真实推演/离屏绘图，再操作输入并放行，不依赖睡眠恰好抢在绘制之前；停止分析输出后进入已有候选也应自行显示完整图。
 
 - 主棋盘与独立棋盘选第二个候选，立即按上下键、滚轮：只改变预览长度，不改变真实节点/手数。按逗号应用该候选的显示前缀；中键按下后更新活动分析、改选候选或步进，再松开仍应用按下时的 PV 和长度，且只应用一次。普通清除后改选不能复活该手势。主棋盘同时检查数字键及 PageUp/PageDown；独立棋盘数字键沿既有转发路径，PageUp/PageDown 保留主棋盘路由。当前窗口无选择时，即使另一窗口有选择，也保留原导航/最佳手回退。
 - 浮动棋盘在浏览态使用主线末端分析、当前节点推演，在编辑态使用当前分析；分别检查悬停、上下键和滚轮，以及窗口隐藏或 F/隐藏按钮切换后重新选择。只验既有入口，不添加数字键、逗号或中键松开快捷键。
 - 检查正常、原始棋盘、完整变化、正数前缀和自动重放的代表场景。冻结刷新时更新源 PV/visits，再改变尺寸或样式：石子、编号、visits 与输入仍对应旧选择；离开重进或显式刷新才重新捕获。允许刷新时选择和图层整批切换。
 - 保存实际棋盘截图，检查石子、阴影、编号和 visits；生成新结果不得修改已发布图像，纯预览不得改变真实局面或引擎状态。应用变化产生的正常落子命令与预览生成分开记录。
+- 在计算尚未完成时持续替换同点 PV/visits，同时让另一宿主选中候选：首个有效修订仍应显示、另一宿主也应取得结果，停止更新后追上最新。快速 A→B→A、点击、导航、换手、切换来源/模式/预览开关、缩放或隐藏后放行旧任务，旧图不得复活。
+- 按固定循环协议反复更新、隐藏/重开，记录 worker 数及 GC 后 Branch/BufferedImage 存活量；区分一次性缓存和逐轮累积，退出应终止 worker。保存候选 SHA、配置、循环次数和原始结果，不把观察值写成永久性能门槛。
+- 同机同 JDK、局面/PV、窗口尺寸/样式/刷新设置比较调查基线与最终候选。冷请求、等价重绘、连续更新及快速换点后点击使用同一预热/采样协议，分别记录完整图延迟、点击可见延迟、EDT 长任务、推演/绘图/发布/合成及分配/存活量。Linux fixture 与真实 Windows/KataGo 结果分开，不以去掉延时推断所有尾延迟都改善。
 
-确定性边界由 `MoveOnlyUiGateTest`、`VariationPreviewStateTest`、`VariationPreviewGeneratorTest` 及现有 Branch/PASS/SNAPSHOT 测试覆盖。Xvfb 证据不替代 Windows 物理输入、ReadBoard 原生焦点、真实 KataGo 或后台调度压力验收；各项沿对应任务的验收边界记录。
+确定性边界由 `MoveOnlyUiGateTest`、`VariationPreviewStateTest`、`VariationPreviewGeneratorTest`、`VariationPreviewSchedulerTest`、`VariationPreviewPublicationTest` 及现有 Branch/PASS/SNAPSHOT 测试覆盖。Xvfb 证据不替代 Windows 物理输入、ReadBoard 原生焦点或真实 KataGo 更新压力；最终原生候选需至少两个同时可见宿主、冻结开/关、尺寸/DPI 与生命周期检查，各项沿对应任务的验收边界记录。
 
 ## Windows 原生桌面
 

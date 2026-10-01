@@ -62,7 +62,6 @@ public class IndependentMainBoard extends JFrame {
   private JButton lockUnlock;
   private JButton btnClose;
   public int[] mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
-  private transient SuggestionHoverIntent suggestionHoverIntent;
   private int curSuggestionMoveOrderByNumber = -1;
   private Stone draggedstone;
   private int[] startcoords = new int[2];
@@ -317,7 +316,8 @@ public class IndependentMainBoard extends JFrame {
               boardRenderer.beginMiddlePreview();
               refresh();
             } else {
-              cancelPendingSuggestionHoverPreview();
+              mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+              clearMoved();
             }
             origin.x = e.getX();
             origin.y = e.getY();
@@ -563,7 +563,6 @@ public class IndependentMainBoard extends JFrame {
                     needRepaint = true;
                     isMouseOver = true;
                     boardRenderer.selectHoveredVariation();
-                    armSuggestionHoverPreview(curCoords[0], curCoords[1]);
                     if (Lizzie.config.autoReplayBranch) {
                       Lizzie.frame.mouseOverChanged = true;
                       boardRenderer.setDisplayedBranchLength(1);
@@ -691,21 +690,8 @@ public class IndependentMainBoard extends JFrame {
     boardRenderer.notShowingBranch();
   }
 
-  private SuggestionHoverIntent suggestionHoverIntent() {
-    if (suggestionHoverIntent == null) {
-      suggestionHoverIntent = new SuggestionHoverIntent(this::refresh);
-    }
-    return suggestionHoverIntent;
-  }
-
-  private void armSuggestionHoverPreview(int x, int y) {
-    suggestionHoverIntent().arm(x, y);
-  }
-
   private void cancelPendingSuggestionHoverPreview() {
-    if (suggestionHoverIntent != null) {
-      suggestionHoverIntent.cancel();
-    }
+    if (boardRenderer != null) boardRenderer.cancelPreview();
   }
 
   @Override
@@ -724,9 +710,6 @@ public class IndependentMainBoard extends JFrame {
     super.dispose();
   }
 
-  boolean isSuggestionHoverPreviewReady(int x, int y) {
-    return suggestionHoverIntent == null || suggestionHoverIntent.permits(x, y);
-  }
 
   private void paintMianPanel(Graphics g) {
     int width = Utils.zoomOut(mainPanel.getWidth());

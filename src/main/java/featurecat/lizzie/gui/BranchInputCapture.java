@@ -97,6 +97,23 @@ final class BranchInputCapture {
     }
   }
 
+  boolean isEmptyPoint(String coordinate) {
+    synchronized (board) {
+      if (!matchesContext()) return false;
+      return Board.asCoordinates(coordinate)
+          .map(coords -> featurecat.lizzie.analysis.AnalysisCandidateValidator.isEmptyPoint(sourceData, coords))
+          .orElse(true);
+    }
+  }
+
+  VariationPreviewGenerator.SourceStones captureCurrentStones(
+      VariationPreviewGenerator.Style retained) {
+    synchronized (board) {
+      if (!matchesContext()) return null;
+      return VariationPreviewGenerator.captureSourceStones(current.getData().stones, retained);
+    }
+  }
+
   private boolean matchesContext() {
     return Lizzie.board == board
         && board.getHistory() == history
