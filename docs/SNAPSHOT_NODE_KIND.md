@@ -98,6 +98,9 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 这些被隔离的 live state 包含 `hasStartStone/startStonelist`、player title、komi、引擎 komi/best-move 等当前窗口状态；相关副作用只允许在调用方显式采用解析结果后发生。
 - SGF 分析标签 `LZ` / `LZ2` / `LZOP` / `LZOP2`（含双引擎对应 payload）在 detached `parseSgf(...)` 阶段必须写入解析目标 history/node 的 `BoardData`，不能读写或覆盖当前 live board 的分析字段。
 - detached `parseSgf(...) -> setHistory(...) -> saveToString(...)` round-trip 必须保留 analysis payload（`engineName` / `engineName2`、playouts、best-move 列表）。
+- 文件、字符串、编辑态和 detached SGF 导入统一兼容属性值之外、结构空白位置的字面量 `\n` 与 `\r\n`；属性值原文继续交给既有 SGF 转义解析，不全文反转义，不改写输入文件。
+- 未知结构转义、双重包装、被转义换行拆开的属性名，以及含本次结构转义的未闭合树/属性值，必须导入失败；live 入口保留原棋谱，detached 入口返回 `null`。普通 SGF 的既有无关容错保持不变。
+- detached 与 live 导入都把 `RE` 保存为 `GameInfo.result`；不能将结果伪造成根或末节点注释，保存重开保持真实注释与对局结果。
 - `LZ` / `LZ2` / `LZOP` / `LZOP2` 单行 header-only analysis payload 视为完整 payload；缺少第二行 PV 时，`parseSgf(...)`、`setHistory(...)` adopt、`saveToString(...)` 与 round-trip 仍导出等价 payload。
 - header 内 `engineName`、`playouts`、`scoreMean`、`scoreStdev`、`pda`（双引擎槽位含 `engineName2`、`scoreMean2`、`scoreStdev2`、`pda2`）在 parse、`setHistory(...)` adopt、`saveToString(...)`、round-trip 全链路保留。
 - `setHistory(...)` adopt detached history 时，board 级 Kata 状态从 adopted history 重新推导：
@@ -200,6 +203,7 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - exact module 继续拥有静态锚点、临时 SGF 消费与真实 tail sequencing；最终 owner confirmation、root replay 和 ponder 留在现有 owner。exact 一旦开始，失败不切换到 root fallback。
 - Board 恢复的 GTP 等待在 EDT 和 Board monitor 外执行。完成时重新检查冻结目标，过期 completion 不恢复分析，也不把替换引擎当作原恢复目标。
 - foreground handback 已冻结的同一 Board/主引擎盘面恢复先按捕获内容完成确认，再由现有 owner 检查稳定性并追赶最新目标；导航发生在 companion close 期间不能提前截断该收敛循环。Board 或主引擎 incarnation 替换仍拒绝旧恢复。
+- 自动快析及后台主线补全（含复用预加载 worker）完成只采纳分析结果并保留当时的浏览节点 identity，不为完成通知推进棋盘，也不退回启动节点。借用主引擎时继续由 foreground lease 恢复并确认最新局面后归还；lease 持有期间不得借 `BOARD_SYNC` 导航。用户暂停、换谱或主引擎替换使旧 completion 失效，不能恢复 ponder；手动闪电分析既有完成导航不变。
 - 同一合法目标的缓存和已导入 SGF 分析继续保留；主副引擎槽位独立。未确认或已失效来源不得建立新的 visits 高水位。board-only 同步及真实 PASS、dummy PASS、setup 语义保持原合同。
 
 ## ReadBoard 单次同步分析恢复（Issue #429 / Ticket 03）
