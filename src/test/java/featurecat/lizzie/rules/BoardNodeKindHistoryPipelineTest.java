@@ -4726,6 +4726,7 @@ class BoardNodeKindHistoryPipelineTest {
     try {
       BoardRenderer renderer = new BoardRenderer(false);
       setField(BoardRenderer.class, renderer, "isShowingBranch", true);
+      setField(BoardRenderer.class, renderer, "branchNavigationOwned", true);
       LizzieFrame.boardRenderer = renderer;
       int refreshes = frame.refreshCallCount();
 
