@@ -685,6 +685,11 @@ public class FloatBoardRenderer {
     drawBranch(false);
   }
 
+  public void selectNormalVariation() {
+    displayedBranchLength = SHOW_NORMAL_BOARD;
+    selectHoveredVariation();
+  }
+
   private VariationPreviewState.Selection prepareSelection(boolean refresh) {
     if (Lizzie.board == null || Lizzie.board.isSetupMode()) {
       clearBranch();
@@ -775,7 +780,6 @@ public class FloatBoardRenderer {
     if (!notChangedMouseOverMove) {
       preview.select(replacement);
       previewCancelled = false;
-      clearPublishedPreview();
     }
     return replacement;
   }
@@ -1305,8 +1309,10 @@ public class FloatBoardRenderer {
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
           boolean isMouseOver =
-              Lizzie.frame.floatBoard != null
-                  && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);
+              preview.published() != null
+                  ? preview.applicationSelection().coordinate().equals(move.coordinate)
+                  : Lizzie.frame.floatBoard != null
+                      && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);
           boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats;
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
@@ -2507,7 +2513,6 @@ public class FloatBoardRenderer {
     displayedBranchLength = n;
     if (preview.setDisplayedLength(n)) {
       previewCancelled = false;
-      clearPublishedPreview();
       drawBranch(false);
     }
   }

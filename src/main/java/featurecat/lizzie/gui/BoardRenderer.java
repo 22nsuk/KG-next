@@ -1562,6 +1562,11 @@ public class BoardRenderer {
     drawBranch(false);
   }
 
+  public void selectNormalVariation() {
+    displayedBranchLength = SHOW_NORMAL_BOARD;
+    selectHoveredVariation();
+  }
+
   private VariationPreviewState.Selection prepareSelection(boolean refresh) {
     if (Lizzie.board == null || Lizzie.board.isSetupMode()) {
       clearBranch();
@@ -1698,7 +1703,6 @@ public class BoardRenderer {
     if (!notChangedMouseOverMove) {
       preview.select(replacement);
       previewCancelled = false;
-      clearPublishedPreview();
     }
     return replacement;
   }
@@ -2491,9 +2495,11 @@ public class BoardRenderer {
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
           boolean isMouseOver =
-              isIndependBoard
-                  ? Lizzie.frame.independentMainBoard.isMouseOver(coords[0], coords[1])
-                  : Lizzie.frame.isMouseOver(coords[0], coords[1]);
+              preview.published() != null
+                  ? preview.applicationSelection().coordinate().equals(move.coordinate)
+                  : isIndependBoard
+                      ? Lizzie.frame.independentMainBoard.isMouseOver(coords[0], coords[1])
+                      : Lizzie.frame.isMouseOver(coords[0], coords[1]);
           boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats;
           boolean outOfOrder =
               Lizzie.config.limitMaxSuggestion > 0
@@ -4555,7 +4561,6 @@ public class BoardRenderer {
     displayedBranchLength = n;
     if (preview.setDisplayedLength(n)) {
       previewCancelled = false;
-      clearPublishedPreview();
       drawBranch(false);
     }
   }
@@ -4565,7 +4570,8 @@ public class BoardRenderer {
   }
 
   public int getReplayBranch() {
-    return selectedVariation().map(List::size).orElse(0);
+    VariationPreviewState.Selection selected = validSelection();
+    return selected == null ? 0 : selected.input().variation.size();
   }
 
   public int getBranchLength() {
@@ -4603,13 +4609,22 @@ public class BoardRenderer {
     return validSelection() != null;
   }
 
+  Optional<VariationPreviewState.Selection> applicationSelection() {
+    if (validSelection() == null) return Optional.empty();
+    VariationPreviewState.Selection selected = preview.applicationSelection();
+    if (selected != null && !selected.source().isCurrent()) {
+      clearBranch();
+      return Optional.empty();
+    }
+    return Optional.ofNullable(selected);
+  }
+
   public Optional<List<String>> selectedVariation() {
-    VariationPreviewState.Selection selected = validSelection();
-    return selected == null ? Optional.empty() : Optional.of(selected.input().variation);
+    return applicationSelection().map(selected -> selected.input().variation);
   }
 
   public void beginMiddlePreview() {
-    middleSelection = validSelection();
+    middleSelection = applicationSelection().orElse(null);
     cancelPreview();
   }
 

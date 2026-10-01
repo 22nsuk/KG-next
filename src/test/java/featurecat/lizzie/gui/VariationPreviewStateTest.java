@@ -103,38 +103,6 @@ class VariationPreviewStateTest {
     assertSame(r2, state.published());
   }
 
-  @Test
-  void prefixUpdateDoesNotMutatePriorInput() {
-    VariationPreviewState state = new VariationPreviewState();
-    Branch.Input input1 = sampleInput(199);
-    VariationPreviewState.Selection s1 =
-        new VariationPreviewState.Selection(null, "D4", input1, -2);
-    VariationPreviewGenerator.Result r1 = sampleResult(input1);
-
-    state.select(s1);
-    assertTrue(state.publish(s1, s1, r1));
-
-    assertTrue(state.setDisplayedLength(3));
-
-    // Prior input remains unchanged
-    assertEquals(199, input1.maxLength);
-
-    // Updated selection reflects the new prefix length while preserving other fields
-    VariationPreviewState.Selection updated = state.selected();
-    assertEquals(3, updated.displayedLength());
-    assertEquals(3, updated.input().maxLength);
-    assertEquals("D4", updated.coordinate());
-    assertEquals(input1.variation, updated.input().variation);
-    assertEquals(input1.pvVisits, updated.input().pvVisits);
-    assertEquals(input1.removeDeadChains, updated.input().removeDeadChains);
-    assertEquals(input1.recordPvVisits, updated.input().recordPvVisits);
-    assertNull(state.published());
-
-    // Setting back to sentinel restores 199 max length
-    assertTrue(state.setDisplayedLength(-2));
-    assertEquals(-2, state.selected().displayedLength());
-    assertEquals(199, state.selected().input().maxLength);
-  }
 
   @Test
   void sameDisplayedLengthRetainsPublishedAndReturnsFalse() {

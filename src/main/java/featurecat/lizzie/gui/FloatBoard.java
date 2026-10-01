@@ -393,10 +393,10 @@ public class FloatBoard extends JDialog {
                     }
                   }
                 if (isCurMouseOver) {
-                  clearMoved();
+                  isReplayVariation = false;
                   needRepaint = true;
                   isMouseOver = true;
-                  boardRenderer.selectHoveredVariation();
+                  boardRenderer.selectNormalVariation();
                   if (Lizzie.config.autoReplayBranch) {
                     Lizzie.frame.mouseOverChanged = true;
                     if (!Lizzie.config.autoReplayDisplayEntireVariationsFirst)

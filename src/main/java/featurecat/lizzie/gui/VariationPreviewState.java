@@ -29,6 +29,8 @@ final class VariationPreviewState {
 
   private Selection selection;
   private VariationPreviewGenerator.Result published;
+  private Selection publishedSelection;
+  private Request publishedRequest;
   private VariationPreviewScheduler scheduler;
   private Request requested;
   private long generation;
@@ -54,6 +56,18 @@ final class VariationPreviewState {
           && mode.equals(other.mode);
     }
 
+    boolean sameSurface(Request other) {
+      BranchInputCapture source = selection.source();
+      BranchInputCapture prior = other.selection.source();
+      return (source == prior || source != null && prior != null
+              && source.sourceData == prior.sourceData && source.analysisData == prior.analysisData
+              && prior.isCurrent())
+          && selection.input().removeDeadChains == other.selection.input().removeDeadChains
+          && selection.input().recordPvVisits == other.selection.input().recordPvVisits
+          && geometry.sameSurface(other.geometry) && style.sameSurface(other.style)
+          && mode.equals(other.mode);
+    }
+
     boolean sameContent(Request other) {
       return sameContext(other)
           && selection.input().variation.equals(other.selection.input().variation)
@@ -74,8 +88,9 @@ final class VariationPreviewState {
     Request request = new Request(next, geometry, style, mode);
     if (requested != null) {
       if (request.sameContent(requested)) return;
-      if (!request.sameContext(requested)) cancelPreview();
+      if (!request.sameContext(requested)) retireWork();
     }
+    if (publishedRequest != null && !request.sameSurface(publishedRequest)) clearPublished();
     requested = request;
     long expectedGeneration = generation;
     if (scheduler == null) scheduler = VariationPreviewScheduler.shared();
@@ -85,12 +100,17 @@ final class VariationPreviewState {
       if (generation != expectedGeneration || selection == null
           || next.source() != null && !next.source().isCurrent()) return;
       publish(selection, next, result);
+      publishedRequest = request;
       onPublished.run();
     });
   }
 
   Selection selected() {
     return selection;
+  }
+
+  Selection applicationSelection() {
+    return publishedSelection != null ? publishedSelection : selection;
   }
 
   VariationPreviewGenerator.Result published() {
@@ -102,7 +122,7 @@ final class VariationPreviewState {
   }
 
   void select(Selection next) {
-    cancelPreview();
+    retireWork();
     this.selection = next;
   }
 
@@ -112,10 +132,20 @@ final class VariationPreviewState {
   }
 
   void cancelPreview() {
+    retireWork();
+    clearPublished();
+  }
+
+  private void retireWork() {
     generation++;
     if (scheduler != null) scheduler.cancel(this);
     requested = null;
-    this.published = null;
+  }
+
+  private void clearPublished() {
+    published = null;
+    publishedSelection = null;
+    publishedRequest = null;
   }
 
   boolean publish(
@@ -129,6 +159,7 @@ final class VariationPreviewState {
     }
     this.selection = replacement;
     this.published = result;
+    this.publishedSelection = replacement;
     return true;
   }
 
@@ -147,7 +178,7 @@ final class VariationPreviewState {
             oldInput.recordPvVisits);
     this.selection =
         new Selection(selection.source(), selection.coordinate(), newInput, n);
-    cancelPreview();
+    retireWork();
     return true;
   }
 }

@@ -36,7 +36,15 @@ final class VariationPreviewGenerator {
       int squareHeight,
       int stoneRadius,
       int hoverX,
-      int hoverY) {}
+      int hoverY) {
+    boolean sameSurface(Geometry other) {
+      return gridWidth == other.gridWidth && gridHeight == other.gridHeight
+          && pixelWidth == other.pixelWidth && pixelHeight == other.pixelHeight
+          && marginWidth == other.marginWidth && marginHeight == other.marginHeight
+          && squareWidth == other.squareWidth && squareHeight == other.squareHeight
+          && stoneRadius == other.stoneRadius;
+    }
+  }
 
   static final class SourceStones {
     private final Stone[] stones;
@@ -99,6 +107,11 @@ final class VariationPreviewGenerator {
       String passText) {
 
     boolean sameRendering(Style other) {
+      return sameSurface(other)
+          && stoneLimit == other.stoneLimit && numberLimit == other.numberLimit;
+    }
+
+    boolean sameSurface(Style other) {
       return other != null
           && floating == other.floating && editMode == other.editMode
           && removeDeadChains == other.removeDeadChains
@@ -107,7 +120,6 @@ final class VariationPreviewGenerator {
           && stoneHighlight == other.stoneHighlight && hoverGlow == other.hoverGlow
           && trying == other.trying && pvVisitsAll == other.pvVisitsAll
           && pvVisitsLast == other.pvVisitsLast && pvVisitsLimit == other.pvVisitsLimit
-          && stoneLimit == other.stoneLimit && numberLimit == other.numberLimit
           && boardType == other.boardType && Objects.equals(font, other.font)
           && blackStone == other.blackStone && whiteStone == other.whiteStone
           && shadow == other.shadow && shadowCenter == other.shadowCenter

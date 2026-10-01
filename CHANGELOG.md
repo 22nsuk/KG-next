@@ -4,6 +4,7 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+- Keep the complete visible variation while stepping or switching candidates, then replace it atomically; comma and middle-click apply the visible PV and prefix while its replacement is pending (#347).
 - Keep candidate markers hidden while a selected preview is being replaced after stepping or switching points, preventing a flash of idle suggestions before the next complete image (#347).
 - Generate complete candidate previews immediately on one shared background worker for main, independent and floating boards; coalesce analysis updates fairly, publish matching stones/shadows/annotations together, and reject stale results after input, geometry or window-lifecycle changes. Remove the fixed hover delay (#347).
 - Capture candidate variations before their preview is drawn so stepping, comma and middle-click use the selected PV; share isolated stone, shadow and annotation generation across main, independent and floating boards, preserving frozen PV visits and explicit refresh (#347).

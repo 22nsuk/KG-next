@@ -9465,10 +9465,10 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean playCurrentVariation(BoardRenderer owner) {
-    Optional<List<String>> selected = owner.selectedVariation();
-    int displayedLength = owner.getDisplayedBranchLength();
-    if (!selected.isPresent()) return false;
-    return playVariation(selected.get(), displayedLength);
+    Optional<VariationPreviewState.Selection> selected = owner.applicationSelection();
+    if (selected.isEmpty()) return false;
+    VariationPreviewState.Selection visible = selected.get();
+    return playVariation(visible.input().variation, visible.displayedLength());
   }
 
   boolean playMiddleVariation(BoardRenderer owner) {
@@ -9757,11 +9757,11 @@ public class LizzieFrame extends JFrame {
         }
 
         if (isCurMouseOver) {
-          clearMoved();
+          isReplayVariation = false;
           needRepaint = true;
           isMouseOver = true;
-          boardRenderer.selectHoveredVariation();
-          if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectHoveredVariation();
+          boardRenderer.selectNormalVariation();
+          if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectNormalVariation();
           if (Lizzie.config.autoReplayBranch) {
             mouseOverChanged = true;
             if (!Lizzie.config.autoReplayDisplayEntireVariationsFirst)
@@ -9932,7 +9932,6 @@ public class LizzieFrame extends JFrame {
   }
 
   void cancelSuggestionPreviewKeepingSelection() {
-    cancelPendingSuggestionHoverPreview();
     boardRenderer.beginMiddlePreview();
     if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.cancelPreview();
     repaintSuggestionHoverPreview();
@@ -14121,7 +14120,6 @@ public class LizzieFrame extends JFrame {
   }
 
   public void setMouseOverCoords(int index) {
-    cancelPendingSuggestionHoverPreview();
     if (Lizzie.config.isFloatBoardMode()) {
       this.independentMainBoard.setMouseOverCoords(index);
       return;
@@ -14145,7 +14143,6 @@ public class LizzieFrame extends JFrame {
   }
 
   private void handleTableClick(int row, int col) {
-    cancelPendingSuggestionHoverPreview();
     LizzieFrame.boardRenderer.startNormalBoard();
     if (listTable.getValueAt(row, 1).toString().startsWith("pass")) return;
     int[] coords = Board.convertNameToCoordinates(listTable.getValueAt(row, 1).toString());

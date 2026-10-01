@@ -51,28 +51,33 @@ class VariationPreviewPublicationTest {
   }
 
   @Test
-  void pendingPresentationDistinguishesReplacementFromRefreshAndCancelledInput() {
+  void replacementKeepsCompletePictureUntilTheLatestTargetPublishes() {
     select("B2", 1);
-    assertTrue(state.isPending());
     finish();
-    assertFalse(state.isPending());
-    live = selection("B2", 2);
-    request();
-    assertFalse(state.isPending(), "soft refresh keeps a complete visible result");
-    finish();
+    var visible = state.published();
     state.setDisplayedLength(1);
     live = state.selected();
     request();
-    assertTrue(state.isPending(), "length replacement must not expose idle candidates");
-    finish();
+    assertSame(visible, state.published());
     select("A3", 3);
-    assertTrue(state.isPending(), "candidate replacement is still preview presentation");
-    state.cancelPreview();
-    assertFalse(state.isPending(), "cancel restores candidates even with retained gesture input");
+    assertSame(visible, state.published());
+    assertEquals("B2", state.applicationSelection().coordinate());
+    assertEquals(2, state.applicationSelection().displayedLength());
+    assertEquals("A3", state.selected().coordinate());
     finish();
-    assertFalse(state.isPending());
+    assertSame(visible, state.published(), "retired step cannot replace the displayed revision");
+    finish();
+    assertEquals(3, state.published().branch().pvVisitsList[0]);
+    assertEquals("A3", state.applicationSelection().coordinate());
+    geometry = new VariationPreviewGenerator.Geometry(3, 3, 150, 150, 30, 30, 40, 40, 15, 1, 1);
+    request();
+    assertNull(state.published(), "a resized surface must not retain an incorrectly scaled image");
+    finish();
+    assertEquals(150, state.published().stones().getWidth());
+    state.clear();
     assertNull(state.published());
   }
+
 
   @Test
   void lateA1CannotPublishOverReselectedA2() {
@@ -156,7 +161,8 @@ class VariationPreviewPublicationTest {
     live = state.selected();
     request();
     edt.remove().run();
-    assertNull(state.published());
+    assertEquals(2, state.published().branch().length);
+    assertEquals(2, state.applicationSelection().displayedLength());
     finish();
     assertEquals(1, state.published().branch().length);
     assertEquals(List.of("1", "200"), state.selected().input().pvVisits);

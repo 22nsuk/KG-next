@@ -312,7 +312,6 @@ public class IndependentMainBoard extends JFrame {
 
           public void mousePressed(MouseEvent e) {
             if (SwingUtilities.isMiddleMouseButton(e)) {
-              cancelPendingSuggestionHoverPreview();
               boardRenderer.beginMiddlePreview();
               refresh();
             } else {
@@ -559,10 +558,10 @@ public class IndependentMainBoard extends JFrame {
                       }
                     }
                   if (isCurMouseOver) {
-                    clearMoved();
+                    isReplayVariation = false;
                     needRepaint = true;
                     isMouseOver = true;
-                    boardRenderer.selectHoveredVariation();
+                    boardRenderer.selectNormalVariation();
                     if (Lizzie.config.autoReplayBranch) {
                       Lizzie.frame.mouseOverChanged = true;
                       boardRenderer.setDisplayedBranchLength(1);
@@ -877,7 +876,6 @@ public class IndependentMainBoard extends JFrame {
   }
 
   public void setMouseOverCoords(int index) {
-    cancelPendingSuggestionHoverPreview();
     List<MoveData> bestMoves = Lizzie.board.getHistory().getData().bestMoves;
     if (bestMoves == null || bestMoves.isEmpty()) return;
     if (index >= bestMoves.size()) return;
