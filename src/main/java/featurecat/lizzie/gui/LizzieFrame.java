@@ -1042,7 +1042,7 @@ public class LizzieFrame extends JFrame {
                       hiddenColumn(5, listTable);
                     }
                   }
-                  listTable.revalidate();
+                  ((SuggestionTableScrollPane) listScrollpane).refreshData();
                 }
                 if (Lizzie.config.isShowingBlunderTabel) {
                   if (Lizzie.leelaz != null && Lizzie.leelaz.isLoaded()) {
@@ -13182,12 +13182,17 @@ public class LizzieFrame extends JFrame {
       listScrollpane.setVisible(true);
     }
     int overlayY = windowMenuHeight + (Lizzie.config.showDoubleMenu ? topPanelHeight : 0);
+    vx = Utils.zoomIn(vx);
+    vy = Utils.zoomIn(vy) + overlayY;
+    vw = Utils.zoomIn(vw);
+    vh = Utils.zoomIn(vh);
     if (listScrollpane.getX() != vx
-        || listScrollpane.getY() != vy + overlayY
+        || listScrollpane.getY() != vy
         || listScrollpane.getWidth() != vw
-        || listScrollpane.getHeight() != vh)
-      listScrollpane.setBounds(
-          Utils.zoomIn(vx), Utils.zoomIn(vy) + overlayY, Utils.zoomIn(vw), Utils.zoomIn(vh));
+        || listScrollpane.getHeight() != vh) {
+      listScrollpane.setBounds(vx, vy, vw, vh);
+      listScrollpane.revalidate();
+    }
   }
 
   public void setHideListScrollpane(boolean visible) {

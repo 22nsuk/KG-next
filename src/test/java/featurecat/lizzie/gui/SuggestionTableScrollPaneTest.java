@@ -278,4 +278,119 @@ class SuggestionTableScrollPaneTest {
           assertNotSame(f.table, SwingUtilities.getDeepestComponentAt(f.pane, 20, below));
         });
   }
+
+  @Test
+  void silentCandidateRefreshClampsRangeWithoutChangingDensityOrFollowingGrowth() throws Exception {
+    edt(
+        () -> {
+          int[] count = {20};
+          int[] generation = {0};
+          JTable table =
+              new JTable(
+                  new javax.swing.table.AbstractTableModel() {
+                    public int getRowCount() {
+                      return count[0];
+                    }
+
+                    public int getColumnCount() {
+                      return 1;
+                    }
+
+                    public Object getValueAt(int row, int column) {
+                      return generation[0] + ":" + (count[0] - row);
+                    }
+                  });
+          table.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
+          SuggestionTableScrollPane pane = new SuggestionTableScrollPane(table);
+          pane.setBorder(BorderFactory.createLineBorder(java.awt.Color.GRAY));
+          pane.refreshStyle(25);
+          pane.setSize(300, 177);
+          pane.doLayout();
+          assertEquals(175, pane.getViewport().getHeight());
+          pane.getVerticalScrollBar().setValue(325);
+          for (int rows : new int[] {12, 7, 0, 20}) {
+            count[0] = rows;
+            pane.refreshData();
+            assertEquals(rows == 12 ? 125 : 0, pane.getViewport().getViewPosition().y);
+            assertEquals(Math.max(175, rows * 25), pane.getVerticalScrollBar().getMaximum());
+            assertEquals(25, table.getRowHeight());
+            assertEquals(177, pane.getHeight());
+          }
+          pane.getVerticalScrollBar().setValue(75);
+          for (int i = 1; i <= 30; i++) {
+            generation[0] = i;
+            pane.refreshData();
+            assertEquals(i + ":17", table.getValueAt(3, 0));
+            assertEquals(75, pane.getViewport().getViewPosition().y);
+            assertEquals(175, pane.getViewport().getHeight());
+            assertEquals(25, table.getRowHeight());
+          }
+          pane.getVerticalScrollBar().setValue(Integer.MAX_VALUE);
+          assertEquals(325, pane.getViewport().getViewPosition().y);
+        });
+  }
+
+  @Test
+  void refreshDuringDragCollapseAndStyleChangeUsesLatestCandidates() throws Exception {
+    Fixture[] ref = new Fixture[1];
+    edt(
+        () -> {
+          Fixture f = ref[0] = new Fixture(20);
+          DefaultTableModel model = (DefaultTableModel) f.table.getModel();
+          f.budget(175);
+          JScrollBar bar = f.pane.getVerticalScrollBar();
+          bar.setValueIsAdjusting(true);
+          bar.setValue(163);
+          model.setRowCount(12);
+          f.pane.refreshData();
+          assertEquals(125, f.y());
+          bar.setValue(63);
+          model.setRowCount(15);
+          f.pane.refreshData();
+          assertEquals(63, f.y(), "data refresh must not snap an active drag");
+          bar.setValueIsAdjusting(false);
+        });
+    settle();
+    edt(
+        () -> {
+          Fixture f = ref[0];
+          DefaultTableModel model = (DefaultTableModel) f.table.getModel();
+          assertEquals(75, f.y());
+          f.budget(12);
+          model.setRowCount(0);
+          f.pane.refreshData();
+          assertEquals(0, f.extent());
+          assertEquals(0, f.y());
+          model.setRowCount(20);
+          f.pane.refreshData();
+          f.pane.refreshStyle(30);
+          f.budget(180);
+          assertEquals(90, f.y(), "collapse retains the row anchor until recovery");
+          f.budget(12);
+          model.setRowCount(7);
+          f.pane.refreshData();
+          f.budget(180);
+          assertEquals(30, f.y(), "recovery clamps against current candidates");
+          f.budget(12);
+          model.setRowCount(0);
+          f.pane.refreshData();
+          f.budget(180);
+          assertEquals(0, f.y());
+          model.setRowCount(20);
+          f.pane.refreshData();
+          assertEquals(0, f.y(), "empty data must not start following the bottom");
+          f.pane.getVerticalScrollBar().setValue(90);
+          for (int i = 0; i < 8; i++) {
+            model.setRowCount(18 + i % 3);
+            f.pane.refreshData();
+            f.pane.refreshStyle(25);
+            f.budget(174);
+            assertEquals(72, f.y());
+            f.pane.refreshStyle(30);
+            f.budget(180);
+            assertEquals(90, f.y());
+            f.aligned();
+          }
+        });
+  }
 }

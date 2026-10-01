@@ -63,6 +63,24 @@ final class SuggestionTableScrollPane extends JScrollPane {
     repaint();
   }
 
+  /** Called by the existing EDT refresh timer; the live model does not publish events. */
+  void refreshData() {
+    int height = (int) Math.min(Integer.MAX_VALUE, (long) table.getRowCount() * laidOutRowHeight);
+    if (height != dataHeight) {
+      changingGeometry = true;
+      try {
+        dataHeight = height;
+        // Data changes clamp the current position, rather than following a growing list.
+        int position =
+            Math.min(getViewport().getViewPosition().y, Math.max(0, dataHeight - bodyHeight));
+        updateRange(getViewport().getViewSize().width, bodyHeight == 0 ? 0 : position);
+      } finally {
+        changingGeometry = false;
+      }
+    }
+    table.repaint();
+  }
+
   private void measureStyle() {
     Font font = table.getFont();
     safeRowHeight = table.getFontMetrics(font).getHeight() + table.getRowMargin() + 2;
@@ -194,6 +212,26 @@ final class SuggestionTableScrollPane extends JScrollPane {
     }
   }
 
+  private void updateRange(int viewWidth, int position) {
+    int range = bodyHeight == 0 ? 0 : Math.max(bodyHeight, dataHeight);
+    Dimension viewSize = getViewport().getViewSize();
+    if (viewSize.width != viewWidth || viewSize.height != range) {
+      getViewport().setViewSize(new Dimension(viewWidth, range));
+    }
+    setPosition(position);
+    JScrollBar vertical = getVerticalScrollBar();
+    if (vertical.getValue() != position
+        || vertical.getVisibleAmount() != bodyHeight
+        || vertical.getMinimum() != 0
+        || vertical.getMaximum() != range) {
+      vertical.setValues(position, bodyHeight, 0, range);
+    }
+    boolean canScroll = bodyHeight > 0 && dataHeight > bodyHeight;
+    if (vertical.isEnabled() != canScroll) vertical.setEnabled(canScroll);
+    // A zero-height viewport must not replace the user's pre-collapse anchor.
+    if (bodyHeight > 0) rememberPosition();
+  }
+
   private final class WholeRowLayout extends ScrollPaneLayout {
     @Override
     public void layoutContainer(Container parent) {
@@ -235,11 +273,6 @@ final class SuggestionTableScrollPane extends JScrollPane {
             table.getScrollableTracksViewportWidth()
                 ? viewport.getWidth()
                 : Math.max(viewport.getWidth(), table.getPreferredSize().width);
-        int viewHeight = bodyHeight == 0 ? 0 : Math.max(bodyHeight, dataHeight);
-        Dimension viewSize = viewport.getViewSize();
-        if (viewSize.width != viewWidth || viewSize.height != viewHeight) {
-          viewport.setViewSize(new Dimension(viewWidth, viewHeight));
-        }
         int maximum = Math.max(0, dataHeight - bodyHeight);
         int position =
             bodyHeight == 0
@@ -247,24 +280,13 @@ final class SuggestionTableScrollPane extends JScrollPane {
                 : (continuousScroll
                     ? Math.min(maximum, scrollingPosition)
                     : (atBottom ? maximum : (int) Math.min(maximum, (long) topRow * rowHeight)));
-        setPosition(position);
+        updateRange(viewWidth, position);
         JScrollBar vertical = getVerticalScrollBar();
-        int range = bodyHeight == 0 ? 0 : Math.max(bodyHeight, dataHeight);
-        if (vertical.getValue() != position
-            || vertical.getVisibleAmount() != bodyHeight
-            || vertical.getMinimum() != 0
-            || vertical.getMaximum() != range) {
-          vertical.setValues(position, bodyHeight, 0, range);
-        }
-        boolean canScroll = bodyHeight > 0 && dataHeight > bodyHeight;
-        if (vertical.isEnabled() != canScroll) vertical.setEnabled(canScroll);
         if (vertical.getUnitIncrement() != rowHeight) vertical.setUnitIncrement(rowHeight);
         if (vertical.getBlockIncrement() != bodyHeight) vertical.setBlockIncrement(bodyHeight);
         if (isWheelScrollingEnabled() != (bodyHeight > 0)) {
           setWheelScrollingEnabled(bodyHeight > 0);
         }
-        // A zero-height layout must not replace the user's pre-collapse anchor.
-        if (bodyHeight > 0) rememberPosition();
       } finally {
         changingGeometry = false;
       }
