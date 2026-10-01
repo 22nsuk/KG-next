@@ -20144,18 +20144,18 @@ public class LizzieFrame extends JFrame {
 
   public static void undo(int movesToAdvance) {
     if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) return;
-    if (boardRenderer.isShowingBranch()) {
+    if (boardRenderer.ownsBranchNavigation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.isShowingBranch()) {
+    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.ownsBranchNavigation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
     if (Lizzie.frame.independentMainBoard != null) {
-      if (Lizzie.frame.independentMainBoard.boardRenderer.isShowingBranch()) {
+      if (Lizzie.frame.independentMainBoard.boardRenderer.ownsBranchNavigation()) {
         Lizzie.frame.independentMainBoard.doBranch(-movesToAdvance);
         Lizzie.frame.refresh();
         return;
@@ -20170,18 +20170,18 @@ public class LizzieFrame extends JFrame {
 
   public static void undoNoRefresh(int movesToAdvance) {
     if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) return;
-    if (boardRenderer.isShowingBranch()) {
+    if (boardRenderer.ownsBranchNavigation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.isShowingBranch()) {
+    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.ownsBranchNavigation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
     if (Lizzie.frame.independentMainBoard != null) {
-      if (Lizzie.frame.independentMainBoard.boardRenderer.isShowingBranch()) {
+      if (Lizzie.frame.independentMainBoard.boardRenderer.ownsBranchNavigation()) {
         Lizzie.frame.independentMainBoard.doBranch(-movesToAdvance);
         Lizzie.frame.refresh();
         return;
