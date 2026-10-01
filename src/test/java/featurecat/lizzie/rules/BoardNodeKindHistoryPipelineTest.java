@@ -49,6 +49,8 @@ import java.util.regex.Pattern;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class BoardNodeKindHistoryPipelineTest {
   private static final int BOARD_SIZE = 3;
@@ -1065,8 +1067,9 @@ class BoardNodeKindHistoryPipelineTest {
     }
   }
 
-  @Test
-  void detachedParseSgfDoesNotRunLiveMoveSideEffects() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"\n", "\\n", "\\r\\n"})
+  void detachedParseSgfDoesNotRunLiveMoveSideEffects(String newline) throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {
       TrackingBoard board = (TrackingBoard) Lizzie.board;
@@ -1075,7 +1078,11 @@ class BoardNodeKindHistoryPipelineTest {
       int initialClearBestMovesCalls = leelaz.clearBestMovesCallCount;
       int initialPdaAdjustmentCalls = leelaz.pdaAdjustmentCallCount;
 
-      BoardHistoryList parsed = SGFParser.parseSgf("(;SZ[3];B[aa];W[bb];B[cc])", false);
+      BoardHistoryList live = board.getHistory();
+      BoardHistoryList parsed =
+          SGFParser.parseSgf("(;SZ[3]" + newline + ";B[aa];W[bb];B[cc])", false);
+      assertSame(live, board.getHistory());
+      assertEquals(3, parsed.getEnd().getData().moveNumber);
 
       assertTrue(
           parsed.getStart().next().isPresent(), "detached SGF should still parse its moves.");
@@ -4711,29 +4718,6 @@ class BoardNodeKindHistoryPipelineTest {
     }
   }
 
-  @Test
-  void previewOnlyInputNavigationRepaintsWithoutHistoryMutation() throws Exception {
-    TestEnvironment env = TestEnvironment.open();
-    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
-    TrackingFrame frame = (TrackingFrame) Lizzie.frame;
-    try {
-      BoardRenderer renderer = new BoardRenderer(false);
-      setField(BoardRenderer.class, renderer, "isShowingBranch", true);
-      LizzieFrame.boardRenderer = renderer;
-      int refreshes = frame.refreshCallCount();
-
-      Input.redo();
-      assertEquals(2, renderer.getDisplayedBranchLength());
-      assertEquals(refreshes + 1, frame.refreshCallCount());
-
-      Input.undo();
-      assertEquals(1, renderer.getDisplayedBranchLength());
-      assertEquals(refreshes + 2, frame.refreshCallCount());
-    } finally {
-      LizzieFrame.boardRenderer = previousRenderer;
-      env.close();
-    }
-  }
 
 
 

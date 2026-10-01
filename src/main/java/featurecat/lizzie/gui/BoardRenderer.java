@@ -326,7 +326,9 @@ public class BoardRenderer {
       }
     } else {
       if (!Lizzie.frame.isInScoreMode) drawBranch();
-      else isShowingBranch = false;
+      else {
+        isShowingBranch = false;
+      }
 
       drawStones(displayNode.getData(), displayNode.getData().stones);
       drawEstimate();
@@ -1589,6 +1591,7 @@ public class BoardRenderer {
       clearBranch();
       return null;
     }
+
     // calculate best moves and branch
     BoardData candidateData = capture.analysisData;
     synchronized (candidateData) {
@@ -4586,7 +4589,11 @@ public class BoardRenderer {
     }
     switch (displayedBranchLength) {
       case 1:
-        if (Lizzie.config.autoReplayBranch || n == 1) setDisplayedBranchLength(2);
+        if (Lizzie.config.autoReplayBranch) {
+          setDisplayedBranchLength(2);
+        } else if (n > 0) {
+          setDisplayedBranchLength(min(1 + n, getReplayBranch() + 1));
+        }
         return true;
       case SHOW_RAW_BOARD:
         return false;

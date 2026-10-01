@@ -4,12 +4,17 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+- Keep asynchronous candidate-preview navigation at its first move without changing game history; preserve frozen PVs and advance independent-board and second-engine Page Down requests through the selected variation (#347, #577).
 - Keep source-board floating candidates visible until the first complete preview is ready, preserving the transparent overlay's hover target during background generation (#347).
 - Keep the complete visible variation while stepping or switching candidates, then replace it atomically; comma and middle-click apply the visible PV and prefix while its replacement is pending (#347).
 - Keep candidate markers hidden while a selected preview is being replaced after stepping or switching points, preventing a flash of idle suggestions before the next complete image (#347).
 - Generate complete candidate previews immediately on one shared background worker for main, independent and floating boards; coalesce analysis updates fairly, publish matching stones/shadows/annotations together, and reject stale results after input, geometry or window-lifecycle changes. Remove the fixed hover delay (#347).
 - Capture candidate variations before their preview is drawn so stepping, comma and middle-click use the selected PV; share isolated stone, shadow and annotation generation across main, independent and floating boards, preserving frozen PV visits and explicit refresh (#347).
 - Capture isolated variation inputs for main, independent, floating, history-hint and secondary-board previews; simulate long variations with private working arrays while preserving PASS, snapshot metadata and existing display scheduling (#347).
+- Wait for the current engine startup/switch to settle before restoring an imported SGF, so games opened with the Windows EXE also start their automatic quick curve; preserve pause and retire continuations after replacement, failure or shutdown.
+- Decode professional ranks in Fox game lists as P1–P9 instead of 83–91 dan, while preserving online dan and kyu ranks for both players.
+- Keep simplified variation-tree images bound to the current history, selected node and viewport; discard late drawings and repaint accepted images on the event thread without requiring another input. Preserve preview selection, navigation and viewport clipping.
+- Scan diagnostic secret lines once during export, preserving complete GTP analysis lines, credential and path redaction, session aliases, and original line endings.
 - Restore Chinese ancient rules as a standard engine-game choice using the existing `stone-scoring` preset; recognize equivalent saved rules without rewriting them and preserve non-equivalent custom parameters (#549).
 - Show concrete engine startup and synchronization failures in the diagnostic window even without a retained startup snapshot; preserve the failure reason and command in copy/export actions and keep local Windows command-line diagnostics available (#555).
 - Restore opt-in search-thread changes for the current KataGo process, including explicit remote requests, with confirmed readback and stale-process isolation; preserve saved thread sources and PDA/WRN auto-loading, and make advanced-parameter help match the dialog theme (#558).
