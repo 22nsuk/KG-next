@@ -869,19 +869,10 @@ public class LizzieFrame extends JFrame {
     listTable = new JTable(listDataModel);
     TableCellRenderer tcr = new ColorTableCellRenderer();
     listTable.setDefaultRenderer(Object.class, tcr);
-    listTable
-        .getTableHeader()
-        .setPreferredSize(
-            new Dimension(
-                listTable.getColumnModel().getTotalColumnWidth(),
-                Lizzie.config.isFrameFontSmall()
-                    ? 20
-                    : (Lizzie.config.isFrameFontMiddle() ? 24 : 28)));
 
     listTable
         .getTableHeader()
         .setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
-    listTable.setRowHeight(Config.menuHeight - 4);
     listTable.getTableHeader().setReorderingAllowed(false);
     listTable.setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
     DefaultTableCellRenderer cellRenderer = new DefaultTableCellRenderer();
@@ -898,11 +889,7 @@ public class LizzieFrame extends JFrame {
       if (i == 2 || i == 4) column.setHeaderRenderer(cellRenderer);
       else column.setHeaderRenderer(cellRenderer2);
     }
-    listScrollpane = new JScrollPane(listTable);
-    listScrollpane
-        .getViewport()
-        .setBackground(
-            Lizzie.config.useMorandiColors ? MorandiPalette.CREAM_WHITE : new Color(243, 243, 243));
+    listScrollpane = new SuggestionTableScrollPane(listTable);
     refreshSuggestionTableStyle();
     varTreePane.addMouseMotionListener(
         new MouseAdapter() {
@@ -922,11 +909,7 @@ public class LizzieFrame extends JFrame {
             setCommentEditable(false);
           }
         });
-    listScrollpane.setVerticalScrollBarPolicy(
-        javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
     listScrollpane.getVerticalScrollBar().setUI(new DemoScrollBarUI2(false));
-    listScrollpane.setBackground(
-        Lizzie.config.useMorandiColors ? MorandiPalette.BG_SECONDARY : new Color(235, 235, 235));
     hiddenColumn(1, listTable);
     listTable.getColumnModel().getColumn(0).setPreferredWidth(10);
     listTable.getColumnModel().getColumn(2).setPreferredWidth(30);
@@ -1058,7 +1041,7 @@ public class LizzieFrame extends JFrame {
                       hiddenColumn(5, listTable);
                     }
                   }
-                  listTable.revalidate();
+                  ((SuggestionTableScrollPane) listScrollpane).refreshData();
                 }
                 if (Lizzie.config.isShowingBlunderTabel) {
                   if (Lizzie.leelaz != null && Lizzie.leelaz.isLoaded()) {
@@ -2706,15 +2689,17 @@ public class LizzieFrame extends JFrame {
   //  }
 
   void refreshSuggestionTableStyle() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::refreshSuggestionTableStyle);
+      return;
+    }
     if (listTable == null || listScrollpane == null) return;
     Color surface = AppleStyleSupport.workspaceSurface();
     listTable.setBackground(surface);
     listTable.setForeground(AppleStyleSupport.dialogTextColor());
     listTable.setFont(AppleStyleSupport.workspaceFont(Font.PLAIN, Config.frameFontSize));
-    listTable.setRowHeight(
-        Math.max(
-            Config.menuHeight - 4, listTable.getFontMetrics(listTable.getFont()).getHeight() + 8));
     listScrollpane.getViewport().setBackground(surface);
+    listScrollpane.setBackground(surface);
     listScrollpane.setBorder(BorderFactory.createLineBorder(AppleStyleSupport.workspaceBorder()));
     for (int i = 0; i < listTable.getColumnCount(); i++) {
       TableCellRenderer renderer = listTable.getColumnModel().getColumn(i).getHeaderRenderer();
@@ -2729,6 +2714,10 @@ public class LizzieFrame extends JFrame {
             BorderFactory.createMatteBorder(0, 0, 1, 0, AppleStyleSupport.workspaceBorder()));
       }
     }
+    ((SuggestionTableScrollPane) listScrollpane)
+        .refreshStyle(
+            Math.max(
+                Config.menuHeight - 4, listTable.getFontMetrics(listTable.getFont()).getHeight() + 8));
   }
 
   public void openAnalysisTable() {
@@ -7756,14 +7745,7 @@ public class LizzieFrame extends JFrame {
           useMorandi ? MorandiPalette.BG_PRIMARY : new Color(100, 100, 100));
     if (topPanel != null)
       topPanel.setBackground(useMorandi ? MorandiPalette.TOOLBAR_BG : new Color(232, 232, 232));
-    if (listScrollpane != null) {
-      listScrollpane.setBackground(
-          useMorandi ? MorandiPalette.BG_SECONDARY : new Color(235, 235, 235));
-      if (listScrollpane.getViewport() != null)
-        listScrollpane
-            .getViewport()
-            .setBackground(useMorandi ? MorandiPalette.CREAM_WHITE : new Color(243, 243, 243));
-    }
+    refreshSuggestionTableStyle();
     if (minScrollpaneBlack != null)
       minScrollpaneBlack.setBackground(
           useMorandi ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
@@ -13289,12 +13271,17 @@ public class LizzieFrame extends JFrame {
       listScrollpane.setVisible(true);
     }
     int overlayY = windowMenuHeight + (Lizzie.config.showDoubleMenu ? topPanelHeight : 0);
+    vx = Utils.zoomIn(vx);
+    vy = Utils.zoomIn(vy) + overlayY;
+    vw = Utils.zoomIn(vw);
+    vh = Utils.zoomIn(vh);
     if (listScrollpane.getX() != vx
-        || listScrollpane.getY() != vy + overlayY
+        || listScrollpane.getY() != vy
         || listScrollpane.getWidth() != vw
-        || listScrollpane.getHeight() != vh)
-      listScrollpane.setBounds(
-          Utils.zoomIn(vx), Utils.zoomIn(vy) + overlayY, Utils.zoomIn(vw), Utils.zoomIn(vh));
+        || listScrollpane.getHeight() != vh) {
+      listScrollpane.setBounds(vx, vy, vw, vh);
+      listScrollpane.revalidate();
+    }
   }
 
   public void setHideListScrollpane(boolean visible) {
