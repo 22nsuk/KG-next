@@ -214,7 +214,6 @@ public class LizzieFrame extends JFrame {
   private final MenuPresentationMode menuPresentationMode;
   private int windowMenuHeight = Config.menuHeight;
   // public static EditToolbar editToolbar;
-  public Optional<List<String>> variationOpt;
 
   public static volatile boolean urlSgf = false;
   public boolean syncBoard = false;
@@ -263,7 +262,6 @@ public class LizzieFrame extends JFrame {
   public int[] suggestionclick = outOfBoundCoordinate;
   public int[] clickbadmove = outOfBoundCoordinate;
   public int[] mouseOverCoordinate = outOfBoundCoordinate;
-  private transient SuggestionHoverIntent suggestionHoverIntent;
   private int curSuggestionMoveOrderByNumber = -1;
   public boolean showControls = false;
   private long showControlTime;
@@ -287,7 +285,13 @@ public class LizzieFrame extends JFrame {
   // private int autoInterval;
   // private long lastAutosaveTime = System.currentTimeMillis();
   private int autosaveTime = 0;
-  public boolean isReplayVariation = false;
+  public volatile boolean isReplayVariation = false;
+  private javax.swing.Timer replayTimer;
+  private boolean replayPonder;
+  private final java.util.concurrent.atomic.AtomicBoolean replayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
+  private final java.util.concurrent.atomic.AtomicBoolean autoReplayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
   public RightClickMenu RightClickMenu;
   public RightClickMenu2 RightClickMenu2;
   //  private int boardPos = 0;
@@ -620,8 +624,8 @@ public class LizzieFrame extends JFrame {
   private boolean redrawVariationTreeOnly;
   private javax.swing.Timer deferredMoveUiRefreshTimer;
   private static final int DEFERRED_MOVE_UI_REFRESH_MS = 180;
-  public boolean mouseOverChanged = false;
-  public boolean isAutoReplying = false;
+  public volatile boolean mouseOverChanged = false;
+  public volatile boolean isAutoReplying = false;
   public boolean isBatchAnalysisMode = false;
   // int testFontSize = 12;
   private Color blunderBackground =
@@ -9526,57 +9530,38 @@ public class LizzieFrame extends JFrame {
       v -> Board.asCoordinates(v).ifPresent(c -> Lizzie.board.place(c[0], c[1]));
 
   public boolean playCurrentVariation() {
-    if (Lizzie.config.showSuggestionVariations) {
-      if (boardRenderer.getDisplayedBranchLength() > 0) {
-        if (boardRenderer.variationOpt.isPresent()) {
-          for (int i = 0;
-              i
-                  < Math.min(
-                      boardRenderer.variationOpt.get().size(),
-                      boardRenderer.getDisplayedBranchLength());
-              i++) {
-            Optional<int[]> coords = Board.asCoordinates(boardRenderer.variationOpt.get().get(i));
-            if (coords.isPresent()) Lizzie.board.place(coords.get()[0], coords.get()[1]);
-          }
-        }
-      } else boardRenderer.variationOpt.ifPresent(vs -> vs.forEach(placeVariation));
-      redrawTreeLater = true;
-      return boardRenderer.variationOpt.isPresent();
-    } else {
-      variationOpt.ifPresent(vs -> vs.forEach(placeVariation));
-      redrawTreeLater = true;
-      return variationOpt.isPresent();
-    }
+    return playCurrentVariation(boardRenderer);
   }
 
-  //  public boolean playCurrentVariation2() {
-  //    if (Lizzie.engineManager.currentEngineNo >= 0) Lizzie.engineManager.isEmpty = true;
-  //    if (Lizzie.config.showSuggestionVariations) {
-  //      boardRenderer.variationOpt.ifPresent(vs -> vs.forEach(placeVariation));
-  //      if (!boardRenderer.variationOpt.isPresent())
-  //        if (Lizzie.engineManager.currentEngineNo >= 0) Lizzie.engineManager.isEmpty = false;
-  //      return boardRenderer.variationOpt.isPresent();
-  //    } else {
-  //      variationOpt.ifPresent(vs -> vs.forEach(placeVariation));
-  //      if (!variationOpt.isPresent())
-  //        if (Lizzie.engineManager.currentEngineNo >= 0) Lizzie.engineManager.isEmpty = false;
-  //      return variationOpt.isPresent();
-  //    }
-  //  }
+  public boolean playCurrentVariation(BoardRenderer owner) {
+    Optional<VariationPreviewState.Selection> selected = owner.applicationSelection();
+    if (selected.isEmpty()) return false;
+    VariationPreviewState.Selection visible = selected.get();
+    return playVariation(visible.input().variation, visible.displayedLength());
+  }
+
+  boolean playMiddleVariation(BoardRenderer owner) {
+    Optional<VariationPreviewState.Selection> selected = owner.takeMiddlePreview();
+    if (!selected.isPresent()) return false;
+    VariationPreviewState.Selection snapshot = selected.get();
+    return playVariation(snapshot.input().variation, snapshot.displayedLength());
+  }
+
+  private boolean playVariation(List<String> variation, int displayedLength) {
+    int length =
+        Lizzie.config.showSuggestionVariations && displayedLength > 0
+            ? Math.min(variation.size(), displayedLength)
+            : variation.size();
+    for (int i = 0; i < length; i++) {
+      placeVariation.accept(variation.get(i));
+    }
+    redrawTreeLater = true;
+    return true;
+  }
+
 
   public boolean isMouseOverSuggestions() {
-    List<MoveData> bestMoves = Lizzie.board.getHistory().getData().bestMoves;
-    for (int i = 0; i < bestMoves.size(); i++) {
-      Optional<int[]> c = Board.asCoordinates(bestMoves.get(i).coordinate);
-      if (c.isPresent()) {
-        if (Lizzie.frame.isMouseOver2(c.get()[0], c.get()[1])) {
-          List<String> variation = bestMoves.get(i).variation;
-          variationOpt = Optional.of(variation);
-          return true;
-        }
-      }
-    }
-    return false;
+    return boardRenderer.hasSelectedVariation();
   }
 
   public void playBestMove() {
@@ -9841,10 +9826,11 @@ public class LizzieFrame extends JFrame {
         }
 
         if (isCurMouseOver) {
-          clearMoved();
+          isReplayVariation = false;
           needRepaint = true;
           isMouseOver = true;
-          armSuggestionHoverPreview(curCoords[0], curCoords[1]);
+          boardRenderer.selectNormalVariation();
+          if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectNormalVariation();
           if (Lizzie.config.autoReplayBranch) {
             mouseOverChanged = true;
             if (!Lizzie.config.autoReplayDisplayEntireVariationsFirst)
@@ -9969,14 +9955,7 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private SuggestionHoverIntent suggestionHoverIntent() {
-    if (suggestionHoverIntent == null) {
-      suggestionHoverIntent = new SuggestionHoverIntent(this::repaintSuggestionHoverPreview);
-    }
-    return suggestionHoverIntent;
-  }
-
-  private void repaintSuggestionHoverPreview() {
+  void repaintSuggestionHoverPreview() {
     if (mainPanel == null) {
       return;
     }
@@ -9984,14 +9963,51 @@ public class LizzieFrame extends JFrame {
     mainPanel.repaint();
   }
 
-  private void armSuggestionHoverPreview(int x, int y) {
-    suggestionHoverIntent().arm(x, y);
+  public void cancelPendingSuggestionHoverPreview() {
+    if (boardRenderer != null) boardRenderer.cancelPreview();
+    if (boardRenderer2 != null) boardRenderer2.cancelPreview();
   }
 
-  public void cancelPendingSuggestionHoverPreview() {
-    if (suggestionHoverIntent != null) {
-      suggestionHoverIntent.cancel();
+  public void shutdownVariationPreviews() {
+    VariationPreviewScheduler.shutdown();
+    clearVariationPreviews();
+  }
+
+  private void clearVariationPreviews() {
+    if (boardRenderer != null) boardRenderer.clearBranch();
+    if (boardRenderer2 != null) boardRenderer2.clearBranch();
+    if (independentMainBoard != null) independentMainBoard.boardRenderer.clearBranch();
+    if (floatBoard != null) floatBoard.boardRenderer.clearBranch();
+  }
+
+  @Override
+  public void setVisible(boolean visible) {
+    if (!visible && boardRenderer != null) {
+      cancelPendingSuggestionHoverPreview();
+      isMouseOver = false;
+      mouseOverCoordinate = outOfBoundCoordinate;
+      suggestionclick = outOfBoundCoordinate;
+      boardRenderer.clearBranch();
+      if (boardRenderer2 != null) boardRenderer2.clearBranch();
     }
+    super.setVisible(visible);
+  }
+
+  @Override
+  public void dispose() {
+    cancelPendingSuggestionHoverPreview();
+    isMouseOver = false;
+    mouseOverCoordinate = outOfBoundCoordinate;
+    suggestionclick = outOfBoundCoordinate;
+    if (boardRenderer != null) boardRenderer.clearBranch();
+    if (boardRenderer2 != null) boardRenderer2.clearBranch();
+    super.dispose();
+  }
+
+  void cancelSuggestionPreviewKeepingSelection() {
+    boardRenderer.beginMiddlePreview();
+    if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.cancelPreview();
+    repaintSuggestionHoverPreview();
   }
 
   /** Prevents a settled PV overlay from covering the stone committed by the same mouse press. */
@@ -10001,14 +10017,11 @@ public class LizzieFrame extends JFrame {
     suggestionclick = outOfBoundCoordinate;
     boolean hadVisiblePreview = isMouseOver;
     isMouseOver = false;
-    if (hadVisiblePreview) {
+    if (hadVisiblePreview || boardRenderer.hasSelectedVariation()) {
       clearMoved();
     }
   }
 
-  boolean isSuggestionHoverPreviewReady(int x, int y) {
-    return suggestionHoverIntent == null || suggestionHoverIntent.permits(x, y);
-  }
 
   //  public void clearMoved2() {
   //    isReplayVariation = false;
@@ -10760,7 +10773,7 @@ public class LizzieFrame extends JFrame {
   //  }
 
   public void startRawBoard() {
-    boolean onBranch = boardRenderer.isShowingBranch();
+    boolean onBranch = boardRenderer.hasSelectedVariation();
     int n = (onBranch ? 1 : BoardRenderer.SHOW_RAW_BOARD);
     boardRenderer.setDisplayedBranchLength(n);
   }
@@ -11223,91 +11236,136 @@ public class LizzieFrame extends JFrame {
   }
 
   public void autoReplayBranch() {
-    if (isAutoReplying) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (autoReplayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              autoReplayStartQueued.set(false);
+              autoReplayBranch();
+            });
+      }
+      return;
+    }
+    if (isAutoReplying || !Lizzie.config.autoReplayBranch || !isDisplayable()) return;
     isAutoReplying = true;
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            while (Lizzie.config.autoReplayBranch) {
-              if (mouseOverChanged) {
-                mouseOverChanged = false;
-                if (Lizzie.config.autoReplayDisplayEntireVariationsFirst) {
-                  for (int s = 0; s < 100; s++) {
-                    if (mouseOverChanged) break;
-                    try {
-                      Thread.sleep((int) (Lizzie.config.displayEntireVariationsFirstSeconds * 10));
-                    } catch (InterruptedException e) {
-                      // TODO Auto-generated catch block
-                      e.printStackTrace();
-                    }
+    javax.swing.Timer replay =
+        new javax.swing.Timer(
+            20,
+            new ActionListener() {
+              private long nextStepAt;
+              private long mainTarget = -1;
+              private long floatingTarget = -1;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                if (!Lizzie.config.autoReplayBranch || !isDisplayable()) {
+                  ((javax.swing.Timer) event.getSource()).stop();
+                  isAutoReplying = false;
+                  return;
+                }
+                long now = System.nanoTime();
+                long currentMainTarget = isVisible() ? boardRenderer.replayTarget() : -1;
+                long currentFloatingTarget =
+                    floatBoard != null && floatBoard.isVisible()
+                        ? floatBoard.boardRenderer.replayTarget() : -1;
+                if (mouseOverChanged
+                    || mainTarget != currentMainTarget
+                    || floatingTarget != currentFloatingTarget) {
+                  mouseOverChanged = false;
+                  mainTarget = currentMainTarget;
+                  floatingTarget = currentFloatingTarget;
+                  double delay =
+                      Lizzie.config.autoReplayDisplayEntireVariationsFirst
+                          ? Lizzie.config.displayEntireVariationsFirstSeconds
+                          : Lizzie.config.replayBranchIntervalSeconds * 0.3;
+                  nextStepAt = now + (long) (delay * 1_000_000_000L);
+                }
+                if (now < nextStepAt) return;
+                if (mainTarget != -1) {
+                  int length = boardRenderer.getDisplayedBranchLength();
+                  if (length != BoardRenderer.SHOW_RAW_BOARD) {
+                    boardRenderer.setReplayLength(
+                        mainTarget,
+                        length == BoardRenderer.SHOW_NORMAL_BOARD || length == 1
+                            ? 2 : Math.min(Math.max(0, length + 1), boardRenderer.getReplayBranch() + 1));
                   }
-                } else {
-                  for (int s = 0; s < 20; s++) {
-                    if (mouseOverChanged) break;
-                    try {
-                      Thread.sleep((int) (Lizzie.config.replayBranchIntervalSeconds * 15));
-                    } catch (InterruptedException e) {
-                      // TODO Auto-generated catch block
-                      e.printStackTrace();
-                    }
+                }
+                if (floatingTarget != -1) {
+                  int length = floatBoard.boardRenderer.getDisplayedBranchLength();
+                  if (length != FloatBoardRenderer.SHOW_RAW_BOARD) {
+                    floatBoard.boardRenderer.setReplayLength(
+                        floatingTarget,
+                        length == FloatBoardRenderer.SHOW_NORMAL_BOARD || length == 1
+                            ? 2
+                            : Math.min(Math.max(0, length + 1),
+                                floatBoard.boardRenderer.getReplayBranch() + 1));
                   }
                 }
+                refresh();
+                nextStepAt = now + (long) (Lizzie.config.replayBranchIntervalSeconds * 1_000_000_000L);
               }
-              if (!mouseOverChanged) {
-                if (floatBoard != null) floatBoard.boardRenderer.incrementDisplayedBranchLength(1);
-                boardRenderer.incrementDisplayedBranchLength(1);
-              }
-              refresh();
-              for (int i = 0; i < 20; i++) {
-                try {
-                  Thread.sleep((int) (Lizzie.config.replayBranchIntervalSeconds * 50));
-                } catch (InterruptedException e) {
-                  e.printStackTrace();
-                }
-                if (!Lizzie.config.autoReplayBranch) break;
-                if (mouseOverChanged) {
-                  break;
-                }
-              }
-            }
-            isAutoReplying = false;
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replay.setInitialDelay(0);
+    replay.start();
   }
 
   public void replayBranch() {
-    if (isReplayVariation || Lizzie.config.autoReplayBranch) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (replayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              replayStartQueued.set(false);
+              replayBranch();
+            });
+      }
+      return;
+    }
+    if (isReplayVariation || Lizzie.config.autoReplayBranch || !isVisible()) return;
+    if (replayTimer != null) finishReplayBranch();
+    long target = boardRenderer.replayTarget();
     int replaySteps = boardRenderer.getReplayBranch();
-    if (replaySteps <= 0) return; // Bad steps or no branch
+    if (target == -1 || replaySteps <= 0) return;
     int oriBranchLength = boardRenderer.getDisplayedBranchLength();
     isReplayVariation = true;
-    final boolean oriPonder = Lizzie.leelaz.isPondering();
-    if (!Lizzie.config.noRefreshOnMouseMove && Lizzie.leelaz.isPondering())
-      Lizzie.leelaz.togglePonder();
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            int secs = (int) (Lizzie.config.replayBranchIntervalSeconds * 1000);
-            for (int i = 1; i < replaySteps + 1; i++) {
-              if (!isReplayVariation) break;
-              setDisplayedBranchLength(i + 1);
-              repaint();
-              try {
-                Thread.sleep(secs);
-              } catch (InterruptedException e) {
-                e.printStackTrace();
+    replayPonder = Lizzie.leelaz.isPondering();
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder) Lizzie.leelaz.togglePonder();
+    replayTimer =
+        new javax.swing.Timer(
+            Math.max(1, (int) (Lizzie.config.replayBranchIntervalSeconds * 1000)),
+            new ActionListener() {
+              private int nextLength = 2;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                javax.swing.Timer replay = (javax.swing.Timer) event.getSource();
+                if (replay != replayTimer) {
+                  replay.stop();
+                  return;
+                }
+                if (!isReplayVariation || !isVisible() || Lizzie.config.autoReplayBranch) {
+                  finishReplayBranch();
+                  return;
+                }
+                boolean complete = nextLength > replaySteps + 1;
+                if (!boardRenderer.setReplayLength(
+                    target, complete ? oriBranchLength : nextLength++)) {
+                  finishReplayBranch();
+                  return;
+                }
+                repaint();
+                if (complete) finishReplayBranch();
               }
-            }
-            boardRenderer.setDisplayedBranchLength(oriBranchLength);
-            isReplayVariation = false;
-            if (!Lizzie.config.noRefreshOnMouseMove && oriPonder && !Lizzie.leelaz.isPondering())
-              Lizzie.leelaz.togglePonder();
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replayTimer.setInitialDelay(0);
+    replayTimer.start();
+  }
+
+  private void finishReplayBranch() {
+    replayTimer.stop();
+    replayTimer = null;
+    isReplayVariation = false;
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder && !Lizzie.leelaz.isPondering())
+      Lizzie.leelaz.togglePonder();
   }
 
   public void replayBranchIndependentMainBoard() {
@@ -11617,10 +11675,14 @@ public class LizzieFrame extends JFrame {
   }
 
   public void addSuggestionAsBranch() {
+    addSuggestionAsBranch(boardRenderer);
+  }
+
+  public void addSuggestionAsBranch(BoardRenderer owner) {
     if (!Lizzie.board.getHistory().getCurrentHistoryNode().isMainTrunk()
         && !Lizzie.board.getHistory().getCurrentHistoryNode().next().isPresent())
-      Lizzie.frame.playCurrentVariation();
-    else boardRenderer.addSuggestionAsBranch();
+      playCurrentVariation(owner);
+    else owner.addSuggestionAsBranch();
     if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
   }
 
@@ -11667,6 +11729,8 @@ public class LizzieFrame extends JFrame {
   }
 
   public void doBranch(int moveTo) {
+    if (!boardRenderer.hasSelectedVariation()
+        && !(Lizzie.config.isDoubleEngineMode() && boardRenderer2.hasSelectedVariation())) return;
     if (moveTo > 0) {
       if (boardRenderer.isShowingNormalBoard()) {
         setDisplayedBranchLength(2);
@@ -11693,7 +11757,7 @@ public class LizzieFrame extends JFrame {
       }
       if (Lizzie.config.isDoubleEngineMode()) {
         if (boardRenderer2.isShowingNormalBoard()) {
-          setDisplayedBranchLength2(boardRenderer.getReplayBranch());
+          setDisplayedBranchLength2(boardRenderer2.getReplayBranch());
         } else {
           if (boardRenderer2.getDisplayedBranchLength() > 1) {
             boardRenderer2.incrementDisplayedBranchLength(-1);
@@ -14217,7 +14281,6 @@ public class LizzieFrame extends JFrame {
   }
 
   public void setMouseOverCoords(int index) {
-    cancelPendingSuggestionHoverPreview();
     if (Lizzie.config.isFloatBoardMode()) {
       this.independentMainBoard.setMouseOverCoords(index);
       return;
@@ -14236,10 +14299,11 @@ public class LizzieFrame extends JFrame {
     mouseOverCoordinate =
         Board.convertNameToCoordinates(
             Lizzie.board.getHistory().getData().bestMoves.get(index).coordinate);
+    boardRenderer.selectHoveredVariation();
+    if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectHoveredVariation();
   }
 
   private void handleTableClick(int row, int col) {
-    cancelPendingSuggestionHoverPreview();
     LizzieFrame.boardRenderer.startNormalBoard();
     if (listTable.getValueAt(row, 1).toString().startsWith("pass")) return;
     int[] coords = Board.convertNameToCoordinates(listTable.getValueAt(row, 1).toString());
@@ -14257,10 +14321,14 @@ public class LizzieFrame extends JFrame {
       Lizzie.frame.mouseOverCoordinate = coords;
       isMouseOver = true;
       Lizzie.frame.suggestionclick = coords;
+      boardRenderer.selectHoveredVariation();
+      if (Lizzie.config.isDoubleEngineMode()) boardRenderer2.selectHoveredVariation();
       Lizzie.frame.refresh();
     }
     if (Lizzie.frame.independentMainBoard != null) {
       Lizzie.frame.independentMainBoard.mouseOverCoordinate = Lizzie.frame.mouseOverCoordinate;
+      independentMainBoard.isMouseOver = isMouseOver;
+      independentMainBoard.boardRenderer.selectHoveredVariation();
     }
   }
 
@@ -20243,25 +20311,23 @@ public class LizzieFrame extends JFrame {
         return;
       }
     }
-    if (!EngineGamePresentation.current().startingOrPlaying()) {
-      Lizzie.board.navigateHistorySteps(movesToAdvance);
-    }
+    navigateHistoryNoRefresh(movesToAdvance);
   }
 
   public static void undo(int movesToAdvance) {
     if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) return;
-    if (boardRenderer.ownsBranchNavigation()) {
+    if (boardRenderer.hasSelectedVariation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.ownsBranchNavigation()) {
+    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.hasSelectedVariation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
     if (Lizzie.frame.independentMainBoard != null) {
-      if (Lizzie.frame.independentMainBoard.boardRenderer.ownsBranchNavigation()) {
+      if (Lizzie.frame.independentMainBoard.boardRenderer.hasSelectedVariation()) {
         Lizzie.frame.independentMainBoard.doBranch(-movesToAdvance);
         Lizzie.frame.refresh();
         return;
@@ -20276,25 +20342,31 @@ public class LizzieFrame extends JFrame {
 
   public static void undoNoRefresh(int movesToAdvance) {
     if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) return;
-    if (boardRenderer.ownsBranchNavigation()) {
+    if (boardRenderer.hasSelectedVariation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.ownsBranchNavigation()) {
+    if (Lizzie.config.isDoubleEngineMode() && boardRenderer2.hasSelectedVariation()) {
       Lizzie.frame.doBranch(-movesToAdvance);
       Lizzie.frame.refresh();
       return;
     }
     if (Lizzie.frame.independentMainBoard != null) {
-      if (Lizzie.frame.independentMainBoard.boardRenderer.ownsBranchNavigation()) {
+      if (Lizzie.frame.independentMainBoard.boardRenderer.hasSelectedVariation()) {
         Lizzie.frame.independentMainBoard.doBranch(-movesToAdvance);
         Lizzie.frame.refresh();
         return;
       }
     }
+    navigateHistoryNoRefresh(-movesToAdvance);
+  }
+
+  /** History fallback after the input host has ruled out its own selected variation. */
+  static void navigateHistoryNoRefresh(int steps) {
+    if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) return;
     if (!EngineGamePresentation.current().startingOrPlaying()) {
-      Lizzie.board.navigateHistorySteps(-movesToAdvance);
+      Lizzie.board.navigateHistorySteps(steps);
     }
   }
 
@@ -20381,11 +20453,14 @@ public class LizzieFrame extends JFrame {
   public void clearMouseOverCoordinate(boolean isIndependBoard) {
     // TODO Auto-generated method stub
     if (isIndependBoard) {
-      if (independentMainBoard != null)
+      if (independentMainBoard != null) {
         independentMainBoard.mouseOverCoordinate = outOfBoundCoordinate;
+        independentMainBoard.clearMoved();
+      }
     } else {
       cancelPendingSuggestionHoverPreview();
       mouseOverCoordinate = outOfBoundCoordinate;
+      clearMoved();
     }
   }
 
@@ -20624,6 +20699,7 @@ public class LizzieFrame extends JFrame {
     ponderStatusBeforeScore = Lizzie.leelaz.isPondering();
     if (ponderStatusBeforeScore) Lizzie.leelaz.togglePonder();
     isInScoreMode = true;
+    clearVariationPreviews();
     Lizzie.board.getGroupInfo();
     clearKataEstimate();
     boardRenderer.removeblock();
