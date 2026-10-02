@@ -11,8 +11,8 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlans;
-import featurecat.lizzie.gui.HumanSlGameController;
 import featurecat.lizzie.gui.GtpConsolePane;
+import featurecat.lizzie.gui.HumanSlGameController;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.WaitForAnalysis;
 import featurecat.lizzie.rules.Board;
@@ -38,10 +38,7 @@ import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -495,18 +492,25 @@ class AnalysisEngineRequestTest {
       setField(AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
       setField(AnalysisEngine.class, engine, "waitFrame", waitFrame);
       setIntField(AnalysisEngine.class, engine, "resultCount", 1);
+      setIntField(AnalysisEngine.class, engine, "responseCount", 1);
       setField(
           AnalysisEngine.class,
           engine,
           "analyzeMap",
           new java.util.HashMap<Integer, BoardHistoryNode>(
               java.util.Map.of(1, Lizzie.board.getHistory().getCurrentHistoryNode())));
-      engine.setCompletionCallback(completions::incrementAndGet);
+      List<ForegroundRestoreResult> restores = new CopyOnWriteArrayList<>();
+      engine.setCompletionCallback(
+          restore -> {
+            restores.add(restore);
+            completions.incrementAndGet();
+          });
 
       invokeAnalysisEngineSetResult(engine);
 
       assertEquals(0, waitFrame.progressCalls);
       assertEquals(0, completions.get());
+      assertTrue(engine.hasRequestLifecycleInProgress());
 
       foreground.completeRestore();
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -515,6 +519,8 @@ class AnalysisEngineRequestTest {
       assertEquals(1, waitFrame.currentMove);
       assertEquals(1, waitFrame.totalMoves);
       assertEquals(1, completions.get());
+      assertEquals(List.of(ForegroundRestoreResult.SUCCEEDED), restores);
+      assertFalse(engine.hasRequestLifecycleInProgress());
     }
   }
 
@@ -551,7 +557,9 @@ class AnalysisEngineRequestTest {
           "analyzeMap",
           new java.util.HashMap<Integer, BoardHistoryNode>(
               java.util.Map.of(1, Lizzie.board.getHistory().getCurrentHistoryNode())));
-      engine.setCompletionCallback(completions::incrementAndGet);
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      List<ForegroundRestoreResult> failures = new CopyOnWriteArrayList<>();
+      engine.setFailureCallback(failures::add);
 
       invokeAnalysisEngineSetResult(engine);
       foreground.failRestore();
@@ -560,6 +568,14 @@ class AnalysisEngineRequestTest {
       assertEquals(0, waitFrame.progressCalls);
       assertEquals(0, completions.get());
       assertFalse(Lizzie.frame.isBatchAnalysisMode);
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
+      AtomicInteger successfulQuits = new AtomicInteger();
+      AtomicInteger failedQuits = new AtomicInteger();
+      engine.normalQuit(successfulQuits::incrementAndGet, failedQuits::incrementAndGet);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(0, successfulQuits.get());
+      assertEquals(1, failedQuits.get());
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
     }
   }
 
@@ -569,20 +585,22 @@ class AnalysisEngineRequestTest {
       boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
-      AtomicInteger failures = new AtomicInteger();
+      List<ForegroundRestoreResult> failures = new CopyOnWriteArrayList<>();
       setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
       setField(AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(failures::add);
 
       invokeAnalysisEngineFinishFailedRequestDispatch(engine);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(0, failures.get());
+      assertTrue(failures.isEmpty());
+      assertTrue(engine.hasRequestLifecycleInProgress());
 
       foreground.completeRestore();
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(1, failures.get());
+      assertEquals(List.of(ForegroundRestoreResult.SUCCEEDED), failures);
+      assertFalse(engine.hasRequestLifecycleInProgress());
     }
   }
 
@@ -592,20 +610,128 @@ class AnalysisEngineRequestTest {
       boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
-      AtomicInteger failures = new AtomicInteger();
+      List<ForegroundRestoreResult> failures = new CopyOnWriteArrayList<>();
       setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
       setField(AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(failures::add);
 
       invokeAnalysisEngineFinishFailedRequestDispatch(engine);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(0, failures.get());
+      assertTrue(failures.isEmpty());
 
       foreground.failRestore();
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(1, failures.get());
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
+      AtomicInteger successfulQuits = new AtomicInteger();
+      AtomicInteger failedQuits = new AtomicInteger();
+      engine.normalQuit(successfulQuits::incrementAndGet, failedQuits::incrementAndGet);
+      invokeAnalysisEngineFinishFailedRequestDispatch(engine);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(0, successfulQuits.get());
+      assertEquals(1, failedQuits.get());
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
+    }
+  }
+
+  @Test
+  void abortedSharedRequestWaitsForRestoreAndDeliversOnlyOnce() throws Exception {
+    for (ForegroundRestoreResult restore :
+        List.of(ForegroundRestoreResult.SUCCEEDED, ForegroundRestoreResult.FAILED)) {
+      try (TestEnvironment env = TestEnvironment.open()) {
+        boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+        TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+        DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
+        List<ForegroundRestoreResult> failures = new CopyOnWriteArrayList<>();
+        AtomicInteger completions = new AtomicInteger();
+        setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
+        setField(
+            AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
+        engine.setCompletionCallback(result -> completions.incrementAndGet());
+        engine.setFailureCallback(failures::add);
+        Method abort = AnalysisEngine.class.getDeclaredMethod("finishAbortedAnalysis");
+        abort.setAccessible(true);
+
+        abort.invoke(engine);
+        abort.invoke(engine);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+        assertTrue(failures.isEmpty());
+        assertTrue(engine.hasRequestLifecycleInProgress());
+        if (restore == ForegroundRestoreResult.SUCCEEDED) {
+          foreground.completeRestore();
+        } else {
+          foreground.failRestore();
+        }
+        abort.invoke(engine);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+        assertEquals(List.of(restore), failures);
+        assertEquals(0, completions.get());
+        assertFalse(engine.hasRequestLifecycleInProgress());
+      }
+    }
+  }
+
+  @Test
+  void newRequestResetsPreviouslyFailedRestoreOutcome() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
+      setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
+      setField(AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
+      List<ForegroundRestoreResult> failures = new CopyOnWriteArrayList<>();
+      engine.setFailureCallback(failures::add);
+      invokeAnalysisEngineFinishFailedRequestDispatch(engine);
+      foreground.failRestore();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
+
+      List<ForegroundRestoreResult> completions = new CopyOnWriteArrayList<>();
+      engine.setCompletionCallback(completions::add);
+      engine.startRequest(-1, -1, false);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(List.of(ForegroundRestoreResult.NOT_REQUIRED), completions);
+      assertEquals(List.of(ForegroundRestoreResult.FAILED), failures);
+    }
+  }
+
+  @Test
+  void normalQuitReportsActualRestoreResultAndRetainsItForLaterCleanup() throws Exception {
+    for (ForegroundRestoreResult expected : ForegroundRestoreResult.values()) {
+      try (TestEnvironment env = TestEnvironment.open()) {
+        boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+        TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+        DeferredRestoreLeelaz foreground = null;
+        if (expected != ForegroundRestoreResult.NOT_REQUIRED) {
+          foreground = new DeferredRestoreLeelaz();
+          setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
+          setField(
+              AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
+        }
+        List<ForegroundRestoreResult> results = new ArrayList<>();
+
+        engine.normalQuitWithRestoreResult(results::add);
+
+        if (foreground != null) {
+          assertTrue(results.isEmpty());
+          assertTrue(engine.hasRequestLifecycleInProgress());
+          if (expected == ForegroundRestoreResult.SUCCEEDED) {
+            foreground.completeRestore();
+          } else {
+            foreground.failRestore();
+          }
+        }
+        assertEquals(List.of(expected), results);
+        assertFalse(engine.hasRequestLifecycleInProgress());
+
+        engine.normalQuitWithRestoreResult(results::add);
+
+        assertEquals(List.of(expected, expected), results);
+      }
     }
   }
 
@@ -729,7 +855,7 @@ class AnalysisEngineRequestTest {
       AtomicInteger successfulContinuations = new AtomicInteger();
       AnalysisEngine engine = new AnalysisEngine(false);
       setField(AnalysisEngine.class, engine, "silentProgress", true);
-      engine.setCompletionCallback(successfulContinuations::incrementAndGet);
+      engine.setCompletionCallback(restore -> successfulContinuations.incrementAndGet());
 
       engine.startRequest(1, -1, false);
       assertTrue(engine.isAnalysisInProgress());
@@ -760,7 +886,7 @@ class AnalysisEngineRequestTest {
       AtomicInteger successfulContinuations = new AtomicInteger();
       AnalysisEngine engine = new AnalysisEngine(false);
       setField(AnalysisEngine.class, engine, "silentProgress", true);
-      engine.setCompletionCallback(successfulContinuations::incrementAndGet);
+      engine.setCompletionCallback(restore -> successfulContinuations.incrementAndGet());
 
       engine.startRequest(1, -1, false);
       int stopCommandId = getExclusiveStopCommandId(foreground);
@@ -900,7 +1026,7 @@ class AnalysisEngineRequestTest {
       waitFrame.setVisible(true);
       engine.waitFrame = waitFrame;
       AtomicInteger completions = new AtomicInteger();
-      engine.setCompletionCallback(completions::incrementAndGet);
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
 
       engine.startRequest(-1, -1, true);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -1042,7 +1168,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
       history.getGameInfo().setKomi(history.getGameInfo().getKomi() + 0.5);
@@ -1065,7 +1191,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
       assertEquals("tromp-taylor", engine.singleRequest().getString("rules"));
@@ -1087,7 +1213,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
       rootData.blackToPlay = !rootData.blackToPlay;
@@ -1108,7 +1234,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
       engine.requestShutdown();
@@ -1163,7 +1289,7 @@ class AnalysisEngineRequestTest {
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger completions = new AtomicInteger();
       engine.synchronousResponse = analysisResult(1, 500, 70.0);
-      engine.setCompletionCallback(completions::incrementAndGet);
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
 
       int requested = engine.startWholeGameRequest(List.of(history.getStart()), 500, false);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -1221,7 +1347,7 @@ class AnalysisEngineRequestTest {
       AtomicInteger completions = new AtomicInteger();
       engine.synchronousResponse = emptyAnalysisResult(1);
       engine.setProgressListener((completed, total) -> progress.set(completed));
-      engine.setCompletionCallback(completions::incrementAndGet);
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
 
       int requested = engine.startWholeGameRequest(List.of(history.getStart()), 500, false);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -1247,7 +1373,7 @@ class AnalysisEngineRequestTest {
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
       engine.synchronousEngineLine = "{not-json";
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       int requested = engine.startWholeGameRequest(List.of(root, move), 500, false);
       javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -1387,7 +1513,7 @@ class AnalysisEngineRequestTest {
       setField(AnalysisEngine.class, engine, "useRemoteCompute", true);
       engine.setKeepAliveAfterCurrentRequest(true);
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
       int analyzeCommandId =
@@ -1481,7 +1607,7 @@ class AnalysisEngineRequestTest {
       setField(AnalysisEngine.class, engine, "isPreLoad", true);
       setField(AnalysisEngine.class, engine, "persistentPreload", true);
       AtomicInteger completed = new AtomicInteger();
-      engine.setCompletionCallback(completed::incrementAndGet);
+      engine.setCompletionCallback(restore -> completed.incrementAndGet());
 
       assertEquals(1, engine.startRequestMissingMainline(false));
       engine.parseResult(analysisResult(1, 200, 62.0));
@@ -1505,7 +1631,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(firstHistory);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       AtomicInteger failures = new AtomicInteger();
-      engine.setFailureCallback(failures::incrementAndGet);
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
 
       assertEquals(1, engine.startRequestMissingMainline(false));
 
@@ -1687,27 +1813,6 @@ class AnalysisEngineRequestTest {
   }
 
   @Test
-  void loadedKifuQuickAnalysisStopsPreviousQueuedQuickAnalysis() throws Exception {
-    try (TestEnvironment env = TestEnvironment.open()) {
-      Lizzie.config.autoQuickAnalyzeOnLoad = true;
-      BoardHistoryNode node = singleUnanalyzedMoveNode();
-      TrackingAnalysisEngine previousEngine = TrackingAnalysisEngine.create();
-      previousEngine.trackPending(1, node);
-      Lizzie.frame.analysisEngine = previousEngine;
-
-      invokeStopBusyQuickAnalysisEngineBeforeLoadedKifuAnalysis(Lizzie.frame);
-
-      assertEquals(
-          1,
-          previousEngine.normalQuitCount,
-          "opening a new kifu must not leave old whole-game analysis queued first.");
-      assertNull(
-          Lizzie.frame.analysisEngine,
-          "after stopping the busy quick-analysis engine, the next request should use a fresh engine.");
-    }
-  }
-
-  @Test
   void startRequestMissingMainlineReportsDispatchFailure() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
@@ -1716,7 +1821,7 @@ class AnalysisEngineRequestTest {
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       engine.failSends = true;
-      engine.setCompletionCallback(() -> {});
+      engine.setCompletionCallback(restore -> {});
 
       int requested = engine.startRequestMissingMainline(false);
 
@@ -2094,7 +2199,7 @@ class AnalysisEngineRequestTest {
       setField(AnalysisEngine.class, engine, "useRemoteCompute", true);
       Lizzie.frame.isBatchAnalysisMode = true;
       AtomicInteger successfulContinuations = new AtomicInteger();
-      engine.setCompletionCallback(successfulContinuations::incrementAndGet);
+      engine.setCompletionCallback(restore -> successfulContinuations.incrementAndGet());
 
       engine.startRequest(-1, -1, false);
       int analyzeCommandId =
@@ -2985,14 +3090,6 @@ class AnalysisEngineRequestTest {
     return stopCommandIdField.getInt(session);
   }
 
-  private static void invokeStopBusyQuickAnalysisEngineBeforeLoadedKifuAnalysis(LizzieFrame frame)
-      throws Exception {
-    Method method =
-        LizzieFrame.class.getDeclaredMethod("stopBusyQuickAnalysisEngineBeforeLoadedKifuAnalysis");
-    method.setAccessible(true);
-    method.invoke(frame);
-  }
-
   private static String remoteGtpInfoLine(int visits, double winrate, double scoreLead) {
     return remoteGtpInfoLine(visits, visits, winrate, scoreLead);
   }
@@ -3510,6 +3607,11 @@ class AnalysisEngineRequestTest {
       setField(AnalysisEngine.class, engine, "silentProgress", false);
       setField(AnalysisEngine.class, engine, "shouldRePonder", false);
       setField(AnalysisEngine.class, engine, "isLoaded", true);
+      setField(
+          AnalysisEngine.class,
+          engine,
+          "foregroundRestoreResult",
+          ForegroundRestoreResult.NOT_REQUIRED);
       setField(AnalysisEngine.class, engine, "resourceBundle", Lizzie.resourceBundle);
       return engine;
     }

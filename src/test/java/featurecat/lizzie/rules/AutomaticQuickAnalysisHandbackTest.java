@@ -66,7 +66,7 @@ class AutomaticQuickAnalysisHandbackTest {
       EngineManager.isEmpty = false;
       AnalysisEngine analysis = AnalysisEngine.createAutomaticQuickAnalysis();
       AtomicInteger completed = new AtomicInteger();
-      analysis.setCompletionCallback(completed::incrementAndGet);
+      analysis.setCompletionCallback(restore -> completed.incrementAndGet());
       try {
         assertEquals(2, analysis.startRequestMissingMainline(false));
         Peer peer = new Peer(foreground, output);
