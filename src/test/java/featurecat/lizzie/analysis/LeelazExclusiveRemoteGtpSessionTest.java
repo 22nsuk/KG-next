@@ -1806,10 +1806,6 @@ class LeelazExclusiveRemoteGtpSessionTest {
   void analysisControlPauseKeepsSharedLeaseRestoreFromResumingPonder() throws Exception {
     RestoreHarness harness = RestoreHarness.open(true, false);
     try {
-      Field active = LizzieFrame.class.getDeclaredField("loadedGameQuickAnalysisActive");
-      active.setAccessible(true);
-      active.setBoolean(Lizzie.frame, true);
-
       Method pause = LizzieFrame.class.getDeclaredMethod("pauseFromAnalysisControl");
       pause.setAccessible(true);
       pause.invoke(Lizzie.frame);
