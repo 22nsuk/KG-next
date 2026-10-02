@@ -867,11 +867,13 @@ class TrackingProductionCutoverTest {
     Font previousUiFont = LizzieFrame.uiFont;
     Font previousWinrateFont = LizzieFrame.winrateFont;
     Font previousPlayoutsFont = LizzieFrame.playoutsFont;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
     LizzieFrame.uiFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
     LizzieFrame.winrateFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
     LizzieFrame.playoutsFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
     try {
       BoardRenderer renderer = new BoardRenderer(false);
+      LizzieFrame.boardRenderer = renderer;
       renderer.setLocation(0, 0);
       renderer.setBoardLength(180, 180);
       BufferedImage image = new BufferedImage(180, 180, BufferedImage.TYPE_INT_ARGB);
@@ -883,6 +885,7 @@ class TrackingProductionCutoverTest {
       }
       return image;
     } finally {
+      LizzieFrame.boardRenderer = previousRenderer;
       LizzieFrame.uiFont = previousUiFont;
       LizzieFrame.winrateFont = previousWinrateFont;
       LizzieFrame.playoutsFont = previousPlayoutsFont;
