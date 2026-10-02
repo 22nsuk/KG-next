@@ -691,7 +691,7 @@ public class FloatBoardRenderer {
   }
 
   private VariationPreviewState.Selection prepareSelection(boolean refresh) {
-    if (Lizzie.board == null || Lizzie.board.isSetupMode()) {
+    if (Lizzie.board == null || Lizzie.board.isSetupMode() || Lizzie.frame.isInScoreMode) {
       clearBranch();
       return null;
     }
@@ -2527,7 +2527,8 @@ public class FloatBoardRenderer {
   }
 
   public int getBranchLength() {
-    return getReplayBranch();
+    VariationPreviewState.Selection selected = validSelection();
+    return selected == null ? 0 : min(selected.input().maxLength, selected.input().variation.size());
   }
 
   public boolean incrementDisplayedBranchLength(int n) {

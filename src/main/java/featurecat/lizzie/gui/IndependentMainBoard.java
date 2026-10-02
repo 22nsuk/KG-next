@@ -314,7 +314,10 @@ public class IndependentMainBoard extends JFrame {
             if (SwingUtilities.isMiddleMouseButton(e)) {
               boardRenderer.beginMiddlePreview();
               refresh();
-            } else {
+            } else if (!SwingUtilities.isRightMouseButton(e)
+                || Lizzie.board.isSetupMode()
+                || Input.selectMode
+                || e.isAltDown()) {
               mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
               clearMoved();
             }

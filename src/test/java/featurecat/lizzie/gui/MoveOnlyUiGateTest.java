@@ -529,6 +529,168 @@ class MoveOnlyUiGateTest {
   }
 
   @Test
+  void longVariationBackstepUsesCapturedPreviewBoundBeforeAndAfterPublication() throws Exception {
+    for (boolean published : new boolean[] {false, true}) {
+      try (TestEnvironment env = TestEnvironment.open()) {
+        BranchRecordFixture fixture = branchRecordFixture();
+        fixture.candidate.variation = new ArrayList<>(java.util.Collections.nCopies(250, "pass"));
+        fixture.candidate.variation.set(0, fixture.candidate.coordinate);
+        fixture.renderer.selectHoveredVariation();
+        if (published) fixture.draw();
+        assertEquals(199, fixture.renderer.getBranchLength());
+
+        fixture.wheel(-1);
+        assertEquals(198, fixture.renderer.getDisplayedBranchLength());
+        fixture.draw();
+        assertEquals(198, fixture.renderer.branchOpt.orElseThrow().length);
+        fixture.assertPreviewRecordUnchanged();
+      }
+    }
+  }
+
+  @Test
+  void queuedPreviewCannotPublishDuringScoreModeAndReselectsAfterExit() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BranchRecordFixture fixture = branchRecordFixture();
+      fixture.renderer.selectHoveredVariation();
+      VariationPreviewState preview =
+          (VariationPreviewState) getField(BoardRenderer.class, fixture.renderer, "preview");
+      VariationPreviewScheduler scheduler =
+          (VariationPreviewScheduler) getField(VariationPreviewState.class, preview, "scheduler");
+      ControlledPreview worker =
+          (ControlledPreview) getField(VariationPreviewScheduler.class, scheduler, "worker");
+      assertTrue(fixture.renderer.hasSelectedVariation());
+      assertFalse(fixture.renderer.isShowingBranch());
+
+      fixture.frame.isInScoreMode = true;
+      worker.finish();
+      assertFalse(fixture.renderer.hasSelectedVariation());
+      assertFalse(fixture.renderer.branchOpt.isPresent());
+      fixture.renderer.selectHoveredVariation();
+      assertFalse(fixture.renderer.hasSelectedVariation());
+
+      fixture.frame.isInScoreMode = false;
+      fixture.renderer.selectHoveredVariation();
+      fixture.draw();
+      assertTrue(fixture.renderer.isShowingBranch());
+      assertEquals(fixture.candidate.variation.size(), fixture.renderer.branchOpt.orElseThrow().length);
+      fixture.assertPreviewRecordUnchanged();
+    }
+  }
+
+  @Test
+  void doubleEngineArrowKeysNavigateSecondOwnedPreviewAndPreserveHistory() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      BranchRecordFixture fixture = branchRecordFixture();
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      fixture.node.getData().bestMoves2 = new ArrayList<>(List.of(fixture.candidate));
+      fixture.node.getData().bestMoves.clear();
+      BoardRenderer second = configuredBranchRenderer();
+      second.setOrder(1);
+      LizzieFrame.boardRenderer2 = second;
+      fixture.draw();
+      second.selectHoveredVariation();
+      assertFalse(fixture.renderer.hasSelectedVariation());
+      assertTrue(second.hasSelectedVariation());
+
+      // Secondary-only pending Down advances preview to move 2 without mutating real game history.
+      second.startNormalBoard();
+      second.selectHoveredVariation();
+      assertFalse(second.isShowingBranch());
+      assertFalse(fixture.renderer.hasSelectedVariation());
+      assertTrue(second.hasSelectedVariation());
+      fixture.key(KeyEvent.VK_DOWN);
+      invokeDrawBranch(second);
+      assertEquals(2, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // Secondary-only pending Up shows full preview without mutating real game history.
+      second.clearBranch();
+      second.startNormalBoard();
+      second.selectHoveredVariation();
+      assertFalse(second.isShowingBranch());
+      assertTrue(second.hasSelectedVariation());
+      fixture.key(KeyEvent.VK_UP);
+      invokeDrawBranch(second);
+      assertEquals(fixture.candidate.variation.size(), second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // Visible variation stepping with Up and Down.
+      fixture.key(KeyEvent.VK_UP);
+      invokeDrawBranch(second);
+      assertEquals(2, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      fixture.key(KeyEvent.VK_DOWN);
+      invokeDrawBranch(second);
+      assertEquals(3, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // Stepping back to length 1 (first move).
+      fixture.key(KeyEvent.VK_UP);
+      invokeDrawBranch(second);
+      assertEquals(2, second.getDisplayedBranchLength());
+      fixture.assertPreviewRecordUnchanged();
+
+      fixture.key(KeyEvent.VK_UP);
+      invokeDrawBranch(second);
+      assertEquals(1, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // Repeated Up at length 1 retains length 1 and candidate ownership without history mutation.
+      fixture.key(KeyEvent.VK_UP);
+      invokeDrawBranch(second);
+      assertEquals(1, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // Down from length 1 advances to length 2.
+      fixture.key(KeyEvent.VK_DOWN);
+      invokeDrawBranch(second);
+      assertEquals(2, second.getDisplayedBranchLength());
+      assertTrue(second.hasSelectedVariation());
+      fixture.assertPreviewRecordUnchanged();
+
+      // When the mouse leaves the candidate, ordinary keys navigate history.
+      fixture.frame.clearSuggestionTablePreview();
+      fixture.frame.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+      fixture.draw();
+      invokeDrawBranch(second);
+      assertFalse(fixture.renderer.hasSelectedVariation());
+      assertFalse(second.hasSelectedVariation());
+
+      fixture.key(KeyEvent.VK_DOWN);
+      assertSame(
+          fixture.next,
+          Lizzie.board.getHistory().getCurrentHistoryNode(),
+          "leaving the candidate should hand forward navigation back to the game record.");
+      assertEquals(3, Lizzie.board.getData().moveNumber);
+
+      fixture.key(KeyEvent.VK_UP);
+      assertSame(
+          fixture.node,
+          Lizzie.board.getHistory().getCurrentHistoryNode(),
+          "leaving the candidate should hand backward navigation back to the game record.");
+      assertEquals(2, Lizzie.board.getData().moveNumber);
+
+      fixture.key(KeyEvent.VK_UP);
+      assertSame(
+          fixture.previous,
+          Lizzie.board.getHistory().getCurrentHistoryNode(),
+          "backward navigation should continue through the game record.");
+      assertEquals(1, Lizzie.board.getData().moveNumber);
+    } finally {
+      env.close();
+    }
+  }
+
+  @Test
   void noRefreshKeepsFrozenPvWhenWheelCrossesFirstCandidateMove() throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {

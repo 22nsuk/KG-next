@@ -9982,6 +9982,10 @@ public class LizzieFrame extends JFrame {
 
   public void shutdownVariationPreviews() {
     VariationPreviewScheduler.shutdown();
+    clearVariationPreviews();
+  }
+
+  private void clearVariationPreviews() {
     if (boardRenderer != null) boardRenderer.clearBranch();
     if (boardRenderer2 != null) boardRenderer2.clearBranch();
     if (independentMainBoard != null) independentMainBoard.boardRenderer.clearBranch();
@@ -20657,6 +20661,7 @@ public class LizzieFrame extends JFrame {
     ponderStatusBeforeScore = Lizzie.leelaz.isPondering();
     if (ponderStatusBeforeScore) Lizzie.leelaz.togglePonder();
     isInScoreMode = true;
+    clearVariationPreviews();
     Lizzie.board.getGroupInfo();
     clearKataEstimate();
     boardRenderer.removeblock();

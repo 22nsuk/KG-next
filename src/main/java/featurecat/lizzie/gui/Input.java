@@ -384,7 +384,10 @@ public class Input implements MouseListener, KeyListener, MouseWheelListener, Mo
             Lizzie.board.SpinAndMirror(3);
           } else LizzieFrame.undoNoRefresh(10);
         } else {
-          if (LizzieFrame.boardRenderer.hasSelectedVariation()) {
+          if (LizzieFrame.boardRenderer.hasSelectedVariation()
+              || (Lizzie.config.isDoubleEngineMode()
+                  && LizzieFrame.boardRenderer2 != null
+                  && LizzieFrame.boardRenderer2.hasSelectedVariation())) {
             Lizzie.frame.doBranch(-1);
           } else {
             LizzieFrame.navigateHistoryNoRefresh(-1);
@@ -414,7 +417,10 @@ public class Input implements MouseListener, KeyListener, MouseWheelListener, Mo
             Lizzie.board.SpinAndMirror(4);
           } else LizzieFrame.redoNoRefresh(10);
         } else {
-          if (LizzieFrame.boardRenderer.hasSelectedVariation()) {
+          if (LizzieFrame.boardRenderer.hasSelectedVariation()
+              || (Lizzie.config.isDoubleEngineMode()
+                  && LizzieFrame.boardRenderer2 != null
+                  && LizzieFrame.boardRenderer2.hasSelectedVariation())) {
             Lizzie.frame.doBranch(1);
           } else {
             LizzieFrame.navigateHistoryNoRefresh(1);
