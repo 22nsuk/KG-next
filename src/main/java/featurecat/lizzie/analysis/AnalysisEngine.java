@@ -229,16 +229,11 @@ public class AnalysisEngine {
     this.purpose =
         purpose == null ? AnalysisResourceCoordinator.Purpose.OTHER : purpose;
     this.persistentPreload = persistentPreload;
-    String foregroundCommand = Lizzie.leelaz == null ? null : Lizzie.leelaz.engineCommand();
     boolean lightweightQuickModelRequested =
         commandOverride != null && !commandOverride.trim().isEmpty();
     automaticPrimaryForegroundReuse =
-        shouldAutomaticallyReusePrimaryForeground(
-            this.purpose,
-            RemoteComputeConfig.isRemoteComputeEngineCommand(foregroundCommand),
-            KataGoRuntimeHelper.isBundledNvidiaCommand(foregroundCommand),
-            KataGoRuntimeHelper.isBundledTensorRtCommand(foregroundCommand),
-            lightweightQuickModelRequested);
+        this.purpose == AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS
+            && automaticallyReusesPrimaryForeground(lightweightQuickModelRequested);
     this.dedicatedLightweightQuickModel =
         this.purpose == AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS
             && !automaticPrimaryForegroundReuse
@@ -293,6 +288,17 @@ public class AnalysisEngine {
     return commandOverride == null || commandOverride.trim().isEmpty()
         ? Lizzie.config.analysisEngineCommand
         : commandOverride;
+  }
+
+  /** Shared by admission and construction, including remote-only profiles without a local command. */
+  public static boolean automaticallyReusesPrimaryForeground(boolean lightweightQuickModelRequested) {
+    String command = Lizzie.leelaz == null ? null : Lizzie.leelaz.engineCommand();
+    return shouldAutomaticallyReusePrimaryForeground(
+        AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS,
+        RemoteComputeConfig.isRemoteComputeEngineCommand(command),
+        KataGoRuntimeHelper.isBundledNvidiaCommand(command),
+        KataGoRuntimeHelper.isBundledTensorRtCommand(command),
+        lightweightQuickModelRequested);
   }
 
   static boolean shouldAutomaticallyReusePrimaryForeground(
@@ -428,7 +434,9 @@ public class AnalysisEngine {
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
-      processBuilder.redirectErrorStream(true);
+      // KataGo can write diagnostic fragments while another thread emits a JSON result.
+      // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
+      processBuilder.redirectErrorStream(false);
       if (startupDiagnosticAttempt != null) {
         startupDiagnosticAttempt.capture(processBuilder);
       }
@@ -584,7 +592,7 @@ public class AnalysisEngine {
       String line = "";
       while ((line = readerInput.readLine()) != null) {
         if (attempt != null) {
-          attempt.output(!useJavaSSH && !useRemoteCompute ? "merged" : "stdout", line);
+          attempt.output("stdout", line);
           if (attempt != startupDiagnosticAttempt) continue;
         }
         try {
@@ -2657,6 +2665,7 @@ public class AnalysisEngine {
   public synchronized boolean hasRequestLifecycleInProgress() {
     return sharedForegroundLeaseStarting
         || sharedForegroundLeaseActive
+        || sharedForegroundRestoreInProgress
         || isAnalysisInProgress();
   }
 

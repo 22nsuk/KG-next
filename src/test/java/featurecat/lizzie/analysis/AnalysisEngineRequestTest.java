@@ -62,6 +62,74 @@ class AnalysisEngineRequestTest {
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
 
   @Test
+  void sharedRestoreRemainsPartOfRequestLifecycleAfterLastResponse() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "sharedForegroundRestoreInProgress", true);
+      assertFalse(engine.isAnalysisInProgress());
+      assertTrue(engine.hasRequestLifecycleInProgress());
+      setField(AnalysisEngine.class, engine, "sharedForegroundRestoreInProgress", false);
+      assertFalse(engine.hasRequestLifecycleInProgress());
+    }
+  }
+
+  @Test
+  void localProcessKeepsDiagnosticFragmentsOutOfJsonResponses() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\""
+          + java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java")
+          + "\" -cp \"" + System.getProperty("java.class.path") + "\" "
+          + InterleavedAnalysisProcess.class.getName();
+      var oldConsole = Lizzie.gtpConsole;
+      Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
+      AnalysisEngine engine = null;
+      try {
+        engine = new AnalysisEngine(true);
+        assertTrue(engine.sendRequest(history.getStart()));
+        AnalysisEngine running = engine;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while ((int) getField(AnalysisEngine.class, running, "responseCount") == 0
+            && System.nanoTime() < deadline) Thread.sleep(10);
+        assertEquals(1, getField(AnalysisEngine.class, engine, "responseCount"));
+        assertEquals(200, history.getStart().getData().getPlayouts());
+      } finally {
+        if (engine != null) {
+          Process process = engine.process;
+          engine.normalQuit();
+          if (process != null) assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+          for (String name : List.of("executor", "executorErr")) {
+            var executor = (java.util.concurrent.ExecutorService)
+                getField(AnalysisEngine.class, engine, name);
+            if (executor != null) {
+              executor.shutdown();
+              assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+            }
+          }
+        }
+        Lizzie.gtpConsole = oldConsole;
+      }
+    }
+  }
+
+  public static final class InterleavedAnalysisProcess {
+    public static void main(String[] args) throws Exception {
+      var input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
+      String request;
+      while ((request = input.readLine()) != null) {
+        int id = new JSONObject(request).getInt("id");
+        System.err.print("diagnostic fragment without newline: ");
+        System.err.flush();
+        System.out.println(analysisResult(id, 200, 62.0));
+        System.out.flush();
+        System.err.println("finished");
+      }
+    }
+  }
+
+  @Test
   void automaticSilentAnalysisPausesForegroundAndLeavesResumeToItsCallback() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       PonderTrackingLeelaz foreground = allocate(PonderTrackingLeelaz.class);
@@ -3401,6 +3469,12 @@ class AnalysisEngineRequestTest {
 
     @Override
     public void addCommand(String command, int commandNumber, String engineName) {}
+
+    @Override
+    public void addLine(String line) {}
+
+    @Override
+    public void addErrorLine(String line) {}
   }
 
   private static final class PonderTrackingLeelaz extends Leelaz {

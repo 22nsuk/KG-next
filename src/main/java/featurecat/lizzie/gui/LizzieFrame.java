@@ -5459,6 +5459,10 @@ public class LizzieFrame extends JFrame {
 
               @Override
               public void onContextChanged() {
+                if (resumeKifuSyncAfterRemoteReconnect(
+                    root, rulesTarget, primary, primaryGeneration, mirror, delayMillis, action)) {
+                  return;
+                }
                 resubmitKifuSyncAfterComparisonExit(
                     root,
                     rulesTarget,
@@ -5480,9 +5484,15 @@ public class LizzieFrame extends JFrame {
                 if (primary == null || EngineManager.isEmpty) {
                   return KifuEngineSyncCoordinator.AttemptResult.COMPLETE;
                 }
+                if (remoteRulesSynchronizationMustWait(primary)) {
+                  return KifuEngineSyncCoordinator.AttemptResult.RETRY;
+                }
                 SessionRulesSynchronizer.Result primaryRules =
                     SessionRulesSynchronizer.synchronize(rulesTarget, primary);
                 if (!primaryRules.satisfied()) {
+                  if (remoteRulesSynchronizationMustWait(primary)) {
+                    return KifuEngineSyncCoordinator.AttemptResult.RETRY;
+                  }
                   if (primaryRules.failure() == SessionRulesSynchronizer.Failure.ENGINE_UNAVAILABLE
                       && rulesCapabilityDiscoveryMayStillComplete(
                           primary, rulesCapabilityDeadlineNanos)) {
@@ -5570,6 +5580,11 @@ public class LizzieFrame extends JFrame {
 
               @Override
               public void onFailed() {
+                if (remoteRulesSynchronizationMustWait(primary)
+                    && resumeKifuSyncAfterRemoteReconnect(
+                        root, rulesTarget, primary, primaryGeneration, mirror, delayMillis, action)) {
+                  return;
+                }
                 if (rulesFailure == null) {
                   failBatchKifuLoad(root);
                   return;
@@ -5585,6 +5600,71 @@ public class LizzieFrame extends JFrame {
                     action);
               }
             });
+  }
+
+  private boolean resumeKifuSyncAfterRemoteReconnect(
+      BoardHistoryNode root,
+      BoardHistoryList.SessionRulesTarget rulesTarget,
+      Leelaz primary,
+      long primaryGeneration,
+      Leelaz mirror,
+      int delayMillis,
+      Runnable action) {
+    if (primary == null
+        || primary != Lizzie.leelaz
+        || primaryGeneration < 0L
+        || !primary.useRemoteCompute
+        || mirror != null
+        || !isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, null)) {
+      return false;
+    }
+    // A replaced reader retires the old restore, not the current import. Wait without sending
+    // commands, then capture fresh reader/rules/position fences through the ordinary load path.
+    kifuEngineSyncCoordinator()
+        .submit(
+            new KifuEngineSyncCoordinator.Request() {
+              @Override
+              public boolean isCurrent() {
+                return isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, null);
+              }
+
+              @Override
+              public KifuEngineSyncCoordinator.AttemptResult synchronize() {
+                if (primary.isNormalEnd || EngineManager.isEmpty) {
+                  return KifuEngineSyncCoordinator.AttemptResult.PERMANENT_FAILURE;
+                }
+                return primary.isLoaded()
+                        && primary.isStarted()
+                        && !primary.isDownWithError
+                        && !remoteRulesSynchronizationMustWait(primary)
+                        && primary.isCurrentEngineIncarnationToken(primary.engineIncarnationToken())
+                    ? KifuEngineSyncCoordinator.AttemptResult.COMPLETE
+                    : KifuEngineSyncCoordinator.AttemptResult.RETRY;
+              }
+
+              @Override
+              public void onSynchronized() {
+                if (isCurrent()) {
+                  scheduleEngineSyncAndResumeAfterKifuLoad(delayMillis, action, false);
+                }
+              }
+
+              @Override
+              public void onFailed() {
+                if (isCurrent()) {
+                  pendingKifuEngineSyncRoot = null;
+                  canGoAfterload = true;
+                  failBatchKifuLoad(root);
+                }
+              }
+            });
+    return true;
+  }
+
+  static boolean remoteRulesSynchronizationMustWait(Leelaz primary) {
+    return primary != null
+        && primary.useRemoteCompute
+        && (primary.isRemoteSessionRecoveryRequested() || primary.hasExclusiveGtpWorkInProgress());
   }
 
   private void resubmitKifuSyncAfterComparisonExit(
@@ -16621,7 +16701,11 @@ public class LizzieFrame extends JFrame {
     }
     boolean hasAutomaticQuickAnalysisCommand =
         silentAnalyze && KataGoAutoSetupHelper.resolveQuickAnalysisEngineCommand().isPresent();
+    boolean automaticForegroundReuse =
+        silentAnalyze
+            && AnalysisEngine.automaticallyReusesPrimaryForeground(hasAutomaticQuickAnalysisCommand);
     if (!Lizzie.config.analysisReuseCurrentEngine
+        && !automaticForegroundReuse
         && !isAnalysisEngineReusable(analysisEngine)
         && !hasAutomaticQuickAnalysisCommand
         && (Lizzie.config.analysisEngineCommand == null
@@ -16852,11 +16936,8 @@ public class LizzieFrame extends JFrame {
     }
     boolean lightweightQuickModelRequested =
         KataGoAutoSetupHelper.resolveQuickAnalysisEngineCommand().isPresent();
-    boolean bundledTensorRtPrimary = isCurrentPrimaryEngineBundledTensorRt();
     boolean needsAutomaticPrimaryForegroundReuse =
-        (isCurrentPrimaryEngineRemote() && !lightweightQuickModelRequested)
-            || (isCurrentPrimaryEngineBundledNvidia()
-                && (bundledTensorRtPrimary || !lightweightQuickModelRequested));
+        AnalysisEngine.automaticallyReusesPrimaryForeground(lightweightQuickModelRequested);
     boolean needsDedicatedLightweightModel =
         lightweightQuickModelRequested && !needsAutomaticPrimaryForegroundReuse;
     if (shouldReplaceAutomaticQuickAnalysisEngine(
@@ -21135,9 +21216,17 @@ public class LizzieFrame extends JFrame {
     }
     long generation = loadedGameQuickAnalysisGeneration;
     BoardHistoryNode root = loadedGameQuickAnalysisRoot;
-    if (!isCurrentLoadedGameQuickAnalysis(generation, root)
-        || !shouldAutoQuickAnalyzeLoadedGame()) {
+    if (!isCurrentLoadedGameQuickAnalysis(generation, root)) {
       stopLoadedGameQuickAnalysisRetry();
+      return;
+    }
+    if (!shouldAutoQuickAnalyzeLoadedGame()) {
+      // The last point can arrive before the shared engine has restored the board. Only the
+      // completion callback may retire this generation and resume foreground analysis.
+      if (loadedGameQuickAnalysisRunning) return;
+      boolean confirmed = loadedGameQuickAnalysisPositionAlreadyConfirmed;
+      stopLoadedGameQuickAnalysisRetry();
+      resumeForegroundAnalysisAfterQuickAnalysisComplete(confirmed);
       return;
     }
     QuickAnalysisWarmupAction action = currentQuickAnalysisWarmupAction(true);
@@ -21590,6 +21679,9 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (!canContinueQuickAnalysisAfterHistoryNavigation() || !shouldAutoQuickAnalyzeLoadedGame()) {
+      if (loadedGameQuickAnalysisRunning
+          && isCurrentLoadedGameQuickAnalysis(
+              loadedGameQuickAnalysisGeneration, loadedGameQuickAnalysisRoot)) return;
       stopQuickAnalysisNavigationResumeTimer();
       if (loadedGameQuickAnalysisActive) {
         boolean positionAlreadyConfirmed = loadedGameQuickAnalysisPositionAlreadyConfirmed;

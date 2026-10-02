@@ -1913,6 +1913,41 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
+  void remoteAutomaticCurveDoesNotRequireASeparateLocalAnalysisCommand() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      Lizzie.config.analysisEngineCommand = "";
+      Lizzie.config.analysisReuseCurrentEngine = false;
+      Lizzie.board = analysisSyncBoardWith(historyWithUnanalyzedMove());
+      RemoteCurveAdmissionLeelaz primary = new RemoteCurveAdmissionLeelaz();
+      Lizzie.leelaz = primary;
+      EngineManager.isEmpty = false;
+      QuickAnalysisResumeFrame frame = allocate(QuickAnalysisResumeFrame.class);
+      java.util.concurrent.atomic.AtomicBoolean starting = new java.util.concurrent.atomic.AtomicBoolean();
+      setField(frame, "quickAnalysisEngineStarting", starting);
+      setField(frame, "quickAnalysisEngineGeneration", new java.util.concurrent.atomic.AtomicLong());
+      Lizzie.frame = frame;
+      SwingUtilities.invokeAndWait(() -> frame.flashAnalyzeGame(true, false, true));
+
+      assertTrue(
+          primary.admissionChecked.await(2, TimeUnit.SECONDS),
+          "A ready Zhizi engine must reach shared-engine admission without a local command.");
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      while (starting.get() && System.nanoTime() < deadline) Thread.sleep(10);
+      assertFalse(starting.get(), "The warmup callback must settle before restoring global test state");
+      waitForMovelistRefreshThreads();
+      drainEdt();
+    } finally {
+      if (Lizzie.frame != null) {
+        invokeStopLoadedGameQuickAnalysisRetry(Lizzie.frame);
+        drainEdt();
+      }
+      env.close();
+    }
+  }
+
+  @Test
   void downloadedKifuAnalyzesMetadataOnlySgfPayload()
       throws Exception {
     TestEnvironment env = TestEnvironment.open();
@@ -2154,6 +2189,49 @@ class LizzieFrameRegressionTest {
       assertEquals(1, frame.refreshCount);
       assertEquals(1, frame.problemSnapshotRefreshCount);
       assertEquals(1, frame.silentProgressRefreshCount);
+    } finally {
+      env.close();
+    }
+  }
+
+  @Test
+  void completedPointsDoNotRetireGenerationBeforeForegroundRestoreCallback() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      AnalysisSyncBoard board = analysisSyncBoardWith(historyWithTargetVisitAnalyzedMove());
+      Lizzie.board = board;
+      TrackingLeelaz leelaz = allocate(TrackingLeelaz.class);
+      Lizzie.leelaz = leelaz;
+      EngineManager.isEmpty = false;
+      QuickAnalysisResumeFrame frame = allocate(QuickAnalysisResumeFrame.class);
+      ResourceTrackingAnalysisEngine engine = allocate(ResourceTrackingAnalysisEngine.class);
+      engine.shared = true;
+      engine.reusable = true;
+      frame.analysisEngine = engine;
+      Lizzie.frame = frame;
+      BoardHistoryNode root = board.getHistory().getStart();
+      armLoadedGameQuickAnalysis(frame, root, true);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            try {
+              Method retry =
+                  LizzieFrame.class.getDeclaredMethod("retryLoadedGameQuickAnalysisIfMissing");
+              retry.setAccessible(true);
+              retry.invoke(frame);
+              frame.continueQuickAnalysisAfterHistoryNavigationWhenIdle();
+            } catch (ReflectiveOperationException failure) {
+              throw new AssertionError(failure);
+            }
+          });
+      assertTrue((boolean) getField(frame, "loadedGameQuickAnalysisActive"));
+      assertEquals(17L, getField(frame, "loadedGameQuickAnalysisGeneration"));
+      assertEquals(0, leelaz.ponderCount, "Do not resume before the restore barrier");
+      invokeFinishLoadedGameQuickAnalysisAttempt(frame, 17L, root, false);
+      drainEdt();
+      assertEquals(1, leelaz.ponderCount);
+      assertEquals(0, board.syncCount, "Shared restore already confirmed the selected position");
+      assertFalse((boolean) getField(frame, "loadedGameQuickAnalysisActive"));
     } finally {
       env.close();
     }
@@ -4755,6 +4833,21 @@ class LizzieFrameRegressionTest {
     @Override
     public boolean isLoaded() {
       return loaded;
+    }
+  }
+
+  private static final class RemoteCurveAdmissionLeelaz extends TrackingLeelaz {
+    private final CountDownLatch admissionChecked = new CountDownLatch(1);
+
+    private RemoteCurveAdmissionLeelaz() throws java.io.IOException {
+      engineCommand = RemoteComputeConfig.COMMAND_ZHIZI;
+    }
+
+    @Override
+    public ExclusiveGtpLeaseAvailability previewForegroundAnalysisLeaseAvailability() {
+      admissionChecked.countDown();
+      // Stop at the admission boundary; no real session or credential is used by this test.
+      return ExclusiveGtpLeaseAvailability.ENGINE_NOT_READY;
     }
   }
 
