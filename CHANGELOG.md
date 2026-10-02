@@ -4,6 +4,7 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+- Serialize candidate-preview retirement with final publication and renderer consumption; run variation replay steps on the event thread and prevent cancelled replays from restoring stale lengths (#347).
 - Preserve independent-board candidate actions when opening their context menu, step backward within the captured preview limit, route ordinary arrow keys to the selected second-engine variation, and retire all candidate previews when entering score mode (#347).
 - Keep asynchronous candidate-preview navigation at its first move without changing game history; preserve frozen PVs and advance independent-board and second-engine Page Down requests through the selected variation (#347, #577).
 - Keep source-board floating candidates visible until the first complete preview is ready, preserving the transparent overlay's hover target during background generation (#347).

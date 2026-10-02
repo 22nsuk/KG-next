@@ -33,6 +33,7 @@ import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLayeredPane;
 import javax.swing.JPanel;
+import javax.swing.SwingUtilities;
 
 public class FloatBoard extends JDialog {
 
@@ -41,7 +42,10 @@ public class FloatBoard extends JDialog {
 
   //  private boolean isLocked;
   private boolean isMouseOver = false;
-  private boolean isReplayVariation = false;
+  private volatile boolean isReplayVariation = false;
+  private javax.swing.Timer replayTimer;
+  private final java.util.concurrent.atomic.AtomicBoolean replayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
   // private JButton lockUnlock;
   public int[] mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
   private int curSuggestionMoveOrderByNumber = -1;
@@ -573,33 +577,60 @@ public class FloatBoard extends JDialog {
   }
 
   public void replayBranch() {
-    if (isReplayVariation) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (replayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              replayStartQueued.set(false);
+              replayBranch();
+            });
+      }
+      return;
+    }
+    if (isReplayVariation || !isVisible()) return;
+    if (replayTimer != null) finishReplayBranch();
+    long target = boardRenderer.replayTarget();
     int replaySteps = boardRenderer.getReplayBranch();
-    if (replaySteps <= 0) return; // Bad steps or no branch
+    if (target == -1 || replaySteps <= 0) return;
     int oriBranchLength = boardRenderer.getDisplayedBranchLength();
     isReplayVariation = true;
     if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.togglePonder();
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            int secs = (int) (Lizzie.config.replayBranchIntervalSeconds * 1000);
-            for (int i = 1; i < replaySteps + 1; i++) {
-              if (!isReplayVariation) break;
-              setDisplayedBranchLength(i);
-              repaint();
-              try {
-                Thread.sleep(secs);
-              } catch (InterruptedException e) {
-                e.printStackTrace();
+    replayTimer =
+        new javax.swing.Timer(
+            Math.max(1, (int) (Lizzie.config.replayBranchIntervalSeconds * 1000)),
+            new ActionListener() {
+              private int nextLength = 1;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                javax.swing.Timer replay = (javax.swing.Timer) event.getSource();
+                if (replay != replayTimer) {
+                  replay.stop();
+                  return;
+                }
+                if (!isReplayVariation || !isVisible()) {
+                  finishReplayBranch();
+                  return;
+                }
+                boolean complete = nextLength > replaySteps;
+                if (!boardRenderer.setReplayLength(
+                    target, complete ? oriBranchLength : nextLength++)) {
+                  finishReplayBranch();
+                  return;
+                }
+                repaint();
+                if (complete) finishReplayBranch();
               }
-            }
-            boardRenderer.setDisplayedBranchLength(oriBranchLength);
-            isReplayVariation = false;
-            if (!Lizzie.leelaz.isPondering()) Lizzie.leelaz.togglePonder();
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replayTimer.setInitialDelay(0);
+    replayTimer.start();
+  }
+
+  private void finishReplayBranch() {
+    replayTimer.stop();
+    replayTimer = null;
+    isReplayVariation = false;
+    if (!Lizzie.leelaz.isPondering()) Lizzie.leelaz.togglePonder();
   }
 
   //

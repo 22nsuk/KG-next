@@ -285,7 +285,13 @@ public class LizzieFrame extends JFrame {
   // private int autoInterval;
   // private long lastAutosaveTime = System.currentTimeMillis();
   private int autosaveTime = 0;
-  public boolean isReplayVariation = false;
+  public volatile boolean isReplayVariation = false;
+  private javax.swing.Timer replayTimer;
+  private boolean replayPonder;
+  private final java.util.concurrent.atomic.AtomicBoolean replayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
+  private final java.util.concurrent.atomic.AtomicBoolean autoReplayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
   public RightClickMenu RightClickMenu;
   public RightClickMenu2 RightClickMenu2;
   //  private int boardPos = 0;
@@ -618,8 +624,8 @@ public class LizzieFrame extends JFrame {
   private boolean redrawVariationTreeOnly;
   private javax.swing.Timer deferredMoveUiRefreshTimer;
   private static final int DEFERRED_MOVE_UI_REFRESH_MS = 180;
-  public boolean mouseOverChanged = false;
-  public boolean isAutoReplying = false;
+  public volatile boolean mouseOverChanged = false;
+  public volatile boolean isAutoReplying = false;
   public boolean isBatchAnalysisMode = false;
   // int testFontSize = 12;
   private Color blunderBackground =
@@ -11248,91 +11254,136 @@ public class LizzieFrame extends JFrame {
   }
 
   public void autoReplayBranch() {
-    if (isAutoReplying) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (autoReplayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              autoReplayStartQueued.set(false);
+              autoReplayBranch();
+            });
+      }
+      return;
+    }
+    if (isAutoReplying || !Lizzie.config.autoReplayBranch || !isDisplayable()) return;
     isAutoReplying = true;
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            while (Lizzie.config.autoReplayBranch) {
-              if (mouseOverChanged) {
-                mouseOverChanged = false;
-                if (Lizzie.config.autoReplayDisplayEntireVariationsFirst) {
-                  for (int s = 0; s < 100; s++) {
-                    if (mouseOverChanged) break;
-                    try {
-                      Thread.sleep((int) (Lizzie.config.displayEntireVariationsFirstSeconds * 10));
-                    } catch (InterruptedException e) {
-                      // TODO Auto-generated catch block
-                      e.printStackTrace();
-                    }
+    javax.swing.Timer replay =
+        new javax.swing.Timer(
+            20,
+            new ActionListener() {
+              private long nextStepAt;
+              private long mainTarget = -1;
+              private long floatingTarget = -1;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                if (!Lizzie.config.autoReplayBranch || !isDisplayable()) {
+                  ((javax.swing.Timer) event.getSource()).stop();
+                  isAutoReplying = false;
+                  return;
+                }
+                long now = System.nanoTime();
+                long currentMainTarget = isVisible() ? boardRenderer.replayTarget() : -1;
+                long currentFloatingTarget =
+                    floatBoard != null && floatBoard.isVisible()
+                        ? floatBoard.boardRenderer.replayTarget() : -1;
+                if (mouseOverChanged
+                    || mainTarget != currentMainTarget
+                    || floatingTarget != currentFloatingTarget) {
+                  mouseOverChanged = false;
+                  mainTarget = currentMainTarget;
+                  floatingTarget = currentFloatingTarget;
+                  double delay =
+                      Lizzie.config.autoReplayDisplayEntireVariationsFirst
+                          ? Lizzie.config.displayEntireVariationsFirstSeconds
+                          : Lizzie.config.replayBranchIntervalSeconds * 0.3;
+                  nextStepAt = now + (long) (delay * 1_000_000_000L);
+                }
+                if (now < nextStepAt) return;
+                if (mainTarget != -1) {
+                  int length = boardRenderer.getDisplayedBranchLength();
+                  if (length != BoardRenderer.SHOW_RAW_BOARD) {
+                    boardRenderer.setReplayLength(
+                        mainTarget,
+                        length == BoardRenderer.SHOW_NORMAL_BOARD || length == 1
+                            ? 2 : Math.min(Math.max(0, length + 1), boardRenderer.getReplayBranch() + 1));
                   }
-                } else {
-                  for (int s = 0; s < 20; s++) {
-                    if (mouseOverChanged) break;
-                    try {
-                      Thread.sleep((int) (Lizzie.config.replayBranchIntervalSeconds * 15));
-                    } catch (InterruptedException e) {
-                      // TODO Auto-generated catch block
-                      e.printStackTrace();
-                    }
+                }
+                if (floatingTarget != -1) {
+                  int length = floatBoard.boardRenderer.getDisplayedBranchLength();
+                  if (length != FloatBoardRenderer.SHOW_RAW_BOARD) {
+                    floatBoard.boardRenderer.setReplayLength(
+                        floatingTarget,
+                        length == FloatBoardRenderer.SHOW_NORMAL_BOARD || length == 1
+                            ? 2
+                            : Math.min(Math.max(0, length + 1),
+                                floatBoard.boardRenderer.getReplayBranch() + 1));
                   }
                 }
+                refresh();
+                nextStepAt = now + (long) (Lizzie.config.replayBranchIntervalSeconds * 1_000_000_000L);
               }
-              if (!mouseOverChanged) {
-                if (floatBoard != null) floatBoard.boardRenderer.incrementDisplayedBranchLength(1);
-                boardRenderer.incrementDisplayedBranchLength(1);
-              }
-              refresh();
-              for (int i = 0; i < 20; i++) {
-                try {
-                  Thread.sleep((int) (Lizzie.config.replayBranchIntervalSeconds * 50));
-                } catch (InterruptedException e) {
-                  e.printStackTrace();
-                }
-                if (!Lizzie.config.autoReplayBranch) break;
-                if (mouseOverChanged) {
-                  break;
-                }
-              }
-            }
-            isAutoReplying = false;
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replay.setInitialDelay(0);
+    replay.start();
   }
 
   public void replayBranch() {
-    if (isReplayVariation || Lizzie.config.autoReplayBranch) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (replayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              replayStartQueued.set(false);
+              replayBranch();
+            });
+      }
+      return;
+    }
+    if (isReplayVariation || Lizzie.config.autoReplayBranch || !isVisible()) return;
+    if (replayTimer != null) finishReplayBranch();
+    long target = boardRenderer.replayTarget();
     int replaySteps = boardRenderer.getReplayBranch();
-    if (replaySteps <= 0) return; // Bad steps or no branch
+    if (target == -1 || replaySteps <= 0) return;
     int oriBranchLength = boardRenderer.getDisplayedBranchLength();
     isReplayVariation = true;
-    final boolean oriPonder = Lizzie.leelaz.isPondering();
-    if (!Lizzie.config.noRefreshOnMouseMove && Lizzie.leelaz.isPondering())
-      Lizzie.leelaz.togglePonder();
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            int secs = (int) (Lizzie.config.replayBranchIntervalSeconds * 1000);
-            for (int i = 1; i < replaySteps + 1; i++) {
-              if (!isReplayVariation) break;
-              setDisplayedBranchLength(i + 1);
-              repaint();
-              try {
-                Thread.sleep(secs);
-              } catch (InterruptedException e) {
-                e.printStackTrace();
+    replayPonder = Lizzie.leelaz.isPondering();
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder) Lizzie.leelaz.togglePonder();
+    replayTimer =
+        new javax.swing.Timer(
+            Math.max(1, (int) (Lizzie.config.replayBranchIntervalSeconds * 1000)),
+            new ActionListener() {
+              private int nextLength = 2;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                javax.swing.Timer replay = (javax.swing.Timer) event.getSource();
+                if (replay != replayTimer) {
+                  replay.stop();
+                  return;
+                }
+                if (!isReplayVariation || !isVisible() || Lizzie.config.autoReplayBranch) {
+                  finishReplayBranch();
+                  return;
+                }
+                boolean complete = nextLength > replaySteps + 1;
+                if (!boardRenderer.setReplayLength(
+                    target, complete ? oriBranchLength : nextLength++)) {
+                  finishReplayBranch();
+                  return;
+                }
+                repaint();
+                if (complete) finishReplayBranch();
               }
-            }
-            boardRenderer.setDisplayedBranchLength(oriBranchLength);
-            isReplayVariation = false;
-            if (!Lizzie.config.noRefreshOnMouseMove && oriPonder && !Lizzie.leelaz.isPondering())
-              Lizzie.leelaz.togglePonder();
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replayTimer.setInitialDelay(0);
+    replayTimer.start();
+  }
+
+  private void finishReplayBranch() {
+    replayTimer.stop();
+    replayTimer = null;
+    isReplayVariation = false;
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder && !Lizzie.leelaz.isPondering())
+      Lizzie.leelaz.togglePonder();
   }
 
   public void replayBranchIndependentMainBoard() {

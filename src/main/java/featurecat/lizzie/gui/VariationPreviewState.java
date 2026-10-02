@@ -34,6 +34,7 @@ final class VariationPreviewState {
   private VariationPreviewScheduler scheduler;
   private Request requested;
   private long generation;
+  private long replayTarget;
 
   record Mode(featurecat.lizzie.ExtraMode mode, boolean frozen, boolean autoReplay) {}
 
@@ -81,57 +82,104 @@ final class VariationPreviewState {
     this.scheduler = scheduler;
   }
 
-  /** The host rechecks live context on EDT before any whole-result publication. */
-  void request(Selection next, VariationPreviewGenerator.Geometry geometry,
-      VariationPreviewGenerator.Style style, Mode mode, Runnable validate, Runnable onPublished) {
-    if (selection == null) return;
-    Request request = new Request(next, geometry, style, mode);
-    if (requested != null) {
-      if (request.sameContent(requested)) return;
-      if (!request.sameContext(requested)) retireWork();
+  /** Capture/validation may acquire Board and must never run under this monitor. */
+  void request(long capturedGeneration, Selection next, VariationPreviewGenerator.Geometry geometry,
+      VariationPreviewGenerator.Style style, Mode mode, Runnable validate,
+      java.util.function.Consumer<VariationPreviewGenerator.Result> onPublished) {
+    Request priorRequest;
+    Request priorPublished;
+    synchronized (this) {
+      if (generation != capturedGeneration || selection == null) return;
+      priorRequest = requested;
+      priorPublished = publishedRequest;
     }
-    if (publishedRequest != null && !request.sameSurface(publishedRequest)) clearPublished();
-    requested = request;
-    long expectedGeneration = generation;
-    if (scheduler == null) scheduler = VariationPreviewScheduler.shared();
-    scheduler.submit(this, next.input(), geometry, style, result -> {
-      if (generation != expectedGeneration || selection == null) return;
+    Request request = new Request(next, geometry, style, mode);
+    boolean unchanged = priorRequest != null && request.sameContent(priorRequest);
+    boolean retire = priorRequest != null && !request.sameContext(priorRequest);
+    boolean clearImage = priorPublished != null && !request.sameSurface(priorPublished);
+    final long expectedGeneration;
+    final VariationPreviewScheduler target;
+    synchronized (this) {
+      if (generation != capturedGeneration || selection == null || unchanged) return;
+      if (retire) retireWork();
+      if (clearImage) clearPublished();
+      requested = request;
+      expectedGeneration = generation;
+      if (scheduler == null) scheduler = VariationPreviewScheduler.shared();
+      target = scheduler;
+    }
+    // Submission can use an inline executor in tests; it must not capture Board under our lock.
+    target.submit(this, next.input(), geometry, style, result -> {
+      synchronized (this) {
+        if (generation != expectedGeneration || selection == null) return;
+      }
       validate.run();
-      if (generation != expectedGeneration || selection == null
-          || next.source() != null && !next.source().isCurrent()) return;
-      publish(selection, next, result);
-      publishedRequest = request;
-      onPublished.run();
+      if (next.source() != null && !next.source().isCurrent()) return;
+      synchronized (this) {
+        if (generation != expectedGeneration || !publish(selection, next, result)) return;
+        publishedRequest = request;
+        // Only install immutable renderer fields/repaint here: no Board/engine/Swing waits.
+        onPublished.accept(result);
+      }
     });
+    synchronized (this) {
+      // A clear can retire this request before submit reaches the scheduler.
+      if (generation != expectedGeneration && requested == null) target.cancel(this);
+    }
   }
 
-  Selection selected() {
+  synchronized long generation() {
+    return generation;
+  }
+
+  synchronized long replayTarget() {
+    return selection == null ? -1 : replayTarget;
+  }
+
+  synchronized void stopReplay() {
+    replayTarget++;
+  }
+
+  /** Commit an EDT capture only if no engine clear or explicit step crossed it. */
+  synchronized long selectIfCurrent(long capturedGeneration, Selection next) {
+    if (generation != capturedGeneration) return -1;
+    if (selection == null || !Objects.equals(selection.coordinate(), next.coordinate())) select(next);
+    return generation;
+  }
+
+  synchronized Selection selected() {
     return selection;
   }
 
-  Selection applicationSelection() {
+  synchronized Selection applicationSelection() {
     return publishedSelection != null ? publishedSelection : selection;
   }
 
-  VariationPreviewGenerator.Result published() {
+  synchronized Selection publishedSelection() {
+    return publishedSelection;
+  }
+
+  synchronized VariationPreviewGenerator.Result published() {
     return published;
   }
 
-  boolean isPending() {
+  synchronized boolean isPending() {
     return requested != null && published == null;
   }
 
-  void select(Selection next) {
+  synchronized void select(Selection next) {
+    stopReplay();
     retireWork();
     this.selection = next;
   }
 
-  void clear() {
+  synchronized void clear() {
+    stopReplay();
     cancelPreview();
     this.selection = null;
   }
 
-  void cancelPreview() {
+  synchronized void cancelPreview() {
     retireWork();
     clearPublished();
   }
@@ -148,7 +196,7 @@ final class VariationPreviewState {
     publishedRequest = null;
   }
 
-  boolean publish(
+  synchronized boolean publish(
       Selection expected,
       Selection replacement,
       VariationPreviewGenerator.Result result) {
@@ -163,7 +211,7 @@ final class VariationPreviewState {
     return true;
   }
 
-  boolean setDisplayedLength(int n) {
+  synchronized boolean setDisplayedLength(int n) {
     if (selection == null || selection.displayedLength() == n) {
       return false;
     }

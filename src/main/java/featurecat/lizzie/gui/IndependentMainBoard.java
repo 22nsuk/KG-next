@@ -57,7 +57,11 @@ public class IndependentMainBoard extends JFrame {
   private boolean right = false;
   private boolean isLocked = Lizzie.config.independentMainBoardLocked;
   public boolean isMouseOver = false;
-  private boolean isReplayVariation = false;
+  private volatile boolean isReplayVariation = false;
+  private javax.swing.Timer replayTimer;
+  private boolean replayPonder;
+  private final java.util.concurrent.atomic.AtomicBoolean replayStartQueued =
+      new java.util.concurrent.atomic.AtomicBoolean();
   private boolean isShowingRect = false;
   private JButton lockUnlock;
   private JButton btnClose;
@@ -737,36 +741,62 @@ public class IndependentMainBoard extends JFrame {
   }
 
   public void replayBranch() {
-    if (isReplayVariation || Lizzie.config.autoReplayBranch) return;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      if (replayStartQueued.compareAndSet(false, true)) {
+        SwingUtilities.invokeLater(
+            () -> {
+              replayStartQueued.set(false);
+              replayBranch();
+            });
+      }
+      return;
+    }
+    if (isReplayVariation || Lizzie.config.autoReplayBranch || !isVisible()) return;
+    if (replayTimer != null) finishReplayBranch();
+    long target = boardRenderer.replayTarget();
     int replaySteps = boardRenderer.getReplayBranch();
-    if (replaySteps <= 0) return; // Bad steps or no branch
+    if (target == -1 || replaySteps <= 0) return;
     int oriBranchLength = boardRenderer.getDisplayedBranchLength();
     isReplayVariation = true;
-    final boolean oriPonder = Lizzie.leelaz.isPondering();
-    if (!Lizzie.config.noRefreshOnMouseMove && Lizzie.leelaz.isPondering())
-      Lizzie.leelaz.togglePonder();
-    Runnable runnable =
-        new Runnable() {
-          public void run() {
-            int secs = (int) (Lizzie.config.replayBranchIntervalSeconds * 1000);
-            for (int i = 1; i < replaySteps + 1; i++) {
-              if (!isReplayVariation) break;
-              setDisplayedBranchLength(i + 1);
-              repaint();
-              try {
-                Thread.sleep(secs);
-              } catch (InterruptedException e) {
-                e.printStackTrace();
+    replayPonder = Lizzie.leelaz.isPondering();
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder) Lizzie.leelaz.togglePonder();
+    replayTimer =
+        new javax.swing.Timer(
+            Math.max(1, (int) (Lizzie.config.replayBranchIntervalSeconds * 1000)),
+            new ActionListener() {
+              private int nextLength = 2;
+
+              @Override
+              public void actionPerformed(ActionEvent event) {
+                javax.swing.Timer replay = (javax.swing.Timer) event.getSource();
+                if (replay != replayTimer) {
+                  replay.stop();
+                  return;
+                }
+                if (!isReplayVariation || !isVisible() || Lizzie.config.autoReplayBranch) {
+                  finishReplayBranch();
+                  return;
+                }
+                boolean complete = nextLength > replaySteps + 1;
+                if (!boardRenderer.setReplayLength(
+                    target, complete ? oriBranchLength : nextLength++)) {
+                  finishReplayBranch();
+                  return;
+                }
+                repaint();
+                if (complete) finishReplayBranch();
               }
-            }
-            boardRenderer.setDisplayedBranchLength(oriBranchLength);
-            isReplayVariation = false;
-            if (!Lizzie.config.noRefreshOnMouseMove && oriPonder && !Lizzie.leelaz.isPondering())
-              Lizzie.leelaz.togglePonder();
-          }
-        };
-    Thread thread = new Thread(runnable);
-    thread.start();
+            });
+    replayTimer.setInitialDelay(0);
+    replayTimer.start();
+  }
+
+  private void finishReplayBranch() {
+    replayTimer.stop();
+    replayTimer = null;
+    isReplayVariation = false;
+    if (!Lizzie.config.noRefreshOnMouseMove && replayPonder && !Lizzie.leelaz.isPondering())
+      Lizzie.leelaz.togglePonder();
   }
 
   private void onClickedForManul(int x, int y) {

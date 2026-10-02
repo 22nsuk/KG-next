@@ -801,6 +801,31 @@ class MoveOnlyUiGateTest {
   }
 
   @Test
+  void explicitStepRejectsOldReplayAdvancementAndRestoration() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      BranchRecordFixture fixture = branchRecordFixture();
+      fixture.draw();
+      int originalLength = fixture.renderer.getDisplayedBranchLength();
+      long replay = fixture.renderer.replayTarget();
+      assertTrue(fixture.renderer.setReplayLength(replay, 3));
+
+      fixture.renderer.setDisplayedBranchLength(2);
+
+      assertFalse(fixture.renderer.setReplayLength(replay, 4));
+      assertFalse(fixture.renderer.setReplayLength(replay, originalLength));
+      assertEquals(2, fixture.renderer.getDisplayedBranchLength());
+      long freshReplay = fixture.renderer.replayTarget();
+      assertTrue(fixture.renderer.setReplayLength(freshReplay, 3));
+      assertTrue(fixture.renderer.setReplayLength(freshReplay, 2));
+      assertEquals(2, fixture.renderer.getDisplayedBranchLength());
+      fixture.assertRecordStructureUnchanged();
+    } finally {
+      env.close();
+    }
+  }
+
+  @Test
   void differentCandidateTakesOwnershipAfterFirstMovePreview() throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {

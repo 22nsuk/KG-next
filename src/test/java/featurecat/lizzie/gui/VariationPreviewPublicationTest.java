@@ -9,6 +9,9 @@ import java.awt.Color;
 import java.awt.Font;
 import java.util.ArrayDeque;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 class VariationPreviewPublicationTest {
@@ -36,7 +39,7 @@ class VariationPreviewPublicationTest {
   }
 
   private void request() {
-    state.request(live, geometry, style, mode, this::request, () -> {});
+    state.request(state.generation(), live, geometry, style, mode, this::request, result -> {});
   }
 
   private void select(String coordinate, int visits) {
@@ -166,5 +169,101 @@ class VariationPreviewPublicationTest {
     finish();
     assertEquals(1, state.published().branch().length);
     assertEquals(List.of("1", "200"), state.selected().input().pvVisits);
+  }
+
+  @Test
+  void clearDuringValidationRejectsPublicationWithoutHoldingTheStateMonitor() {
+    live = selection("B2", 1);
+    state.select(live);
+    state.request(state.generation(), live, geometry, style, mode,
+        () -> runWriter(state::clear), result -> fail("retired result consumed"));
+    finish();
+    assertNull(state.selected());
+    assertNull(state.published());
+  }
+
+  @Test
+  void newerStepDuringValidationIsNotOverwrittenByTheCompletedRequest() {
+    live = selection("B2", 1);
+    state.select(live);
+    state.request(state.generation(), live, geometry, style, mode,
+        () -> runWriter(() -> state.setDisplayedLength(1)),
+        result -> fail("old prefix consumed"));
+    finish();
+    assertEquals(1, state.selected().displayedLength());
+    assertNull(state.published());
+    live = state.selected();
+    request();
+    finish();
+    assertEquals(1, state.published().branch().length);
+  }
+
+  @Test
+  void clearCannotSplitPublicationFromRendererConsumption() throws Exception {
+    live = selection("B2", 1);
+    state.select(live);
+    CountDownLatch clearing = new CountDownLatch(1);
+    CountDownLatch cleared = new CountDownLatch(1);
+    AtomicReference<VariationPreviewGenerator.Result> visible = new AtomicReference<>();
+    Thread writer = new Thread(() -> {
+      clearing.countDown();
+      synchronized (state) {
+        state.clear();
+        visible.set(null);
+      }
+      cleared.countDown();
+    });
+    state.request(state.generation(), live, geometry, style, mode, () -> {}, result -> {
+      writer.start();
+      await(clearing);
+      assertSame(result, state.published());
+      visible.set(result);
+      assertEquals(2, result.branch().length);
+      assertEquals(1L, cleared.getCount(), "clear must follow whole-result consumption");
+    });
+    finish();
+    await(cleared);
+    writer.join(2000);
+    assertFalse(writer.isAlive());
+    assertNull(visible.get());
+    assertNull(state.published());
+    assertNull(state.selected());
+  }
+
+  @Test
+  void captureAndReplayTokensRejectClearReselectEvenAtTheSameCoordinate() {
+    select("B2", 1);
+    long capture = state.generation();
+    long target = state.replayTarget();
+    assertTrue(state.setDisplayedLength(1));
+    assertEquals(target, state.replayTarget());
+    state.clear();
+    assertEquals(-1, state.selectIfCurrent(capture, live));
+    select("B2", 1);
+    assertNotEquals(target, state.replayTarget());
+    assertEquals(2, state.selected().displayedLength());
+  }
+
+  private static void runWriter(Runnable action) {
+    CountDownLatch finished = new CountDownLatch(1);
+    Thread writer = new Thread(() -> {
+      try {
+        action.run();
+      } finally {
+        finished.countDown();
+      }
+    });
+    writer.setDaemon(true);
+    writer.start();
+    await(finished);
+  }
+
+  private static void await(CountDownLatch latch) {
+    try {
+      assertTrue(latch.await(2, TimeUnit.SECONDS), "preview operation blocked");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(interrupted);
+    }
   }
 }

@@ -777,10 +777,6 @@ public class FloatBoardRenderer {
     }
     VariationPreviewState.Selection replacement = new VariationPreviewState.Selection(
         capture, suggestedMove.get().coordinate, input, displayedBranchLength);
-    if (!notChangedMouseOverMove) {
-      preview.select(replacement);
-      previewCancelled = false;
-    }
     return replacement;
   }
 
@@ -789,11 +785,17 @@ public class FloatBoardRenderer {
   }
 
   private void drawBranch(boolean refresh) {
+    validSelection();
+    long capturedGeneration = preview.generation();
     VariationPreviewState.Selection replacement = prepareSelection(refresh);
     if (replacement == null || previewCancelled) return;
+    long requestGeneration = preview.selectIfCurrent(capturedGeneration, replacement);
+    if (requestGeneration < 0) return;
     if (displayedBranchLength == 1 && !Lizzie.config.autoReplayBranch) {
-      preview.cancelPreview();
-      clearPublishedPreview();
+      synchronized (preview) {
+        preview.cancelPreview();
+        clearPublishedPreview();
+      }
       return;
     }
     if (cachedBoardWidth != boardWidth || cachedBoardHeight != boardHeight) {
@@ -824,11 +826,10 @@ public class FloatBoardRenderer {
       clearBranch();
       return;
     }
-    preview.request(replacement, geometry, style,
+    preview.request(requestGeneration, replacement, geometry, style,
         new VariationPreviewState.Mode(Lizzie.config.extraMode,
             Lizzie.config.noRefreshOnMouseMove, Lizzie.config.autoReplayBranch),
-        this::drawBranch, () -> {
-      VariationPreviewGenerator.Result result = preview.published();
+        this::drawBranch, result -> {
       branch = result.branch();
       branchOpt = Optional.of(branch);
       branchStonesImage = result.stones();
@@ -840,7 +841,9 @@ public class FloatBoardRenderer {
       publishedStyle = style;
       Lizzie.frame.floatBoard.repaint();
     });
-    if (preview.published() == null) clearPublishedPreview();
+    synchronized (preview) {
+      if (preview.published() == null) clearPublishedPreview();
+    }
   }
 
 
@@ -1053,8 +1056,9 @@ public class FloatBoardRenderer {
 
   /** Composite the annotations published with the candidate stones. */
   private void drawMoveNumbers(Graphics2D g) {
-    if (preview.published() != null && isShowingBranch) {
-      g.drawImage(preview.published().annotations(), x, y, null);
+    VariationPreviewGenerator.Result visible = preview.published();
+    if (visible != null && isShowingBranch) {
+      g.drawImage(visible.annotations(), x, y, null);
     }
   }
 
@@ -1309,9 +1313,10 @@ public class FloatBoardRenderer {
 
           int suggestionX = x + scaledMarginWidth + squareWidth * coords[0];
           int suggestionY = y + scaledMarginHeight + squareHeight * coords[1];
+          VariationPreviewState.Selection visible = preview.publishedSelection();
           boolean isMouseOver =
-              preview.published() != null
-                  ? preview.applicationSelection().coordinate().equals(move.coordinate)
+              visible != null
+                  ? visible.coordinate().equals(move.coordinate)
                   : Lizzie.frame.floatBoard != null
                       && Lizzie.frame.floatBoard.isMouseOver(coords[0], coords[1]);
           boolean lackOfPlayouts = percentPlayouts <= Lizzie.config.minPlayoutRatioForStats;
@@ -2511,11 +2516,35 @@ public class FloatBoardRenderer {
   }
 
   public void setDisplayedBranchLength(int n) {
-    displayedBranchLength = n;
-    if (preview.setDisplayedLength(n)) {
+    boolean changed;
+    synchronized (preview) {
+      preview.stopReplay();
+      displayedBranchLength = n;
+      changed = preview.setDisplayedLength(n);
+    }
+    if (changed) {
       previewCancelled = false;
       drawBranch(false);
     }
+  }
+
+  long replayTarget() {
+    return validSelection() == null ? -1 : preview.replayTarget();
+  }
+
+  boolean setReplayLength(long target, int n) {
+    if (validSelection() == null) return false;
+    boolean changed;
+    synchronized (preview) {
+      if (target < 0 || preview.replayTarget() != target) return false;
+      displayedBranchLength = n;
+      changed = preview.setDisplayedLength(n);
+    }
+    if (changed) {
+      previewCancelled = false;
+      drawBranch(false);
+    }
+    return true;
   }
 
   public int getDisplayedBranchLength() {
@@ -2568,9 +2597,12 @@ public class FloatBoardRenderer {
   }
 
   public void cancelPreview() {
-    preview.cancelPreview();
-    previewCancelled = true;
-    clearPublishedPreview();
+    synchronized (preview) {
+      preview.stopReplay();
+      preview.cancelPreview();
+      previewCancelled = true;
+      clearPublishedPreview();
+    }
   }
 
   private void clearPublishedPreview() {
@@ -2589,10 +2621,12 @@ public class FloatBoardRenderer {
   }
 
   public void clearBranch() {
-    preview.clear();
-    previewCancelled = false;
-    mouseOverTemp = null;
-    clearPublishedPreview();
+    synchronized (preview) {
+      preview.clear();
+      previewCancelled = false;
+      mouseOverTemp = null;
+      clearPublishedPreview();
+    }
   }
 
   public boolean isInside(int x1, int y1) {
