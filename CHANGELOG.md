@@ -4,6 +4,7 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+- Let the Beta channel compare signed GitHub stable and test releases, select the highest valid version without downgrading or falling back to an older package, and retain a non-blocking warning when one candidate cannot be checked; preserve Stable source selection (#578).
 - Wait for the current engine startup/switch to settle before restoring an imported SGF, so games opened with the Windows EXE also start their automatic quick curve; preserve pause and retire continuations after replacement, failure or shutdown.
 - Decode professional ranks in Fox game lists as P1–P9 instead of 83–91 dan, while preserving online dan and kyu ranks for both players.
 - Keep simplified variation-tree images bound to the current history, selected node and viewport; discard late drawings and repaint accepted images on the event thread without requiring another input. Preserve preview selection, navigation and viewport clipping.
