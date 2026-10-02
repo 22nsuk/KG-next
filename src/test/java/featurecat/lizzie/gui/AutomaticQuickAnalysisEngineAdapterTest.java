@@ -85,6 +85,46 @@ class AutomaticQuickAnalysisEngineAdapterTest {
   }
 
   @Test
+  void uncheckedStartupFailureSettlesAcquisitionAndAllowsRetry() throws Exception {
+    PhysicalWorker recovered = worker();
+    int[] attempts = {0};
+    Client first = new Client();
+    Client retry = new Client();
+    onEdt(
+        () -> {
+          adapter =
+              new AutomaticQuickAnalysisEngineAdapter(
+                  Lizzie.frame,
+                  persistent -> {
+                    if (attempts[0]++ == 0) {
+                      throw new IllegalArgumentException("controlled invalid engine configuration");
+                    }
+                    return recovered;
+                  },
+                  executor::submit);
+          first.acquire();
+        });
+    executor.run(STARTUP);
+    onEdt(
+        () -> {
+          assertTrue(first.delivered);
+          assertNull(first.use);
+          assertFalse(first.registration.inProgress());
+          assertFalse(adapter.isStarting());
+          retry.acquire();
+        });
+    executor.run(STARTUP);
+    onEdt(
+        () -> {
+          assertTrue(retry.delivered);
+          assertNotNull(retry.use);
+          assertSame(recovered, adapter.ownedEngine());
+          assertFalse(adapter.isStarting());
+          assertEquals(2, attempts[0]);
+        });
+  }
+
+  @Test
   void cancelledAcquisitionLeavesPendingStartupAvailableToSuccessor() throws Exception {
     PhysicalWorker worker = worker();
     Client first = new Client();

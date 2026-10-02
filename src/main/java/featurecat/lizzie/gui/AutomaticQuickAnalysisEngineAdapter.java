@@ -166,7 +166,7 @@ final class AutomaticQuickAnalysisEngineAdapter implements AutomaticQuickAnalysi
           AnalysisEngine engine = null;
           try {
             engine = factory.create(pending.persistent);
-          } catch (IOException failure) {
+          } catch (IOException | RuntimeException failure) {
             failure.printStackTrace();
           }
           AnalysisEngine warmed = engine;
