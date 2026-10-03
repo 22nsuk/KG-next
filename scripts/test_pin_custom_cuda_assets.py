@@ -80,6 +80,7 @@ class CustomCudaAssetsTest(unittest.TestCase):
 
     def test_generator_changes_only_two_assets_using_measured_bytes(self):
         baseline, generated = load_catalog(DEFAULT_CATALOG), self.pin()
+        self.assertNotIn(b"\r\n", self.output.read_bytes())
         for key, value in baseline.items():
             if key != "assets":
                 self.assertEqual(value, generated[key])

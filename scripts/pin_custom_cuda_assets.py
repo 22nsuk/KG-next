@@ -44,7 +44,7 @@ def pin(base_catalog: Path, cuda12: Path, cuda13: Path, source_commit: str,
     validate_catalog(catalog)
     output.parent.mkdir(parents=True, exist_ok=True)
     # Both archives must verify before any generated catalog becomes visible.
-    with output.open("x", encoding="utf-8") as handle:
+    with output.open("x", encoding="utf-8", newline="\n") as handle:
         handle.write(json.dumps(catalog, indent=2) + "\n")
     return catalog
 
