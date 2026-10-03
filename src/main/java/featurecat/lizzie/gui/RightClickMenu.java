@@ -103,6 +103,13 @@ public class RightClickMenu extends JPopupMenu {
                     ? Lizzie.frame.independentMainBoard.boardRenderer
                     : LizzieFrame.boardRenderer;
             Lizzie.frame.isShowingRightMenu = true;
+            String restrictionHint = resourceBundle.getString(
+                Lizzie.leelaz != null && Lizzie.leelaz.supportsRootTreeReuse()
+                    ? "RightClickMenu.reuseRootTree"
+                    : "RightClickMenu.reuseRootTreeUnavailable");
+            for (JFontMenuItem item : new JFontMenuItem[] {allow, allow2, allow3, avoid, cancelavoid}) {
+              item.setToolTipText(restrictionHint);
+            }
             addSuggestionAsBranch.setVisible(
                 previewOwner.hasSelectedVariation() && !Lizzie.frame.isAnaPlayingAgainstLeelaz);
 
@@ -484,9 +491,11 @@ public class RightClickMenu extends JPopupMenu {
   private void cancelavoid() {
     LizzieFrame.allowcoords = "";
     LizzieFrame.avoidcoords = "";
-    // move = 0;
+    LizzieFrame.isKeepForcing = false;
+    LizzieFrame.isTempForcing = false;
+    LizzieFrame.isforcing = false;
+    Lizzie.frame.isKeepingForce = false;
     Lizzie.leelaz.ponder();
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     LizzieFrame.boardRenderer.removeSelectedRect();
     Lizzie.frame.refresh();
   }
@@ -520,7 +529,6 @@ public class RightClickMenu extends JPopupMenu {
     LizzieFrame.avoidcoords = "";
     Lizzie.leelaz.Pondering();
     Lizzie.leelaz.analyzeAvoid("allow", LizzieFrame.allowcoords, 1);
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
 
     LizzieFrame.boardRenderer.drawAllSelectedRectByCoords(true, LizzieFrame.allowcoords);
     Lizzie.frame.refresh();
@@ -528,41 +536,30 @@ public class RightClickMenu extends JPopupMenu {
 
   private void allow2() {
     if (Lizzie.board.iscoordsempty(coords[0], coords[1])) {
-      if (LizzieFrame.allowcoords != "") {
-        LizzieFrame.allowcoords += "," + Board.convertCoordinatesToName(coords[0], coords[1]);
-      } else {
-        LizzieFrame.allowcoords = Board.convertCoordinatesToName(coords[0], coords[1]);
-      }
+      LizzieFrame.allowcoords = RestrictionCoordinates.add(
+          LizzieFrame.allowcoords, Board.convertCoordinatesToName(coords[0], coords[1]));
     }
     LizzieFrame.isforcing = true;
     LizzieFrame.isallow = true;
     LizzieFrame.avoidcoords = "";
     Lizzie.leelaz.Pondering();
     Lizzie.leelaz.analyzeAvoid("allow", LizzieFrame.allowcoords, 1);
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     LizzieFrame.boardRenderer.drawAllSelectedRectByCoords(true, LizzieFrame.allowcoords);
     Lizzie.frame.refresh();
   }
 
   private void allow3() {
-    String newCoords = "";
-    String[] params = LizzieFrame.allowcoords.trim().split(",");
-    String coordsHere =
-        Board.convertCoordinatesToName(RightClickMenu.coords[0], RightClickMenu.coords[1]);
-    boolean first = true;
-    for (String coords : params) {
-      if (!coordsHere.equals(coords)) {
-        if (first) newCoords = coords;
-        else newCoords += "," + coords;
-      }
+    String vertex = Board.convertCoordinatesToName(coords[0], coords[1]);
+    LizzieFrame.allowcoords = RestrictionCoordinates.remove(LizzieFrame.allowcoords, vertex);
+    if (LizzieFrame.allowcoords.isEmpty()) {
+      cancelavoid();
+      return;
     }
-    LizzieFrame.allowcoords = newCoords;
     LizzieFrame.isforcing = true;
     LizzieFrame.isallow = true;
     LizzieFrame.avoidcoords = "";
     Lizzie.leelaz.Pondering();
     Lizzie.leelaz.analyzeAvoid("allow", LizzieFrame.allowcoords, 1);
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     LizzieFrame.boardRenderer.drawAllSelectedRectByCoords(true, LizzieFrame.allowcoords);
     Lizzie.frame.refresh();
   }
@@ -571,15 +568,12 @@ public class RightClickMenu extends JPopupMenu {
     LizzieFrame.isTempForcing = true;
     LizzieFrame.isforcing = true;
     LizzieFrame.isallow = false;
+    LizzieFrame.allowcoords = "";
     if (Lizzie.board.iscoordsempty(coords[0], coords[1])) {
-      if (LizzieFrame.avoidcoords != "") {
-        LizzieFrame.avoidcoords += "," + Board.convertCoordinatesToName(coords[0], coords[1]);
-      } else {
-        LizzieFrame.avoidcoords = Board.convertCoordinatesToName(coords[0], coords[1]);
-      }
+      LizzieFrame.avoidcoords = RestrictionCoordinates.add(
+          LizzieFrame.avoidcoords, Board.convertCoordinatesToName(coords[0], coords[1]));
     }
     Lizzie.leelaz.analyzeAvoid("avoid", LizzieFrame.avoidcoords, Lizzie.config.selectAvoidMoves);
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     LizzieFrame.boardRenderer.drawAllSelectedRectByCoords(false, LizzieFrame.avoidcoords);
     Lizzie.frame.repaint();
   }

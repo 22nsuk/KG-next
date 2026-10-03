@@ -150,7 +150,7 @@ def validate_update_manifest(
         "Core update is missing the legacy updater alias",
     )
     require(
-        any(entry.startswith("app/LizzieYzy Next") and entry.endswith(".cfg") for entry in entries),
+        any(entry.startswith("app/KG-next") and entry.endswith(".cfg") for entry in entries),
         "Core update must include launcher cfg files",
     )
     require("README.txt" in entries, "Core update is missing README.txt")

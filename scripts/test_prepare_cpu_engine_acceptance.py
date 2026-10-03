@@ -123,6 +123,8 @@ class CpuAcceptanceProvisionerTest(unittest.TestCase):
                         engineReleaseRepository="wimi321/lizzieyzy-next",
                         katagoSourceCommit="47aadc08518b3e121f22539796c911002f699584")
         for target, asset in baseline["assets"].items():
+            if asset.get("origin") == "official-release":
+                continue
             asset["assetName"] = f"katago-source-47aadc08518b-{target}.zip"
         self.catalog = baseline
         self.catalog["assets"]["linux-cpu"].update(

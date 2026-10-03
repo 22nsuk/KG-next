@@ -48,8 +48,14 @@ class RunLocalCiTest(unittest.TestCase):
             root = Path(temporary)
             scripts = root / "scripts"
             scripts.mkdir()
-            for name in ("run_local_ci.py", "check_line_endings.py"):
+            for name in ("run_local_ci.py", "check_line_endings.py", "validate_kg_metadata.py",
+                         "katago_asset_catalog.py"):
                 shutil.copy2(run_local_ci.REPO_ROOT / "scripts" / name, scripts / name)
+            for name in ("README.md", "src/main/resources/katago-assets.json",
+                         "docs/KG_MODEL_VERIFICATION.json"):
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(run_local_ci.REPO_ROOT / name, target)
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             subprocess.run(
                 ["git", "-C", str(root), "-c", "user.name=CI Test", "-c",

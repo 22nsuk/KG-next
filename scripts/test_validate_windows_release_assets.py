@@ -54,7 +54,7 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
         core_path = self.release_dir / self.core_name
         with zipfile.ZipFile(core_path, "w") as archive:
             archive.writestr("app/lizzie-yzy2.5.3-shaded.jar", b"jar")
-            archive.writestr("app/LizzieYzy Next.cfg", b"cfg")
+            archive.writestr("app/KG-next.cfg", b"cfg")
             archive.writestr("lizzieyzy-next-core.jar", b"alias")
             archive.writestr("README.txt", b"readme")
             archive.writestr("lizzieyzy-next-core-update-manifest.json", b"{}")

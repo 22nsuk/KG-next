@@ -90,6 +90,7 @@ jobs:
         shell: bash
         env:
           PREPARE_WINDOWS_EXPERIMENTAL: 'true'
+          PREPARE_WINDOWS_CUDA13: 'true'
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -102,6 +103,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           WINDOWS_BUILD_EXPERIMENTAL_PORTABLES: 'true'
+          WINDOWS_BUILD_CUDA13: 'true'
         run: |
           set -euo pipefail
           if [[ ! "$RELEASE_TAG" =~ ^next-[0-9]{4}-[0-9]{2}-[0-9]{2}\.[1-9][0-9]*$ ]]; then
@@ -170,44 +172,46 @@ jobs:
             python3 scripts/audit_katago_source_bundle.py --target "$target" \
               --engine "dist/windows/input-${flavor}/engines/katago/windows-x64"
           done
-          grep -qx 'Model source: kata1-tf3-b11c768-s12002M-d6304M.bin.gz' "dist/windows/input-with-katago/engines/katago/VERSION.txt"
-          grep -qx 'Model architecture: transformer' "dist/windows/input-with-katago/engines/katago/VERSION.txt"
-          grep -qx 'Minimum KataGo version: 1.17.0' "dist/windows/input-with-katago/engines/katago/VERSION.txt"
+          default_model_id="$(python3 scripts/katago_asset_catalog.py get defaultModelId)"
+          model_manifest="dist/windows/input-with-katago/engines/katago/VERSION.txt"
+          grep -Fqx "Model source: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.fileName")" "$model_manifest"
+          grep -Fqx "Model architecture: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.architecture")" "$model_manifest"
+          grep -Fqx "Minimum KataGo version: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.minimumKataGoVersion")" "$model_manifest"
           test "$(sha256sum "dist/windows/input-with-katago/weights/default.bin.gz" | awk '{print $1}')" = \
-            "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e"
+            "$(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.sha256")"
           test -f "dist/windows/input-opencl/engines/katago/windows-x64/katago.exe"
           test -f "dist/windows/input-opencl/PROJECT_INFO.txt"
           test -f "dist/windows/input-opencl/readboard/readboard.exe"
           test -f "dist/windows/input-opencl/readboard/lizzieyzy-next-readboard-manifest.txt"
           grep -Fqx "Windows OpenCL bundle: $(python3 scripts/katago_asset_catalog.py get assets.windows-opencl.assetName)" "dist/windows/input-opencl/engines/katago/VERSION.txt"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/LizzieYzy Next.exe"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/PROJECT_INFO.txt"
-          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-with-katago/LizzieYzy Next/app/LizzieYzy Next.cfg"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/readboard/readboard.exe"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/readboard/lizzieyzy-next-readboard-manifest.txt"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/jcef-bundle/build_meta.json"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/jcef-bundle/install.lock"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/jcef-bundle/libcef.dll"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/app/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
-          test -f "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/LizzieYzy Next OpenCL.exe"
-          test -f "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/app/PROJECT_INFO.txt"
-          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/app/LizzieYzy Next OpenCL.cfg"
-          test -f "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/app/readboard/readboard.exe"
-          test -f "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/runtime/bin/java.exe"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/LizzieYzy Next NVIDIA.exe"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/PROJECT_INFO.txt"
-          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/LizzieYzy Next NVIDIA.cfg"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/readboard/readboard.exe"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/runtime/bin/java.exe"
+          test -f "dist/windows/app-image-with-katago/KG-next/KG-next.exe"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/PROJECT_INFO.txt"
+          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-with-katago/KG-next/app/KG-next.cfg"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/readboard/readboard.exe"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/readboard/lizzieyzy-next-readboard-manifest.txt"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/jcef-bundle/build_meta.json"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/jcef-bundle/install.lock"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/jcef-bundle/libcef.dll"
+          test -f "dist/windows/app-image-with-katago/KG-next/app/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
+          test -f "dist/windows/app-image-opencl/KG-next OpenCL/KG-next OpenCL.exe"
+          test -f "dist/windows/app-image-opencl/KG-next OpenCL/app/PROJECT_INFO.txt"
+          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-opencl/KG-next OpenCL/app/KG-next OpenCL.cfg"
+          test -f "dist/windows/app-image-opencl/KG-next OpenCL/app/readboard/readboard.exe"
+          test -f "dist/windows/app-image-opencl/KG-next OpenCL/runtime/bin/java.exe"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/KG-next NVIDIA.exe"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/PROJECT_INFO.txt"
+          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-nvidia/KG-next NVIDIA/app/KG-next NVIDIA.cfg"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/readboard/readboard.exe"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/runtime/bin/java.exe"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/katago.exe"
           test -f "dist/windows/input-nvidia/PROJECT_INFO.txt"
           test -f "dist/windows/input-nvidia/readboard/readboard.exe"
           test -f "dist/windows/input-nvidia/readboard/lizzieyzy-next-readboard-manifest.txt"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/cudart64_12.dll"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/cublas64_12.dll"
-          test -f "dist/windows/app-image-without.engine/LizzieYzy Next/LizzieYzy Next.exe"
-          test -f "dist/windows/app-image-without.engine/LizzieYzy Next/app/PROJECT_INFO.txt"
-          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-without.engine/LizzieYzy Next/app/LizzieYzy Next.cfg"
+          test -f "dist/windows/app-image-without.engine/KG-next/KG-next.exe"
+          test -f "dist/windows/app-image-without.engine/KG-next/app/PROJECT_INFO.txt"
+          grep -q "java-options=-Dlizzie.next.version=$RELEASE_TAG" "dist/windows/app-image-without.engine/KG-next/app/KG-next.cfg"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/cublasLt64_12.dll"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/cudnn64_9.dll"
           test -f "dist/windows/input-nvidia/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
@@ -218,30 +222,54 @@ jobs:
           grep -Eq '^- CUDA NVRTC: 12\.8\.61 \| .* \| sha256=e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d[[:space:]]*$' \
             "dist/windows/input-nvidia/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
           grep -qx "nvidia" "dist/windows/input-nvidia/engines/katago/windows-x64/lizzieyzy-next-engine-backend.txt"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/cudart64_12.dll"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/cublas64_12.dll"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/cublasLt64_12.dll"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/cudnn64_9.dll"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/cudart64_12.dll"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/cublas64_12.dll"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/cublasLt64_12.dll"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/cudnn64_9.dll"
           # Reviewed source builds statically link zlib; official archives ship z.dll.
           for nvidia_engine in \
             "dist/windows/input-nvidia/engines/katago/windows-x64" \
-            "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64"; do
+            "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64"; do
             if [ "$(python3 scripts/katago_asset_catalog.py origin)" = "project-source-build" ]; then
               python3 scripts/audit_katago_source_bundle.py --target windows-nvidia --engine "$nvidia_engine"
             else
               test -f "$nvidia_engine/z.dll"
             fi
           done
-          find "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64" -maxdepth 1 -type f -name 'nvJitLink*.dll' | grep -q .
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/nvrtc64_120_0.dll"
-          test -f "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/nvrtc-builtins64_128.dll"
+          find "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64" -maxdepth 1 -type f -name 'nvJitLink*.dll' | grep -q .
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/nvrtc64_120_0.dll"
+          test -f "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/nvrtc-builtins64_128.dll"
+          cuda13_app="dist/windows/app-image-nvidia.cuda13/KG-next NVIDIA CUDA13"
+          test -f "$cuda13_app/KG-next NVIDIA CUDA13.exe"
+          test -f "$cuda13_app/app/PROJECT_INFO.txt"
+          test -f "$cuda13_app/app/readboard/readboard.exe"
+          test -f "$cuda13_app/runtime/bin/java.exe"
+          grep -Fq "java-options=-Dlizzie.next.version=$RELEASE_TAG" "$cuda13_app/app/KG-next NVIDIA CUDA13.cfg"
+          for cuda13_engine in \
+            "dist/windows/input-nvidia.cuda13/engines/katago/windows-x64" \
+            "$cuda13_app/app/engines/katago/windows-x64"; do
+            test -f "$cuda13_engine/katago.exe"
+            test -f "$cuda13_engine/z.dll"
+            grep -Fqx "nvidia" "$cuda13_engine/lizzieyzy-next-engine-backend.txt"
+            grep -Fqx "Origin: official-release" "$cuda13_engine/lizzieyzy-next-katago-engine-manifest.txt"
+            grep -Fqx "Asset: $(python3 scripts/katago_asset_catalog.py get assets.windows-nvidia-cuda13.assetName)" \
+              "$cuda13_engine/lizzieyzy-next-katago-engine-manifest.txt"
+            test "$(sha256sum "$cuda13_engine/katago.exe" | awk '{print $1}')" = \
+              "$(python3 scripts/katago_asset_catalog.py get assets.windows-nvidia-cuda13.executableSha256)"
+            python3 scripts/prepare_bundled_nvidia_runtime.py \
+              --profile cuda13.2-cudnn9.24 --verify-output --output-dir "$cuda13_engine"
+          done
+          grep -Fqx "Windows NVIDIA CUDA13 bundle: $(python3 scripts/katago_asset_catalog.py get assets.windows-nvidia-cuda13.assetName)" \
+            "$cuda13_app/app/engines/katago/VERSION.txt"
+          test "$(sha256sum "$cuda13_app/app/weights/default.bin.gz" | awk '{print $1}')" = \
+            "$(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.sha256")"
           experimental_specs=(
-            "experimental.directml|LizzieYzy Next DirectML Experimental|directml|windows-directml"
-            "experimental.openvino|LizzieYzy Next OpenVINO Experimental|openvino|windows-openvino"
-            "experimental.rocm.gfx103x|LizzieYzy Next ROCm gfx103x Experimental|rocm-gfx103x|windows-rocm-gfx103x"
-            "experimental.rocm.gfx110x|LizzieYzy Next ROCm gfx110x Experimental|rocm-gfx110x|windows-rocm-gfx110x"
-            "experimental.rocm.gfx1151|LizzieYzy Next ROCm gfx1151 Experimental|rocm-gfx1151|windows-rocm-gfx1151"
-            "experimental.rocm.gfx120x|LizzieYzy Next ROCm gfx120x Experimental|rocm-gfx120x|windows-rocm-gfx120x"
+            "experimental.directml|KG-next DirectML Experimental|directml|windows-directml"
+            "experimental.openvino|KG-next OpenVINO Experimental|openvino|windows-openvino"
+            "experimental.rocm.gfx103x|KG-next ROCm gfx103x Experimental|rocm-gfx103x|windows-rocm-gfx103x"
+            "experimental.rocm.gfx110x|KG-next ROCm gfx110x Experimental|rocm-gfx110x|windows-rocm-gfx110x"
+            "experimental.rocm.gfx1151|KG-next ROCm gfx1151 Experimental|rocm-gfx1151|windows-rocm-gfx1151"
+            "experimental.rocm.gfx120x|KG-next ROCm gfx120x Experimental|rocm-gfx120x|windows-rocm-gfx120x"
           )
           for spec in "${experimental_specs[@]}"; do
             IFS='|' read -r flavor app_name backend catalog_id <<<"$spec"
@@ -256,10 +284,10 @@ jobs:
             test -f "dist/windows/app-image-${flavor}/${app_name}/${app_name}.exe"
             test -f "dist/release/${RELEASE_DATE_TAG}-windows64.${flavor}.portable.zip"
             test "$(sha256sum "dist/windows/app-image-${flavor}/${app_name}/app/weights/default.bin.gz" | awk '{print $1}')" = \
-              "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e"
+              "$(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.sha256")"
           done
-          test -d "dist/windows/app-image-experimental.rocm.gfx103x/LizzieYzy Next ROCm gfx103x Experimental/app/engines/katago/windows-x64/rocblas"
-          test -d "dist/windows/app-image-experimental.rocm.gfx103x/LizzieYzy Next ROCm gfx103x Experimental/app/engines/katago/windows-x64/hipblaslt"
+          test -d "dist/windows/app-image-experimental.rocm.gfx103x/KG-next ROCm gfx103x Experimental/app/engines/katago/windows-x64/rocblas"
+          test -d "dist/windows/app-image-experimental.rocm.gfx103x/KG-next ROCm gfx103x Experimental/app/engines/katago/windows-x64/hipblaslt"
           test -f "dist/release/${RELEASE_DATE_TAG}-windows64.nvidia.tensorrt.portable.7z.001"
           test -f "dist/release/${RELEASE_DATE_TAG}-windows64.nvidia.tensorrt.portable.README.txt"
           test -f "dist/release/${RELEASE_DATE_TAG}-windows64.nvidia.tensorrt.portable.manifest.json"
@@ -277,14 +305,14 @@ jobs:
             "engines/katago/windows-x64-nvidia-tensorrt/lizzieyzy-next-katago-engine-manifest.txt"
           grep -Fqx "HumanSL companion SHA-256: $companion_sha" \
             "engines/katago/windows-x64-nvidia-tensorrt/lizzieyzy-next-katago-engine-manifest.txt"
-          test -f "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe"
-          echo "$companion_sha  dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe" | sha256sum -c -
-          test -f "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/nvrtc64_120_0.dll"
-          test -f "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/nvrtc-builtins64_128.dll"
+          test -f "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe"
+          echo "$companion_sha  dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe" | sha256sum -c -
+          test -f "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/nvrtc64_120_0.dll"
+          test -f "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/nvrtc-builtins64_128.dll"
           grep -Eq '^- CUDA NVRTC: 12\.8\.61 \| .* \| sha256=e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d[[:space:]]*$' \
-            "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
+            "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
           grep -Eq '^- NVIDIA TensorRT: 10\.9\.0\.34 \| .* \| sha256=c2758eb60191f01a47b24f54700e5463f577ebe129cd18fe835d0aa9f1e1a16d[[:space:]]*$' \
-            "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
+            "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-nvidia-runtime-manifest.txt"
           grep -Fqx "KataGo release: $(python3 scripts/katago_asset_catalog.py get katagoReleaseTag)" \
             "dist/windows/input-nvidia.tensorrt/engines/katago/VERSION.txt"
           grep -Fqx "Windows TensorRT bundle: $(python3 scripts/katago_asset_catalog.py get assets.windows-tensorrt.assetName)" \
@@ -294,10 +322,10 @@ jobs:
           test -f "dist/windows/input-without.engine/PROJECT_INFO.txt"
           test -f "dist/windows/input-without.engine/readboard/readboard.exe"
           test -f "dist/windows/input-without.engine/readboard/lizzieyzy-next-readboard-manifest.txt"
-          test -f "dist/windows/app-image-without.engine/LizzieYzy Next/app/PROJECT_INFO.txt"
-          test -f "dist/windows/app-image-without.engine/LizzieYzy Next/app/readboard/readboard.exe"
-          test -f "dist/windows/app-image-without.engine/LizzieYzy Next/runtime/bin/java.exe"
-          test -f "dist/windows/app-image-with-katago/LizzieYzy Next/runtime/bin/java.exe"
+          test -f "dist/windows/app-image-without.engine/KG-next/app/PROJECT_INFO.txt"
+          test -f "dist/windows/app-image-without.engine/KG-next/app/readboard/readboard.exe"
+          test -f "dist/windows/app-image-without.engine/KG-next/runtime/bin/java.exe"
+          test -f "dist/windows/app-image-with-katago/KG-next/runtime/bin/java.exe"
           shopt -s nullglob
           jcef_bundle_count=0
           for jcef_bundle in dist/windows/input-*/jcef-bundle dist/windows/app-image-*/*/app/jcef-bundle; do
@@ -316,10 +344,11 @@ jobs:
             exit 1
           fi
           for app_cfg in \
-            "dist/windows/app-image-with-katago/LizzieYzy Next/app/LizzieYzy Next.cfg" \
-            "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/app/LizzieYzy Next OpenCL.cfg" \
-            "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/LizzieYzy Next NVIDIA.cfg" \
-            "dist/windows/app-image-without.engine/LizzieYzy Next/app/LizzieYzy Next.cfg"; do
+            "dist/windows/app-image-with-katago/KG-next/app/KG-next.cfg" \
+            "dist/windows/app-image-opencl/KG-next OpenCL/app/KG-next OpenCL.cfg" \
+            "dist/windows/app-image-nvidia/KG-next NVIDIA/app/KG-next NVIDIA.cfg" \
+            "dist/windows/app-image-nvidia.cuda13/KG-next NVIDIA CUDA13/app/KG-next NVIDIA CUDA13.cfg" \
+            "dist/windows/app-image-without.engine/KG-next/app/KG-next.cfg"; do
             grep -q -- "java-options=-Xshare:auto" "$app_cfg"
             grep -q -- "java-options=-XX:InitialRAMPercentage=1.0" "$app_cfg"
             grep -q -- "java-options=-XX:MaxRAMPercentage=50.0" "$app_cfg"
@@ -362,20 +391,21 @@ jobs:
         run: |
           set -euo pipefail
           runtime_version_engines=(
-            "dist/windows/app-image-with-katago/LizzieYzy Next/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-opencl/LizzieYzy Next OpenCL/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.directml/LizzieYzy Next DirectML Experimental/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.openvino/LizzieYzy Next OpenVINO Experimental/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.rocm.gfx103x/LizzieYzy Next ROCm gfx103x Experimental/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.rocm.gfx110x/LizzieYzy Next ROCm gfx110x Experimental/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.rocm.gfx1151/LizzieYzy Next ROCm gfx1151 Experimental/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-experimental.rocm.gfx120x/LizzieYzy Next ROCm gfx120x Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-with-katago/KG-next/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-opencl/KG-next OpenCL/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.directml/KG-next DirectML Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.openvino/KG-next OpenVINO Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.rocm.gfx103x/KG-next ROCm gfx103x Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.rocm.gfx110x/KG-next ROCm gfx110x Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.rocm.gfx1151/KG-next ROCm gfx1151 Experimental/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-experimental.rocm.gfx120x/KG-next ROCm gfx120x Experimental/app/engines/katago/windows-x64/katago.exe"
           )
           driver_gated_static_engines=(
-            "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64/katago.exe"
-            "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe"
+            "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-nvidia.cuda13/KG-next NVIDIA CUDA13/app/engines/katago/windows-x64/katago.exe"
+            "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/katago-human-sl-cuda.exe"
           )
-          tensorrt_engine="dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/katago.exe"
+          tensorrt_engine="dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/katago.exe"
           for engine in "${runtime_version_engines[@]}"; do
             test -f "$engine"
             version_output="$("$engine" version 2>&1)"
@@ -399,17 +429,17 @@ jobs:
             --reject-version 1.17.2 \
             "$tensorrt_engine"
           python3 scripts/audit_katago_package_metadata.py \
-            --version-file "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/VERSION.txt" \
-            --engine-manifest "dist/windows/app-image-nvidia.tensorrt/LizzieYzy Next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-katago-engine-manifest.txt" \
+            --version-file "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/VERSION.txt" \
+            --engine-manifest "dist/windows/app-image-nvidia.tensorrt/KG-next NVIDIA TensorRT/app/engines/katago/windows-x64/lizzieyzy-next-katago-engine-manifest.txt" \
             --expected-version "$(python3 scripts/katago_asset_catalog.py get katagoVersion)" \
             --expected-asset "$(python3 scripts/katago_asset_catalog.py get assets.windows-tensorrt.assetName)"
 
       - name: Smoke test bundled Windows app images
         shell: powershell
         run: |
-          $appExe = Join-Path $PWD "dist\windows\app-image-with-katago\LizzieYzy Next\LizzieYzy Next.exe"
+          $appExe = Join-Path $PWD "dist\windows\app-image-with-katago\KG-next\KG-next.exe"
           & "$PWD\scripts\windows_smoke_test.ps1" -AppExe $appExe -WaitSeconds 60 -ProbeBoardSync
-          $nvidiaExe = Join-Path $PWD "dist\windows\app-image-nvidia\LizzieYzy Next NVIDIA\LizzieYzy Next NVIDIA.exe"
+          $nvidiaExe = Join-Path $PWD "dist\windows\app-image-nvidia\KG-next NVIDIA\KG-next NVIDIA.exe"
           & "$PWD\scripts\windows_smoke_test.ps1" `
             -AppExe $nvidiaExe `
             -WaitSeconds 30 `
@@ -418,14 +448,15 @@ jobs:
             -LauncherOnly `
             -OpenAutoSetup
           $launcherOnlyApps = @(
-            "dist\windows\app-image-opencl\LizzieYzy Next OpenCL\LizzieYzy Next OpenCL.exe",
-            "dist\windows\app-image-without.engine\LizzieYzy Next\LizzieYzy Next.exe",
-            "dist\windows\app-image-experimental.directml\LizzieYzy Next DirectML Experimental\LizzieYzy Next DirectML Experimental.exe",
-            "dist\windows\app-image-experimental.openvino\LizzieYzy Next OpenVINO Experimental\LizzieYzy Next OpenVINO Experimental.exe",
-            "dist\windows\app-image-experimental.rocm.gfx103x\LizzieYzy Next ROCm gfx103x Experimental\LizzieYzy Next ROCm gfx103x Experimental.exe",
-            "dist\windows\app-image-experimental.rocm.gfx110x\LizzieYzy Next ROCm gfx110x Experimental\LizzieYzy Next ROCm gfx110x Experimental.exe",
-            "dist\windows\app-image-experimental.rocm.gfx1151\LizzieYzy Next ROCm gfx1151 Experimental\LizzieYzy Next ROCm gfx1151 Experimental.exe",
-            "dist\windows\app-image-experimental.rocm.gfx120x\LizzieYzy Next ROCm gfx120x Experimental\LizzieYzy Next ROCm gfx120x Experimental.exe"
+            "dist\windows\app-image-nvidia.cuda13\KG-next NVIDIA CUDA13\KG-next NVIDIA CUDA13.exe",
+            "dist\windows\app-image-opencl\KG-next OpenCL\KG-next OpenCL.exe",
+            "dist\windows\app-image-without.engine\KG-next\KG-next.exe",
+            "dist\windows\app-image-experimental.directml\KG-next DirectML Experimental\KG-next DirectML Experimental.exe",
+            "dist\windows\app-image-experimental.openvino\KG-next OpenVINO Experimental\KG-next OpenVINO Experimental.exe",
+            "dist\windows\app-image-experimental.rocm.gfx103x\KG-next ROCm gfx103x Experimental\KG-next ROCm gfx103x Experimental.exe",
+            "dist\windows\app-image-experimental.rocm.gfx110x\KG-next ROCm gfx110x Experimental\KG-next ROCm gfx110x Experimental.exe",
+            "dist\windows\app-image-experimental.rocm.gfx1151\KG-next ROCm gfx1151 Experimental\KG-next ROCm gfx1151 Experimental.exe",
+            "dist\windows\app-image-experimental.rocm.gfx120x\KG-next ROCm gfx120x Experimental\KG-next ROCm gfx120x Experimental.exe"
           )
           foreach ($relativePath in $launcherOnlyApps) {
             $launcherExe = Join-Path $PWD $relativePath
@@ -476,8 +507,8 @@ jobs:
           name: windows-smoke-logs
           path: |
             ${{ runner.temp }}/lizzieyzy-next-msi-smoke/logs/*
-            dist/windows/app-image-with-katago/LizzieYzy Next/LastConsoleLogs_*.txt
-            dist/windows/app-image-with-katago/LizzieYzy Next/LastErrorLogs_*.txt
+            dist/windows/app-image-with-katago/KG-next/LastConsoleLogs_*.txt
+            dist/windows/app-image-with-katago/KG-next/LastErrorLogs_*.txt
 
       - name: Create run-bound release asset provenance
         shell: bash

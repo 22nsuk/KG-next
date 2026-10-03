@@ -31,7 +31,8 @@ def validate_transfer_catalog(catalog, repository, tag):
     require(catalog.get('katagoSourceCommit') == SOURCE_COMMIT, 'Unexpected source commit')
     require(catalog.get('engineReleaseRepository') == repository, 'Unexpected engine repository')
     require(catalog.get('engineReleaseTag') == tag, 'Unexpected engine release tag')
-    records = catalog['assets']
+    records = {key: value for key, value in catalog['assets'].items()
+               if value.get('origin', catalog['origin']) == 'project-source-build'}
     require(set(records) == set(TARGETS), 'Incomplete source target matrix')
     require(sum(record['sizeBytes'] for record in records.values()) <= 2_000_000_000,
             'Source inventory exceeds transfer budget')

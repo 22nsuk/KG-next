@@ -22,7 +22,7 @@ class SGFParserEmptyEngineSaveTest {
       assertFalse(
           sgf.contains("DZ[G]"),
           "a non-Kata board with no foreground engine must not write a Kata header");
-      assertTrue(sgf.contains("AP[LizzieYzy Next"), "ordinary save still writes the app header");
+      assertTrue(sgf.contains("AP[KG-next"), "ordinary save still writes the app header");
     }
   }
 

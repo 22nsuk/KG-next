@@ -57,20 +57,30 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
         name = require_text(asset, "assetName")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.zip", name):
             raise ValueError(f"asset {asset_id} has unsafe assetName")
-        if catalog.get("origin", "official-release") == "project-source-build":
+        asset_origin = asset.get("origin", catalog.get("origin", "official-release"))
+        override = asset.get("downloadUrl", "")
+        if asset_origin == "official-release":
+            expected_url = f"https://github.com/lightvector/KataGo/releases/download/{release_tag}/{name}"
+            if (override and override != expected_url) or ("origin" in asset and override != expected_url):
+                raise ValueError(f"asset {asset_id} has unsupported official downloadUrl")
+        elif asset_origin != catalog.get("origin") or override:
+            raise ValueError(f"asset {asset_id} has unsupported origin or downloadUrl")
+        if asset_origin == "project-source-build":
             expected = f"katago-source-{catalog['katagoSourceCommit'][:12]}-{asset_id}.zip"
             if name != expected:
                 raise ValueError(f"asset {asset_id} must identify the pinned source and target")
         elif f"-{release_tag}-" not in name:
             raise ValueError(f"asset {asset_id} does not use {release_tag}: {name}")
         executable_sha = asset.get("executableSha256", "")
+        if "origin" in asset and asset_origin == "official-release" and not SHA256_RE.fullmatch(str(asset.get("inventorySha256", ""))):
+            raise ValueError(f"asset {asset_id} requires inventorySha256")
         if executable_sha and not SHA256_RE.fullmatch(executable_sha):
             raise ValueError(f"asset {asset_id} has invalid executableSha256")
         linkage = asset.get("zlibLinkage", "dynamic")
         if linkage not in ("dynamic", "static"):
             raise ValueError(f"asset {asset_id} has invalid zlibLinkage")
         static_zlib_asset = (
-            catalog.get("origin", "official-release") == "project-source-build"
+            asset_origin == "project-source-build"
             and asset_id in ("windows-nvidia", "windows-tensorrt")
         )
         if (linkage == "static") != static_zlib_asset:
@@ -101,7 +111,8 @@ def engine_release_base(catalog: dict[str, Any]) -> str:
 
 
 def asset_download_url(catalog: dict[str, Any], asset_id: str) -> str:
-    return engine_release_base(catalog) + "/" + catalog["assets"][asset_id]["assetName"]
+    asset = catalog["assets"][asset_id]
+    return asset.get("downloadUrl") or engine_release_base(catalog) + "/" + asset["assetName"]
 
 
 def validate_entry(entry: Any, label: str) -> None:
@@ -147,7 +158,7 @@ def engine_manifest_text(catalog: dict[str, Any], asset_id: str, source_commit: 
         f"Asset SHA-256: {asset['sha256']}\n"
         f"Executable SHA-256: {require_text(asset, 'executableSha256')}\n"
         f"Backend: {require_text(asset, 'backend')}\n"
-        f"Origin: {require_text(catalog, 'origin')}\n"
+        f"Origin: {asset.get('origin', require_text(catalog, 'origin'))}\n"
         f"Source commit: {source_commit}\n"
         f"Zlib linkage: {asset.get('zlibLinkage', 'dynamic')}\n"
     )

@@ -1,11 +1,13 @@
+> KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
+
 <p align="center">
-  <img src="assets/hero-english.svg" alt="LizzieYzy Next" width="100%" />
+  <img src="assets/hero-english.svg" alt="KG-next" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
   <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="เว็บไซต์ทางการ"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
@@ -15,7 +17,7 @@
 </p>
 
 <p align="center">
-  <strong>LizzieYzy Next คือสาขา lizzieyzy ที่ยังได้รับการดูแล สำหรับผู้เล่นที่ใช้ KataGo ทบทวนเกมโกะ</strong><br/>
+  <strong>KG-next คือสาขา lizzieyzy ที่ยังได้รับการดูแล สำหรับผู้เล่นที่ใช้ KataGo ทบทวนเกมโกะ</strong><br/>
   รองรับการดึงเกมด้วยชื่อเล่น Fox การวิเคราะห์ทั้งกระดานอย่างรวดเร็ว กราฟอัตราชนะใหม่ และภาพรวมด้านล่าง พร้อมเวอร์ชันสำหรับ Windows, macOS และ Linux
 </p>
 
@@ -32,7 +34,7 @@
 </p>
 
 > [!NOTE]
-> แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่ดาวน์โหลดเวอร์ชันเสถียรจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
+> แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่ดาวน์โหลดเวอร์ชันเสถียรจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
 >
 > ผู้ใช้ในจีนแผ่นดินใหญ่สามารถดาวน์โหลดจาก Baidu Netdisk สาธารณะได้เช่นกัน:
 > [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
@@ -64,10 +66,10 @@
 
 ## เลือกดาวน์โหลดตัวไหน
 
-แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่เลือกเวอร์ชันเสถียรที่ใช้บ่อยจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
+แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่เลือกเวอร์ชันเสถียรที่ใช้บ่อยจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
 
 <p align="center">
-  <img src="assets/package-guide.svg" alt="คู่มือเลือกแพ็กเกจ LizzieYzy Next" width="100%" />
+  <img src="assets/package-guide.svg" alt="คู่มือเลือกแพ็กเกจ KG-next" width="100%" />
 </p>
 
 | สถานการณ์ของคุณ | คีย์เวิร์ดไฟล์ที่ควรหา |
@@ -88,9 +90,9 @@
 | macOS Intel | `*mac-intel.with-katago.dmg` |
 | Linux | `*linux64.with-katago.zip` |
 
-แพ็กเกจฉบับเต็มสำหรับแบ็กเอนด์ CPU, OpenCL, CUDA, TensorRT และ Metal รวมถึงแพ็กเกจ Linux ใช้ KataGo `v1.18.1` ส่วน Linux NVIDIA ยังคงใช้ CUDA 12.1 เพื่อความเข้ากันได้ของสภาพแวดล้อม
+แพ็กเกจฉบับเต็มสำหรับแบ็กเอนด์ CPU, OpenCL, CUDA, TensorRT และ Metal รวมถึงแพ็กเกจ Linux ใช้ KataGo `v1.18.2` ส่วน Linux NVIDIA ยังคงใช้ CUDA 12.1 เพื่อความเข้ากันได้ของสภาพแวดล้อม
 
-แพ็กเกจฉบับเต็มที่แนะนำมีโมเดลเรือธง B11 อย่างเป็นทางการ `b11c768h12nbt3tflrs-fson-silu.bin.gz` (ประมาณ 202 MiB) การเปรียบเทียบบน RTX 3070 วัด throughput การค้นหาต่ำกว่า B10 ประมาณ 40% หากต้องการความเร็วสามารถเปลี่ยนเป็น B10 ใน `KataGo การตั้งค่าอัตโนมัติ -> จัดการโมเดล`
+โมเดลเริ่มต้นคือ `kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz` ดูรายละเอียดใน `src/main/resources/katago-assets.json` การเปลี่ยนแปลงนี้ยังไม่ได้ทดสอบประสิทธิภาพ GPU ของโมเดลนี้
 
 หมายเหตุ NVIDIA และ TensorRT:
 
@@ -107,7 +109,7 @@
 
 <p align="center">
   <a href="assets/fox-id-demo.gif">
-    <img src="assets/fox-id-demo-cover.png" alt="ตัวอย่างการดึงเกมด้วยชื่อเล่น Fox ใน LizzieYzy Next" width="100%" />
+    <img src="assets/fox-id-demo-cover.png" alt="ตัวอย่างการดึงเกมด้วยชื่อเล่น Fox ใน KG-next" width="100%" />
   </a>
 </p>
 
@@ -122,13 +124,13 @@
 ## ตัวอย่างหน้าจอ
 
 <p align="center">
-  <img src="assets/interface-overview-2026-04.png" alt="หน้าจอ LizzieYzy Next" width="100%" />
+  <img src="assets/interface-overview-2026-04.png" alt="หน้าจอ KG-next" width="100%" />
 </p>
 
 กราฟหลักและภาพรวมด่วนแสดงข้อมูลต่อไปนี้:
 
 <p align="center">
-  <img src="assets/winrate-quick-overview-2026-04.png" alt="กราฟอัตราชนะและภาพรวมด่วนของ LizzieYzy Next" width="46%" />
+  <img src="assets/winrate-quick-overview-2026-04.png" alt="กราฟอัตราชนะและภาพรวมด่วนของ KG-next" width="46%" />
 </p>
 
 - เส้นสีน้ำเงิน / สีม่วง: แนวโน้มอัตราชนะของทั้งสองฝ่าย
@@ -138,7 +140,7 @@
 
 ## แตกต่างจาก lizzieyzy เดิมอย่างไร
 
-| หัวข้อเปรียบเทียบ | `lizzieyzy` เดิม | `LizzieYzy Next` |
+| หัวข้อเปรียบเทียบ | `lizzieyzy` เดิม | `KG-next` |
 | --- | --- | --- |
 | สถานะปัจจุบัน | โปรเจกต์เดิมที่ผู้ใช้จำนวนมากยังจำได้ แต่ไม่มีการดูแลต่อเนื่องในทางปฏิบัติ | สาขาที่ดูแลอยู่ในปัจจุบัน เน้นการใช้งานและการเผยแพร่ |
 | การดึงเกม Fox | ขั้นตอนเดิมใช้งานไม่ได้ในหลายกรณี | กู้คืนขั้นตอนที่ใช้บ่อยและรองรับการใส่ชื่อเล่น |
@@ -149,7 +151,7 @@
 
 ## การเปิดครั้งแรกบน macOS
 
-เลือกแพ็กเกจที่ตรงกับ Mac ของคุณ เปิด DMG แล้วลาก `LizzieYzy Next` ไปยัง Applications จากนั้นนำดิสก์ติดตั้งออกและเปิดโปรแกรมจากโฟลเดอร์ Applications ใน Finder เวอร์ชันทางการผ่านการลงนามและ notarization แล้ว หาก macOS ยังปิดกั้นโปรแกรม ให้ทำตาม [คู่มือติดตั้ง](docs/INSTALL.md)
+เลือกแพ็กเกจที่ตรงกับ Mac ของคุณ เปิด DMG แล้วลาก `KG-next` ไปยัง Applications จากนั้นนำดิสก์ติดตั้งออกและเปิดโปรแกรมจากโฟลเดอร์ Applications ใน Finder เวอร์ชันทางการผ่านการลงนามและ notarization แล้ว หาก macOS ยังปิดกั้นโปรแกรม ให้ทำตาม [คู่มือติดตั้ง](docs/INSTALL.md)
 
 ## เอกสารและการมีส่วนร่วม
 
@@ -158,8 +160,8 @@
 - [รายละเอียดแพ็กเกจ](docs/PACKAGES.md)
 - [คำถามที่พบบ่อยและการแก้ปัญหา](docs/TROUBLESHOOTING.md)
 - [แพลตฟอร์มที่ทดสอบแล้ว](docs/TESTED_PLATFORMS.md)
-- [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
-- [GitHub Discussions](https://github.com/wimi321/lizzieyzy-next/discussions)
+- [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
+- [GitHub Discussions](https://github.com/22nsuk/KG-next/discussions)
 - [กลุ่ม QQ ภาษาจีน: 299419120](https://qm.qq.com/q/JZoeojjteg)
 - [แผนงานโครงการ](ROADMAP.md)
 - [ร่วมพัฒนา](CONTRIBUTING.md)
@@ -176,8 +178,8 @@
 ขอบคุณผู้ร่วมพัฒนาทุกคน:
 
 <p align="left">
-  <a href="https://github.com/wimi321/lizzieyzy-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="ผู้ร่วมพัฒนา LizzieYzy Next" />
+  <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="ผู้ร่วมพัฒนา KG-next" />
   </a>
 </p>
 

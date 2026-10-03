@@ -57,7 +57,7 @@ def verify_nvidia_dependency_origin(workflow: str) -> None:
     with tempfile.TemporaryDirectory(prefix="nvidia origin ") as temporary:
         root = Path(temporary)
         inputs = [root / "dist/windows/input-nvidia/engines/katago/windows-x64",
-                  root / "dist/windows/app-image-nvidia/LizzieYzy Next NVIDIA/app/engines/katago/windows-x64"]
+                  root / "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64"]
         for directory in inputs:
             directory.mkdir(parents=True)
         # Stub only the external command boundary; inventory validation has its own tests.
@@ -154,7 +154,7 @@ def main() -> None:
         "windows_smoke_test.ps1",
     )
     require(lizzie_source, "lizzie.smoke.openAutoSetup", "Lizzie.java")
-    require(workflow, "LizzieYzy Next NVIDIA.exe", "build-windows-release.yml")
+    require(workflow, "KG-next NVIDIA.exe", "build-windows-release.yml")
     require(workflow, "-LauncherOnly", "build-windows-release.yml")
     require(workflow, "-OpenAutoSetup", "build-windows-release.yml")
     require(workflow, "runtime/bin/server/jvm.dll", "build-windows-release.yml")

@@ -236,7 +236,7 @@ public final class TeacherSettings {
     Path temporary = Files.createTempFile(parent, "teacher-", ".tmp");
     try {
       try (OutputStream output = Files.newOutputStream(temporary)) {
-        properties.store(output, "LizzieYzy Next AI commentary settings (no secrets)");
+        properties.store(output, "KG-next AI commentary settings (no secrets)");
       }
       try {
         Files.move(

@@ -39,6 +39,9 @@ public final class KataGoAssetCatalog {
     assets = Collections.unmodifiableMap(parseAssets(root.getJSONObject("assets")));
     if (origin.equals("project-source-build")) {
       for (Asset asset : assets.values()) {
+        if (!asset.downloadUrl().isEmpty()) {
+          continue;
+        }
         String expected =
             "katago-source-" + katagoSourceCommit.substring(0, 12) + "-" + asset.id() + ".zip";
         if (!expected.equals(asset.assetName())) {
@@ -130,7 +133,9 @@ public final class KataGoAssetCatalog {
     if (!asset.equals(assets.get(asset.id()))) {
       throw new IllegalArgumentException("Asset is not from the trusted catalog");
     }
-    return engineReleaseBase + "/" + asset.assetName();
+    return asset.downloadUrl().isEmpty()
+        ? engineReleaseBase + "/" + asset.assetName()
+        : asset.downloadUrl();
   }
 
   private static String engineReleaseBase(JSONObject root) {
@@ -190,7 +195,7 @@ public final class KataGoAssetCatalog {
     return url;
   }
 
-  private static Map<String, Asset> parseAssets(JSONObject values) {
+  private Map<String, Asset> parseAssets(JSONObject values) {
     Map<String, Asset> parsed = new LinkedHashMap<>();
     for (String id : values.keySet()) {
       JSONObject value = values.getJSONObject(id);
@@ -210,9 +215,30 @@ public final class KataGoAssetCatalog {
               value.optString("runtimeProfile", ""),
               value.optString("gpuFamily", ""),
               required(value, "releaseTier"),
-              zlibLinkage(value)));
+              zlibLinkage(value),
+              assetDownloadOverride(value)));
     }
     return parsed;
+  }
+
+  private String assetDownloadOverride(JSONObject value) {
+    String assetOrigin = value.optString("origin", origin);
+    String url = value.optString("downloadUrl", "").trim();
+    if (assetOrigin.equals("official-release")) {
+      if (value.has("origin")) {
+        requiredSha256(value, "inventorySha256");
+      }
+      String name = required(value, "assetName");
+      String expected = releaseUrl(katagoReleaseTag, name);
+      if (!name.contains("-" + katagoReleaseTag + "-")
+          || (!url.isEmpty() && !url.equals(expected))
+          || (value.has("origin") && !url.equals(expected))) {
+        throw new IllegalStateException("Unsupported official engine download URL");
+      }
+    } else if (!assetOrigin.equals(origin) || !url.isEmpty()) {
+      throw new IllegalStateException("Unsupported engine origin or download URL");
+    }
+    return url;
   }
   private static String zlibLinkage(JSONObject value) {
     String linkage = value.optString("zlibLinkage", "dynamic").trim();
@@ -293,5 +319,6 @@ public final class KataGoAssetCatalog {
       String runtimeProfile,
       String gpuFamily,
       String releaseTier,
-      String zlibLinkage) {}
+      String zlibLinkage,
+      String downloadUrl) {}
 }

@@ -3809,7 +3809,7 @@ public class Leelaz {
             AnalysisOutputOwnership.ordinary(
                 analysisOutputGeneration.get(),
                 binding.analysisStateLineage,
-                captureAnalysisInfoTarget()));
+                captureAnalysisInfoTarget(), false));
         binding.suppressGlobalEnginePresentation = false;
         suppressGlobalEnginePresentationUntilOwned = false;
       }
@@ -5102,6 +5102,9 @@ public class Leelaz {
     private final long generation;
     private final AnalysisStateLineage analysisStateLineage;
     private final AnalysisInfoTarget target;
+    private final boolean hasMoveRestrictions;
+    /** Consumed only by a valid full display adoption from this physically published owner. */
+    private boolean pendingRestrictedAnalysisAdoption;
 
     private AnalysisOutputOwnership(
         EngineManager.EngineGamePrimaryContext exactContext,
@@ -5109,13 +5112,16 @@ public class Leelaz {
         Object recoveryToken,
         long generation,
         AnalysisStateLineage analysisStateLineage,
-        AnalysisInfoTarget target) {
+        AnalysisInfoTarget target,
+        boolean hasMoveRestrictions) {
       this.exactContext = exactContext;
       this.ordinary = ordinary;
       this.recoveryToken = recoveryToken;
       this.generation = generation;
       this.analysisStateLineage = analysisStateLineage;
       this.target = target;
+      this.hasMoveRestrictions = hasMoveRestrictions;
+      this.pendingRestrictedAnalysisAdoption = hasMoveRestrictions;
     }
 
     private static AnalysisOutputOwnership exact(
@@ -5123,19 +5129,20 @@ public class Leelaz {
         long generation,
         AnalysisStateLineage analysisStateLineage) {
       return new AnalysisOutputOwnership(
-          context, false, null, generation, analysisStateLineage, null);
+          context, false, null, generation, analysisStateLineage, null, false);
     }
 
     private static AnalysisOutputOwnership ordinary(
-        long generation, AnalysisStateLineage analysisStateLineage, AnalysisInfoTarget target) {
+        long generation, AnalysisStateLineage analysisStateLineage, AnalysisInfoTarget target,
+        boolean hasMoveRestrictions) {
       return new AnalysisOutputOwnership(
-          null, true, null, generation, analysisStateLineage, target);
+          null, true, null, generation, analysisStateLineage, target, hasMoveRestrictions);
     }
 
     private static AnalysisOutputOwnership recoveryTombstone(
         Object recoveryToken, long generation, AnalysisStateLineage analysisStateLineage) {
       return new AnalysisOutputOwnership(
-          null, false, recoveryToken, generation, analysisStateLineage, null);
+          null, false, recoveryToken, generation, analysisStateLineage, null, false);
     }
 
     private boolean isExact() {
@@ -5511,20 +5518,33 @@ public class Leelaz {
       return;
     }
     List<MoveData> boardMoves = new ArrayList<>(parsed.moves);
+    AnalysisOutputOwnership cacheOwner =
+        source instanceof AnalysisOutputOwnership ? (AnalysisOutputOwnership) source : null;
+    boolean forceRestrictedAdoption =
+        cacheOwner != null && cacheOwner.pendingRestrictedAnalysisAdoption;
+    boolean adopted;
     if (parsed.kata) {
-      displayData.adoptOrdinaryAnalysis(
+      adopted = displayData.adoptOrdinaryAnalysis(
           boardMoves, bestMovesEnginename, this, parsed.totalPlayouts, parsed.rootVisits,
           parsed.estimateArray,
           moveFocusState != null && moveFocusState.current() ? moveFocusState.treeSource : source,
           secondaryDisplay,
-          moveFocusState != null && moveFocusState.current()
-              && (moveFocusState.pendingAdoption || moveFocusState.adopted));
+          forceRestrictedAdoption || (moveFocusState != null && moveFocusState.current()
+              && (moveFocusState.pendingAdoption || moveFocusState.adopted)))
+          == BoardData.AnalysisAdoption.FULL;
     } else if (secondaryDisplay) {
       displayData.tryToSetBestMoves2FromEngine(
-          boardMoves, bestMovesEnginename, this, parsed.totalPlayouts, null);
+          boardMoves, bestMovesEnginename, this, parsed.totalPlayouts, null,
+          forceRestrictedAdoption);
+      // A forced, nonempty legacy payload always replaces this slot when the setter returns.
+      adopted = forceRestrictedAdoption;
     } else {
-      displayData.tryToSetBestMovesFromEngine(
-          boardMoves, bestMovesEnginename, this, parsed.totalPlayouts, null, false);
+      adopted = displayData.tryToSetBestMovesFromEngine(
+          boardMoves, bestMovesEnginename, this, parsed.totalPlayouts, null,
+          forceRestrictedAdoption);
+    }
+    if (adopted && cacheOwner != null) {
+      cacheOwner.pendingRestrictedAnalysisAdoption = false;
     }
   }
 
@@ -6780,6 +6800,14 @@ public class Leelaz {
         || normalized.startsWith("genmove ");
   }
 
+  private boolean hasAnalysisMoveRestrictions(String command) {
+    if (!isOrdinaryPositionAnalysisCommand(command)) return false;
+    for (String token : command.trim().split("\\s+")) {
+      if (token.equalsIgnoreCase("allow") || token.equalsIgnoreCase("avoid")) return true;
+    }
+    return false;
+  }
+
   private enum AnalysisStateMutation {
     NONE,
     RESET_PAYLOAD,
@@ -6985,7 +7013,16 @@ public class Leelaz {
                 binding.analysisStateLineage,
                 isOrdinaryPositionAnalysisCommand(command.command)
                     ? command.ordinaryAnalysisTarget
-                    : captureAnalysisInfoTarget());
+                    : captureAnalysisInfoTarget(),
+                hasAnalysisMoveRestrictions(command.command));
+        // Stock engines also reset visits when the previous restrictions are removed. This
+        // replacement belongs to the new owner, so an old or cancelled stream cannot consume it.
+        replacement.pendingRestrictedAnalysisAdoption |=
+            isOrdinaryPositionAnalysisCommand(command.command)
+                && previous != null
+                && (previous.hasMoveRestrictions || previous.pendingRestrictedAnalysisAdoption)
+                && previous.generation == analysisOutputGeneration.get()
+                && isCurrentAnalysisInfoTarget(previous.target);
         binding.suppressGlobalEnginePresentation = false;
         suppressGlobalEnginePresentationUntilOwned = false;
       }
@@ -11455,6 +11492,7 @@ public class Leelaz {
         }
       }
     }
+    command = adaptRootTreeReuseForReceiver(command);
     Leelaz mirroredEngine = mirrorToSecondEngine ? resolveDefaultCommandMirrorEngine() : null;
     boolean defaultMirrorMustRemainAbsent = mirrorToSecondEngine && mirroredEngine == null;
     String mirroredCommand =
@@ -11592,6 +11630,26 @@ public class Leelaz {
       if (params.length > 2 && params[params.length - 2].equals("ownership")) {
         adapted = adapted.substring(0, adapted.length() - 14);
       }
+    }
+    return adaptRootTreeReuseForReceiver(adapted);
+  }
+
+  String adaptRootTreeReuseForReceiver(String command) {
+    if (command == null
+        || (!command.contains("reuseRootTree") && !command.contains("rootInfo"))) {
+      return command;
+    }
+    boolean analysisCommand = switch (command.trim().split("\\s+", 2)[0].toLowerCase(Locale.ROOT)) {
+      case "kata-analyze", "lz-analyze", "analyze", "kata-genmove_analyze",
+          "lz-genmove_analyze", "genmove_analyze" -> true;
+      default -> false;
+    };
+    if (!analysisCommand) return command;
+    boolean reuseRootTree = supportsRootTreeReuse();
+    String adapted =
+        reuseRootTree ? command : command.replaceAll("\\s+reuseRootTree\\s+\\S+", "");
+    if (!isKatago || (!supportRootInfo && !reuseRootTree)) {
+      adapted = adapted.replaceAll("\\s+rootInfo\\s+\\S+", "");
     }
     return adapted;
   }
@@ -19692,8 +19750,23 @@ public class Leelaz {
     return accepted;
   }
 
+  /** Capability belongs to this live reader binding, never to the configured engine name. */
+  public boolean supportsRootTreeReuse() {
+    synchronized (engineArbitrationLock()) {
+      ReaderStreamBinding binding = currentReaderStreamBinding();
+      return isKatago
+          && !binding.terminated
+          && endGetCommandList
+          && commandListBinding == binding
+          && commandLists.contains("kg-reuse-root-tree");
+    }
+  }
+
   public String addKataTag() {
-    return (supportRootInfo ? " rootInfo true" : "")
+    boolean reuseRootTree = supportsRootTreeReuse();
+    // Reused root totals must stay visible when the allowed child set shrinks.
+    return (reuseRootTree ? " reuseRootTree true" : "")
+        + (supportRootInfo || reuseRootTree ? " rootInfo true" : "")
         + (Lizzie.config.showKataGoEstimate ? " ownership true" : "")
         + (Lizzie.config.showPvVisits ? " pvVisits true" : "")
         + (Lizzie.config.showKataGoEstimate
@@ -22569,7 +22642,6 @@ public class Leelaz {
     analyzeAvoid(
         String.format(
             Locale.ENGLISH, "%s %s %s %d", type, color, coordList, untilMove <= 0 ? 1 : untilMove));
-    Lizzie.board.clearbestmoves();
   }
 
   public void analyzeAvoid(String type, String coordList, int untilMove) {
@@ -22604,7 +22676,6 @@ public class Leelaz {
             maybeAddPlayer(addPlayer, blackToPlay),
             getInterval(),
             parameters));
-    Lizzie.board.clearbestmoves();
   }
 
   public void analyzeAvoid(String parameters) {
@@ -22621,8 +22692,6 @@ public class Leelaz {
             maybeAddPlayer(),
             getInterval(),
             parameters));
-    // Lizzie.board.getHistory().getData().tryToClearBestMoves();
-    Lizzie.board.clearbestmoves();
   }
 
   /** This initializes leelaz's pondering mode at its current position */
@@ -22690,7 +22759,7 @@ public class Leelaz {
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {
-      if (LizzieFrame.allowcoords != "") {
+      if (!LizzieFrame.allowcoords.isEmpty()) {
         Lizzie.leelaz.analyzeAvoid(
             "allow",
             LizzieFrame.allowcoords,

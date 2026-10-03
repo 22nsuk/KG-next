@@ -221,11 +221,11 @@ cp readme_cn.pdf readme_en.pdf "$INPUT_DIR/"
 copy_bundle_engine_assets
 copy_bundled_jcef_assets
 
-APP_NAME="LizzieYzy Next"
+APP_NAME="KG-next"
 APP_DESCRIPTION="Maintained LizzieYzy build with Fox nickname fetch and easier KataGo setup"
 MAIN_JAR="$(basename "$JAR_PATH")"
 ICON_PATH="$ROOT_DIR/packaging/icons/app-icon.icns"
-IDENTIFIER="com.wimi321.lizzieyzy.next"
+IDENTIFIER="com.github.nsuk22.kgnext"
 
 prepare_custom_runtime
 
@@ -246,7 +246,7 @@ jpackage \
   --main-class featurecat.lizzie.Lizzie \
   --dest "$APP_IMAGE_DIR" \
   --app-version "$APP_VERSION" \
-  --vendor "wimi321" \
+  --vendor "22nsuk" \
   --description "$APP_DESCRIPTION" \
   --icon "$ICON_PATH" \
   --mac-package-identifier "$IDENTIFIER" \
@@ -324,12 +324,12 @@ If macOS blocks the first launch:
 4. Launch the app again.
 
 Bundled KataGo paths inside the app bundle:
-- Engine: LizzieYzy Next.app/Contents/app/engines/katago/$ENGINE_PLATFORM_DIR/katago
-- Weight: LizzieYzy Next.app/Contents/app/weights/default.bin.gz
-- Configs: LizzieYzy Next.app/Contents/app/engines/katago/configs/
+- Engine: KG-next.app/Contents/app/engines/katago/$ENGINE_PLATFORM_DIR/katago
+- Weight: KG-next.app/Contents/app/weights/default.bin.gz
+- Configs: KG-next.app/Contents/app/engines/katago/configs/
 
 Bundled browser runtime:
-- LizzieYzy Next.app/Contents/app/jcef-bundle/
+- KG-next.app/Contents/app/jcef-bundle/
 - Used by the built-in Yike web page and Yike hall; no first-use browser download is required.
 
 Notes:

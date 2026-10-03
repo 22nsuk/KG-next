@@ -6,6 +6,8 @@
 
 	<groupId>featurecat</groupId>
 	<artifactId>lizzie</artifactId>
+	<name>KG-next</name>
+	<description>Korean-first KataGo review and analysis desktop application</description>
 	<version>yzy2.5.3</version>
 
 	<properties>

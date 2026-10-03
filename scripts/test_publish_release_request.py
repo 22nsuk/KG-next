@@ -44,7 +44,7 @@ def request_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "date_tag": DATE_TAG,
         "release_tag": RELEASE_TAG,
-        "title": f"LizzieYzy Next {RELEASE_TAG}",
+        "title": f"KG-next {RELEASE_TAG}",
         "prerelease": True,
         "notes_file": f".github/release-notes/{RELEASE_TAG}.md",
     }
@@ -673,7 +673,7 @@ class GitHubClientTagAliasTest(unittest.TestCase):
         release_request = PUBLISH.ReleaseRequest(
             DATE_TAG,
             RELEASE_TAG,
-            f"LizzieYzy Next {RELEASE_TAG}",
+            f"KG-next {RELEASE_TAG}",
             True,
             f".github/release-notes/{RELEASE_TAG}.md",
         )
@@ -908,6 +908,9 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         self.assertIn("python3 -I -", prepare)
         self.assertNotIn("python3 scripts/", prepare)
         self.assertIn("hashlib.file_digest", prepare)
+        self.assertIn("EXPECTED_REPOSITORY: wimi321/lizzieyzy-next", prepare)
+        self.assertNotIn("EXPECTED_REPOSITORY: ${{ github.repository }}", prepare)
+        self.assertNotIn("contents: write", prepare)
         self.assertIn("contents: read", execute)
         self.assertNotIn("contents: write", execute)
         self.assertNotIn("GH_TOKEN:", execute)
@@ -1064,13 +1067,13 @@ class ReleasePublisherTest(unittest.TestCase):
         return PUBLISH.ReleaseRequest(
             DATE_TAG,
             RELEASE_TAG,
-            f"LizzieYzy Next {RELEASE_TAG}",
+            f"KG-next {RELEASE_TAG}",
             True,
             f".github/release-notes/{RELEASE_TAG}.md",
         )
 
     def release_notes(self) -> str:
-        blocks: list[str] = [f"# LizzieYzy Next {RELEASE_TAG}"]
+        blocks: list[str] = [f"# KG-next {RELEASE_TAG}"]
         for heading in PUBLISH.LOCALIZED_NOTE_HEADINGS:
             rows = [
                 (

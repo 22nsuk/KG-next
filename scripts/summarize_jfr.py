@@ -104,7 +104,7 @@ def main() -> int:
     json_output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     lines = [
-        "# LizzieYzy Next JFR summary",
+        "# KG-next JFR summary",
         "",
         f"- Recording: `{jfr_path}`",
         f"- Sampled allocation weight: {human_bytes(allocations['sampledWeightBytes'])}",

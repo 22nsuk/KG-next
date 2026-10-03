@@ -594,7 +594,7 @@ def safe_fixture_mount(dmg: Path, destination: Path) -> Path:
 def mount_dmg(dmg: Path, evidence: Path) -> tuple[Path, str, str, Path]:
     mount_log = evidence / "mount.log"
     if FIXTURE_MODE:
-        mount_path = evidence / "fixture Volumes" / "LizzieYzy Next - Fixture"
+        mount_path = evidence / "fixture Volumes" / "KG-next - Fixture"
         safe_fixture_mount(dmg, mount_path)
         mount_log.write_text(f"FIXTURE read-only mount: {mount_path}\n", encoding="utf-8")
         if os.environ.get("LIZZIE_MACOS_ACCEPTANCE_FIXTURE_POST_ATTACH_FAIL") == "1":
@@ -607,7 +607,7 @@ def mount_dmg(dmg: Path, evidence: Path) -> tuple[Path, str, str, Path]:
                     "fixture-device",
                 ) from cleanup_error
             raise AcceptanceError("Fixture post-attach inspection failed after successful mount")
-        return mount_path, "fixture-device", "LizzieYzy Next - Fixture", mount_log
+        return mount_path, "fixture-device", "KG-next - Fixture", mount_log
     mount_path = evidence / "mounted DMG"
     mount_path.mkdir()
     plist_path = evidence / "hdiutil-attach.plist"
@@ -697,16 +697,16 @@ def architecture_identity(path: Path, label: str, expected: str, *, executable: 
 
 
 def resolve_installed_layout(app: Path, product: dict[str, str]) -> dict[str, Any]:
-    require(app.name == "LizzieYzy Next.app" and app.is_dir(), f"Installed app identity is invalid: {app}")
+    require(app.name == "KG-next.app" and app.is_dir(), f"Installed app identity is invalid: {app}")
     info_path = app / "Contents" / "Info.plist"
     require(info_path.is_file(), f"Installed app Info.plist is missing: {info_path}")
     with info_path.open("rb") as stream:
         info = plistlib.load(stream)
-    require(info.get("CFBundleIdentifier") == "com.wimi321.lizzieyzy.next", "Installed app bundle identifier is unexpected")
-    launcher = app / "Contents" / "MacOS" / "LizzieYzy Next"
+    require(info.get("CFBundleIdentifier") == "com.github.nsuk22.kgnext", "Installed app bundle identifier is unexpected")
+    launcher = app / "Contents" / "MacOS" / "KG-next"
     runtime = app / "Contents" / "runtime" / "Contents" / "Home" / "bin" / "java"
     app_root = app / "Contents" / "app"
-    launcher_config = app_root / "LizzieYzy Next.cfg"
+    launcher_config = app_root / "KG-next.cfg"
     jars = sorted(app_root.glob("*-shaded.jar"))
     require(len(jars) == 1, "Installed app must contain exactly one shaded JAR")
     jar = jars[0]
@@ -765,7 +765,7 @@ def codesign_reports_fully_unsigned(result: subprocess.CompletedProcess[str]) ->
 
 
 def confirm_open_anyway(app: Path, dmg: Path, evidence: Path, quarantine_value: str) -> str:
-    launcher = app / "Contents" / "MacOS" / "LizzieYzy Next"
+    launcher = app / "Contents" / "MacOS" / "KG-next"
     request = {
         "schemaVersion": 1,
         "nonce": secrets.token_hex(16),
@@ -1560,10 +1560,10 @@ def run(
             raise
         observed["dmg"].update(mountPath=str(mount_path.resolve()), device=mount_device, volumeName=volume_name)
         apps = [path for path in mount_path.iterdir() if path.is_dir() and path.suffix == ".app"]
-        require(apps == [mount_path / "LizzieYzy Next.app"], f"Mounted DMG app identity is ambiguous: {[path.name for path in apps]}")
+        require(apps == [mount_path / "KG-next.app"], f"Mounted DMG app identity is ambiguous: {[path.name for path in apps]}")
         install_parent = evidence / "Applications 等价" / "已安装 应用 程序"
         install_parent.mkdir(parents=True)
-        installed_app = install_parent / "LizzieYzy Next.app"
+        installed_app = install_parent / "KG-next.app"
         require(not installed_app.exists(), f"Installed destination must be new: {installed_app}")
         shutil.copytree(apps[0], installed_app, symlinks=True)
         detach_dmg(mount_path, mount_device, evidence)

@@ -244,8 +244,8 @@ public final class PlatformCredentialStore {
       command.add("store");
       command.add(
           kind == Kind.API_KEY
-              ? "--label=LizzieYzy Next AI Commentary API Key"
-              : "--label=LizzieYzy Next Zhizi " + kind.id());
+              ? "--label=KG-next AI Commentary API Key"
+              : "--label=KG-next Zhizi " + kind.id());
       command.addAll(secretAttributes(kind, account));
       CommandResult result = run(command, secret + System.lineSeparator());
       if (result.exitCode != 0) {

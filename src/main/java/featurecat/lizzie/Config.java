@@ -1040,8 +1040,9 @@ public class Config {
   public boolean showPreviousBestmovesOnlyFirstMove = true;
   public boolean showDetailedToolbarMenu = false;
 
-  public int selectAllowMoves = 999;
-  public int selectAvoidMoves = 999;
+  // First-ply restrictions can retain the native tree; keep explicitly saved deeper choices.
+  public int selectAllowMoves = 1;
+  public int selectAvoidMoves = 1;
   public int selectAllowCustomMoves = 5;
   public int selectAvoidCustomMoves = 5;
 
@@ -1828,8 +1829,8 @@ public class Config {
     showPreviousBestmovesOnlyFirstMove =
         uiConfig.optBoolean("show-previous-bestmoves-only-first-move", true);
     showDetailedToolbarMenu = uiConfig.optBoolean("show-detailed-toolbar-menu", false);
-    selectAllowMoves = uiConfig.optInt("select-allow-moves", 999);
-    selectAvoidMoves = uiConfig.optInt("select-avoid-moves", 999);
+    selectAllowMoves = uiConfig.optInt("select-allow-moves", 1);
+    selectAvoidMoves = uiConfig.optInt("select-avoid-moves", 1);
     selectAllowCustomMoves = uiConfig.optInt("select-allow-custom-moves", 5);
     selectAvoidCustomMoves = uiConfig.optInt("select-allow-custom-moves", 5);
     customLayout1 = uiConfig.optJSONObject("custom-layout-1");

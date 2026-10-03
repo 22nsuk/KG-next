@@ -814,9 +814,13 @@ public class BoardRenderer {
     g0.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
     boolean isKoreanBlack = isKoreanName(black);
     boolean isKoreanWhite = isKoreanName(white);
+    String koreanFontName = isKoreanBlack || isKoreanWhite
+        ? featurecat.lizzie.util.LocaleFontSupport.resolveLanguageFontName(
+            Lizzie.config.uiFontName, Locale.KOREAN)
+        : Lizzie.config.uiFontName;
     g0.setFont(
         new Font(
-            isKoreanWhite || isKoreanBlack ? "Malgun Gothic" : Lizzie.config.uiFontName,
+            isKoreanWhite || isKoreanBlack ? koreanFontName : Lizzie.config.uiFontName,
             Font.PLAIN,
             (int) (Math.min(28, this.scaledMarginHeight * 53 / 100))));
 
@@ -892,7 +896,7 @@ public class BoardRenderer {
     if (black.length() > 0) {
       Font font =
           new Font(
-              isKoreanBlack ? "Malgun Gothic" : Lizzie.config.uiFontName,
+              isKoreanBlack ? koreanFontName : Lizzie.config.uiFontName,
               Font.PLAIN,
               (int) (Math.min(28, this.scaledMarginHeight * 53 / 100)));
       g0.setFont(font);
@@ -914,7 +918,7 @@ public class BoardRenderer {
     if (white.length() > 0) {
       Font font =
           new Font(
-              isKoreanWhite ? "Malgun Gothic" : Lizzie.config.uiFontName,
+              isKoreanWhite ? koreanFontName : Lizzie.config.uiFontName,
               Font.PLAIN,
               (int) (Math.min(28, this.scaledMarginHeight * 53 / 100)));
       g0.setFont(font);

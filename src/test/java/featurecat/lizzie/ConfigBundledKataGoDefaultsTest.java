@@ -26,9 +26,24 @@ public class ConfigBundledKataGoDefaultsTest {
       "migrated-hide-blunder-bar-default-v1";
 
   @Test
+  void newRestrictionsDefaultToFirstPlyAndExplicitDepthIsPreserved() throws Exception {
+    Path root = Files.createTempDirectory("kg-avoid-default");
+    Files.createDirectories(root.resolve("save"));
+    Config defaults = ConfigTestHelper.createBootstrapped(root);
+    assertEquals(1, defaults.selectAvoidMoves);
+    assertEquals(1, defaults.selectAllowMoves);
+    defaults.uiConfig.put("select-avoid-moves", 999);
+    defaults.uiConfig.put("select-allow-moves", 5);
+    defaults.save();
+    Config restored = ConfigTestHelper.createBootstrapped(root);
+    assertEquals(999, restored.selectAvoidMoves);
+    assertEquals(5, restored.selectAllowMoves);
+  }
+
+  @Test
   void windowsPortableMarkerKeepsMutableDataInsideExtractedFolder() throws Exception {
     Path tempRoot = Files.createTempDirectory("lizzie-portable-root");
-    Path portableRoot = Files.createDirectories(tempRoot.resolve("LizzieYzy Next 围棋"));
+    Path portableRoot = Files.createDirectories(tempRoot.resolve("KG-next 围棋"));
     Files.writeString(portableRoot.resolve(".lizzie-portable"), "portable");
     Files.createDirectories(portableRoot.resolve("app"));
     Files.writeString(
@@ -1426,8 +1441,8 @@ public class ConfigBundledKataGoDefaultsTest {
   @Test
   void bundledExecutableDetectionPreservesSpacesAndUnicode() {
     Path bundledExecutable =
-        Path.of("LizzieYzy Next 测试", "app", "engines", "katago", "windows-x64", "katago.exe");
-    Path externalExecutable = Path.of("LizzieYzy Next 测试", "app", "custom engines", "katago.exe");
+        Path.of("KG-next 测试", "app", "engines", "katago", "windows-x64", "katago.exe");
+    Path externalExecutable = Path.of("KG-next 测试", "app", "custom engines", "katago.exe");
 
     assertTrue(Config.isBundledKataGoExecutable(bundledExecutable));
     assertFalse(Config.isBundledKataGoExecutable(externalExecutable));

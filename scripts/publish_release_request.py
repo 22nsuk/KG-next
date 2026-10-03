@@ -184,8 +184,8 @@ class ReleaseRequest:
             raise PublishError("release serial must be a positive integer without leading zeros")
         if self.prerelease is not True:
             raise PublishError("Automated release requests must explicitly set prerelease to true")
-        if self.title != f"LizzieYzy Next {self.release_tag}":
-            raise PublishError("title must be exactly 'LizzieYzy Next <release_tag>'")
+        if self.title != f"KG-next {self.release_tag}":
+            raise PublishError("title must be exactly 'KG-next <release_tag>'")
         expected_notes = f".github/release-notes/{self.release_tag}.md"
         if self.notes_file != expected_notes:
             raise PublishError(f"notes_file must be exactly {expected_notes}")

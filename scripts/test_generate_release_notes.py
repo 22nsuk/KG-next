@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).with_name("generate_release_notes.py")
@@ -75,7 +76,7 @@ class GenerateReleaseNotesTest(unittest.TestCase):
 
         self.assertEqual("v1.18.2", metadata["katago_version"])
         self.assertEqual(
-            "kata1-tf3-b11c768-s12002M-d6304M.bin.gz", metadata["model_source"]
+            "kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz", metadata["model_source"]
         )
         self.assertEqual(
             "katago-source-47aadc08518b-windows-nvidia.zip",
@@ -85,6 +86,36 @@ class GenerateReleaseNotesTest(unittest.TestCase):
             metadata["windows_nvidia_bundle"],
             metadata["windows_nvidia50_cuda_bundle"],
         )
+        self.assertEqual(
+            "katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip",
+            metadata["windows_nvidia_cuda13_bundle"],
+        )
+
+    def test_default_repository_links_to_kg_next(self) -> None:
+        with patch("sys.argv", [str(SCRIPT_PATH)]):
+            self.assertEqual("22nsuk/KG-next", NOTES.parse_args().repo)
+
+    def test_future_notes_offer_cuda13_separately_in_all_languages(self) -> None:
+        notes = NOTES.build_release_notes(
+            self.asset_map, NOTES.load_bundle_metadata(), "22nsuk/KG-next", "next-2099-01-01.1"
+        )
+        for language in NOTES.RELEASE_LANGUAGES:
+            start = notes.index(f"## {language}\n")
+            next_heading = notes.find("\n## ", start + 1)
+            section = notes[start:] if next_heading < 0 else notes[start:next_heading]
+            self.assertIn("windows64.nvidia.cuda13.portable.zip", section)
+            self.assertIn("CUDA 13.2 / cuDNN 9.24", section)
+            self.assertIn("CUDA 12.8", section)
+            self.assertIn("windows64.nvidia.portable.zip", section)
+            self.assertIn("windows64.nvidia.tensorrt.portable.7z.001", section)
+
+    def test_future_notes_only_offer_cuda13_when_published(self) -> None:
+        asset_map = dict(self.asset_map, windows_nvidia_cuda13_portable=None)
+        notes = NOTES.build_release_notes(
+            asset_map, NOTES.load_bundle_metadata(), "22nsuk/KG-next", "next-2099-01-01.1"
+        )
+        self.assertNotIn("windows64.nvidia.cuda13.portable.zip", notes)
+        self.assertNotIn("requires a CUDA 13 compatible", notes)
 
 
 if __name__ == "__main__":

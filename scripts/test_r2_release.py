@@ -51,7 +51,7 @@ def release():
         "tag_name": TAG,
         "published_at": "2026-08-03T00:00:00Z",
         "html_url": f"https://github.com/example/releases/tag/{TAG}",
-        "body": "# LizzieYzy Next\n\nRelease notes\n",
+        "body": "# KG-next\n\nRelease notes\n",
         "assets": [asset(name) for name in names],
     }
 
@@ -178,6 +178,46 @@ class R2ReleaseTest(unittest.TestCase):
         oversized["assets"][0]["size"] = r2_release.R2_SIZE_LIMIT
         with self.assertRaises(r2_release.ReleaseError):
             r2_release.select_r2_assets(oversized, r2_release.DEFAULT_PUBLIC_BASE)
+
+    def test_optional_cuda13_is_mirrored_and_keeps_the_standard_nvidia_package(self):
+        source = release()
+        name = f"{DATE}-windows64.nvidia.cuda13.portable.zip"
+        source["assets"].append(asset(name))
+        selected = r2_release.select_r2_assets(source, r2_release.DEFAULT_PUBLIC_BASE)
+        self.assertEqual(14, len(selected))
+        self.assertEqual({"nvidia", "nvidia-cuda13"}, {
+            entry.flavor for entry in selected if entry.flavor in {"nvidia", "nvidia-cuda13"}
+        })
+        manifest = r2_release.build_manifest(source, selected, r2_release.DEFAULT_PUBLIC_BASE)
+        package = next(entry for entry in manifest["packages"] if entry["flavor"] == "nvidia-cuda13")
+        self.assertEqual(name, package["assetName"])
+        self.assertEqual("download-archive", package["installMode"])
+        self.assertEqual(1, len(manifest["components"]))
+        catalog = r2_release.build_catalog(source, selected, r2_release.DEFAULT_PUBLIC_BASE)
+        entry = next(entry for entry in catalog["assets"] if entry["flavor"] == "nvidia-cuda13")
+        self.assertEqual("windows-portable", entry["category"])
+        self.assertTrue(entry["advanced"])
+        self.assertIn("CUDA 13.2 / cuDNN 9.24", entry["labelEn"])
+        page = r2_release.render_index(catalog)
+        self.assertIn(package["downloadUrl"], page)
+        self.assertIn("NVIDIA CUDA 13.2 可选版", page)
+
+    def test_optional_cuda13_cannot_replace_standard_assets_or_bypass_integrity_and_size(self):
+        for failure in ("missing-nvidia", "duplicate", "digest", "size"):
+            source = release()
+            optional = asset(f"{DATE}-windows64.nvidia.cuda13.portable.zip")
+            source["assets"].append(optional)
+            if failure == "missing-nvidia":
+                source["assets"] = [entry for entry in source["assets"]
+                                    if entry["name"] != f"{DATE}-windows64.nvidia.portable.zip"]
+            elif failure == "duplicate":
+                source["assets"].append(dict(optional))
+            elif failure == "digest":
+                optional["digest"] = None
+            else:
+                optional["size"] = r2_release.R2_SIZE_LIMIT
+            with self.subTest(failure=failure), self.assertRaises(r2_release.ReleaseError):
+                r2_release.select_r2_assets(source, r2_release.DEFAULT_PUBLIC_BASE)
 
     def test_stale_release_keys_require_an_exact_inventory(self):
         keep = {
@@ -309,7 +349,7 @@ class R2ReleaseTest(unittest.TestCase):
         selected = r2_release.select_r2_assets(source, r2_release.DEFAULT_PUBLIC_BASE)
         linked = selected[0]
         source["body"] = (
-            "# LizzieYzy Next\n\n"
+            "# KG-next\n\n"
             f"[{linked.name}]({r2_release.r2_url(r2_release.DEFAULT_PUBLIC_BASE, linked)})\n"
         )
 

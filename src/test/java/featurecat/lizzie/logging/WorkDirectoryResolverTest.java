@@ -179,7 +179,7 @@ class WorkDirectoryResolverTest {
   @Test
   void windowsPortableMarkerKeepsMutableDataInsideExtractedFolder() throws Exception {
     Path tempRoot = Files.createTempDirectory("lizzie-portable-root");
-    Path portableRoot = Files.createDirectories(tempRoot.resolve("LizzieYzy Next 围棋"));
+    Path portableRoot = Files.createDirectories(tempRoot.resolve("KG-next 围棋"));
     Files.writeString(portableRoot.resolve(".lizzie-portable"), "portable");
     Files.createDirectories(portableRoot.resolve("app"));
     Files.writeString(

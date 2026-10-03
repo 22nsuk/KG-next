@@ -405,6 +405,9 @@ prepare_source_bundle() {
       ;;
     *) echo "Unsupported source-package host: $(uname -s)" >&2; return 1 ;;
   esac
+  if [[ "${PREPARE_WINDOWS_CUDA13:-false}" == "true" ]]; then
+    targets+=(windows-nvidia-cuda13)
+  fi
   "$CATEGORY_READER" "$ROOT_DIR/scripts/prepare_katago_source_assets.py" \
     --catalog "$ROOT_DIR/src/main/resources/katago-assets.json" \
     --targets "${targets[@]}" --cache "$CACHE_DIR" --engines "$ENGINES_ROOT"
@@ -466,6 +469,11 @@ main() {
   prepare_windows_bundle "$windows_nvidia_src" "$WINDOWS_NVIDIA_ROOT"
   rm -rf "$ENGINES_ROOT/windows-x64-nvidia50-cuda"
   verify_windows_nvidia_executable
+  if [[ "${PREPARE_WINDOWS_CUDA13:-false}" == "true" ]]; then
+    "$CATEGORY_READER" "$ROOT_DIR/scripts/prepare_katago_source_assets.py" \
+      --catalog "$ROOT_DIR/src/main/resources/katago-assets.json" \
+      --targets windows-nvidia-cuda13 --cache "$CACHE_DIR" --engines "$ENGINES_ROOT"
+  fi
   if [[ "${PREPARE_WINDOWS_EXPERIMENTAL:-false}" == "true" ]]; then
     prepare_windows_bundle_tree "$(extract_asset "$WINDOWS_DIRECTML_ASSET")" "$WINDOWS_DIRECTML_ROOT"
     write_experimental_engine_manifest "$WINDOWS_DIRECTML_ROOT" "$WINDOWS_DIRECTML_ASSET" "directml"

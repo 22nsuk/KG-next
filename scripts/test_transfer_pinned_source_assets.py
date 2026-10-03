@@ -30,6 +30,12 @@ class TransferTests(unittest.TestCase):
 
     def test_full_pinned_matrix_accepted(self):
         self.assertEqual(len(self.validate(self.catalog)), 15)
+        self.assertNotIn('windows-nvidia-cuda13', self.validate(self.catalog))
+
+    def test_official_override_cannot_replace_a_required_source_target(self):
+        self.catalog['assets']['linux-cpu'] = deepcopy(self.catalog['assets']['windows-nvidia-cuda13'])
+        with self.assertRaises(IdentityError):
+            self.validate(self.catalog)
 
     def test_wrong_identity_or_missing_target_rejected(self):
         for field, value in (('katagoSourceCommit', '0' * 40),

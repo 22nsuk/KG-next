@@ -1,31 +1,13 @@
-LizzieYzy Next
+KG-next
 
-Project:
-https://github.com/wimi321/lizzieyzy-next
+프로젝트: https://github.com/22nsuk/KG-next
+릴리스: https://github.com/22nsuk/KG-next/releases
+문제 보고: https://github.com/22nsuk/KG-next/issues
 
-Releases:
-https://github.com/wimi321/lizzieyzy-next/releases
+KataGo를 활용한 한국어 중심 바둑 복기·분석 프로그램입니다.
+원본: https://github.com/wimi321/lizzieyzy-next
+라이선스: GNU GPL v3 (LICENSE.txt 참조)
 
-Issues:
-https://github.com/wimi321/lizzieyzy-next/issues
-
-China mirror (Baidu Netdisk):
-https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w
-Code: 3i8w
-
-中文简介
-LizzieYzy Next 是持续维护中的 LizzieYzy / KataGo 围棋分析界面，重点提供：
-- 输入野狐昵称获取最新公开棋谱
-- 更顺手的整局快速分析与胜率走势查看
-- Windows、macOS、Linux 多平台发布包
-- 更适合普通用户开箱即用的内置引擎方案
-
-English
-LizzieYzy Next is an actively maintained LizzieYzy / KataGo GUI for Go review, focused on:
-- Fox nickname based public-game fetch
-- Faster whole-game analysis and winrate overview
-- Cross-platform releases for Windows, macOS, and Linux
-- Easier out-of-box bundled engine experience
-
-If this package helps you, star the project and watch Releases:
-https://github.com/wimi321/lizzieyzy-next
+엔진 실행 파일, 모델, 설정은 서로 별개입니다.
+첫 수 제한 시 탐색 트리 재사용에는 KG-next 패치 엔진이 필요합니다.
+이 패키지를 원본 프로젝트의 자동 업데이트로 덮어쓰지 마세요.

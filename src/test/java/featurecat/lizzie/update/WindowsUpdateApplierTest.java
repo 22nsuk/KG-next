@@ -26,7 +26,7 @@ class WindowsUpdateApplierTest {
         coreZip,
         entry("lizzieyzy-next-core.jar", "new-core"),
         entry("app/lizzie-yzy2.5.3-shaded.jar", "manual-overlay-core"),
-        entry("app/LizzieYzy Next OpenCL.cfg", "-Dlizzie.next.version=next-2026-06-21.1"));
+        entry("app/KG-next OpenCL.cfg", "-Dlizzie.next.version=next-2026-06-21.1"));
     Path request =
         request(
             fixture,
@@ -38,7 +38,7 @@ class WindowsUpdateApplierTest {
     assertEquals("new-core", Files.readString(fixture.currentJar));
     assertEquals(
         "-Dlizzie.next.version=next-2026-06-21.1",
-        Files.readString(fixture.appDir.resolve("LizzieYzy Next OpenCL.cfg")));
+        Files.readString(fixture.appDir.resolve("KG-next OpenCL.cfg")));
     assertEquals("user-save", Files.readString(fixture.appRoot.resolve("user-data").resolve("save.txt")));
     assertTrue(Files.isRegularFile(fixture.appDir.resolve(InstalledUpdateState.INSTALLED_MANIFEST_NAME)));
   }
@@ -124,12 +124,12 @@ class WindowsUpdateApplierTest {
   }
 
   private Fixture fixture() throws IOException {
-    Path appRoot = Files.createDirectories(tempDir.resolve("LizzieYzy Next"));
+    Path appRoot = Files.createDirectories(tempDir.resolve("KG-next"));
     Path appDir = Files.createDirectories(appRoot.resolve("app"));
     Path userData = Files.createDirectories(appRoot.resolve("user-data"));
     Path currentJar = appDir.resolve("lizzie-yzy2.5.3-shaded.jar");
     Files.writeString(currentJar, "old-core");
-    Files.writeString(appDir.resolve("LizzieYzy Next OpenCL.cfg"), "-Dlizzie.next.version=old");
+    Files.writeString(appDir.resolve("KG-next OpenCL.cfg"), "-Dlizzie.next.version=old");
     Files.writeString(userData.resolve("save.txt"), "user-save");
     Path staging = Files.createDirectories(tempDir.resolve("staging"));
     return new Fixture(appRoot, appDir, currentJar, staging);

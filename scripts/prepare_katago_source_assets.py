@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Install verified source release archives into a build tree, never fall back to old engines."""
+"""Install verified source archives and explicitly selected official optional engines."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import tempfile
 import zipfile
@@ -18,12 +20,18 @@ from stage_katago_source_release import digest, normalized_name, verify_archive
 DESTINATIONS = {
     "windows-cpu": "windows-x64", "windows-opencl": "windows-x64-opencl",
     "windows-nvidia": "windows-x64-nvidia", "windows-tensorrt": "windows-x64-nvidia-tensorrt",
+    "windows-nvidia-cuda13": "windows-x64-nvidia-cuda13",
     "windows-directml": "windows-x64-directml", "windows-openvino": "windows-x64-openvino",
     **{f"windows-rocm-{family}": f"windows-x64-rocm-{family}"
        for family in ("gfx103x", "gfx110x", "gfx1151", "gfx120x")},
     "linux-cpu": "linux-x64", "linux-opencl": "linux-x64-opencl", "linux-nvidia": "linux-x64-nvidia",
     "macos-arm64": "macos-arm64", "macos-amd64": "macos-amd64",
 }
+OFFICIAL_RECEIPT = "official-package.json"
+
+
+def inventory_digest(records: list[dict]) -> str:
+    return hashlib.sha256(json.dumps(records, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def download(catalog: dict, target: str, cache: Path) -> Path:
@@ -34,7 +42,7 @@ def download(catalog: dict, target: str, cache: Path) -> Path:
     cache.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".source-download-", dir=cache) as temporary:
         pending = Path(temporary) / asset["assetName"]
-        if os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"):
+        if not asset.get("downloadUrl") and (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             # gh handles authenticated Draft assets without forwarding a token to storage/CDN hosts.
             subprocess.run(["gh", "release", "download", catalog["engineReleaseTag"],
                             "--repo", catalog["engineReleaseRepository"], "--pattern", asset["assetName"],
@@ -52,24 +60,59 @@ def download(catalog: dict, target: str, cache: Path) -> Path:
 def unpack(archive: Path, output: Path, target: str, asset: dict) -> dict:
     if archive.stat().st_size != asset["sizeBytes"] or digest(archive) != asset["sha256"]:
         raise ValueError("untrusted source archive")
-    metadata = verify_archive(archive, target)
+    official = target == "windows-nvidia-cuda13" and asset.get("origin") == "official-release"
+    metadata = {"sourceCommit": ""} if official else verify_archive(archive, target)
+    if official:
+        with zipfile.ZipFile(archive) as opened:
+            files = {}
+            for item in opened.infolist():
+                # Official bundles may include directory entries; reject links and names that can
+                # collide or escape a Windows destination before writing any file.
+                name = normalized_name(item.filename.rstrip("/") if item.is_dir() else item.filename)
+                if stat.S_ISLNK(item.external_attr >> 16):
+                    raise ValueError("official archive cannot contain symlinks")
+                if item.is_dir():
+                    continue
+                folded = name.casefold()
+                if folded in files:
+                    raise ValueError("official archive contains duplicate file names")
+                files[folded] = item
+            required = {"katago.exe", "z.dll", "default_gtp.cfg", "analysis_example.cfg"}
+            if not required <= files.keys():
+                raise ValueError("official CUDA13 archive is missing executable, zlib or configurations")
+            if OFFICIAL_RECEIPT in files or "source-release.json" in files:
+                raise ValueError("official archive contains conflicting provenance metadata")
+            records = []
+            for item in sorted(files.values(), key=lambda entry: entry.filename):
+                with opened.open(item) as handle:
+                    records.append(dict(file=normalized_name(item.filename), sizeBytes=item.file_size,
+                                        sha256=hashlib.file_digest(handle, "sha256").hexdigest()))
+            if inventory_digest(records) != asset.get("inventorySha256"):
+                raise ValueError("official archive inventory does not match the trusted catalog")
+        metadata.update(schemaVersion=1, origin="official-release", target=target,
+                        assetSha256=asset["sha256"], files=records,
+                        executable={"sha256": next(item["sha256"] for item in records if item["file"] == "katago.exe")})
     if metadata["executable"]["sha256"] != asset["executableSha256"]:
         raise ValueError("source executable does not match the trusted catalog")
     output.mkdir(parents=True, exist_ok=False)
     with zipfile.ZipFile(archive) as opened:
         for item in opened.infolist():
+            if item.is_dir():
+                continue
             name = normalized_name(item.filename)
             path = output.joinpath(*name.split("/"))
             path.parent.mkdir(parents=True, exist_ok=True)
             with opened.open(item) as source, path.open("xb") as destination:
                 shutil.copyfileobj(source, destination, 1024 * 1024)
             path.chmod((item.external_attr >> 16) & 0o777)
+    if official:
+        (output / OFFICIAL_RECEIPT).write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     return metadata
 
 
 def prepare(catalog_path: Path, targets: list[str], cache: Path, engines: Path) -> None:
     catalog = load_catalog(catalog_path)
-    if catalog.get("origin") != "project-source-build":
+    if catalog.get("origin") != "project-source-build" and targets != ["windows-nvidia-cuda13"]:
         raise ValueError("source preparation requires the reviewed source catalog")
     if not targets or len(set(targets)) != len(targets) or any(target not in DESTINATIONS for target in targets):
         raise ValueError("invalid or duplicate source preparation targets")

@@ -305,7 +305,7 @@ public class Lizzie {
     void replaceWith(Leelaz replacement);
   }
 
-  public static String appName = "LizzieYzy Next";
+  public static String appName = "KG-next";
   public static String lizzieVersion = "2.5.3";
   private static final String DEFAULT_NEXT_VERSION = "next-dev";
   private static final String SMOKE_OPEN_BOARD_SYNC_PROPERTY = "lizzie.smoke.openBoardSync";

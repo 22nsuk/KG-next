@@ -100,14 +100,12 @@ public class Utils {
     } catch (IOException | FontFormatException e) {
       e.printStackTrace();
     }
-    if (uiFontName != null
-        && (!(uiFontName.equals("Lizzie默认") || uiFontName.equals("Lizzie Default")))) {
+    if (!LocaleFontSupport.isDefaultSelection(uiFontName)) {
       LizzieFrame.uiFont = new Font(uiFontName, Font.PLAIN, 12);
     }
-    if (playoutFontName != null)
+    if (!LocaleFontSupport.isDefaultSelection(playoutFontName))
       LizzieFrame.playoutsFont = new Font(playoutFontName, Font.PLAIN, 12);
-    if (winrateFontName != null
-        && (!(winrateFontName.equals("Lizzie默认") || winrateFontName.equals("Lizzie Default")))) {
+    if (!LocaleFontSupport.isDefaultSelection(winrateFontName)) {
       LizzieFrame.winrateFont = new Font(winrateFontName, Font.BOLD, 12);
     }
   }

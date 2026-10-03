@@ -87,7 +87,7 @@ public final class WindowsUpdateDialog extends JDialog {
 
     JLabel title =
         new JLabel(
-            "<html><b>LizzieYzy Next "
+            "<html><b>KG-next "
                 + plan.manifest.releaseTag
                 + "</b><br>"
                 + tr("WindowsUpdate.currentVersion", "当前版本", "Current version")

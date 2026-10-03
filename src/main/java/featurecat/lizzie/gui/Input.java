@@ -20,7 +20,7 @@ public class Input implements MouseListener, KeyListener, MouseWheelListener, Mo
   public void mouseClicked(MouseEvent e) {
     if (e.isAltDown()
         && !SwingUtilities.isMiddleMouseButton(e)
-        && (LizzieFrame.allowcoords != "" || LizzieFrame.avoidcoords != ""))
+        && (!LizzieFrame.allowcoords.isEmpty() || !LizzieFrame.avoidcoords.isEmpty()))
       LizzieFrame.menu.clearSelect.doClick();
   }
 

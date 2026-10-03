@@ -11,10 +11,14 @@ import tempfile
 
 from build_katago_source import SOURCE_COMMIT, TARGETS
 from katago_asset_catalog import DEFAULT_CATALOG, engine_manifest_text, load_catalog
+from prepare_katago_source_assets import OFFICIAL_RECEIPT, inventory_digest
 from stage_katago_source_release import digest, normalized_name
 
 
 def audit(catalog: dict, target: str, engine: Path) -> None:
+    if target == "windows-nvidia-cuda13":
+        audit_official_cuda13(catalog, target, engine)
+        return
     if catalog.get("origin", "official-release") == "official-release":
         return
     asset = catalog["assets"][target]
@@ -68,6 +72,36 @@ def audit(catalog: dict, target: str, engine: Path) -> None:
     print(f"{target}: exact source {SOURCE_COMMIT}, {len(records)} files verified")
 
 
+def audit_official_cuda13(catalog: dict, target: str, engine: Path) -> None:
+    asset = catalog["assets"][target]
+    receipt = engine / OFFICIAL_RECEIPT
+    if engine.is_symlink() or receipt.is_symlink() or not receipt.is_file():
+        raise ValueError("installed official engine receipt is missing or unsafe")
+    metadata = json.loads(receipt.read_text(encoding="utf-8"))
+    records = metadata.get("files", [])
+    if (asset.get("origin") != "official-release" or asset.get("zlibLinkage") != "dynamic"
+            or metadata.get("schemaVersion") != 1 or metadata.get("origin") != "official-release"
+            or metadata.get("target") != target or metadata.get("sourceCommit") != ""
+            or metadata.get("assetSha256") != asset["sha256"]
+            or metadata.get("executable", {}).get("sha256") != asset["executableSha256"]
+            or not records or inventory_digest(records) != asset.get("inventorySha256")):
+        raise ValueError("installed official identity or inventory differs from trusted catalog")
+    manifest = engine / "lizzieyzy-next-katago-engine-manifest.txt"
+    if (manifest.is_symlink() or not manifest.is_file()
+            or manifest.read_text(encoding="utf-8") != engine_manifest_text(catalog, target, "")):
+        raise ValueError("installed official provenance manifest differs from trusted catalog")
+    names = [normalized_name(record.get("file")) for record in records]
+    if (len({name.casefold() for name in names}) != len(names)
+            or not {"katago.exe", "z.dll", "default_gtp.cfg", "analysis_example.cfg"}.issubset(names)):
+        raise ValueError("installed official inventory is incomplete or ambiguous")
+    for record, name in zip(records, names):
+        path = engine.joinpath(*name.split("/"))
+        if (path.is_symlink() or not path.is_file() or engine.resolve() not in path.resolve().parents
+                or path.stat().st_size != record.get("sizeBytes") or digest(path) != record.get("sha256")):
+            raise ValueError(f"installed official file missing or modified: {name}")
+    print(f"{target}: official executable and {len(records)} original archive files verified")
+
+
 def restore_after_jpackage(catalog: dict, target: str, source: Path, engine: Path) -> None:
     """Undo jpackage's implicit ad-hoc signing, before our platform signing stage."""
     if catalog.get("origin") != "project-source-build" or target not in ("macos-arm64", "macos-amd64"):
@@ -95,7 +129,7 @@ def restore_after_jpackage(catalog: dict, target: str, source: Path, engine: Pat
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
-    parser.add_argument("--target", choices=TARGETS, required=True)
+    parser.add_argument("--target", choices=tuple(TARGETS) + ("windows-nvidia-cuda13",), required=True)
     parser.add_argument("--engine", type=Path, required=True)
     parser.add_argument("--restore-from", type=Path,
                         help="Restore verified macOS input after jpackage, before platform signing")

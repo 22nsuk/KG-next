@@ -75,8 +75,8 @@ class MacosProductAcceptanceFixtureTest(unittest.TestCase):
         packaged_architecture = binary_architecture or architecture
         jcef_platform = "macosx-arm64" if architecture == "arm64" else "macosx-amd64"
         if populated:
-            app = "LizzieYzy Next.app"
-            launcher = f"{app}/Contents/MacOS/LizzieYzy Next"
+            app = "KG-next.app"
+            launcher = f"{app}/Contents/MacOS/KG-next"
             runtime = f"{app}/Contents/runtime/Contents/Home/bin/java"
             engine = f"{app}/Contents/app/engines/katago/{engine_directory}/katago"
             helper = f"{app}/Contents/app/jcef-bundle/jcef Helper.app/Contents/MacOS/jcef Helper"
@@ -120,7 +120,7 @@ engine_pid=$!
 "$LIZZIE_MACOS_ACCEPTANCE_APP_ROOT/Contents/app/jcef-bundle/jcef Helper.app/Contents/MacOS/jcef Helper" &
 helper_pid=$!
 if [[ "{runtime_mode}" == "mounted-process" ]]; then
-  bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' '/Volumes/LizzieYzy Next/LizzieYzy Next.app' &
+  bash -c 'trap "exit 0" TERM INT; while :; do sleep 1; done' '/Volumes/KG-next/KG-next.app' &
   mounted_pid=$!
 else
   mounted_pid=''
@@ -142,9 +142,9 @@ trap 'cleanup; exit 0' TERM INT
 while :; do sleep 1; done
 """
             info = {
-                "CFBundleIdentifier": "com.wimi321.lizzieyzy.next",
+                "CFBundleIdentifier": "com.github.nsuk22.kgnext",
                 "CFBundlePackageType": "APPL",
-                "CFBundleExecutable": "LizzieYzy Next",
+                "CFBundleExecutable": "KG-next",
                 "CFBundleVersion": "2026.9.19",
                 "CFBundleShortVersionString": "2026.9.19",
             }
@@ -162,7 +162,7 @@ while :; do sleep 1; done
                 self.executable(archive, helper, "#!/usr/bin/env bash\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n")
                 for binary in (launcher, runtime, engine, helper):
                     archive.writestr(f"{binary}.arch", packaged_architecture)
-                archive.writestr(f"{app}/Contents/app/LizzieYzy Next.cfg", "[Application]\napp.mainjar=$APPDIR/lizzie-yzy2.5.3-shaded.jar\njava-options=-Xshare:auto\n")
+                archive.writestr(f"{app}/Contents/app/KG-next.cfg", "[Application]\napp.mainjar=$APPDIR/lizzie-yzy2.5.3-shaded.jar\njava-options=-Xshare:auto\n")
                 archive.writestr(f"{app}/Contents/app/lizzie-yzy2.5.3-shaded.jar", b"fixture jar")
                 archive.writestr(f"{app}/Contents/app/jcef-bundle/libjcef.dylib", b"fixture jcef")
                 archive.writestr(f"{app}/Contents/app/jcef-bundle/libjcef.dylib.arch", architecture)
@@ -670,12 +670,12 @@ while :; do sleep 1; done
 
     def test_native_codesign_diagnostic_rejects_partial_nested_signature(self) -> None:
         outer_unsigned = subprocess.CompletedProcess(
-            ["codesign"], 1, "", "/Applications/LizzieYzy Next.app: code object is not signed at all\n"
+            ["codesign"], 1, "", "/Applications/KG-next.app: code object is not signed at all\n"
         )
         partial_nested = subprocess.CompletedProcess(
-            ["codesign"], 1, "", "/Applications/LizzieYzy Next.app: code object is not signed at all\nIn subcomponent: /Applications/LizzieYzy Next.app/Contents/app/lib.dylib\n"
+            ["codesign"], 1, "", "/Applications/KG-next.app: code object is not signed at all\nIn subcomponent: /Applications/KG-next.app/Contents/app/lib.dylib\n"
         )
-        signed_outer = subprocess.CompletedProcess(["codesign"], 0, "", "Executable=/Applications/LizzieYzy Next.app\n")
+        signed_outer = subprocess.CompletedProcess(["codesign"], 0, "", "Executable=/Applications/KG-next.app\n")
 
         self.assertTrue(acceptance.codesign_reports_fully_unsigned(outer_unsigned))
         self.assertFalse(acceptance.codesign_reports_fully_unsigned(partial_nested))
@@ -715,13 +715,13 @@ while :; do sleep 1; done
         self.assertEqual([], record["cleanup"]["remainingOwnedResources"])
 
     def test_process_parser_preserves_space_containing_image_and_arguments(self) -> None:
-        metadata = " 42 1 S Mon Jan  2 03:04:05 2026 /Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next\n"
-        arguments = " 42 /Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next --fixture value\n"
+        metadata = " 42 1 S Mon Jan  2 03:04:05 2026 /Applications/KG-next.app/Contents/MacOS/KG-next\n"
+        arguments = " 42 /Applications/KG-next.app/Contents/MacOS/KG-next --fixture value\n"
 
         rows = acceptance.parse_process_tables(metadata, arguments)
 
-        self.assertEqual("/Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next", rows[42]["image"])
-        self.assertEqual("/Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next --fixture value", rows[42]["commandLine"])
+        self.assertEqual("/Applications/KG-next.app/Contents/MacOS/KG-next", rows[42]["image"])
+        self.assertEqual("/Applications/KG-next.app/Contents/MacOS/KG-next --fixture value", rows[42]["commandLine"])
         self.assertEqual("Mon Jan 2 03:04:05 2026", rows[42]["incarnation"])
 
     def test_matching_process_snapshots_preserves_native_pid_identity(self) -> None:
@@ -729,13 +729,13 @@ while :; do sleep 1; done
             "parentPid": 1,
             "state": "S",
             "incarnation": "Mon Jan 2 03:04:05 2026",
-            "image": "/Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next",
-            "commandLine": "/Applications/LizzieYzy Next.app/Contents/MacOS/LizzieYzy Next",
+            "image": "/Applications/KG-next.app/Contents/MacOS/KG-next",
+            "commandLine": "/Applications/KG-next.app/Contents/MacOS/KG-next",
         }
 
         with mock.patch.object(acceptance, "process_table", return_value={42: native_row}):
-            rows = acceptance.matching_process_snapshots(["LizzieYzy Next.app"])
-            owned = acceptance.owned_processes(rows, ["LizzieYzy Next.app"])
+            rows = acceptance.matching_process_snapshots(["KG-next.app"])
+            owned = acceptance.owned_processes(rows, ["KG-next.app"])
 
         self.assertEqual(42, rows[0]["pid"])
         self.assertEqual(42, owned[0]["pid"])
