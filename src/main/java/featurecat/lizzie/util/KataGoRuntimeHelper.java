@@ -1656,8 +1656,9 @@ public final class KataGoRuntimeHelper {
     command.add("-n");
     command.add("1");
     command.add("-v");
-    // KataGo rejects visits <= 1. Two visits is the smallest legal real inference probe.
-    command.add("2");
+    // Two visits can finish within a timer tick after warmup and report infinite throughput.
+    // A small 64-visit sample gives the existing finite-metric check real inference to measure.
+    command.add("64");
     command.add("-time");
     command.add("1");
     command.add("-no-server-thread-test");

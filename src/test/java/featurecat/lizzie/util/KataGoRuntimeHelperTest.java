@@ -2813,7 +2813,7 @@ public class KataGoRuntimeHelperTest {
 
     List<String> command = KataGoRuntimeHelper.buildCudaCompatibilityProbeCommand(engine, inputs);
 
-    assertEquals("2", command.get(command.indexOf("-v") + 1));
+    assertEquals("64", command.get(command.indexOf("-v") + 1));
     assertEquals("1", command.get(command.indexOf("-n") + 1));
     assertEquals("1", command.get(command.indexOf("-t") + 1));
     assertTrue(command.contains("-no-server-thread-test"));
