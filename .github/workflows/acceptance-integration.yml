@@ -24,10 +24,10 @@ jobs:
   prepare-source-archive:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # GitHub restricts Draft assets to push access. This job only reads JSON,
-    # downloads bytes and verifies a digest; it never executes PR code or engines.
+    # This fork retains pinned public upstream engine assets. Only read JSON,
+    # download bytes and verify their digest; never execute PR code or engines here.
     permissions:
-      contents: write
+      contents: read
     outputs:
       has_source: ${{ steps.archive.outputs.has_source }}
     steps:
@@ -40,7 +40,7 @@ jobs:
         id: archive
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_REPOSITORY: ${{ github.repository }}
+          EXPECTED_REPOSITORY: wimi321/lizzieyzy-next
         run: |
           python3 -I - <<'PY'
           import hashlib
