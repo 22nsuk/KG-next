@@ -1,11 +1,13 @@
+> KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
+
 <p align="center">
-  <img src="assets/hero-japanese.svg" alt="LizzieYzy Next" width="100%" />
+  <img src="assets/hero-japanese.svg" alt="KG-next" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
   <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="公式サイト"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
@@ -15,7 +17,7 @@
 </p>
 
 <p align="center">
-  <strong>LizzieYzy Next は、KataGo で対局を振り返る利用者向けに保守されている lizzieyzy ブランチです。</strong><br/>
+  <strong>KG-next は、KataGo で対局を振り返る利用者向けに保守されている lizzieyzy ブランチです。</strong><br/>
   野狐のニックネームによる棋譜取得、全局の高速解析、新しい勝率グラフと下部概要を備え、Windows、macOS、Linux 向けに配布しています。
 </p>
 
@@ -32,7 +34,7 @@
 </p>
 
 > [!NOTE]
-> 中国本土のユーザーには、安定版の [公式ダウンロードページ](https://goagent.top/download/) をおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases) からダウンロードできます。
+> 中国本土のユーザーには、安定版の [公式ダウンロードページ](https://goagent.top/download/) をおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/22nsuk/KG-next/releases) からダウンロードできます。
 >
 > 中国本土から利用する場合は、公開されている Baidu Netdisk ダウンロードも使えます:
 > [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
@@ -64,10 +66,10 @@ Linux x86_64 の NVIDIA GPU サーバーがあり、まだ `WSS` リンクがな
 
 ## まずどれをダウンロードするか
 
-中国本土のユーザーには、よく使う安定版を [公式ダウンロードページ](https://goagent.top/download/) から選ぶことをおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases) からダウンロードできます。
+中国本土のユーザーには、よく使う安定版を [公式ダウンロードページ](https://goagent.top/download/) から選ぶことをおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/22nsuk/KG-next/releases) からダウンロードできます。
 
 <p align="center">
-  <img src="assets/package-guide.svg" alt="LizzieYzy Next package guide" width="100%" />
+  <img src="assets/package-guide.svg" alt="KG-next package guide" width="100%" />
 </p>
 
 | あなたの環境 | Releases でこのキーワードを含むファイルを探す |
@@ -88,9 +90,9 @@ Linux x86_64 の NVIDIA GPU サーバーがあり、まだ `WSS` リンクがな
 | macOS Intel | `*mac-intel.with-katago.dmg` |
 | Linux | `*linux64.with-katago.zip` |
 
-CPU、OpenCL、CUDA、TensorRT、Metal の各バックエンド向けフルパッケージと Linux パッケージは KataGo `v1.18.1` を使用します。Linux NVIDIA 版は実行環境との互換性のため CUDA 12.1 を維持しています。
+CPU、OpenCL、CUDA、TensorRT、Metal の各バックエンド向けフルパッケージと Linux パッケージは KataGo `v1.18.2` を使用します。Linux NVIDIA 版は実行環境との互換性のため CUDA 12.1 を維持しています。
 
-推奨フルパッケージには、公式フラッグシップ B11 モデル `b11c768h12nbt3tflrs-fson-silu.bin.gz`（約 202 MiB）が含まれます。RTX 3070 での比較では、探索スループットが B10 より約 40% 低く、速度を優先する場合は `KataGo 自動設定 -> ウェイト` で B10 に切り替えられます。
+既定モデルは `kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz` です。エンジンとモデルは `src/main/resources/katago-assets.json` を参照してください。このモデルの GPU 性能比較は今回実施していません。
 
 NVIDIA と TensorRT:
 
@@ -107,7 +109,7 @@ NVIDIA と TensorRT:
 
 <p align="center">
   <a href="assets/fox-id-demo.gif">
-    <img src="assets/fox-id-demo-cover.png" alt="LizzieYzy Next Fox nickname demo" width="100%" />
+    <img src="assets/fox-id-demo-cover.png" alt="KG-next Fox nickname demo" width="100%" />
   </a>
 </p>
 
@@ -122,13 +124,13 @@ NVIDIA と TensorRT:
 ## 画面プレビュー
 
 <p align="center">
-  <img src="assets/interface-overview-2026-04.png" alt="LizzieYzy Next 画面プレビュー" width="100%" />
+  <img src="assets/interface-overview-2026-04.png" alt="KG-next 画面プレビュー" width="100%" />
 </p>
 
 主勝率グラフと下部のクイック概要には、次の情報が表示されます。
 
 <p align="center">
-  <img src="assets/winrate-quick-overview-2026-04.png" alt="LizzieYzy Next winrate graph and quick overview" width="46%" />
+  <img src="assets/winrate-quick-overview-2026-04.png" alt="KG-next winrate graph and quick overview" width="46%" />
 </p>
 
 - 青線 / 紫線: 双方の勝率の流れ
@@ -138,7 +140,7 @@ NVIDIA と TensorRT:
 
 ## 元の lizzieyzy との違い
 
-| 比較項目 | 元の `lizzieyzy` | `LizzieYzy Next` |
+| 比較項目 | 元の `lizzieyzy` | `KG-next` |
 | --- | --- | --- |
 | 現在の状態 | 多くの人が覚えている元プロジェクトだが、実用面の継続保守は弱い | 使用感と配布体験を継続保守する現行ブランチ |
 | 野狐棋譜取得 | 古い取得フローは壊れた場面が多い | よく使う取得フローを復旧し、ニックネーム入力にも対応 |
@@ -149,7 +151,7 @@ NVIDIA と TensorRT:
 
 ## macOS の初回起動
 
-Mac に合うパッケージを選び、DMG を開いて `LizzieYzy Next` を「アプリケーション」へドラッグします。インストールディスクを取り出したあと、Finder の「アプリケーション」から起動してください。公式 release は署名と公証を行っています。macOS にブロックされる場合は [インストールガイド](docs/INSTALL_JA.md) を参照してください。
+Mac に合うパッケージを選び、DMG を開いて `KG-next` を「アプリケーション」へドラッグします。インストールディスクを取り出したあと、Finder の「アプリケーション」から起動してください。公式 release は署名と公証を行っています。macOS にブロックされる場合は [インストールガイド](docs/INSTALL_JA.md) を参照してください。
 
 ## ドキュメントと参加
 
@@ -158,8 +160,8 @@ Mac に合うパッケージを選び、DMG を開いて `LizzieYzy Next` を「
 - [配布パッケージ一覧 (English)](docs/PACKAGES_EN.md)
 - [トラブル対応 (English)](docs/TROUBLESHOOTING_EN.md)
 - [検証済みプラットフォーム (English)](docs/TESTED_PLATFORMS.md)
-- [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
-- [GitHub Discussions](https://github.com/wimi321/lizzieyzy-next/discussions)
+- [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
+- [GitHub Discussions](https://github.com/22nsuk/KG-next/discussions)
 - [中国語 QQ グループ: 299419120](https://qm.qq.com/q/JZoeojjteg)
 - [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
@@ -176,8 +178,8 @@ readboard の継続的な保守と改善に取り組む [qiyi71w](https://github
 すべてのコントリビューターに感謝します:
 
 <p align="left">
-  <a href="https://github.com/wimi321/lizzieyzy-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="LizzieYzy Next のコントリビューター" />
+  <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="KG-next のコントリビューター" />
   </a>
 </p>
 

@@ -16,7 +16,7 @@ class BrowserFrameJcefBundleTest {
 
   @Test
   void findsPackagedJcefBundleUnderAppDirectory() throws IOException {
-    Path root = tempDir.resolve("LizzieYzy Next");
+    Path root = tempDir.resolve("KG-next");
     Path bundle = root.resolve("app").resolve(BrowserFrame.JCEF_BUNDLE_DIRECTORY);
     writeBundle(bundle, BrowserFrame.JCEF_RELEASE_TAG, "*");
 

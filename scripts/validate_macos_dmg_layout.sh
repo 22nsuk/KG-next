@@ -216,7 +216,7 @@ expected_version = sys.argv[2]
 with open(info_path, "rb") as handle:
     info = plistlib.load(handle)
 
-if info.get("CFBundleIdentifier") != "com.wimi321.lizzieyzy.next":
+if info.get("CFBundleIdentifier") != "com.github.nsuk22.kgnext":
     raise SystemExit("Unexpected macOS bundle identifier.")
 if info.get("CFBundlePackageType") != "APPL":
     raise SystemExit("macOS bundle is not registered as an application.")

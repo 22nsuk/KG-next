@@ -670,7 +670,7 @@ public final class AppleStyleSupport {
               ? Lizzie.config.uiConfig.optString("ui-font-name", "")
               : Lizzie.config.theme.config.optString(
                   "ui-font-name", Lizzie.config.uiConfig.optString("ui-font-name", ""));
-      if (explicit.isBlank() || "Lizzie Default".equals(explicit) || "Lizzie默认".equals(explicit)) {
+      if (LocaleFontSupport.isDefaultSelection(explicit)) {
         Locale locale = AppLocale.fromConfigValue(Lizzie.config.useLanguage).locale();
         family =
             DEFAULT_UI_FONTS.computeIfAbsent(

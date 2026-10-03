@@ -2823,7 +2823,7 @@ public class KataGoAutoSetupDialog extends JDialog {
         throw new IOException(text("AutoSetup.openBrowserUnsupported"));
       }
       Desktop.getDesktop()
-          .browse(URI.create("https://github.com/wimi321/lizzieyzy-next/releases/latest"));
+          .browse(URI.create("https://github.com/22nsuk/KG-next/releases"));
     } catch (IOException | RuntimeException e) {
       showLocalSetupError(e);
     }

@@ -122,7 +122,9 @@ PY_COMPILE_FILES = (
     "scripts/probe_katago_focus.py",
     "scripts/test_build_katago_source.py",
     "scripts/katago_asset_catalog.py",
+    "scripts/validate_kg_metadata.py",
     "scripts/test_katago_asset_catalog.py",
+    "scripts/test_validate_kg_metadata.py",
     "scripts/stage_katago_source_release.py",
     "scripts/audit_katago_linux_compatibility.py",
     "scripts/test_audit_katago_linux_compatibility.py",
@@ -193,6 +195,7 @@ DIRECT_PYTHON_TESTS = (
     "scripts/test_build_katago_linux_cuda.py",
     "scripts/test_build_katago_source.py",
     "scripts/test_katago_asset_catalog.py",
+    "scripts/test_validate_kg_metadata.py",
     "scripts/test_stage_katago_source_release.py",
     "scripts/test_build_katago_macos_dependencies.py",
     "scripts/test_package_katago_source_macos.py",
@@ -390,6 +393,7 @@ def windows_steps(maven: str, powershell: str) -> list[Step]:
     )
     return [
         Step("Verify repository line endings", (python, "scripts/check_line_endings.py"), group="repository"),
+        Step("Verify KG-next engine and model metadata", (python, "scripts/validate_kg_metadata.py"), group="repository"),
         Step("Verify bundled JCEF logic", (python, "scripts/test_prepare_bundled_jcef.py")),
         Step("Verify CPU acceptance provisioning", (python, "scripts/test_prepare_cpu_engine_acceptance.py")),
         Step("Verify acceptance runner outcomes", (python, "scripts/test_run_acceptance.py")),
@@ -445,6 +449,7 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
     steps = [
         Step("Test line-ending checker", (python, "scripts/test_check_line_endings.py"), group="repository"),
         Step("Verify repository line endings", (python, "scripts/check_line_endings.py"), group="repository"),
+        Step("Verify KG-next engine and model metadata", (python, "scripts/validate_kg_metadata.py"), group="repository"),
         Step("Verify local Markdown links", (python, "scripts/check_markdown_links.py"), group="repository"),
         Step("Compile release helper Python", (python, "-m", "py_compile", *PY_COMPILE_FILES)),
     ]

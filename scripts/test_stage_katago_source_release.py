@@ -72,10 +72,17 @@ class SourceReleaseTest(unittest.TestCase):
 
     def test_all_fifteen_targets_are_sealed_and_model_is_unchanged(self):
         catalog = self.run_stage()
-        self.assertEqual(set(TARGETS), set(catalog["assets"]))
+        self.assertEqual(set(TARGETS) | {"windows-nvidia-cuda13"}, set(catalog["assets"]))
+        self.assertEqual(
+            json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8"))["assets"]["windows-nvidia-cuda13"],
+            catalog["assets"]["windows-nvidia-cuda13"],
+        )
         baseline = json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8"))
         self.assertEqual(baseline["models"], catalog["models"])
         for target, asset in catalog["assets"].items():
+            if target not in TARGETS:
+                self.assertFalse((self.root / "release" / asset["assetName"]).exists())
+                continue
             archive = self.root / "release" / asset["assetName"]
             self.assertEqual(asset["sha256"], record(archive, archive.name)["sha256"])
             with zipfile.ZipFile(archive) as opened:

@@ -20,10 +20,31 @@ USER_AGENT = (
 )
 CUDA_12_1_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.1.1.json"
 CUDA_12_8_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_12.8.0.json"
+CUDA_13_2_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.2.2.json"
 CUDNN_8_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_8.9.7.29.json"
 CUDNN_9_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.8.0.json"
+CUDNN_9_24_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.24.0.json"
 CUDA_12_8_NVRTC_VERSION = "12.8.61"
 CUDA_12_8_NVRTC_SHA256 = "e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d"
+CUDA_13_2_NVRTC_VERSION = "13.2.86"
+CUDA_13_2_NVRTC_SHA256 = "c8d4254c51bfa3fa982bd40bf36de9800d4c65211945e8393fbf4c310ef9232a"
+CUDNN_9_24_VERSION = "9.24.0.43"
+CUDNN_9_24_SHA256 = "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06"
+CUDA_13_2_PACKAGE_PINS = {
+    "cuda_cudart": ("13.2.86", "024e0c1055343d9d2a7d35c90fb7695db14cc2f05bb962198eb18b92c73b32be"),
+    "libcublas": ("13.4.1.3", "bc6f590490134f4dbe29672b72e536c44362cc5f738a0f7e48c8c3c141e9b24a"),
+    "libnvjitlink": ("13.2.86", "e1e94fbb5bf45c3c148a34febb29ca5546c760ebfe8ceb6ecc949b0a4d836bd9"),
+    "cuda_nvrtc": (CUDA_13_2_NVRTC_VERSION, CUDA_13_2_NVRTC_SHA256),
+    "cudnn": (CUDNN_9_24_VERSION, CUDNN_9_24_SHA256),
+}
+CUDA_13_2_DLLS = frozenset((
+    "cudart64_13.dll", "cublas64_13.dll", "cublasLt64_13.dll", "nvJitLink_130_0.dll",
+    "nvrtc64_130_0.dll", "nvrtc-builtins64_132.dll", "cudnn64_9.dll", "cudnn_adv64_9.dll",
+    "cudnn_cnn64_9.dll", "cudnn_engines_precompiled64_9.dll",
+    "cudnn_engines_runtime_compiled64_9.dll", "cudnn_engines_tensor_ir64_9.dll",
+    "cudnn_ext64_9.dll", "cudnn_graph64_9.dll", "cudnn_heuristic64_9.dll", "cudnn_ops64_9.dll",
+))
+NVIDIA_DLL_PATTERNS = ("cudart*.dll", "cublas*.dll", "nvblas*.dll", "nvjitlink*.dll", "nvrtc*.dll", "cudnn*.dll")
 TENSORRT_10_9_URL = (
     "https://developer.download.nvidia.com/compute/machine-learning/tensorrt/10.9.0/zip/"
     "TensorRT-10.9.0.34.Windows.win10.cuda-12.8.zip"
@@ -42,7 +63,20 @@ CUDA_12_8_SPECS = (
     ("CUDA nvJitLink", CUDA_12_8_MANIFEST_URL, "libnvjitlink", "windows-x86_64"),
     ("CUDA NVRTC", CUDA_12_8_MANIFEST_URL, "cuda_nvrtc", "windows-x86_64"),
 )
+CUDA_13_2_SPECS = (
+    ("CUDA Runtime", CUDA_13_2_MANIFEST_URL, "cuda_cudart", "windows-x86_64"),
+    ("CUDA cuBLAS", CUDA_13_2_MANIFEST_URL, "libcublas", "windows-x86_64"),
+    ("CUDA nvJitLink", CUDA_13_2_MANIFEST_URL, "libnvjitlink", "windows-x86_64"),
+    ("CUDA NVRTC", CUDA_13_2_MANIFEST_URL, "cuda_nvrtc", "windows-x86_64"),
+)
 RUNTIME_PROFILES = {
+    "cuda13.2-cudnn9.24": {
+        "description": "Optional CUDA 13.2 + cuDNN 9.24 runtime, separate from CUDA 12 packages",
+        "manifest_specs": CUDA_13_2_SPECS
+        + (("NVIDIA cuDNN", CUDNN_9_24_MANIFEST_URL, "cudnn", "windows-x86_64/cuda13"),),
+        "direct_specs": (),
+        "dll_patterns": tuple(CUDA_13_2_DLLS),
+    },
     "cuda12.1-cudnn8": {
         "description": "Legacy CUDA 12.1 + cuDNN 8 runtime for existing NVIDIA installs",
         "manifest_specs": CUDA_12_1_SPECS
@@ -107,6 +141,10 @@ def parse_args() -> argparse.Namespace:
         choices=sorted(RUNTIME_PROFILES),
         default="cuda12.8-cudnn9",
         help="Runtime profile to prepare.",
+    )
+    parser.add_argument(
+        "--verify-output", action="store_true",
+        help="Verify a prepared directory and its manifest without downloading or changing files.",
     )
     return parser.parse_args()
 
@@ -316,6 +354,17 @@ def write_manifest(
 
 
 def validate_profile_packages(profile_name: str, packages: list[dict[str, object]]) -> None:
+    if profile_name == "cuda13.2-cudnn9.24":
+        if (len(packages) != len(CUDA_13_2_PACKAGE_PINS)
+                or {package.get("key") for package in packages} != set(CUDA_13_2_PACKAGE_PINS)):
+            raise RuntimeErrorWithContext(f"{profile_name} requires exactly its five pinned packages")
+        for package in packages:
+            version, digest = CUDA_13_2_PACKAGE_PINS[str(package["key"])]
+            if package.get("version") != version or package.get("sha256") != digest:
+                raise RuntimeErrorWithContext(
+                    f"{profile_name} requires {package['key']} {version} with SHA-256 {digest}"
+                )
+        return
     if not profile_name.startswith("cuda12.8-"):
         return
     nvrtc_packages = [package for package in packages if package.get("key") == "cuda_nvrtc"]
@@ -334,6 +383,53 @@ def validate_profile_packages(profile_name: str, packages: list[dict[str, object
         )
 
 
+def validate_profile_dlls(profile_name: str, extracted_names: list[str]) -> None:
+    runtime_names = {name.lower() for name in extracted_names if any(
+        fnmatch.fnmatchcase(name.lower(), pattern) for pattern in NVIDIA_DLL_PATTERNS
+    )}
+    if profile_name == "cuda13.2-cudnn9.24":
+        expected = {name.lower() for name in CUDA_13_2_DLLS}
+        if runtime_names != expected:
+            raise RuntimeErrorWithContext(
+                f"{profile_name} runtime DLL set mismatch; missing={sorted(expected - runtime_names)}, "
+                f"unexpected={sorted(runtime_names - expected)}"
+            )
+    elif profile_name.startswith("cuda12."):
+        cuda12_patterns = ("cudart64_12.dll", "cublas64_12.dll", "cublaslt64_12.dll", "nvblas64_12.dll",
+                           "nvjitlink_120_0.dll", "nvrtc64_120_0.dll", "nvrtc-builtins64_12?.dll")
+        cudnn_major = "8" if profile_name.endswith("cudnn8") else "9"
+        for name in runtime_names:
+            if name.startswith("cudnn"):
+                compatible = name.endswith(f"64_{cudnn_major}.dll")
+            else:
+                compatible = any(fnmatch.fnmatchcase(name, pattern) for pattern in cuda12_patterns)
+            if not compatible:
+                raise RuntimeErrorWithContext(f"{profile_name} contains incompatible runtime DLL: {name}")
+
+
+def verify_prepared_output(profile_name: str, output_dir: Path) -> None:
+    manifest_path = output_dir / MANIFEST_FILE_NAME
+    if not manifest_path.is_file():
+        raise RuntimeErrorWithContext(f"Prepared NVIDIA runtime manifest is missing: {manifest_path}")
+    manifest = manifest_path.read_text(encoding="utf-8")
+    if f"Profile: {profile_name}" not in manifest.splitlines():
+        raise RuntimeErrorWithContext(f"Prepared NVIDIA manifest does not match {profile_name}")
+    validate_profile_dlls(profile_name, [path.name for path in output_dir.glob("*")
+                                     if path.is_file() and path.suffix.lower() == DLL_SUFFIX])
+    pins = CUDA_13_2_PACKAGE_PINS if profile_name == "cuda13.2-cudnn9.24" else {}
+    if profile_name.startswith("cuda12.8-"):
+        pins = {"cuda_nvrtc": (CUDA_12_8_NVRTC_VERSION, CUDA_12_8_NVRTC_SHA256)}
+        if not all((output_dir / name).is_file() for name in
+                   ("nvrtc64_120_0.dll", "nvrtc-builtins64_128.dll")):
+            raise RuntimeErrorWithContext(f"{profile_name} is missing NVRTC compiler or builtins")
+    specs = RUNTIME_PROFILES[profile_name]["manifest_specs"]
+    display_names = {spec[2]: spec[0] for spec in specs}
+    for key, (version, digest) in pins.items():
+        if not any(line.startswith(f"- {display_names[key]}: {version} | ")
+                   and line.endswith(f" | sha256={digest}") for line in manifest.splitlines()):
+            raise RuntimeErrorWithContext(f"Prepared NVIDIA manifest is missing pinned {key} {version}")
+
+
 def prepare_runtime_profile(
     profile_name: str,
     profile: dict[str, object],
@@ -347,6 +443,9 @@ def prepare_runtime_profile(
     packages = load_manifest_package_specs(cache_dir, profile["manifest_specs"])
     packages.extend(load_direct_package_specs(profile["direct_specs"]))
     validate_profile_packages(profile_name, packages)
+    if "dll_patterns" in profile:
+        for package in packages:
+            package["dll_patterns"] = profile["dll_patterns"]
 
     for child in output_dir.iterdir():
         if child.is_dir():
@@ -361,6 +460,7 @@ def prepare_runtime_profile(
 
     if not extracted_names:
         raise RuntimeErrorWithContext("No NVIDIA runtime DLLs were extracted.")
+    validate_profile_dlls(profile_name, extracted_names)
 
     write_manifest(output_dir, profile_name, packages, extracted_names)
     return packages, extracted_names
@@ -371,6 +471,10 @@ def main() -> int:
     profile = RUNTIME_PROFILES[args.profile]
     cache_dir = Path(args.cache_dir).resolve()
     output_dir = Path(args.output_dir).resolve()
+    if args.verify_output:
+        verify_prepared_output(args.profile, output_dir)
+        print(f"Verified NVIDIA runtime profile {args.profile} in: {output_dir}")
+        return 0
     _, extracted_names = prepare_runtime_profile(args.profile, profile, cache_dir, output_dir)
     print(f"Prepared NVIDIA runtime profile {args.profile} in: {output_dir}")
     print(f"DLLs: {len(set(extracted_names))}")

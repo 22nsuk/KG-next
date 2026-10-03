@@ -1544,29 +1544,29 @@ public class SGFParser {
           if ((white != null && (white.katago() || white.sai())) || Lizzie.board.isPkBoardKataW)
             generalProps.append(
                 String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KW]AP[LizzieYzy Next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KW]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
                     komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
           else if ((black != null && (black.katago() || black.sai()))
               || Lizzie.board.isPkBoardKataB)
             generalProps.append(
                 String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KB]AP[LizzieYzy Next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KB]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
                     komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
           else
             generalProps.append(
                 String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[Y]AP[LizzieYzy Next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[Y]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
                     komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
         } else {
           if ((Lizzie.leelaz != null && Lizzie.leelaz.isKatago) || Lizzie.board.isKataBoard)
             generalProps.append(
                 String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[G]AP[LizzieYzy Next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[G]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
                     komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
           else
             generalProps.append(
                 String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]AP[LizzieYzy Next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                    "KM[%s]PW[%s]PB[%s]DT[%s]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
                     komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
         }
       }

@@ -1118,6 +1118,7 @@ public final class RemoteComputeConfig {
     } else if (!home.isEmpty()) {
       base = Path.of(home, ".config");
     }
+    // Keep the legacy credential namespace so existing saved credentials remain readable.
     return base == null
         ? null
         : base.resolve("LizzieYzy Next").resolve("secure-credentials").toAbsolutePath().normalize();

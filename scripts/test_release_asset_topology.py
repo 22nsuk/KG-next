@@ -15,6 +15,7 @@ from scripts import generate_release_notes as notes
 from scripts import publish_release_request as publisher
 from scripts import release_asset_provenance as provenance
 from scripts import release_asset_topology as topology
+from scripts import sync_baidu_pan as baidu
 
 
 DATE_TAG = "2026-08-19"
@@ -42,6 +43,7 @@ WINDOWS_PUBLIC = (
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.README.txt",
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.manifest.json",
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.sha256.txt",
+    f"{DATE_TAG}-windows64.nvidia.cuda13.portable.zip",
 )
 LINUX_PUBLIC = (
     f"{DATE_TAG}-linux64.opencl.zip",
@@ -73,6 +75,7 @@ DIRECT_DOWNLOAD = (
     f"{DATE_TAG}-linux64.with-katago.zip",
     f"{DATE_TAG}-linux64.opencl.zip",
     f"{DATE_TAG}-linux64.nvidia.zip",
+    f"{DATE_TAG}-windows64.nvidia.cuda13.portable.zip",
 )
 NOTES_TABLE_KEYS = (
     "windows_opencl_portable",
@@ -94,6 +97,7 @@ NOTES_TABLE_KEYS = (
     "linux64",
     "linux64_opencl",
     "linux64_nvidia",
+    "windows_nvidia_cuda13_portable",
 )
 WORKFLOW_UNITS = (
     (
@@ -124,12 +128,12 @@ WORKFLOW_UNITS = (
 
 
 class ReleaseAssetTopologyContractTest(unittest.TestCase):
-    def test_universe_has_exactly_the_current_26_public_assets(self) -> None:
+    def test_universe_has_exactly_the_current_27_public_assets(self) -> None:
         keys = tuple(asset.key for asset in topology.assets())
         names = tuple(asset.filename.render(DATE_TAG) for asset in topology.assets())
 
-        self.assertEqual(26, len(keys))
-        self.assertEqual(26, len(set(keys)))
+        self.assertEqual(27, len(keys))
+        self.assertEqual(27, len(set(keys)))
         self.assertEqual(
             WINDOWS_PUBLIC + LINUX_PUBLIC + MAC_AMD64_PUBLIC + MAC_ARM64_PUBLIC,
             names,
@@ -156,6 +160,17 @@ class ReleaseAssetTopologyContractTest(unittest.TestCase):
         self.assertEqual(LINUX_PUBLIC, topology.public_inventory("linux", DATE_TAG))
         self.assertEqual(MAC_ARM64_PUBLIC, topology.public_inventory("mac-arm64", DATE_TAG))
         self.assertEqual(MAC_AMD64_PUBLIC, topology.public_inventory("mac-amd64", DATE_TAG))
+
+    def test_cuda13_portable_is_a_separate_runnable_release_candidate(self) -> None:
+        name = f"{DATE_TAG}-windows64.nvidia.cuda13.portable.zip"
+        item = topology.asset_for_name("windows", DATE_TAG, name)
+        self.assertEqual("windows_nvidia_cuda13_portable", item.key)
+        self.assertIs(topology.CandidateClass.PORTABLE_PRODUCT, item.candidate_class)
+        self.assertTrue(item.runnable)
+        self.assertEqual(frozenset(topology.Role), item.roles)
+        self.assertIn(name, publisher.direct_download_names(DATE_TAG))
+        self.assertIn(name, provenance.expected_asset_names("windows", DATE_TAG))
+
     def test_asset_identity_lookup_round_trips_canonical_metadata(self) -> None:
         cases = (
             (
@@ -349,6 +364,32 @@ class TopologyDeletionTest(unittest.TestCase):
             [unit.workflow_file for unit in topology.release_units()],
             [spec.workflow_file for spec in publisher.WORKFLOWS],
         )
+
+
+class BaiduMirrorInventoryTest(unittest.TestCase):
+    def fixture(self, cuda13_date: str | None = None) -> list[baidu.ReleaseAsset]:
+        assets = [baidu.ReleaseAsset(f"{DATE_TAG}-{suffix}", 1) for suffix in baidu.EXPECTED_ASSET_SUFFIXES]
+        if cuda13_date:
+            assets.append(baidu.ReleaseAsset(f"{cuda13_date}-windows64.nvidia.cuda13.portable.zip", 1))
+        return assets
+
+    def test_cuda13_is_optional_and_mirrored_when_present_for_the_date(self) -> None:
+        baseline = self.fixture()
+        self.assertEqual(baseline, baidu.pick_expected_assets(baseline, DATE_TAG))
+        complete = self.fixture(DATE_TAG)
+        self.assertEqual(complete, baidu.pick_expected_assets(complete, DATE_TAG))
+
+    def test_does_not_pick_a_stale_optional_cuda13_package(self) -> None:
+        self.assertEqual(self.fixture(), baidu.pick_expected_assets(self.fixture("2026-08-18"), DATE_TAG))
+
+    def test_cuda13_does_not_replace_a_required_nvidia_package(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "Missing expected"):
+            baidu.pick_expected_assets(self.fixture(DATE_TAG)[::2], DATE_TAG)
+
+    def test_duplicate_optional_cuda13_package_is_rejected(self) -> None:
+        assets = self.fixture(DATE_TAG)
+        with self.assertRaisesRegex(SystemExit, "Ambiguous optional"):
+            baidu.pick_expected_assets([*assets, assets[-1]], DATE_TAG)
 
 
 class LinuxValidatorSmokeTest(unittest.TestCase):

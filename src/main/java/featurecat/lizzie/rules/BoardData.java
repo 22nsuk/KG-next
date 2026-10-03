@@ -658,7 +658,14 @@ public class BoardData {
       int totalplayouts,
       List<Double> estimateArray) {
     tryToSetBestMoves2FromEngine(
-        moves, engName, true, sourceEngine, totalplayouts, estimateArray);
+        moves, engName, sourceEngine, totalplayouts, estimateArray, false);
+  }
+
+  public void tryToSetBestMoves2FromEngine(
+      List<MoveData> moves, String engName, Leelaz sourceEngine,
+      int totalplayouts, List<Double> estimateArray, boolean forceOverride) {
+    tryToSetBestMoves2FromEngine(
+        moves, engName, true, sourceEngine, totalplayouts, estimateArray, forceOverride);
   }
 
   private void tryToSetBestMoves2FromEngine(

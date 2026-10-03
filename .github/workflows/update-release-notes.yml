@@ -101,9 +101,9 @@ jobs:
             --date-tag "$RELEASE_DATE_TAG" \
             --release-tag "$RELEASE_TAG" \
             --repository "$RELEASE_REPOSITORY"
-          release_title="LizzieYzy Next $RELEASE_TAG"
+          release_title="KG-next $RELEASE_TAG"
           if [[ "$RELEASE_TAG" == "next-2026-06-29.1" ]]; then
-            release_title="LizzieYzy Next 首冠版 $RELEASE_TAG"
+            release_title="KG-next 首冠版 $RELEASE_TAG"
           fi
           gh release edit "$RELEASE_TAG" \
             --repo "$RELEASE_REPOSITORY" \

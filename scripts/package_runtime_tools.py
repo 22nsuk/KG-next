@@ -376,7 +376,7 @@ def audit_sizes(args: argparse.Namespace) -> int:
             / "dist"
             / "macos"
             / "app-image"
-            / "LizzieYzy Next.app"
+            / "KG-next.app"
             / "Contents"
             / "app"
             / "jcef-bundle",
@@ -413,7 +413,7 @@ def audit_sizes(args: argparse.Namespace) -> int:
     write_json(json_output, payload)
     output.parent.mkdir(parents=True, exist_ok=True)
     lines = [
-        "# LizzieYzy Next package size audit",
+        "# KG-next package size audit",
         "",
         f"- Generated: {payload['generatedAt']}",
         f"- Root: `{root}`",
@@ -491,7 +491,7 @@ def compare_audits(args: argparse.Namespace) -> int:
             )
 
     lines = [
-        "# LizzieYzy Next package size comparison",
+        "# KG-next package size comparison",
         "",
         f"- Before: `{before_path}`",
         f"- After: `{after_path}`",

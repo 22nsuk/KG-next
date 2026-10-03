@@ -157,7 +157,7 @@ public class KataGoRuntimeHelperTest {
   @Test
   void bundledEngineUnderSpacedUnicodePathKeepsRuntimeStateOutOfEngineDirectory() throws Exception {
     Path tempRoot = Files.createTempDirectory("katago-helper-spaced-path");
-    Path portableRoot = Files.createDirectories(tempRoot.resolve("LizzieYzy Next 测试 portable"));
+    Path portableRoot = Files.createDirectories(tempRoot.resolve("KG-next 测试 portable"));
     Path enginePath =
         touch(
             portableRoot
@@ -626,8 +626,7 @@ public class KataGoRuntimeHelperTest {
         WINDOWS_OS_NAME,
         () -> {
           Path tempRoot = Files.createTempDirectory("katago-helper-separated-tensorrt");
-          Path portableRoot =
-              Files.createDirectories(tempRoot.resolve("LizzieYzy Next CUDA portable"));
+          Path portableRoot = Files.createDirectories(tempRoot.resolve("KG-next CUDA portable"));
           Path runtimeWorkDirectory =
               Files.createDirectories(portableRoot.resolve("user-data").resolve("runtime"));
           Path engineDir =
@@ -737,6 +736,229 @@ public class KataGoRuntimeHelperTest {
                   assertTrue(
                       KataGoRuntimeHelper.inspectNvidiaRuntime(enginePath, "").ready,
                       "Pinned project CUDA builds statically link zlib and need no zlib DLL."));
+        });
+  }
+
+  @Test
+  void cuda13RuntimeUsesExactCoreDllsAndTheCompleteCudnnClosure() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-helper-cuda13-closure");
+          Path engineDir =
+              Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia-cuda13"));
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia\n");
+          touchRequiredCuda13_2Dlls(engineDir);
+          withConfig(
+              root,
+              () -> {
+                KataGoRuntimeHelper.NvidiaRuntimeStatus valid =
+                    KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                assertTrue(valid.ready, valid.detailText);
+                assertFalse(valid.verifiedStaticZlib);
+                assertFalse(Files.exists(engineDir.resolve("cudart64_12.dll")));
+                for (String dll : CUDA13_CORE_AND_CUDNN_DLLS) {
+                  Files.delete(engineDir.resolve(dll));
+                  KataGoRuntimeHelper.NvidiaRuntimeStatus missing =
+                      KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                  assertFalse(missing.ready, "CUDA13 must fail preflight without " + dll);
+                  assertTrue(missing.missingDlls.contains(dll), missing.missingDlls.toString());
+                  touch(engineDir.resolve(dll));
+                }
+                Files.delete(engineDir.resolve("nvrtc-builtins64_132.dll"));
+                touch(engineDir.resolve("nvrtc-builtins64_128.dll"));
+                assertFalse(KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "").ready);
+              });
+        });
+  }
+
+  @Test
+  void cuda13RuntimeRequiresItsPinnedNvrtcAndCuda13CudnnArchive() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-helper-cuda13-metadata");
+          Path engineDir =
+              Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia-cuda13"));
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia\n");
+          touchRequiredCuda13_2Dlls(engineDir);
+          Path manifest = engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+          String pinned = Files.readString(manifest);
+          withConfig(
+              root,
+              () -> {
+                for (String bad :
+                    List.of(
+                        pinned.replace("13.2.86", "13.2.85"),
+                        pinned.replace(
+                            KataGoRuntimeHelper.CUDA_13_2_NVRTC_SHA256,
+                            KataGoRuntimeHelper.CUDA_12_8_NVRTC_SHA256),
+                        pinned.replace("9.24.0.43", "9.24.0.42"),
+                        pinned.replace(
+                            KataGoRuntimeHelper.CUDNN_9_24_CUDA13_SHA256, EMPTY_FILE_SHA256))) {
+                  Files.writeString(manifest, bad);
+                  KataGoRuntimeHelper.NvidiaRuntimeStatus status =
+                      KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                  assertFalse(status.ready, "Mismatched archive metadata must fail preflight.");
+                  assertTrue(
+                      status.missingDlls.stream().anyMatch(value -> value.contains("manifest")));
+                }
+                Files.writeString(manifest, pinned);
+                assertTrue(KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "").ready);
+              });
+        });
+  }
+
+  @Test
+  void cuda13AndCuda12RuntimeRequirementsRemainSeparate() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-helper-cuda-profile-separation");
+          Path engineDir =
+              Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia"));
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          touchRequiredCuda13_2Dlls(engineDir);
+          withConfig(
+              root,
+              () -> {
+                Path manifest = engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+                String cuda13Manifest = Files.readString(manifest);
+                Files.writeString(
+                    manifest, cuda13Manifest.replace("cuda13.2-cudnn9.24", "cuda12.8-cudnn9"));
+                KataGoRuntimeHelper.NvidiaRuntimeStatus cuda12 =
+                    KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                assertFalse(cuda12.ready);
+                assertTrue(cuda12.missingDlls.contains("cudart64_12.dll"));
+                assertTrue(cuda12.missingDlls.contains("nvrtc-builtins64_128.dll"));
+                assertTrue(cuda12.missingDlls.contains("CUDA NVRTC 12.8.61 manifest"));
+
+                for (String dll : CUDA13_CORE_AND_CUDNN_DLLS) Files.delete(engineDir.resolve(dll));
+                touchRequiredCuda12_8Dlls(engineDir);
+                Files.writeString(manifest, cuda13Manifest);
+                KataGoRuntimeHelper.NvidiaRuntimeStatus cuda13 =
+                    KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                assertFalse(cuda13.ready);
+                assertTrue(cuda13.missingDlls.contains("cudart64_13.dll"));
+                assertTrue(cuda13.missingDlls.contains("nvrtc-builtins64_132.dll"));
+              });
+        });
+  }
+
+  @Test
+  void managedCuda13DirectoryCannotFallBackToCuda12WhenItsManifestIsMissingOrMismatched()
+      throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-helper-cuda13-missing-profile");
+          Path engineDir =
+              Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia-cuda13"));
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          touchRequiredCuda12_8Dlls(engineDir);
+          withConfig(
+              root,
+              () -> {
+                assertEquals("nvidia", KataGoRuntimeHelper.resolveNvidiaBackend(engine));
+                for (boolean deleteManifest : List.of(false, true)) {
+                  if (deleteManifest) {
+                    Files.delete(engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt"));
+                  }
+                  KataGoRuntimeHelper.NvidiaRuntimeStatus status =
+                      KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "");
+                  assertFalse(status.ready);
+                  assertTrue(status.missingDlls.contains("cudart64_13.dll"));
+                  assertTrue(status.missingDlls.contains("CUDA NVRTC 13.2.86 manifest"));
+                }
+              });
+        });
+  }
+
+  @Test
+  void cuda13CannotUseCuda12EngineProvenanceForStaticZlibExemption() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-helper-cuda13-zlib-provenance");
+          Path engineDir =
+              Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia-cuda13"));
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia\n");
+          touchRequiredCuda13_2Dlls(engineDir);
+          writeProjectEngineManifest(engineDir, "windows-nvidia");
+          Files.delete(engineDir.resolve("z.dll"));
+          withConfig(root, () -> assertMissingDynamicZlib(engine));
+        });
+  }
+
+  @Test
+  void cuda13DriverCompatibilityRequiresItsOwnRealInferenceProbe() throws Exception {
+    Path engineDir = Files.createTempDirectory("katago-helper-cuda13-driver");
+    Path engine = touch(engineDir.resolve("katago.exe"));
+    Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia\n");
+    touchRequiredCuda13_2Dlls(engineDir);
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.UNSUPPORTED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "579.99"));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.UNSUPPORTED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "570.65"));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.PROBE_REQUIRED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "580.00"));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.PROBE_REQUIRED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "610.74"));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.UNKNOWN,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, null));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.UNKNOWN,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "unknown"));
+    touchRequiredCuda12_8Dlls(engineDir);
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.SUPPORTED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "570.65"));
+    assertEquals(
+        NvidiaGpuDetector.CudaCompatibility.PROBE_REQUIRED,
+        KataGoRuntimeHelper.cudaDriverCompatibility(engine, "560.76"));
+  }
+
+  @Test
+  void cuda13CompatibilityCacheSeparatesProfilesAndTracksRuntimeChanges() throws Exception {
+    Path root = Files.createTempDirectory("katago-helper-cuda13-probe-cache");
+    Path engineDir = Files.createDirectories(root.resolve("engines/katago/windows-x64-nvidia"));
+    Path engine = touch(engineDir.resolve("katago.exe"));
+    Path model = Files.writeString(root.resolve("model.bin.gz"), "model");
+    Path config = Files.writeString(root.resolve("gtp.cfg"), "config");
+    touchRequiredCuda13_2Dlls(engineDir);
+    withConfig(
+        root,
+        () -> {
+          String cuda13 =
+              KataGoRuntimeHelper.buildCudaCompatibilityProbeSignature(
+                  engine, model, config, "610.74");
+          Path cuda13Marker = KataGoRuntimeHelper.cudaCompatibilityProbeMarker(engine);
+          assertEquals(
+              "cuda13.2-cudnn9.24-inference-compatibility-v1.txt",
+              cuda13Marker.getFileName().toString());
+          KataGoRuntimeHelper.rememberCudaCompatibilityProbe(cuda13Marker, cuda13);
+          Files.writeString(engineDir.resolve("cudnn_ext64_9.dll"), "runtime changed");
+          String changedRuntime =
+              KataGoRuntimeHelper.buildCudaCompatibilityProbeSignature(
+                  engine, model, config, "610.74");
+          assertFalse(
+              KataGoRuntimeHelper.hasMatchingCudaCompatibilityProbe(cuda13Marker, changedRuntime));
+          touchRequiredCuda12_8Dlls(engineDir);
+          String cuda12 =
+              KataGoRuntimeHelper.buildCudaCompatibilityProbeSignature(
+                  engine, model, config, "610.74");
+          Path cuda12Marker = KataGoRuntimeHelper.cudaCompatibilityProbeMarker(engine);
+          assertFalse(cuda12Marker.equals(cuda13Marker));
+          assertFalse(cuda12.equals(cuda13));
+          assertFalse(KataGoRuntimeHelper.hasMatchingCudaCompatibilityProbe(cuda13Marker, cuda12));
         });
   }
 
@@ -1274,7 +1496,8 @@ public class KataGoRuntimeHelperTest {
                                     .resolve("nvidia-runtime")
                                     .resolve("downloads")
                                     .resolve("katago-trt.zip")),
-                            "Successful TensorRT installs should remove the completed installer archive.");
+                            "Successful TensorRT installs should remove the completed installer"
+                                + " archive.");
                       }));
         });
   }
@@ -1614,7 +1837,8 @@ public class KataGoRuntimeHelperTest {
                                 "Successful resume should promote the .part file into the cache.");
                             assertFalse(
                                 Files.exists(partialArchive.resolveSibling("katago-trt.zip")),
-                                "Successful TensorRT installs should clean the completed archive after setup.");
+                                "Successful TensorRT installs should clean the completed archive"
+                                    + " after setup.");
                           })));
     }
   }
@@ -1681,7 +1905,8 @@ public class KataGoRuntimeHelperTest {
                               errorMessage.contains("TensorRT")
                                   && (errorMessage.toLowerCase(Locale.ROOT).contains("running")
                                       || errorMessage.contains("运行")),
-                              "Concurrent TensorRT installs should report one quiet running-task message.");
+                              "Concurrent TensorRT installs should report one quiet running-task"
+                                  + " message.");
                           assertFalse(
                               Utils.getEngineData().stream()
                                   .anyMatch(engine -> "KataGo TensorRT".equals(engine.name)));
@@ -1721,7 +1946,8 @@ public class KataGoRuntimeHelperTest {
                     KataGoRuntimeHelper.inspectNvidiaRuntime(targetDir.resolve("katago.exe"), "");
                 assertTrue(
                     runtimeStatus.ready,
-                    "TensorRT runtime should be accepted when launch PATH dirs satisfy dependencies.");
+                    "TensorRT runtime should be accepted when launch PATH dirs satisfy"
+                        + " dependencies.");
                 KataGoRuntimeHelper.TensorRtInstallStatus installStatus =
                     KataGoRuntimeHelper.inspectTensorRtInstall(snapshot);
                 assertTrue(installStatus.installed);
@@ -1747,7 +1973,8 @@ public class KataGoRuntimeHelperTest {
                     KataGoRuntimeHelper.inspectTensorRtInstall(snapshot);
                 assertTrue(
                     refreshedStatus.active,
-                    "TensorRT should stay active when the dialog refresh finds the original CUDA package first.");
+                    "TensorRT should stay active when the dialog refresh finds the original CUDA"
+                        + " package first.");
                 assertFalse(KataGoRuntimeHelper.canInstallTensorRt(snapshot));
                 assertTrue(
                     Utils.getEngineData().stream()
@@ -2679,7 +2906,8 @@ public class KataGoRuntimeHelperTest {
 
     assertTrue(
         completed >= 950,
-        "A completed fixed-thread cell should nearly complete its segment instead of assuming 12 tests.");
+        "A completed fixed-thread cell should nearly complete its segment instead of assuming 12"
+            + " tests.");
   }
 
   @Test
@@ -3012,6 +3240,43 @@ public class KataGoRuntimeHelperTest {
     touchCuda12CoreWithoutNvrtc(directory);
     touch(directory.resolve("nvrtc64_120_0.dll"));
     touch(directory.resolve("nvrtc-builtins64_128.dll"));
+  }
+
+  private static final List<String> CUDA13_CORE_AND_CUDNN_DLLS =
+      List.of(
+          "cudart64_13.dll",
+          "cublas64_13.dll",
+          "cublasLt64_13.dll",
+          "nvJitLink_130_0.dll",
+          "nvrtc64_130_0.dll",
+          "nvrtc-builtins64_132.dll",
+          "cudnn64_9.dll",
+          "cudnn_adv64_9.dll",
+          "cudnn_cnn64_9.dll",
+          "cudnn_engines_precompiled64_9.dll",
+          "cudnn_engines_runtime_compiled64_9.dll",
+          "cudnn_engines_tensor_ir64_9.dll",
+          "cudnn_ext64_9.dll",
+          "cudnn_graph64_9.dll",
+          "cudnn_heuristic64_9.dll",
+          "cudnn_ops64_9.dll");
+
+  private static void touchRequiredCuda13_2Dlls(Path directory) throws IOException {
+    for (String dll : CUDA13_CORE_AND_CUDNN_DLLS) touch(directory.resolve(dll));
+    touch(directory.resolve("z.dll"));
+    Files.writeString(
+        directory.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt"),
+        "Profile: cuda13.2-cudnn9.24\n"
+            + "- CUDA NVRTC: "
+            + KataGoRuntimeHelper.CUDA_13_2_NVRTC_VERSION
+            + " | fixture | sha256="
+            + KataGoRuntimeHelper.CUDA_13_2_NVRTC_SHA256
+            + "\n"
+            + "- NVIDIA cuDNN: "
+            + KataGoRuntimeHelper.CUDNN_9_24_VERSION
+            + " | fixture | sha256="
+            + KataGoRuntimeHelper.CUDNN_9_24_CUDA13_SHA256
+            + "\n");
   }
 
   private static void touchRequiredCuda12_8Dlls(Path directory) throws IOException {

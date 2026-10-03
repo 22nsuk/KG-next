@@ -1,11 +1,13 @@
+> KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
+
 <p align="center">
-  <img src="assets/hero-english.svg" alt="LizzieYzy Next" width="100%" />
+  <img src="assets/hero-english.svg" alt="KG-next" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
   <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="Official website"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
@@ -15,7 +17,7 @@
 </p>
 
 <p align="center">
-  <strong>LizzieYzy Next is the maintained lizzieyzy branch for players who use KataGo to review games.</strong><br/>
+  <strong>KG-next is the maintained lizzieyzy branch for players who use KataGo to review games.</strong><br/>
   It provides Fox nickname fetching, fast full-game analysis, a redesigned winrate graph and bottom quick overview, with releases for Windows, macOS, and Linux.
 </p>
 
@@ -32,7 +34,7 @@
 </p>
 
 > [!NOTE]
-> Users in mainland China are encouraged to use the [official download page](https://goagent.top/download/) for stable builds. Installers, Linux packages, and older versions remain available from [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases).
+> Users in mainland China are encouraged to use the [official download page](https://goagent.top/download/) for stable builds. Installers, Linux packages, and older versions remain available from [GitHub Releases](https://github.com/22nsuk/KG-next/releases).
 >
 > For users in mainland China, a public Baidu Netdisk download is available:
 > [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
@@ -64,10 +66,10 @@ If you have a Linux x86_64 NVIDIA GPU server but no `WSS` link yet, use [KataGo 
 
 ## What to download first
 
-Users in mainland China are encouraged to choose common stable builds from the [official download page](https://goagent.top/download/). Installers, Linux packages, and older versions are available from [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases).
+Users in mainland China are encouraged to choose common stable builds from the [official download page](https://goagent.top/download/). Installers, Linux packages, and older versions are available from [GitHub Releases](https://github.com/22nsuk/KG-next/releases).
 
 <p align="center">
-  <img src="assets/package-guide.svg" alt="LizzieYzy Next package guide" width="100%" />
+  <img src="assets/package-guide.svg" alt="KG-next package guide" width="100%" />
 </p>
 
 | Your situation | Find the file that contains this keyword on Releases |
@@ -88,9 +90,9 @@ Users in mainland China are encouraged to choose common stable builds from the [
 | macOS Intel, then drag the app to Applications | `*mac-intel.with-katago.dmg` |
 | Linux | `*linux64.with-katago.zip` |
 
-Full packages for CPU, OpenCL, CUDA, TensorRT, and Metal backends, along with the Linux packages, use KataGo `v1.18.1`. Linux NVIDIA remains on CUDA 12.1 for runtime compatibility.
+Full packages for CPU, OpenCL, CUDA, TensorRT, and Metal backends, along with the Linux packages, use KataGo `v1.18.2`. Linux NVIDIA remains on CUDA 12.1 for runtime compatibility.
 
-The recommended full package includes the official flagship B11 model `b11c768h12nbt3tflrs-fson-silu.bin.gz` (about 202 MiB). An RTX 3070 comparison measured about 40% lower search throughput than B10, which remains available from `KataGo Auto Setup -> Weights`.
+The default model is `kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz`. Engine and model pins come from `src/main/resources/katago-assets.json`; this change does not claim GPU performance measurements for this model.
 
 NVIDIA and TensorRT notes:
 
@@ -107,7 +109,7 @@ NVIDIA and TensorRT notes:
 
 <p align="center">
   <a href="assets/fox-id-demo.gif">
-    <img src="assets/fox-id-demo-cover.png" alt="LizzieYzy Next Fox nickname demo" width="100%" />
+    <img src="assets/fox-id-demo-cover.png" alt="KG-next Fox nickname demo" width="100%" />
   </a>
 </p>
 
@@ -122,13 +124,13 @@ Click the search button in the top bar or press `Ctrl+K` (`Command+K` on macOS).
 ## Interface preview
 
 <p align="center">
-  <img src="assets/interface-overview-2026-04.png" alt="LizzieYzy Next interface preview" width="100%" />
+  <img src="assets/interface-overview-2026-04.png" alt="KG-next interface preview" width="100%" />
 </p>
 
 The main graph and quick overview show:
 
 <p align="center">
-  <img src="assets/winrate-quick-overview-2026-04.png" alt="LizzieYzy Next winrate graph and quick overview" width="46%" />
+  <img src="assets/winrate-quick-overview-2026-04.png" alt="KG-next winrate graph and quick overview" width="46%" />
 </p>
 
 - blue / magenta lines: the changing winrate picture
@@ -138,7 +140,7 @@ The main graph and quick overview show:
 
 ## How it differs from the original LizzieYzy
 
-| Comparison | Original `lizzieyzy` | `LizzieYzy Next` |
+| Comparison | Original `lizzieyzy` | `KG-next` |
 | --- | --- | --- |
 | Current status | Historical project remembered by many users, but without practical ongoing maintenance | Actively maintained branch focused on usability and releases |
 | Fox fetching | Older flow broke for many users | Common fetching flow restored, now with nickname input |
@@ -149,7 +151,7 @@ The main graph and quick overview show:
 
 ## First launch on macOS
 
-Choose the package for your Mac, open the DMG, drag `LizzieYzy Next` to Applications, eject the installer disk, and launch it from Finder's Applications folder. Official releases are signed and notarized; if macOS still blocks the app, follow the [Installation Guide](docs/INSTALL_EN.md).
+Choose the package for your Mac, open the DMG, drag `KG-next` to Applications, eject the installer disk, and launch it from Finder's Applications folder. Official releases are signed and notarized; if macOS still blocks the app, follow the [Installation Guide](docs/INSTALL_EN.md).
 
 ## Documentation and contribution
 
@@ -158,8 +160,8 @@ Choose the package for your Mac, open the DMG, drag `LizzieYzy Next` to Applicat
 - [Package Overview](docs/PACKAGES_EN.md)
 - [Troubleshooting](docs/TROUBLESHOOTING_EN.md)
 - [Tested Platforms](docs/TESTED_PLATFORMS.md)
-- [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
-- [GitHub Discussions](https://github.com/wimi321/lizzieyzy-next/discussions)
+- [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
+- [GitHub Discussions](https://github.com/22nsuk/KG-next/discussions)
 - [Chinese QQ group: 299419120](https://qm.qq.com/q/JZoeojjteg)
 - [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md)
@@ -176,8 +178,8 @@ Thanks to [qiyi71w](https://github.com/qiyi71w) for maintaining and improving re
 Thanks to everyone who has contributed:
 
 <p align="left">
-  <a href="https://github.com/wimi321/lizzieyzy-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="LizzieYzy Next contributors" />
+  <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="KG-next contributors" />
   </a>
 </p>
 

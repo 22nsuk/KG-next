@@ -44,7 +44,7 @@ def request_payload(**overrides: object) -> dict[str, object]:
     payload: dict[str, object] = {
         "date_tag": DATE_TAG,
         "release_tag": RELEASE_TAG,
-        "title": f"LizzieYzy Next {RELEASE_TAG}",
+        "title": f"KG-next {RELEASE_TAG}",
         "prerelease": True,
         "notes_file": f".github/release-notes/{RELEASE_TAG}.md",
     }
@@ -673,7 +673,7 @@ class GitHubClientTagAliasTest(unittest.TestCase):
         release_request = PUBLISH.ReleaseRequest(
             DATE_TAG,
             RELEASE_TAG,
-            f"LizzieYzy Next {RELEASE_TAG}",
+            f"KG-next {RELEASE_TAG}",
             True,
             f".github/release-notes/{RELEASE_TAG}.md",
         )
@@ -1064,13 +1064,13 @@ class ReleasePublisherTest(unittest.TestCase):
         return PUBLISH.ReleaseRequest(
             DATE_TAG,
             RELEASE_TAG,
-            f"LizzieYzy Next {RELEASE_TAG}",
+            f"KG-next {RELEASE_TAG}",
             True,
             f".github/release-notes/{RELEASE_TAG}.md",
         )
 
     def release_notes(self) -> str:
-        blocks: list[str] = [f"# LizzieYzy Next {RELEASE_TAG}"]
+        blocks: list[str] = [f"# KG-next {RELEASE_TAG}"]
         for heading in PUBLISH.LOCALIZED_NOTE_HEADINGS:
             rows = [
                 (

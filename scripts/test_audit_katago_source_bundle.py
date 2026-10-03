@@ -1,12 +1,14 @@
 import json
+import hashlib
 from pathlib import Path
 import shutil
 import unittest
 from unittest import mock
+import zipfile
 
 from audit_katago_source_bundle import audit, restore_after_jpackage
 from katago_asset_catalog import engine_manifest_text
-from prepare_katago_source_assets import unpack
+from prepare_katago_source_assets import OFFICIAL_RECEIPT, inventory_digest, unpack
 from test_stage_katago_source_release import SourceReleaseTest
 
 
@@ -83,6 +85,60 @@ class InstalledSourceTest(unittest.TestCase):
 
     def test_official_catalog_keeps_its_existing_audits(self):
         audit({"origin": "official-release"}, "windows-cpu", self.fixture.root / "absent")
+
+    def official_cuda13_bundle(self):
+        target = "windows-nvidia-cuda13"
+        engine = self.fixture.root / "official-cuda13"
+        archive = self.fixture.root / "official.zip"
+        contents = {"katago.exe": b"official engine", "z.dll": b"official zlib",
+                    "default_gtp.cfg": b"official gtp", "analysis_example.cfg": b"official analysis"}
+        with zipfile.ZipFile(archive, "w") as opened:
+            for name, content in contents.items():
+                opened.writestr(name, content)
+        asset = self.catalog["assets"][target]
+        asset.update(sizeBytes=archive.stat().st_size, sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+                     executableSha256=hashlib.sha256(contents["katago.exe"]).hexdigest(),
+                     inventorySha256=inventory_digest([
+                         dict(file=name, sizeBytes=len(content), sha256=hashlib.sha256(content).hexdigest())
+                         for name, content in sorted(contents.items())]))
+        unpack(archive, engine, target, asset)
+        (engine / "lizzieyzy-next-katago-engine-manifest.txt").write_text(
+            engine_manifest_text(self.catalog, target, ""), encoding="utf-8")
+        return target, engine
+
+    def test_official_cuda13_inventory_allows_appended_runtime_and_checks_original_files(self):
+        target, engine = self.official_cuda13_bundle()
+        (engine / "cudart64_13.dll").write_bytes(b"appended matching runtime")
+        audit(self.catalog, target, engine)
+        (engine / "z.dll").write_bytes(b"changed zlib")
+        with self.assertRaisesRegex(ValueError, "official file missing or modified: z.dll"):
+            audit(self.catalog, target, engine)
+
+    def test_official_cuda13_forged_receipt_cannot_approve_changed_zlib(self):
+        target, engine = self.official_cuda13_bundle()
+        (engine / "z.dll").write_bytes(b"changed zlib")
+        receipt = engine / OFFICIAL_RECEIPT
+        metadata = json.loads(receipt.read_text())
+        entry = next(item for item in metadata["files"] if item["file"] == "z.dll")
+        entry.update(sizeBytes=len(b"changed zlib"), sha256=hashlib.sha256(b"changed zlib").hexdigest())
+        receipt.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(ValueError, "official identity or inventory"):
+            audit(self.catalog, target, engine)
+
+    def test_official_cuda13_rejects_forged_source_identity_and_manifest(self):
+        target, engine = self.official_cuda13_bundle()
+        receipt = engine / OFFICIAL_RECEIPT
+        metadata = json.loads(receipt.read_text())
+        metadata["sourceCommit"] = self.catalog["katagoSourceCommit"]
+        receipt.write_text(json.dumps(metadata))
+        with self.assertRaisesRegex(ValueError, "official identity or inventory"):
+            audit(self.catalog, target, engine)
+        metadata["sourceCommit"] = ""
+        receipt.write_text(json.dumps(metadata))
+        manifest = engine / "lizzieyzy-next-katago-engine-manifest.txt"
+        manifest.write_text(manifest.read_text().replace("Origin: official-release", "Origin: project-source-build"))
+        with self.assertRaisesRegex(ValueError, "official provenance manifest"):
+            audit(self.catalog, target, engine)
 
     def mac_bundle(self, target="macos-arm64"):
         source = self.fixture.root / "input" / target

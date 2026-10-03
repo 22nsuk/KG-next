@@ -8054,8 +8054,9 @@ public class Menu extends JMenuBar {
             if (Lizzie.frame.independentMainBoard != null)
               Lizzie.frame.independentMainBoard.boardRenderer.removeSelectedRect();
             Lizzie.frame.refresh();
-            if (LizzieFrame.avoidcoords != "" || LizzieFrame.allowcoords != "")
-              Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+            LizzieFrame.isKeepForcing = false;
+            LizzieFrame.isTempForcing = false;
+            LizzieFrame.isforcing = false;
             LizzieFrame.avoidcoords = "";
             LizzieFrame.allowcoords = "";
             Lizzie.frame.isKeepingForce = false;

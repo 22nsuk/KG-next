@@ -6,11 +6,15 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
+from unittest import mock
 from zipfile import ZipFile
 
 
@@ -23,6 +27,171 @@ SPEC.loader.exec_module(NVIDIA_RUNTIME)
 
 
 class PrepareBundledNvidiaRuntimeTest(unittest.TestCase):
+    CUDA13_DLLS = {
+        "cuda_cudart": ("cudart64_13.dll",),
+        "libcublas": ("cublas64_13.dll", "cublasLt64_13.dll"),
+        "libnvjitlink": ("nvJitLink_130_0.dll",),
+        "cuda_nvrtc": ("nvrtc64_130_0.dll", "nvrtc-builtins64_132.dll"),
+        "cudnn": ("cudnn64_9.dll", "cudnn_adv64_9.dll", "cudnn_cnn64_9.dll",
+                  "cudnn_engines_precompiled64_9.dll", "cudnn_engines_runtime_compiled64_9.dll",
+                  "cudnn_engines_tensor_ir64_9.dll", "cudnn_ext64_9.dll", "cudnn_graph64_9.dll",
+                  "cudnn_heuristic64_9.dll", "cudnn_ops64_9.dll"),
+    }
+
+    def cuda13_packages(self):
+        names = {spec[2]: spec[0] for spec in NVIDIA_RUNTIME.CUDA_13_2_SPECS}
+        names["cudnn"] = "NVIDIA cuDNN"
+        return [dict(key=key, display_name=names[key], version=version, sha256=digest,
+                     url=f"https://example.invalid/{key}.zip")
+                for key, (version, digest) in NVIDIA_RUNTIME.CUDA_13_2_PACKAGE_PINS.items()]
+
+    def shell(self):
+        git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+        bash = str(git_bash) if git_bash.is_file() else shutil.which("bash")
+        if bash is None:
+            self.skipTest("Bash is required for the release script integration fixture")
+        return bash
+
+    def shell_function(self, name):
+        script = Path(__file__).with_name("package_windows_exe.sh").read_text(encoding="utf-8")
+        start = script.index(name + "() {")
+        return script[start:script.index("\n}\n", start) + len("\n}\n")]
+
+    def test_windows_packager_copies_cuda13_runtime_and_propagates_mixed_major_failure(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            runtime = root / "runtime"
+            runtime.mkdir()
+            names = [name for dlls in self.CUDA13_DLLS.values() for name in dlls]
+            for name in names:
+                (runtime / name).write_bytes(name.encode())
+            NVIDIA_RUNTIME.write_manifest(runtime, "cuda13.2-cudnn9.24", self.cuda13_packages(), names)
+            script = '''set -euo pipefail
+PYTHON_BIN="$2"
+NVIDIA_RUNTIME_PREPARE_SCRIPT="$3"
+STANDARD_ENGINE_PLATFORM_DIR=windows-x64
+resolve_python_bin() { :; }
+''' + self.shell_function("copy_bundle_nvidia_runtime_assets") + '''
+copy_bundle_nvidia_runtime_assets "$1/input" windows-x64 "$1/runtime"
+'''
+            command = [self.shell(), "-c", script, "fixture", root.as_posix(),
+                       Path(sys.executable).as_posix(), SCRIPT_PATH.resolve().as_posix()]
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("", result.stdout, "staging diagnostics must not corrupt app-image path output")
+            engine = root / "input/engines/katago/windows-x64"
+            self.assertEqual(b"nvrtc-builtins64_132.dll", (engine / "nvrtc-builtins64_132.dll").read_bytes())
+            (engine / "cudart64_12.dll").write_bytes(b"mixed major")
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("unexpected=['cudart64_12.dll']", result.stderr)
+
+    def test_windows_cuda13_build_route_is_opt_in_and_uses_separate_runtime_without_installer(self):
+        package_script = Path(__file__).with_name("package_windows_exe.sh").read_text(encoding="utf-8")
+        start = package_script.index('if [[ "${WINDOWS_BUILD_CUDA13:-false}" == "true" ]]; then')
+        end = package_script.index('\nif [[ "${WINDOWS_BUILD_EXPERIMENTAL_PORTABLES', start)
+        script = '''set -euo pipefail
+WINDOWS_BUILD_CUDA13="$1"
+NVIDIA_CUDA13_ENGINE_PLATFORM_DIR=windows-x64-nvidia-cuda13
+STANDARD_ENGINE_PLATFORM_DIR=windows-x64
+NVIDIA_CUDA13_RUNTIME_STAGE_DIR=runtime13
+NVIDIA_CUDA13_APP_NAME='KG-next NVIDIA CUDA13'
+NVIDIA_CUDA13_APP_DESCRIPTION='Optional CUDA13'
+NVIDIA_CUDA13_ARCH_TAG=windows64.nvidia.cuda13
+WINDOWS_UPGRADE_UUID_NVIDIA=unchanged-default-uuid
+has_bundled_katago() { [[ "$1" == windows-x64-nvidia-cuda13 && "$HAS_ENGINE" == true ]]; }
+prepare_bundled_nvidia_runtime_assets() { printf 'runtime %s %s\\n' "$1" "$2"; }
+build_release_variant() { printf 'variant'; printf ' <%s>' "$@"; printf '\\n'; }
+''' + package_script[start:end]
+        for enabled, has_engine, expected_status in (("false", "true", 0), ("true", "true", 0), ("true", "false", 1)):
+            with self.subTest(enabled=enabled, has_engine=has_engine):
+                result = subprocess.run([self.shell(), "-c", script, "fixture", enabled],
+                                        env=dict(os.environ, HAS_ENGINE=has_engine),
+                                        capture_output=True, text=True)
+                self.assertEqual(expected_status, result.returncode, result.stderr)
+                if enabled == "false":
+                    self.assertEqual("", result.stdout)
+                elif has_engine == "true":
+                    self.assertIn("runtime cuda13.2-cudnn9.24 runtime13", result.stdout)
+                    self.assertIn("<windows-x64-nvidia-cuda13> <windows-x64> <nvidia>", result.stdout)
+                    self.assertIn("<windows64.nvidia.cuda13> <unchanged-default-uuid> <runtime13> <false>", result.stdout)
+                else:
+                    self.assertIn("CUDA13 packaging requires", result.stderr)
+
+    def test_cuda13_profile_prepares_all_runtime_dlls_from_cuda13_manifest_variant(self):
+        profile_name = "cuda13.2-cudnn9.24"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            cache = root / "cache"
+            manifests = cache / "manifests"
+            manifests.mkdir(parents=True)
+            cuda, cudnn, archives = {}, {}, {}
+            for package in self.cuda13_packages():
+                key = package["key"]
+                entry = dict(relative_path=f"{key}.zip", sha256=package["sha256"], size="1")
+                target = cudnn if key == "cudnn" else cuda
+                target[key] = dict(version=package["version"], **{"windows-x86_64": (
+                    {"cuda12": dict(entry, sha256="0" * 64), "cuda13": entry} if key == "cudnn" else entry)})
+                archive = root / f"{key}.zip"
+                with ZipFile(archive, "w") as opened:
+                    for name in self.CUDA13_DLLS[key]:
+                        opened.writestr(f"{key}/bin/x64/{name}", name.encode())
+                    opened.writestr(f"{key}/LICENSE", b"license")
+                    if key == "libcublas":
+                        opened.writestr(f"{key}/bin/x64/nvblas64_13.dll", b"optional NVBLAS")
+                archives[key] = archive
+            for url, data in ((NVIDIA_RUNTIME.CUDA_13_2_MANIFEST_URL, cuda),
+                              (NVIDIA_RUNTIME.CUDNN_9_24_MANIFEST_URL, cudnn)):
+                (manifests / url.rsplit("/", 1)[1]).write_text(json.dumps(data), encoding="utf-8")
+            with mock.patch.object(NVIDIA_RUNTIME, "ensure_archive", side_effect=lambda p, d: archives[p["key"]]):
+                packages, extracted = NVIDIA_RUNTIME.prepare_runtime_profile(
+                    profile_name, NVIDIA_RUNTIME.RUNTIME_PROFILES[profile_name], cache, root / "runtime")
+            expected = {name for names in self.CUDA13_DLLS.values() for name in names}
+            self.assertEqual(expected, set(extracted))
+            self.assertEqual(16, len(extracted))
+            self.assertFalse((root / "runtime/nvblas64_13.dll").exists())
+            self.assertTrue((root / "runtime/licenses/cudnn-LICENSE").is_file())
+            self.assertEqual("88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06",
+                             next(p["sha256"] for p in packages if p["key"] == "cudnn"))
+            NVIDIA_RUNTIME.verify_prepared_output(profile_name, root / "runtime")
+
+    def test_cuda13_rejects_mixed_packages_wrong_pins_and_missing_cudnn_components(self):
+        valid = self.cuda13_packages()
+        NVIDIA_RUNTIME.validate_profile_packages("cuda13.2-cudnn9.24", valid)
+        for key in ("cuda_cudart", "libcublas", "libnvjitlink", "cuda_nvrtc", "cudnn"):
+            with self.subTest(package=key):
+                mixed = [dict(p, version="12.8.61") if p["key"] == key else dict(p) for p in valid]
+                with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "requires " + key):
+                    NVIDIA_RUNTIME.validate_profile_packages("cuda13.2-cudnn9.24", mixed)
+                wrong_digest = [dict(p, sha256="0" * 64) if p["key"] == key else dict(p) for p in valid]
+                with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "requires " + key):
+                    NVIDIA_RUNTIME.validate_profile_packages("cuda13.2-cudnn9.24", wrong_digest)
+        names = [name for dlls in self.CUDA13_DLLS.values() for name in dlls]
+        for invalid in (names + ["cudart64_12.dll"], names + ["nvrtc-builtins64_128.dll"],
+                        [n for n in names if n != "cudnn_ext64_9.dll"],
+                        [n for n in names if n != "cudnn_engines_tensor_ir64_9.dll"]):
+            with self.subTest(dlls=invalid), self.assertRaisesRegex(
+                    NVIDIA_RUNTIME.RuntimeErrorWithContext, "runtime DLL set mismatch"):
+                NVIDIA_RUNTIME.validate_profile_dlls("cuda13.2-cudnn9.24", invalid)
+        with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "incompatible runtime DLL"):
+            NVIDIA_RUNTIME.validate_profile_dlls("cuda12.8-cudnn9", ["nvrtc64_130_0.dll"])
+
+    def test_cuda13_cli_verifies_prepared_engine_and_rejects_cross_major_dlls(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            output = Path(temporary_directory)
+            names = [name for dlls in self.CUDA13_DLLS.values() for name in dlls]
+            for name in names + ["z.dll"]:
+                (output / name).write_bytes(b"test runtime")
+            NVIDIA_RUNTIME.write_manifest(output, "cuda13.2-cudnn9.24", self.cuda13_packages(), names)
+            command = [sys.executable, str(SCRIPT_PATH), "--profile", "cuda13.2-cudnn9.24",
+                       "--output-dir", str(output), "--verify-output"]
+            self.assertEqual(0, subprocess.run(command, capture_output=True, text=True).returncode)
+            (output / "nvrtc64_120_0.dll").write_bytes(b"wrong major")
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("unexpected=['nvrtc64_120_0.dll']", result.stderr)
+            self.assertEqual(b"wrong major", (output / "nvrtc64_120_0.dll").read_bytes())
+
     def test_every_cuda_profile_includes_nvrtc(self) -> None:
         for profile_name, profile in NVIDIA_RUNTIME.RUNTIME_PROFILES.items():
             package_keys = {spec[2] for spec in profile["manifest_specs"]}
@@ -31,6 +200,18 @@ class PrepareBundledNvidiaRuntimeTest(unittest.TestCase):
                 package_keys,
                 f"{profile_name} must include NVRTC for cuDNN runtime-compiled engines",
             )
+
+    def test_existing_cuda12_profiles_accept_original_dll_names_and_reject_cuda13(self) -> None:
+        for profile_name in ("cuda12.1-cudnn8", "cuda12.1-cudnn9", "cuda12.8-cudnn9",
+                             "cuda12.8-cudnn9-tensorrt"):
+            with self.subTest(profile=profile_name):
+                names = ["cudart64_12.dll", "cublas64_12.dll", "cublasLt64_12.dll", "nvblas64_12.dll",
+                         "nvJitLink_120_0.dll", "nvrtc64_120_0.dll",
+                         "nvrtc-builtins64_128.dll" if "12.8" in profile_name else "nvrtc-builtins64_121.dll",
+                         "cudnn64_8.dll" if profile_name.endswith("cudnn8") else "cudnn64_9.dll"]
+                NVIDIA_RUNTIME.validate_profile_dlls(profile_name, names)
+                with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "incompatible runtime DLL"):
+                    NVIDIA_RUNTIME.validate_profile_dlls(profile_name, names + ["nvJitLink_130_0.dll"])
 
     def test_nvrtc_archive_extracts_compiler_and_builtins(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -29,7 +29,7 @@ peak_rss_file="$OUT_DIR/${timestamp}-${SCENARIO}.peak-rss-kib"
 read -r -a extra_java_options <<< "${JAVA_OPTIONS:-}"
 
 cat >"$summary_file" <<EOF
-LizzieYzy Next JFR benchmark
+KG-next JFR benchmark
 ============================
 
 Scenario: $SCENARIO

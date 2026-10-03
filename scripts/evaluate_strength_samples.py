@@ -34,11 +34,11 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 DEFAULT_KATAGO = (
-    r"D:\katago\LizzieYzy Next OpenCL\app\engines\katago\windows-x64\katago.exe"
+    r"D:\katago\KG-next OpenCL\app\engines\katago\windows-x64\katago.exe"
 )
-DEFAULT_MODEL = r"D:\katago\LizzieYzy Next OpenCL\app\weights\default.bin.gz"
+DEFAULT_MODEL = r"D:\katago\KG-next OpenCL\app\weights\default.bin.gz"
 DEFAULT_CONFIG = (
-    r"D:\katago\LizzieYzy Next OpenCL\app\engines\katago\configs\analysis.cfg"
+    r"D:\katago\KG-next OpenCL\app\engines\katago\configs\analysis.cfg"
 )
 
 WINRATE_TO_SCORE_LOSS = 6.0

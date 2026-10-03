@@ -94,7 +94,7 @@ namespace FixtureJvmHost {
       AppDomain.CurrentDomain.UnhandledException += (sender, args) => File.WriteAllText(Path.Combine(root, "fixture-failure.txt"), args.ExceptionObject.ToString());
       if (LoadLibrary(Path.Combine(root, "runtime", "bin", "server", "jvm.dll")) == IntPtr.Zero) throw new InvalidOperationException("fixture jvm load failed: " + Marshal.GetLastWin32Error());
       string data = Path.Combine(root, "user-data");
-      string cfg = Path.Combine(root, "app", "LizzieYzy Next.cfg");
+      string cfg = Path.Combine(root, "app", "KG-next.cfg");
       if (File.Exists(cfg)) {
         foreach (string line in File.ReadAllLines(cfg)) {
           const string prefix = "java-options=-Dlizzie.work.dir=";
@@ -119,7 +119,7 @@ namespace FixtureJvmHost {
       });
       engineStarter.IsBackground = true;
       engineStarter.Start();
-      Application.Run(new Form { Text = "LizzieYzy Next acceptance fixture", Width = 320, Height = 180 });
+      Application.Run(new Form { Text = "KG-next acceptance fixture", Width = 320, Height = 180 });
     }
   }
 }'''
@@ -133,7 +133,7 @@ namespace FixtureLauncher {
       string root = AppContext.BaseDirectory;
       AppDomain.CurrentDomain.UnhandledException += (sender, args) => File.WriteAllText(Path.Combine(root, "fixture-launcher-failure.txt"), args.ExceptionObject.ToString());
       using (Process child = Process.Start(new ProcessStartInfo {
-        FileName = Path.Combine(root, "app", "LizzieYzy Next JVM Host.exe"),
+        FileName = Path.Combine(root, "app", "KG-next JVM Host.exe"),
         WorkingDirectory = root,
         UseShellExecute = false
       })) {
@@ -275,14 +275,14 @@ namespace FixtureLauncher {
     ) -> tuple[Path, Path]:
         flavor = "without.engine" if no_engine else "with-katago"
         asset = self.root / f"{date_tag}-windows64.{flavor}.portable.zip"
-        product = "LizzieYzy Next"
+        product = "KG-next"
         files: dict[str, bytes] = {
             f"{product}/.lizzie-portable": b"portable fixture\n",
-            f"{product}/LizzieYzy Next.exe": (launcher_override or (self.launcher if ready else self.sleepy_launcher)).read_bytes(),
-            f"{product}/app/LizzieYzy Next JVM Host.exe": self.jvm_host.read_bytes(),
+            f"{product}/KG-next.exe": (launcher_override or (self.launcher if ready else self.sleepy_launcher)).read_bytes(),
+            f"{product}/app/KG-next JVM Host.exe": self.jvm_host.read_bytes(),
             f"{product}/runtime/bin/java.exe": self.java.read_bytes(),
             f"{product}/runtime/bin/server/jvm.dll": self.jvm.read_bytes(),
-            f"{product}/app/LizzieYzy Next.cfg": b"[Application]\napp.mainjar=lizzie-yzy2.5.3-shaded.jar\n",
+            f"{product}/app/KG-next.cfg": b"[Application]\napp.mainjar=lizzie-yzy2.5.3-shaded.jar\n",
             f"{product}/app/lizzie-yzy2.5.3-shaded.jar": b"fixture-shaded-jar",
             f"{product}/app/lizzieyzy-next-installed-manifest.json": (
                 json.dumps({"schemaVersion": 1, "releaseTag": release_tag, "platform": "windows", "flavor": flavor}) + "\n"
@@ -319,11 +319,11 @@ namespace FixtureLauncher {
         asset = self.root / f"{date_tag}-windows64.core-update.zip"
         payloads = {
             "app/lizzie-yzy2.5.3-shaded.jar": b"candidate core jar",
-            "app/LizzieYzy Next.cfg": b"candidate launcher cfg",
+            "app/KG-next.cfg": b"candidate launcher cfg",
             "lizzieyzy-next-core.jar": b"candidate core jar",
         }
         if noop_config:
-            payloads["app/LizzieYzy Next.cfg"] = b"[Application]\napp.mainjar=lizzie-yzy2.5.3-shaded.jar\n"
+            payloads["app/KG-next.cfg"] = b"[Application]\napp.mainjar=lizzie-yzy2.5.3-shaded.jar\n"
         if replace_runtime:
             payloads["runtime/acceptance-sentinel.bin"] = b"forbidden replacement"
         files = [
@@ -917,7 +917,7 @@ function Invoke-InstallerProcess {{
   param([string]$Installer, [string]$InstallRoot, [string]$LogPath)
   $script:fixtureEntry = [pscustomobject]@{{
     PSPath = 'Registry::fixture-owned'; PSChildName = '{{11111111-1111-1111-1111-111111111111}}';
-    DisplayName = 'LizzieYzy Next fixture'; DisplayVersion = '1.0'; UninstallString = 'fixture-uninstall.exe';
+    DisplayName = 'KG-next fixture'; DisplayVersion = '1.0'; UninstallString = 'fixture-uninstall.exe';
     QuietUninstallString = ''; InstallLocation = $InstallRoot
   }}
   return 1603
@@ -982,7 +982,7 @@ if (-not $script:rolledBack -or $script:fixtureEntry) {{ throw 'owned installer 
         driver = self.root / "installer-identity-cleanup-fixture.ps1"
         driver.write_text(
             f". '{windows_path(fixture_script)}' -Command Prepare\n"
-            f"$script:entry = [pscustomobject]@{{ PSPath='{registry_path}'; PSChildName='{{11111111-1111-1111-1111-111111111111}}'; DisplayName='LizzieYzy Next fixture'; DisplayVersion='1.0'; UninstallString='fixture.exe'; QuietUninstallString=''; InstallLocation='{windows_path(product_root)}' }}\n"
+            f"$script:entry = [pscustomobject]@{{ PSPath='{registry_path}'; PSChildName='{{11111111-1111-1111-1111-111111111111}}'; DisplayName='KG-next fixture'; DisplayVersion='1.0'; UninstallString='fixture.exe'; QuietUninstallString=''; InstallLocation='{windows_path(product_root)}' }}\n"
             "function Read-PreparedIdentity { throw 'Prepared launcher drift detected.' }\n"
             "function Get-UninstallEntries { if ($script:entry) { return @($script:entry) }; return @() }\n"
             f"function Invoke-Uninstall {{ param([object]$InstallEvidence,[string]$LogPath); $script:entry = $null; Set-Content -LiteralPath '{windows_path(marker)}' -Value 'removed' }}\n"

@@ -85,7 +85,7 @@ class ReadBoardLaunchPathTest {
 
   @Test
   void resolveNativeReadBoardDirectoryRecognizesJpackageAppLayout() throws Exception {
-    Path appRoot = Files.createDirectories(tempDir.resolve("LizzieYzy Next"));
+    Path appRoot = Files.createDirectories(tempDir.resolve("KG-next"));
     Path appReadBoardDir = Files.createDirectories(appRoot.resolve("app").resolve("readboard"));
     Files.write(appReadBoardDir.resolve("readboard.exe"), new byte[] {0});
 
@@ -98,7 +98,7 @@ class ReadBoardLaunchPathTest {
 
   @Test
   void resolveNativeReadBoardDirectoryPrefersExecutableOverEmptyLegacyDirectory() throws Exception {
-    Path appRoot = Files.createDirectories(tempDir.resolve("LizzieYzy Next"));
+    Path appRoot = Files.createDirectories(tempDir.resolve("KG-next"));
     Files.createDirectories(appRoot.resolve("readboard"));
     Path appReadBoardDir = Files.createDirectories(appRoot.resolve("app").resolve("readboard"));
     Files.write(appReadBoardDir.resolve("readboard.exe"), new byte[] {0});
@@ -114,7 +114,7 @@ class ReadBoardLaunchPathTest {
   void defaultNativeReadBoardDirectoryCandidatesIncludeJpackageRuntimeRoot() {
     String javaHome = System.getProperty("java.home");
     try {
-      Path appRoot = tempDir.resolve("LizzieYzy Next");
+      Path appRoot = tempDir.resolve("KG-next");
       System.setProperty("java.home", appRoot.resolve("runtime").toString());
 
       List<String> candidatePaths = new ArrayList<String>();

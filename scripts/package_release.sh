@@ -293,7 +293,7 @@ EOF
   fi
 
   cat >"$root/Update.txt" <<EOF
-Project: LizzieYzy Next
+Project: KG-next
 Date: $DATE_TAG
 Version: $APP_DISPLAY_VERSION
 Changes:

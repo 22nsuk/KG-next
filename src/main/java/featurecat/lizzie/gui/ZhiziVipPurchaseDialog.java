@@ -311,7 +311,7 @@ final class ZhiziVipPurchaseDialog extends JDialog {
             "<html>"
                 + text(
                     "RemoteCompute.payment.providerNotice",
-                    "Compute service and payment are provided by Zhizi. LizzieYzy Next does not store payment details.")
+                    "Compute service and payment are provided by Zhizi. KG-next does not store payment details.")
                 + "</html>");
     provider.setForeground(MUTED);
     provider.setFont(provider.getFont().deriveFont(12.5F));

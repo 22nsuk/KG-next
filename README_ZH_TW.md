@@ -1,11 +1,13 @@
+> KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
+
 <p align="center">
-  <img src="assets/hero-chinese.svg" alt="LizzieYzy Next" width="100%" />
+  <img src="assets/hero-chinese.svg" alt="KG-next" width="100%" />
 </p>
 
 <p align="center">
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
   <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="官方網站"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
@@ -15,7 +17,7 @@
 </p>
 
 <p align="center">
-  <strong>LizzieYzy Next 是仍在維護的 lizzieyzy 分支，面向使用 KataGo 覆盤的一般棋友。</strong><br/>
+  <strong>KG-next 是仍在維護的 lizzieyzy 分支，面向使用 KataGo 覆盤的一般棋友。</strong><br/>
   提供野狐暱稱抓譜、快速全盤分析、新版勝率圖和底部快速概覽，並發佈 Windows、macOS、Linux 版本。
 </p>
 
@@ -37,7 +39,7 @@
 > 歡迎交流使用問題、回報 bug、分享使用體驗，或者討論接下來最想加的功能。
 
 > [!NOTE]
-> 中國大陸使用者建議從 [官方下載頁面](https://goagent.top/download/) 下載正式版；需要安裝程式、Linux 套件或歷史版本時，可使用 [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)。
+> 中國大陸使用者建議從 [官方下載頁面](https://goagent.top/download/) 下載正式版；需要安裝程式、Linux 套件或歷史版本時，可使用 [GitHub Releases](https://github.com/22nsuk/KG-next/releases)。
 >
 > 中國大陸使用者也可使用公開的百度網盤下載：
 > [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
@@ -64,10 +66,10 @@
 
 ## 先下載哪個
 
-中國大陸使用者建議從 [官方下載頁面](https://goagent.top/download/) 選擇常用正式版；安裝程式、Linux 套件和歷史版本可在 [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases) 下載。
+中國大陸使用者建議從 [官方下載頁面](https://goagent.top/download/) 選擇常用正式版；安裝程式、Linux 套件和歷史版本可在 [GitHub Releases](https://github.com/22nsuk/KG-next/releases) 下載。
 
 <p align="center">
-  <img src="assets/package-guide-zh.svg" alt="LizzieYzy Next 下載選擇圖" width="100%" />
+  <img src="assets/package-guide-zh.svg" alt="KG-next 下載選擇圖" width="100%" />
 </p>
 
 | 你的情況 | 到 Releases 裡找包含這個關鍵字的檔案 |
@@ -88,9 +90,9 @@
 | macOS Intel | `*mac-intel.with-katago.dmg` |
 | Linux | `*linux64.with-katago.zip` |
 
-完整套件的 CPU、OpenCL、CUDA、TensorRT、Metal 後端及 Linux 套件均使用 KataGo `v1.18.1`。Linux NVIDIA 仍使用 CUDA 12.1，以兼顧執行環境相容性。
+完整套件的 CPU、OpenCL、CUDA、TensorRT、Metal 後端及 Linux 套件均使用 KataGo `v1.18.2`。Linux NVIDIA 仍使用 CUDA 12.1，以兼顧執行環境相容性。
 
-推薦完整套件預設內建官方旗艦 B11 `b11c768h12nbt3tflrs-fson-silu.bin.gz`（約 202 MiB）；RTX 3070 實測搜尋吞吐比 B10 低約 40%，偏重速度時可在 `KataGo 自動設定 -> 權重管理` 切換 B10。
+預設模型為 `kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz`。引擎與模型以 `src/main/resources/katago-assets.json` 為準；本次未進行此模型的 GPU 效能比較。
 
 NVIDIA 和 TensorRT 說明：
 
@@ -107,7 +109,7 @@ NVIDIA 和 TensorRT 說明：
 
 <p align="center">
   <a href="assets/fox-id-demo-cn.gif">
-    <img src="assets/fox-id-demo-cn-cover.png" alt="LizzieYzy Next 野狐暱稱抓譜示範" width="100%" />
+    <img src="assets/fox-id-demo-cn-cover.png" alt="KG-next 野狐暱稱抓譜示範" width="100%" />
   </a>
 </p>
 
@@ -122,13 +124,13 @@ NVIDIA 和 TensorRT 說明：
 ## 介面預覽
 
 <p align="center">
-  <img src="assets/interface-overview-2026-04.png" alt="LizzieYzy Next 介面預覽" width="100%" />
+  <img src="assets/interface-overview-2026-04.png" alt="KG-next 介面預覽" width="100%" />
 </p>
 
 主勝率圖和底部快速概覽包含：
 
 <p align="center">
-  <img src="assets/winrate-quick-overview-2026-04.png" alt="LizzieYzy Next 主勝率圖與快速概覽" width="46%" />
+  <img src="assets/winrate-quick-overview-2026-04.png" alt="KG-next 主勝率圖與快速概覽" width="46%" />
 </p>
 
 - 藍線 / 紫線：雙方勝率走勢
@@ -138,7 +140,7 @@ NVIDIA 和 TensorRT 說明：
 
 ## 它和原來的 lizzieyzy 有什麼不同
 
-| 比較項目 | 原 `lizzieyzy` | `LizzieYzy Next` |
+| 比較項目 | 原 `lizzieyzy` | `KG-next` |
 | --- | --- | --- |
 | 目前狀態 | 許多人仍記得的歷史專案，但長期缺少持續維護 | 持續維護使用體驗和發佈流程的目前分支 |
 | 野狐抓譜 | 舊流程在許多情況下已失效 | 已恢復常用抓譜流程，並支援暱稱輸入 |
@@ -149,7 +151,7 @@ NVIDIA 和 TensorRT 說明：
 
 ## macOS 首次啟動
 
-選擇符合 Mac 晶片的套件，打開 DMG 後將 `LizzieYzy Next` 拖到「應用程式」。退出安裝磁碟，再從 Finder 的「應用程式」資料夾啟動。官方 release 已完成簽章和公證；如果 macOS 仍阻擋程式，請依照 [安裝說明](docs/INSTALL.md) 排查。
+選擇符合 Mac 晶片的套件，打開 DMG 後將 `KG-next` 拖到「應用程式」。退出安裝磁碟，再從 Finder 的「應用程式」資料夾啟動。官方 release 已完成簽章和公證；如果 macOS 仍阻擋程式，請依照 [安裝說明](docs/INSTALL.md) 排查。
 
 ## 文件與參與
 
@@ -158,8 +160,8 @@ NVIDIA 和 TensorRT 說明：
 - [發佈包說明](docs/PACKAGES.md)
 - [常見問題與排錯](docs/TROUBLESHOOTING.md)
 - [已驗證平台](docs/TESTED_PLATFORMS.md)
-- [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
-- [GitHub Discussions](https://github.com/wimi321/lizzieyzy-next/discussions)
+- [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
+- [GitHub Discussions](https://github.com/22nsuk/KG-next/discussions)
 - [QQ 群：299419120](https://qm.qq.com/q/JZoeojjteg)
 - [專案路線圖](ROADMAP.md)
 - [參與貢獻](CONTRIBUTING.md)
@@ -176,8 +178,8 @@ NVIDIA 和 TensorRT 說明：
 感謝所有參與提交的貢獻者：
 
 <p align="left">
-  <a href="https://github.com/wimi321/lizzieyzy-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="LizzieYzy Next 貢獻者" />
+  <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="KG-next 貢獻者" />
   </a>
 </p>
 

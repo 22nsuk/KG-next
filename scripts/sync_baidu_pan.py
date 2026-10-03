@@ -27,6 +27,7 @@ EXPECTED_ASSET_SUFFIXES = (
     'windows64.opencl.portable.zip',
     'windows64.nvidia.portable.zip',
 )
+OPTIONAL_ASSET_SUFFIXES = ('windows64.nvidia.cuda13.portable.zip',)
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,14 +51,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--date-tag', required=True, help='Release date tag, for example 2026-04-17.')
     parser.add_argument(
         '--remote-root',
-        default=os.getenv('BAIDU_REMOTE_ROOT', '/LizzieYzy Next 国内下载'),
+        default=os.getenv('BAIDU_REMOTE_ROOT', '/KG-next 国内下载'),
         help='Remote Baidu Netdisk root directory.',
     )
     parser.add_argument(
         '--github-release-url',
         help='Optional GitHub release URL. Defaults to owner/tag format inferred from the repo env.',
     )
-    parser.add_argument('--repo', default=os.getenv('GITHUB_REPOSITORY', 'wimi321/lizzieyzy-next'))
+    parser.add_argument('--repo', default=os.getenv('GITHUB_REPOSITORY', '22nsuk/KG-next'))
     parser.add_argument('--dry-run', action='store_true', help='Print planned actions without calling Baidu APIs.')
     return parser.parse_args()
 
@@ -526,6 +527,13 @@ def pick_expected_assets(assets: list[ReleaseAsset], date_tag: str) -> list[Rele
         if not candidates:
             raise SystemExit(f'Missing expected release asset ending with: {suffix}')
         matched.append(sorted(candidates, key=lambda item: item.name)[-1])
+    for suffix in OPTIONAL_ASSET_SUFFIXES:
+        candidates = [item for item in assets if item.name.endswith(suffix)]
+        if date_tag:
+            candidates = [item for item in candidates if item.name.startswith(f'{date_tag}-')]
+        if len(candidates) > 1:
+            raise SystemExit(f'Ambiguous optional release asset ending with: {suffix}')
+        matched.extend(candidates)
     return matched
 
 
@@ -541,7 +549,7 @@ def collect_local_release_assets(local_release_dir: Path, date_tag: str) -> list
 def collect_github_release_assets(repo: str, release_tag: str, date_tag: str) -> list[ReleaseAsset]:
     headers = {
         'Accept': 'application/vnd.github+json',
-        'User-Agent': 'LizzieYzy-Next-BaiduMirror/1.0',
+        'User-Agent': 'KG-next-BaiduMirror/1.0',
     }
     token = github_token()
     if token:

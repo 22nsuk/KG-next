@@ -258,6 +258,17 @@ _WINDOWS_ASSETS = (
         public=19,
     ),
     _asset("windows_tensorrt_split_sha256", "windows64.nvidia.tensorrt.portable.sha256.txt", "windows", "x86_64", CandidateClass.SUPPORT, False, public=20),
+    _asset(
+        "windows_nvidia_cuda13_portable",
+        "windows64.nvidia.cuda13.portable.zip",
+        "windows",
+        "x86_64",
+        CandidateClass.PORTABLE_PRODUCT,
+        True,
+        public=21,
+        notes_table=19,
+        direct=22,
+    ),
 )
 
 _LINUX_ASSETS = (

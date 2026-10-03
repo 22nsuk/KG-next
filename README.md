@@ -1,196 +1,105 @@
-<p align="center">
-  <img src="assets/hero-chinese.svg" alt="LizzieYzy Next" width="100%" />
-</p>
+# KG-next
 
-<p align="center">
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/wimi321/lizzieyzy-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total.svg?label=Downloads&color=666666" alt="Downloads"></a>
-  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="官方网站"></a>
-  <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
-</p>
+**KataGo를 활용한 한국어 중심의 바둑 복기·분석 프로그램입니다.**
 
-<p align="center">
-  简体中文 · <a href="README_ZH_TW.md">繁體中文</a> · <a href="README_EN.md">English</a> · <a href="README_JA.md">日本語</a> · <a href="README_KO.md">한국어</a> · <a href="README_TH.md">ภาษาไทย</a>
-</p>
+[LizzieYzy Next](https://github.com/wimi321/lizzieyzy-next)를 기반으로 분석 제한의 탐색 재사용, 한국어 표현과 글꼴, 제품 이름 및 모델 설정을 개선하는 포크입니다. 원본의 저작권과 GPL 라이선스를 유지합니다.
 
-<p align="center">
-  <strong>LizzieYzy Next 是仍在维护的 lizzieyzy 分支，面向使用 KataGo 复盘的普通棋友。</strong><br/>
-  提供野狐昵称抓谱、快速全盘分析、新版胜率图和底部快速概览，并发布 Windows、macOS、Linux 版本。
-</p>
+[릴리스](https://github.com/22nsuk/KG-next/releases) · [문제 보고](https://github.com/22nsuk/KG-next/issues) · [English](README_EN.md) · [中文](README_ZH_CN.md) · [라이선스](LICENSE.txt)
 
-<p align="center">
-  <a href="https://goagent.top/"><strong>官方网站</strong></a>
-  ·
-  <a href="https://goagent.top/download/"><strong>正式版下载</strong></a>
-  ·
-  <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>百度网盘下载</strong></a>
-  ·
-  <a href="docs/INSTALL.md"><strong>安装说明</strong></a>
-  ·
-  <a href="docs/TROUBLESHOOTING.md"><strong>常见问题</strong></a>
-</p>
+> **배포와 소스를 구분해 주세요.** 이 저장소의 변경을 원본 프로젝트에서 이미 배포한 설치 파일에 적용된 기능으로 간주하면 안 됩니다. KG-next 설치 파일은 이 저장소의 릴리스에서 확인하고, 아직 없으면 아래 절차로 소스를 빌드하세요. 원본 앱의 자동 업데이트로 포크를 덮어쓰지 않도록 앱의 업데이트 메뉴는 KG-next 릴리스 페이지를 안내합니다.
 
-> [!NOTE]
-> 国内用户建议从 [官网下载页面](https://goagent.top/download/) 下载正式版；需要安装器、Linux 包或历史版本时，可使用 [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)。
->
-> 国内用户也可使用公开百度网盘下载：
-> [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
-> 提取码：`3i8w`
+## 주요 기능
 
-> [!TIP]
-> [项目讨论 QQ 群：299419120](https://qm.qq.com/q/JZoeojjteg)
->
-> 欢迎交流使用问题、反馈 bug、分享使用体验，或者讨论接下来最想加的功能。
+기보를 열어 승률·우세 집수·후보 수·변화도·영역 점유를 확인하고, 전체 기보의 빠른 분석과 정밀 분석을 수행합니다. 기보 편집·저장, 독립 바둑판과 변화도 비교, 엔진 대국, 원본에서 제공하던 기보 수집 기능을 유지합니다. 외부 기보 서비스의 로그인·수집 동작은 서비스 상황과 실행 환경에 영향을 받습니다.
 
-## 你打开后马上能做什么
+### 분석 허용·제외와 탐색 트리 유지
 
-| 你想做什么 | 这个项目现在怎么解决 |
-| --- | --- |
-| 抓最近公开野狐棋谱 | 直接输入野狐昵称，程序自动匹配账号并抓谱 |
-| 快速看整盘走势 | 提供快速全盘分析，不用完全靠一步一步手点 |
-| 快速找问题手 | 提供新版主胜率图和底部热力概览，更容易一眼看出大问题手 |
-| 减少快速曲线对主引擎的影响 | 可在 `KataGo 一键设置 -> 权重管理` 按需下载 38 MB 官方轻量模型；仅补齐棋谱曲线时启动，主分析开始即释放显卡 |
-| 少折腾配置 | 推荐整合包已内置 KataGo、默认权重和首次自动配置 |
-| 不想安装 | Windows 默认优先推荐 `portable.zip` 免安装包 |
-| 做棋盘同步 | Windows 主发布包已内置原生 `readboard.exe`，同步入口更清晰 |
-| 本机算力不够 | `设置 -> 远程算力中心` 可登录智子云算力，创建远程 KataGo 引擎后像本机引擎一样使用 |
+새 설정의 허용·제외 범위는 **첫 수만 제한**입니다. 기존 설정에서 **전체 수순에 제한 적용**을 선택했다면 그 값을 보존하므로, 탐색을 재사용하려면 제한 도구의 범위를 **첫 수에만 제한 적용**으로 바꾸세요.
 
-远程算力中心默认使用“VIP 包月”（`--gpu-type vip-share`）；非 VIP 用户可在高级设置中切换到“按量 1x / 3x / 6x”等档位。默认预设使用智子28B模型。TensorRT/CUDA 指云端引擎后端，不是充值套餐名。
+바둑판을 우클릭하면 **이 수만 분석 / 분석 허용 수 추가 / 분석 허용 수 해제 / 이 수 분석 제외 / 분석 제한 모두 해제**를 사용할 수 있습니다.
 
-勾选“记住登录/密码”后，凭据由 Windows DPAPI、macOS Keychain 或 Linux Secret Service 保护，不写入普通配置。系统安全存储不可用时，凭据只保留到程序退出。断线后会自动重连，也可一键切回本机引擎。
+| 엔진·작업 조건 | 동작 |
+|---|---|
+| **KG-next 패치 엔진**, 같은 국면, 첫 수만 제한 | 기존 하위 탐색을 남긴 채 허용·제외 목록을 바꿉니다. 제외한 수를 다시 허용하면 그 수의 기존 탐색도 재사용합니다. |
+| 이후 수순까지 제한하거나, 그런 제한을 해제 | 하위 국면의 평가 조건이 달라지므로 탐색을 초기화합니다. |
+| 확장 기능이 없는 일반 KataGo·다른 엔진 | 기존 프로토콜을 사용합니다. 엔진 내부의 제한 변경에 따른 재탐색은 유지됩니다. |
+| 어느 엔진이든 다른 국면에 저장된 분석 | 현재 국면의 제한 변경만으로 기보 전체의 분석을 초기화하지 않습니다. |
 
-有 Linux x86_64 NVIDIA GPU 服务器、但还没有 `WSS` 链接时，可使用 [KataGo 远程算力一键部署](https://github.com/wimi321/katago-remote-one-click)。在服务器运行一条命令即可生成加密链接和二维码，再到 `远程算力 -> 自建算力` 中粘贴或导入；无需自行开放公网端口。
+**앱만 갱신해서 일반 KataGo의 탐색 초기화가 없어지는 것은 아닙니다.** 기본 자산 목록의 기존 바이너리는 검증된 원본 배포 파일이며, KG-next 확장을 포함한다고 가정하지 않습니다. 실제 트리 유지에는 [KataGo 포크 빌드·검증 절차](engine/README.md)가 필요합니다. 우클릭 메뉴의 도움말은 현재 실행 중인 엔진의 지원 여부를 표시합니다.
 
-## 先下载哪个
+엔진은 `list_commands`에서 `kg-reuse-root-tree`를 제공하고 `kata-analyze ... reuseRootTree true`를 처리해야 합니다. 이름이나 버전 문자열만 보고 지원한다고 판단하지 않습니다. 이 기능은 표시에 이전 방문 수를 덧붙이는 방식이나, 강제 제외를 약한 집중 탐색으로 대체하는 방식이 아닙니다. 필터를 바꾸면 유효 후보와 루트의 집수·승률은 달라질 수 있습니다.
 
-<p align="center">
-  <img src="assets/package-guide-zh.svg" alt="LizzieYzy Next 下载选择图" width="100%" />
-</p>
+## KataGo 실행 파일과 모델
 
-| 你的情况 | 到 Releases 里找包含这个关键词的文件 |
-| --- | --- |
-| Windows，RTX 20/30/40/50 NVIDIA 显卡，推荐，免安装 | `*windows64.nvidia.portable.zip` |
-| Windows，RTX 20/30/40/50 NVIDIA 显卡，想安装 | `*windows64.nvidia.installer.exe` |
-| Windows，AMD / Intel / 较老 NVIDIA 显卡，免安装 | `*windows64.opencl.portable.zip` |
-| Windows，AMD / Intel / 较老 NVIDIA 显卡，想安装 | `*windows64.opencl.installer.exe` |
-| Windows，没有合适 GPU 或 GPU 版本无法启动，CPU 兼容版 | `*windows64.with-katago.portable.zip` |
-| Windows，CPU 兼容版，想安装 | `*windows64.with-katago.installer.exe` |
-| 已经有 Windows 免安装版，日常升级 | `*windows64.core-update.zip`，解压到旧目录覆盖 |
-| Windows，RTX 30 系及以下，想测试 TensorRT | 先下载统一 NVIDIA 包，再在 `KataGo 一键设置` 里选装 |
-| Windows，RTX 30 系及以下，想离线测试 TensorRT | `*windows64.nvidia.tensorrt.portable.7z.001` 起的全部分卷，先看同名 `README.txt` |
-| Windows，DirectX 12 GPU，参与 DirectML 测试 | `*windows64.experimental.directml.portable.zip` |
-| Windows，Intel GPU/NPU，参与 OpenVINO 测试 | `*windows64.experimental.openvino.portable.zip` |
-| Windows，AMD RX 6000/7000/9000 或 Ryzen AI Max，参与 ROCm 测试 | 选择对应 `*windows64.experimental.rocm.*.portable.zip` |
-| Windows，自己配引擎，免安装 | `*windows64.without.engine.portable.zip` |
-| Windows，自己配引擎，想安装 | `*windows64.without.engine.installer.exe` |
-| macOS Apple Silicon，打开后拖到“应用程序” | `*mac-apple-silicon.with-katago.dmg` |
-| macOS Intel，打开后拖到“应用程序” | `*mac-intel.with-katago.dmg` |
-| Linux | `*linux64.with-katago.zip` |
+실행 파일은 탐색을 수행하는 **엔진**, `.bin` 또는 `.bin.gz`는 평가에 사용하는 **신경망 모델**입니다. 서로 다른 항목입니다.
 
-Windows `portable.zip` 把配置、日志、棋谱、权重和软件内安装的 TensorRT 文件保存在解压目录，主要位于 `user-data/`。删除整个目录即可卸载；换目录升级时，复制 `user-data/` 可保留设置。
+| 항목 | 기준값 |
+|---|---|
+| 기본 엔진 소스 버전 | **KataGo v1.18.2** |
+| 고정 엔진 소스 커밋 | `47aadc08518b3e121f22539796c911002f699584` |
+| 지정 모델의 압축 전 파일명 | **`kata1-tf3-b11c768-s11003M-d5973M-7gres.bin`** |
+| 공식 다운로드·패키지 형식 | `kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz` |
+| 압축 파일 크기 | `262039869` 바이트(약 250 MiB) |
+| 압축 파일 SHA-256 | `93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871` |
+| 압축 해제 후 크기 | `281905904` 바이트 |
+| 압축 해제 후 SHA-256 | `0a2042694a8f956e15fb7d8e6a310b2441c63aad3e6bc2c092e65c9d2ee7f064` |
 
-已有 Windows 免安装版时，小版本升级可下载 `*windows64.core-update.zip`。关闭软件后，把 zip 内容解压到原目录并覆盖旧文件。该包只更新 `app/lizzie-yzy2.5.3-shaded.jar`、`app/LizzieYzy Next*.cfg` 和供旧版自动更新器识别的兼容文件，不会覆盖 `weights/`、`engines/`、`runtime/`、`jcef-bundle/`、`readboard/` 或 `user-data/`。如果 release 说明包含 KataGo、权重或运行环境升级，请改用完整包或对应资源包。
+다운로드·패키징의 기준은 [자산 목록](src/main/resources/katago-assets.json)입니다. 공식 `.bin.gz`를 받아 압축 전 내용까지 확인한 [검증 기록](docs/KG_MODEL_VERIFICATION.json)을 포함합니다. KataGo는 gzip 모델을 직접 읽으므로 불필요한 압축 해제는 하지 않습니다. 패키지 내부의 `weights/default.bin.gz`는 기존 실행 설정과의 호환을 위한 별칭이며, 다른 모델을 뜻하지 않습니다.
 
-完整包的 CPU、OpenCL、CUDA、TensorRT、Metal 后端和 Linux 包均使用 KataGo `v1.18.1`。Linux NVIDIA 仍使用 CUDA 12.1，以兼顾系统运行环境。
+목록에 있는 기존 엔진 자산은 원본 유지보수 프로젝트의 고정 소스 빌드입니다. 해당 다운로드 주소와 해시는 검증되지 않은 KG-next 주소로 치환하지 않았습니다. **앱 업데이트, 엔진 교체, 모델 교체는 별도 작업**이며 사용자가 직접 지정한 엔진과 모델을 자동으로 덮어쓰지 않습니다.
 
-主推荐完整包默认内置官方旗舰 B11 `b11c768h12nbt3tflrs-fson-silu.bin.gz`（约 202 MiB）；本机 RTX 3070 实测搜索吞吐比 B10 慢约 40%，追求速度可在 `KataGo 一键设置 -> 权重` 中切换 B10。
+Windows NVIDIA에는 기존 CUDA 12.8 / cuDNN 9.8 외에 **CUDA 13.2 / cuDNN 9.24.0.43** 선택 패키지를 추가했습니다. 프로필별 필수 DLL·manifest와 실제 추론 호환성을 검사하며 CUDA12와 CUDA13을 혼용하지 않습니다. [런타임 및 패키징 안내](engine/README.md)를 참고하세요.
 
-NVIDIA 和 TensorRT 说明：
+GPU 백엔드는 장치·드라이버·런타임에 맞춰 선택하세요. 같은 모델을 사용해 응답성과 전체 기보 처리량을 직접 비교하는 것이 좋습니다. 이전 모델의 RTX 3070 측정값을 새 모델의 성능으로 재사용하지 않습니다.
 
-- `KataGo 一键设置` 会检测 NVIDIA GPU 和 Compute Capability，并提示是否推荐 TensorRT；检测失败时仍可手动继续。
-- RTX 40/50 默认使用 CUDA。TensorRT 是 RTX 30 系及以下的可选方案；安装完成后会自动删除下载包，旧缓存可在一键设置中清理。
-- NVIDIA 驱动 `570.65` 及以上可直接加载；`528.33–570.64` 首次运行会做一次轻量推理探测；更旧驱动会显示修复状态。
-- 离线安装 TensorRT 时，下载 `*windows64.nvidia.tensorrt.portable.7z.001/.002/...` 全部分卷，并使用 7-Zip 从 `.001` 解压。先阅读同名 `README.txt`。
-- GTX 10 系以前的显卡优先使用 OpenCL 包。OpenCL 不稳定时，改用 `*windows64.with-katago.portable.zip`。
+## 실행과 설정
 
-## 三步开始
+### 릴리스 패키지
 
-1. 去 [正式版下载页](https://goagent.top/download/) 下载适合自己系统的包；需要安装器、Linux 或历史版本时使用 GitHub Releases。
-2. 打开程序后，点击 `野狐棋谱`，输入野狐昵称。
-3. 抓到棋谱后继续做快速全盘分析，用主胜率图和底部快速概览直接定位关键手。
+KG-next 릴리스에서 운영체제와 백엔드에 맞는 패키지를 선택합니다. 엔진이 없는 패키지나 직접 빌드한 앱은 엔진 실행 파일, 모델, 설정 파일을 별도로 지정해야 합니다. 모든 패키지가 KG-next 패치 엔진을 포함한다고 가정하지 마세요.
 
-<p align="center">
-  <a href="assets/fox-id-demo-cn.gif">
-    <img src="assets/fox-id-demo-cn-cover.png" alt="LizzieYzy Next 野狐昵称抓谱演示" width="100%" />
-  </a>
-</p>
+Windows 설치 제품명은 `KG-next`이며 NVIDIA·OpenCL 등 변형에는 백엔드 이름이 붙습니다. 원본 제품을 업그레이드 대상으로 오인하지 않도록 설치 식별자를 분리합니다. macOS 앱 이름도 `KG-next.app`입니다. 내부 Java 패키지명과 기존 SGF 분석 속성은 기보 호환성을 위해 유지합니다.
 
-<p align="center">
-  如果 GitHub 里的动图加载慢，直接点上面的图就能看完整演示。
-</p>
+### 소스 빌드
 
-## 查找功能和设置
+JDK 17 이상과 Maven이 필요합니다. 저장소의 CI는 JDK 21 환경도 사용합니다.
 
-点击顶部的搜索按钮，或按 `Ctrl+K`（macOS 为 `Command+K`）。可用任一支持语言输入功能名，检索完全离线；输入为空时按向下键或选择“浏览功能”即可按分类查看完整目录。用上下键选择结果，输入法候选提交后再单独按一次 `Enter` 才会激活。菜单和对话框功能会打开原有入口；设置结果只负责定位并聚焦控件，不会自动修改值。暂不可用的结果仍会显示原因，按 `Esc` 可关闭搜索并回到原来的焦点。
+```sh
+git clone https://github.com/22nsuk/KG-next.git
+cd KG-next
+mvn -B verify
+java -jar target/lizzie-yzy2.5.3-shaded.jar
+```
 
-## 界面预览
+JAR의 기존 파일명과 `featurecat.lizzie` 진입점은 빌드·플러그인 호환을 위해 유지하며, 실제 앱 표시 이름은 KG-next입니다. 운영체제 패키징은 `scripts/package_windows_exe.sh`, `scripts/package_macos_dmg.sh` 및 [개발 문서](docs/DEVELOPMENT.md)를 참고하세요. 원본의 릴리스 자격 증명·서명 키가 포크에 자동으로 이전되지는 않습니다.
 
-<p align="center">
-  <img src="assets/interface-overview-2026-04.png" alt="LizzieYzy Next 界面预览" width="100%" />
-</p>
+### 한국어와 글꼴
 
-主胜率图和底部快速概览包含：
+언어 설정에서 한국어를 선택합니다. 기본 UI 글꼴은 설치된 한글 지원 글꼴 중 맑은 고딕, Apple SD Gothic Neo, Noto Sans CJK KR / Noto Sans KR, Source Han Sans K, 나눔고딕 등을 순서대로 확인합니다. Windows 전용 글꼴이 없는 운영체제에서도 다른 글꼴로 대체하며, 사용자가 지정한 한글 표시 가능한 글꼴은 유지합니다.
 
-<p align="center">
-  <img src="assets/winrate-quick-overview-2026-04.png" alt="LizzieYzy Next 主胜率图与快速概览" width="46%" />
-</p>
+운영체제에 한글 글꼴이 전혀 없으면 앱이 없는 글꼴을 생성할 수는 없습니다. 운영체제의 글꼴 관리 기능으로 한글 글꼴을 설치한 뒤 앱을 다시 실행하세요. 이 변경은 외부 글꼴을 무단 배포하거나 자동 다운로드하지 않습니다.
 
-- 蓝线 / 紫线：双方胜率走势
-- 绿色线：目差变化
-- 底部热力概览：整盘问题手分布，红橙黄越多，越值得先看
-- 竖向定位线：当前手或悬停手的位置
+## 검증
 
-## 它和原来的 lizzieyzy 有什么区别
+```sh
+# Java 단위·통합 검사 및 패키지 빌드
+mvn -B -Djava.awt.headless=true verify
 
-| 对比项 | 原 `lizzieyzy` | `LizzieYzy Next` |
-| --- | --- | --- |
-| 当前状态 | 历史项目，很多人还记得，但长期缺少持续维护 | 当前维护分支，继续修可用性和发布体验 |
-| 野狐抓谱 | 老流程陆续失效 | 已恢复常用抓谱链路，支持昵称输入 |
-| 输入方式 | 更依赖先知道账号数字 | 直接输入野狐昵称，程序自动匹配账号 |
-| KataGo 使用门槛 | 常常需要自己补环境或补资源 | 推荐整合包已内置 KataGo 和默认权重 |
-| Windows 下载体验 | 需要用户自己判断更多 | 明确优先推荐 `portable.zip` 免安装包 |
-| 同步工具 | 用户自己拼环境的情况更多 | Windows 主发布包内置原生 `readboard.exe` |
+# 텍스트 줄바꿈과 모델·README 일치 검사
+python3 scripts/check_line_endings.py
+python3 scripts/validate_kg_metadata.py
 
-## macOS 首次启动
+# 실제 엔진의 첫 수 제한 재사용 회귀 검사
+python3 /path/to/KataGo/python/probe_kg_root_reuse.py --engine /path/to/katago \
+  --model /path/to/test-model.bin.gz --output /tmp/kg-root-reuse-proof
+```
 
-先确认下载的芯片版本正确，再打开 DMG，按画面箭头把 `LizzieYzy Next` 拖到“应用程序”，弹出安装磁盘后从 Finder 的“应用程序”启动。当前官方 release 流程会完成签名和公证；如果系统仍拦截，请按 [安装说明](docs/INSTALL.md) 排查。
+Java의 헤드리스 테스트, 실제 CPU 엔진 테스트, Windows GPU 테스트, 설치 패키지 테스트는 서로 다른 검증입니다. 특히 CPU에서 탐색을 보존했다고 해서 Windows CUDA/TensorRT 실행·성능까지 검증한 것은 아닙니다. 자세한 변경·검증·남은 조건은 PR과 [엔진 문서](engine/README.md)에 기록합니다.
 
-## 文档与参与
+## 문서와 원본
 
-- [获取帮助](SUPPORT.md)
-- [安装说明](docs/INSTALL.md)
-- [发布包说明](docs/PACKAGES.md)
-- [常见问题与排错](docs/TROUBLESHOOTING.md)
-- [已验证平台](docs/TESTED_PLATFORMS.md)
-- [GitHub Releases](https://github.com/wimi321/lizzieyzy-next/releases)
-- [GitHub Discussions](https://github.com/wimi321/lizzieyzy-next/discussions)
-- [QQ 群：299419120](https://qm.qq.com/q/JZoeojjteg)
-- [项目路线图](ROADMAP.md)
-- [参与贡献](CONTRIBUTING.md)
-- [更新日志](CHANGELOG.md)
+[개발](docs/DEVELOPMENT.md) · [배포 체크리스트](docs/RELEASE_CHECKLIST.md) · [변경 이력](CHANGELOG.md) · [기여](CONTRIBUTING.md)
 
-## 致谢
+다른 언어의 README와 원본의 이전 검증 기록은 기능 참고 자료입니다. KG-next의 현재 모델·엔진 조건 및 배포 상태는 이 기본 문서와 자산 목록을 기준으로 합니다.
 
-- 原项目：[yzyray/lizzieyzy](https://github.com/yzyray/lizzieyzy)
-- KataGo：[lightvector/KataGo](https://github.com/lightvector/KataGo)
-- 棋盘同步工具：[qiyi71w/readboard](https://github.com/qiyi71w/readboard)
-
-感谢 [qiyi71w](https://github.com/qiyi71w) 持续维护和优化 readboard。
-
-感谢所有参与提交的贡献者：
-
-<p align="left">
-  <a href="https://github.com/wimi321/lizzieyzy-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="LizzieYzy Next 贡献者" />
-  </a>
-</p>
-
-野狐抓谱参考：
-
-- [yzyray/FoxRequest](https://github.com/yzyray/FoxRequest)
-- [FuckUbuntu/Lizzieyzy-Helper](https://github.com/FuckUbuntu/Lizzieyzy-Helper)
-
-## 参与翻译
-
-欢迎提交 README 翻译 PR。Translations are welcome; please submit a Pull Request.
+KG-next는 [LizzieYzy Next](https://github.com/wimi321/lizzieyzy-next), LizzieYzy 및 Lizzie의 작업을 이어갑니다. 바둑 엔진은 [KataGo](https://github.com/lightvector/KataGo)입니다. 원본 저작권 고지와 `LICENSE.txt`를 보존하며, 엔진 패치의 원본 라이선스도 [engine/README.md](engine/README.md)에 명시합니다.

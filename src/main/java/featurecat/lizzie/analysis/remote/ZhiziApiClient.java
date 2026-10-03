@@ -212,7 +212,7 @@ public class ZhiziApiClient {
     body.put("payType", "WECHAT");
     body.put("amount", product.priceFen);
     body.put("tradeType", "NATIVE");
-    body.put("body", "LizzieYzy Next VIP membership");
+    body.put("body", "KG-next VIP membership");
     body.put("orderType", "PURCHASE_PRODUCT");
     body.put("productName", product.name);
     body.put("extraInfo", new JSONObject().put("autoRenew", autoRenew));
@@ -243,7 +243,7 @@ public class ZhiziApiClient {
     body.put("payType", "WECHAT");
     body.put("amount", amountFen);
     body.put("tradeType", "NATIVE");
-    body.put("body", "LizzieYzy Next account top-up");
+    body.put("body", "KG-next account top-up");
     PaymentOrder order =
         PaymentOrder.fromJson(
             post(

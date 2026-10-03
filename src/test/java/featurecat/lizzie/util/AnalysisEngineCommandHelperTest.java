@@ -244,11 +244,11 @@ class AnalysisEngineCommandHelperTest {
 
   @Test
   void humanSlRebasesAStaleBundledCommandToTheCurrentInstallation() throws Exception {
-    Path currentRoot = tempDir.resolve("当前 LizzieYzy Next.app").resolve("Contents").resolve("app");
+    Path currentRoot = tempDir.resolve("当前 KG-next.app").resolve("Contents").resolve("app");
     Path engine = writeFile(currentRoot.resolve("engines/katago/macos-arm64/katago"));
     Path config = writeFile(currentRoot.resolve("engines/katago/configs/analysis.cfg"));
     Path weight = writeFile(currentRoot.resolve("weights/default.bin.gz"));
-    Path staleRoot = tempDir.resolve("old build").resolve("LizzieYzy Next.app/Contents/app");
+    Path staleRoot = tempDir.resolve("old build").resolve("KG-next.app/Contents/app");
     String staleCommand =
         quote(staleRoot.resolve("engines/katago/macos-arm64/katago"))
             + " analysis -model "

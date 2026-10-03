@@ -11579,34 +11579,15 @@ public class LizzieFrame extends JFrame {
     //        Lizzie.board.convertCoordinatesToName(minX, minY);
     //    featurecat.lizzie.gui.RightClickMenu.kataAllowBottomRight =
     //        Lizzie.board.convertCoordinatesToName(minX + xCounts, minY + yCounts);
-    String[] exsitCoords;
-    if (selectForceAllow) exsitCoords = LizzieFrame.allowcoords.split(",");
-    else exsitCoords = LizzieFrame.avoidcoords.split(",");
     for (int i = 0; i <= xCounts; i++) {
       for (int j = 0; j <= yCounts; j++) {
         int x = minX + i;
         int y = minY + j;
-        boolean needSkip = false;
         String coordsName = Board.convertCoordinatesToName(x, y);
-        for (String existedCoords : exsitCoords) {
-          if (coordsName.equals(existedCoords)) {
-            needSkip = true;
-            break;
-          }
-        }
-        if (needSkip) continue;
         if (selectForceAllow) {
-          if (LizzieFrame.allowcoords != "") {
-            LizzieFrame.allowcoords = LizzieFrame.allowcoords + "," + coordsName;
-          } else {
-            LizzieFrame.allowcoords = coordsName;
-          }
+          LizzieFrame.allowcoords = RestrictionCoordinates.add(LizzieFrame.allowcoords, coordsName);
         } else {
-          if (LizzieFrame.avoidcoords != "") {
-            LizzieFrame.avoidcoords = LizzieFrame.avoidcoords + "," + coordsName;
-          } else {
-            LizzieFrame.avoidcoords = coordsName;
-          }
+          LizzieFrame.avoidcoords = RestrictionCoordinates.add(LizzieFrame.avoidcoords, coordsName);
         }
       }
     }
@@ -11645,7 +11626,6 @@ public class LizzieFrame extends JFrame {
         if (selectForceAllow)
           boardRenderer.drawAllSelectedRectByCoords(selectForceAllow, LizzieFrame.allowcoords);
         else boardRenderer.drawAllSelectedRectByCoords(selectForceAllow, LizzieFrame.avoidcoords);
-        Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
         repaint();
       } else {
         selectCoordsX2 = -1;

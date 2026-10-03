@@ -15,7 +15,7 @@ public final class LocaleFontSupport {
   private static final String SIMPLIFIED_CHINESE_SAMPLE = "简体中文";
   private static final String TRADITIONAL_CHINESE_SAMPLE = "繁體中文";
   private static final String JAPANESE_SAMPLE = "日本語";
-  private static final String KOREAN_SAMPLE = "한국어";
+  private static final String KOREAN_SAMPLE = "한국어 바둑 복기 흑백 집 패 빅 ㄱㅎ";
   private static final String THAI_SAMPLE =
       "\u0e20\u0e32\u0e29\u0e32\u0e44\u0e17\u0e22 \u0e01\u0e32\u0e23\u0e15\u0e31\u0e49\u0e07\u0e04\u0e48\u0e32 \u0e40\u0e04\u0e23\u0e37\u0e48\u0e2d\u0e07\u0e21\u0e37\u0e2d";
   private static final List<String> SIMPLIFIED_CHINESE_FONT_CANDIDATES =
@@ -50,6 +50,8 @@ public final class LocaleFontSupport {
           "Malgun Gothic",
           "Apple SD Gothic Neo",
           "Noto Sans CJK KR",
+          "Noto Sans KR",
+          "Source Han Sans K",
           "NanumGothic",
           "Arial Unicode MS");
   private static final List<String> THAI_FONT_CANDIDATES =
@@ -67,10 +69,14 @@ public final class LocaleFontSupport {
 
   public static String resolveDefaultFontName(String configuredName, Locale locale) {
     String configured = normalized(configuredName, DEFAULT_FONT);
-    if (!isThai(locale)) {
-      return configured;
+    if (isKorean(locale)) {
+      // Prefer Korean-specific glyphs for an automatic default, not a CJK font for another locale.
+      return resolveKoreanDefaultFontName(configured, LocaleFontSupport::canRenderKorean);
     }
-    return resolveThaiFontName(configured, configured, LocaleFontSupport::canRenderThai);
+    if (isThai(locale)) {
+      return resolveThaiFontName(configured, configured, LocaleFontSupport::canRenderThai);
+    }
+    return configured;
   }
 
   /** Selects a font that can render the native label for a language picker option. */
@@ -93,10 +99,29 @@ public final class LocaleFontSupport {
     String fallback = normalized(fallbackName, DEFAULT_FONT);
     String configured =
         isDefaultSelection(configuredName) ? fallback : normalized(configuredName, fallback);
-    if (!isThai(locale)) {
-      return configured;
+    if (isKorean(locale)) {
+      return resolveKoreanFontName(configured, fallback, LocaleFontSupport::canRenderKorean);
     }
-    return resolveThaiFontName(configured, fallback, LocaleFontSupport::canRenderThai);
+    if (isThai(locale)) {
+      return resolveThaiFontName(configured, fallback, LocaleFontSupport::canRenderThai);
+    }
+    return configured;
+  }
+
+  static String resolveKoreanDefaultFontName(
+      String fallbackName, Predicate<String> supportsKorean) {
+    for (String candidate : KOREAN_FONT_CANDIDATES) {
+      if (supportsKorean.test(candidate)) {
+        return candidate;
+      }
+    }
+    return normalized(fallbackName, DEFAULT_FONT);
+  }
+
+  static String resolveKoreanFontName(
+      String configuredName, String fallbackName, Predicate<String> supportsKorean) {
+    return resolveFontName(
+        configuredName, fallbackName, KOREAN_FONT_CANDIDATES, supportsKorean);
   }
 
   static String resolveThaiFontName(
@@ -126,12 +151,18 @@ public final class LocaleFontSupport {
     return fallback;
   }
 
-  static boolean isDefaultSelection(String fontName) {
+  public static boolean isDefaultSelection(String fontName) {
     if (fontName == null || fontName.trim().isEmpty()) {
       return true;
     }
     String value = fontName.trim();
-    return "Lizzie Default".equalsIgnoreCase(value) || "Lizzie\u9ed8\u8ba4".equals(value);
+    return "KG-next Default".equalsIgnoreCase(value)
+        || "Lizzie Default".equalsIgnoreCase(value)
+        || "Lizzie\u9ed8\u8ba4".equals(value);
+  }
+
+  private static boolean isKorean(Locale locale) {
+    return locale != null && "ko".equalsIgnoreCase(locale.getLanguage());
   }
 
   private static boolean isThai(Locale locale) {
@@ -193,23 +224,34 @@ public final class LocaleFontSupport {
     return fontName == null || fontName.trim().isEmpty() ? fallback : fontName.trim();
   }
 
+  private static boolean canRenderKorean(String requestedName) {
+    return canRender(requestedName, KOREAN_SAMPLE);
+  }
+
   private static boolean canRenderThai(String requestedName) {
     return canRender(requestedName, THAI_SAMPLE);
   }
 
   private static boolean canRender(String requestedName, String sample) {
-    String family = availableFontFamilies().get(requestedName.toLowerCase(Locale.ROOT));
+    String family = InstalledFonts.FAMILIES.get(requestedName.toLowerCase(Locale.ROOT));
     if (family == null) {
       return false;
     }
     return new Font(family, Font.PLAIN, 12).canDisplayUpTo(sample) < 0;
   }
 
+  private static final class InstalledFonts {
+    private static final Map<String, String> FAMILIES = availableFontFamilies();
+  }
+
   private static Map<String, String> availableFontFamilies() {
     Map<String, String> families = new HashMap<>();
-    for (String family :
-        GraphicsEnvironment.getLocalGraphicsEnvironment().getAvailableFontFamilyNames()) {
-      families.putIfAbsent(family.toLowerCase(Locale.ROOT), family);
+    GraphicsEnvironment environment = GraphicsEnvironment.getLocalGraphicsEnvironment();
+    // Candidate names use English, while the font picker may save a localized family name.
+    for (Locale namingLocale : new Locale[] {Locale.US, Locale.getDefault()}) {
+      for (String family : environment.getAvailableFontFamilyNames(namingLocale)) {
+        families.putIfAbsent(family.toLowerCase(Locale.ROOT), family);
+      }
     }
     return families;
   }

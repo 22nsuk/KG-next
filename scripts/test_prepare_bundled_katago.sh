@@ -8,11 +8,11 @@ source "$ROOT_DIR/scripts/prepare_bundled_katago.sh"
 [[ "$KATAGO_TAG" == "v1.18.2" ]]
 [[ "$(catalog_get katagoSourceCommit)" == "47aadc08518b3e121f22539796c911002f699584" ]]
 [[ "$KATAGO_RELEASE_BASE" == "https://github.com/wimi321/lizzieyzy-next/releases/download/"* ]]
-[[ "$PREFERRED_MODEL_NAME" == "kata1-tf3-b11c768-s12002M-d6304M.bin.gz" ]]
-[[ "$PREFERRED_MODEL_SIZE_BYTES" == "262017809" ]]
+[[ "$PREFERRED_MODEL_NAME" == "kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz" ]]
+[[ "$PREFERRED_MODEL_SIZE_BYTES" == "262039869" ]]
 [[ "$MODEL_URL" == "https://media.katagotraining.org/uploaded/networks/models/kata1/$PREFERRED_MODEL_NAME" ]]
 [[ "$PREFERRED_MODEL_SHA256" == \
-  "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e" ]]
+  "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871" ]]
 [[ "$HUMAN_SL_CUDA_COMPANION_SHA256" == \
   "9a87f2e40233bb5694332546f9cad0a6248f4593341ccafb29225fbf025a6ef6" ]]
 for pair in "windows-cpu|$WINDOWS_ASSET" "windows-opencl|$WINDOWS_OPENCL_ASSET" \

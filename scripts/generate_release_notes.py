@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--date-tag', help='Release date tag, for example 2026-03-23')
     parser.add_argument('--release-dir', default=str(ROOT / 'dist' / 'release'), help='Directory containing release assets')
     parser.add_argument('--release-tag', help='GitHub release tag, used for direct asset links')
-    parser.add_argument('--repo', default='wimi321/lizzieyzy-next', help='GitHub repo in owner/name format')
+    parser.add_argument('--repo', default='22nsuk/KG-next', help='GitHub repo in owner/name format')
     parser.add_argument('--from-gh', action='store_true', help='Read asset names from GitHub release instead of local dist/release')
     parser.add_argument('--output', help='Output markdown file path; defaults to stdout')
     return parser.parse_args()
@@ -50,6 +50,7 @@ def load_bundle_metadata() -> dict[str, str]:
         'windows_bundle': 'Unknown',
         'windows_opencl_bundle': 'Unknown',
         'windows_nvidia_bundle': 'Unknown',
+        'windows_nvidia_cuda13_bundle': 'Unknown',
         'windows_nvidia50_cuda_bundle': 'Unknown',
         'linux_bundle': 'Unknown',
         'linux_opencl_bundle': 'Unknown',
@@ -70,6 +71,8 @@ def load_bundle_metadata() -> dict[str, str]:
                 metadata['windows_opencl_bundle'] = value
             elif key == 'windows nvidia bundle':
                 metadata['windows_nvidia_bundle'] = value
+            elif key == 'windows nvidia cuda13 bundle':
+                metadata['windows_nvidia_cuda13_bundle'] = value
             elif key == 'windows nvidia 50 cuda bundle':
                 metadata['windows_nvidia50_cuda_bundle'] = value
             elif key == 'linux bundle':
@@ -92,6 +95,7 @@ def load_bundle_metadata() -> dict[str, str]:
                 'windows_bundle': assets['windows-cpu']['assetName'],
                 'windows_opencl_bundle': assets['windows-opencl']['assetName'],
                 'windows_nvidia_bundle': assets['windows-nvidia']['assetName'],
+                'windows_nvidia_cuda13_bundle': assets['windows-nvidia-cuda13']['assetName'],
                 # Historical note builders still expose this compatibility field. The current
                 # release deliberately uses the same unified CUDA asset for every RTX generation.
                 'windows_nvidia50_cuda_bundle': assets['windows-nvidia']['assetName'],
@@ -261,10 +265,10 @@ def format_asset_en(asset_name: str | list[str] | None, repo: str, release_tag: 
 def release_heading(release_tag: str | None) -> str:
     tag = (release_tag or '').strip()
     if not tag:
-        return '# LizzieYzy Next'
+        return '# KG-next'
     if tag == 'next-2026-06-29.1':
-        return f'# LizzieYzy Next 首冠版 {tag}'
-    return f'# LizzieYzy Next {tag}'
+        return f'# KG-next 首冠版 {tag}'
+    return f'# KG-next {tag}'
 
 
 def validate_release_sections(sections: list[dict[str, object]]) -> None:
@@ -481,6 +485,14 @@ def apply_current_windows_download_guidance(
             'หากไม่มี GPU backend ที่เหมาะสมหรือเปิดไม่ได้ ให้ใช้ {cpu} รุ่น CPU compatibility',
         ),
     }
+    cuda13_templates = {
+        '中文': '可选的 {cuda13} 单独包含 CUDA 13.2 / cuDNN 9.24 runtime；需要支持 CUDA 13 的 NVIDIA 驱动。普通 NVIDIA 包继续使用 CUDA 12.8。',
+        '繁體中文': '可選的 {cuda13} 單獨包含 CUDA 13.2 / cuDNN 9.24 runtime；需要支援 CUDA 13 的 NVIDIA 驅動。一般 NVIDIA 套件繼續使用 CUDA 12.8。',
+        'English': 'The optional {cuda13} bundles CUDA 13.2 / cuDNN 9.24 separately and requires a CUDA 13 compatible NVIDIA driver. The standard NVIDIA package continues to use CUDA 12.8.',
+        '日本語': '任意の {cuda13} は CUDA 13.2 / cuDNN 9.24 runtime を別途同梱し、CUDA 13 対応 NVIDIA driver が必要です。標準 NVIDIA package は CUDA 12.8 を使用します。',
+        '한국어': '선택형 {cuda13} 는 CUDA 13.2 / cuDNN 9.24 runtime 을 별도로 포함하며 CUDA 13 호환 NVIDIA 드라이버가 필요합니다. 기본 NVIDIA 패키지는 CUDA 12.8 을 사용합니다.',
+        'ภาษาไทย': '{cuda13} เป็นทางเลือกที่รวม CUDA 13.2 / cuDNN 9.24 แยกต่างหาก และต้องใช้ NVIDIA driver ที่รองรับ CUDA 13 ส่วนแพ็กเกจ NVIDIA มาตรฐานยังใช้ CUDA 12.8',
+    }
     why_items = {
         '中文': (
             'Windows 现在按硬件明确区分 CUDA、OpenCL 和 CPU 兼容版，下载时不再猜。',
@@ -552,6 +564,9 @@ def apply_current_windows_download_guidance(
             )
             for template in before_templates.get(language, before_templates['English'])
         ]
+        cuda13_asset = localized_assets.get('windows_nvidia_cuda13_portable')
+        if formatted_asset_available(cuda13_asset):
+            guidance.append(cuda13_templates.get(language, cuda13_templates['English']).format(cuda13=cuda13_asset))
         before['items'] = guidance + before['items']
 
         download = section['download']
@@ -562,6 +577,7 @@ def apply_current_windows_download_guidance(
         preferred_keys = [
             'windows_nvidia_portable',
             'windows_nvidia_installer',
+            'windows_nvidia_cuda13_portable',
             'windows_opencl_portable',
             'windows_opencl_installer',
             'windows_portable',
@@ -682,6 +698,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64 位，CPU 兼容版，想安装',
         'windows_nvidia_portable': 'Windows 64 位，RTX 20/30/40/50，NVIDIA CUDA 推荐版，免安装',
         'windows_nvidia_installer': 'Windows 64 位，RTX 20/30/40/50，NVIDIA CUDA 推荐安装版',
+        'windows_nvidia_cuda13_portable': 'Windows 64 位，NVIDIA CUDA 13.2 / cuDNN 9.24 可选版，免安装',
         'windows_directml_experimental': 'Windows 64 位，DirectML 实验版，DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64 位，OpenVINO 实验版，Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64 位，ROCm 实验版，AMD RX 6000',
@@ -703,6 +720,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64 位，CPU 相容版，想安裝',
         'windows_nvidia_portable': 'Windows 64 位，RTX 20/30/40/50，NVIDIA CUDA 建議版，免安裝',
         'windows_nvidia_installer': 'Windows 64 位，RTX 20/30/40/50，NVIDIA CUDA 建議安裝版',
+        'windows_nvidia_cuda13_portable': 'Windows 64 位，NVIDIA CUDA 13.2 / cuDNN 9.24 可選版，免安裝',
         'windows_directml_experimental': 'Windows 64 位，DirectML 實驗版，DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64 位，OpenVINO 實驗版，Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64 位，ROCm 實驗版，AMD RX 6000',
@@ -724,6 +742,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64-bit, CPU compatible build, installer',
         'windows_nvidia_portable': 'Windows 64-bit, RTX 20/30/40/50, recommended NVIDIA CUDA, no install',
         'windows_nvidia_installer': 'Windows 64-bit, RTX 20/30/40/50, recommended NVIDIA CUDA installer',
+        'windows_nvidia_cuda13_portable': 'Windows 64-bit, optional NVIDIA CUDA 13.2 / cuDNN 9.24, no install',
         'windows_directml_experimental': 'Windows 64-bit, DirectML experimental, DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64-bit, OpenVINO experimental, Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64-bit, ROCm experimental, AMD RX 6000',
@@ -745,6 +764,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64-bit、CPU 互換版、インストーラ',
         'windows_nvidia_portable': 'Windows 64-bit、RTX 20/30/40/50、推奨 NVIDIA CUDA、インストール不要',
         'windows_nvidia_installer': 'Windows 64-bit、RTX 20/30/40/50、推奨 NVIDIA CUDA、インストーラ',
+        'windows_nvidia_cuda13_portable': 'Windows 64-bit、任意の NVIDIA CUDA 13.2 / cuDNN 9.24、インストール不要',
         'windows_directml_experimental': 'Windows 64-bit、DirectML experimental、DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64-bit、OpenVINO experimental、Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64-bit、ROCm experimental、AMD RX 6000',
@@ -766,6 +786,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64-bit, CPU 호환 빌드, 설치형',
         'windows_nvidia_portable': 'Windows 64-bit, RTX 20/30/40/50, 권장 NVIDIA CUDA, 무설치',
         'windows_nvidia_installer': 'Windows 64-bit, RTX 20/30/40/50, 권장 NVIDIA CUDA 설치형',
+        'windows_nvidia_cuda13_portable': 'Windows 64-bit, 선택형 NVIDIA CUDA 13.2 / cuDNN 9.24, 무설치',
         'windows_directml_experimental': 'Windows 64-bit, DirectML experimental, DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64-bit, OpenVINO experimental, Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64-bit, ROCm experimental, AMD RX 6000',
@@ -787,6 +808,7 @@ STANDARD_DOWNLOAD_LABELS = {
         'windows_installer': 'Windows 64-bit, CPU compatible build, แบบติดตั้ง',
         'windows_nvidia_portable': 'Windows 64-bit, RTX 20/30/40/50, NVIDIA CUDA ที่แนะนำ, ไม่ต้องติดตั้ง',
         'windows_nvidia_installer': 'Windows 64-bit, RTX 20/30/40/50, NVIDIA CUDA installer ที่แนะนำ',
+        'windows_nvidia_cuda13_portable': 'Windows 64-bit, NVIDIA CUDA 13.2 / cuDNN 9.24 ทางเลือก, ไม่ต้องติดตั้ง',
         'windows_directml_experimental': 'Windows 64-bit, DirectML experimental, DirectX 12 GPU',
         'windows_openvino_experimental': 'Windows 64-bit, OpenVINO experimental, Intel GPU/NPU',
         'windows_rocm_gfx103x_experimental': 'Windows 64-bit, ROCm experimental, AMD RX 6000',
@@ -1098,7 +1120,7 @@ def build_next_2026_05_17_2_notes(
     add_nvidia50_download_rows(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
-    heading = f'# LizzieYzy Next {release_tag} 4段纪念版' if release_tag else '# LizzieYzy Next 4段纪念版'
+    heading = f'# KG-next {release_tag} 4段纪念版' if release_tag else '# KG-next 4段纪念版'
     return heading + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
     ) + '\n'
@@ -2520,7 +2542,7 @@ def build_next_2026_05_30_1_notes(
             'language': '中文',
             'labels': 'zh',
             'intro': (
-                '这是 `LizzieYzy Next` 的 2026-05-30 预览版，重点合并社区 PR 并修复同步、分析与预览交互。'
+                '这是 `KG-next` 的 2026-05-30 预览版，重点合并社区 PR 并修复同步、分析与预览交互。'
                 '特别感谢 @semanym 与 @qiyi71w 的持续贡献：这一版补强了 ReadBoard 落子失败后的恢复、批量闪电分析设置、'
                 '候选点表预览清理，以及 TensorRT 一键设置的 NVIDIA GPU 检测。'
             ),
@@ -2556,7 +2578,7 @@ def build_next_2026_05_30_1_notes(
             'language': '繁體中文',
             'labels': 'zh_hant',
             'intro': (
-                '這是 `LizzieYzy Next` 的 2026-05-30 預覽版，重點是合併社群 PR 並修復同步、分析與預覽互動。'
+                '這是 `KG-next` 的 2026-05-30 預覽版，重點是合併社群 PR 並修復同步、分析與預覽互動。'
                 '特別感謝 @semanym 與 @qiyi71w 的持續貢獻：這一版補強 ReadBoard 落子失敗後的恢復、批量閃電分析設定、'
                 '候選點表預覽清理，以及 TensorRT 一鍵設定的 NVIDIA GPU 偵測。'
             ),
@@ -2592,7 +2614,7 @@ def build_next_2026_05_30_1_notes(
             'language': 'English',
             'labels': 'en',
             'intro': (
-                'This is the 2026-05-30 preview build of `LizzieYzy Next`, focused on community PRs and sync, analysis, and preview stability. '
+                'This is the 2026-05-30 preview build of `KG-next`, focused on community PRs and sync, analysis, and preview stability. '
                 'Special thanks to @semanym and @qiyi71w for the continued work: this release improves ReadBoard recovery after failed local moves, '
                 'batch lightning analysis settings, candidate-table preview cleanup, and NVIDIA GPU detection for TensorRT auto setup.'
             ),
@@ -2628,7 +2650,7 @@ def build_next_2026_05_30_1_notes(
             'language': '日本語',
             'labels': 'ja',
             'intro': (
-                'これは `LizzieYzy Next` の 2026-05-30 プレビュー版です。コミュニティ PR を取り込み、同期・分析・プレビュー操作の安定性を高めました。'
+                'これは `KG-next` の 2026-05-30 プレビュー版です。コミュニティ PR を取り込み、同期・分析・プレビュー操作の安定性を高めました。'
                 '@semanym さんと @qiyi71w さんの継続的な貢献に感謝します。この版では ReadBoard の失敗手後の復旧、'
                 'batch lightning analysis 設定、候補手表のプレビュー解除、TensorRT 自動設定向け NVIDIA GPU 検出を改善しています。'
             ),
@@ -2664,7 +2686,7 @@ def build_next_2026_05_30_1_notes(
             'language': '한국어',
             'labels': 'ko',
             'intro': (
-                '`LizzieYzy Next` 2026-05-30 프리뷰 빌드입니다. 커뮤니티 PR 을 반영하고 동기화, 분석, 미리보기 상호작용 안정성을 개선했습니다. '
+                '`KG-next` 2026-05-30 프리뷰 빌드입니다. 커뮤니티 PR 을 반영하고 동기화, 분석, 미리보기 상호작용 안정성을 개선했습니다. '
                 '@semanym 님과 @qiyi71w 님의 지속적인 기여에 감사드립니다. 이번 릴리스는 ReadBoard 실패 착수 복구, '
                 'batch lightning analysis 설정, 후보수 표 미리보기 정리, TensorRT 자동 설정용 NVIDIA GPU 감지를 보강합니다.'
             ),
@@ -2700,7 +2722,7 @@ def build_next_2026_05_30_1_notes(
             'language': 'ภาษาไทย',
             'labels': 'th',
             'intro': (
-                'นี่คือ build preview วันที่ 2026-05-30 ของ `LizzieYzy Next` เน้นรวม PR จากชุมชนและปรับความเสถียรของ sync, analysis, และ preview interaction '
+                'นี่คือ build preview วันที่ 2026-05-30 ของ `KG-next` เน้นรวม PR จากชุมชนและปรับความเสถียรของ sync, analysis, และ preview interaction '
                 'ขอบคุณ @semanym และ @qiyi71w สำหรับการช่วยพัฒนาอย่างต่อเนื่อง รุ่นนี้ปรับปรุงการกู้คืน ReadBoard หลังวางหมากพลาด, '
                 'batch lightning analysis settings, การล้าง preview ในตาราง candidate, และการตรวจ NVIDIA GPU สำหรับ TensorRT auto setup'
             ),
@@ -5061,7 +5083,7 @@ def build_next_2026_05_18_1_notes(
     ]
     add_nvidia50_download_rows(sections, assets_cn, assets)
     validate_release_sections(sections)
-    heading = f'# LizzieYzy Next {release_tag} 4段纪念版更新' if release_tag else '# LizzieYzy Next 4段纪念版更新'
+    heading = f'# KG-next {release_tag} 4段纪念版更新' if release_tag else '# KG-next 4段纪念版更新'
     return heading + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
     ) + '\n'
@@ -5315,7 +5337,7 @@ def build_next_2026_06_09_1_notes(
     ]
     add_nvidia50_download_rows(sections, assets_cn, assets)
     validate_release_sections(sections)
-    heading = f'# LizzieYzy Next {release_tag} 更新' if release_tag else '# LizzieYzy Next 更新'
+    heading = f'# KG-next {release_tag} 更新' if release_tag else '# KG-next 更新'
     return heading + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
     ) + '\n'
@@ -5819,7 +5841,7 @@ def build_next_2026_06_11_2_notes(
             'updates': [
                 '修复野狐棋谱加载后不自动生成胜率曲线的问题：主引擎还没开始 ponder 时，也会自动启动静默快速分析。',
                 '默认关闭胜率图里的柱状失误条，让新用户第一眼看到的是更干净的胜率曲线；旧默认配置会一次性迁移，之后用户手动开启会被保留。',
-                'macOS DMG 改成标准拖拽安装布局：打开安装包后可以把 LizzieYzy Next 拖到 Applications。',
+                'macOS DMG 改成标准拖拽安装布局：打开安装包后可以把 KG-next 拖到 Applications。',
                 'macOS 签名公证上传增加重试，降低 Apple notary 临时 503 导致 Intel/Apple Silicon 包失败的概率。',
                 '保留上一版 Apple 风格和 LizzieYzy 经典风格的视觉打磨，以及主窗口、胜率图、分支预览的缓冲复用性能优化。',
                 '本次不改变 KataGo 分析逻辑、问题手判定规则或用户已有的手动引擎配置。',
@@ -5852,7 +5874,7 @@ def build_next_2026_06_11_2_notes(
             'updates': [
                 '修復野狐棋譜載入後不自動生成勝率曲線的問題：主引擎尚未開始 ponder 時，也會自動啟動靜默快速分析。',
                 '預設關閉勝率圖裡的柱狀失誤條，讓新使用者第一眼看到更乾淨的勝率曲線；舊預設設定會一次性遷移，之後手動開啟會被保留。',
-                'macOS DMG 改成標準拖曳安裝版面：打開安裝包後可以把 LizzieYzy Next 拖到 Applications。',
+                'macOS DMG 改成標準拖曳安裝版面：打開安裝包後可以把 KG-next 拖到 Applications。',
                 'macOS 簽名公證上傳增加重試，降低 Apple notary 暫時 503 造成 Intel/Apple Silicon 包失敗的機率。',
                 '保留上一版 Apple 風格和 LizzieYzy 經典風格的視覺打磨，以及主視窗、勝率圖、分支預覽的緩衝重用效能優化。',
                 '本次不改變 KataGo 分析邏輯、問題手判定規則或使用者既有的手動引擎設定。',

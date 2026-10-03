@@ -4,6 +4,17 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+### KG-next
+
+- Keep same-position first-ply allow/exclude subtrees with the capability-gated extension maintained in the 22nsuk/KataGo engine repository; preserve legacy behavior for unpatched engines and deeper restrictions.
+- Stop marking unrelated positions stale when changing menu or rectangle restrictions, preserve the other allowed moves when removing one, and default new allow/exclude settings to the first ply without overriding saved depths.
+- Add a separate NVIDIA CUDA 13.2 / cuDNN 9.24.0.43 portable with pinned official engine/runtime assets, complete DLL validation, separate driver inference checks, and release/download integration. Keep CUDA 12.8 and TensorRT companion compatibility.
+- Rebrand visible app/installer identities as KG-next, separate installer identifiers and route manual update checks to this fork's releases while retaining legacy file and credential compatibility.
+- Correct Korean actions and Go terminology, choose installed Korean-capable fonts and preserve usable custom font choices.
+- Pin the requested B11 model to verified compressed/uncompressed digests, make Korean the primary README, and check catalog/documentation consistency in CI.
+
+### Inherited upstream changes
+
 - Let the Beta channel compare signed GitHub stable and test releases, select the highest valid version without downgrading or falling back to an older package, and retain a non-blocking warning when one candidate cannot be checked; preserve Stable source selection (#578).
 - Show complete suggestion rows within the existing panel, tightening safe cell padding only when it fits one more row; align settled scrolling to row boundaries and preserve browsing position through resizing without changing fonts, candidates, or board sizes (#579).
 - Keep live suggestion values and ordering current while retaining row density and browsing position; clamp the scroll range when candidates shrink or clear, including refreshes during resizing and panel collapse (#579).

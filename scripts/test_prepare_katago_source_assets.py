@@ -1,12 +1,15 @@
 import json
+import hashlib
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 import test_stage_katago_source_release as fixtures
 from katago_asset_catalog import DEFAULT_CATALOG, validate_catalog
-from prepare_katago_source_assets import DESTINATIONS, download, prepare, unpack
+from prepare_katago_source_assets import DESTINATIONS, download, inventory_digest, prepare, unpack
 
 
 class PrepareSourceAssetsTest(unittest.TestCase):
@@ -25,6 +28,75 @@ class PrepareSourceAssetsTest(unittest.TestCase):
     def prepare(self, targets):
         with mock.patch("prepare_katago_source_assets.download", side_effect=lambda c, t, p: self.archive(t)):
             prepare(self.catalog_path, targets, self.root / "cache", self.engines)
+
+    def official_cuda13_archive(self, *, missing_zlib=False, unsafe_member=None, wrong_executable=False,
+                                symlink_member=False):
+        asset = self.catalog["assets"]["windows-nvidia-cuda13"]
+        archive = self.archive("windows-nvidia-cuda13")
+        executable = b"official CUDA13 test engine"
+        with zipfile.ZipFile(archive, "w") as opened:
+            opened.writestr("katago.exe", executable)
+            opened.writestr("default_gtp.cfg", b"official gtp")
+            opened.writestr("analysis_example.cfg", b"official analysis")
+            if not missing_zlib:
+                opened.writestr("z.dll", b"official dynamic zlib")
+            if unsafe_member:
+                opened.writestr(unsafe_member, b"unsafe")
+            if symlink_member:
+                link = zipfile.ZipInfo("linked.dll")
+                link.external_attr = 0o120777 << 16
+                opened.writestr(link, b"z.dll")
+        asset.update(sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),
+                     sizeBytes=archive.stat().st_size,
+                     executableSha256="0" * 64 if wrong_executable else hashlib.sha256(executable).hexdigest())
+        with zipfile.ZipFile(archive) as opened:
+            asset["inventorySha256"] = inventory_digest([
+                dict(file=name, sizeBytes=opened.getinfo(name).file_size,
+                     sha256=hashlib.sha256(opened.read(name)).hexdigest()) for name in sorted(opened.namelist())])
+        self.catalog_path.write_text(json.dumps(self.catalog), encoding="utf-8")
+        return archive
+
+    def test_official_cuda13_is_explicit_separate_and_keeps_dynamic_zlib(self):
+        self.official_cuda13_archive()
+        self.prepare(["windows-cpu", "windows-nvidia-cuda13"])
+        optional = self.engines / "windows-x64-nvidia-cuda13"
+        self.assertEqual(b"official dynamic zlib", (optional / "z.dll").read_bytes())
+        manifest = (optional / "lizzieyzy-next-katago-engine-manifest.txt").read_text()
+        self.assertIn("Origin: official-release", manifest)
+        self.assertIn("Zlib linkage: dynamic", manifest)
+        self.assertNotIn(self.catalog["katagoSourceCommit"], manifest)
+        self.assertFalse((self.engines / "windows-x64-nvidia").exists())
+        self.assertEqual("gtp test config", (self.engines / "configs/gtp.cfg").read_text())
+
+    def test_official_cuda13_rejects_bad_executable_missing_zlib_and_unsafe_archive_before_replace(self):
+        destination = self.engines / "windows-x64-nvidia-cuda13"
+        destination.mkdir(parents=True)
+        (destination / "katago.exe").write_bytes(b"previous engine")
+        cases = ((dict(wrong_executable=True), "trusted catalog"),
+                 (dict(missing_zlib=True), "missing executable, zlib"),
+                 (dict(unsafe_member="../escaped.dll"), "unsafe relative"),
+                 (dict(unsafe_member="Z.DLL"), "duplicate file"),
+                 (dict(symlink_member=True), "cannot contain symlinks"))
+        for arguments, message in cases:
+            with self.subTest(arguments=arguments):
+                self.official_cuda13_archive(**arguments)
+                with self.assertRaisesRegex(ValueError, message):
+                    self.prepare(["windows-nvidia-cuda13"])
+                self.assertEqual(b"previous engine", (destination / "katago.exe").read_bytes())
+                self.assertFalse((self.root / "escaped.dll").exists())
+
+    def test_official_cuda13_download_uses_override_even_with_github_credentials(self):
+        archive = self.official_cuda13_archive()
+
+        def fake_download(command, **kwargs):
+            self.assertEqual("curl", command[0])
+            Path(command[command.index("--output") + 1]).write_bytes(archive.read_bytes())
+
+        with mock.patch.dict(os.environ, {"GH_TOKEN": "test fixture"}), mock.patch(
+                "prepare_katago_source_assets.subprocess.run", side_effect=fake_download) as run:
+            downloaded = download(self.catalog, "windows-nvidia-cuda13", self.root / "fresh-cache")
+        self.assertEqual(archive.read_bytes(), downloaded.read_bytes())
+        self.assertEqual(self.catalog["assets"]["windows-nvidia-cuda13"]["downloadUrl"], run.call_args.args[0][-1])
 
     def test_prepares_exact_configurations_licenses_and_source_identity(self):
         self.prepare(["windows-cpu", "windows-nvidia", "macos-arm64"])
@@ -67,6 +139,9 @@ class PrepareSourceAssetsTest(unittest.TestCase):
         official.pop("engineReleaseTag", None)
         for target, asset in official["assets"].items():
             asset["assetName"] = f"katago-{official['katagoReleaseTag']}-{target}.zip"
+            if asset.get("downloadUrl"):
+                asset["downloadUrl"] = ("https://github.com/lightvector/KataGo/releases/download/"
+                                        + official["katagoReleaseTag"] + "/" + asset["assetName"])
             asset.pop("zlibLinkage", None)
         validate_catalog(official)
         official_path = self.root / "official.json"

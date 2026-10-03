@@ -11,7 +11,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$UpgradeUuid,
 
-    [string]$AppName = "LizzieYzy Next",
+    [string]$AppName = "KG-next",
 
     [string]$MainClass = "featurecat.lizzie.Lizzie",
 

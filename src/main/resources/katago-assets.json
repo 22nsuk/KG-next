@@ -7,15 +7,15 @@
   "defaultModelId": "b11-flagship",
   "models": {
     "b11-flagship": {
-      "fileName": "kata1-tf3-b11c768-s12002M-d6304M.bin.gz",
-      "downloadUrl": "https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-tf3-b11c768-s12002M-d6304M.bin.gz",
+      "fileName": "kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz",
+      "downloadUrl": "https://media.katagotraining.org/uploaded/networks/models/kata1/kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz",
       "publishedAt": "2026-09-25",
       "displayFamily": "11B",
       "tier": "strongest",
       "architecture": "transformer",
       "minimumKataGoVersion": "1.17.0",
-      "sizeBytes": 262017809,
-      "sha256": "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e",
+      "sizeBytes": 262039869,
+      "sha256": "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871",
       "bundled": true
     },
     "b10-balanced": {
@@ -68,6 +68,20 @@
       "runtimeProfile": "cuda12.8-cudnn9",
       "zlibLinkage": "static",
       "releaseTier": "stable"
+    },
+    "windows-nvidia-cuda13": {
+      "platform": "windows-x64",
+      "backend": "cuda",
+      "origin": "official-release",
+      "downloadUrl": "https://github.com/lightvector/KataGo/releases/download/v1.18.2/katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip",
+      "assetName": "katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip",
+      "sizeBytes": 9825374,
+      "sha256": "4b26f1889bed56b91964aa565f324eeab816e77f2ee79197be04f7291a2e7514",
+      "inventorySha256": "ad5dbef89adce90a1791a31df37815d934fee2408887f1ddeba914255523923a",
+      "executableSha256": "48a5995f6feacf4b2cd92c6916e863a4948611e3149fdf91fdc0606b7c2d2993",
+      "runtimeProfile": "cuda13.2-cudnn9.24",
+      "zlibLinkage": "dynamic",
+      "releaseTier": "optional"
     },
     "windows-tensorrt": {
       "platform": "windows-x64",

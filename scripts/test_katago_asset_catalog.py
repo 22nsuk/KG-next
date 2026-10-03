@@ -16,12 +16,12 @@ class KataGoAssetCatalogTest(unittest.TestCase):
         self.assertEqual("1.18.2", catalog["katagoVersion"])
         self.assertEqual("project-source-build", catalog["origin"])
         self.assertEqual("47aadc08518b3e121f22539796c911002f699584", catalog["katagoSourceCommit"])
-        self.assertEqual(15, len(catalog["assets"]))
-        self.assertEqual("kata1-tf3-b11c768-s12002M-d6304M.bin.gz", default_model["fileName"])
-        self.assertEqual(262017809, default_model["sizeBytes"])
+        self.assertEqual(16, len(catalog["assets"]))
+        self.assertEqual("kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz", default_model["fileName"])
+        self.assertEqual(262039869, default_model["sizeBytes"])
         self.assertEqual("2026-09-25", default_model["publishedAt"])
         self.assertEqual(
-            "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e",
+            "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871",
             default_model["sha256"],
         )
         self.assertTrue(default_model["bundled"])
@@ -41,11 +41,28 @@ class KataGoAssetCatalogTest(unittest.TestCase):
 
         self.assertEqual("cuda12.8-cudnn9", completed.stdout.strip())
 
+    def test_optional_cuda13_uses_verified_official_asset(self):
+        catalog = katago_asset_catalog.load_catalog(katago_asset_catalog.DEFAULT_CATALOG)
+        asset = catalog['assets']['windows-nvidia-cuda13']
+        self.assertEqual('cuda13.2-cudnn9.24', asset['runtimeProfile'])
+        self.assertEqual('dynamic', asset['zlibLinkage'])
+        self.assertEqual('official-release', asset['origin'])
+        self.assertEqual('https://github.com/lightvector/KataGo/releases/download/v1.18.2/'
+                         + asset['assetName'], katago_asset_catalog.asset_download_url(catalog, 'windows-nvidia-cuda13'))
+        for field, value in [('downloadUrl', 'https://example.com/engine.zip'),
+                             ('inventorySha256', ''),
+                             ('origin', 'unknown'), ('zlibLinkage', 'static'),
+                             ('assetName', 'katago-v1.18.1-cuda13.zip')]:
+            candidate = json.loads(json.dumps(catalog))
+            candidate['assets']['windows-nvidia-cuda13'][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                katago_asset_catalog.validate_catalog(candidate)
+
     def test_model_urls_preserve_release_fallback(self):
         catalog = katago_asset_catalog.load_catalog(katago_asset_catalog.DEFAULT_CATALOG)
         self.assertEqual(
             "https://media.katagotraining.org/uploaded/networks/models/kata1/"
-            "kata1-tf3-b11c768-s12002M-d6304M.bin.gz",
+            "kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz",
             katago_asset_catalog.model_download_url(catalog, "b11-flagship"),
         )
         self.assertIn("/v1.17.1/", katago_asset_catalog.model_download_url(catalog, "b10-balanced"))
@@ -96,6 +113,8 @@ class KataGoAssetCatalogTest(unittest.TestCase):
         catalog.update(origin="project-source-build", engineReleaseRepository="wimi321/lizzieyzy-next",
                        engineReleaseTag="next-2026-09-17.1")
         for asset_id, asset in catalog["assets"].items():
+            if asset.get('origin') == 'official-release':
+                continue
             asset["assetName"] = f"katago-source-{catalog['katagoSourceCommit'][:12]}-{asset_id}.zip"
         return catalog
 

@@ -5,6 +5,7 @@ import static java.awt.RenderingHints.VALUE_ANTIALIAS_ON;
 import static java.awt.image.BufferedImage.TYPE_INT_ARGB;
 import static java.lang.Math.max;
 
+import featurecat.lizzie.AppLocale;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.LizzieFrame.HtmlKit;
@@ -15,6 +16,7 @@ import featurecat.lizzie.search.FunctionCatalog.ConfigSettingTarget;
 import featurecat.lizzie.search.FunctionCatalog.SettingSection;
 import featurecat.lizzie.theme.Theme;
 import featurecat.lizzie.util.DigitOnlyFilter;
+import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.NetworkProxy;
 import featurecat.lizzie.util.Utils;
 import java.awt.BasicStroke;
@@ -26,7 +28,6 @@ import java.awt.Desktop;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
-import java.awt.FontFormatException;
 import java.awt.FontMetrics;
 import java.awt.GradientPaint;
 import java.awt.Graphics;
@@ -62,6 +63,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.MissingResourceException;
 import java.util.ResourceBundle;
@@ -2645,7 +2647,7 @@ public class ConfigDialog2 extends JDialog {
     JPanel copy = new JPanel();
     copy.setOpaque(false);
     copy.setLayout(new javax.swing.BoxLayout(copy, javax.swing.BoxLayout.Y_AXIS));
-    JLabel title = new JLabel("LizzieYzy Next");
+    JLabel title = new JLabel("KG-next");
     title.putClientProperty(CLIENT_SKIP_TEXT_STYLE, Boolean.TRUE);
     title.setForeground(SETTINGS_TEXT());
     title.setFont(AppleStyleSupport.workspaceFont(Font.BOLD, 32));
@@ -2661,7 +2663,7 @@ public class ConfigDialog2 extends JDialog {
         createAboutParagraph(
             configText(
                 "ConfigDialog2.modern.about.intro",
-                "LizzieYzy Next 帮你更方便地找棋谱、看胜率、用 KataGo 复盘，让常用功能尽量开箱即用。"));
+                "KG-next 帮你更方便地找棋谱、看胜率、用 KataGo 复盘，让常用功能尽量开箱即用。"));
     copy.add(title);
     copy.add(javax.swing.Box.createVerticalStrut(4));
     copy.add(version);
@@ -2673,15 +2675,15 @@ public class ConfigDialog2 extends JDialog {
     actions.add(
         createAboutLinkButton(
             configText("ConfigDialog2.modern.about.homepage", "项目主页"),
-            "https://github.com/wimi321/lizzieyzy-next"));
+            "https://github.com/22nsuk/KG-next"));
     actions.add(
         createAboutLinkButton(
             configText("ConfigDialog2.modern.about.releases", "发布下载"),
-            "https://github.com/wimi321/lizzieyzy-next/releases"));
+            "https://github.com/22nsuk/KG-next/releases"));
     actions.add(
         createAboutLinkButton(
             configText("ConfigDialog2.modern.about.issues", "问题反馈"),
-            "https://github.com/wimi321/lizzieyzy-next/issues"));
+            "https://github.com/22nsuk/KG-next/issues"));
     hero.add(copy, BorderLayout.CENTER);
     hero.add(actions, BorderLayout.SOUTH);
     return hero;
@@ -2863,11 +2865,11 @@ public class ConfigDialog2 extends JDialog {
     actions.add(
         createAboutLinkButton(
             configText("ConfigDialog2.modern.about.reportIssue", "反馈问题"),
-            "https://github.com/wimi321/lizzieyzy-next/issues"));
+            "https://github.com/22nsuk/KG-next/issues"));
     actions.add(
         createAboutLinkButton(
             configText("ConfigDialog2.modern.about.viewUpdates", "查看更新"),
-            "https://github.com/wimi321/lizzieyzy-next/releases"));
+            "https://github.com/22nsuk/KG-next/releases"));
     row.add(copy, BorderLayout.CENTER);
     row.add(actions, BorderLayout.EAST);
     return row;
@@ -6221,38 +6223,7 @@ public class ConfigDialog2 extends JDialog {
             "scorediff-in-variation-tree-factor",
             Utils.parseTextToDouble(txtPercentScoreDiff, 50.0) / 100.0);
 
-        if (theme.fontName().equals("Lizzie默认") || theme.fontName().equals("Lizzie Default")) {
-          Lizzie.config.fontName = "SansSerif";
-        } else if (theme.fontName() != null) {
-          Lizzie.config.fontName = theme.fontName();
-        }
-
-        if (theme.uiFontName().equals("Lizzie默认") || theme.uiFontName().equals("Lizzie Default")) {
-          if (Lizzie.config.isChinese)
-            LizzieFrame.uiFont = new Font("Microsoft YaHei", Font.TRUETYPE_FONT, 12);
-          else
-            LizzieFrame.uiFont =
-                new Font(
-                    resourceBundle.getString("FontList.systemDefault"), Font.TRUETYPE_FONT, 12);
-        } else if (theme.uiFontName() != null) {
-          LizzieFrame.uiFont = new Font(theme.uiFontName(), Font.PLAIN, 12);
-        }
-
-        if (theme.winrateFontName().equals("Lizzie默认")
-            || theme.winrateFontName().equals("Lizzie Default")) {
-          try {
-            LizzieFrame.winrateFont =
-                Font.createFont(
-                    Font.TRUETYPE_FONT,
-                    Thread.currentThread()
-                        .getContextClassLoader()
-                        .getResourceAsStream("fonts/OpenSans-Semibold.ttf"));
-          } catch (IOException | FontFormatException e) {
-            e.printStackTrace();
-          }
-        } else if (theme.winrateFontName() != null) {
-          LizzieFrame.winrateFont = new Font(theme.winrateFontName(), Font.PLAIN, 12);
-        }
+        applyFontSelections(theme.uiFontName(), theme.fontName(), theme.winrateFontName());
 
         theme.config.put("background-image", txtBackgroundPath.getText().trim());
         theme.config.put("board-image", txtBoardPath.getText().trim());
@@ -6425,49 +6396,26 @@ public class ConfigDialog2 extends JDialog {
         "blunder-node-colors",
         ((BlunderNodeTableModel) tblBlunderNodes.getModel()).getColorArray());
 
-    if (!Lizzie.config.uiConfig.optString("font-name").isEmpty()) {
-      if (Lizzie.config.uiConfig.getString("font-name").equals("Lizzie默认")
-          || Lizzie.config.uiConfig.getString("font-name").equals("Lizzie Default"))
-        Lizzie.config.fontName = "SansSerif";
-      else Lizzie.config.fontName = Lizzie.config.uiConfig.optString("font-name");
-    }
-
-    if (!Lizzie.config.uiConfig.optString("ui-font-name").isEmpty()
-        && (Lizzie.config.uiConfig.getString("ui-font-name").equals("Lizzie默认")
-            || Lizzie.config.uiConfig.getString("ui-font-name").equals("Lizzie Default"))) {
-      if (Lizzie.config.isChinese)
-        LizzieFrame.uiFont = new Font("Microsoft YaHei", Font.TRUETYPE_FONT, 12);
-      else
-        LizzieFrame.uiFont =
-            new Font(resourceBundle.getString("FontList.systemDefault"), Font.TRUETYPE_FONT, 12);
-    } else if (!Lizzie.config.uiConfig.optString("ui-font-name").isEmpty()) {
-      LizzieFrame.uiFont =
-          new Font(Lizzie.config.uiConfig.optString("ui-font-name"), Font.PLAIN, 12);
-    }
+    applyFontSelections(
+        Lizzie.config.uiConfig.optString("ui-font-name"),
+        Lizzie.config.uiConfig.optString("font-name"),
+        Lizzie.config.uiConfig.optString("winrate-font-name"));
     Lizzie.config.uiConfig.put("use-scorediff-in-variation-tree", chkUseScoreDiff.isSelected());
     Lizzie.config.uiConfig.put(
         "scorediff-in-variation-tree-factor",
         Utils.parseTextToDouble(
                 txtPercentScoreDiff, Lizzie.config.scoreDiffInVariationTreeFactor * 100)
             / 100.0);
+  }
 
-    if (!Lizzie.config.uiConfig.optString("winrate-font-name").isEmpty()
-        && (Lizzie.config.uiConfig.getString("winrate-font-name").equals("Lizzie默认")
-            || Lizzie.config.uiConfig.getString("winrate-font-name").equals("Lizzie Default"))) {
-      try {
-        LizzieFrame.winrateFont =
-            Font.createFont(
-                Font.TRUETYPE_FONT,
-                Thread.currentThread()
-                    .getContextClassLoader()
-                    .getResourceAsStream("fonts/OpenSans-Semibold.ttf"));
-      } catch (IOException | FontFormatException e) {
-        e.printStackTrace();
-      }
-    } else if (!Lizzie.config.uiConfig.optString("winrate-font-name").isEmpty()) {
-      LizzieFrame.winrateFont =
-          new Font(Lizzie.config.uiConfig.optString("winrate-font-name"), Font.PLAIN, 12);
-    }
+  static void applyFontSelections(String uiName, String boardName, String winrateName) {
+    Locale locale = AppLocale.fromConfigValue(Lizzie.config.useLanguage).locale();
+    Lizzie.config.uiFontName =
+        LocaleFontSupport.resolveConfiguredFontName(uiName, locale, Config.sysDefaultFontName);
+    Lizzie.config.fontName =
+        LocaleFontSupport.resolveConfiguredFontName(boardName, locale, Config.sysDefaultFontName);
+    Lizzie.config.winrateFontName = winrateName;
+    Utils.loadFonts(Lizzie.config.uiFontName, Lizzie.config.fontName, winrateName);
   }
 
   private void finalizeEditedBlunderColors() {

@@ -171,4 +171,4 @@ for ($run = 1; $run -le $Runs; $run++) {
 }
 
 Write-Host "Benchmark complete: $OutputDirectory"
-Write-Host "Keep this directory together with LizzieYzy Next analysis-resource-diagnostics.jsonl."
+Write-Host "Keep this directory together with KG-next analysis-resource-diagnostics.jsonl."

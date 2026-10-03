@@ -98,28 +98,29 @@ jobs:
 
       - name: Audit macOS arm64 display version
         run: |
-          app_root="dist/macos/app-image/LizzieYzy Next.app/Contents/app"
+          app_root="dist/macos/app-image/KG-next.app/Contents/app"
           grep -Fqx "KataGo release: $(python3 scripts/katago_asset_catalog.py get katagoReleaseTag)" "$app_root/engines/katago/VERSION.txt"
           python3 scripts/audit_katago_source_bundle.py --target macos-arm64 --engine "$app_root/engines/katago/macos-arm64"
-          grep -qx "Model source: kata1-tf3-b11c768-s12002M-d6304M.bin.gz" "$app_root/engines/katago/VERSION.txt"
-          grep -qx "Model architecture: transformer" "$app_root/engines/katago/VERSION.txt"
-          grep -qx "Minimum KataGo version: 1.17.0" "$app_root/engines/katago/VERSION.txt"
+          default_model_id="$(python3 scripts/katago_asset_catalog.py get defaultModelId)"
+          grep -Fqx "Model source: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.fileName")" "$app_root/engines/katago/VERSION.txt"
+          grep -Fqx "Model architecture: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.architecture")" "$app_root/engines/katago/VERSION.txt"
+          grep -Fqx "Minimum KataGo version: $(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.minimumKataGoVersion")" "$app_root/engines/katago/VERSION.txt"
           test "$(shasum -a 256 "$app_root/weights/default.bin.gz" | awk '{print $1}')" = \
-            "4a6312e80faadee7b7dd28689a2e87a1efb4640c10132f16290da7a17b4c6d9e"
+            "$(python3 scripts/katago_asset_catalog.py get "models.${default_model_id}.sha256")"
           grep -q -- "java-options=-Dlizzie.next.version=$RELEASE_TAG" \
-            "dist/macos/app-image/LizzieYzy Next.app/Contents/app/LizzieYzy Next.cfg"
+            "dist/macos/app-image/KG-next.app/Contents/app/KG-next.cfg"
           grep -q -- "java-options=-Xshare:auto" \
-            "dist/macos/app-image/LizzieYzy Next.app/Contents/app/LizzieYzy Next.cfg"
+            "dist/macos/app-image/KG-next.app/Contents/app/KG-next.cfg"
           for option in \
             "--add-exports=java.desktop/sun.awt=ALL-UNNAMED" \
             "--add-exports=java.desktop/sun.lwawt=ALL-UNNAMED" \
             "--add-exports=java.desktop/sun.lwawt.macosx=ALL-UNNAMED"; do
             grep -Fqx "java-options=$option" \
-              "dist/macos/app-image/LizzieYzy Next.app/Contents/app/LizzieYzy Next.cfg"
+              "dist/macos/app-image/KG-next.app/Contents/app/KG-next.cfg"
           done
           ! grep -q -- "SharedArchiveFile" \
-            "dist/macos/app-image/LizzieYzy Next.app/Contents/app/LizzieYzy Next.cfg"
-          test ! -f "dist/macos/app-image/LizzieYzy Next.app/Contents/app/lizzieyzy-next-cds.jsa"
+            "dist/macos/app-image/KG-next.app/Contents/app/KG-next.cfg"
+          test ! -f "dist/macos/app-image/KG-next.app/Contents/app/lizzieyzy-next-cds.jsa"
           grep -q -- "Release display version: $RELEASE_TAG" \
             "dist/release-meta/${RELEASE_DATE_TAG}-mac-apple-silicon-install.txt"
           bundle_version="$(python3 scripts/macos_bundle_version.py \
@@ -127,13 +128,13 @@ jobs:
             --date-tag "$RELEASE_DATE_TAG" \
             --field build)"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
-            'dist/macos/app-image/LizzieYzy Next.app/Contents/Info.plist')" = "$bundle_version"
+            'dist/macos/app-image/KG-next.app/Contents/Info.plist')" = "$bundle_version"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
-            'dist/macos/app-image/LizzieYzy Next.app/Contents/Info.plist')" = "$bundle_version"
+            'dist/macos/app-image/KG-next.app/Contents/Info.plist')" = "$bundle_version"
           test -f "dist/release-meta/${RELEASE_DATE_TAG}-mac-apple-silicon-runtime.json"
           grep -q '"optimized": true' "dist/release-meta/${RELEASE_DATE_TAG}-mac-apple-silicon-runtime.json"
           grep -q '"created": true' "dist/release-meta/${RELEASE_DATE_TAG}-mac-apple-silicon-runtime.json"
-          jcef="dist/macos/app-image/LizzieYzy Next.app/Contents/app/jcef-bundle"
+          jcef="dist/macos/app-image/KG-next.app/Contents/app/jcef-bundle"
           test -f "$jcef/build_meta.json"
           test -f "$jcef/install.lock"
           test -f "$jcef/libjcef.dylib"

@@ -25,7 +25,7 @@ HUMAN_SL_FILE = "b18c384nbt-humanv0.bin.gz"
 HUMAN_SL_KEY = "models/humansl/" + HUMAN_SL_FILE
 HUMAN_SL_SHA256 = "637746e44f0efe00ad1245a50aa9bbf0716efe364c43965ead97bd6835d84ab5"
 HUMAN_SL_ORIGIN = "https://media.katagotraining.org/uploaded/networks/models_extra/" + HUMAN_SL_FILE
-DEFAULT_REPOSITORY = "wimi321/lizzieyzy-next"
+DEFAULT_REPOSITORY = "22nsuk/KG-next"
 DEFAULT_BUCKET = "lizzieyzy-next-downloads"
 DEFAULT_PUBLIC_BASE = "https://download.goagent.top"
 DEFAULT_WEBSITE_DOWNLOAD_URL = "https://goagent.top/download/"
@@ -47,6 +47,9 @@ WINDOWS_PORTABLE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})-windows64\."
     r"(?P<flavor>opencl|with-katago|nvidia|without\.engine)"
     r"\.portable\.zip$"
+)
+WINDOWS_CUDA13_PORTABLE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})-windows64\.nvidia\.cuda13\.portable\.zip$"
 )
 WINDOWS_CORE = re.compile(
     r"^(?P<date>\d{4}-\d{2}-\d{2})-windows64\.core-update\.zip$"
@@ -132,12 +135,17 @@ def select_r2_assets(
         raise ReleaseError("Release tag is missing")
     selected: list[Asset] = []
     counts = {"windows": 0, "core": 0, "amd_rocm": 0, "mac": 0, "tensorrt": 0}
+    cuda13_count = 0
     for raw in release_assets(release):
         name = str(raw.get("name") or "")
         match = WINDOWS_PORTABLE.fullmatch(name)
         category = ""
         kwargs: dict[str, str] = {}
-        if match:
+        if WINDOWS_CUDA13_PORTABLE.fullmatch(name):
+            category = "windows-portable"
+            kwargs = {"flavor": "nvidia-cuda13", "arch": "x64"}
+            cuda13_count += 1
+        elif match:
             category = "windows-portable"
             kwargs = {"flavor": match.group("flavor"), "arch": "x64"}
             counts["windows"] += 1
@@ -178,6 +186,8 @@ def select_r2_assets(
     expected = {"windows": 4, "core": 1, "amd_rocm": 1, "mac": 2, "tensorrt": 5}
     if counts != expected:
         raise ReleaseError(f"R2 asset whitelist mismatch: expected {expected}, found {counts}")
+    if cuda13_count > 1:
+        raise ReleaseError("R2 asset whitelist must contain at most one optional CUDA13 package")
     names = [asset.name for asset in selected]
     if len(names) != len(set(names)):
         raise ReleaseError("R2 asset whitelist contains duplicate names")
@@ -380,6 +390,11 @@ def catalog_label(asset: Asset) -> tuple[str, str, bool]:
         "opencl": ("Windows OpenCL", "Windows OpenCL", False),
         "with-katago": ("Windows CPU / 通用版", "Windows CPU / universal", False),
         "nvidia": ("Windows NVIDIA", "Windows NVIDIA", False),
+        "nvidia-cuda13": (
+            "Windows NVIDIA CUDA 13.2 / cuDNN 9.24 可选版",
+            "Optional Windows NVIDIA CUDA 13.2 / cuDNN 9.24",
+            True,
+        ),
         "without.engine": ("Windows 无引擎版", "Windows without engine", False),
         "nvidia-tensorrt": (
             "RTX 20 / GTX 16 可选 TensorRT",
@@ -474,7 +489,7 @@ def render_index(catalog: dict[str, Any], *, maintenance: bool = False) -> str:
             "clock-history",
         )
     }
-    history_url = "https://github.com/wimi321/lizzieyzy-next/releases"
+    history_url = f"https://github.com/{DEFAULT_REPOSITORY}/releases"
     help_url = str(catalog.get("releaseUrl") or history_url)
 
     def decorative_icon(name: str, class_name: str = "row-icon") -> str:
@@ -547,6 +562,21 @@ def render_index(catalog: dict[str, Any], *, maintenance: bool = False) -> str:
             "without.engine",
         )
     }
+    cuda13_entries = [
+        entry for entry in assets
+        if entry.get("category") == "windows-portable" and entry.get("flavor") == "nvidia-cuda13"
+    ]
+    if len(cuda13_entries) > 1:
+        raise ReleaseError("Download page expected at most one optional CUDA13 entry")
+    cuda13_row = (
+        download_row(
+            cuda13_entries[0],
+            "NVIDIA CUDA 13.2 可选版",
+            "cuDNN 9.24 · 需要支持 CUDA 13 的 NVIDIA 驱动",
+            "gpu-card",
+        )
+        if cuda13_entries else ""
+    )
     mac_arm = find_entry("macos-dmg", arch="arm64")
     mac_intel = find_entry("macos-dmg", arch="x64")
     core = find_entry("windows-core-update")
@@ -571,6 +601,7 @@ def render_index(catalog: dict[str, Any], *, maintenance: bool = False) -> str:
                 "gpu-card",
                 recommended=True,
             ),
+            cuda13_row,
             (
                 '<li class="download-row trt-row">'
                 '<div class="download-main">'
@@ -631,7 +662,7 @@ def render_index(catalog: dict[str, Any], *, maintenance: bool = False) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>LizzieYzy Next 下载</title>
+  <title>KG-next 下载</title>
   <style>
     :root {{ --ink:#153f37; --muted:#68746f; --paper:#fbf8f1; --surface:#fffdf9e8; --line:#ddd5c5; --gold:#d66c1b; --green:#165c4c; --green-hover:#10493d; --focus:#d98a26; }}
     * {{ box-sizing:border-box; }}
@@ -710,8 +741,8 @@ def render_index(catalog: dict[str, Any], *, maintenance: bool = False) -> str:
 </head>
 <body><main>
   <header class="masthead">
-    <img class="app-icon" src="{app_icon}" width="82" height="82" alt="LizzieYzy Next 图标">
-    <div><p class="brand">LizzieYzy Next</p><h1>选择你的版本</h1><p class="subtitle">先选电脑，再下载与你硬件匹配的版本</p></div>
+    <img class="app-icon" src="{app_icon}" width="82" height="82" alt="KG-next 图标">
+    <div><p class="brand">KG-next</p><h1>选择你的版本</h1><p class="subtitle">先选电脑，再下载与你硬件匹配的版本</p></div>
   </header>
   {maintenance_notice}
   <div class="platform-grid">
@@ -755,7 +786,7 @@ def render_redirect_index(
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta http-equiv="refresh" content="0; url={escaped}">
   <link rel="canonical" href="{escaped}">
-  <title>正在前往 LizzieYzy Next 官网下载</title>
+  <title>正在前往 KG-next 官网下载</title>
 </head>
 <body>
   <p><a href="{escaped}">前往官网下载页面</a></p>
@@ -851,7 +882,7 @@ def pointer_release_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "tag_name": TEST_CHANNEL_POINTER_TAG,
-        "name": "LizzieYzy Next test channel pointer",
+        "name": "KG-next test channel pointer",
         "body": (
             "Signed test-channel pointer. This release is not a packaged version, "
             "must stay a pre-release, and must never be made latest."

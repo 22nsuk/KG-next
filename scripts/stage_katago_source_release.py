@@ -215,6 +215,9 @@ def stage(packages: Path, acceptance: Path, base_catalog: Path, output: Path, ta
         staging = Path(temporary)
         catalog["assets"] = {}
         baseline_assets = load_catalog(base_catalog)["assets"]
+        # Official optional engines are independently pinned, not rebuilt by this source matrix.
+        catalog["assets"].update({key: copy.deepcopy(value) for key, value in baseline_assets.items()
+                                  if value.get("origin") == "official-release"})
         for result in accepted:
             target = result["target"]
             receipt, files, receipt_name = verified[target]

@@ -11,7 +11,7 @@ APP_VERSION="${2:-1.0.0}"
 JAR_PATH="${3:-target/lizzie-yzy2.5.3-shaded.jar}"
 APP_DISPLAY_VERSION="${LIZZIE_NEXT_VERSION:-${4:-next-dev}}"
 RELEASE_PRERELEASE="${LIZZIE_RELEASE_PRERELEASE:-false}"
-WINDOWS_UPGRADE_UUID="${WINDOWS_UPGRADE_UUID:-c2ef73ec-f99a-4f3d-b950-f52c0186122a}"
+WINDOWS_UPGRADE_UUID="${WINDOWS_UPGRADE_UUID:-c2c4503c-1b53-5c0e-8759-40ad7d90d098}"
 WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE="${WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE:-1.0}"
 WINDOWS_JAVA_MAX_RAM_PERCENTAGE="${WINDOWS_JAVA_MAX_RAM_PERCENTAGE:-50.0}"
 
@@ -26,17 +26,19 @@ if [[ ! -f "$JAR_PATH" ]]; then
   exit 1
 fi
 
-APP_NAME="LizzieYzy Next"
+APP_NAME="KG-next"
 APP_DESCRIPTION="Maintained LizzieYzy build with Fox nickname fetch and easier KataGo setup"
-OPENCL_APP_NAME="LizzieYzy Next OpenCL"
+OPENCL_APP_NAME="KG-next OpenCL"
 OPENCL_APP_DESCRIPTION="Maintained LizzieYzy build with Fox nickname fetch and bundled OpenCL KataGo"
-NVIDIA_APP_NAME="LizzieYzy Next NVIDIA"
+NVIDIA_APP_NAME="KG-next NVIDIA"
 NVIDIA_APP_DESCRIPTION="Maintained LizzieYzy build with bundled CUDA 12.8 KataGo for RTX 20/30/40/50"
-NVIDIA_TRT_APP_NAME="LizzieYzy Next NVIDIA TensorRT"
+NVIDIA_CUDA13_APP_NAME="KG-next NVIDIA CUDA13"
+NVIDIA_CUDA13_APP_DESCRIPTION="Optional KataGo build with CUDA 13.2 and cuDNN 9.24"
+NVIDIA_TRT_APP_NAME="KG-next NVIDIA TensorRT"
 NVIDIA_TRT_APP_DESCRIPTION="Optional TensorRT KataGo build for NVIDIA RTX 30 series and earlier"
-DIRECTML_APP_NAME="LizzieYzy Next DirectML Experimental"
+DIRECTML_APP_NAME="KG-next DirectML Experimental"
 DIRECTML_APP_DESCRIPTION="Experimental self-contained DirectML KataGo build for DirectX 12 GPUs"
-OPENVINO_APP_NAME="LizzieYzy Next OpenVINO Experimental"
+OPENVINO_APP_NAME="KG-next OpenVINO Experimental"
 OPENVINO_APP_DESCRIPTION="Experimental self-contained OpenVINO KataGo build for Intel GPU and NPU"
 MAIN_JAR="$(basename "$JAR_PATH")"
 ICON_PATH="$ROOT_DIR/packaging/icons/app-icon.ico"
@@ -44,6 +46,7 @@ ARCH_TAG="windows64"
 STANDARD_ENGINE_PLATFORM_DIR="windows-x64"
 OPENCL_ENGINE_PLATFORM_DIR="${WINDOWS_OPENCL_ENGINE_PLATFORM_DIR:-windows-x64-opencl}"
 NVIDIA_ENGINE_PLATFORM_DIR="${WINDOWS_NVIDIA_ENGINE_PLATFORM_DIR:-windows-x64-nvidia}"
+NVIDIA_CUDA13_ENGINE_PLATFORM_DIR="windows-x64-nvidia-cuda13"
 NVIDIA_TRT_ENGINE_PLATFORM_DIR="${WINDOWS_NVIDIA_TRT_ENGINE_PLATFORM_DIR:-windows-x64-nvidia-tensorrt}"
 DIRECTML_ENGINE_PLATFORM_DIR="windows-x64-directml"
 OPENVINO_ENGINE_PLATFORM_DIR="windows-x64-openvino"
@@ -53,17 +56,19 @@ ROCM_GFX1151_ENGINE_PLATFORM_DIR="windows-x64-rocm-gfx1151"
 ROCM_GFX120X_ENGINE_PLATFORM_DIR="windows-x64-rocm-gfx120x"
 OPENCL_ARCH_TAG="${ARCH_TAG}.opencl"
 NVIDIA_ARCH_TAG="${ARCH_TAG}.nvidia"
+NVIDIA_CUDA13_ARCH_TAG="${ARCH_TAG}.nvidia.cuda13"
 NVIDIA_TRT_ARCH_TAG="${ARCH_TAG}.nvidia.tensorrt"
 MAX_RELEASE_ASSET_BYTES="${WINDOWS_RELEASE_ASSET_MAX_BYTES:-2000000000}"
 TENSORRT_SPLIT_VOLUME_SIZE="${WINDOWS_TENSORRT_SPLIT_VOLUME_SIZE:-1800m}"
 DIST_DIR="$ROOT_DIR/dist/windows"
 RELEASE_DIR="$ROOT_DIR/dist/release"
 META_DIR="$ROOT_DIR/dist/release-meta"
-WINDOWS_UPGRADE_UUID_NVIDIA="${WINDOWS_UPGRADE_UUID_NVIDIA:-14a4599e-6d5b-4b86-9895-7748266f0c25}"
-WINDOWS_UPGRADE_UUID_OPENCL="${WINDOWS_UPGRADE_UUID_OPENCL:-0ec8b17f-06b0-4f6a-9246-cf61953743cf}"
+WINDOWS_UPGRADE_UUID_NVIDIA="${WINDOWS_UPGRADE_UUID_NVIDIA:-2b8b0c3a-cb12-5b5e-bac3-fa1b207ec8b3}"
+WINDOWS_UPGRADE_UUID_OPENCL="${WINDOWS_UPGRADE_UUID_OPENCL:-8219862a-9ac3-5f84-9203-db6d653f5543}"
 ENGINE_BACKEND_MARKER_NAME="lizzieyzy-next-engine-backend.txt"
 NVIDIA_RUNTIME_PREPARE_SCRIPT="$ROOT_DIR/scripts/prepare_bundled_nvidia_runtime.py"
 NVIDIA_RUNTIME_STAGE_DIR="$DIST_DIR/nvidia-runtime/cuda12.8-cudnn9"
+NVIDIA_CUDA13_RUNTIME_STAGE_DIR="$DIST_DIR/nvidia-runtime/cuda13.2-cudnn9.24"
 NVIDIA_TRT_RUNTIME_STAGE_DIR="$DIST_DIR/nvidia-runtime/cuda12.8-cudnn9-tensorrt"
 CUDA_12_8_NVRTC_VERSION="12.8.61"
 CUDA_12_8_NVRTC_SHA256="e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d"
@@ -472,6 +477,11 @@ copy_bundle_engine_assets() {
   mkdir -p "$input_dir/engines/katago/$engine_target_dir" "$input_dir/weights"
   cp -R "$ROOT_DIR/engines/katago/$engine_source_dir/." \
     "$input_dir/engines/katago/$engine_target_dir/"
+  if [[ "$engine_source_dir" == "windows-x64-nvidia-cuda13" ]]; then
+    resolve_python_bin
+    "$PYTHON_BIN" "$ROOT_DIR/scripts/audit_katago_source_bundle.py" \
+      --target windows-nvidia-cuda13 --engine "$input_dir/engines/katago/$engine_target_dir" >&2 || return $?
+  fi
   if [[ -d "$ROOT_DIR/engines/katago/configs" ]]; then
     cp -R "$ROOT_DIR/engines/katago/configs" "$input_dir/engines/katago/"
   fi
@@ -483,29 +493,38 @@ copy_bundle_engine_assets() {
       >"$input_dir/engines/katago/$engine_target_dir/$ENGINE_BACKEND_MARKER_NAME"
   fi
   if [[ "$engine_backend" == *tensorrt* ]]; then
-    write_tensorrt_version_file "$input_dir" "$engine_target_dir"
+    write_tensorrt_version_file "$input_dir" "$engine_target_dir" || return $?
+  fi
+  if [[ "$engine_source_dir" == "windows-x64-nvidia-cuda13" ]]; then
+    write_engine_variant_version_file "$input_dir" "$engine_target_dir" "Windows NVIDIA CUDA13 bundle" || return $?
   fi
   cp "$ROOT_DIR/weights/default.bin.gz" "$input_dir/weights/default.bin.gz"
 }
 
 write_tensorrt_version_file() {
+  write_engine_variant_version_file "$1" "$2" "Windows TensorRT bundle"
+}
+
+write_engine_variant_version_file() {
   local input_dir="$1"
   local engine_target_dir="$2"
+  local bundle_label="$3"
   local version_file="$input_dir/engines/katago/VERSION.txt"
   local engine_manifest="$input_dir/engines/katago/$engine_target_dir/$TENSORRT_ENGINE_MANIFEST_NAME"
 
   if [[ ! -f "$engine_manifest" ]]; then
-    echo "TensorRT KataGo engine manifest not found: $engine_manifest"
+    echo "KataGo engine manifest not found: $engine_manifest"
     exit 1
   fi
   resolve_python_bin
-  "$PYTHON_BIN" - "$version_file" "$engine_manifest" <<'PY'
+  "$PYTHON_BIN" - "$version_file" "$engine_manifest" "$bundle_label" <<'PY'
 from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
 version_path = Path(sys.argv[1])
 engine_manifest_path = Path(sys.argv[2])
+bundle_label = sys.argv[3]
 
 def parse_metadata(path):
     result = {}
@@ -522,11 +541,11 @@ engine = parse_metadata(engine_manifest_path)
 release = engine.get("KataGo release", "").strip()
 asset = engine.get("Asset", "").strip()
 if not release or not asset:
-    raise SystemExit(f"Incomplete TensorRT engine manifest: {engine_manifest_path}")
+    raise SystemExit(f"Incomplete KataGo engine manifest: {engine_manifest_path}")
 
 lines = [
     f"KataGo release: {release}",
-    f"Windows TensorRT bundle: {asset}",
+    f"{bundle_label}: {asset}",
 ]
 for key in (
     "Model source",
@@ -555,6 +574,8 @@ prepare_bundled_nvidia_runtime_assets() {
   "$PYTHON_BIN" "$NVIDIA_RUNTIME_PREPARE_SCRIPT" \
     --profile "$runtime_profile" \
     --output-dir "$runtime_stage_dir"
+  "$PYTHON_BIN" "$NVIDIA_RUNTIME_PREPARE_SCRIPT" \
+    --profile "$runtime_profile" --verify-output --output-dir "$runtime_stage_dir"
 
   local runtime_manifest="$runtime_stage_dir/lizzieyzy-next-nvidia-runtime-manifest.txt"
   if [[ "$runtime_profile" == cuda12.8-* ]]; then
@@ -594,6 +615,11 @@ copy_bundle_nvidia_runtime_assets() {
     mkdir -p "$engine_dir/licenses/nvidia-runtime"
     cp -R "$runtime_stage_dir/licenses/." "$engine_dir/licenses/nvidia-runtime/"
   fi
+  local runtime_profile
+  runtime_profile="$(sed -n 's/^Profile: //p' "$runtime_stage_dir/lizzieyzy-next-nvidia-runtime-manifest.txt")"
+  resolve_python_bin
+  "$PYTHON_BIN" "$NVIDIA_RUNTIME_PREPARE_SCRIPT" \
+    --profile "$runtime_profile" --verify-output --output-dir "$engine_dir" >&2 || return $?
 }
 
 prepare_bundled_tensorrt_engine_assets() {
@@ -797,9 +823,9 @@ build_app_image() {
   rm -rf "$input_dir" "$app_image_dir"
   copy_common_inputs "$input_dir"
   if [[ "$include_katago" == "true" ]]; then
-    copy_bundle_engine_assets "$input_dir" "$engine_source_dir" "$engine_target_dir" "$engine_backend"
+    copy_bundle_engine_assets "$input_dir" "$engine_source_dir" "$engine_target_dir" "$engine_backend" || return $?
     if [[ "$engine_backend" == nvidia* ]]; then
-      copy_bundle_nvidia_runtime_assets "$input_dir" "$engine_target_dir" "$runtime_stage_dir"
+      copy_bundle_nvidia_runtime_assets "$input_dir" "$engine_target_dir" "$runtime_stage_dir" || return $?
     fi
   fi
   write_installed_update_manifest "$input_dir" "$flavor"
@@ -817,7 +843,7 @@ build_app_image() {
     --main-class featurecat.lizzie.Lizzie \
     --dest "$app_image_dir" \
     --app-version "$WINDOWS_APP_VERSION" \
-    --vendor "wimi321" \
+    --vendor "22nsuk" \
     --description "$app_description" \
     --icon "$ICON_PATH" \
     "${runtime_args[@]}" \
@@ -867,9 +893,9 @@ build_installer() {
   rm -rf "$input_dir" "$installer_dir"
   copy_common_inputs "$input_dir"
   if [[ "$include_katago" == "true" ]]; then
-    copy_bundle_engine_assets "$input_dir" "$engine_source_dir" "$engine_target_dir" "$engine_backend"
+    copy_bundle_engine_assets "$input_dir" "$engine_source_dir" "$engine_target_dir" "$engine_backend" || return $?
     if [[ "$engine_backend" == nvidia* ]]; then
-      copy_bundle_nvidia_runtime_assets "$input_dir" "$engine_target_dir" "$runtime_stage_dir"
+      copy_bundle_nvidia_runtime_assets "$input_dir" "$engine_target_dir" "$runtime_stage_dir" || return $?
     fi
   fi
   write_installed_update_manifest "$input_dir" "$flavor"
@@ -887,7 +913,7 @@ build_installer() {
     --main-class featurecat.lizzie.Lizzie \
     --dest "$installer_dir" \
     --app-version "$WINDOWS_APP_VERSION" \
-    --vendor "wimi321" \
+    --vendor "22nsuk" \
     --description "$app_description" \
     --icon "$ICON_PATH" \
     --win-dir-chooser \
@@ -910,6 +936,7 @@ write_windows_install_note() {
   local has_nvidia_katago="$3"
   local has_no_engine_installer="$4"
   local has_tensorrt_split="$5"
+  local has_nvidia_cuda13="${6:-false}"
   local note_file="$META_DIR/${DATE_TAG}-${ARCH_TAG}-install.txt"
 
   cat >"$note_file" <<EOF
@@ -920,7 +947,7 @@ Release display version: $APP_DISPLAY_VERSION
 How to pick the right file:
 - ${DATE_TAG}-${ARCH_TAG}.core-update.zip
   Lightweight update for existing Windows portable users. Use it only after you already have a full portable folder.
-  Close the app, extract this zip into the folder that contains LizzieYzy Next*.exe and app/, and allow overwriting app/${MAIN_JAR}.
+  Close the app, extract this zip into the folder that contains KG-next*.exe and app/, and allow overwriting app/${MAIN_JAR}.
   It updates only the application core; engines, weights, Java runtime, JCEF, readboard, TensorRT, settings, saves, and user-data stay in place.
   New users should still download one of the full portable packages below first.
 EOF
@@ -960,6 +987,14 @@ EOF
   RTX 40/50 users should use the normal NVIDIA/CUDA package. GTX 16 users may test TensorRT, while GTX 10 is unsupported.
 - ${DATE_TAG}-${NVIDIA_TRT_ARCH_TAG}.portable.README.txt
   Read this first before using the RTX 30 series and earlier optional TensorRT split package.
+EOF
+  fi
+
+  if [[ "$has_nvidia_cuda13" == "true" ]]; then
+    cat >>"$note_file" <<EOF
+- ${DATE_TAG}-${NVIDIA_CUDA13_ARCH_TAG}.portable.zip
+  Optional CUDA 13.2 / cuDNN 9.24 portable build with its own matching runtime.
+  Unzip it and open ${NVIDIA_CUDA13_APP_NAME}.exe on a GPU and driver supported by CUDA 13.2.
 EOF
   fi
 
@@ -1056,7 +1091,7 @@ create_portable_zip() {
   native_zip="$(to_native_path "$portable_zip")"
   log_step "Creating Windows portable zip: $(basename "$portable_zip")"
   printf '%s\n' \
-    "LizzieYzy Next portable package. Keep this file so settings, logs, downloaded weights, and TensorRT stay inside this folder." \
+    "KG-next portable package. Keep this file so settings, logs, downloaded weights, and TensorRT stay inside this folder." \
     >"$app_image_root/.lizzie-portable"
   mkdir -p "$app_image_root/user-data"
   powershell.exe -NoProfile -Command \
@@ -1192,7 +1227,7 @@ create_tensorrt_split_package() {
   native_archive="$(to_native_path "$archive_base.7z")"
 
   printf '%s\n' \
-    "LizzieYzy Next optional TensorRT split package for RTX 30 series and earlier. Keep this file so settings, logs, downloaded weights, and TensorRT stay inside this folder." \
+    "KG-next optional TensorRT split package for RTX 30 series and earlier. Keep this file so settings, logs, downloaded weights, and TensorRT stay inside this folder." \
     >"$app_image_root/.lizzie-portable"
   mkdir -p "$app_image_root/user-data"
 
@@ -1242,7 +1277,7 @@ create_core_update_asset() {
     return 1
   fi
   cat >"$core_dir/README.txt" <<EOF
-LizzieYzy Next lightweight core update
+KG-next lightweight core update
 =====================================
 
 Release: $APP_DISPLAY_VERSION
@@ -1250,20 +1285,20 @@ Date: $DATE_TAG
 
 用途：
 - 已经在使用 Windows 免安装版的老用户，日常升级优先下载这个小更新包。
-- 关闭 LizzieYzy Next 后，把这个 zip 解压到旧的免安装目录里覆盖。
-- 目标目录应该是包含 "LizzieYzy Next*.exe" 和 "app" 文件夹的目录。
-- 解压时允许覆盖 app/$MAIN_JAR 和 app/LizzieYzy Next*.cfg。
+- 关闭 KG-next 后，把这个 zip 解压到旧的免安装目录里覆盖。
+- 目标目录应该是包含 "KG-next*.exe" 和 "app" 文件夹的目录。
+- 解压时允许覆盖 app/$MAIN_JAR 和 app/KG-next*.cfg。
 
-这个包只更新 LizzieYzy Next 主程序核心和启动器配置。
+这个包只更新 KG-next 主程序核心和启动器配置。
 启动器配置用于同步标题栏版本号和必要 JVM 参数；不会改变你的引擎、权重或用户数据。
 KataGo 引擎、权重、JCEF、readboard、Java runtime、设置、棋谱、TensorRT 和 user-data 都会保留。
 只有未来更新 manifest 明确列出资源组件时，才需要下载对应的大资源更新。
 
 Manual update:
 - Existing Windows portable users can use this small package for regular updates.
-- Close LizzieYzy Next, then extract this zip into the existing portable app folder.
-- The target folder should contain "LizzieYzy Next*.exe" and an "app" folder.
-- Allow overwriting app/$MAIN_JAR and app/LizzieYzy Next*.cfg.
+- Close KG-next, then extract this zip into the existing portable app folder.
+- The target folder should contain "KG-next*.exe" and an "app" folder.
+- Allow overwriting app/$MAIN_JAR and app/KG-next*.cfg.
 
 This package updates the application core and launcher configuration only.
 The launcher configuration keeps the title-bar version and required JVM options in sync.
@@ -1325,7 +1360,7 @@ payload = {
     "kind": "windows-core-update",
     "releaseTag": release_tag,
     "dateTag": date_tag,
-    "manualOverlayTarget": "folder containing LizzieYzy Next*.exe and app/",
+    "manualOverlayTarget": "folder containing KG-next*.exe and app/",
     "preserves": [
         "user-data/",
         "app/weights/",
@@ -1502,6 +1537,7 @@ build_no_engine_installer="true"
 has_with_katago_assets="false"
 has_opencl_katago_assets="false"
 has_nvidia_katago_assets="false"
+has_nvidia_cuda13_katago_assets="false"
 has_tensorrt_split_assets="false"
 
 prepare_bundled_readboard_assets
@@ -1558,6 +1594,20 @@ else
   has_nvidia_katago_assets="false"
 fi
 
+if [[ "${WINDOWS_BUILD_CUDA13:-false}" == "true" ]]; then
+  if ! has_bundled_katago "$NVIDIA_CUDA13_ENGINE_PLATFORM_DIR"; then
+    echo "CUDA13 packaging requires PREPARE_WINDOWS_CUDA13=true prepared engine assets" >&2
+    exit 1
+  fi
+  has_nvidia_cuda13_katago_assets="true"
+  prepare_bundled_nvidia_runtime_assets "cuda13.2-cudnn9.24" "$NVIDIA_CUDA13_RUNTIME_STAGE_DIR"
+  build_release_variant \
+    "nvidia.cuda13" "true" "$NVIDIA_CUDA13_APP_NAME" "$NVIDIA_CUDA13_APP_DESCRIPTION" \
+    "$NVIDIA_CUDA13_ENGINE_PLATFORM_DIR" "$STANDARD_ENGINE_PLATFORM_DIR" "nvidia" \
+    "$NVIDIA_CUDA13_ARCH_TAG" "$WINDOWS_UPGRADE_UUID_NVIDIA" \
+    "$NVIDIA_CUDA13_RUNTIME_STAGE_DIR" "false"
+fi
+
 if [[ "${WINDOWS_BUILD_EXPERIMENTAL_PORTABLES:-true}" == "true" ]]; then
   if has_bundled_katago "$DIRECTML_ENGINE_PLATFORM_DIR"; then
     build_release_variant \
@@ -1580,7 +1630,7 @@ if [[ "${WINDOWS_BUILD_EXPERIMENTAL_PORTABLES:-true}" == "true" ]]; then
     if has_bundled_katago "$rocm_engine_dir"; then
       build_release_variant \
         "experimental.rocm.$rocm_family" "true" \
-        "LizzieYzy Next ROCm $rocm_family Experimental" \
+        "KG-next ROCm $rocm_family Experimental" \
         "Experimental self-contained ROCm KataGo build for $rocm_hardware" \
         "$rocm_engine_dir" "$STANDARD_ENGINE_PLATFORM_DIR" "rocm-$rocm_family" \
         "${ARCH_TAG}.experimental.rocm.$rocm_family" "$WINDOWS_UPGRADE_UUID" "" "false"
@@ -1622,7 +1672,8 @@ write_windows_install_note \
   "$has_opencl_katago_assets" \
   "$has_nvidia_katago_assets" \
   "$build_no_engine_installer" \
-  "$has_tensorrt_split_assets"
+  "$has_tensorrt_split_assets" \
+  "$has_nvidia_cuda13_katago_assets"
 write_sha256_file "$checksum_file" "${artifacts[@]}" "$install_note"
 
 resolve_python_bin

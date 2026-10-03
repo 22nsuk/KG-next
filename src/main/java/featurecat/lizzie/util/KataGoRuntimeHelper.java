@@ -100,6 +100,7 @@ public final class KataGoRuntimeHelper {
   private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
   private static final String NVIDIA_ENGINE_DIR = "windows-x64-nvidia";
   private static final String NVIDIA50_CUDA_ENGINE_DIR = "windows-x64-nvidia50-cuda";
+  private static final String NVIDIA_CUDA13_ENGINE_DIR = "windows-x64-nvidia-cuda13";
   private static final String NVIDIA_TRT_ENGINE_DIR = "windows-x64-nvidia-tensorrt";
   private static final String NVIDIA50_TRT_ENGINE_DIR = "windows-x64-nvidia50-trt";
   private static final String NVIDIA_BACKEND = "nvidia";
@@ -177,6 +178,12 @@ public final class KataGoRuntimeHelper {
   static final String CUDA_12_8_NVRTC_VERSION = "12.8.61";
   static final String CUDA_12_8_NVRTC_SHA256 =
       "e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d";
+  static final String CUDA_13_2_NVRTC_VERSION = "13.2.86";
+  static final String CUDA_13_2_NVRTC_SHA256 =
+      "c8d4254c51bfa3fa982bd40bf36de9800d4c65211945e8393fbf4c310ef9232a";
+  static final String CUDNN_9_24_VERSION = "9.24.0.43";
+  static final String CUDNN_9_24_CUDA13_SHA256 =
+      "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06";
   private static final long CUDA_12_8_CUDART_SIZE_BYTES = 3034859L;
   private static final long CUDA_12_8_CUBLAS_SIZE_BYTES = 574528660L;
   private static final long CUDA_12_8_NVJITLINK_SIZE_BYTES = 257312022L;
@@ -246,6 +253,25 @@ public final class KataGoRuntimeHelper {
           Arrays.asList("nvinfer_10.dll", "nvinfer*.dll"),
           Arrays.asList("nvinfer_plugin_10.dll", "nvinfer_plugin*.dll"),
           Arrays.asList("zlibwapi.dll", "libz.dll", "z.dll"));
+  private static final List<List<String>> REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS =
+      Arrays.asList(
+          Arrays.asList("cudart64_13.dll"),
+          Arrays.asList("cublas64_13.dll"),
+          Arrays.asList("cublasLt64_13.dll"),
+          Arrays.asList("nvJitLink_130_0.dll"),
+          Arrays.asList("nvrtc64_130_0.dll"),
+          Arrays.asList("nvrtc-builtins64_132.dll"),
+          Arrays.asList("cudnn64_9.dll"),
+          Arrays.asList("cudnn_adv64_9.dll"),
+          Arrays.asList("cudnn_cnn64_9.dll"),
+          Arrays.asList("cudnn_engines_precompiled64_9.dll"),
+          Arrays.asList("cudnn_engines_runtime_compiled64_9.dll"),
+          Arrays.asList("cudnn_engines_tensor_ir64_9.dll"),
+          Arrays.asList("cudnn_ext64_9.dll"),
+          Arrays.asList("cudnn_graph64_9.dll"),
+          Arrays.asList("cudnn_heuristic64_9.dll"),
+          Arrays.asList("cudnn_ops64_9.dll"),
+          Arrays.asList("zlibwapi.dll", "libz.dll", "z.dll"));
   private static final List<List<String>>
       REQUIRED_NVIDIA_CUDA12_1_CUDNN8_RUNTIME_DLL_GROUPS_STATIC_ZLIB =
           REQUIRED_NVIDIA_CUDA12_1_CUDNN8_RUNTIME_DLL_GROUPS.subList(
@@ -257,6 +283,9 @@ public final class KataGoRuntimeHelper {
   private static final List<List<String>> REQUIRED_NVIDIA_CUDA12_8_RUNTIME_DLL_GROUPS_STATIC_ZLIB =
       REQUIRED_NVIDIA_CUDA12_8_RUNTIME_DLL_GROUPS.subList(
           0, REQUIRED_NVIDIA_CUDA12_8_RUNTIME_DLL_GROUPS.size() - 1);
+  private static final List<List<String>> REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS_STATIC_ZLIB =
+      REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS.subList(
+          0, REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS.size() - 1);
   private static final List<List<String>> REQUIRED_NVIDIA_TRT10_9_RUNTIME_DLL_GROUPS_STATIC_ZLIB =
       REQUIRED_NVIDIA_TRT10_9_RUNTIME_DLL_GROUPS.subList(
           0, REQUIRED_NVIDIA_TRT10_9_RUNTIME_DLL_GROUPS.size() - 1);
@@ -914,7 +943,7 @@ public final class KataGoRuntimeHelper {
               "<html>"
                   + resource(
                           "AutoSetup.nvidiaBootstrapDescription",
-                          "LizzieYzy Next is checking the bundled NVIDIA files in your package."
+                          "KG-next is checking the bundled NVIDIA files in your package."
                               + " If files are missing, reinstall the NVIDIA package.")
                       .replace("\n", "<br>")
                   + "</html>");
@@ -1064,7 +1093,8 @@ public final class KataGoRuntimeHelper {
     if (normalizedLower.contains("/" + NVIDIA50_CUDA_ENGINE_DIR + "/")) {
       return NVIDIA50_CUDA_BACKEND;
     }
-    if (normalizedLower.contains("/" + NVIDIA_ENGINE_DIR + "/")) {
+    if (normalizedLower.contains("/" + NVIDIA_ENGINE_DIR + "/")
+        || normalizedLower.contains("/" + NVIDIA_CUDA13_ENGINE_DIR + "/")) {
       return NVIDIA_BACKEND;
     }
     String backendLower = readEngineBackendMarker(enginePath);
@@ -1139,7 +1169,7 @@ public final class KataGoRuntimeHelper {
     if (!status.ready) {
       throw new IOException(buildMissingRuntimeMessage(status));
     }
-    ensureCuda12_8DriverCompatibility(enginePath, launchCommand);
+    ensureCudaDriverCompatibility(enginePath, launchCommand);
   }
 
   public static boolean offersTensorRtRepairAction(Throwable error) {
@@ -1384,35 +1414,37 @@ public final class KataGoRuntimeHelper {
     }
   }
 
-  private static void ensureCuda12_8DriverCompatibility(Path enginePath, List<String> launchCommand)
+  private static void ensureCudaDriverCompatibility(Path enginePath, List<String> launchCommand)
       throws IOException {
     String backend = resolveNvidiaBackend(enginePath);
-    if (backend == null
-        || (!usesCuda12_8Runtime(enginePath, backend) && !isTensorRtBackend(backend))) {
+    CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, backend);
+    if (profile == null) {
       return;
     }
 
     String driverVersion = resolveNvidiaDriverVersion();
     NvidiaGpuDetector.CudaCompatibility compatibility =
-        NvidiaGpuDetector.cudaCompatibility(driverVersion);
+        cudaDriverCompatibility(enginePath, driverVersion);
     if (compatibility == NvidiaGpuDetector.CudaCompatibility.SUPPORTED) {
       return;
     }
     if (compatibility == NvidiaGpuDetector.CudaCompatibility.UNSUPPORTED) {
-      throw new IOException(
-          String.format(
-              resource(
+      String message =
+          profile == CudaRuntimeProfile.CUDA_13_2
+              ? resource(
+                  "AutoSetup.cuda13DriverTooOld",
+                  "NVIDIA driver %s is too old for the CUDA 13.2/cuDNN 9.24 package. Update to"
+                      + " driver branch 580 or newer, then verify real neural-network inference.")
+              : resource(
                   "AutoSetup.cudaDriverTooOld",
                   "NVIDIA driver %s is too old for the CUDA 12.8 package. Update to 528.33 or"
-                      + " newer; 570.65 or newer is recommended."),
-              driverVersion == null || driverVersion.trim().isEmpty()
-                  ? resource("AutoSetup.cudaDriverUnknown", "unknown")
-                  : driverVersion.trim()));
+                      + " newer; 570.65 or newer is recommended.");
+      throw new IOException(String.format(message, driverVersion.trim()));
     }
 
     CudaCompatibilityProbeInputs inputs =
         resolveCudaCompatibilityProbeInputs(enginePath, launchCommand);
-    Path marker = cudaCompatibilityProbeMarker();
+    Path marker = cudaCompatibilityProbeMarker(enginePath);
     String signature =
         buildCudaCompatibilityProbeSignature(
             enginePath, inputs.modelPath, inputs.configPath, driverVersion);
@@ -1420,9 +1452,33 @@ public final class KataGoRuntimeHelper {
       if (hasMatchingCudaCompatibilityProbe(marker, signature)) {
         return;
       }
-      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion);
+      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion, profile);
       rememberCudaCompatibilityProbe(marker, signature);
     }
+  }
+
+  static NvidiaGpuDetector.CudaCompatibility cudaDriverCompatibility(
+      Path enginePath, String driverVersion) {
+    if (cudaRuntimeProfile(enginePath, resolveNvidiaBackend(enginePath))
+        != CudaRuntimeProfile.CUDA_13_2) {
+      return NvidiaGpuDetector.cudaCompatibility(driverVersion);
+    }
+    Matcher version =
+        Pattern.compile("^(\\d+)(?:[.,]\\d+)*$")
+            .matcher(driverVersion == null ? "" : driverVersion.trim());
+    if (!version.matches()) {
+      return NvidiaGpuDetector.CudaCompatibility.UNKNOWN;
+    }
+    try {
+      if (Integer.parseInt(version.group(1)) < 580) {
+        return NvidiaGpuDetector.CudaCompatibility.UNSUPPORTED;
+      }
+    } catch (NumberFormatException e) {
+      return NvidiaGpuDetector.CudaCompatibility.UNKNOWN;
+    }
+    // NVIDIA documents a CUDA 13.x branch floor, but no full Windows 13.2 driver
+    // version. NVRTC/PTX can require newer driver features, so verify inference.
+    return NvidiaGpuDetector.CudaCompatibility.PROBE_REQUIRED;
   }
 
   static CudaCompatibilityProbeInputs resolveCudaCompatibilityProbeInputs(
@@ -1458,8 +1514,11 @@ public final class KataGoRuntimeHelper {
   static String buildCudaCompatibilityProbeSignature(
       Path enginePath, Path modelPath, Path configPath, String driverVersion) {
     StringBuilder signature = new StringBuilder();
+    CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, resolveNvidiaBackend(enginePath));
     signature
-        .append("schema=1")
+        .append("schema=2")
+        .append("|profile=")
+        .append(profile == null ? "legacy" : profile.id)
         .append("|katago=")
         .append(KataGoAssetCatalog.get().katagoVersion())
         .append("|driver=")
@@ -1467,6 +1526,24 @@ public final class KataGoRuntimeHelper {
     appendPathFingerprint(signature, enginePath);
     appendPathFingerprint(signature, modelPath);
     appendPathFingerprint(signature, configPath);
+    if (profile == CudaRuntimeProfile.CUDA_13_2) {
+      List<Path> searchDirs =
+          collectRuntimeSearchDirs(
+              enginePath,
+              getNvidiaRuntimeDir(),
+              System.getProperty(TENSORRT_RUNTIME_SEARCH_PATH_PROPERTY, System.getenv("PATH")));
+      for (Path directory : searchDirs) {
+        for (String manifestName :
+            List.of("lizzieyzy-next-nvidia-runtime-manifest.txt", "manifest.txt")) {
+          Path manifest = directory.resolve(manifestName);
+          if (Files.isRegularFile(manifest)) appendPathFingerprint(signature, manifest);
+        }
+        for (List<String> group : REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS_STATIC_ZLIB) {
+          Path dll = directory.resolve(group.get(0));
+          if (Files.isRegularFile(dll)) appendPathFingerprint(signature, dll);
+        }
+      }
+    }
     return signature.toString();
   }
 
@@ -1509,7 +1586,10 @@ public final class KataGoRuntimeHelper {
   }
 
   private static void runCudaCompatibilityInferenceProbe(
-      Path enginePath, CudaCompatibilityProbeInputs inputs, String driverVersion)
+      Path enginePath,
+      CudaCompatibilityProbeInputs inputs,
+      String driverVersion,
+      CudaRuntimeProfile profile)
       throws IOException {
     List<String> command = buildCudaCompatibilityProbeCommand(enginePath, inputs);
     ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -1542,12 +1622,19 @@ public final class KataGoRuntimeHelper {
                 .isPresent();
     if (!successfulInference) {
       String detail = summarizeCompatibilityProbeOutput(output.toString());
+      String message =
+          profile == CudaRuntimeProfile.CUDA_13_2
+              ? resource(
+                  "AutoSetup.cuda13ProbeFailed",
+                  "CUDA 13.2/cuDNN 9.24 could not complete a real neural-network test with NVIDIA"
+                      + " driver %s.")
+              : resource(
+                  "AutoSetup.cudaProbeFailed",
+                  "CUDA 12.8 could not complete a real neural-network test with NVIDIA driver"
+                      + " %s.");
       throw new IOException(
           String.format(
-                  resource(
-                      "AutoSetup.cudaProbeFailed",
-                      "CUDA 12.8 could not complete a real neural-network test with NVIDIA driver"
-                          + " %s."),
+                  message,
                   driverVersion == null || driverVersion.trim().isEmpty()
                       ? resource("AutoSetup.cudaDriverUnknown", "unknown")
                       : driverVersion.trim())
@@ -1629,14 +1716,33 @@ public final class KataGoRuntimeHelper {
     return summary.toString();
   }
 
-  private static Path cudaCompatibilityProbeMarker() {
+  static Path cudaCompatibilityProbeMarker(Path enginePath) {
+    CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, resolveNvidiaBackend(enginePath));
     Path runtimeDir = getNvidiaRuntimeDir();
     return runtimeDir == null
         ? null
         : runtimeDir
             .resolve(NVIDIA_RUNTIME_CACHE_DIR)
             .resolve("compatibility")
-            .resolve(CUDA_COMPATIBILITY_PROBE_MARKER);
+            .resolve(
+                profile == CudaRuntimeProfile.CUDA_13_2
+                    ? "cuda13.2-cudnn9.24-inference-compatibility-v1.txt"
+                    : CUDA_COMPATIBILITY_PROBE_MARKER);
+  }
+
+  private enum CudaRuntimeProfile {
+    CUDA_12_8("cuda12.8-cudnn9", CUDA_12_8_NVRTC_VERSION, CUDA_12_8_NVRTC_SHA256),
+    CUDA_13_2("cuda13.2-cudnn9.24", CUDA_13_2_NVRTC_VERSION, CUDA_13_2_NVRTC_SHA256);
+
+    final String id;
+    final String nvrtcVersion;
+    final String nvrtcSha256;
+
+    CudaRuntimeProfile(String id, String nvrtcVersion, String nvrtcSha256) {
+      this.id = id;
+      this.nvrtcVersion = nvrtcVersion;
+      this.nvrtcSha256 = nvrtcSha256;
+    }
   }
 
   static final class CudaCompatibilityProbeInputs {
@@ -1746,10 +1852,11 @@ public final class KataGoRuntimeHelper {
     List<String> launch = applyStoredAppleTuningProfile(command, enginePath, entry);
     if (!isAppleSiliconHost())
       launch = applyStoredOfficialBenchmarkGpuSettings(launch, enginePath, entry);
-    launch = threads > 0
-        ? KataGoCommandSpec.parse(launch)
-            .withForcedOverrides(Map.of("numSearchThreads", String.valueOf(threads)))
-        : launch;
+    launch =
+        threads > 0
+            ? KataGoCommandSpec.parse(launch)
+                .withForcedOverrides(Map.of("numSearchThreads", String.valueOf(threads)))
+            : launch;
     return MeasuredKataGoTuning.applyLive(launch, entry);
   }
 
@@ -2151,9 +2258,16 @@ public final class KataGoRuntimeHelper {
         missing.add(describeRequirementGroup(group));
       }
     }
-    if ((usesCuda12_8Runtime(enginePath, backend) || isTensorRtBackend(backend))
-        && !hasPinnedCuda12_8NvrtcManifest(searchDirs)) {
-      missing.add("CUDA NVRTC " + CUDA_12_8_NVRTC_VERSION + " manifest");
+    CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, backend);
+    if (profile != null
+        && !hasPinnedRuntimePackageManifest(
+            searchDirs, "CUDA NVRTC", profile.nvrtcVersion, profile.nvrtcSha256)) {
+      missing.add("CUDA NVRTC " + profile.nvrtcVersion + " manifest");
+    }
+    if (profile == CudaRuntimeProfile.CUDA_13_2
+        && !hasPinnedRuntimePackageManifest(
+            searchDirs, "NVIDIA cuDNN", CUDNN_9_24_VERSION, CUDNN_9_24_CUDA13_SHA256)) {
+      missing.add("NVIDIA cuDNN " + CUDNN_9_24_VERSION + " CUDA 13 manifest");
     }
     Path readyDir = findDirectoryContainingRequiredDlls(searchDirs, requiredDllGroups);
     boolean ready = missing.isEmpty();
@@ -2841,7 +2955,7 @@ public final class KataGoRuntimeHelper {
   private static String tensorRtInstallAlreadyRunningMessage() {
     return resource(
         "AutoSetup.tensorRtInstallAlreadyRunning",
-        "TensorRT installation is already running in another LizzieYzy Next window. Please wait for"
+        "TensorRT installation is already running in another KG-next window. Please wait for"
             + " it to finish.");
   }
 
@@ -6072,6 +6186,11 @@ public final class KataGoRuntimeHelper {
           ? REQUIRED_NVIDIA_TRT10_9_RUNTIME_DLL_GROUPS_STATIC_ZLIB
           : REQUIRED_NVIDIA_TRT10_9_RUNTIME_DLL_GROUPS;
     }
+    if (usesCuda13_2Runtime(enginePath, backend)) {
+      return staticZlib
+          ? REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS_STATIC_ZLIB
+          : REQUIRED_NVIDIA_CUDA13_2_RUNTIME_DLL_GROUPS;
+    }
     if (usesCuda12_8Runtime(enginePath, backend)) {
       return staticZlib
           ? REQUIRED_NVIDIA_CUDA12_8_RUNTIME_DLL_GROUPS_STATIC_ZLIB
@@ -6085,6 +6204,50 @@ public final class KataGoRuntimeHelper {
     return staticZlib
         ? REQUIRED_NVIDIA_CUDA12_1_CUDNN9_RUNTIME_DLL_GROUPS_STATIC_ZLIB
         : REQUIRED_NVIDIA_CUDA12_1_CUDNN9_RUNTIME_DLL_GROUPS;
+  }
+
+  private static CudaRuntimeProfile cudaRuntimeProfile(Path enginePath, String backend) {
+    if (isTensorRtBackend(backend)) {
+      return CudaRuntimeProfile.CUDA_12_8;
+    }
+    if (usesCuda13_2Runtime(enginePath, backend)) {
+      return CudaRuntimeProfile.CUDA_13_2;
+    }
+    return usesCuda12_8Runtime(enginePath, backend) ? CudaRuntimeProfile.CUDA_12_8 : null;
+  }
+
+  private static boolean usesCuda13_2Runtime(Path enginePath, String backend) {
+    if (!(NVIDIA_BACKEND.equalsIgnoreCase(backend)
+            || NVIDIA50_CUDA_BACKEND.equalsIgnoreCase(backend))
+        || enginePath == null
+        || enginePath.getParent() == null) {
+      return false;
+    }
+    Path engineDirectoryName = enginePath.getParent().getFileName();
+    if (engineDirectoryName != null
+        && NVIDIA_CUDA13_ENGINE_DIR.equalsIgnoreCase(engineDirectoryName.toString())) {
+      return true;
+    }
+    Path manifest = enginePath.getParent().resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+    if (!Files.isRegularFile(manifest)) {
+      return false;
+    }
+    try {
+      String text = Files.readString(manifest, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
+      String profile = null;
+      for (String line : text.replace("\r", "").split("\n")) {
+        if (!line.trim().startsWith("profile:")) {
+          continue;
+        }
+        if (profile != null) {
+          return false;
+        }
+        profile = line.trim();
+      }
+      return ("profile: " + CudaRuntimeProfile.CUDA_13_2.id).equals(profile);
+    } catch (IOException e) {
+      return false;
+    }
   }
 
   private static boolean usesCuda12_8Runtime(Path enginePath, String backend) {
@@ -6131,7 +6294,8 @@ public final class KataGoRuntimeHelper {
         && !Files.isRegularFile(engineDir.resolve("cudnn64_9.dll"));
   }
 
-  private static boolean hasPinnedCuda12_8NvrtcManifest(List<Path> searchDirs) {
+  private static boolean hasPinnedRuntimePackageManifest(
+      List<Path> searchDirs, String label, String version, String sha256) {
     for (Path directory : searchDirs) {
       if (directory == null) {
         continue;
@@ -6144,7 +6308,7 @@ public final class KataGoRuntimeHelper {
         }
         try {
           String text = Files.readString(manifest, StandardCharsets.UTF_8);
-          if (containsPinnedCuda12_8NvrtcManifestEntry(text)) {
+          if (containsPinnedRuntimePackageManifestEntry(text, label, version, sha256)) {
             return true;
           }
         } catch (IOException e) {
@@ -6154,16 +6318,18 @@ public final class KataGoRuntimeHelper {
     return false;
   }
 
-  private static boolean containsPinnedCuda12_8NvrtcManifestEntry(String manifestText) {
+  private static boolean containsPinnedRuntimePackageManifestEntry(
+      String manifestText, String label, String version, String sha256) {
     if (manifestText == null) {
       return false;
     }
     String normalized = manifestText.toLowerCase(Locale.ROOT).replace("\r", "");
     String[] lines = normalized.split("\n");
-    String bundledPrefix = "- cuda nvrtc: " + CUDA_12_8_NVRTC_VERSION + " |";
-    String bundledSuffix = "| sha256=" + CUDA_12_8_NVRTC_SHA256;
-    String installedHeader = "cuda nvrtc: " + CUDA_12_8_NVRTC_VERSION;
-    String installedSha = "sha-256: " + CUDA_12_8_NVRTC_SHA256;
+    String packageLabel = label.toLowerCase(Locale.ROOT);
+    String bundledPrefix = "- " + packageLabel + ": " + version + " |";
+    String bundledSuffix = "| sha256=" + sha256;
+    String installedHeader = packageLabel + ": " + version;
+    String installedSha = "sha-256: " + sha256;
     for (int index = 0; index < lines.length; index++) {
       String line = lines[index].trim();
       if (line.startsWith(bundledPrefix) && line.endsWith(bundledSuffix)) {
@@ -6840,7 +7006,10 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean hasVerifiedStaticZlibProvenance(Path enginePath, String backend) {
-    KataGoAssetCatalog.Asset asset = assetForNvidiaBackend(backend);
+    KataGoAssetCatalog.Asset asset =
+        usesCuda13_2Runtime(enginePath, backend)
+            ? KATAGO_ASSETS.assets().get("windows-nvidia-cuda13")
+            : assetForNvidiaBackend(backend);
     return asset != null
         && "project-source-build".equals(KATAGO_ASSETS.origin())
         && "static".equals(asset.zlibLinkage())

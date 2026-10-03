@@ -293,7 +293,7 @@ function Resolve-ProductLayout {
         Require-Value -Condition (Test-Path -LiteralPath (Join-Path $root "user-data") -PathType Container) -Message "Portable user-data directory is missing."
     }
 
-    $launchers = @(Get-ChildItem -LiteralPath $root -Filter "LizzieYzy Next*.exe" -File)
+    $launchers = @(Get-ChildItem -LiteralPath $root -Filter "KG-next*.exe" -File)
     Require-Value -Condition ($launchers.Count -eq 1) -Message "Prepared product must contain exactly one root launcher."
     $launcher = $launchers[0].FullName
     $runtime = Join-Path $root "runtime\bin\java.exe"
@@ -404,7 +404,7 @@ function Get-UninstallEntries {
     return @(
         foreach ($root in $roots) {
             Get-ItemProperty -Path $root -ErrorAction SilentlyContinue |
-                Where-Object { $_.PSObject.Properties["DisplayName"] -and $_.DisplayName -like "LizzieYzy Next*" -and $_.PSObject.Properties["UninstallString"] -and $_.UninstallString }
+                Where-Object { $_.PSObject.Properties["DisplayName"] -and $_.DisplayName -like "KG-next*" -and $_.PSObject.Properties["UninstallString"] -and $_.UninstallString }
         }
     )
 }
@@ -440,7 +440,7 @@ function Invoke-Installer {
         Require-Value -Condition ($unexpected.Count -eq 0 -and @($beforeEntries | Where-Object { [string]$_.PSPath -ieq [string]$AllowedExistingInstall.RegistryPath }).Count -eq 1) -Message "Installer upgrade ownership does not match the single allowed predecessor."
     }
     else {
-        Require-Value -Condition ($beforeEntries.Count -eq 0) -Message "A related LizzieYzy Next installation already exists outside this acceptance run."
+        Require-Value -Condition ($beforeEntries.Count -eq 0) -Message "A related KG-next installation already exists outside this acceptance run."
     }
     if (-not $AllowedExistingInstall) { Require-Value -Condition (-not (Test-Path -LiteralPath $InstallRoot)) -Message "Disposable installer target already exists: $InstallRoot" }
     $beforePaths = @($beforeEntries | ForEach-Object { [string]$_.PSPath })
