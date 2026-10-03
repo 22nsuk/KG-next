@@ -7,7 +7,7 @@ from unittest import mock
 import zipfile
 
 from build_katago_source import SOURCE_COMMIT, TARGETS
-from katago_asset_catalog import DEFAULT_CATALOG
+from katago_asset_catalog import DEFAULT_CATALOG, SOURCE_OVERRIDE_FIELDS
 from stage_katago_source_release import archive_files, normalized_name, record, stage, verify_archive
 
 
@@ -19,6 +19,20 @@ class SourceReleaseTest(unittest.TestCase):
         self.packages = self.root / "packages"
         self.acceptance = self.root / "acceptance"
         self.source = self.root / "source"
+        baseline = json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8"))
+        for target in ("windows-nvidia", "windows-nvidia-cuda13"):
+            asset = baseline["assets"][target]
+            for field in SOURCE_OVERRIDE_FIELDS + ("sourceMetadataSha256",):
+                asset.pop(field, None)
+        cuda12 = baseline["assets"]["windows-nvidia"]
+        cuda12.pop("origin", None)
+        cuda12["assetName"] = f"katago-source-{SOURCE_COMMIT[:12]}-windows-nvidia.zip"
+        cuda13 = baseline["assets"]["windows-nvidia-cuda13"]
+        cuda13.update(origin="official-release", zlibLinkage="dynamic", inventorySha256="a" * 64,
+                      assetName="katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip")
+        cuda13["downloadUrl"] = "https://github.com/lightvector/KataGo/releases/download/v1.18.2/" + cuda13["assetName"]
+        self.base_catalog = self.root / "baseline.json"
+        self.base_catalog.write_text(json.dumps(baseline), encoding="utf-8")
         (self.source / "cpp/configs").mkdir(parents=True)
         (self.source / "cpp/configs/gtp_example.cfg").write_text("gtp test config", encoding="utf-8")
         (self.source / "cpp/configs/analysis_example.cfg").write_text("analysis test config", encoding="utf-8")
@@ -67,17 +81,17 @@ class SourceReleaseTest(unittest.TestCase):
         path.write_text(json.dumps(data), encoding="utf-8")
 
     def run_stage(self, output="release"):
-        return stage(self.packages, self.acceptance, DEFAULT_CATALOG, self.root / output,
+        return stage(self.packages, self.acceptance, self.base_catalog, self.root / output,
                      "next-2026-09-17.1", self.source)
 
     def test_all_fifteen_targets_are_sealed_and_model_is_unchanged(self):
         catalog = self.run_stage()
         self.assertEqual(set(TARGETS) | {"windows-nvidia-cuda13"}, set(catalog["assets"]))
         self.assertEqual(
-            json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8"))["assets"]["windows-nvidia-cuda13"],
+            json.loads(self.base_catalog.read_text(encoding="utf-8"))["assets"]["windows-nvidia-cuda13"],
             catalog["assets"]["windows-nvidia-cuda13"],
         )
-        baseline = json.loads(DEFAULT_CATALOG.read_text(encoding="utf-8"))
+        baseline = json.loads(self.base_catalog.read_text(encoding="utf-8"))
         self.assertEqual(baseline["models"], catalog["models"])
         for target, asset in catalog["assets"].items():
             if target not in TARGETS:

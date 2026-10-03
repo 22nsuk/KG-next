@@ -14,13 +14,13 @@ source "$ROOT_DIR/scripts/prepare_bundled_katago.sh"
 [[ "$PREFERRED_MODEL_SHA256" == \
   "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871" ]]
 [[ "$HUMAN_SL_CUDA_COMPANION_SHA256" == \
-  "9a87f2e40233bb5694332546f9cad0a6248f4593341ccafb29225fbf025a6ef6" ]]
+  "$(catalog_get assets.windows-nvidia.executableSha256)" ]]
 for pair in "windows-cpu|$WINDOWS_ASSET" "windows-opencl|$WINDOWS_OPENCL_ASSET" \
   "windows-nvidia|$WINDOWS_NVIDIA_ASSET" "linux-cpu|$LINUX_ASSET" \
   "linux-opencl|$LINUX_OPENCL_ASSET" "linux-nvidia|$LINUX_NVIDIA_ASSET"; do
   id="${pair%%|*}"
   asset="${pair#*|}"
-  [[ "$asset" == "katago-source-47aadc08518b-$id.zip" ]]
+  [[ "$asset" == "$(catalog_get "assets.$id.assetName")" ]]
   sha="$(expected_asset_sha256 "$asset")"
   [[ "$sha" =~ ^[0-9a-f]{64}$ ]]
   [[ "$sha" == "$(catalog_get "assets.$id.sha256")" ]]

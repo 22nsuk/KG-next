@@ -8,7 +8,7 @@ from unittest import mock
 import zipfile
 
 import test_stage_katago_source_release as fixtures
-from katago_asset_catalog import DEFAULT_CATALOG, validate_catalog
+from katago_asset_catalog import DEFAULT_CATALOG, SOURCE_OVERRIDE_FIELDS, validate_catalog
 from prepare_katago_source_assets import DESTINATIONS, download, inventory_digest, prepare, unpack
 
 
@@ -143,6 +143,8 @@ class PrepareSourceAssetsTest(unittest.TestCase):
                 asset["downloadUrl"] = ("https://github.com/lightvector/KataGo/releases/download/"
                                         + official["katagoReleaseTag"] + "/" + asset["assetName"])
             asset.pop("zlibLinkage", None)
+            for field in SOURCE_OVERRIDE_FIELDS + ("sourceMetadataSha256", "origin"):
+                asset.pop(field, None)
         validate_catalog(official)
         official_path = self.root / "official.json"
         official_path.write_text(json.dumps(official))

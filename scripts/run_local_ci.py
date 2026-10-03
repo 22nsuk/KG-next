@@ -126,6 +126,8 @@ PY_COMPILE_FILES = (
     "scripts/test_katago_asset_catalog.py",
     "scripts/test_validate_kg_metadata.py",
     "scripts/stage_katago_source_release.py",
+    "scripts/pin_custom_cuda_assets.py",
+    "scripts/test_pin_custom_cuda_assets.py",
     "scripts/audit_katago_linux_compatibility.py",
     "scripts/test_audit_katago_linux_compatibility.py",
     "scripts/prepare_katago_source_assets.py",
@@ -179,6 +181,7 @@ PY_COMPILE_FILES = (
 )
 
 DIRECT_PYTHON_TESTS = (
+    "scripts/test_pin_custom_cuda_assets.py",
     "scripts/test_measure_analysis.py",
     "scripts/test_audit_katago_source_bundle.py",
     "scripts/test_audit_katago_linux_compatibility.py",

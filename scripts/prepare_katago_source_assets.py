@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import zipfile
 
-from katago_asset_catalog import asset_download_url, engine_manifest_text, load_catalog
+from katago_asset_catalog import asset_download_url, asset_origin_for, asset_source_identity, engine_manifest_text, load_catalog
 from stage_katago_source_release import digest, normalized_name, verify_archive
 
 DESTINATIONS = {
@@ -44,8 +44,9 @@ def download(catalog: dict, target: str, cache: Path) -> Path:
         pending = Path(temporary) / asset["assetName"]
         if not asset.get("downloadUrl") and (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")):
             # gh handles authenticated Draft assets without forwarding a token to storage/CDN hosts.
-            subprocess.run(["gh", "release", "download", catalog["engineReleaseTag"],
-                            "--repo", catalog["engineReleaseRepository"], "--pattern", asset["assetName"],
+            identity = asset_source_identity(catalog, target)
+            subprocess.run(["gh", "release", "download", identity["releaseTag"],
+                            "--repo", identity["releaseRepository"], "--pattern", asset["assetName"],
                             "--dir", temporary], check=True, timeout=1800)
         else:
             subprocess.run(["curl", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https",
@@ -61,7 +62,12 @@ def unpack(archive: Path, output: Path, target: str, asset: dict) -> dict:
     if archive.stat().st_size != asset["sizeBytes"] or digest(archive) != asset["sha256"]:
         raise ValueError("untrusted source archive")
     official = target == "windows-nvidia-cuda13" and asset.get("origin") == "official-release"
-    metadata = {"sourceCommit": ""} if official else verify_archive(archive, target)
+    identity = asset_source_identity({"assets": {target: asset}, "katagoReleaseTag": "",
+                                      "katagoSourceCommit": asset.get("katagoSourceCommit", "")}, target) if "katagoSourceCommit" in asset else None
+    metadata = {"sourceCommit": ""} if official else verify_archive(
+        archive, target, **(dict(source_commit=identity["sourceCommit"],
+                                source_repository=identity["sourceRepository"],
+                                metadata_sha256=asset["sourceMetadataSha256"]) if identity else {}))
     if official:
         with zipfile.ZipFile(archive) as opened:
             files = {}
@@ -112,10 +118,12 @@ def unpack(archive: Path, output: Path, target: str, asset: dict) -> dict:
 
 def prepare(catalog_path: Path, targets: list[str], cache: Path, engines: Path) -> None:
     catalog = load_catalog(catalog_path)
-    if catalog.get("origin") != "project-source-build" and targets != ["windows-nvidia-cuda13"]:
-        raise ValueError("source preparation requires the reviewed source catalog")
     if not targets or len(set(targets)) != len(targets) or any(target not in DESTINATIONS for target in targets):
         raise ValueError("invalid or duplicate source preparation targets")
+    if any(asset_origin_for(catalog, target) != "project-source-build"
+           and not (target == "windows-nvidia-cuda13" and asset_origin_for(catalog, target) == "official-release")
+           for target in targets):
+        raise ValueError("source preparation requires the reviewed source catalog")
     if engines.is_symlink() or (engines / "configs").is_symlink():
         raise ValueError("build engine/config roots cannot be symlinks")
     if any((engines / DESTINATIONS[target]).is_symlink() for target in targets):

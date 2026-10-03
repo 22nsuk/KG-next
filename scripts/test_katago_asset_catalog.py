@@ -42,7 +42,7 @@ class KataGoAssetCatalogTest(unittest.TestCase):
         self.assertEqual("cuda12.8-cudnn9", completed.stdout.strip())
 
     def test_optional_cuda13_uses_verified_official_asset(self):
-        catalog = katago_asset_catalog.load_catalog(katago_asset_catalog.DEFAULT_CATALOG)
+        catalog = self.source_catalog()
         asset = catalog['assets']['windows-nvidia-cuda13']
         self.assertEqual('cuda13.2-cudnn9.24', asset['runtimeProfile'])
         self.assertEqual('dynamic', asset['zlibLinkage'])
@@ -112,6 +112,15 @@ class KataGoAssetCatalogTest(unittest.TestCase):
         catalog = katago_asset_catalog.load_catalog(katago_asset_catalog.DEFAULT_CATALOG)
         catalog.update(origin="project-source-build", engineReleaseRepository="wimi321/lizzieyzy-next",
                        engineReleaseTag="next-2026-09-17.1")
+        for asset in catalog["assets"].values():
+            for field in katago_asset_catalog.SOURCE_OVERRIDE_FIELDS + ("sourceMetadataSha256",):
+                asset.pop(field, None)
+        cuda12 = catalog["assets"]["windows-nvidia"]
+        cuda12.pop("origin", None)
+        cuda13 = catalog["assets"]["windows-nvidia-cuda13"]
+        cuda13.update(origin="official-release", zlibLinkage="dynamic", inventorySha256="a" * 64,
+                      assetName="katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip")
+        cuda13["downloadUrl"] = "https://github.com/lightvector/KataGo/releases/download/v1.18.2/" + cuda13["assetName"]
         for asset_id, asset in catalog["assets"].items():
             if asset.get('origin') == 'official-release':
                 continue

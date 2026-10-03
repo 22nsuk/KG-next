@@ -10,26 +10,35 @@ import shutil
 import tempfile
 
 from build_katago_source import SOURCE_COMMIT, TARGETS
-from katago_asset_catalog import DEFAULT_CATALOG, engine_manifest_text, load_catalog
+from katago_asset_catalog import DEFAULT_CATALOG, asset_origin_for, asset_source_identity, engine_manifest_text, load_catalog
 from prepare_katago_source_assets import OFFICIAL_RECEIPT, inventory_digest
-from stage_katago_source_release import digest, normalized_name
+from stage_katago_source_release import digest, normalized_name, verify_custom_cuda_metadata
 
 
 def audit(catalog: dict, target: str, engine: Path) -> None:
-    if target == "windows-nvidia-cuda13":
+    if target == "windows-nvidia-cuda13" and asset_origin_for(catalog, target) == "official-release":
         audit_official_cuda13(catalog, target, engine)
         return
-    if catalog.get("origin", "official-release") == "official-release":
+    if catalog.get("origin", "official-release") == "official-release" and (
+            target not in catalog.get("assets", {}) or asset_origin_for(catalog, target) == "official-release"):
         return
     asset = catalog["assets"][target]
-    metadata = json.loads((engine / "source-release.json").read_text(encoding="utf-8"))
+    identity = asset_source_identity(catalog, target)
+    receipt = engine / "source-release.json"
+    if (engine.is_symlink() or receipt.is_symlink() or not receipt.is_file()
+            or (asset.get("sourceMetadataSha256") and digest(receipt) != asset["sourceMetadataSha256"])):
+        raise ValueError("installed source metadata differs from trusted catalog")
+    metadata = json.loads(receipt.read_text(encoding="utf-8"))
     executable = "katago.exe" if target.startswith("windows-") else "katago"
-    if (metadata.get("sourceCommit") != SOURCE_COMMIT
-            or catalog.get("katagoSourceCommit") != SOURCE_COMMIT
-            or metadata.get("target") != target or metadata.get("backend") != TARGETS[target][2]
+    backend = "CUDA" if target == "windows-nvidia-cuda13" else TARGETS[target][2]
+    if (metadata.get("sourceCommit") != identity["sourceCommit"]
+            or metadata.get("sourceRepository") != identity["sourceRepository"]
+            or metadata.get("target") != target or metadata.get("backend") != backend
             or metadata.get("origin") != "project-source-build"
             or metadata.get("executable", {}).get("sha256") != asset["executableSha256"]):
         raise ValueError("installed source identity differs from trusted catalog")
+    if "katagoSourceCommit" in asset:
+        verify_custom_cuda_metadata(metadata, target, identity["sourceCommit"])
     manifest = engine / "lizzieyzy-next-katago-engine-manifest.txt"
     expected_manifest = engine_manifest_text(catalog, target, metadata["sourceCommit"])
     companion = engine / "katago-human-sl-cuda.exe"
@@ -43,7 +52,7 @@ def audit(catalog: dict, target: str, engine: Path) -> None:
             + catalog["assets"]["windows-nvidia"]["executableSha256"]
             + "\n"
         )
-    if not manifest.is_file() or manifest.read_text(encoding="utf-8") != expected_manifest:
+    if manifest.is_symlink() or not manifest.is_file() or manifest.read_text(encoding="utf-8") != expected_manifest:
         if companion_present:
             raise ValueError("installed TensorRT companion is not bound by trusted provenance")
         raise ValueError("installed engine provenance manifest differs from trusted catalog")
@@ -69,7 +78,9 @@ def audit(catalog: dict, target: str, engine: Path) -> None:
             raise ValueError(f"installed source file missing or modified: {name}")
     if digest(engine / executable) != asset["executableSha256"]:
         raise ValueError("installed engine executable differs from trusted catalog")
-    print(f"{target}: exact source {SOURCE_COMMIT}, {len(records)} files verified")
+    if asset.get("zlibLinkage") == "static" and any((engine / name).exists() for name in ("z.dll", "zlib.dll", "zlib1.dll")):
+        raise ValueError("installed static-zlib source bundle contains dynamic zlib")
+    print(f"{target}: exact source {identity['sourceCommit']}, {len(records)} files verified")
 
 
 def audit_official_cuda13(catalog: dict, target: str, engine: Path) -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -79,7 +80,7 @@ class GenerateReleaseNotesTest(unittest.TestCase):
             "kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz", metadata["model_source"]
         )
         self.assertEqual(
-            "katago-source-47aadc08518b-windows-nvidia.zip",
+            json.loads((Path(__file__).resolve().parents[1] / "src/main/resources/katago-assets.json").read_text())["assets"]["windows-nvidia"]["assetName"],
             metadata["windows_nvidia_bundle"],
         )
         self.assertEqual(
@@ -87,7 +88,7 @@ class GenerateReleaseNotesTest(unittest.TestCase):
             metadata["windows_nvidia50_cuda_bundle"],
         )
         self.assertEqual(
-            "katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip",
+            json.loads((Path(__file__).resolve().parents[1] / "src/main/resources/katago-assets.json").read_text())["assets"]["windows-nvidia-cuda13"]["assetName"],
             metadata["windows_nvidia_cuda13_bundle"],
         )
 

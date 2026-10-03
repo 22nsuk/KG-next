@@ -11,6 +11,90 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 class KataGoAssetCatalogTest {
+  private static final String CUSTOM_COMMIT = "a".repeat(40);
+
+  private JSONObject customCudaCatalogJson() throws IOException {
+    JSONObject root = sourceCatalogJson();
+    for (String id : new String[] {"windows-nvidia", "windows-nvidia-cuda13"}) {
+      JSONObject asset = root.getJSONObject("assets").getJSONObject(id);
+      asset.remove("downloadUrl");
+      asset.remove("inventorySha256");
+      asset.put("origin", "project-source-build");
+      asset.put("katagoSourceCommit", CUSTOM_COMMIT);
+      asset.put("katagoSourceRepository", "https://github.com/22nsuk/KataGo");
+      asset.put("engineReleaseRepository", "22nsuk/KataGo");
+      asset.put("engineReleaseTag", "kg-next-" + CUSTOM_COMMIT.substring(0, 12));
+      asset.put("assetName", "katago-source-" + CUSTOM_COMMIT.substring(0, 12) + "-" + id + ".zip");
+      asset.put("sourceMetadataSha256", "b".repeat(64));
+      asset.put("zlibLinkage", "static");
+    }
+    return root;
+  }
+
+  @Test
+  void customCudaAssetsUseTheirOwnSourceAndReleaseWithoutRepointingOtherAssets()
+      throws IOException {
+    KataGoAssetCatalog catalog = new KataGoAssetCatalog(customCudaCatalogJson());
+    for (String id : new String[] {"windows-nvidia", "windows-nvidia-cuda13"}) {
+      KataGoAssetCatalog.Asset asset = catalog.asset(id);
+      assertEquals(CUSTOM_COMMIT, asset.sourceCommit());
+      assertEquals("https://github.com/22nsuk/KataGo", asset.sourceRepository());
+      assertEquals("static", asset.zlibLinkage());
+      assertEquals(
+          "https://github.com/22nsuk/KataGo/releases/download/kg-next-"
+              + CUSTOM_COMMIT.substring(0, 12)
+              + "/"
+              + asset.assetName(),
+          catalog.assetDownloadUrl(asset));
+      String manifest = catalog.engineManifestText(asset);
+      assertTrue(manifest.contains("Source commit: " + CUSTOM_COMMIT + "\n"));
+      assertTrue(manifest.contains("Source repository: https://github.com/22nsuk/KataGo\n"));
+      assertTrue(
+          manifest.contains(
+              "Engine release tag: kg-next-" + CUSTOM_COMMIT.substring(0, 12) + "\n"));
+    }
+    assertTrue(
+        catalog
+            .assetDownloadUrl(catalog.asset("windows-tensorrt"))
+            .startsWith(
+                "https://github.com/wimi321/lizzieyzy-next/releases/download/next-2026-09-17.1/"));
+    assertEquals(
+        KataGoAssetCatalog.get().katagoSourceCommit(), catalog.asset("windows-cpu").sourceCommit());
+  }
+
+  @Test
+  void customSourceIdentityRejectsWrongOriginMissingHashMutableTagAndUnrelatedTarget()
+      throws IOException {
+    for (String[] change :
+        new String[][] {
+          {"origin", "official-release"},
+          {"katagoSourceCommit", "master"},
+          {"katagoSourceRepository", "https://github.com/lightvector/KataGo"},
+          {"engineReleaseRepository", "evil/KataGo"},
+          {"engineReleaseTag", "latest"},
+          {"engineReleaseTag", "kg-next-000000000000"},
+          {"sourceMetadataSha256", ""},
+          {"downloadUrl", "https://example.com/engine.zip"}
+        }) {
+      JSONObject root = customCudaCatalogJson();
+      root.getJSONObject("assets").getJSONObject("windows-nvidia").put(change[0], change[1]);
+      assertThrows(IllegalStateException.class, () -> new KataGoAssetCatalog(root));
+    }
+    JSONObject root = customCudaCatalogJson();
+    JSONObject cuda = root.getJSONObject("assets").getJSONObject("windows-nvidia");
+    JSONObject cpu = root.getJSONObject("assets").getJSONObject("windows-cpu");
+    for (String field :
+        new String[] {
+          "katagoSourceCommit",
+          "katagoSourceRepository",
+          "engineReleaseRepository",
+          "engineReleaseTag"
+        }) {
+      cpu.put(field, cuda.get(field));
+    }
+    assertThrows(IllegalStateException.class, () -> new KataGoAssetCatalog(root));
+  }
+
   private JSONObject sourceCatalogJson() throws IOException {
     JSONObject root;
     try (var input = getClass().getResourceAsStream("/katago-assets.json")) {
@@ -20,6 +104,29 @@ class KataGoAssetCatalogTest {
     root.put("engineReleaseRepository", "wimi321/lizzieyzy-next");
     root.put("engineReleaseTag", "next-2026-09-17.1");
     JSONObject assets = root.getJSONObject("assets");
+    for (String id : new String[] {"windows-nvidia", "windows-nvidia-cuda13"}) {
+      JSONObject asset = assets.getJSONObject(id);
+      for (String field :
+          new String[] {
+            "katagoSourceCommit",
+            "katagoSourceRepository",
+            "engineReleaseRepository",
+            "engineReleaseTag",
+            "sourceMetadataSha256"
+          }) {
+        asset.remove(field);
+      }
+    }
+    assets.getJSONObject("windows-nvidia").remove("origin");
+    JSONObject official = assets.getJSONObject("windows-nvidia-cuda13");
+    official.put("origin", "official-release");
+    official.put("zlibLinkage", "dynamic");
+    official.put("inventorySha256", "a".repeat(64));
+    official.put("assetName", "katago-v1.18.2-cuda13.2-cudnn9.24.0-windows-x64.zip");
+    official.put(
+        "downloadUrl",
+        "https://github.com/lightvector/KataGo/releases/download/v1.18.2/"
+            + official.getString("assetName"));
     for (String id : assets.keySet()) {
       if (assets.getJSONObject(id).optString("origin").equals("official-release")) {
         continue;
@@ -28,7 +135,11 @@ class KataGoAssetCatalogTest {
           .getJSONObject(id)
           .put(
               "assetName",
-              "katago-source-" + root.getString("katagoSourceCommit").substring(0, 12) + "-" + id + ".zip");
+              "katago-source-"
+                  + root.getString("katagoSourceCommit").substring(0, 12)
+                  + "-"
+                  + id
+                  + ".zip");
     }
     return root;
   }
@@ -39,8 +150,10 @@ class KataGoAssetCatalogTest {
     assertTrue(
         catalog
             .assetDownloadUrl(catalog.asset("windows-tensorrt"))
-            .startsWith("https://github.com/wimi321/lizzieyzy-next/releases/download/next-2026-09-17.1/"));
-    assertTrue(catalog.modelDownloadUrl(catalog.model("b10-balanced")).contains("lightvector/KataGo"));
+            .startsWith(
+                "https://github.com/wimi321/lizzieyzy-next/releases/download/next-2026-09-17.1/"));
+    assertTrue(
+        catalog.modelDownloadUrl(catalog.model("b10-balanced")).contains("lightvector/KataGo"));
   }
 
   @Test
@@ -80,8 +193,7 @@ class KataGoAssetCatalogTest {
     assertEquals("kata1-tf3-b11c768-s11003M-d5973M-7gres.bin.gz", model.fileName());
     assertEquals(262_039_869L, model.sizeBytes());
     assertEquals(
-        "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871",
-        model.sha256());
+        "93bdb63a3bfae4a70db0cb5265287495ecfc10b1ba1cc6814feeba1cdf055871", model.sha256());
     assertTrue(model.bundled());
     assertFalse(catalog.model("b10-balanced").bundled());
     assertEquals("2026-09-25", model.publishedAt());
@@ -105,7 +217,9 @@ class KataGoAssetCatalogTest {
     assertEquals("static", catalog.asset("windows-tensorrt").zlibLinkage());
     assertEquals("cuda12.1-cudnn9", catalog.asset("linux-nvidia").runtimeProfile());
     assertEquals(
-        "katago-source-47aadc08518b-windows-nvidia.zip",
+        "katago-source-"
+            + catalog.asset("windows-nvidia").sourceCommit().substring(0, 12)
+            + "-windows-nvidia.zip",
         catalog.asset("windows-nvidia").assetName());
     assertEquals(
         "katago-source-47aadc08518b-linux-nvidia.zip", catalog.asset("linux-nvidia").assetName());
@@ -113,22 +227,23 @@ class KataGoAssetCatalogTest {
 
   @Test
   void optionalCuda13UsesOfficialArchiveAndCannotClaimStaticZlib() throws IOException {
-    KataGoAssetCatalog catalog = KataGoAssetCatalog.get();
+    KataGoAssetCatalog catalog = new KataGoAssetCatalog(sourceCatalogJson());
     KataGoAssetCatalog.Asset asset = catalog.asset("windows-nvidia-cuda13");
     assertEquals("cuda13.2-cudnn9.24", asset.runtimeProfile());
     assertEquals("dynamic", asset.zlibLinkage());
     assertEquals(
         "https://github.com/lightvector/KataGo/releases/download/v1.18.2/" + asset.assetName(),
         catalog.assetDownloadUrl(asset));
-    for (String[] change : new String[][] {
-        {"downloadUrl", "https://example.com/engine.zip"},
-        {"inventorySha256", ""},
-        {"origin", "unknown"},
-        {"zlibLinkage", "static"},
-        {"assetName", "katago-v1.18.1-cuda13.zip"}}) {
+    for (String[] change :
+        new String[][] {
+          {"downloadUrl", "https://example.com/engine.zip"},
+          {"inventorySha256", ""},
+          {"origin", "unknown"},
+          {"zlibLinkage", "static"},
+          {"assetName", "katago-v1.18.1-cuda13.zip"}
+        }) {
       JSONObject root = sourceCatalogJson();
-      root.getJSONObject("assets").getJSONObject("windows-nvidia-cuda13")
-          .put(change[0], change[1]);
+      root.getJSONObject("assets").getJSONObject("windows-nvidia-cuda13").put(change[0], change[1]);
       assertThrows(IllegalStateException.class, () -> new KataGoAssetCatalog(root));
     }
   }
@@ -140,10 +255,7 @@ class KataGoAssetCatalogTest {
     assertThrows(IllegalStateException.class, () -> new KataGoAssetCatalog(missing));
 
     JSONObject widened = sourceCatalogJson();
-    widened
-        .getJSONObject("assets")
-        .getJSONObject("windows-cpu")
-        .put("zlibLinkage", "static");
+    widened.getJSONObject("assets").getJSONObject("windows-cpu").put("zlibLinkage", "static");
     assertThrows(IllegalStateException.class, () -> new KataGoAssetCatalog(widened));
   }
 

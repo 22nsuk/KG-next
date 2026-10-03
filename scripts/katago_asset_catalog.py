@@ -14,6 +14,12 @@ DEFAULT_CATALOG = ROOT / "src" / "main" / "resources" / "katago-assets.json"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 PROJECT_REPOSITORY = "wimi321/lizzieyzy-next"
+CUSTOM_ENGINE_REPOSITORY = "22nsuk/KataGo"
+CUSTOM_SOURCE_REPOSITORY = "https://github.com/22nsuk/KataGo"
+CUSTOM_CUDA_TARGETS = {"windows-nvidia", "windows-nvidia-cuda13"}
+SOURCE_OVERRIDE_FIELDS = (
+    "katagoSourceCommit", "katagoSourceRepository", "engineReleaseRepository", "engineReleaseTag"
+)
 
 
 def load_catalog(path: Path) -> dict[str, Any]:
@@ -57,16 +63,17 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
         name = require_text(asset, "assetName")
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*\.zip", name):
             raise ValueError(f"asset {asset_id} has unsafe assetName")
-        asset_origin = asset.get("origin", catalog.get("origin", "official-release"))
+        asset_origin = asset_origin_for(catalog, asset_id)
+        source_identity = asset_source_identity(catalog, asset_id)
         override = asset.get("downloadUrl", "")
         if asset_origin == "official-release":
             expected_url = f"https://github.com/lightvector/KataGo/releases/download/{release_tag}/{name}"
             if (override and override != expected_url) or ("origin" in asset and override != expected_url):
                 raise ValueError(f"asset {asset_id} has unsupported official downloadUrl")
-        elif asset_origin != catalog.get("origin") or override:
+        elif asset_origin != "project-source-build" or override:
             raise ValueError(f"asset {asset_id} has unsupported origin or downloadUrl")
         if asset_origin == "project-source-build":
-            expected = f"katago-source-{catalog['katagoSourceCommit'][:12]}-{asset_id}.zip"
+            expected = f"katago-source-{source_identity['sourceCommit'][:12]}-{asset_id}.zip"
             if name != expected:
                 raise ValueError(f"asset {asset_id} must identify the pinned source and target")
         elif f"-{release_tag}-" not in name:
@@ -81,7 +88,7 @@ def validate_catalog(catalog: dict[str, Any]) -> None:
             raise ValueError(f"asset {asset_id} has invalid zlibLinkage")
         static_zlib_asset = (
             asset_origin == "project-source-build"
-            and asset_id in ("windows-nvidia", "windows-tensorrt")
+            and asset_id in ("windows-nvidia", "windows-nvidia-cuda13", "windows-tensorrt")
         )
         if (linkage == "static") != static_zlib_asset:
             raise ValueError(f"asset {asset_id} has invalid origin-aware zlibLinkage")
@@ -112,7 +119,45 @@ def engine_release_base(catalog: dict[str, Any]) -> str:
 
 def asset_download_url(catalog: dict[str, Any], asset_id: str) -> str:
     asset = catalog["assets"][asset_id]
-    return asset.get("downloadUrl") or engine_release_base(catalog) + "/" + asset["assetName"]
+    identity = asset_source_identity(catalog, asset_id)
+    base = (f"https://github.com/{identity['releaseRepository']}/releases/download/{identity['releaseTag']}"
+            if asset_origin_for(catalog, asset_id) == "project-source-build" else engine_release_base(catalog))
+    return asset.get("downloadUrl") or base + "/" + asset["assetName"]
+
+
+def asset_origin_for(catalog: dict[str, Any], asset_id: str) -> str:
+    return catalog["assets"][asset_id].get("origin", catalog.get("origin", "official-release"))
+
+
+def asset_source_identity(catalog: dict[str, Any], asset_id: str) -> dict[str, str]:
+    asset = catalog["assets"][asset_id]
+    overridden = any(field in asset for field in SOURCE_OVERRIDE_FIELDS)
+    if overridden:
+        if asset_id not in CUSTOM_CUDA_TARGETS or asset.get("origin") != "project-source-build":
+            raise ValueError(f"asset {asset_id} cannot override source identity")
+        commit, repository, release_repository, tag = (require_text(asset, field) for field in SOURCE_OVERRIDE_FIELDS)
+        if (not SOURCE_COMMIT_RE.fullmatch(commit) or repository != CUSTOM_SOURCE_REPOSITORY
+                or release_repository != CUSTOM_ENGINE_REPOSITORY or tag != f"kg-next-{commit[:12]}"):
+            raise ValueError(f"asset {asset_id} has invalid custom source release identity")
+        profile = "cuda12.8-cudnn9" if asset_id == "windows-nvidia" else "cuda13.2-cudnn9.24"
+        if asset.get("backend") != "cuda" or asset.get("platform") != "windows-x64" or asset.get("runtimeProfile") != profile:
+            raise ValueError(f"asset {asset_id} has invalid custom CUDA runtime identity")
+        for field in ("executableSha256", "sourceMetadataSha256"):
+            if not SHA256_RE.fullmatch(str(asset.get(field, ""))):
+                raise ValueError(f"asset {asset_id} requires {field}")
+        if asset.get("downloadUrl") or "inventorySha256" in asset:
+            raise ValueError(f"asset {asset_id} has conflicting custom source provenance")
+    else:
+        if asset.get("origin") == "project-source-build" and catalog.get("origin") != "project-source-build":
+            raise ValueError(f"asset {asset_id} requires explicit custom source identity")
+        if "katagoSourceRepository" in catalog:
+            raise ValueError("global source repository overrides are unsupported")
+        commit = catalog.get("katagoSourceCommit", "")
+        repository = "https://github.com/lightvector/KataGo"
+        release_repository = catalog.get("engineReleaseRepository", "lightvector/KataGo")
+        tag = catalog.get("engineReleaseTag", catalog["katagoReleaseTag"])
+    return dict(sourceCommit=commit, sourceRepository=repository,
+                releaseRepository=release_repository, releaseTag=tag)
 
 
 def validate_entry(entry: Any, label: str) -> None:
@@ -150,6 +195,12 @@ def model_download_url(catalog: dict[str, Any], model_id: str) -> str:
 
 def engine_manifest_text(catalog: dict[str, Any], asset_id: str, source_commit: str) -> str:
     asset = catalog["assets"][asset_id]
+    identity = asset_source_identity(catalog, asset_id)
+    provenance = ""
+    if "katagoSourceCommit" in asset:
+        provenance = (f"Source repository: {identity['sourceRepository']}\n"
+                      f"Engine release repository: {identity['releaseRepository']}\n"
+                      f"Engine release tag: {identity['releaseTag']}\n")
     return (
         "Manifest schema: 2\n"
         f"KataGo release: {catalog['katagoReleaseTag']}\n"
@@ -160,7 +211,8 @@ def engine_manifest_text(catalog: dict[str, Any], asset_id: str, source_commit: 
         f"Backend: {require_text(asset, 'backend')}\n"
         f"Origin: {asset.get('origin', require_text(catalog, 'origin'))}\n"
         f"Source commit: {source_commit}\n"
-        f"Zlib linkage: {asset.get('zlibLinkage', 'dynamic')}\n"
+        + provenance
+        + f"Zlib linkage: {asset.get('zlibLinkage', 'dynamic')}\n"
     )
 
 
@@ -177,6 +229,8 @@ def main() -> int:
     subparsers.add_parser("origin")
     asset_url_parser = subparsers.add_parser("asset-url")
     asset_url_parser.add_argument("asset_id")
+    asset_origin_parser = subparsers.add_parser("asset-origin")
+    asset_origin_parser.add_argument("asset_id")
     args = parser.parse_args()
 
     catalog = load_catalog(args.catalog)
@@ -186,6 +240,8 @@ def main() -> int:
         print(model_download_url(catalog, args.model_id))
     if args.command == "asset-url":
         print(asset_download_url(catalog, args.asset_id))
+    if args.command == "asset-origin":
+        print(asset_origin_for(catalog, args.asset_id))
     if args.command == "engine-release-base":
         print(engine_release_base(catalog))
     if args.command == "get":
