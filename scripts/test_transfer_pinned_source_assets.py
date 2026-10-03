@@ -10,6 +10,7 @@ from scripts.transfer_pinned_source_assets import (
     transfer_archive, validate_transfer_catalog, verify_source_inventory,
 )
 from scripts.validate_release_workflow_identity import IdentityError
+from scripts.katago_asset_catalog import validate_catalog
 
 
 class TransferTests(unittest.TestCase):
@@ -44,7 +45,13 @@ class TransferTests(unittest.TestCase):
         self.assertNotIn("windows-nvidia", records)
 
     def test_official_override_cannot_replace_a_required_source_target(self):
-        self.catalog['assets']['linux-cpu'] = deepcopy(self.catalog['assets']['windows-nvidia-cuda13'])
+        asset = self.catalog['assets']['linux-cpu']
+        name = f"katago-{self.catalog['katagoReleaseTag']}-linux-cpu.zip"
+        asset.update(origin='official-release', assetName=name, zlibLinkage='dynamic',
+                     inventorySha256='a' * 64,
+                     downloadUrl='https://github.com/lightvector/KataGo/releases/download/'
+                     + self.catalog['katagoReleaseTag'] + '/' + name)
+        validate_catalog(self.catalog)
         with self.assertRaises(IdentityError):
             self.validate(self.catalog)
 
