@@ -40,6 +40,42 @@ import org.slf4j.LoggerFactory;
 
 public class KataGoAutoSetupHelperTest {
   @Test
+  void automaticRepairPreservesBothCudaVariantsWhenBoardAndAnalysisUseDifferentEngines()
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-dual-cuda-repair");
+    Path cuda12 = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path cuda13 = touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    Path analysis = touch(root.resolve("engines/katago/configs/analysis.cfg"));
+    Path model = touch(root.resolve("weights/default.bin.gz"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> entries = new ArrayList<>();
+      entries.add(engineData("CUDA12", cuda12, gtp, model, false));
+      entries.add(engineData("CUDA13", cuda13, gtp, model, true));
+      for (EngineData entry : entries) BundledKataGoProfile.claim(entry);
+      for (int selected : new int[] {1, 0}) {
+        entries.get(0).isDefault = selected == 0;
+        entries.get(1).isDefault = selected == 1;
+        Utils.saveEngineSettings(entries);
+        Lizzie.config.uiConfig.put("default-engine", selected);
+        String analysisCommand = quote(selected == 1 ? cuda12 : cuda13)
+            + " analysis -model " + quote(model) + " -config " + quote(analysis)
+            + " -quit-without-waiting";
+        Lizzie.config.uiConfig.put("analysis-engine-command", analysisCommand);
+        assertFalse(KataGoAutoSetupHelper.migrateAutoSetupCommandsIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenStartupEngineIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenBundledCommandsIfNeeded());
+        ArrayList<EngineData> after = Utils.getEngineData();
+        assertEquals(2, after.size());
+        assertEquals(entries.get(0).commands, after.get(0).commands);
+        assertEquals(entries.get(1).commands, after.get(1).commands);
+        assertEquals(selected, Lizzie.config.uiConfig.getInt("default-engine"));
+        assertEquals(analysisCommand, Lizzie.config.uiConfig.getString("analysis-engine-command"));
+      }
+    });
+  }
+
+  @Test
   void switchingPortableWeightRetainsBundledAndDownloadedCatalogCandidates() throws Exception {
     Path root = Files.createTempDirectory("katago-switch-catalog");
     Path app = Files.createDirectories(root.resolve("app"));

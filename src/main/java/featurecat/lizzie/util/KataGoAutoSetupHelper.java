@@ -4046,8 +4046,27 @@ public final class KataGoAutoSetupHelper {
     if (isTensorRtManagedCommand("", command)) {
       return false;
     }
+    Path actualEngine = KataGoRuntimeHelper.resolveCommandExecutable(Utils.splitCommand(command));
+    // A dual installation may deliberately use one CUDA engine for the board and the other for
+    // analysis. A complete sibling engine is not an outdated executable needing global repair.
+    if (areParallelBundledCudaEngines(actualEngine, expectedEnginePath)) {
+      expectedEnginePath = actualEngine;
+    }
     return isCommandBrokenOrOutdated(
         command, expectedEnginePath, expectedConfigPath, expectedWeightPath);
+  }
+
+  private static boolean areParallelBundledCudaEngines(Path first, Path second) {
+    if (first == null || second == null || !Files.isRegularFile(first) || !Files.isRegularFile(second))
+      return false;
+    Path a = first.toAbsolutePath().normalize().getParent();
+    Path b = second.toAbsolutePath().normalize().getParent();
+    if (a == null || b == null || a.getParent() == null || !a.getParent().equals(b.getParent()))
+      return false;
+    String aName = a.getFileName().toString();
+    String bName = b.getFileName().toString();
+    return ("windows-x64".equals(aName) && BundledKataGoProfile.CUDA13_DIRECTORY.equals(bName))
+        || ("windows-x64".equals(bName) && BundledKataGoProfile.CUDA13_DIRECTORY.equals(aName));
   }
 
   private static boolean isTensorRtManagedCommand(String name, String command) {
