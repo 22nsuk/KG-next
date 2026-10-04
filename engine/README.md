@@ -42,4 +42,28 @@ WINDOWS_BUILD_CUDA13=true ./scripts/package_windows_exe.sh YYYY-MM-DD 1.0.0 targ
 
 일반 Windows 패키징 도구와 JDK가 필요합니다. 준비와 패키징 모두 옵션을 켜야 합니다. 생성되는 `windows64.nvidia.cuda13.portable.zip`은 별도 제품 폴더 `KG-next NVIDIA CUDA13`을 사용합니다. 기존 사용자의 엔진 폴더를 자동 교체하는 절차가 아닙니다.
 
+## CUDA12·CUDA13 한 폴더에 설치
+
+두 버전을 함께 사용하려면 `scripts/assemble_windows_dual_cuda.py`로 하나의 portable 설치를 구성할 수 있습니다. 기존의 검증된 Windows app-image에서 GUI 실행 파일·Java 런타임·JCEF·readboard·기본 모델을 재사용하고, 최신 GUI JAR과 같은 소스 커밋의 CUDA12·CUDA13 엔진을 추가합니다. Python 3.10 이상이 필요하며 다운로드·엔진 빌드·JRE 재생성은 수행하지 않습니다.
+
+아래 예시는 이미 `prepare_katago_source_assets.py`로 검증·추출한 엔진 폴더와 `prepare_bundled_nvidia_runtime.py`로 준비한 각 런타임 폴더를 사용합니다. app-image에는 현재 자산 목록의 기본 모델과 한 개의 jpackage 실행 파일·설정 쌍이 있어야 합니다. JAR은 이 두 엔진을 등록하는 최신 GUI 빌드여야 하며 `--release-tag`는 해당 GUI 버전을 표시합니다.
+
+```powershell
+python scripts/assemble_windows_dual_cuda.py `
+  --app-image 'C:/packages/KG-next NVIDIA' `
+  --jar target/lizzie-yzy2.5.3-shaded.jar `
+  --cuda12-engine 'C:/prepared/engines/windows-x64-nvidia' `
+  --cuda13-engine 'C:/prepared/engines/windows-x64-nvidia-cuda13' `
+  --cuda12-runtime 'C:/prepared/cuda12.8-cudnn9' `
+  --cuda13-runtime 'C:/prepared/cuda13.2-cudnn9.24' `
+  --release-tag next-YYYY-MM-DD.N `
+  --output 'C:/Games/KG-next'
+```
+
+출력 폴더는 새 폴더 또는 빈 폴더여야 하며 입력 폴더와 겹칠 수 없습니다. 스크립트는 자산 목록으로 엔진 원본·출처·모델을 검증하고, 엔진 빌드에서 감사한 NVIDIA DLL 목록·크기·해시와 런타임을 대조한 뒤 완성된 설치를 배치합니다. 기존 설치의 `user-data`, 기보, 계정 정보는 복사하지 않습니다. 네이티브 실행 설정은 이 설치의 `user-data`를 명시하여 인접 설치의 자동 마이그레이션을 방지합니다.
+
+`KG-next.exe`를 실행한 뒤 엔진 메뉴에서 기본 `KataGo Bundled` (CUDA12)와 `KataGo CUDA13 (13.2 / cuDNN 9.24)`를 선택합니다. CUDA13은 추가 항목이며 기존 기본 엔진·직접 수정한 명령을 바꾸지 않습니다. 각 엔진 폴더가 자식 프로세스의 DLL 검색 경로 앞에 오므로 같은 이름의 cuDNN DLL도 서로 섞이지 않습니다. GUI·JRE·기본 모델·GTP/analysis 설정은 한 벌만 보관합니다.
+
+설치 루트의 `README-CUDA.md`에 사용법이 있으며, `pwsh -NoProfile -File .\Test-CUDA.ps1`로 두 버전을 순차 검사합니다. `-Profile CUDA12` 또는 `-Profile CUDA13`으로 한 버전만 검사할 수 있습니다. 각 검사는 1개 국면·32방문·탐색 스레드 4개로 실행하고 자동 튜닝·추가 배치 검사를 생략하며, 90초 제한·종료 코드·완료된 탐색 출력을 확인합니다. 결과는 `user-data/test-results`에 남기며 GUI 설정은 수정하지 않습니다. 짧은 실행 검사는 성능 비교를 대신하지 않습니다. 네이티브 실행 파일·JRE는 app-image를 만들 때의 버전이며, 조립 시 JAR과 표시 버전·설치 위치 설정만 갱신합니다.
+
 KataGo는 MIT, KG-next Java 앱은 기존 GPL v3 라이선스를 유지합니다. 엔진과 각 런타임의 고지는 해당 저장소 및 배포 라이브러리에서 보존합니다.

@@ -89,6 +89,8 @@ TENSORRT_UI_REQUIRED_TESTS = (
 
 
 PY_COMPILE_FILES = (
+    "scripts/assemble_windows_dual_cuda.py",
+    "scripts/test_assemble_windows_dual_cuda.py",
     "scripts/katago_source_targets.py",
     "scripts/audit_katago_source_bundle.py",
     "scripts/test_audit_katago_source_bundle.py",
@@ -181,6 +183,7 @@ PY_COMPILE_FILES = (
 )
 
 DIRECT_PYTHON_TESTS = (
+    "scripts/test_assemble_windows_dual_cuda.py",
     "scripts/test_pin_custom_cuda_assets.py",
     "scripts/test_measure_analysis.py",
     "scripts/test_audit_katago_source_bundle.py",

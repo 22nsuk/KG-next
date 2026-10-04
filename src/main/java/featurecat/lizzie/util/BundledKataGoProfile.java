@@ -9,6 +9,8 @@ import org.json.JSONObject;
 /** Ownership of the generated bundled entry, independent of its display name and model contents. */
 public final class BundledKataGoProfile {
   public static final String TYPE = "bundled-katago";
+  public static final String CUDA13_TYPE = "bundled-katago-cuda13";
+  public static final String CUDA13_DIRECTORY = "windows-x64-nvidia-cuda13";
 
   private BundledKataGoProfile() {}
 
@@ -29,6 +31,21 @@ public final class BundledKataGoProfile {
         entry.optBoolean("useJavaSSH", false));
   }
 
+  public static boolean isManagedCuda13(JSONObject entry) {
+    return !entry.optBoolean("useJavaSSH", false)
+        && CUDA13_TYPE.equals(entry.optString("managedProfileType"))
+        && !entry.optString("managedProfileCommand").isBlank()
+        && entry.optString("managedProfileCommand").equals(entry.optString("command"));
+  }
+
+  public static boolean isCuda13Command(String command) {
+    List<String> parts = Utils.splitCommand(command == null ? "" : command);
+    if (parts.isEmpty()) return false;
+    String executable = parts.get(0).replace('\\', '/');
+    return executable.endsWith("/engines/katago/" + CUDA13_DIRECTORY + "/katago.exe")
+        || executable.equals("engines/katago/" + CUDA13_DIRECTORY + "/katago.exe");
+  }
+
   private static boolean isManaged(String type, String generated, String command, boolean ssh) {
     return !ssh
         && TYPE.equals(type)
@@ -38,12 +55,12 @@ public final class BundledKataGoProfile {
   }
 
   public static void claim(EngineData entry) {
-    entry.managedProfileType = TYPE;
+    entry.managedProfileType = isCuda13Command(entry.commands) ? CUDA13_TYPE : TYPE;
     entry.managedProfileCommand = entry.commands;
   }
 
   public static void claim(JSONObject entry) {
-    entry.put("managedProfileType", TYPE);
+    entry.put("managedProfileType", isCuda13Command(entry.optString("command")) ? CUDA13_TYPE : TYPE);
     entry.put("managedProfileCommand", entry.getString("command"));
   }
 
@@ -68,7 +85,7 @@ public final class BundledKataGoProfile {
 
   private static boolean canMigrate(
       boolean hasIdentity, boolean ssh, String name, String command, Path appRoot) {
-    if (hasIdentity || ssh) return false;
+    if (hasIdentity || ssh || isCuda13Command(command)) return false;
     boolean legacyName = "KataGo Bundled".equals(name) || "KataGo Auto Setup".equals(name);
     return legacyName && (command == null || command.isBlank())
         || isDefaultCommand(command, appRoot, legacyName);
