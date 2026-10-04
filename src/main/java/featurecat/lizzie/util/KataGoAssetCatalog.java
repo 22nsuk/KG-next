@@ -36,14 +36,14 @@ public final class KataGoAssetCatalog {
     modelReleaseTag = required(root, "modelReleaseTag");
     defaultModelId = required(root, "defaultModelId");
     models = Collections.unmodifiableMap(parseModels(root.getJSONObject("models")));
-    assets = Collections.unmodifiableMap(parseAssets(root.getJSONObject("assets")));
-    if (origin.equals("project-source-build")) {
+    assets = Collections.unmodifiableMap(parseAssets(root.getJSONObject("assets"), root));
+    {
       for (Asset asset : assets.values()) {
-        if (!asset.downloadUrl().isEmpty()) {
+        if (!asset.origin().equals("project-source-build")) {
           continue;
         }
         String expected =
-            "katago-source-" + katagoSourceCommit.substring(0, 12) + "-" + asset.id() + ".zip";
+            "katago-source-" + asset.sourceCommit().substring(0, 12) + "-" + asset.id() + ".zip";
         if (!expected.equals(asset.assetName())) {
           throw new IllegalStateException("Source asset does not identify its commit and target");
         }
@@ -63,8 +63,10 @@ public final class KataGoAssetCatalog {
     }
     for (Asset asset : assets.values()) {
       boolean staticZlibAsset =
-          origin.equals("project-source-build")
-              && (asset.id().equals("windows-nvidia") || asset.id().equals("windows-tensorrt"));
+          asset.origin().equals("project-source-build")
+              && (asset.id().equals("windows-nvidia")
+                  || asset.id().equals("windows-tensorrt")
+                  || asset.id().equals("windows-nvidia-cuda13"));
       if (asset.zlibLinkage().equals("static") != staticZlibAsset) {
         throw new IllegalStateException("Invalid KataGo asset zlib linkage: " + asset.id());
       }
@@ -86,10 +88,10 @@ public final class KataGoAssetCatalog {
   public String katagoSourceCommit() {
     return katagoSourceCommit;
   }
+
   public String origin() {
     return origin;
   }
-
 
   public String modelReleaseTag() {
     return modelReleaseTag;
@@ -134,7 +136,12 @@ public final class KataGoAssetCatalog {
       throw new IllegalArgumentException("Asset is not from the trusted catalog");
     }
     return asset.downloadUrl().isEmpty()
-        ? engineReleaseBase + "/" + asset.assetName()
+        ? "https://github.com/"
+            + asset.releaseRepository()
+            + "/releases/download/"
+            + asset.releaseTag()
+            + "/"
+            + asset.assetName()
         : asset.downloadUrl();
   }
 
@@ -150,8 +157,7 @@ public final class KataGoAssetCatalog {
     if (!origin.equals("project-source-build")
         || !root.optString("engineReleaseRepository").equals("wimi321/lizzieyzy-next")
         || !required(root, "katagoSourceCommit").matches("[0-9a-f]{40}")
-        || !required(root, "engineReleaseTag")
-            .matches("next-\\d{4}-\\d{2}-\\d{2}\\.[1-9][0-9]*")) {
+        || !required(root, "engineReleaseTag").matches("next-\\d{4}-\\d{2}-\\d{2}\\.[1-9][0-9]*")) {
       throw new IllegalStateException("Invalid trusted project source release identity");
     }
     return "https://github.com/wimi321/lizzieyzy-next/releases/download/"
@@ -195,13 +201,14 @@ public final class KataGoAssetCatalog {
     return url;
   }
 
-  private Map<String, Asset> parseAssets(JSONObject values) {
+  private Map<String, Asset> parseAssets(JSONObject values, JSONObject root) {
     Map<String, Asset> parsed = new LinkedHashMap<>();
     for (String id : values.keySet()) {
       JSONObject value = values.getJSONObject(id);
       if (!required(value, "assetName").matches("[A-Za-z0-9][A-Za-z0-9._-]*\\.zip")) {
         throw new IllegalStateException("Unsafe KataGo asset name");
       }
+      SourceIdentity identity = sourceIdentity(root, value, id);
       parsed.put(
           id,
           new Asset(
@@ -216,7 +223,12 @@ public final class KataGoAssetCatalog {
               value.optString("gpuFamily", ""),
               required(value, "releaseTier"),
               zlibLinkage(value),
-              assetDownloadOverride(value)));
+              assetDownloadOverride(value),
+              value.optString("origin", origin),
+              identity.commit(),
+              identity.sourceRepository(),
+              identity.releaseRepository(),
+              identity.releaseTag()));
     }
     return parsed;
   }
@@ -235,11 +247,100 @@ public final class KataGoAssetCatalog {
           || (value.has("origin") && !url.equals(expected))) {
         throw new IllegalStateException("Unsupported official engine download URL");
       }
-    } else if (!assetOrigin.equals(origin) || !url.isEmpty()) {
+    } else if (!assetOrigin.equals("project-source-build") || !url.isEmpty()) {
       throw new IllegalStateException("Unsupported engine origin or download URL");
     }
     return url;
   }
+
+  private SourceIdentity sourceIdentity(JSONObject root, JSONObject asset, String id) {
+    boolean overridden =
+        asset.has("katagoSourceCommit")
+            || asset.has("katagoSourceRepository")
+            || asset.has("engineReleaseRepository")
+            || asset.has("engineReleaseTag");
+    if (overridden) {
+      String commit = required(asset, "katagoSourceCommit");
+      if (!(id.equals("windows-nvidia") || id.equals("windows-nvidia-cuda13"))
+          || !asset.optString("origin").equals("project-source-build")
+          || !commit.matches("[0-9a-f]{40}")
+          || !required(asset, "katagoSourceRepository").equals("https://github.com/22nsuk/KataGo")
+          || !required(asset, "engineReleaseRepository").equals("22nsuk/KataGo")
+          || !required(asset, "engineReleaseTag").equals("kg-next-" + commit.substring(0, 12))
+          || asset.has("inventorySha256")
+          || !asset.optString("downloadUrl").isEmpty()) {
+        throw new IllegalStateException("Invalid custom source release identity: " + id);
+      }
+      requiredSha256(asset, "executableSha256");
+      requiredSha256(asset, "sourceMetadataSha256");
+      String profile = id.equals("windows-nvidia") ? "cuda12.8-cudnn9" : "cuda13.2-cudnn9.24";
+      if (!asset.optString("backend").equals("cuda")
+          || !asset.optString("platform").equals("windows-x64")
+          || !asset.optString("runtimeProfile").equals(profile)) {
+        throw new IllegalStateException("Invalid custom CUDA runtime identity: " + id);
+      }
+      return new SourceIdentity(
+          commit,
+          required(asset, "katagoSourceRepository"),
+          required(asset, "engineReleaseRepository"),
+          required(asset, "engineReleaseTag"));
+    }
+    if (root.has("katagoSourceRepository")) {
+      throw new IllegalStateException("Global source repository overrides are unsupported");
+    }
+    if (asset.optString("origin").equals("project-source-build")
+        && !origin.equals("project-source-build")) {
+      throw new IllegalStateException(
+          "Source asset requires explicit custom source identity: " + id);
+    }
+    return new SourceIdentity(
+        katagoSourceCommit,
+        "https://github.com/lightvector/KataGo",
+        root.optString("engineReleaseRepository", "lightvector/KataGo"),
+        root.optString("engineReleaseTag", katagoReleaseTag));
+  }
+
+  private record SourceIdentity(
+      String commit, String sourceRepository, String releaseRepository, String releaseTag) {}
+
+  public String engineManifestText(Asset asset) {
+    if (!asset.equals(assets.get(asset.id()))) {
+      throw new IllegalArgumentException("Asset is not from the trusted catalog");
+    }
+    String sourceCommit = asset.origin().equals("project-source-build") ? asset.sourceCommit() : "";
+    String provenance =
+        asset.sourceRepository().equals("https://github.com/22nsuk/KataGo")
+            ? "Source repository: "
+                + asset.sourceRepository()
+                + "\nEngine release repository: "
+                + asset.releaseRepository()
+                + "\nEngine release tag: "
+                + asset.releaseTag()
+                + "\n"
+            : "";
+    return "Manifest schema: 2\nKataGo release: "
+        + katagoReleaseTag
+        + "\nAsset ID: "
+        + asset.id()
+        + "\nAsset: "
+        + asset.assetName()
+        + "\nAsset SHA-256: "
+        + asset.sha256()
+        + "\nExecutable SHA-256: "
+        + asset.executableSha256()
+        + "\nBackend: "
+        + asset.backend()
+        + "\nOrigin: "
+        + asset.origin()
+        + "\nSource commit: "
+        + sourceCommit
+        + "\n"
+        + provenance
+        + "Zlib linkage: "
+        + asset.zlibLinkage()
+        + "\n";
+  }
+
   private static String zlibLinkage(JSONObject value) {
     String linkage = value.optString("zlibLinkage", "dynamic").trim();
     if (!linkage.equals("dynamic") && !linkage.equals("static")) {
@@ -247,7 +348,6 @@ public final class KataGoAssetCatalog {
     }
     return linkage;
   }
-
 
   private static String required(JSONObject value, String key) {
     String result = value.optString(key, "").trim();
@@ -320,5 +420,10 @@ public final class KataGoAssetCatalog {
       String gpuFamily,
       String releaseTier,
       String zlibLinkage,
-      String downloadUrl) {}
+      String downloadUrl,
+      String origin,
+      String sourceCommit,
+      String sourceRepository,
+      String releaseRepository,
+      String releaseTag) {}
 }

@@ -15,7 +15,7 @@ import tempfile
 import zipfile
 
 from build_katago_source import SOURCE_COMMIT, TARGETS, check_release_receipts, check_source
-from katago_asset_catalog import load_catalog, validate_catalog
+from katago_asset_catalog import CUSTOM_CUDA_TARGETS, CUSTOM_SOURCE_REPOSITORY, SHA256_RE, load_catalog, validate_catalog
 
 
 def digest(path: Path) -> str:
@@ -156,15 +156,22 @@ def write_zip(path: Path, files: dict[str, Path], metadata: dict) -> None:
         archive.writestr(info, json.dumps(metadata, indent=2, sort_keys=True) + "\n")
 
 
-def verify_archive(path: Path, target: str) -> dict:
+def verify_archive(path: Path, target: str, *, source_commit: str = SOURCE_COMMIT,
+                   source_repository: str = "https://github.com/lightvector/KataGo",
+                   metadata_sha256: str = "") -> dict:
     with zipfile.ZipFile(path) as archive:
         names = [normalized_name(item.filename) for item in archive.infolist()]
         if len({name.casefold() for name in names}) != len(names):
             raise ValueError("source archive contains duplicate names")
-        metadata = json.loads(archive.read("source-release.json"))
-        if (metadata.get("target") != target or metadata.get("sourceCommit") != SOURCE_COMMIT
+        metadata_bytes = archive.read("source-release.json")
+        if metadata_sha256 and hashlib.sha256(metadata_bytes).hexdigest() != metadata_sha256:
+            raise ValueError("source archive metadata differs from trusted catalog")
+        metadata = json.loads(metadata_bytes)
+        backend = "CUDA" if target in CUSTOM_CUDA_TARGETS else TARGETS[target][2]
+        if (metadata.get("target") != target or metadata.get("sourceCommit") != source_commit
+                or metadata.get("sourceRepository") != source_repository
                 or metadata.get("origin") != "project-source-build"
-                or metadata.get("backend") != TARGETS[target][2]
+                or metadata.get("backend") != backend
                 or any(metadata.get(status) != "PASS" for status in
                        ("buildStatus", "packagingStatus", "dependencyAuditStatus"))):
             raise ValueError("source archive belongs to a different source or target")
@@ -179,6 +186,12 @@ def verify_archive(path: Path, target: str) -> dict:
         executable = "katago.exe" if target.startswith("windows-") else "katago"
         if metadata.get("executable") != expected.get(executable):
             raise ValueError("source archive executable identity mismatch")
+        if source_repository == CUSTOM_SOURCE_REPOSITORY:
+            verify_custom_cuda_metadata(metadata, target, source_commit)
+            if (not {executable, "default_gtp.cfg", "analysis_example.cfg"} <= expected.keys()
+                    or not any(name.startswith("licenses/") for name in expected)
+                    or any(name.casefold() in {"z.dll", "zlib.dll", "zlib1.dll"} for name in expected)):
+                raise ValueError("custom CUDA source archive is missing configuration/license or has dynamic zlib")
         for name, item in expected.items():
             info = archive.getinfo(name)
             if (info.file_size != item.get("sizeBytes")
@@ -188,6 +201,36 @@ def verify_archive(path: Path, target: str) -> dict:
                 if hashlib.file_digest(source, "sha256").hexdigest() != item.get("sha256"):
                     raise ValueError("source archive file checksum mismatch")
         return metadata
+
+
+def verify_custom_cuda_metadata(metadata: dict, target: str, source_commit: str) -> None:
+    if (target not in CUSTOM_CUDA_TARGETS or metadata.get("schemaVersion") != 1
+            or f"Git revision: {source_commit}" not in metadata.get("versionOutput", "")
+            or not SHA256_RE.fullmatch(str(metadata.get("dependencyLockSha256", "")))
+            or metadata.get("hardwareAcceptanceStatus") == "FAIL" or metadata.get("error")):
+        raise ValueError("custom CUDA source build evidence is missing or failed")
+    zlib = [entry for entry in metadata.get("dependencies", []) if entry.get("name") == "zlib"]
+    if (len(zlib) != 1 or zlib[0].get("linkage") != "static"
+            or zlib[0].get("version") != "1.3.1" or zlib[0].get("msvcRuntime") != "MultiThreaded"
+            or zlib[0].get("sha256") != "9a93b2b7dfdac77ceba5a558a580e74667dd6fede4585b91eefb60f03b72df23"):
+        raise ValueError("custom CUDA source build requires audited static zlib provenance")
+    profile = "cuda12.8-cudnn9.8" if target == "windows-nvidia" else "cuda13.2-cudnn9.24"
+    if metadata.get("runtimeProfile") != profile:
+        raise ValueError("custom CUDA runtime profile does not match its target")
+    pins = {
+        "windows-nvidia": {
+            "cuda_cudart": ("12.8.57", "2c7aa62a195d79229d4381c8bd0174a30502cf3d8124c6e94ee50a7fc8a1e9f4"),
+            "cudnn": ("9.8.0.87", "d8a23705e3884b137b7e05449fb2b61bfa524e7cfc3fda80743d633f423c6ce4"),
+        },
+        "windows-nvidia-cuda13": {
+            "cuda_cudart": ("13.2.86", "024e0c1055343d9d2a7d35c90fb7695db14cc2f05bb962198eb18b92c73b32be"),
+            "cudnn": ("9.24.0.43", "88f72bd1ce384197cedbc68496c6052d7ff0bd9fd0b3c74470402cf737507e06"),
+        },
+    }
+    for name, (version, sha256) in pins[target].items():
+        records = [entry for entry in metadata.get("dependencies", []) if entry.get("name") == name]
+        if len(records) != 1 or records[0].get("version") != version or records[0].get("sha256") != sha256:
+            raise ValueError(f"custom CUDA source build has incorrect pinned {name} dependency")
 
 
 def stage(packages: Path, acceptance: Path, base_catalog: Path, output: Path, tag: str,
@@ -215,11 +258,14 @@ def stage(packages: Path, acceptance: Path, base_catalog: Path, output: Path, ta
         staging = Path(temporary)
         catalog["assets"] = {}
         baseline_assets = load_catalog(base_catalog)["assets"]
-        # Official optional engines are independently pinned, not rebuilt by this source matrix.
+        # Independently released assets retain their catalog identity, even when the legacy
+        # matrix still produces a receipt for the same target (notably Windows CUDA12).
         catalog["assets"].update({key: copy.deepcopy(value) for key, value in baseline_assets.items()
-                                  if value.get("origin") == "official-release"})
+                                  if key not in TARGETS or "katagoSourceCommit" in value})
         for result in accepted:
             target = result["target"]
+            if target in catalog["assets"]:
+                continue
             receipt, files, receipt_name = verified[target]
             selected = archive_files(target, files)
             selected = dict(selected, **{receipt_name: packages / target / receipt_name})

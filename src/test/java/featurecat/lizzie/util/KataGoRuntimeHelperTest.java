@@ -3324,22 +3324,11 @@ public class KataGoRuntimeHelperTest {
     KataGoAssetCatalog.Asset asset = catalog.asset(assetId);
     Files.writeString(
         directory.resolve("lizzieyzy-next-katago-engine-manifest.txt"),
-        "Manifest schema: 2\n"
-            + "KataGo release: "
-            + catalog.katagoReleaseTag()
-            + "\nAsset ID: "
-            + assetId
-            + "\nAsset: "
-            + asset.assetName()
-            + "\nAsset SHA-256: "
-            + asset.sha256()
-            + "\nExecutable SHA-256: "
-            + EMPTY_FILE_SHA256
-            + "\nBackend: "
-            + asset.backend()
-            + "\nOrigin: project-source-build\nSource commit: "
-            + catalog.katagoSourceCommit()
-            + "\nZlib linkage: static\n");
+        catalog
+            .engineManifestText(asset)
+            .replace(
+                "Executable SHA-256: " + asset.executableSha256(),
+                "Executable SHA-256: " + EMPTY_FILE_SHA256));
   }
 
   private static void assertMissingDynamicZlib(Path enginePath) {

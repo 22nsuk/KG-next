@@ -230,7 +230,7 @@ jobs:
           for nvidia_engine in \
             "dist/windows/input-nvidia/engines/katago/windows-x64" \
             "dist/windows/app-image-nvidia/KG-next NVIDIA/app/engines/katago/windows-x64"; do
-            if [ "$(python3 scripts/katago_asset_catalog.py origin)" = "project-source-build" ]; then
+            if [ "$(python3 scripts/katago_asset_catalog.py asset-origin windows-nvidia)" = "project-source-build" ]; then
               python3 scripts/audit_katago_source_bundle.py --target windows-nvidia --engine "$nvidia_engine"
             else
               test -f "$nvidia_engine/z.dll"
@@ -249,9 +249,15 @@ jobs:
             "dist/windows/input-nvidia.cuda13/engines/katago/windows-x64" \
             "$cuda13_app/app/engines/katago/windows-x64"; do
             test -f "$cuda13_engine/katago.exe"
-            test -f "$cuda13_engine/z.dll"
             grep -Fqx "nvidia" "$cuda13_engine/lizzieyzy-next-engine-backend.txt"
-            grep -Fqx "Origin: official-release" "$cuda13_engine/lizzieyzy-next-katago-engine-manifest.txt"
+            cuda13_origin="$(python3 scripts/katago_asset_catalog.py asset-origin windows-nvidia-cuda13)"
+            grep -Fqx "Origin: $cuda13_origin" "$cuda13_engine/lizzieyzy-next-katago-engine-manifest.txt"
+            if [ "$cuda13_origin" = "project-source-build" ]; then
+              python3 scripts/audit_katago_source_bundle.py --target windows-nvidia-cuda13 --engine "$cuda13_engine"
+              test ! -f "$cuda13_engine/z.dll"
+            else
+              test -f "$cuda13_engine/z.dll"
+            fi
             grep -Fqx "Asset: $(python3 scripts/katago_asset_catalog.py get assets.windows-nvidia-cuda13.assetName)" \
               "$cuda13_engine/lizzieyzy-next-katago-engine-manifest.txt"
             test "$(sha256sum "$cuda13_engine/katago.exe" | awk '{print $1}')" = \

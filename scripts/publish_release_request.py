@@ -715,18 +715,21 @@ class ReleasePublisher:
             katago_catalog.validate_catalog(catalog)
         except (KeyError, TypeError, ValueError) as error:
             raise PublishError(f"Invalid source engine catalog: {error}") from error
+        independent = {key for key, value in catalog["assets"].items() if "katagoSourceCommit" in value}
+        inherited = {key: value for key, value in catalog["assets"].items()
+                     if value.get("origin", catalog["origin"]) == "project-source-build" and key not in independent}
         if (catalog.get("katagoSourceCommit") != SOURCE_COMMIT
                 or catalog.get("engineReleaseRepository") != self.client.repository
                 or catalog.get("engineReleaseTag") != self.request.release_tag
-                or set(catalog["assets"]) != set(TARGETS)):
-            raise PublishError("All 15 pinned source assets must belong to this exact release")
-        return {asset["assetName"]: asset for asset in catalog["assets"].values()}
+                or set(inherited) != set(TARGETS) - independent):
+            raise PublishError("All inherited pinned source assets must belong to this exact release")
+        return {asset["assetName"]: asset for asset in inherited.values()}
 
     def _wait_for_source_assets(self, release_id: int) -> None:
         if not self.source_assets:
             return
         deadline = time.monotonic() + self.ci_timeout_seconds
-        print("Waiting for the 15 reviewed source archives in the draft release", flush=True)
+        print(f"Waiting for the {len(self.source_assets)} reviewed inherited source archives in the draft release", flush=True)
         while True:
             rows = self.client.list_release_assets(release_id)
             selected = [row for row in rows if row.get("name") in self.source_assets]

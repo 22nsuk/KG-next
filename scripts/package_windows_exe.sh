@@ -547,6 +547,10 @@ lines = [
     f"KataGo release: {release}",
     f"{bundle_label}: {asset}",
 ]
+for key in ("Origin", "Source commit", "Source repository", "Engine release repository", "Engine release tag"):
+    value = engine.get(key, "").strip()
+    if value:
+        lines.append(f"{key}: {value}")
 for key in (
     "Model source",
     "Model SHA-256",

@@ -213,6 +213,34 @@ build_release_variant() { printf 'variant'; printf ' <%s>' "$@"; printf '\\n'; }
                 with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "incompatible runtime DLL"):
                     NVIDIA_RUNTIME.validate_profile_dlls(profile_name, names + ["nvJitLink_130_0.dll"])
 
+    def test_cuda128_accepts_pinned_nvrtc_alternate_but_rejects_cuda13_alternate(self) -> None:
+        for profile in ("cuda12.8-cudnn9", "cuda12.8-cudnn9-tensorrt"):
+            NVIDIA_RUNTIME.validate_profile_dlls(profile, ["nvrtc64_120_0.alt.dll"])
+            with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "incompatible runtime DLL"):
+                NVIDIA_RUNTIME.validate_profile_dlls(profile, ["nvrtc64_130_0.alt.dll"])
+        with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "incompatible runtime DLL"):
+            NVIDIA_RUNTIME.validate_profile_dlls("cuda12.1-cudnn9", ["nvrtc64_120_0.alt.dll"])
+
+    def test_cuda128_requires_pinned_cudnn98_package_and_prepared_manifest(self) -> None:
+        packages = [dict(key="cuda_nvrtc", version=NVIDIA_RUNTIME.CUDA_12_8_NVRTC_VERSION,
+                         sha256=NVIDIA_RUNTIME.CUDA_12_8_NVRTC_SHA256, display_name="CUDA NVRTC", url="https://example.invalid/nvrtc.zip"),
+                    dict(key="cudnn", version=NVIDIA_RUNTIME.CUDNN_9_8_VERSION,
+                         sha256=NVIDIA_RUNTIME.CUDNN_9_8_SHA256, display_name="NVIDIA cuDNN", url="https://example.invalid/cudnn.zip")]
+        NVIDIA_RUNTIME.validate_profile_packages("cuda12.8-cudnn9", packages)
+        for change in (dict(version="9.24.0.43"), dict(sha256="0" * 64)):
+            with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "pinned cuDNN"):
+                NVIDIA_RUNTIME.validate_profile_packages("cuda12.8-cudnn9", [packages[0], dict(packages[1], **change)])
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)
+            names = ["nvrtc64_120_0.dll", "nvrtc-builtins64_128.dll", "nvrtc64_120_0.alt.dll"]
+            for name in names:
+                (output / name).write_bytes(b"synthetic runtime")
+            NVIDIA_RUNTIME.write_manifest(output, "cuda12.8-cudnn9", packages, names)
+            NVIDIA_RUNTIME.verify_prepared_output("cuda12.8-cudnn9", output)
+            NVIDIA_RUNTIME.write_manifest(output, "cuda12.8-cudnn9", packages[:1], names)
+            with self.assertRaisesRegex(NVIDIA_RUNTIME.RuntimeErrorWithContext, "missing pinned cudnn"):
+                NVIDIA_RUNTIME.verify_prepared_output("cuda12.8-cudnn9", output)
+
     def test_nvrtc_archive_extracts_compiler_and_builtins(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

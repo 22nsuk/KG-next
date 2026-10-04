@@ -375,11 +375,15 @@ inventory and runtime policy; the original source receipt remains included as ev
 Default GTP and analysis templates are included from the same clean pinned source
 checkout. Archives are reopened and every stored file is hashed before staging completes.
 
-The shared catalog distinguishes official releases from `project-source-build`. Only
-the reviewed `wimi321/lizzieyzy-next` immutable release URL is accepted for project
-engines. Model URLs remain official and unchanged. Runtime repair, CUDA companions,
+The shared catalog distinguishes official releases from `project-source-build`. The inherited
+source matrix uses the reviewed `wimi321/lizzieyzy-next` immutable release URL. Windows
+CUDA12 and CUDA13 may independently use `22nsuk/KataGo`, with all four per-asset fields
+`katagoSourceCommit`, `katagoSourceRepository`, `engineReleaseRepository` and
+`engineReleaseTag` required together. Only those two targets may override their source,
+and the tag must equal `kg-next-<SHA12>`. Models and the other fourteen engines keep their
+existing identities. Runtime repair, CUDA companions,
 experimental installation and TensorRT packaging use the same source-aware URL resolver.
-Catalog schema 2 records `zlibLinkage: static` only for the pinned Windows CUDA and
+Catalog schema 2 records `zlibLinkage: static` only for the pinned Windows CUDA12, CUDA13 and
 TensorRT project builds. Installed engine manifest schema 2 binds the catalog origin,
 asset ID/name/archive digest, executable digest, backend, source commit and zlib linkage
 to the final executable. Runtime readiness omits the dynamic zlib DLL group only when
@@ -387,6 +391,17 @@ that manifest and the executable still match the catalog exactly; official, exte
 unknown or modified engines remain subject to their dynamic dependency contract.
 The checked-in production catalog is **not switched by staging**. Final archive upload,
 application package integration, signing and publication remain separate gates.
+
+`pin_custom_cuda_assets.py --cuda12 <archive> --cuda13 <archive> --source-commit <FULL_SHA>
+--tag kg-next-<SHA12> --output <new-catalog>` validates real fork archives and measures
+their sizes, archive/executable hashes and `sourceMetadataSha256`. It checks the exact
+source/target, runtime profile, CUDA runtime and cuDNN archive pins, static zlib evidence,
+configuration templates, license inventory and every archive member. Its output changes
+only the two CUDA assets; it does not upload anything. Source archive metadata itself is
+hash-pinned so an installed receipt cannot change the recorded static-link evidence.
+The legacy fifteen-target staging process preserves independent overrides instead of
+promoting an upstream CUDA12 build over the fork. GUI release asset transfer copies
+only the fourteen inherited assets, leaving both custom assets in their engine release.
 
 Linux CUDA packages also carry the hash-locked SDK's `libz.so.1`, required dynamically by
 cuDNN. CUDA/cuDNN remain external; zlib must not be silently resolved from the build host.

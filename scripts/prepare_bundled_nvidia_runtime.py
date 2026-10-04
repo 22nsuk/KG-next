@@ -26,6 +26,8 @@ CUDNN_9_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cudnn/redi
 CUDNN_9_24_MANIFEST_URL = "https://developer.download.nvidia.com/compute/cudnn/redist/redistrib_9.24.0.json"
 CUDA_12_8_NVRTC_VERSION = "12.8.61"
 CUDA_12_8_NVRTC_SHA256 = "e43603b09f8a52d681ceb814c00b655af19da53692ab91671dabbf8071c8f93d"
+CUDNN_9_8_VERSION = "9.8.0.87"
+CUDNN_9_8_SHA256 = "d8a23705e3884b137b7e05449fb2b61bfa524e7cfc3fda80743d633f423c6ce4"
 CUDA_13_2_NVRTC_VERSION = "13.2.86"
 CUDA_13_2_NVRTC_SHA256 = "c8d4254c51bfa3fa982bd40bf36de9800d4c65211945e8393fbf4c310ef9232a"
 CUDNN_9_24_VERSION = "9.24.0.43"
@@ -90,7 +92,7 @@ RUNTIME_PROFILES = {
         "direct_specs": (),
     },
     "cuda12.8-cudnn9": {
-        "description": "CUDA 12.8 + cuDNN 9 runtime for the unified RTX 20/30/40/50 package",
+        "description": "CUDA 12.8 + cuDNN 9.8 runtime for the unified RTX 20/30/40/50 package",
         "manifest_specs": CUDA_12_8_SPECS
         + (("NVIDIA cuDNN", CUDNN_9_MANIFEST_URL, "cudnn", "windows-x86_64/cuda12"),),
         "direct_specs": (),
@@ -367,6 +369,11 @@ def validate_profile_packages(profile_name: str, packages: list[dict[str, object
         return
     if not profile_name.startswith("cuda12.8-"):
         return
+    if profile_name in ("cuda12.8-cudnn9", "cuda12.8-cudnn9-tensorrt"):
+        cudnn = [package for package in packages if package.get("key") == "cudnn"]
+        if (len(cudnn) != 1 or cudnn[0].get("version") != CUDNN_9_8_VERSION
+                or cudnn[0].get("sha256") != CUDNN_9_8_SHA256):
+            raise RuntimeErrorWithContext(f"{profile_name} requires pinned cuDNN {CUDNN_9_8_VERSION}")
     nvrtc_packages = [package for package in packages if package.get("key") == "cuda_nvrtc"]
     if len(nvrtc_packages) != 1:
         raise RuntimeErrorWithContext(
@@ -397,6 +404,8 @@ def validate_profile_dlls(profile_name: str, extracted_names: list[str]) -> None
     elif profile_name.startswith("cuda12."):
         cuda12_patterns = ("cudart64_12.dll", "cublas64_12.dll", "cublaslt64_12.dll", "nvblas64_12.dll",
                            "nvjitlink_120_0.dll", "nvrtc64_120_0.dll", "nvrtc-builtins64_12?.dll")
+        if profile_name.startswith("cuda12.8-"):
+            cuda12_patterns += ("nvrtc64_120_0.alt.dll",)
         cudnn_major = "8" if profile_name.endswith("cudnn8") else "9"
         for name in runtime_names:
             if name.startswith("cudnn"):
@@ -419,6 +428,8 @@ def verify_prepared_output(profile_name: str, output_dir: Path) -> None:
     pins = CUDA_13_2_PACKAGE_PINS if profile_name == "cuda13.2-cudnn9.24" else {}
     if profile_name.startswith("cuda12.8-"):
         pins = {"cuda_nvrtc": (CUDA_12_8_NVRTC_VERSION, CUDA_12_8_NVRTC_SHA256)}
+        if profile_name in ("cuda12.8-cudnn9", "cuda12.8-cudnn9-tensorrt"):
+            pins["cudnn"] = (CUDNN_9_8_VERSION, CUDNN_9_8_SHA256)
         if not all((output_dir / name).is_file() for name in
                    ("nvrtc64_120_0.dll", "nvrtc-builtins64_128.dll")):
             raise RuntimeErrorWithContext(f"{profile_name} is missing NVRTC compiler or builtins")

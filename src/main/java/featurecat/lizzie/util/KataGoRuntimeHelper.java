@@ -7012,7 +7012,7 @@ public final class KataGoRuntimeHelper {
             ? KATAGO_ASSETS.assets().get("windows-nvidia-cuda13")
             : assetForNvidiaBackend(backend);
     return asset != null
-        && "project-source-build".equals(KATAGO_ASSETS.origin())
+        && "project-source-build".equals(asset.origin())
         && "static".equals(asset.zlibLinkage())
         && hasVerifiedEngineProvenance(enginePath, asset);
   }
@@ -7047,14 +7047,27 @@ public final class KataGoRuntimeHelper {
           && asset.sha256().equals(manifest.get("Asset SHA-256"))
           && expectedExecutableSha256.equals(manifest.get("Executable SHA-256"))
           && asset.backend().equals(manifest.get("Backend"))
-          && KATAGO_ASSETS.origin().equals(manifest.get("Origin"))
-          && KATAGO_ASSETS.katagoSourceCommit().equals(manifest.get("Source commit"))
+          && asset.origin().equals(manifest.get("Origin"))
+          && asset.sourceCommit().equals(manifest.get("Source commit"))
+          && hasValidSourceRepositoryManifest(manifest, asset)
           && asset.zlibLinkage().equals(manifest.get("Zlib linkage"))
           && hasValidOptionalCompanionManifest(manifest)
           && expectedExecutableSha256.equalsIgnoreCase(sha256(enginePath));
     } catch (IOException e) {
       return false;
     }
+  }
+
+  private static boolean hasValidSourceRepositoryManifest(
+      Map<String, String> manifest, KataGoAssetCatalog.Asset asset) {
+    if (asset.sourceRepository().equals("https://github.com/22nsuk/KataGo")) {
+      return asset.sourceRepository().equals(manifest.get("Source repository"))
+          && asset.releaseRepository().equals(manifest.get("Engine release repository"))
+          && asset.releaseTag().equals(manifest.get("Engine release tag"));
+    }
+    return !manifest.containsKey("Source repository")
+        && !manifest.containsKey("Engine release repository")
+        && !manifest.containsKey("Engine release tag");
   }
 
   private static boolean hasValidOptionalCompanionManifest(Map<String, String> manifest) {
@@ -7102,6 +7115,9 @@ public final class KataGoRuntimeHelper {
           "Backend",
           "Origin",
           "Source commit",
+          "Source repository",
+          "Engine release repository",
+          "Engine release tag",
           "Zlib linkage",
           "HumanSL companion",
           "HumanSL companion SHA-256" ->
@@ -7111,24 +7127,11 @@ public final class KataGoRuntimeHelper {
   }
 
   static String tensorRtEngineManifestText() {
-    return "Manifest schema: 2\n"
-        + "KataGo release: "
-        + TENSORRT_KATAGO_VERSION
-        + "\nAsset ID: windows-tensorrt\nAsset: "
-        + TENSORRT_KATAGO_ASSET
-        + "\nAsset SHA-256: "
-        + TENSORRT_KATAGO_SHA256
-        + "\nExecutable SHA-256: "
-        + expectedKatagoExecutableSha256(TENSORRT_KATAGO_ASSET_INFO)
-        + "\nBackend: "
-        + TENSORRT_KATAGO_ASSET_INFO.backend()
-        + "\nOrigin: "
-        + KATAGO_ASSETS.origin()
-        + "\nSource commit: "
-        + KATAGO_ASSETS.katagoSourceCommit()
-        + "\nZlib linkage: "
-        + TENSORRT_KATAGO_ASSET_INFO.zlibLinkage()
-        + "\n";
+    return KATAGO_ASSETS
+        .engineManifestText(TENSORRT_KATAGO_ASSET_INFO)
+        .replace(
+            "Executable SHA-256: " + TENSORRT_KATAGO_ASSET_INFO.executableSha256(),
+            "Executable SHA-256: " + expectedKatagoExecutableSha256(TENSORRT_KATAGO_ASSET_INFO));
   }
 
   private static void deleteRecursively(Path path) throws IOException {
