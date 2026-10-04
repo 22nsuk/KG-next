@@ -577,13 +577,16 @@ public class Config {
       return null;
     }
 
-    Path appRoot = appRootOpt.get();
-    String binaryName = OS.isWindows() ? "katago.exe" : "katago";
+    return detectBundledKataGoConfig(appRootOpt.get(), detectBundledPlatformDir());
+  }
+
+  private static BundledKataGoConfig detectBundledKataGoConfig(Path appRoot, String platformDir) {
+    String binaryName = platformDir.startsWith("windows-") ? "katago.exe" : "katago";
     Path enginePath =
         appRoot
             .resolve(BUNDLED_ENGINE_ROOT)
             .resolve("katago")
-            .resolve(detectBundledPlatformDir())
+            .resolve(platformDir)
             .resolve(binaryName);
     Path weightPath = appRoot.resolve(BUNDLED_WEIGHT_ROOT).resolve(BUNDLED_WEIGHT_NAME);
     Path gtpConfigPath =
@@ -775,7 +778,39 @@ public class Config {
         ui.put("analysis-engine-command-customized", false);
       }
     }
+    if ("windows-x64".equals(detectBundledPlatformDir())) {
+      applyBundledCuda13Default(bundledConfig.appRoot, engineSettings);
+    }
     return !configBeforeRepair.equals(config.toString());
+  }
+
+  // The optional second engine has separate ownership so repairing the primary entry or running
+  // Auto Setup cannot silently turn a selected CUDA13 entry back into CUDA12.
+  private static void applyBundledCuda13Default(Path appRoot, JSONArray engines) {
+    BundledKataGoConfig cuda13 =
+        detectBundledKataGoConfig(appRoot, BundledKataGoProfile.CUDA13_DIRECTORY);
+    if (cuda13 == null) return;
+    JSONObject entry = null;
+    for (int i = 0; i < engines.length(); i++) {
+      JSONObject candidate = engines.optJSONObject(i);
+      if (candidate != null && BundledKataGoProfile.isManagedCuda13(candidate)) {
+        entry = candidate;
+        break;
+      }
+    }
+    if (entry == null) {
+      entry = new JSONObject()
+          .put("name", "KataGo CUDA13 (13.2 / cuDNN 9.24)")
+          .put("isDefault", false)
+          .put("preload", false)
+          .put("komi", 7.5)
+          .put("width", 19)
+          .put("height", 19);
+      engines.put(entry);
+    }
+    if (entry.optString("id").isBlank()) entry.put("id", UUID.randomUUID().toString());
+    entry.put("command", cuda13.engineCommand);
+    BundledKataGoProfile.claim(entry);
   }
 
   private boolean applyBundledKataGoDefaultsAndPersist() throws IOException {
