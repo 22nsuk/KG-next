@@ -131,6 +131,7 @@ class ConfigDualCudaTest {
 
   private Path bundle(String name) throws Exception {
     Path root = Files.createDirectories(temp.resolve(name));
+    Files.createDirectories(root.resolve("save"));
     Path engine = root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe");
     Files.createDirectories(engine.getParent());
     Files.writeString(engine, "fixture");
