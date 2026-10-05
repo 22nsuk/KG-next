@@ -347,11 +347,15 @@ public class VariationTreePublicationTest {
       Lizzie.frame.setVisible(false);
       assertNull(Lizzie.frame.currentVariationTreeImage());
     });
+    // An EDT barrier alone does not finish the native window-manager unmap/remap.
+    // Drain native events too, so a 2x Robot sample uses the reshown window's actual geometry.
+    robot.waitForIdle();
     SwingUtilities.invokeAndWait(() -> {
       assertNull(Lizzie.frame.currentVariationTreeImage(), "hidden frame rejects queued publication");
       Lizzie.frame.setVisible(true);
       Lizzie.frame.refresh();
     });
+    robot.waitForIdle();
     awaitScrollTree(robot, scroll.get(), 79, result.resolveSibling("scroll-reshown.png"));
     assertTrue(failures.isEmpty(), "Swing state changed off EDT: " + failures);
   }
