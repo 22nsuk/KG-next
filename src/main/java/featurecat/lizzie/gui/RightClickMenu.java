@@ -10,8 +10,6 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
 import java.util.ResourceBundle;
-import java.util.Timer;
-import java.util.TimerTask;
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
 import javax.swing.JPopupMenu;
@@ -65,32 +63,7 @@ public class RightClickMenu extends JPopupMenu {
         new PopupMenuListener() {
           public void popupMenuCanceled(PopupMenuEvent e) {}
 
-          public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
-            SwingUtilities.invokeLater(
-                () -> {
-                  if (Lizzie.frame.isMouseOver) {
-                    Lizzie.frame.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
-                    Lizzie.frame.isMouseOver = false;
-                    Lizzie.frame.clearMoved();
-                  }
-                  if (Lizzie.frame.independentMainBoard != null
-                      && Lizzie.frame.independentMainBoard.isMouseOver) {
-                    Lizzie.frame.independentMainBoard.mouseOverCoordinate =
-                        LizzieFrame.outOfBoundCoordinate;
-                    Lizzie.frame.independentMainBoard.isMouseOver = false;
-                    Lizzie.frame.independentMainBoard.clearMoved();
-                  }
-                });
-            Timer timer = new Timer();
-            timer.schedule(
-                new TimerTask() {
-                  public void run() {
-                    Lizzie.frame.isShowingRightMenu = false;
-                    this.cancel();
-                  }
-                },
-                200);
-          }
+          public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {}
 
           public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
             boolean independent =
@@ -102,7 +75,6 @@ public class RightClickMenu extends JPopupMenu {
                 independent
                     ? Lizzie.frame.independentMainBoard.boardRenderer
                     : LizzieFrame.boardRenderer;
-            Lizzie.frame.isShowingRightMenu = true;
             String restrictionHint = resourceBundle.getString(
                 Lizzie.leelaz != null && Lizzie.leelaz.supportsRootTreeReuse()
                     ? "RightClickMenu.reuseRootTree"
@@ -214,6 +186,7 @@ public class RightClickMenu extends JPopupMenu {
         };
 
     this.addPopupMenuListener(listener);
+    BoardPopupMenus.install(this, true);
     ImageIcon iconBack = new ImageIcon();
     ImageIcon iconBlack = new ImageIcon();
     ImageIcon iconWhite = new ImageIcon();
