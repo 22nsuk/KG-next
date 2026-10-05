@@ -106,7 +106,9 @@ final class RulesLayerTestHarness implements AutoCloseable {
     LizzieFrame.menu = allocate(Menu.class);
     LizzieFrame.menu.txtKomi = new javax.swing.JTextField();
     LizzieFrame.winrateGraph = allocate(WinrateGraph.class);
-    LizzieFrame.boardRenderer = allocate(NoOpBoardRenderer.class);
+    // The renderer is headless-safe; construct it so its image surfaces and other final
+    // collaborators exist when loadFile invokes real cleanup methods on this stub.
+    LizzieFrame.boardRenderer = new NoOpBoardRenderer();
     LizzieFrame.isSavingRaw = false;
     LizzieFrame.urlSgf = false;
 

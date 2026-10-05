@@ -363,10 +363,22 @@ public class VariationTreePublicationTest {
       assertWindowFitsScreen();
       javax.swing.Timer observer = new javax.swing.Timer(30, null);
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
+      AtomicReference<String> observed = new AtomicReference<>("not observed");
       observer.addActionListener(event -> {
         try {
-          if (System.nanoTime() > deadline) throw new AssertionError("scroll tree did not settle");
+          if (System.nanoTime() > deadline) {
+            var viewport = scroll.getViewport();
+            ImageIO.write(robot.createScreenCapture(new java.awt.Rectangle(
+                viewport.getLocationOnScreen(), viewport.getSize())), "png", screenshot.toFile());
+            var last = Lizzie.frame.currentVariationTreeImage();
+            if (last != null) ImageIO.write(last.image(), "png",
+                screenshot.resolveSibling("timeout-tree.png").toFile());
+            throw new AssertionError("scroll tree did not settle: " + screenshot.getFileName()
+                + "; " + observed.get() + "; frame=" + Lizzie.frame.getBounds()
+                + "; showing=" + Lizzie.frame.isShowing());
+          }
           var tree = Lizzie.frame.currentVariationTreeImage();
+          observed.set("view=" + (tree == null ? null : tree.view()));
           if (tree == null || tree.view().simple()
               || tree.view().displayNode().getData().moveNumber != move) return;
           assertTrue(scroll.isVisible());
@@ -375,10 +387,14 @@ public class VariationTreePublicationTest {
           java.awt.Point marker = new java.awt.Point(
               featurecat.lizzie.util.Utils.zoomIn(tree.currentX() + offset),
               featurecat.lizzie.util.Utils.zoomIn(tree.currentY() + offset));
+          observed.set(observed.get() + "; viewport=" + viewport.getViewRect()
+              + "; marker=" + marker);
           if (!viewport.getViewRect().contains(marker)) return;
           var origin = viewport.getView().getLocationOnScreen();
           java.awt.Point screenPoint = new java.awt.Point(origin.x + marker.x, origin.y + marker.y);
-          if (!robot.getPixelColor(screenPoint.x, screenPoint.y).equals(Color.BLACK)) return;
+          Color actual = robot.getPixelColor(screenPoint.x, screenPoint.y);
+          observed.set(observed.get() + "; screen=" + screenPoint + "; pixel=" + actual);
+          if (!actual.equals(Color.BLACK)) return;
           ImageIO.write(robot.createScreenCapture(new java.awt.Rectangle(
               viewport.getLocationOnScreen(), viewport.getSize())), "png", screenshot.toFile());
           observer.stop();
