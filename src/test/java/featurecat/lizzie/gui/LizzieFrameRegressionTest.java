@@ -21,6 +21,8 @@ import featurecat.lizzie.analysis.PlayerStrengthEstimator;
 import featurecat.lizzie.analysis.ReadBoard;
 import featurecat.lizzie.analysis.WholeGameAnalysisSession;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
+import featurecat.lizzie.gui.web.WebBoardDataCollector;
+import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -51,6 +53,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -69,6 +72,69 @@ import org.junit.jupiter.api.io.TempDir;
 class LizzieFrameRegressionTest {
   private static final int BOARD_SIZE = 2;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
+
+  @Test
+  void toolbarTrialExitPublishesOnlyForOneCompletedTransition() throws Exception {
+    WebBoardManager previousManager = Lizzie.webBoardManager;
+    Leelaz previousEngine = Lizzie.leelaz;
+    LizzieFrame previousFrame = Lizzie.frame;
+    WebBoardManager manager = new WebBoardManager();
+    List<Boolean> publications = new ArrayList<>();
+    WebBoardDataCollector collector =
+        new WebBoardDataCollector() {
+          @Override
+          public void broadcastTrialState(WebBoardManager.TrialSession session) {
+            publications.add(session != null);
+          }
+
+          @Override
+          public void onBoardStateChanged() {}
+
+          @Override
+          public ScheduledFuture<?> scheduleOnExecutor(Runnable task, long delay, TimeUnit unit) {
+            return null; // No background worker or idle timeout is needed for a toolbar action.
+          }
+        };
+    try {
+      Lizzie.frame = null; // This test exercises the toolbar command, not desktop painting.
+      Lizzie.leelaz = new Leelaz("");
+      Lizzie.webBoardManager = manager;
+      setDeclaredField(WebBoardManager.class, manager, "collector", collector);
+      setDeclaredField(WebBoardManager.class, manager, "running", true);
+      LizzieFrame frame = allocate(PolicyFrame.class);
+      BoardHistoryNode anchor =
+          new BoardHistoryNode(BoardData.empty(Board.boardWidth, Board.boardHeight));
+      assertTrue(manager.enterTrial("owner", anchor));
+      publications.clear();
+
+      SwingUtilities.invokeAndWait(frame::exitWebTrialFromToolbar);
+      assertEquals("", manager.getCurrentTrialOwner());
+      assertTrue(anchor.variations.isEmpty(), "ending an unused trial removes its dummy branch");
+      assertEquals(List.of(false), publications, "a completed toolbar exit must publish once");
+
+      SwingUtilities.invokeAndWait(frame::exitWebTrialFromToolbar);
+      assertEquals(List.of(false), publications, "an already-ended trial must not publish again");
+
+      assertTrue(manager.enterTrial("next-owner", anchor));
+      publications.clear();
+      setDeclaredField(WebBoardManager.class, manager, "running", false);
+      SwingUtilities.invokeAndWait(frame::exitWebTrialFromToolbar);
+      assertEquals("next-owner", manager.getCurrentTrialOwner());
+      assertTrue(publications.isEmpty(), "a stopped server must not receive a toolbar exit");
+
+      Lizzie.webBoardManager = null;
+      SwingUtilities.invokeAndWait(frame::exitWebTrialFromToolbar);
+    } finally {
+      try {
+        manager.forceExitTrial();
+        collector.shutdown();
+      } finally {
+        Lizzie.webBoardManager = previousManager;
+        Lizzie.leelaz = previousEngine;
+        Lizzie.frame = previousFrame;
+      }
+    }
+  }
 
   @Test
   void startupBenchmarkYieldsToUserTasksAndLoadedGameAtRoot() throws Exception {
