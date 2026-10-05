@@ -19,12 +19,12 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Run repository checks
         run: python3 scripts/run_local_ci.py --profile portable --group repository --require-clean --summary-dir target/local-ci/portable-repository
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-portable-repository
           path: target/local-ci/portable-repository
@@ -35,12 +35,12 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Run portable script tests
         run: python3 scripts/run_local_ci.py --profile portable --group scripts --require-clean --summary-dir target/local-ci/portable-scripts
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-portable-scripts
           path: target/local-ci/portable-scripts
@@ -51,9 +51,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.x'
       - name: Run Windows repository checks
@@ -64,14 +64,14 @@ jobs:
         run: python scripts/run_local_ci.py --profile windows --group scripts --require-clean --summary-dir target/local-ci/windows-scripts
       - name: Upload repository summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-windows-repository
           path: target/local-ci/windows-repository
           if-no-files-found: warn
       - name: Upload script summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-windows-scripts
           path: target/local-ci/windows-scripts
@@ -82,9 +82,9 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -93,17 +93,43 @@ jobs:
         run: python3 scripts/run_local_ci.py --profile portable --group java --require-clean --summary-dir target/local-ci/portable-java
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-portable-java
           path: target/local-ci/portable-java
           if-no-files-found: warn
       - name: Upload JaCoCo coverage report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: jacoco-coverage-report-linux
           path: target/site/jacoco
           if-no-files-found: error
+
+  # Keep the full verification on Java 21; execute only the changed web boundaries on Java 17.
+  java17-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Java 17
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - name: Verify web message and HTTP boundaries on Java 17
+        run: >-
+          mvn -B -Djava.awt.headless=true
+          -Dtest=WebBoardHttpServerLifecycleTest,WebTrialMessageLifecycleTest
+          test
+      - name: Upload Java 17 test reports
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: java17-web-test-reports
+          path: target/surefire-reports
+          if-no-files-found: warn
 
   java-windows:
     runs-on: windows-latest
@@ -115,13 +141,13 @@ jobs:
           $deadline = [DateTimeOffset]::UtcNow.AddMinutes(27).ToUnixTimeSeconds()
           Add-Content -LiteralPath $env:GITHUB_ENV -Value "LIZZIE_CI_DEADLINE_UNIX_SECONDS=$deadline" -Encoding utf8
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.x'
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -132,7 +158,7 @@ jobs:
         run: ./scripts/run_windows_ci_diagnostics.ps1
       - name: Upload Windows Java diagnostics
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-java-diagnostics
           retention-days: 14
@@ -143,13 +169,13 @@ jobs:
           if-no-files-found: warn
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-windows-java
           path: target/local-ci/windows-java
           if-no-files-found: warn
       - name: Upload JaCoCo coverage report
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: jacoco-coverage-report-windows
           path: target/site/jacoco
@@ -160,9 +186,9 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -206,14 +232,14 @@ jobs:
           '
       - name: Upload desktop smoke artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: desktop-smoke
           path: target/desktop-smoke
           if-no-files-found: warn
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-portable-desktop
           path: target/local-ci/portable-desktop
@@ -237,13 +263,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.x'
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
         with:
           distribution: temurin
           java-version: '21'
@@ -267,14 +293,14 @@ jobs:
         run: python scripts/run_local_ci.py --profile ${{ matrix.profile }} --group engine-process --require-clean --summary-dir target/local-ci/${{ matrix.summary }}
       - name: Upload engine process artifacts
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: engine-process-${{ matrix.name }}
           path: target/engine-process-smoke
           if-no-files-found: warn
       - name: Upload local CI summary
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: local-ci-summary-${{ matrix.summary }}
           path: target/local-ci/${{ matrix.summary }}
@@ -282,23 +308,24 @@ jobs:
 
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java-windows, desktop-smoke, engine-process]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, engine-process]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - name: Require all execution jobs
         env:
           REPOSITORY: ${{ needs.repository-checks.result }}
           SCRIPTS: ${{ needs.script-tests.result }}
           WINDOWS_SCRIPTS: ${{ needs.windows-script-tests.result }}
           JAVA_LINUX: ${{ needs.java-linux.result }}
+          JAVA17_WEB: ${{ needs.java17-web.result }}
           JAVA_WINDOWS: ${{ needs.java-windows.result }}
           DESKTOP: ${{ needs.desktop-smoke.result }}
           ENGINE_PROCESS: ${{ needs.engine-process.result }}
         run: |
-          printf '%s\n' "repository-checks=$REPOSITORY" "script-tests=$SCRIPTS" "windows-script-tests=$WINDOWS_SCRIPTS" "java-linux=$JAVA_LINUX" "java-windows=$JAVA_WINDOWS" "desktop-smoke=$DESKTOP" "engine-process=$ENGINE_PROCESS"
+          printf '%s\n' "repository-checks=$REPOSITORY" "script-tests=$SCRIPTS" "windows-script-tests=$WINDOWS_SCRIPTS" "java-linux=$JAVA_LINUX" "java17-web=$JAVA17_WEB" "java-windows=$JAVA_WINDOWS" "desktop-smoke=$DESKTOP" "engine-process=$ENGINE_PROCESS"
           python3 - <<'PY'
           import os
           from scripts.run_local_ci import require_successful_job_results
@@ -309,6 +336,7 @@ jobs:
                   "script-tests": os.environ["SCRIPTS"],
                   "windows-script-tests": os.environ["WINDOWS_SCRIPTS"],
                   "java-linux": os.environ["JAVA_LINUX"],
+                  "java17-web": os.environ["JAVA17_WEB"],
                   "java-windows": os.environ["JAVA_WINDOWS"],
                   "desktop-smoke": os.environ["DESKTOP"],
                   "engine-process": os.environ["ENGINE_PROCESS"],
