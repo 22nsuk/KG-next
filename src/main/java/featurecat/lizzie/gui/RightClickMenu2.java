@@ -5,8 +5,6 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.IOException;
 import java.util.ResourceBundle;
-import java.util.Timer;
-import java.util.TimerTask;
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
 import javax.swing.JPopupMenu;
@@ -36,34 +34,9 @@ public class RightClickMenu2 extends JPopupMenu {
         new PopupMenuListener() {
           public void popupMenuCanceled(PopupMenuEvent e) {}
 
-          public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
-            //				if (Lizzie.leelaz.isPondering() && featurecat.lizzie.gui.RightClickMenu.isforcing)
-            // {
-            //					if (featurecat.lizzie.gui.RightClickMenu.isforcing) {
-            //						Lizzie.leelaz.analyzeAvoid("allow", Lizzie.board.getcurrentturn(),
-            //								featurecat.lizzie.gui.RightClickMenu.allowcoords, 1);
-            //					} else {
-            //						Lizzie.leelaz.analyzeAvoid("avoid", Lizzie.board.getcurrentturn(),
-            //								featurecat.lizzie.gui.RightClickMenu.avoidcoords, 30);
-            //					}
-            //				}
-            //				if (Lizzie.leelaz.isPondering() &&
-            // !featurecat.lizzie.gui.RightClickMenu.isforcing) {
-            //					Lizzie.leelaz.ponder();
-            //				}
-            Timer timer = new Timer();
-            timer.schedule(
-                new TimerTask() {
-                  public void run() {
-                    Lizzie.frame.isShowingRightMenu = false;
-                    this.cancel();
-                  }
-                },
-                200);
-          }
+          public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {}
 
           public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
-            Lizzie.frame.isShowingRightMenu = true;
             if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz) {
               previousMove.setText(resourceBundle.getString("RightClickMenu.regretOne")); // ("悔棋");
               switchone.setVisible(false);
@@ -88,6 +61,7 @@ public class RightClickMenu2 extends JPopupMenu {
         };
 
     this.addPopupMenuListener(listener);
+    BoardPopupMenus.install(this, false);
     ImageIcon iconBack = new ImageIcon();
     ImageIcon iconSearch = new ImageIcon();
     try {
