@@ -5,6 +5,7 @@ import featurecat.lizzie.analysis.EngineFollowController;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import java.io.IOException;
@@ -34,21 +35,43 @@ public class WebBoardManager {
     void refresh();
   }
 
+  /** The trial path needs scheduling and publication, not the collector's UI/serialization setup. */
+  interface TrialEvents {
+    void execute(Runnable task);
+
+    ScheduledFuture<?> schedule(Runnable task, long delay, TimeUnit unit);
+
+    void publish(TrialSession session);
+  }
+
   public static class TrialSession {
     public final String ownerClientId;
     public final BoardHistoryNode anchorNode;
     public volatile BoardHistoryNode displayNode;
+    final int boardWidth;
+    final int boardHeight;
+    final Board sourceBoard;
+    final BoardHistoryList sourceHistory;
 
     /** 进入试下时若 anchor 是 mainline 末端（variations 为空），插入的 dummy 占位节点。null 表示未插入。 */
     BoardHistoryNode mainlineDummy;
 
     volatile long lastActivityMs;
     ScheduledFuture<?> idleTimer;
+    long idleGeneration;
 
     TrialSession(String owner, BoardHistoryNode anchor) {
+      this(owner, anchor, null);
+    }
+
+    TrialSession(String owner, BoardHistoryNode anchor, Board sourceBoard) {
       this.ownerClientId = owner;
       this.anchorNode = anchor;
       this.displayNode = anchor;
+      this.boardWidth = Board.boardWidth;
+      this.boardHeight = Board.boardHeight;
+      this.sourceBoard = sourceBoard;
+      this.sourceHistory = sourceBoard == null ? null : sourceBoard.getHistory();
       this.lastActivityMs = System.currentTimeMillis();
     }
   }
@@ -97,6 +120,37 @@ public class WebBoardManager {
   private volatile String accessUrl;
   private int actualHttpPort;
   private int actualWsPort;
+
+  private final TrialEvents trialEvents;
+
+  public WebBoardManager() {
+    trialEvents = new TrialEvents() {
+      @Override
+      public void execute(Runnable task) {
+        WebBoardDataCollector current = collector;
+        if (current != null) current.runOnExecutor(task);
+      }
+
+      @Override
+      public ScheduledFuture<?> schedule(Runnable task, long delay, TimeUnit unit) {
+        WebBoardDataCollector current = collector;
+        return current == null ? null : current.scheduleOnExecutor(task, delay, unit);
+      }
+
+      @Override
+      public void publish(TrialSession session) {
+        WebBoardDataCollector current = collector;
+        if (current != null) {
+          current.onBoardStateChanged();
+          current.broadcastTrialState(session);
+        }
+      }
+    };
+  }
+
+  WebBoardManager(TrialEvents trialEvents) {
+    this.trialEvents = java.util.Objects.requireNonNull(trialEvents);
+  }
 
   private volatile DisplayNodeOverrideSink overrideSink =
       node -> {
@@ -161,7 +215,7 @@ public class WebBoardManager {
       try {
         httpServer = new WebBoardHttpServer(httpPort + i);
         httpServer.start();
-        actualHttpPort = httpPort + i;
+        actualHttpPort = httpServer.getPort();
         break;
       } catch (Exception e) {
         httpServer = null;
@@ -209,6 +263,7 @@ public class WebBoardManager {
           String clientId = msg.optString("clientId");
           Board capturedBoard = Lizzie.board;
           WebBoardServer capturedServer = wsServer;
+          if (capturedBoard == null || capturedServer == null) return;
           BoardHistoryNode anchor = capturedBoard.getHistory().getCurrentHistoryNode();
           TrialEnterResult result =
               enterTrialWithResult(clientId, anchor, capturedBoard, capturedServer, conn);
@@ -219,20 +274,23 @@ public class WebBoardManager {
                     .put("type", "trial_denied")
                     .put("reason", inUse ? "in_use" : "engine_busy")
                     .put("ownerClientId", result.capturedOwnerClientId());
-            wsServer.sendToConnection(conn, denied.toString());
+            capturedServer.sendToConnection(conn, denied.toString());
           } else {
-            collector.broadcastTrialState(activeSession);
+            synchronized (this) {
+              if (wsServer == capturedServer
+                  && activeSession != null
+                  && activeSession.ownerClientId.equals(clientId)) publishTrialState();
+            }
           }
           break;
         }
       case "exit_trial":
         exitTrial(msg.optString("clientId"));
-        collector.broadcastTrialState(null);
         break;
       case "trial_move":
         {
-          int x = msg.optInt("x", -1);
-          int y = msg.optInt("y", -1);
+          int x = trialCoordinate(msg, "x");
+          int y = trialCoordinate(msg, "y");
           if (x < 0 || y < 0) return;
           applyTrialMove(msg.optString("clientId"), x, y);
           break;
@@ -254,13 +312,25 @@ public class WebBoardManager {
     }
   }
 
+  private static int trialCoordinate(JSONObject message, String key) {
+    Object value = message.opt(key);
+    if (!(value instanceof Number)) return -1;
+    Number number = (Number) value;
+    long integer = number.longValue();
+    return integer >= 0 && integer <= Integer.MAX_VALUE && number.doubleValue() == integer
+        ? (int) integer : -1;
+  }
+
   void attachWebSocketServer(WebBoardServer server) {
     wsServer = server;
-    server.setMessageHandler(this::handleClientMessage);
+    server.setMessageHandler((conn, message) -> {
+      if (wsServer == server) handleClientMessage(conn, message);
+    });
   }
 
   public synchronized void stop() {
     if (!running) return;
+    if (wsServer != null) wsServer.setMessageHandler(null);
     forceExitTrial();
     if (collector != null) {
       collector.shutdown();
@@ -383,7 +453,7 @@ public class WebBoardManager {
                     || (capturedConnection != null && !capturedConnection.isOpen())))) {
           return TrialEnterResult.ENGINE_BUSY;
         }
-        TrialSession session = new TrialSession(clientId, anchor);
+        TrialSession session = new TrialSession(clientId, anchor, capturedBoard);
         // 试下子要走分叉而非接续 mainline。若 anchor 是 mainline 末端（无主线下一手），
         // 先插一个 dummy 占据 variations[0]，让后续试下子永远 add 到 index>=1。
         // ReadBoard 同步推进 mainline 时会识别 dummy 并把它替换走（line ~1035），互不干扰。
@@ -422,19 +492,16 @@ public class WebBoardManager {
 
   public synchronized void exitTrial(String clientId) {
     if (activeSession == null || !activeSession.ownerClientId.equals(clientId)) return;
-    cancelIdleTimer(activeSession);
-    cleanupMainlineDummy(activeSession);
-    activeSession = null;
-    applyOverrideAndRefresh(null);
-    EngineFollowController c = engineController;
-    if (c != null) {
-      BoardHistoryNode tail = mainlineTailSupplier.get();
-      if (tail != null) c.onTrialExit(tail);
-    }
+    endTrial();
   }
 
   public synchronized void forceExitTrial() {
     if (activeSession == null) return;
+    endTrial();
+  }
+
+  /** Called under the manager monitor; only a completed transition publishes an exit. */
+  private void endTrial() {
     cancelIdleTimer(activeSession);
     cleanupMainlineDummy(activeSession);
     activeSession = null;
@@ -444,6 +511,11 @@ public class WebBoardManager {
       BoardHistoryNode tail = mainlineTailSupplier.get();
       if (tail != null) c.onTrialExit(tail);
     }
+    publishTrialState();
+  }
+
+  private void publishTrialState() {
+    trialEvents.publish(activeSession);
   }
 
   /**
@@ -473,9 +545,22 @@ public class WebBoardManager {
 
   public synchronized void applyTrialMove(String clientId, int x, int y) {
     TrialSession s = activeSession;
-    if (s == null || !s.ownerClientId.equals(clientId)) return;
-    collector.runOnExecutor(() -> doApplyMove(s, x, y));
+    if (s == null || !s.ownerClientId.equals(clientId) || !validTrialCoordinates(s, x, y)) return;
+    trialEvents.execute(() -> doApplyMove(s, x, y));
     touchActivity(s);
+  }
+
+  private static boolean validTrialCoordinates(TrialSession s, int x, int y) {
+    if (x < 0 || y < 0 || x >= s.boardWidth || y >= s.boardHeight
+        || Board.boardWidth != s.boardWidth || Board.boardHeight != s.boardHeight
+        || (s.sourceBoard != null
+            && (Lizzie.board != s.sourceBoard || s.sourceBoard.getHistory() != s.sourceHistory))) {
+      return false;
+    }
+    BoardData data = s.displayNode.getData();
+    long points = (long) s.boardWidth * s.boardHeight;
+    return data != null && data.stones != null && data.stones.length == points
+        && (data.moveNumberList == null || data.moveNumberList.length == points);
   }
 
   public synchronized void trialNavigate(String clientId, String direction) {
@@ -505,8 +590,7 @@ public class WebBoardManager {
       EngineFollowController c = engineController;
       if (c != null) c.onTrialDisplayNodeChanged(s.displayNode);
     }
-    collector.onBoardStateChanged();
-    collector.broadcastTrialState(s);
+    publishTrialState();
     touchActivity(s);
   }
 
@@ -522,8 +606,7 @@ public class WebBoardManager {
       EngineFollowController c = engineController;
       if (c != null) c.onTrialDisplayNodeChanged(s.displayNode);
     }
-    collector.onBoardStateChanged();
-    collector.broadcastTrialState(s);
+    publishTrialState();
     touchActivity(s);
   }
 
@@ -536,14 +619,14 @@ public class WebBoardManager {
       EngineFollowController c = engineController;
       if (c != null) c.onTrialDisplayNodeChanged(s.anchorNode);
     }
-    collector.onBoardStateChanged();
-    collector.broadcastTrialState(s);
+    publishTrialState();
     touchActivity(s);
   }
 
   private void doApplyMove(TrialSession s, int x, int y) {
     synchronized (this) {
-      if (activeSession != s) return;
+      // A queued command must still belong to this session and board when it executes.
+      if (activeSession != s || !validTrialCoordinates(s, x, y)) return;
       BoardHistoryNode parent = s.displayNode;
       BoardData parentData = parent.getData();
       // 试下诊断（默认关闭，-Dlizzie.trial.diag=true 打开）：用户落子坐标 + 落子前 displayNode 引擎首选
@@ -575,8 +658,7 @@ public class WebBoardManager {
             EngineFollowController c = engineController;
             if (c != null) c.onTrialDisplayNodeChanged(existing);
           }
-          collector.onBoardStateChanged();
-          collector.broadcastTrialState(s);
+          publishTrialState();
           return;
         }
       }
@@ -643,18 +725,17 @@ public class WebBoardManager {
         EngineFollowController c = engineController;
         if (c != null) c.onTrialDisplayNodeChanged(child);
       }
-      collector.onBoardStateChanged();
-      collector.broadcastTrialState(s);
+      publishTrialState();
     }
   }
 
   private void scheduleIdleTimeout(TrialSession s) {
-    if (collector == null) return;
+    long generation = ++s.idleGeneration;
     s.idleTimer =
-        collector.scheduleOnExecutor(
+        trialEvents.schedule(
             () -> {
               synchronized (this) {
-                if (activeSession == s) forceExitTrial();
+                if (activeSession == s && s.idleGeneration == generation) forceExitTrial();
               }
             },
             IDLE_TIMEOUT_MS,
@@ -662,6 +743,8 @@ public class WebBoardManager {
   }
 
   private void cancelIdleTimer(TrialSession s) {
+    // A cancelled callback may already be waiting for the manager monitor.
+    ++s.idleGeneration;
     if (s.idleTimer != null) {
       s.idleTimer.cancel(false);
       s.idleTimer = null;
