@@ -24,14 +24,14 @@ final class SwingRefreshCoalescer {
 
   void request() {
     requestedGeneration.incrementAndGet();
-    enqueueIfNeeded();
+    enqueueIfNeeded(false);
   }
 
-  private void enqueueIfNeeded() {
+  private void enqueueIfNeeded(boolean deferOnEventThread) {
     if (!pending.compareAndSet(false, true)) {
       return;
     }
-    if (SwingUtilities.isEventDispatchThread()) {
+    if (!deferOnEventThread && SwingUtilities.isEventDispatchThread()) {
       scheduleOnEventThread();
     } else {
       SwingUtilities.invokeLater(this::scheduleOnEventThread);
@@ -65,7 +65,9 @@ final class SwingRefreshCoalescer {
     } finally {
       pending.set(false);
       if (requestedGeneration.get() != generation) {
-        enqueueIfNeeded();
+        // Claim pending before posting so intervening requests join this follow-up. Always
+        // yield to queued input here, even when the previous task exhausted the rate interval.
+        enqueueIfNeeded(true);
       }
     }
   }
