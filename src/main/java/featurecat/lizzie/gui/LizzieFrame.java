@@ -12765,6 +12765,7 @@ public class LizzieFrame extends JFrame {
                   SwingUtilities.invokeLater(
                       new Thread() {
                         public void run() {
+                          boolean scrollToEnd = firstSync;
                           if (((Lizzie.board.getHistory().getCurrentHistoryNode().isMainTrunk()
                                       && Lizzie.board
                                               .getHistory()
@@ -12777,13 +12778,14 @@ public class LizzieFrame extends JFrame {
                             moveToMainTrunk();
                             Lizzie.board.goToMoveNumberBeyondBranch(moveNumber);
                             if (firstSync) {
-                              renderVarTree(0, 0, false, true);
                               firstSync = false;
                             }
                           }
                           maxMvNum = moveNumber;
                           redrawTree = true;
                           Lizzie.frame.refresh();
+                          // Refresh cancels pending tree work, so request the initial end scroll afterwards.
+                          if (scrollToEnd) renderVarTree(0, 0, false, true);
                         }
                       });
                 }

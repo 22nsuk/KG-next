@@ -84,6 +84,11 @@ final class VariationTreeImage implements AutoCloseable {
     pending = new Request(++generation, view, current, publish);
     finished = null;
     if (workerScheduled) return;
+    scheduleWorker();
+  }
+
+  // Caller holds this queue's monitor.
+  private void scheduleWorker() {
     workerScheduled = true;
     try {
       worker.execute(this::drain);
@@ -107,13 +112,25 @@ final class VariationTreeImage implements AutoCloseable {
   }
 
   private void drain() {
+    try {
+      drainRequests();
+    } finally {
+      synchronized (this) {
+        // Even an Error in Java2D or recursive layout must release worker ownership. A request
+        // received during that drawing still owns the latest slot and needs a replacement worker.
+        workerScheduled = false;
+        if (!closed && pending != null) scheduleWorker();
+      }
+    }
+  }
+
+  private void drainRequests() {
     while (true) {
       Request request;
       synchronized (this) {
         request = pending;
         pending = null;
         if (request == null) {
-          workerScheduled = false;
           return;
         }
       }

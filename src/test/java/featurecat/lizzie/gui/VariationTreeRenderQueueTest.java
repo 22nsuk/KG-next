@@ -164,6 +164,59 @@ class VariationTreeRenderQueueTest {
     }
   }
 
+  @Test
+  void renderErrorReleasesWorkerForLaterRequests() {
+    Queue<Runnable> workers = new ArrayDeque<>();
+    Queue<Runnable> completions = new ArrayDeque<>();
+    AtomicInteger published = new AtomicInteger();
+    AssertionError failure = new AssertionError("fixture layout failure");
+    try (VariationTreeImage images = new VariationTreeImage(workers::add, completions::add,
+        (view, cancelled) -> {
+          if (view.width() == 1) throw failure;
+          return result(view);
+        })) {
+      images.request(view(1), () -> true, result -> fail("failed drawing"));
+      assertSame(failure, assertThrows(AssertionError.class, () -> workers.remove().run()));
+      assertTrue(completions.isEmpty());
+      images.cancel();
+      images.request(view(2), () -> true, result -> published.set(result.view().width()));
+      assertEquals(1, workers.size(), "failed drawing must not retain worker ownership");
+      workers.remove().run();
+      completions.remove().run();
+      assertEquals(2, published.get());
+    }
+  }
+
+  @Test
+  void renderErrorReschedulesTheLatestRequestReceivedDuringDrawing() {
+    Queue<Runnable> workers = new ArrayDeque<>();
+    Queue<Runnable> completions = new ArrayDeque<>();
+    AtomicInteger published = new AtomicInteger();
+    AtomicReference<VariationTreeImage> reference = new AtomicReference<>();
+    AssertionError failure = new AssertionError("fixture layout failure");
+    try (VariationTreeImage images = new VariationTreeImage(workers::add, completions::add,
+        (view, cancelled) -> {
+          if (view.width() == 1) {
+            for (int id = 2; id <= 1_000; id++) {
+              reference.get().request(view(id), () -> true,
+                  result -> published.set(result.view().width()));
+            }
+            throw failure;
+          }
+          return result(view);
+        })) {
+      reference.set(images);
+      images.request(view(1), () -> true, result -> fail("failed drawing"));
+      assertSame(failure, assertThrows(AssertionError.class, () -> workers.remove().run()));
+      assertEquals(1, workers.size(), "latest pending request needs exactly one replacement worker");
+      workers.remove().run();
+      assertTrue(workers.isEmpty());
+      assertEquals(1, completions.size());
+      completions.remove().run();
+      assertEquals(1_000, published.get());
+    }
+  }
+
   private static VariationTreeImage.View view(int id) {
     return new VariationTreeImage.View(null, null, null, null, id, 0, 0, id, 100,
         500, 500, null, id % 2 == 0, null);

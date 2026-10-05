@@ -177,6 +177,7 @@ public class VariationTreePublicationTest {
     SwingUtilities.invokeAndWait(
         () -> {
           // Observe repaint completion without causing a paint, navigation or another input event.
+          assertWindowFitsScreen();
           javax.swing.Timer observer = new javax.swing.Timer(30, null);
           long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
           observer.addActionListener(
@@ -359,6 +360,7 @@ public class VariationTreePublicationTest {
       int move, Path screenshot) throws Exception {
     var ready = new java.util.concurrent.CompletableFuture<Void>();
     SwingUtilities.invokeAndWait(() -> {
+      assertWindowFitsScreen();
       javax.swing.Timer observer = new javax.swing.Timer(30, null);
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10);
       observer.addActionListener(event -> {
@@ -396,6 +398,15 @@ public class VariationTreePublicationTest {
     return new VariationTreeImage.View(view.board(), view.history(), view.displayNode(),
         view.boardNode(), view.revision(), view.x(), view.y(), view.width(), view.height(),
         view.panelWidth(), view.panelHeight(), view.frame(), simple, view.style());
+  }
+
+  private static void assertWindowFitsScreen() {
+    java.awt.Rectangle screen = Lizzie.frame.getGraphicsConfiguration().getBounds();
+    java.awt.Rectangle window =
+        new java.awt.Rectangle(Lizzie.frame.getLocationOnScreen(), Lizzie.frame.getSize());
+    assertTrue(screen.contains(window),
+        () -> "Desktop probe window must fit the logical screen at scale "
+            + Lizzie.javaScaleFactor + ": window=" + window + ", screen=" + screen);
   }
 
   static VariationTreeImage.View view(int width, int height) {

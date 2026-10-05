@@ -136,7 +136,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -160,6 +160,7 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
                 ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
                 ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
+                ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
             ),
             run_local_ci.DESKTOP_REQUIRED_TESTS,
         )
@@ -540,7 +541,7 @@ class RunLocalCiTest(unittest.TestCase):
             stale = desktop_reports / "TEST-stale.xml"
             stale.write_text('<testsuite tests="1"><testcase classname="stale" name="stale"/></testsuite>')
 
-            *navigation, config, engine, chinese, english, offline, variation = run_local_ci.DESKTOP_REQUIRED_TESTS
+            *navigation, config, engine, chinese, english, offline, variation, invalidation = run_local_ci.DESKTOP_REQUIRED_TESTS
             passed_navigation = [(case, "") for case in navigation]
 
             def suite_xml(*cases: tuple[tuple[str, str], str]) -> str:
@@ -578,37 +579,37 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertFalse(stale.exists())
 
                 missing_engine = suite_xml(
-                    *passed_navigation, (config, ""), (chinese, ""), (english, ""), (offline, ""), (variation, ""),
+                    *passed_navigation, (config, ""), (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(missing_engine)):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
-                    self.assertEqual(10, summary["junit"]["tests"])
+                    self.assertEqual(11, summary["junit"]["tests"])
                     self.assertEqual(0, summary["junit"]["skipped"])
 
                 skipped_engine = suite_xml(
                     *passed_navigation, (config, ""), (engine, "<skipped/>"),
-                    (chinese, ""), (english, ""), (offline, ""), (variation, ""),
+                    (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(skipped_engine)):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
-                    self.assertEqual(11, summary["junit"]["tests"])
+                    self.assertEqual(12, summary["junit"]["tests"])
                     self.assertEqual(1, summary["junit"]["skipped"])
 
                 pass_xml = suite_xml(
                     *passed_navigation, (config, ""), (engine, ""),
-                    (chinese, ""), (english, ""), (offline, ""), (variation, ""),
+                    (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(pass_xml)):
                     self.assertEqual(0, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("PASS", summary["result"])
-                    self.assertEqual(11, summary["junit"]["tests"])
+                    self.assertEqual(12, summary["junit"]["tests"])
 
-                for missing in (*navigation, offline, variation):
+                for missing in (*navigation, offline, variation, invalidation):
                     incomplete = suite_xml(
                         *((case, "") for case in run_local_ci.DESKTOP_REQUIRED_TESTS
                           if case != missing)
