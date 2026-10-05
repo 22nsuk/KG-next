@@ -62,7 +62,7 @@ public class SubBoardRenderer {
   private BufferedImage cachedStonesImage = emptyImage;
   // private BufferedImage cachedStonesImagedraged = emptyImage;
   private BufferedImage blockimage = emptyImage;
-  private BufferedImage kataEstimateImage = emptyImage;
+  private final BufferedImageSurface kataEstimateImage = new BufferedImageSurface();
   private BufferedImage heatimage = emptyImage;
 
   private BufferedImage cachedBoardImage = emptyImage;
@@ -569,10 +569,7 @@ public class SubBoardRenderer {
   }
 
   public void removeKataEstimateImage() {
-    try {
-      kataEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    } catch (Exception ex) {
-    }
+    kataEstimateImage.clear();
   }
 
   public boolean shouldShowCountBlockBelow() {
@@ -593,8 +590,14 @@ public class SubBoardRenderer {
 
   public void drawKataEstimateByTransparent(
       List<Double> estimateList, boolean reverse, boolean fromRawNet) {
-    BufferedImage newEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    Graphics2D g = newEstimateImage.createGraphics();
+    kataEstimateImage.render(
+        boardWidth,
+        boardHeight,
+        g -> paintKataEstimateByTransparent(g, estimateList, reverse, fromRawNet));
+  }
+
+  private void paintKataEstimateByTransparent(
+      Graphics2D g, List<Double> estimateList, boolean reverse, boolean fromRawNet) {
     boolean blackToPlay = Lizzie.board.getHistory().isBlacksTurn();
     boolean showBigSize = shouldShowCountBlockBig();
     if (reverse) blackToPlay = !blackToPlay;
@@ -660,8 +663,6 @@ public class SubBoardRenderer {
               stoneX - squareWidth / 4, stoneY - squareWidth / 4, squareWidth / 2, squareWidth / 2);
       }
     }
-    kataEstimateImage = newEstimateImage;
-    g.dispose();
   }
 
   private double convertLength(double length) {
@@ -675,8 +676,11 @@ public class SubBoardRenderer {
   }
 
   public void drawKataEstimateBySize(List<Double> estimateList, boolean reverse) {
-    BufferedImage newEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    Graphics2D g = newEstimateImage.createGraphics();
+    kataEstimateImage.render(
+        boardWidth, boardHeight, g -> paintKataEstimateBySize(g, estimateList, reverse));
+  }
+
+  private void paintKataEstimateBySize(Graphics2D g, List<Double> estimateList, boolean reverse) {
     boolean blackToPlay = Lizzie.board.getHistory().isBlacksTurn();
     if (reverse) blackToPlay = !blackToPlay;
     for (int i = 0; i < estimateList.size(); i++) {
@@ -701,13 +705,13 @@ public class SubBoardRenderer {
         if (length > 0) g.fillRect(stoneX - length / 2, stoneY - length / 2, length, length);
       }
     }
-    kataEstimateImage = newEstimateImage;
-    g.dispose();
   }
 
   public void drawcountblock(ArrayList<Integer> tempcount) {
-    kataEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    Graphics2D g = kataEstimateImage.createGraphics();
+    kataEstimateImage.render(boardWidth, boardHeight, g -> paintCountBlock(g, tempcount));
+  }
+
+  private void paintCountBlock(Graphics2D g, ArrayList<Integer> tempcount) {
     for (int i = 0; i < tempcount.size(); i++) {
       if (tempcount.get(i) > 0) {
         int y = i / Board.boardWidth;
@@ -726,7 +730,6 @@ public class SubBoardRenderer {
         g.fillRect(stoneX - stoneRadius / 2, stoneY - stoneRadius / 2, stoneRadius, stoneRadius);
       }
     }
-    g.dispose();
   }
 
   public void removeblock() {
@@ -1092,7 +1095,7 @@ public class SubBoardRenderer {
             && Lizzie.config.showKataGoEstimateOnSubbord
             && Lizzie.config.showKataGoEstimateOnSubbord)
         || Lizzie.frame.isShowingHeatmap)
-      if (shouldShowCountBlockBelow()) g.drawImage(kataEstimateImage, x, y, null);
+      if (shouldShowCountBlockBelow()) kataEstimateImage.drawTo(g, x, y);
     g.drawImage(cachedStonesImage, x, y, null);
     // g.drawImage(cachedStonesShadowImage, x, y, null);
     // g.drawImage(cachedStonesShadowImagedraged, x, y, null);
@@ -1110,7 +1113,7 @@ public class SubBoardRenderer {
     if (!Lizzie.frame.isInPlayMode() && !Lizzie.config.subBoardRaw && Lizzie.config.showBranchNow()
         || (Lizzie.config.isFourSubMode() && !showHeat && this != Lizzie.frame.subBoardRenderer4)) {
       g.drawImage(branchStonesImage, x, y, null);
-      if (!shouldShowCountBlockBelow()) g.drawImage(kataEstimateImage, x, y, null);
+      if (!shouldShowCountBlockBelow()) kataEstimateImage.drawTo(g, x, y);
     }
   }
 

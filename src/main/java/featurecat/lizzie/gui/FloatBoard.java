@@ -2,7 +2,6 @@ package featurecat.lizzie.gui;
 
 import static java.awt.RenderingHints.KEY_ANTIALIASING;
 import static java.awt.RenderingHints.VALUE_ANTIALIAS_OFF;
-import static java.awt.image.BufferedImage.TYPE_INT_ARGB;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
@@ -53,7 +52,7 @@ public class FloatBoard extends JDialog {
   public int selectCoordsY1;
   public int selectCoordsX2;
   public int selectCoordsY2;
-  private BufferedImage cachedImage;
+  private final BufferedImageSurface boardImage = new BufferedImageSurface();
   public FloatBoardRenderer boardRenderer;
   private JPanel mainPanel;
   private JLayeredPane allPanel;
@@ -544,24 +543,27 @@ public class FloatBoard extends JDialog {
 
 
   private void paintMianPanel(Graphics g) {
-    if (posWidth <= 40 || posHeight <= 40) return;
-    cachedImage = new BufferedImage(posWidth, posHeight, TYPE_INT_ARGB);
+    int width = posWidth;
+    int height = posHeight;
+    if (width <= 40 || height <= 40) return;
     if (editMode)
       drawBackground(
           (Graphics2D) g,
           Utils.zoomIn(20),
           Utils.zoomIn(20),
-          posWidth - Utils.zoomIn(40),
-          posHeight - Utils.zoomIn(40));
-    // TODO Auto-generated method stub
-    if (!hideSuggestion || editMode) {
-      Graphics2D g0 = (Graphics2D) cachedImage.getGraphics();
-      boardRenderer.setLocation(Utils.zoomIn(20), Utils.zoomIn(20));
-      boardRenderer.setBoardLength(posWidth - Utils.zoomIn(40), posHeight - Utils.zoomIn(40));
-      boardRenderer.draw(g0);
-      g0.dispose();
-    }
-    g.drawImage(cachedImage, 0, 0, null);
+          width - Utils.zoomIn(40),
+          height - Utils.zoomIn(40));
+    boardImage.render(
+        width,
+        height,
+        graphics -> {
+          if (!hideSuggestion || editMode) {
+            boardRenderer.setLocation(Utils.zoomIn(20), Utils.zoomIn(20));
+            boardRenderer.setBoardLength(width - Utils.zoomIn(40), height - Utils.zoomIn(40));
+            boardRenderer.draw(graphics);
+          }
+        });
+    boardImage.drawTo(g, 0, 0);
   }
 
   private void setDisplayedBranchLength(int n) {

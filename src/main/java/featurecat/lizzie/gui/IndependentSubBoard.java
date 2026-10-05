@@ -1,13 +1,11 @@
 package featurecat.lizzie.gui;
 
-import static java.awt.image.BufferedImage.TYPE_INT_ARGB;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.util.Utils;
 import java.awt.Cursor;
 import java.awt.Dimension;
 import java.awt.Graphics;
-import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.Point;
 import java.awt.Toolkit;
@@ -43,7 +41,7 @@ public class IndependentSubBoard extends JFrame {
   private JButton lockUnlock;
   private JButton btnClose;
   private JButton topUntop;
-  public BufferedImage cachedImage;
+  private final BufferedImageSurface boardImage = new BufferedImageSurface();
   // private boolean drag = false;
   // private Point lastPoint = null;
   // private Point draggingAnchor = null;
@@ -339,19 +337,21 @@ public class IndependentSubBoard extends JFrame {
   }
 
   private void paintMianPanel(Graphics g) {
-    // TODO Auto-generated method stub
     int width = Utils.zoomOut(mainPanel.getWidth());
     int height = Utils.zoomOut(mainPanel.getHeight());
-    BufferedImage cachedImage = new BufferedImage(width, height, TYPE_INT_ARGB);
-    Graphics2D g0 = (Graphics2D) cachedImage.getGraphics();
-    // g0.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-    // g0.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-    subBoardRenderer.setLocation(0, 0);
-    subBoardRenderer.setBoardLength(width, height);
-    subBoardRenderer.draw(g0);
-    g0.dispose();
-    this.cachedImage = cachedImage;
-    g.drawImage(cachedImage, 0, 0, null);
+    boardImage.render(
+        width,
+        height,
+        graphics -> {
+          subBoardRenderer.setLocation(0, 0);
+          subBoardRenderer.setBoardLength(width, height);
+          subBoardRenderer.draw(graphics);
+        });
+    boardImage.drawTo(g, 0, 0);
+  }
+
+  BufferedImage snapshotImage() {
+    return boardImage.snapshot();
   }
 
   public void refresh() {
