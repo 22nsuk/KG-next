@@ -12192,12 +12192,9 @@ public class LizzieFrame extends JFrame {
 
   private void saveIndependMainBoardToClipboard() {
     if (Config.isScaled || Lizzie.isMultiScreen) {
-      int width = this.independentMainBoard.cachedImage.getWidth();
-      int height = this.independentMainBoard.cachedImage.getHeight();
-      Rectangle rect = new Rectangle(0, 0, width, height);
-      BufferedImage areaImage =
-          this.independentMainBoard.cachedImage.getSubimage(
-              rect.x, rect.y, rect.width, rect.height);
+      BufferedImage areaImage = this.independentMainBoard.snapshotImage();
+      int width = areaImage.getWidth();
+      int height = areaImage.getHeight();
       BufferedImage buffImg = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
       buffImg
           .getGraphics()
@@ -12224,12 +12221,9 @@ public class LizzieFrame extends JFrame {
 
   private BufferedImage getIndependMainBoardToClipboard() {
     if (Config.isScaled || Lizzie.isMultiScreen) {
-      int width = this.independentMainBoard.cachedImage.getWidth();
-      int height = this.independentMainBoard.cachedImage.getHeight();
-      Rectangle rect = new Rectangle(0, 0, width, height);
-      BufferedImage areaImage =
-          this.independentMainBoard.cachedImage.getSubimage(
-              rect.x, rect.y, rect.width, rect.height);
+      BufferedImage areaImage = this.independentMainBoard.snapshotImage();
+      int width = areaImage.getWidth();
+      int height = areaImage.getHeight();
       BufferedImage buffImg = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
       buffImg
           .getGraphics()
@@ -14043,11 +14037,9 @@ public class LizzieFrame extends JFrame {
 
   private void saveIndependSubBoardToClipboard() {
     if (Config.isScaled || Lizzie.isMultiScreen) {
-      int width = this.independentSubBoard.cachedImage.getWidth();
-      int height = this.independentSubBoard.cachedImage.getHeight();
-      Rectangle rect = new Rectangle(0, 0, width, height);
-      BufferedImage areaImage =
-          this.independentSubBoard.cachedImage.getSubimage(rect.x, rect.y, rect.width, rect.height);
+      BufferedImage areaImage = this.independentSubBoard.snapshotImage();
+      int width = areaImage.getWidth();
+      int height = areaImage.getHeight();
       BufferedImage buffImg = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
       buffImg
           .getGraphics()
@@ -14075,11 +14067,9 @@ public class LizzieFrame extends JFrame {
 
   private BufferedImage getIndependSubBoardToClipboard() {
     if (Config.isScaled || Lizzie.isMultiScreen) {
-      int width = this.independentSubBoard.cachedImage.getWidth();
-      int height = this.independentSubBoard.cachedImage.getHeight();
-      Rectangle rect = new Rectangle(0, 0, width, height);
-      BufferedImage areaImage =
-          this.independentSubBoard.cachedImage.getSubimage(rect.x, rect.y, rect.width, rect.height);
+      BufferedImage areaImage = this.independentSubBoard.snapshotImage();
+      int width = areaImage.getWidth();
+      int height = areaImage.getHeight();
       BufferedImage buffImg = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
       buffImg
           .getGraphics()
@@ -14688,12 +14678,9 @@ public class LizzieFrame extends JFrame {
   public Image saveMainBoardToImageOri() {
     if (Config.isScaled || Lizzie.isMultiScreen) {
       if (Lizzie.config.isFloatBoardMode()) {
-        int width = this.independentMainBoard.cachedImage.getWidth();
-        int height = this.independentMainBoard.cachedImage.getHeight();
-        Rectangle rect = new Rectangle(0, 0, width, height);
-        BufferedImage areaImage =
-            this.independentMainBoard.cachedImage.getSubimage(
-                rect.x, rect.y, rect.width, rect.height);
+        BufferedImage areaImage = this.independentMainBoard.snapshotImage();
+        int width = areaImage.getWidth();
+        int height = areaImage.getHeight();
         BufferedImage buffImg = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         buffImg
             .getGraphics()

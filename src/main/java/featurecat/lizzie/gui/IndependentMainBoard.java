@@ -1,6 +1,5 @@
 package featurecat.lizzie.gui;
 
-import static java.awt.image.BufferedImage.TYPE_INT_ARGB;
 import static java.lang.Math.max;
 import static java.lang.Math.min;
 
@@ -78,7 +77,7 @@ public class IndependentMainBoard extends JFrame {
   public int selectCoordsY1;
   public int selectCoordsX2;
   public int selectCoordsY2;
-  public BufferedImage cachedImage;
+  private final BufferedImageSurface boardImage = new BufferedImageSurface();
   private JButton topUntop;
   // private boolean drag = false;
   // private Point lastPoint = null;
@@ -720,16 +719,19 @@ public class IndependentMainBoard extends JFrame {
   private void paintMianPanel(Graphics g) {
     int width = Utils.zoomOut(mainPanel.getWidth());
     int height = Utils.zoomOut(mainPanel.getHeight());
-    BufferedImage cachedImage = new BufferedImage(width, height, TYPE_INT_ARGB);
-    // TODO Auto-generated method stub
-    Graphics2D g0 = (Graphics2D) cachedImage.getGraphics();
+    boardImage.render(
+        width,
+        height,
+        graphics -> {
+          boardRenderer.setLocation(0, 0);
+          boardRenderer.setBoardLength(width, height);
+          boardRenderer.draw(graphics);
+        });
+    boardImage.drawTo(g, 0, 0);
+  }
 
-    boardRenderer.setLocation(0, 0);
-    boardRenderer.setBoardLength(width, height);
-    boardRenderer.draw(g0);
-    g0.dispose();
-    this.cachedImage = cachedImage;
-    g.drawImage(this.cachedImage, 0, 0, null);
+  BufferedImage snapshotImage() {
+    return boardImage.snapshot();
   }
 
   private void setDisplayedBranchLength(int n) {

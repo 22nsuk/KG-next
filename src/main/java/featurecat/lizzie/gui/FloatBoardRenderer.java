@@ -78,7 +78,7 @@ public class FloatBoardRenderer {
   // private BufferedImage importantSugg = emptyImage;
   private ArrayList<BufferedImage> cachedSelectImage = new ArrayList<BufferedImage>();
   private boolean hasBlockimage = false;
-  private BufferedImage kataEstimateImage = emptyImage;
+  private final BufferedImageSurface kataEstimateImage = new BufferedImageSurface();
 
   private BufferedImage cachedBoardImage = emptyImage;
   private BufferedImage cachedWallpaperImage = emptyImage;
@@ -480,7 +480,7 @@ public class FloatBoardRenderer {
   }
 
   public void removeKataEstimateImage() {
-    kataEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
+    kataEstimateImage.clear();
   }
 
 
@@ -506,8 +506,14 @@ public class FloatBoardRenderer {
 
   public void drawKataEstimateByTransparent(
       List<Double> estimateList, boolean blackToPlay, boolean fromRawNet) {
-    BufferedImage newEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    Graphics2D g = newEstimateImage.createGraphics();
+    kataEstimateImage.render(
+        boardWidth,
+        boardHeight,
+        g -> paintKataEstimateByTransparent(g, estimateList, blackToPlay, fromRawNet));
+  }
+
+  private void paintKataEstimateByTransparent(
+      Graphics2D g, List<Double> estimateList, boolean blackToPlay, boolean fromRawNet) {
     boolean showBigSize = shouldShowCountBlockBig();
     for (int i = 0; i < estimateList.size(); i++) {
       int[] c = Lizzie.board.getCoordKataGo(i);
@@ -579,8 +585,6 @@ public class FloatBoardRenderer {
         }
       }
     }
-    kataEstimateImage = newEstimateImage;
-    g.dispose();
   }
 
   private double convertLength(double length) {
@@ -594,8 +598,11 @@ public class FloatBoardRenderer {
   }
 
   public void drawKataEstimateBySize(List<Double> estimateList, boolean blackToPlay) {
-    BufferedImage newEstimateImage = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    Graphics2D g = newEstimateImage.createGraphics();
+    kataEstimateImage.render(
+        boardWidth, boardHeight, g -> paintKataEstimateBySize(g, estimateList, blackToPlay));
+  }
+
+  private void paintKataEstimateBySize(Graphics2D g, List<Double> estimateList, boolean blackToPlay) {
     for (int i = 0; i < estimateList.size(); i++) {
       int[] c = Lizzie.board.getCoordKataGo(i);
       int x = c[0];
@@ -618,8 +625,6 @@ public class FloatBoardRenderer {
         if (length > 0) g.fillRect(stoneX - length / 2, stoneY - length / 2, length, length);
       }
     }
-    kataEstimateImage = newEstimateImage;
-    g.dispose();
   }
 
 
@@ -883,7 +888,7 @@ public class FloatBoardRenderer {
     g.setRenderingHint(KEY_ANTIALIASING, VALUE_ANTIALIAS_OFF);
     if ((Lizzie.config.showKataGoEstimate && Lizzie.config.showKataGoEstimateOnMainbord)
         || Lizzie.frame.isShowingHeatmap)
-      if (shouldShowCountBlockBelow()) g.drawImage(kataEstimateImage, x, y, null);
+      if (shouldShowCountBlockBelow()) kataEstimateImage.drawTo(g, x, y);
     if (showingBranch) {
       if (!Lizzie.config.removeDeadChainInVariation) {
         g.drawImage(cachedStonesShadowImage, x, y, null);
@@ -903,7 +908,7 @@ public class FloatBoardRenderer {
     g.drawImage(blockimage, x, y, null);
     if ((Lizzie.config.showKataGoEstimate && Lizzie.config.showKataGoEstimateOnMainbord)
         || Lizzie.frame.isShowingHeatmap)
-      if (!shouldShowCountBlockBelow()) g.drawImage(kataEstimateImage, x, y, null);
+      if (!shouldShowCountBlockBelow()) kataEstimateImage.drawTo(g, x, y);
     g.drawImage(selectImage, x, y, null);
     if (!cachedSelectImage.isEmpty()) {
       for (int i = 0; i < cachedSelectImage.size(); i++) {
