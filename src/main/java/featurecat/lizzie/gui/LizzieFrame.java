@@ -13000,9 +13000,6 @@ public class LizzieFrame extends JFrame {
   void exitWebTrialFromToolbar() {
     if (Lizzie.webBoardManager == null || !Lizzie.webBoardManager.isRunning()) return;
     Lizzie.webBoardManager.forceExitTrial();
-    featurecat.lizzie.gui.web.WebBoardDataCollector collector =
-        Lizzie.webBoardManager.getCollector();
-    if (collector != null) collector.broadcastTrialState(null);
   }
 
   public void endHumanSlGameIfActive() {
