@@ -255,35 +255,43 @@ public class WebBoardManager {
     return true;
   }
 
-  private void handleClientMessage(org.java_websocket.WebSocket conn, JSONObject msg) {
-    String type = msg.optString("type");
-    switch (type) {
-      case "enter_trial":
-        {
-          String clientId = msg.optString("clientId");
-          Board capturedBoard = Lizzie.board;
-          WebBoardServer capturedServer = wsServer;
-          if (capturedBoard == null || capturedServer == null) return;
-          BoardHistoryNode anchor = capturedBoard.getHistory().getCurrentHistoryNode();
-          TrialEnterResult result =
-              enterTrialWithResult(clientId, anchor, capturedBoard, capturedServer, conn);
-          if (!result.isAccepted()) {
-            boolean inUse = result.kind() == TrialEnterResult.Kind.IN_USE;
-            JSONObject denied =
-                new JSONObject()
-                    .put("type", "trial_denied")
-                    .put("reason", inUse ? "in_use" : "engine_busy")
-                    .put("ownerClientId", result.capturedOwnerClientId());
-            capturedServer.sendToConnection(conn, denied.toString());
-          } else {
-            synchronized (this) {
-              if (wsServer == capturedServer
-                  && activeSession != null
-                  && activeSession.ownerClientId.equals(clientId)) publishTrialState();
-            }
-          }
-          break;
-        }
+  private void handleClientMessage(
+      WebBoardServer source, org.java_websocket.WebSocket conn, JSONObject msg) {
+    if (!"enter_trial".equals(msg.optString("type"))) {
+      synchronized (this) {
+        if (wsServer == source) handleTrialCommand(msg);
+      }
+      return;
+    }
+
+    // Enter must acquire the engine reservation outside the manager monitor.
+    // Keep the originating server, rather than capturing a replacement after dispatch.
+    String clientId = msg.optString("clientId");
+    Board capturedBoard = Lizzie.board;
+    if (capturedBoard == null || wsServer != source) return;
+    BoardHistoryNode anchor = capturedBoard.getHistory().getCurrentHistoryNode();
+    TrialEnterResult result =
+        enterTrialWithResult(clientId, anchor, capturedBoard, source, conn);
+    if (!result.isAccepted()) {
+      boolean inUse = result.kind() == TrialEnterResult.Kind.IN_USE;
+      JSONObject denied =
+          new JSONObject()
+              .put("type", "trial_denied")
+              .put("reason", inUse ? "in_use" : "engine_busy")
+              .put("ownerClientId", result.capturedOwnerClientId());
+      source.sendToConnection(conn, denied.toString());
+    } else {
+      synchronized (this) {
+        if (wsServer == source
+            && activeSession != null
+            && activeSession.ownerClientId.equals(clientId)) publishTrialState();
+      }
+    }
+  }
+
+  /** Existing-session commands and their publications share the same state-transition lock. */
+  private void handleTrialCommand(JSONObject msg) {
+    switch (msg.optString("type")) {
       case "exit_trial":
         exitTrial(msg.optString("clientId"));
         break;
@@ -297,7 +305,7 @@ public class WebBoardManager {
         }
       case "trial_navigate":
         if (msg.has("childIndex")) {
-          int childIndex = msg.optInt("childIndex", -1);
+          int childIndex = trialCoordinate(msg, "childIndex");
           if (childIndex < 0) return;
           trialNavigateForward(msg.optString("clientId"), childIndex);
         } else {
@@ -315,17 +323,17 @@ public class WebBoardManager {
   private static int trialCoordinate(JSONObject message, String key) {
     Object value = message.opt(key);
     if (!(value instanceof Number)) return -1;
-    Number number = (Number) value;
-    long integer = number.longValue();
-    return integer >= 0 && integer <= Integer.MAX_VALUE && number.doubleValue() == integer
-        ? (int) integer : -1;
+    try {
+      int coordinate = new java.math.BigDecimal(value.toString()).intValueExact();
+      return coordinate >= 0 ? coordinate : -1;
+    } catch (NumberFormatException | ArithmeticException e) {
+      return -1;
+    }
   }
 
   void attachWebSocketServer(WebBoardServer server) {
     wsServer = server;
-    server.setMessageHandler((conn, message) -> {
-      if (wsServer == server) handleClientMessage(conn, message);
-    });
+    server.setMessageHandler((conn, message) -> handleClientMessage(server, conn, message));
   }
 
   public synchronized void stop() {

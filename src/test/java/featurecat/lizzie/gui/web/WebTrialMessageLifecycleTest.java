@@ -8,6 +8,7 @@ import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import java.math.BigDecimal;
 import java.net.InetSocketAddress;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -87,7 +88,8 @@ class WebTrialMessageLifecycleTest {
     try (Fixture f = new Fixture()) {
       Object[][] invalid = {
         {-1, 0}, {0, -1}, {Board.boardWidth, 0}, {0, Board.boardHeight},
-        {Integer.MAX_VALUE, 0}, {Long.MAX_VALUE, 0}, {1.5, 0}, {"3", 0}, {null, 0}
+        {Integer.MAX_VALUE, 0}, {Long.MAX_VALUE, 0}, {1.5, 0}, {"3", 0}, {null, 0},
+        {new BigDecimal("3.0000000000000001"), 0}, {new BigDecimal("1e-400"), 0}
       };
       for (Object[] point : invalid) {
         f.message("trial_move", "owner", "x", point[0], "y", point[1]);
@@ -107,6 +109,16 @@ class WebTrialMessageLifecycleTest {
       assertNotSame(f.anchor, child);
       assertArrayEquals(new int[] {3, 3}, child.getData().lastMove.orElseThrow());
       assertSame(child, f.override.get());
+      assertEquals(List.of(new Publication("owner", child)), f.events.publications);
+
+      f.message("trial_reset", "owner");
+      f.events.publications.clear();
+      f.message("trial_navigate", "owner", "childIndex", 4294967297L);
+      f.message("trial_navigate", "owner", "childIndex", new BigDecimal("1.0000000000000001"));
+      assertSame(f.anchor, f.manager.getDisplayNodeForTest());
+      assertTrue(f.events.publications.isEmpty());
+      f.message("trial_navigate", "owner", "childIndex", 1);
+      assertSame(child, f.manager.getDisplayNodeForTest());
       assertEquals(List.of(new Publication("owner", child)), f.events.publications);
     }
   }
@@ -161,6 +173,36 @@ class WebTrialMessageLifecycleTest {
         replacement.onMessage(null, "{\"type\":\"exit_trial\",\"clientId\":\"owner\"}");
         assertEquals(List.of(new Publication("", null)), f.events.publications);
       } finally {
+        replacement.stop(1000);
+      }
+    }
+  }
+
+  @Test
+  void serverIdentityIsRecheckedAfterWaitingForTheTransitionLock() throws Exception {
+    try (Fixture f = new Fixture()) {
+      WebBoardServer replacement = new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 2);
+      FutureTask<Void> dispatch = new FutureTask<>(() -> {
+        f.message("exit_trial", "owner");
+        return null;
+      });
+      Thread reader = new Thread(dispatch, "test-old-web-reader");
+      reader.setDaemon(true);
+      try {
+        synchronized (f.manager) {
+          reader.start();
+          long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+          while (reader.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+            Thread.sleep(1);
+          }
+          assertEquals(Thread.State.BLOCKED, reader.getState(), "reader must be waiting for the manager");
+          f.manager.attachWebSocketServer(replacement);
+        }
+        dispatch.get(3, TimeUnit.SECONDS);
+        assertEquals("owner", f.manager.getCurrentTrialOwner());
+        assertTrue(f.events.publications.isEmpty());
+      } finally {
+        reader.join(3000);
         replacement.stop(1000);
       }
     }
