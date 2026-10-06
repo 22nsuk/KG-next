@@ -11353,6 +11353,18 @@ public class Leelaz {
     return runPendingResponseHandlerForLine(line);
   }
 
+  /**
+   * Admit console PDA changes as one batch, including on a mirrored engine. A rejected dynamic
+   * update must not enqueue its preliminary static-PDA reset alone. Success means queue admission,
+   * not an acknowledgement from the external engine.
+   */
+  public boolean sendConsolePda(double value, boolean dynamic) {
+    if (!Double.isFinite(value)) return false;
+    List<String> commands =
+        dynamic ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
+    return sendStatefulOrdinaryCommands(commands, StatefulOrdinaryMutationKind.NONE) >= 0L;
+  }
+
   public boolean sendRawConsoleCommand(String command) {
     return sendCommand(command, null, null, false, true);
   }

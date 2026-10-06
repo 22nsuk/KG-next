@@ -2922,6 +2922,54 @@ class EngineManagerEngineGameStateMachineTest {
     assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void consolePdaBatchPreservesOrderOnPrimaryAndMirror(boolean dynamic) {
+    installManager();
+    Lizzie.config.extraMode = ExtraMode.Double_Engine;
+    Lizzie.leelaz2 = white;
+
+    assertTrue(black.sendConsolePda(0.25, dynamic));
+
+    for (String commands : List.of(black.commandText(), white.commandText())) {
+      if (dynamic) {
+        assertTrue(commands.contains("pda 0"), commands);
+        assertTrue(commands.contains("dympdacap 0.25"), commands);
+        assertTrue(commandLineIndex(commands, "pda 0")
+            < commandLineIndex(commands, "dympdacap 0.25"), commands);
+      } else {
+        assertTrue(commands.contains("pda 0.25"), commands);
+        assertFalse(commands.contains("dympdacap"), commands);
+      }
+    }
+  }
+
+  @Test
+  void rejectedConsolePdaBatchCannotResetSecondaryLater() {
+    installManager();
+    Lizzie.config.extraMode = ExtraMode.Double_Engine;
+    Lizzie.leelaz2 = white;
+    try (Leelaz.ExclusiveGtpLifecycleReservation reservation =
+        black.beginExclusiveGtpLifecycleReservation()) {
+      assertNotNull(reservation);
+      assertFalse(black.sendConsolePda(0.25, true));
+      assertFalse(black.commandText().contains("pda"), black.commandText());
+      assertFalse(white.commandText().contains("pda"), white.commandText());
+    }
+    white.sendCommandNoLeelaz2("protocol_version");
+    assertFalse(white.commandText().contains("pda"), white.commandText());
+    assertTrue(white.commandText().contains("protocol_version"), white.commandText());
+  }
+
+  @Test
+  void nonFiniteConsolePdaCannotEnqueueEitherCommand() {
+    installManager();
+    String before = black.commandText();
+    assertFalse(black.sendConsolePda(Double.NaN, false));
+    assertFalse(black.sendConsolePda(Double.POSITIVE_INFINITY, true));
+    assertEquals(before, black.commandText());
+  }
+
   @Test
   void boardClearKomiPairReleasesEndpointBeforeAnalysisAdmissionDrain() throws Exception {
     installManager();
