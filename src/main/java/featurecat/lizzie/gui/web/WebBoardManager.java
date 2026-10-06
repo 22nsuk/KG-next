@@ -326,6 +326,8 @@ public class WebBoardManager {
     if (clientId.isBlank() || clientId.length() > 128) return;
     if (!"enter_trial".equals(type) && !"resume_trial".equals(type)) {
       if (!authorizedCommand(activeSession, source, connection, message)) return;
+      // An invalidated board blocks edits, not the authenticated owner's ability to exit.
+      if (!"exit_trial".equals(type) && !validTrialBoard(activeSession)) return;
       if ("trial_move".equals(type)
           && !validTrialCoordinates(activeSession,
               trialCoordinate(message, "x"), trialCoordinate(message, "y"))) return;
@@ -380,7 +382,8 @@ public class WebBoardManager {
           touchActivity(session);
           publishTrialState();
           grantTrial(source, connection, session);
-        } else if (authorizedCommand(session, source, connection, message)) {
+        } else if (authorizedCommand(session, source, connection, message)
+            && ("exit_trial".equals(type) || validTrialBoard(session))) {
           handleTrialCommand(message);
         }
       }
@@ -391,6 +394,8 @@ public class WebBoardManager {
     BoardHistoryNode anchor;
     synchronized (this) {
       if (!currentConnection(source, connection) || Lizzie.board == null) return;
+      // A replaced board cannot be resumed. Retire its reservation before admitting a new trial.
+      if (activeSession != null && !validTrialBoard(activeSession)) endTrial();
       capturedBoard = Lizzie.board;
       anchor = capturedBoard.getHistory().getCurrentHistoryNode();
     }
@@ -417,7 +422,7 @@ public class WebBoardManager {
       TrialSession session, WebBoardServer source, WebSocket connection, JSONObject message) {
     return session != null && session.ownerServer == source && session.ownerConnection == connection
         && session.ownerClientId.equals(message.optString("clientId"))
-        && session.sessionId.equals(message.optString("sessionId")) && validTrialBoard(session);
+        && session.sessionId.equals(message.optString("sessionId"));
   }
 
   private static String newResumeToken() {

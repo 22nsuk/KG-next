@@ -211,6 +211,50 @@ class WebTrialMessageLifecycleTest {
   }
 
   @Test
+  void ownerCanStillExitAfterTheSourceBoardIsReplaced() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "exit_trial");
+      Lizzie.board = new Board();
+      f.events.drain();
+      assertEquals("", f.manager.getCurrentTrialOwner());
+      assertNull(f.display.get());
+      assertTrue(f.anchor.variations.isEmpty());
+      assertTrue(f.events.timers.get(0).isCancelled());
+    }
+  }
+
+  @Test
+  void newEntryRetiresAStaleBoardSessionWithoutGrantingItsOldCredential() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      String oldSession = f.sessionId;
+      String oldToken = f.resumeToken;
+      f.owner.open = false;
+      Board replacement = new Board();
+      Lizzie.board = replacement;
+      f.send(f.visitor, "enter_trial");
+      assertTrue(
+          f.visitor.messages.stream().anyMatch(m -> "trial_granted".equals(m.optString("type"))),
+          "a replaced board must not keep the old session reservation");
+      JSONObject grant =
+          f.visitor.messages.stream()
+              .filter(m -> "trial_granted".equals(m.optString("type")))
+              .findFirst()
+              .orElseThrow();
+      assertNotEquals(oldSession, grant.getString("sessionId"));
+      assertNotEquals(oldToken, grant.getString("resumeToken"));
+      assertSame(
+          replacement.getHistory().getCurrentHistoryNode(), f.manager.getTrialAnchorForTest());
+      assertTrue(f.anchor.variations.isEmpty());
+      assertTrue(f.events.timers.get(0).isCancelled());
+      f.events.publications.clear();
+      f.owner.open = true;
+      f.send(f.owner, "exit_trial");
+      assertEquals("owner", f.manager.getCurrentTrialOwner());
+      assertTrue(f.events.publications.isEmpty());
+    }
+  }
+
+  @Test
   void replacedServerCannotDispatchQueuedOrNewMessages() throws Exception {
     try (WebTrialTestFixture f = new WebTrialTestFixture()) {
       WebBoardServer replacement = new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 2);
