@@ -29,6 +29,7 @@ import java.awt.event.WindowEvent;
 import java.io.IOException;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.ResourceBundle;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,6 +49,10 @@ public class GtpConsolePane extends JDialog {
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
   private static final Pattern CONSOLE_VERTEX =
       Pattern.compile("([A-HJ-Z]+)([0-9]+)", Pattern.CASE_INSENSITIVE);
+
+  private static final Pattern CONSOLE_INTEGER = Pattern.compile("[+]?[0-9]+");
+  private static final Pattern CONSOLE_NUMBER =
+      Pattern.compile("[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?");
 
   // private int scrollLength = 0;
   private JScrollPane scrollPane;
@@ -360,11 +365,11 @@ public class GtpConsolePane extends JDialog {
 
     if (Lizzie.leelaz != null) {
       if ("play".equals(commandName)) {
-        if (!playConsoleMove(moveParams)) wrongMoveParameters();
+        if (!playConsoleMove(moveParams)) wrongParameters();
       } else if ("genmove".equals(commandName)) {
         Stone color = moveParams.length == 2 ? consoleColor(moveParams[1]) : Stone.EMPTY;
         if (color == Stone.EMPTY) {
-          wrongMoveParameters();
+          wrongParameters();
         } else if (!Lizzie.leelaz.isThinking) {
           BoardData position = Lizzie.board.getData();
           boolean previousBlackToPlay = position.blackToPlay;
@@ -376,109 +381,113 @@ public class GtpConsolePane extends JDialog {
             if (!accepted) position.blackToPlay = previousBlackToPlay;
           }
         }
-      } else if ("showboard".equals(commandToLower)) {
-        if (Lizzie.leelaz.sendRawConsoleCommand(command) && Lizzie.leelaz.isPondering()) {
+      } else if ("showboard".equals(commandName)) {
+        if (moveParams.length != 1) wrongParameters();
+        else if (Lizzie.leelaz.sendRawConsoleCommand(commandName) && Lizzie.leelaz.isPondering()) {
           Lizzie.leelaz.ponder();
         }
-      } else if ("clear_board".equals(commandToLower)) {
-        Lizzie.board.clear(false);
-        Lizzie.frame.refresh();
-      } else if ("heatmap".equals(commandToLower)) {
-        Lizzie.leelaz.toggleHeatmap(false);
+      } else if ("clear_board".equals(commandName)) {
+        if (moveParams.length != 1) wrongParameters();
+        else {
+          Lizzie.board.clear(false);
+          Lizzie.frame.refresh();
+        }
+      } else if ("heatmap".equals(commandName)) {
+        if (moveParams.length != 1) wrongParameters();
+        else Lizzie.leelaz.toggleHeatmap(false);
       } else if (commandToLower.startsWith("kata-raw")) {
         if (Lizzie.leelaz.sendRawConsoleCommand(command)) {
         Lizzie.leelaz.setHeatmap();
         }
-      } else if (commandToLower.startsWith("boardsize")) {
-        String cmdParams[] = command.split(" ");
-        if (cmdParams.length >= 2) {
-          int width = Integer.parseInt(cmdParams[1]);
-          int height = width;
-          if (cmdParams.length >= 3) {
-            height = Integer.parseInt(cmdParams[2]);
-          }
-          Lizzie.board.reopen(width, height);
-        } else {
-          this.setDocs(
-              resourceBundle.getString("GtpConsolePane.wrongParameters") + "\r\n",
-              new Color(255, 255, 0),
-              false,
-              Config.frameFontSize);
-        }
-      } else if (commandToLower.startsWith("komi")) {
-        String cmdParams[] = command.split(" ");
-        if (cmdParams.length == 2) {
-          Lizzie.board.getHistory().getGameInfo().setKomi(Double.parseDouble(cmdParams[1]));
+      } else if ("boardsize".equals(commandName)
+          || "rectangular_boardsize".equals(commandName)) {
+        if (!resizeFromConsole(moveParams)) wrongParameters();
+      } else if ("komi".equals(commandName)) {
+        OptionalDouble value = consoleNumber(moveParams);
+        if (value.isEmpty() || !Float.isFinite((float) value.getAsDouble())) {
+          wrongParameters();
+        } else if (Lizzie.leelaz.sendRawConsoleCommand("komi " + value.getAsDouble())) {
+          Lizzie.board.getHistory().getGameInfo().setKomi(value.getAsDouble());
           Lizzie.board.getHistory().getGameInfo().changeKomi();
-          // Lizzie.frame.komi = cmdParams[1];
-          if (LizzieFrame.toolbar.setkomi != null)
-            LizzieFrame.toolbar.setkomi.textFieldKomi.setText(cmdParams[1]);
+          if (LizzieFrame.toolbar != null && LizzieFrame.toolbar.setkomi != null)
+            LizzieFrame.toolbar.setkomi.textFieldKomi.setText(String.valueOf(value.getAsDouble()));
+          Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+          if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
         }
-        Lizzie.leelaz.sendCommand(command);
-        Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-        if (Lizzie.leelaz.isPondering()) {
-          Lizzie.leelaz.ponder();
-        }
-      } else if ("undo".equals(command)) {
-        if (!Lizzie.board.previousMove(true))
-          this.setDocs(
+      } else if ("undo".equals(commandName)) {
+        if (moveParams.length != 1) {
+          wrongParameters();
+        } else if (!Lizzie.board.previousMove(true)) {
+          setDocs(
               resourceBundle.getString("GtpConsolePane.wrongPrevious") + "\r\n",
               new Color(255, 255, 0),
               false,
               Config.frameFontSize);
-      } else if (command.startsWith("pda")
-          || command.startsWith("dympdacap")
-          || command.startsWith("getpda")
-          || command.startsWith("getdympdacap")) {
-        if (commandToLower.startsWith("pda")) {
-          String[] params = command.trim().split(" ");
-          if (params.length == 2) {
-            try {
-              Double pda = Double.parseDouble(params[1]);
+        }
+      } else if ("pda".equals(commandName) || "dympdacap".equals(commandName)) {
+        OptionalDouble value = consoleNumber(moveParams);
+        if (value.isEmpty()) {
+          wrongParameters();
+        } else {
+          boolean dynamic = "dympdacap".equals(commandName);
+          double pda = value.getAsDouble();
+          if (Lizzie.leelaz.sendConsolePda(pda, dynamic)) {
+            Lizzie.leelaz.isStaticPda = !dynamic;
+            if (dynamic) {
+              Lizzie.leelaz.pda = 0;
+              Lizzie.leelaz.pdaCap = pda;
+            } else {
               Lizzie.leelaz.pda = pda;
-              Lizzie.leelaz.isStaticPda = true;
-              if (Lizzie.config.isDoubleEngineMode()) Lizzie.leelaz2.pda = 0;
-              if (LizzieFrame.menu.setPda != null)
-                LizzieFrame.menu.setPda.curPDA.setText(String.valueOf(pda));
-              LizzieFrame.menu.txtPDA.setText(String.valueOf(pda));
-            } catch (Exception es) {
-              es.printStackTrace();
             }
-          }
-        }
-        if (commandToLower.startsWith("dympdacap")) {
-          Lizzie.leelaz.sendCommand("pda 0");
-          LizzieFrame.menu.txtPDA.setText("0.000");
-          Lizzie.leelaz.isStaticPda = false;
-          String[] params = command.trim().split(" ");
-          if (params.length == 2) {
-            try {
-              double dymCap = Double.parseDouble(params[1]);
-              Lizzie.leelaz.pdaCap = dymCap;
-            } catch (Exception es) {
-              es.printStackTrace();
+            if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null)
+              Lizzie.leelaz2.pda = 0;
+            if (LizzieFrame.menu != null) {
+              if (LizzieFrame.menu.txtPDA != null)
+                LizzieFrame.menu.txtPDA.setText(dynamic ? "0.000" : String.valueOf(pda));
+              if (LizzieFrame.menu.setPda != null) {
+                if (dynamic) LizzieFrame.menu.setPda.txtDymCap.setText(String.valueOf(pda));
+                else LizzieFrame.menu.setPda.curPDA.setText(String.valueOf(pda));
+              }
             }
+            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
           }
         }
-        Lizzie.leelaz.sendCommand(command);
-        if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-      } else if (command.startsWith("dympdacap")) {
-        String[] params = command.trim().split(" ");
-        if (params.length == 2) {
-          try {
-            Double pdaCap = Double.parseDouble(params[1]);
-            Lizzie.leelaz.pdaCap = pdaCap;
-            if (LizzieFrame.menu.setPda != null)
-              LizzieFrame.menu.setPda.txtDymCap.setText(String.valueOf(pdaCap));
-          } catch (Exception es) {
-            es.printStackTrace();
-          }
-        }
-        Lizzie.leelaz.sendCommand(command);
-        if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
+      } else if ("getpda".equals(commandName) || "getdympdacap".equals(commandName)) {
+        if (moveParams.length != 1) wrongParameters();
+        else if (Lizzie.leelaz.sendRawConsoleCommand(commandName) && Lizzie.leelaz.isPondering())
+          Lizzie.leelaz.ponder();
       } else {
         Lizzie.leelaz.sendRawConsoleCommand(command);
       }
+    }
+  }
+
+  private boolean resizeFromConsole(String[] params) {
+    if (params.length != 2 && params.length != 3) return false;
+    // Preserve square and rectangular boards, without guessing a particular engine's size limit.
+    if (!CONSOLE_INTEGER.matcher(params[1]).matches()
+        || (params.length == 3 && !CONSOLE_INTEGER.matcher(params[2]).matches())) return false;
+    int width;
+    int height;
+    try {
+      width = Integer.parseInt(params[1]);
+      height = params.length == 3 ? Integer.parseInt(params[2]) : width;
+    } catch (NumberFormatException invalidSize) {
+      return false;
+    }
+    if (!Board.isValidBoardSize(width, height)) return false;
+    Lizzie.board.reopen(width, height);
+    return true;
+  }
+
+  private static OptionalDouble consoleNumber(String[] params) {
+    if (params.length != 2 || !CONSOLE_NUMBER.matcher(params[1]).matches())
+      return OptionalDouble.empty();
+    try {
+      double value = Double.parseDouble(params[1]);
+      return Double.isFinite(value) ? OptionalDouble.of(value) : OptionalDouble.empty();
+    } catch (NumberFormatException invalidNumber) {
+      return OptionalDouble.empty();
     }
   }
 
@@ -529,7 +538,7 @@ public class GtpConsolePane extends JDialog {
     return true;
   }
 
-  private void wrongMoveParameters() {
+  private void wrongParameters() {
     setDocs(
         resourceBundle.getString("GtpConsolePane.wrongParameters") + "\r\n",
         new Color(255, 255, 0),

@@ -920,6 +920,11 @@ public class Board {
     tempmovelist.clear();
   }
 
+  /** Valid dimensions for the int-indexed board arrays; not an engine capability/heap budget. */
+  public static boolean isValidBoardSize(int width, int height) {
+    return width >= 2 && height >= 2 && (long) width * height <= Integer.MAX_VALUE - 8L;
+  }
+
   /**
    * Open board again when the SZ property is setup by sgf
    *
@@ -928,6 +933,10 @@ public class Board {
   public void reopen(int width, int height) {
     width = (width >= 2) ? width : 19;
     height = (height >= 2) ? height : 19;
+
+    // Reject unrepresentable arrays before publishing dimensions or replacing Zobrist tables.
+    if (!isValidBoardSize(width, height))
+      throw new IllegalArgumentException("Board dimensions exceed the array index range");
 
     boolean resizeNeeded;
     EngineForwardingPlan forwarding;
