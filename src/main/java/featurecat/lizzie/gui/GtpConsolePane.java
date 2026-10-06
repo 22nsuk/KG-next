@@ -499,6 +499,11 @@ public class GtpConsolePane extends JDialog {
     if (params.length != 3) return false;
     Stone color = consoleColor(params[1]);
     if (color == Stone.EMPTY) return false;
+    // Board.place uses the parent's turn to decide whether a human-game move reaches the
+    // engine. Reject moves outside that contract instead of advancing only the GUI history.
+    if (Lizzie.frame.isPlayingAgainstLeelaz
+        && (Lizzie.frame.playerIsBlack != Lizzie.board.getData().blackToPlay
+            || Lizzie.frame.playerIsBlack != (color == Stone.BLACK))) return false;
     if ("pass".equalsIgnoreCase(params[2])) {
       Lizzie.board.pass(color);
       return true;

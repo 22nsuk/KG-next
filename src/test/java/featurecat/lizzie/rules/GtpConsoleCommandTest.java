@@ -16,11 +16,13 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /**
@@ -125,6 +127,52 @@ class GtpConsoleCommandTest {
     rules.current().getData().blackToPlay = true;
     engine.commands.clear();
     assertRejectedWithoutPositionChange("play w B4");
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true, false, b, D4",
+    "true, false, w, D4",
+    "true, true, w, D4",
+    "false, true, w, D4",
+    "false, true, b, D4",
+    "false, false, b, D4",
+    "true, false, b, pass",
+    "true, false, w, pass",
+    "true, true, w, pass",
+    "false, true, w, pass",
+    "false, true, b, pass",
+    "false, false, b, pass"
+  })
+  void humanGameRejectsConsolePlayOutsideTheHumanTurn(
+      boolean humanIsBlack, boolean blackToPlay, String color, String vertex) throws Exception {
+    Lizzie.frame.isPlayingAgainstLeelaz = true;
+    Lizzie.frame.playerIsBlack = humanIsBlack;
+    rules.current().getData().blackToPlay = blackToPlay;
+    assertRejectedWithoutPositionChange("play " + color + " " + vertex);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, b, D4", "false, w, D4", "true, b, pass", "false, w, pass"})
+  void humanGameAcceptsTheHumanMoveAndRequestsExactlyOneReply(
+      boolean humanIsBlack, String color, String vertex) throws Exception {
+    Lizzie.frame.isPlayingAgainstLeelaz = true;
+    Lizzie.frame.playerIsBlack = humanIsBlack;
+    BoardHistoryNode parent = rules.current();
+    parent.getData().blackToPlay = humanIsBlack;
+    submit("play " + color + " " + vertex);
+    assertEquals(humanIsBlack, parent.getData().blackToPlay);
+    assertEquals(humanIsBlack ? Stone.BLACK : Stone.WHITE, rules.current().getData().lastMoveColor);
+    assertEquals(!humanIsBlack, rules.current().getData().blackToPlay);
+    assertEquals(1, rules.current().getData().moveNumber);
+    assertEquals("pass".equals(vertex), rules.current().getData().isPassNode());
+    if (!"pass".equals(vertex)) {
+      assertEquals(humanIsBlack ? Stone.BLACK : Stone.WHITE, rules.stoneAt(3, 1));
+    }
+    assertEquals(2, engine.commands.size());
+    assertEquals("play " + (humanIsBlack ? "B" : "W") + " " + vertex, engine.commands.get(0));
+    assertEquals(
+        "genmove " + (humanIsBlack ? "w" : "b"), engine.commands.get(1).toLowerCase(Locale.ROOT));
   }
 
   @Test
