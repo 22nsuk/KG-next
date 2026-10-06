@@ -130,6 +130,58 @@ class GtpConsoleCommandTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"b, w, D4", "w, b, D4", "b, w, pass", "w, b, pass"})
+  void replayWithOppositeColorPreservesTheOriginalBranchAndSendsTheNewColor(
+      String originalColor, String requestedColor, String vertex) throws Exception {
+    BoardHistoryNode parent = rules.current();
+    submit("play " + originalColor + " " + vertex);
+    BoardHistoryNode original = rules.current();
+    original.getData().comment = "preserve original continuation";
+    submit("play " + requestedColor + " A1");
+    BoardHistoryNode continuation = rules.current();
+    assertTrue(rules.board().getHistory().previous().isPresent());
+    assertTrue(rules.board().getHistory().previous().isPresent());
+    boolean parentTurn = parent.getData().blackToPlay;
+    engine.commands.clear();
+
+    submit("play " + requestedColor + " " + vertex);
+
+    Stone requested = requestedColor.equals("b") ? Stone.BLACK : Stone.WHITE;
+    assertNotSame(original, rules.current());
+    assertEquals(requested, rules.current().getData().lastMoveColor);
+    assertEquals(requested == Stone.WHITE, rules.current().getData().blackToPlay);
+    assertEquals(1, rules.current().getData().moveNumber);
+    assertEquals(parentTurn, parent.getData().blackToPlay);
+    assertEquals("pass".equals(vertex), rules.current().getData().isPassNode());
+    if (!"pass".equals(vertex)) assertEquals(requested, rules.stoneAt(3, 1));
+    assertEquals(2, parent.numberOfChildren());
+    assertSame(original, parent.getVariation(0).orElseThrow());
+    assertSame(continuation, original.next().orElseThrow());
+    assertEquals("preserve original continuation", original.getData().comment);
+    assertEquals(
+        List.of("play " + requestedColor.toUpperCase(Locale.ROOT) + " " + vertex), engine.commands);
+  }
+
+  @ParameterizedTest
+  @CsvSource({"b, D4", "w, D4", "b, pass", "w, pass"})
+  void replayWithSameColorReusesTheOriginalNodeAndSendsExactlyOneMove(
+      String color, String vertex) throws Exception {
+    BoardHistoryNode parent = rules.current();
+    submit("play " + color + " " + vertex);
+    BoardHistoryNode original = rules.current();
+    original.getData().comment = "keep analysis and comment";
+    assertTrue(rules.board().getHistory().previous().isPresent());
+    engine.commands.clear();
+
+    submit("play " + color + " " + vertex);
+
+    assertSame(original, rules.current());
+    assertEquals(1, parent.numberOfChildren());
+    assertEquals("keep analysis and comment", rules.current().getData().comment);
+    assertEquals(List.of("play " + color.toUpperCase(Locale.ROOT) + " " + vertex), engine.commands);
+  }
+
+  @ParameterizedTest
   @CsvSource({
     "true, false, b, D4",
     "true, false, w, D4",

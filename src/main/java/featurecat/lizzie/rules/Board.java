@@ -2599,7 +2599,12 @@ public class Board {
       }
 
       // check to see if this move is being replayed in history
-      if (history.getNext().map(this::isKnownPass).orElse(false) && !newBranch) {
+      if (history
+              .getNext()
+              .filter(next -> next.lastMoveColor == color)
+              .map(this::isKnownPass)
+              .orElse(false)
+          && !newBranch) {
         // this is the next move in history. Just increment history so that we don't
         // erase the
         // redo's
@@ -2854,8 +2859,9 @@ public class Board {
       double nextWinrate = -100;
       if (history.getData().winrate >= 0) nextWinrate = 100 - history.getData().winrate;
 
-      // check to see if this coordinate is being replayed in history
-      Optional<int[]> nextLast = history.getNext().flatMap(n -> n.lastMove);
+      // A replay must match both the coordinate and the requested color.
+      Optional<int[]> nextLast =
+          history.getNext().filter(next -> next.lastMoveColor == color).flatMap(n -> n.lastMove);
       if (nextLast.isPresent()
           && nextLast.get()[0] == x
           && nextLast.get()[1] == y
