@@ -88,8 +88,11 @@ import java.awt.image.RenderedImage;
 import java.io.*;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -14767,45 +14770,119 @@ public class LizzieFrame extends JFrame {
   }
 
   public void deleteTempGame(int index) {
-    ArrayList<TempGameData> data = getSaveGameList();
-    File file = resolveSavedGameFile(false, index, "bmp");
-    if (file.exists() && file.isFile()) file.delete();
-    File file2 = resolveSavedGameFile(false, index, "sgf");
-    if (file2.exists() && file2.isFile()) file2.delete();
-    for (int i = index + 1; i <= data.size(); i++) {
-      File oldfile = resolveSavedGameFile(false, i, "bmp");
-      File newfile = resolveSavedGameFile(false, (i - 1), "bmp");
-      if (oldfile.exists()) {
-        oldfile.renameTo(newfile);
-      }
-    }
-    for (int i = index + 1; i <= data.size(); i++) {
-      File oldfile = resolveSavedGameFile(false, i, "sgf");
-      File newfile = resolveSavedGameFile(false, (i - 1), "sgf");
-      if (oldfile.exists()) {
-        oldfile.renameTo(newfile);
-      }
-    }
-
-    data.remove(index - 1);
-    saveTempGame(data);
+    runSavedGameAction(
+        () -> {
+          ArrayList<TempGameData> data = getSaveGameList();
+          TempGameData removed = findTemporaryGame(data, index);
+          if (removed == null) return; // A stale panel action must not delete another record.
+          data.remove(removed);
+          if (persistTemporaryGameList(data)) cleanupTemporaryGameFiles(List.of(removed));
+        });
   }
 
   public void deleteAllTempGame() {
-    ArrayList<TempGameData> data = getSaveGameList();
-    for (int index = 1; index < data.size() + 1; index++) {
-      File file = resolveSavedGameFile(false, index, "bmp");
-      if (file.exists() && file.isFile()) file.delete();
-      File file2 = resolveSavedGameFile(false, index, "sgf");
-      if (file2.exists() && file2.isFile()) file2.delete();
+    runSavedGameAction(
+        () -> {
+          ArrayList<TempGameData> removed = getSaveGameList();
+          if (removed.isEmpty()) return;
+          if (persistTemporaryGameList(new ArrayList<>())) cleanupTemporaryGameFiles(removed);
+        });
+  }
+
+  public void renameTempGame(int index, String name) {
+    runSavedGameAction(
+        () -> {
+          ArrayList<TempGameData> data = getSaveGameList();
+          TempGameData record = findTemporaryGame(data, index);
+          if (record == null) return;
+          record.name = name;
+          persistTemporaryGameList(data);
+        });
+  }
+
+  private static TempGameData findTemporaryGame(List<TempGameData> data, int index) {
+    for (TempGameData record : data) {
+      if (record.index == index) return record;
     }
-    saveTempGame(new ArrayList<TempGameData>());
+    return null;
+  }
+
+  private boolean persistTemporaryGameList(ArrayList<TempGameData> data) {
+    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
+    putTempGameList(candidate, data);
     try {
-      Lizzie.config.saveTempBoard();
-    } catch (IOException es) {
-      // TODO Auto-generated catch block
-      es.printStackTrace();
+      Lizzie.config.saveTempBoard(candidate);
+      return true;
+    } catch (IOException failure) {
+      savedGameEditFailed(failure);
+      return false;
     }
+  }
+
+  protected void savedGameEditFailed(IOException failure) {
+    org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+        .warn("Could not persist saved-game edit", failure);
+    if (!GraphicsEnvironment.isHeadless()) {
+      Utils.showMsg(
+          Lizzie.resourceBundle.getString("LizzieFrame.saveFileFailed")
+              + "\n"
+              + failure.getLocalizedMessage());
+    }
+  }
+
+  private void cleanupTemporaryGameFiles(List<TempGameData> removed) {
+    // The manifest is already committed. Only unreferenced files are touched; survivors
+    // keep their identifiers and paths. Cleanup failure leaves an orphan, never a rollback
+    // to a manifest whose files may already have been removed.
+    for (TempGameData record : removed) {
+      for (String extension : List.of("sgf", "bmp")) {
+        Path file = resolveSavedGameFile(false, record.index, extension).toPath();
+        try {
+          Files.deleteIfExists(file);
+        } catch (IOException failure) {
+          org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+              .warn("Saved-game list committed; unreferenced file remains: {}", file, failure);
+        }
+      }
+    }
+  }
+
+  private int allocateTemporaryGameIndex(int requestedIndex, List<TempGameData> data)
+      throws IOException {
+    long next =
+        Math.max(
+            Math.max(1L, requestedIndex), nextTemporaryGameIndex(Lizzie.config.saveBoardConfig));
+    for (TempGameData record : data) next = Math.max(next, (long) record.index + 1L);
+    while (next <= Integer.MAX_VALUE) {
+      Path sgf = resolveSavedGameFile(false, (int) next, "sgf").toPath();
+      Path preview = resolveSavedGameFile(false, (int) next, "bmp").toPath();
+      Files.createDirectories(sgf.getParent());
+      // Even orphan previews and dangling links reserve their slot. Attribute read errors
+      // must abort the save, rather than be mistaken for absence or cause an unbounded scan.
+      if (!savedGameFileExists(sgf) && !savedGameFileExists(preview)) return (int) next;
+      next++;
+    }
+    throw new IOException("No unused temporary-game identifier is available");
+  }
+
+  private static boolean savedGameFileExists(Path path) throws IOException {
+    try {
+      Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+      return true;
+    } catch (NoSuchFileException absent) {
+      return false;
+    }
+  }
+
+  private static long nextTemporaryGameIndex(JSONObject metadata) {
+    long next = Math.max(1L, metadata.optLong("save-game-next-index", 1L));
+    JSONArray indices = metadata.optJSONArray("save-game-index");
+    if (indices != null) {
+      for (int i = 0; i < indices.length(); i++) {
+        next = Math.max(next, (long) indices.getInt(i) + 1L);
+      }
+    }
+    return next;
   }
 
   public void saveTempGame(int index, String name) {
@@ -14818,7 +14895,20 @@ public class LizzieFrame extends JFrame {
 
   private void saveTemporaryGameOnEdt(int index, String name, boolean add) {
     ArrayList<TempGameData> data = getSaveGameList();
-    TempGameData saved = add ? new TempGameData() : data.get(index - 1);
+    TempGameData saved;
+    if (add) {
+      try {
+        index = allocateTemporaryGameIndex(index, data);
+      } catch (IOException failure) {
+        savedGameEditFailed(failure);
+        return;
+      }
+      saved = new TempGameData();
+      saved.index = index;
+    } else {
+      saved = findTemporaryGame(data, index);
+      if (saved == null) return;
+    }
     saved.name = name;
     saved.time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
     saved.curMoveNumer = Lizzie.board.getCurrentMovenumber();
@@ -14942,6 +15032,23 @@ public class LizzieFrame extends JFrame {
       String moveList,
       boolean oriShowListPane,
       boolean OriShowVariationGraph) {
+    addTempGameOne(
+        index, index, x, y, name, time, isAutoSave, moveNumber, moveList,
+        oriShowListPane, OriShowVariationGraph);
+  }
+
+  private void addTempGameOne(
+      int index,
+      int displayNumber,
+      int x,
+      int y,
+      String name,
+      String time,
+      boolean isAutoSave,
+      int moveNumber,
+      String moveList,
+      boolean oriShowListPane,
+      boolean OriShowVariationGraph) {
     JLabel boardImage = new JLabel();
     File file = resolveSavedGameFile(isAutoSave, index, "bmp");
     try {
@@ -14957,7 +15064,7 @@ public class LizzieFrame extends JFrame {
         new JLabel(
             isAutoSave
                 ? Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.autoRec")
-                : Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.rec") + index);
+                : Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.rec") + displayNumber);
     lblIndex.setForeground(Color.WHITE);
 
     JTextField txtName = new JTextField();
@@ -15038,14 +15145,13 @@ public class LizzieFrame extends JFrame {
             // TBD未完成
             if (isAutoSave) {
               Lizzie.config.saveBoardConfig.put("save-auto-game-index" + index, -2);
+              try {
+                Lizzie.config.saveTempBoard();
+              } catch (IOException es) {
+                es.printStackTrace();
+              }
             } else {
               deleteTempGame(index);
-            }
-            try {
-              Lizzie.config.saveTempBoard();
-            } catch (IOException es) {
-              // TODO Auto-generated catch block
-              es.printStackTrace();
             }
             Lizzie.config.showListPane = oriShowListPane;
             Lizzie.config.showVariationGraph = OriShowVariationGraph;
@@ -15065,16 +15171,7 @@ public class LizzieFrame extends JFrame {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            // TBD
-            ArrayList<TempGameData> data = getSaveGameList();
-            data.get(index - 1).name = txtName.getText();
-            try {
-              Lizzie.config.saveTempBoard();
-            } catch (IOException es) {
-              // TODO Auto-generated catch block
-              es.printStackTrace();
-            }
-            saveTempGame(data);
+            renameTempGame(index, txtName.getText());
             Lizzie.config.showListPane = oriShowListPane;
             Lizzie.config.showVariationGraph = OriShowVariationGraph;
             showTempGamePanel();
@@ -15160,7 +15257,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void saveTempGame(ArrayList<TempGameData> tempGameList) {
-    putTempGameList(Lizzie.config.saveBoardConfig, tempGameList);
+    runSavedGameAction(() -> persistTemporaryGameList(tempGameList));
   }
 
   private static void putTempGameList(JSONObject target, ArrayList<TempGameData> tempGameList) {
@@ -15169,15 +15266,21 @@ public class LizzieFrame extends JFrame {
     JSONArray saveTime = new JSONArray();
     JSONArray saveMoveNumber = new JSONArray();
     JSONArray saveMoveList = new JSONArray();
-    int s = 1;
+    // Keep file identity separate from display order, including when the list becomes empty.
+    long nextIndex = nextTemporaryGameIndex(target);
+    Set<Integer> seen = new HashSet<>();
     for (TempGameData data : tempGameList) {
-      saveIndex.put(s);
+      if (data.index < 1 || !seen.add(data.index)) {
+        throw new IllegalArgumentException("Invalid temporary-game identifier: " + data.index);
+      }
+      saveIndex.put(data.index);
+      nextIndex = Math.max(nextIndex, (long) data.index + 1L);
       saveName.put(data.name);
       saveTime.put(data.time);
       saveMoveNumber.put(data.curMoveNumer);
       saveMoveList.put(data.moves);
-      s++;
     }
+    target.put("save-game-next-index", nextIndex);
     target.put("save-game-index", saveIndex);
     target.put("save-game-name", saveName);
     target.put("save-game-time", saveTime);
@@ -15197,9 +15300,13 @@ public class LizzieFrame extends JFrame {
         Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-number"));
     Optional<JSONArray> saveMoveList =
         Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-list"));
+    Set<Integer> seen = new HashSet<>();
     for (int s = 0; s < (saveIndex.isPresent() ? saveIndex.get().length() : 0); s++) {
       TempGameData data = new TempGameData();
       data.index = saveIndex.get().getInt(s);
+      if (data.index < 1 || !seen.add(data.index)) {
+        throw new IllegalStateException("Invalid temporary-game identifier: " + data.index);
+      }
       data.name = saveName.get().getString(s);
       data.time = saveTime.get().getString(s);
       data.curMoveNumer = saveMoveNumber.get().getInt(s);
@@ -15228,27 +15335,7 @@ public class LizzieFrame extends JFrame {
       tempGameList.add(data);
     }
 
-    Optional<JSONArray> saveIndex =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-index"));
-    Optional<JSONArray> saveName =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-name"));
-    Optional<JSONArray> saveTime =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-time"));
-    Optional<JSONArray> saveMoveNumber =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-number"));
-    Optional<JSONArray> saveMoveList =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-list"));
-    for (int s = 0; s < (saveIndex.isPresent() ? saveIndex.get().length() : 0); s++) {
-      TempGameData data = new TempGameData();
-      data.index = saveIndex.get().getInt(s);
-      data.name = saveName.get().getString(s);
-      data.time = saveTime.get().getString(s);
-      data.curMoveNumer = saveMoveNumber.get().getInt(s);
-      if (saveMoveList.isPresent()) data.moves = saveMoveList.get().optString(s, "");
-      else data.moves = "";
-      data.isAutoSave = false;
-      tempGameList.add(data);
-    }
+    tempGameList.addAll(getSaveGameList());
 
     return tempGameList;
   }
@@ -15434,6 +15521,7 @@ public class LizzieFrame extends JFrame {
       data.y = y;
       addTempGameOne(
           data.index,
+          data.isAutoSave ? 0 : newIndex++,
           x,
           y,
           data.name,
@@ -15444,9 +15532,6 @@ public class LizzieFrame extends JFrame {
           oriShowListPane,
           OriShowVariationGraph);
       if (i == tempGameList.size() - 1) {
-        if (data.isAutoSave) {
-          newIndex = 1;
-        } else newIndex = data.index + 1;
         newX = ((i + 1) % column) * 310;
         newY = ((i + 1) / column) * 345 + 20;
       }

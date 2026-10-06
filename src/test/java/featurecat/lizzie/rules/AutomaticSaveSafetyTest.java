@@ -7,6 +7,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.TempGameData;
 import java.awt.AWTEvent;
 import java.awt.Component;
 import java.awt.Container;
@@ -21,19 +22,25 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JDialog;
+import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import org.json.JSONArray;
@@ -234,6 +241,446 @@ class AutomaticSaveSafetyTest {
   }
 
   @ParameterizedTest
+  @ValueSource(ints = {1, 2, 3})
+  void deletionPreservesSurvivingFileIdentities(int deleted) throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Map<Path, byte[]> before = temporaryFiles();
+    frame.deleteTempGame(deleted);
+    List<Integer> expected = new ArrayList<>(List.of(1, 2, 3));
+    expected.remove(Integer.valueOf(deleted));
+    assertTemporaryIndices(expected);
+    for (int index : expected) {
+      assertEquals("record " + index, record(index).name);
+      assertEquals("moves " + index, record(index).moves);
+      for (String extension : List.of("sgf", "bmp")) {
+        Path path = temporarySlot(index, extension);
+        assertArrayEquals(before.get(path), Files.readAllBytes(path));
+      }
+    }
+    assertFalse(Files.exists(temporarySlot(deleted, "sgf")));
+    assertFalse(Files.exists(temporarySlot(deleted, "bmp")));
+    assertEquals(4L, config.saveBoardConfig.getLong("save-game-next-index"));
+    assertEquals(0, frame.editFailures);
+    assertNoStagingFiles();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void deletionMetadataFailurePreservesFilesAndCanRetry(boolean all) throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Map<Path, byte[]> before = temporaryFiles();
+    JSONObject original = config.saveBoardConfig;
+    Field filename = blockMetadataDestination();
+    if (all) frame.deleteAllTempGame();
+    else frame.deleteTempGame(2);
+    assertEquals(1, frame.editFailures);
+    assertSame(original, config.saveBoardConfig);
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertFilesUnchanged(before);
+    filename.set(config, metadataFile().toString());
+    if (all) frame.deleteAllTempGame();
+    else frame.deleteTempGame(2);
+    assertTemporaryIndices(all ? List.of() : List.of(1, 3));
+    assertNoStagingFiles();
+  }
+
+  @Test
+  void renameButtonPersistsNewNameBeforeRefreshingPanel() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Map<Path, byte[]> before = temporaryFiles();
+    AtomicReference<String> persistedNameAtRefresh = new AtomicReference<>();
+    frame.afterPanelRefresh =
+        () -> {
+          try {
+            JSONObject saved =
+                new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
+            persistedNameAtRefresh.set(saved.getJSONArray("save-game-name").getString(1));
+          } catch (IOException failure) {
+            throw new AssertionError(failure);
+          }
+        };
+    clickRecordButton(2, "LizzieFrame.saveAndLoad.reName", "새 이름");
+    assertEquals("새 이름", persistedNameAtRefresh.get());
+    assertEquals("새 이름", record(2).name);
+    assertEquals("time 2", record(2).time);
+    assertEquals("moves 2", record(2).moves);
+    assertEquals(1, frame.panelRefreshes);
+    assertEquals(0, frame.previewCalls);
+    assertTemporaryIndices(List.of(1, 2, 3));
+    assertFilesUnchanged(before);
+  }
+
+  @Test
+  void deleteButtonCommitsTheListBeforeRefreshingPanel() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    clickRecordButton(2, "LizzieFrame.saveAndLoad.del", "unused");
+    assertTemporaryIndices(List.of(1, 3));
+    assertEquals(1, frame.panelRefreshes);
+    assertFalse(Files.exists(temporarySlot(2, "sgf")));
+  }
+
+  @Test
+  void failedDeleteButtonKeepsTheExistingListAndFiles() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Map<Path, byte[]> before = temporaryFiles();
+    String original = config.saveBoardConfig.toString();
+    blockMetadataDestination();
+    clickRecordButton(2, "LizzieFrame.saveAndLoad.del", "unused");
+    assertEquals(original, config.saveBoardConfig.toString());
+    assertFilesUnchanged(before);
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertEquals(1, frame.editFailures);
+  }
+
+  @Test
+  void sparseRecordRowDisplaysOrdinalButEditsItsFileIdentity() throws Exception {
+    seedTemporaryRecords(1, 3);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          JPanel panel = new JPanel();
+          try {
+            Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+            panelField.setAccessible(true);
+            panelField.set(frame, panel);
+            var row =
+                LizzieFrame.class.getDeclaredMethod(
+                    "addTempGameOne",
+                    int.class,
+                    int.class,
+                    int.class,
+                    int.class,
+                    String.class,
+                    String.class,
+                    boolean.class,
+                    int.class,
+                    String.class,
+                    boolean.class,
+                    boolean.class);
+            row.setAccessible(true);
+            row.invoke(frame, 3, 2, 0, 0, "third file", "old time", false, 1, "", true, true);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+          String label = Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.rec") + 2;
+          assertTrue(
+              Arrays.stream(panel.getComponents())
+                  .filter(JLabel.class::isInstance)
+                  .map(JLabel.class::cast)
+                  .anyMatch(component -> label.equals(component.getText())));
+          Arrays.stream(panel.getComponents())
+              .filter(JButton.class::isInstance)
+              .map(JButton.class::cast)
+              .filter(
+                  button ->
+                      Lizzie.resourceBundle
+                          .getString("LizzieFrame.saveAndLoad.reName")
+                          .equals(button.getText()))
+              .findFirst()
+              .orElseThrow()
+              .doClick(0);
+        });
+    assertTemporaryIndices(List.of(1, 3));
+    assertEquals("third file", record(3).name);
+    assertEquals("record 1", record(1).name);
+  }
+
+  @Test
+  void renameFailureKeepsMemoryAndDiskNamesAndCanRetry() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Map<Path, byte[]> before = temporaryFiles();
+    JSONObject original = config.saveBoardConfig;
+    Field filename = blockMetadataDestination();
+    clickRecordButton(2, "LizzieFrame.saveAndLoad.reName", "새 이름");
+    assertEquals(1, frame.editFailures);
+    assertSame(original, config.saveBoardConfig);
+    assertEquals("record 2", record(2).name);
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertFilesUnchanged(before);
+    filename.set(config, metadataFile().toString());
+    frame.renameTempGame(2, "새 이름");
+    assertEquals("새 이름", record(2).name);
+    assertTemporaryIndices(List.of(1, 2, 3));
+    assertFilesUnchanged(before);
+    assertNoStagingFiles();
+  }
+
+  @Test
+  void deleteAllPreservesAutomaticAndUnlistedFilesAndDoesNotRecycleIdentifiers() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    Path unlisted = temporarySlot(9, "sgf");
+    Files.writeString(unlisted, "orphan to preserve");
+    Files.writeString(slot(SaveKind.EXIT, "sgf"), "automatic recovery");
+    frame.deleteAllTempGame();
+    assertTemporaryIndices(List.of());
+    assertEquals("automatic recovery", Files.readString(slot(SaveKind.EXIT, "sgf")));
+    assertEquals(1, config.saveBoardConfig.getInt("save-auto-game-index1"));
+    assertEquals("orphan to preserve", Files.readString(unlisted));
+    for (int index : List.of(1, 2, 3)) {
+      assertFalse(Files.exists(temporarySlot(index, "sgf")));
+      assertFalse(Files.exists(temporarySlot(index, "bmp")));
+    }
+    frame.addTempGame(1, "new record");
+    assertTemporaryIndices(List.of(4));
+    assertTrue(Files.readString(temporarySlot(4, "sgf")).contains(";W[dd]"));
+  }
+
+  @Test
+  void cleanupFailureDoesNotRollBackOrDamageSurvivors() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    byte[] survivor = Files.readAllBytes(temporarySlot(3, "sgf"));
+    Path blocked = temporarySlot(2, "sgf");
+    Files.delete(blocked);
+    Files.createDirectory(blocked);
+    Files.writeString(blocked.resolve("keep"), "not a regular saved-game file");
+    frame.deleteTempGame(2);
+    assertTemporaryIndices(List.of(1, 3));
+    assertArrayEquals(survivor, Files.readAllBytes(temporarySlot(3, "sgf")));
+    assertEquals("not a regular saved-game file", Files.readString(blocked.resolve("keep")));
+    assertFalse(Files.exists(temporarySlot(2, "bmp")));
+    frame.addTempGame(2, "new record");
+    assertTemporaryIndices(List.of(1, 3, 4));
+    assertTrue(Files.isDirectory(blocked));
+  }
+
+  @Test
+  void newSaveSkipsOrphanSgfPreviewAndDirectorySlots() throws Exception {
+    seedTemporaryRecords(1);
+    Files.writeString(temporarySlot(2, "sgf"), "recoverable orphan");
+    Files.writeString(temporarySlot(3, "bmp"), "orphan preview");
+    Files.createDirectory(temporarySlot(4, "sgf"));
+    frame.addTempGame(2, "new record");
+    assertTemporaryIndices(List.of(1, 5));
+    assertEquals("recoverable orphan", Files.readString(temporarySlot(2, "sgf")));
+    assertEquals("orphan preview", Files.readString(temporarySlot(3, "bmp")));
+    assertTrue(Files.isDirectory(temporarySlot(4, "sgf")));
+    assertTrue(Files.readString(temporarySlot(5, "sgf")).contains(";W[dd]"));
+    assertEquals(0, frame.editFailures);
+  }
+
+  @Test
+  void unavailableSaveDirectoryRejectsNewRecordWithoutPublishingIt() throws Exception {
+    seedTemporaryRecords(1);
+    Map<Path, byte[]> before = temporaryFiles();
+    Path saveDirectory = directory.resolve("save");
+    Path backup = directory.resolve("saved-directory-backup");
+    Files.move(saveDirectory, backup);
+    Files.writeString(saveDirectory, "not a directory");
+    try {
+      frame.addTempGame(2, "new record");
+      assertEquals(1, frame.editFailures);
+      assertEquals(
+          List.of(1), frame.getSaveGameList().stream().map(record -> record.index).toList());
+      assertEquals("not a directory", Files.readString(saveDirectory));
+    } finally {
+      Files.delete(saveDirectory);
+      Files.move(backup, saveDirectory);
+    }
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertFilesUnchanged(before);
+  }
+
+  @Test
+  void overwriteAndRenameUseFileIdentityAfterMiddleDeletion() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    byte[] first = Files.readAllBytes(temporarySlot(1, "sgf"));
+    frame.deleteTempGame(2);
+    frame.saveTempGame(3, "replaced third");
+    frame.renameTempGame(3, "renamed third");
+    assertTemporaryIndices(List.of(1, 3));
+    assertEquals("renamed third", record(3).name);
+    assertTrue(Files.readString(temporarySlot(3, "sgf")).contains(";W[dd]"));
+    assertArrayEquals(first, Files.readAllBytes(temporarySlot(1, "sgf")));
+    assertFalse(Files.exists(temporarySlot(2, "sgf")));
+  }
+
+  @Test
+  void staleEditActionsCannotAffectANewerRecord() throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    frame.deleteTempGame(3);
+    frame.addTempGame(3, "new fourth");
+    assertTemporaryIndices(List.of(1, 2, 4));
+    String metadata = Files.readString(metadataFile());
+    Map<Path, byte[]> before = temporaryFiles();
+    frame.deleteTempGame(3);
+    frame.renameTempGame(3, "stale rename");
+    frame.saveTempGame(3, "stale overwrite");
+    assertEquals(metadata, Files.readString(metadataFile()));
+    assertFilesUnchanged(before);
+    assertEquals("new fourth", record(4).name);
+  }
+
+  @Test
+  void identifierExhaustionFailsWithoutReusingDeletedRecords() throws Exception {
+    seedTemporaryRecords(Integer.MAX_VALUE);
+    frame.deleteAllTempGame();
+    assertEquals(
+        (long) Integer.MAX_VALUE + 1L, config.saveBoardConfig.getLong("save-game-next-index"));
+    String metadata = Files.readString(metadataFile());
+    frame.addTempGame(1, "cannot allocate");
+    assertEquals(1, frame.editFailures);
+    assertEquals(metadata, Files.readString(metadataFile()));
+    assertTemporaryIndices(List.of());
+    assertFalse(Files.exists(temporarySlot(1, "sgf")));
+  }
+
+  @Test
+  void duplicateRecordIdentitiesAreRejectedBeforeDeletion() throws Exception {
+    seedTemporaryRecords(1, 2);
+    config.saveBoardConfig.getJSONArray("save-game-index").put(1, 1);
+    config.saveTempBoard();
+    String metadata = Files.readString(metadataFile());
+    Map<Path, byte[]> before = temporaryFiles();
+    assertThrows(IllegalStateException.class, () -> frame.deleteTempGame(1));
+    assertEquals(metadata, Files.readString(metadataFile()));
+    assertFilesUnchanged(before);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editsSerializeWithAnInFlightAutomaticSave(boolean deletion) throws Exception {
+    seedTemporaryRecords(1, 2, 3);
+    frame.previewEntered = new CountDownLatch(1);
+    frame.releasePreview = new CountDownLatch(1);
+    var workers = Executors.newFixedThreadPool(2);
+    CountDownLatch editStarted = new CountDownLatch(1);
+    try {
+      var automatic = workers.submit(() -> frame.saveAutoGame(2));
+      assertTrue(frame.previewEntered.await(5, TimeUnit.SECONDS));
+      var edit =
+          workers.submit(
+              () -> {
+                editStarted.countDown();
+                if (deletion) frame.deleteTempGame(2);
+                else frame.renameTempGame(2, "queued rename");
+              });
+      assertTrue(editStarted.await(5, TimeUnit.SECONDS));
+      assertThrows(TimeoutException.class, () -> edit.get(100, TimeUnit.MILLISECONDS));
+      frame.releasePreview.countDown();
+      automatic.get(5, TimeUnit.SECONDS);
+      edit.get(5, TimeUnit.SECONDS);
+      assertTemporaryIndices(deletion ? List.of(1, 3) : List.of(1, 2, 3));
+      if (!deletion) assertEquals("queued rename", record(2).name);
+      assertEquals(2, config.saveBoardConfig.getInt("save-auto-game-move-number2"));
+    } finally {
+      frame.releasePreview.countDown();
+      workers.shutdownNow();
+      assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  private void seedTemporaryRecords(int... indices) throws IOException {
+    JSONArray ids = new JSONArray();
+    JSONArray names = new JSONArray();
+    JSONArray times = new JSONArray();
+    JSONArray moves = new JSONArray();
+    JSONArray numbers = new JSONArray();
+    for (int index : indices) {
+      ids.put(index);
+      names.put("record " + index);
+      times.put("time " + index);
+      moves.put("moves " + index);
+      numbers.put(1);
+      Files.writeString(temporarySlot(index, "sgf"), "(;SZ[5]C[record " + index + "];B[aa])");
+      assertTrue(
+          ImageIO.write(
+              new BufferedImage(7, 7, BufferedImage.TYPE_INT_RGB),
+              "bmp",
+              temporarySlot(index, "bmp").toFile()));
+    }
+    config
+        .saveBoardConfig
+        .put("save-game-index", ids)
+        .put("save-game-name", names)
+        .put("save-game-time", times)
+        .put("save-game-move-list", moves)
+        .put("save-game-move-number", numbers);
+    config.saveBoardConfig.remove("save-game-next-index"); // Existing, unmigrated metadata.
+    config.saveTempBoard();
+    oldMetadata = Files.readString(metadataFile());
+  }
+
+  private Path temporarySlot(int index, String extension) {
+    return directory.resolve("save/game" + index + "." + extension);
+  }
+
+  private TempGameData record(int index) {
+    return frame.getSaveGameList().stream()
+        .filter(record -> record.index == index)
+        .findFirst()
+        .orElseThrow();
+  }
+
+  private void assertTemporaryIndices(List<Integer> expected) throws IOException {
+    JSONObject persisted = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
+    assertTrue(persisted.similar(config.saveBoardConfig));
+    assertEquals(expected, persisted.getJSONArray("save-game-index").toList());
+    assertEquals(expected, frame.getSaveGameList().stream().map(record -> record.index).toList());
+    assertEquals(
+        expected,
+        frame.getTempGameList().stream()
+            .filter(record -> !record.isAutoSave)
+            .map(record -> record.index)
+            .toList());
+  }
+
+  private Map<Path, byte[]> temporaryFiles() throws IOException {
+    Map<Path, byte[]> contents = new LinkedHashMap<>();
+    try (var files = Files.list(directory.resolve("save"))) {
+      for (Path file :
+          files
+              .filter(path -> path.getFileName().toString().startsWith("game"))
+              .filter(Files::isRegularFile)
+              .toList()) contents.put(file, Files.readAllBytes(file));
+    }
+    return contents;
+  }
+
+  private void assertFilesUnchanged(Map<Path, byte[]> contents) throws IOException {
+    for (var entry : contents.entrySet()) {
+      assertArrayEquals(
+          entry.getValue(), Files.readAllBytes(entry.getKey()), entry.getKey().toString());
+    }
+  }
+
+  private Field blockMetadataDestination() throws Exception {
+    Path blocked = directory.resolve("blocked-metadata");
+    Files.createDirectory(blocked);
+    Files.writeString(blocked.resolve("keep"), "keep");
+    Field filename = Config.class.getDeclaredField("saveBoardFilename");
+    filename.setAccessible(true);
+    filename.set(config, blocked.toString());
+    return filename;
+  }
+
+  private void clickRecordButton(int index, String key, String name) throws Exception {
+    SwingUtilities.invokeAndWait(
+        () -> {
+          JPanel panel = new JPanel();
+          try {
+            Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+            panelField.setAccessible(true);
+            panelField.set(frame, panel);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+          frame.addTempGameOne(index, 0, 0, "old name", "old time", false, 1, "", true, true);
+          Arrays.stream(panel.getComponents())
+              .filter(JTextField.class::isInstance)
+              .map(JTextField.class::cast)
+              .findFirst()
+              .orElseThrow()
+              .setText(name);
+          Arrays.stream(panel.getComponents())
+              .filter(JButton.class::isInstance)
+              .map(JButton.class::cast)
+              .filter(button -> Lizzie.resourceBundle.getString(key).equals(button.getText()))
+              .findFirst()
+              .orElseThrow()
+              .doClick(0);
+        });
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void serializerFailureNeverOpensOrTruncatesThePreviousSgf(boolean autoSave) throws Exception {
     Path target = directory.resolve("previous.sgf");
@@ -267,7 +714,7 @@ class AutomaticSaveSafetyTest {
   }
 
   @ParameterizedTest
-  @EnumSource(SaveKind.class)
+  @EnumSource(value = SaveKind.class, names = "ADD", mode = EnumSource.Mode.EXCLUDE)
   void failedSgfReplacementPreservesMetadataAndDoesNotTouchPreview(SaveKind kind) throws Exception {
     JSONObject original = config.saveBoardConfig;
     Path target = slot(kind, "sgf");
@@ -463,10 +910,18 @@ class AutomaticSaveSafetyTest {
 
   static class PreviewFrame extends LizzieFrame {
     int panelRefreshes;
+    int editFailures;
+    Runnable afterPanelRefresh;
+
+    @Override
+    protected void savedGameEditFailed(IOException failure) {
+      editFailures++;
+    }
 
     @Override
     public void showTempGamePanel() {
       panelRefreshes++;
+      if (afterPanelRefresh != null) afterPanelRefresh.run();
     }
 
     int previewCalls;
