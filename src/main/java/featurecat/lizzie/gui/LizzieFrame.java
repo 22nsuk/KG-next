@@ -15016,7 +15016,7 @@ public class LizzieFrame extends JFrame {
                     Lizzie.resourceBundle.getString("LizzieFrame.recordExists"),
                     Lizzie.resourceBundle.getString("LizzieFrame.warning"),
                     JOptionPane.YES_NO_OPTION);
-            if (ret == JOptionPane.NO_OPTION) {
+            if (ret != JOptionPane.YES_OPTION) {
               isShowingBigBoardPanel = false;
               return;
             }

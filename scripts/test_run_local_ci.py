@@ -136,11 +136,14 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame",
             steps[0].command,
         )
         self.assertEqual(
             (
+                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
+                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
+                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
                 *tuple(
                     (
                         "featurecat.lizzie.gui.FunctionSearchNavigationTest",
@@ -585,7 +588,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
-                    self.assertEqual(11, summary["junit"]["tests"])
+                    self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS) - 1, summary["junit"]["tests"])
                     self.assertEqual(0, summary["junit"]["skipped"])
 
                 skipped_engine = suite_xml(
@@ -596,7 +599,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
-                    self.assertEqual(12, summary["junit"]["tests"])
+                    self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS), summary["junit"]["tests"])
                     self.assertEqual(1, summary["junit"]["skipped"])
 
                 pass_xml = suite_xml(
@@ -607,7 +610,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(0, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("PASS", summary["result"])
-                    self.assertEqual(12, summary["junit"]["tests"])
+                    self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS), summary["junit"]["tests"])
 
                 for missing in (*navigation, offline, variation, invalidation):
                     incomplete = suite_xml(
