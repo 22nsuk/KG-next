@@ -51,6 +51,8 @@ public class WebBoardDataCollector {
       Supplier<BoardHistoryNode> displayNode,
       Supplier<BoardHistoryNode> historyRoot) {
     this.executor = executor;
+    // Trial activity replaces long-lived idle deadlines; release cancelled tasks immediately.
+    this.executor.setRemoveOnCancelPolicy(true);
     this.displayNode = displayNode;
     this.historyRoot = historyRoot;
     updates =

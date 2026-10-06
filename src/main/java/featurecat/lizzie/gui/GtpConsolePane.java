@@ -6,6 +6,9 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.enginegame.EngineGamePresentation;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
 import featurecat.lizzie.logging.ObservationText;
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.DocType;
 import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
@@ -24,7 +27,11 @@ import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.ResourceBundle;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
 import javax.swing.JButton;
 import javax.swing.JDialog;
@@ -39,6 +46,8 @@ import org.json.JSONArray;
 
 public class GtpConsolePane extends JDialog {
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
+  private static final Pattern CONSOLE_VERTEX =
+      Pattern.compile("([A-HJ-Z]+)([0-9]+)", Pattern.CASE_INSENSITIVE);
 
   // private int scrollLength = 0;
   private JScrollPane scrollPane;
@@ -335,7 +344,9 @@ public class GtpConsolePane extends JDialog {
       return;
     }
     String command = txtCommand.getText().trim();
-    String commandToLower = command.toLowerCase();
+    String commandToLower = command.toLowerCase(Locale.ROOT);
+    String[] moveParams = command.split("\\s+");
+    String commandName = moveParams[0].toLowerCase(Locale.ROOT);
     txtCommand.setText("");
 
     if (EngineGamePresentation.current().playing()) {
@@ -348,43 +359,22 @@ public class GtpConsolePane extends JDialog {
     }
 
     if (Lizzie.leelaz != null) {
-      if (commandToLower.startsWith("genmove")
-          || commandToLower.startsWith("lz-genmove")
-          || commandToLower.startsWith("kata-genmove")
-          || commandToLower.startsWith("play")) {
-        String cmdParams[] = command.split(" ");
-        if (cmdParams.length >= 2) {
-          String param1 = cmdParams[1].toLowerCase();
-          if (commandToLower.startsWith("genmove")) {
-            if (!Lizzie.leelaz.isThinking) {
-              // Lizzie.leelaz.time_settings();
-              boolean previousBlackToPlay = Lizzie.board.getData().blackToPlay;
-              boolean needChangePla = previousBlackToPlay != "b".equalsIgnoreCase(param1);
-              if (needChangePla) {
-                Lizzie.board.getHistory().getData().blackToPlay = !previousBlackToPlay;
-              }
-              if (!Lizzie.leelaz.genmove(param1, true)) {
-                Lizzie.board.getHistory().getData().blackToPlay = previousBlackToPlay;
-              }
-            }
-          } else {
-            boolean needChangePla =
-                (Lizzie.board.getData().blackToPlay != "b".equalsIgnoreCase(param1));
-            if (needChangePla) {
-              Lizzie.board.getHistory().getData().blackToPlay =
-                  !Lizzie.board.getHistory().getData().blackToPlay;
-            }
-            if (cmdParams.length >= 3) {
-              String param2 = cmdParams[2].toUpperCase();
-              Lizzie.board.place(param2);
-            }
+      if ("play".equals(commandName)) {
+        if (!playConsoleMove(moveParams)) wrongMoveParameters();
+      } else if ("genmove".equals(commandName)) {
+        Stone color = moveParams.length == 2 ? consoleColor(moveParams[1]) : Stone.EMPTY;
+        if (color == Stone.EMPTY) {
+          wrongMoveParameters();
+        } else if (!Lizzie.leelaz.isThinking) {
+          BoardData position = Lizzie.board.getData();
+          boolean previousBlackToPlay = position.blackToPlay;
+          boolean accepted = false;
+          position.blackToPlay = color == Stone.BLACK;
+          try {
+            accepted = Lizzie.leelaz.genmove(color == Stone.BLACK ? "b" : "w", true);
+          } finally {
+            if (!accepted) position.blackToPlay = previousBlackToPlay;
           }
-        } else {
-          this.setDocs(
-              resourceBundle.getString("GtpConsolePane.wrongParameters") + "\r\n",
-              new Color(255, 255, 0),
-              false,
-              Config.frameFontSize);
         }
       } else if ("showboard".equals(commandToLower)) {
         if (Lizzie.leelaz.sendRawConsoleCommand(command) && Lizzie.leelaz.isPondering()) {
@@ -490,6 +480,61 @@ public class GtpConsolePane extends JDialog {
         Lizzie.leelaz.sendRawConsoleCommand(command);
       }
     }
+  }
+
+  private static Stone consoleColor(String value) {
+    switch (value.toLowerCase(Locale.ROOT)) {
+      case "b":
+      case "black":
+        return Stone.BLACK;
+      case "w":
+      case "white":
+        return Stone.WHITE;
+      default:
+        return Stone.EMPTY;
+    }
+  }
+
+  private boolean playConsoleMove(String[] params) {
+    if (params.length != 3) return false;
+    Stone color = consoleColor(params[1]);
+    if (color == Stone.EMPTY) return false;
+    // Board.place uses the parent's turn to decide whether a human-game move reaches the
+    // engine. Reject moves outside that contract instead of advancing only the GUI history.
+    if (Lizzie.frame.isPlayingAgainstLeelaz
+        && (Lizzie.frame.playerIsBlack != Lizzie.board.getData().blackToPlay
+            || Lizzie.frame.playerIsBlack != (color == Stone.BLACK))) return false;
+    if ("pass".equalsIgnoreCase(params[2])) {
+      Lizzie.board.pass(color);
+      return true;
+    }
+    Matcher vertex = CONSOLE_VERTEX.matcher(params[2]);
+    if (!vertex.matches()) return false;
+    // Board.asCoordinates intentionally repairs oversized rows for other callers. Console input
+    // must be validated as written, not silently shortened into a different move (e.g. A50 -> A5).
+    int row;
+    try {
+      row = Integer.parseInt(vertex.group(2));
+    } catch (NumberFormatException invalidRow) {
+      return false;
+    }
+    if (row < 1 || row > Board.boardHeight) return false;
+    Optional<int[]> coordinates = Board.asCoordinates(params[2]);
+    if (!coordinates.isPresent()) return false;
+    int[] point = coordinates.get();
+    if (!Board.isValid(point[0], point[1])) return false;
+    if (!Board.coordsAsName(point[0]).equalsIgnoreCase(vertex.group(1))) return false;
+    // Use the explicit-color API: a rejected move must not change the current node's turn.
+    Lizzie.board.place(point[0], point[1], color);
+    return true;
+  }
+
+  private void wrongMoveParameters() {
+    setDocs(
+        resourceBundle.getString("GtpConsolePane.wrongParameters") + "\r\n",
+        new Color(255, 255, 0),
+        false,
+        Config.frameFontSize);
   }
 
   public void addErrorLine(String line) {
