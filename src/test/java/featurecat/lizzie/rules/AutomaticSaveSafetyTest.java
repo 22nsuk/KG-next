@@ -1,24 +1,41 @@
 package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.LizzieFrame;
+import java.awt.AWTEvent;
+import java.awt.Component;
+import java.awt.Container;
+import java.awt.GraphicsEnvironment;
 import java.awt.Image;
+import java.awt.Toolkit;
+import java.awt.Window;
+import java.awt.event.AWTEventListener;
+import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.imageio.ImageIO;
+import javax.swing.JButton;
+import javax.swing.JDialog;
+import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -80,6 +97,140 @@ class AutomaticSaveSafetyTest {
   @AfterEach
   void restore() {
     if (rules != null) rules.close();
+  }
+
+  @Test
+  void closingOverwriteDialogPreservesSavedGame() throws Exception {
+    assertOverwriteConfirmation(JOptionPane.CLOSED_OPTION);
+  }
+
+  @Test
+  void decliningOverwritePreservesSavedGame() throws Exception {
+    assertOverwriteConfirmation(JOptionPane.NO_OPTION);
+  }
+
+  @Test
+  void confirmingOverwriteReplacesSavedGame() throws Exception {
+    assertOverwriteConfirmation(JOptionPane.YES_OPTION);
+  }
+
+  private void assertOverwriteConfirmation(int answer) throws Exception {
+    assumeFalse(GraphicsEnvironment.isHeadless());
+    Path sgf = slot(SaveKind.REPLACE, "sgf");
+    Path preview = slot(SaveKind.REPLACE, "bmp");
+    String oldSgf = "(;SZ[5]C[previous saved game])";
+    Files.writeString(sgf, oldSgf);
+    assertTrue(
+        ImageIO.write(
+            new BufferedImage(7, 7, BufferedImage.TYPE_INT_RGB), "bmp", preview.toFile()));
+    byte[] oldPreview = Files.readAllBytes(preview);
+    String oldInMemoryMetadata = config.saveBoardConfig.toString();
+    config.showListPane = false;
+    config.showVariationGraph = false;
+    String expectedName = Lizzie.board.getHistory().getGameInfo().getSaveFileName();
+    JPanel panel = new JPanel();
+    Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+    panelField.setAccessible(true);
+    panelField.set(frame, panel);
+    Field showingPreview = LizzieFrame.class.getDeclaredField("isShowingBigBoardPanel");
+    showingPreview.setAccessible(true);
+    AtomicBoolean answered = new AtomicBoolean();
+    AtomicBoolean timedOut = new AtomicBoolean();
+
+    SwingUtilities.invokeAndWait(
+        () -> {
+          Set<Window> existing = Set.of(Window.getWindows());
+          // The rules fixture allocates the frame without constructing a native window.
+          // Only the modal owner is absent; the real entry button and save path still run.
+          Lizzie.frame = null;
+          AWTEventListener responder =
+              event -> {
+                if (event.getID() != WindowEvent.WINDOW_OPENED
+                    || !(event.getSource() instanceof JDialog)) return;
+                JDialog dialog = (JDialog) event.getSource();
+                if (existing.contains(dialog)
+                    || !Lizzie.resourceBundle
+                        .getString("LizzieFrame.warning")
+                        .equals(dialog.getTitle())) return;
+                JOptionPane pane = findOptionPane(dialog);
+                if (pane == null || pane.getOptionType() != JOptionPane.YES_NO_OPTION) return;
+                answered.set(true);
+                if (answer == JOptionPane.CLOSED_OPTION) {
+                  dialog.dispatchEvent(new WindowEvent(dialog, WindowEvent.WINDOW_CLOSING));
+                } else {
+                  pane.setValue(answer);
+                }
+              };
+          Toolkit toolkit = Toolkit.getDefaultToolkit();
+          Timer deadline =
+              new Timer(
+                  5000,
+                  event -> {
+                    timedOut.set(true);
+                    for (Window window : Window.getWindows()) {
+                      if (!existing.contains(window)) window.dispose();
+                    }
+                  });
+          deadline.setRepeats(false);
+          toolkit.addAWTEventListener(responder, AWTEvent.WINDOW_EVENT_MASK);
+          try {
+            frame.addTempGameOne(1, 0, 0, "old name", "old time", false, 1, "", true, true);
+            JButton save =
+                Arrays.stream(panel.getComponents())
+                    .filter(JButton.class::isInstance)
+                    .map(JButton.class::cast)
+                    .filter(
+                        button ->
+                            Lizzie.resourceBundle
+                                .getString("LizzieFrame.saveAndLoad.save")
+                                .equals(button.getText()))
+                    .findFirst()
+                    .orElseThrow();
+            deadline.start();
+            save.doClick(0);
+          } finally {
+            deadline.stop();
+            toolkit.removeAWTEventListener(responder);
+            for (Window window : Window.getWindows()) {
+              if (!existing.contains(window)) window.dispose();
+            }
+            Lizzie.frame = frame;
+          }
+        });
+
+    assertFalse(timedOut.get(), "overwrite dialog was not answered before the deadline");
+    assertTrue(answered.get(), "the actual save button must open the confirmation dialog");
+    assertFalse(showingPreview.getBoolean(frame), "all decisions must release the preview guard");
+    boolean confirmed = answer == JOptionPane.YES_OPTION;
+    assertEquals(confirmed, config.showListPane);
+    assertEquals(confirmed, config.showVariationGraph);
+    assertEquals(confirmed ? 1 : 0, frame.panelRefreshes);
+    assertEquals(confirmed ? 1 : 0, frame.previewCalls);
+    if (confirmed) {
+      assertTrue(Files.readString(sgf).contains(";W[dd]"));
+      JSONObject saved = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
+      assertEquals(expectedName, saved.getJSONArray("save-game-name").getString(0));
+      assertEquals(2, saved.getJSONArray("save-game-move-number").getInt(0));
+      assertTrue(saved.similar(config.saveBoardConfig));
+      assertEquals(8, ImageIO.read(preview.toFile()).getWidth());
+    } else {
+      assertEquals(oldSgf, Files.readString(sgf));
+      assertEquals(oldMetadata, Files.readString(metadataFile()));
+      assertEquals(oldInMemoryMetadata, config.saveBoardConfig.toString());
+      assertArrayEquals(oldPreview, Files.readAllBytes(preview));
+    }
+    assertNoStagingFiles();
+  }
+
+  private static JOptionPane findOptionPane(Container container) {
+    if (container instanceof JOptionPane) return (JOptionPane) container;
+    for (Component child : container.getComponents()) {
+      if (child instanceof Container) {
+        JOptionPane pane = findOptionPane((Container) child);
+        if (pane != null) return pane;
+      }
+    }
+    return null;
   }
 
   @ParameterizedTest
@@ -311,6 +462,13 @@ class AutomaticSaveSafetyTest {
   }
 
   static class PreviewFrame extends LizzieFrame {
+    int panelRefreshes;
+
+    @Override
+    public void showTempGamePanel() {
+      panelRefreshes++;
+    }
+
     int previewCalls;
     int failureMode;
     CountDownLatch previewEntered;
