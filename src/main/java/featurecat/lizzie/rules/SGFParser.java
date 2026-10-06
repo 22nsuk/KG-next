@@ -14,10 +14,12 @@ import featurecat.lizzie.enginegame.MatchRulesSnapshot;
 import featurecat.lizzie.enginegame.MatchRulesTexts;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.SgfObservation;
+import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.EncodingDetector;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
 import java.lang.reflect.Field;
+import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -1391,15 +1393,17 @@ public class SGFParser {
   }
 
   public static void save(Board board, String filename, boolean isAutoSave) throws IOException {
-    try {
-      try (Writer writer = new OutputStreamWriter(new FileOutputStream(filename), "utf-8")) {
-        saveToStream(board, writer, false, isAutoSave);
-      }
-      SgfObservation.record("save", "ok", filename, null);
-    } catch (IOException e) {
-      SgfObservation.record("save", "failed", filename, e);
-      throw e;
+    String snapshot;
+    try (StringWriter writer = new StringWriter()) {
+      // Automatic/temporary saves need the same detached tree as manual saves. Finish
+      // serialization before opening any file, so a failed capture cannot truncate the old SGF.
+      saveToStream(board, writer, false, isAutoSave, false, false, true);
+      snapshot = writer.toString();
+    } catch (IOException | RuntimeException failure) {
+      SgfObservation.record("save", "failed", filename, failure);
+      throw failure;
     }
+    AtomicSgfFileWriter.write(Path.of(filename), snapshot);
   }
 
   private static void saveToStream(

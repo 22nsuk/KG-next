@@ -87,6 +87,9 @@ import java.awt.image.BufferedImage;
 import java.awt.image.RenderedImage;
 import java.io.*;
 import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.text.MessageFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -14765,20 +14768,20 @@ public class LizzieFrame extends JFrame {
 
   public void deleteTempGame(int index) {
     ArrayList<TempGameData> data = getSaveGameList();
-    File file = new File("save" + File.separator + "game" + index + ".bmp");
+    File file = resolveSavedGameFile(false, index, "bmp");
     if (file.exists() && file.isFile()) file.delete();
-    File file2 = new File("save" + File.separator + "game" + index + ".sgf");
+    File file2 = resolveSavedGameFile(false, index, "sgf");
     if (file2.exists() && file2.isFile()) file2.delete();
     for (int i = index + 1; i <= data.size(); i++) {
-      File oldfile = new File("save" + File.separator + "game" + i + ".bmp");
-      File newfile = new File("save" + File.separator + "game" + (i - 1) + ".bmp");
+      File oldfile = resolveSavedGameFile(false, i, "bmp");
+      File newfile = resolveSavedGameFile(false, (i - 1), "bmp");
       if (oldfile.exists()) {
         oldfile.renameTo(newfile);
       }
     }
     for (int i = index + 1; i <= data.size(); i++) {
-      File oldfile = new File("save" + File.separator + "game" + i + ".sgf");
-      File newfile = new File("save" + File.separator + "game" + (i - 1) + ".sgf");
+      File oldfile = resolveSavedGameFile(false, i, "sgf");
+      File newfile = resolveSavedGameFile(false, (i - 1), "sgf");
       if (oldfile.exists()) {
         oldfile.renameTo(newfile);
       }
@@ -14791,9 +14794,9 @@ public class LizzieFrame extends JFrame {
   public void deleteAllTempGame() {
     ArrayList<TempGameData> data = getSaveGameList();
     for (int index = 1; index < data.size() + 1; index++) {
-      File file = new File("save" + File.separator + "game" + index + ".bmp");
+      File file = resolveSavedGameFile(false, index, "bmp");
       if (file.exists() && file.isFile()) file.delete();
-      File file2 = new File("save" + File.separator + "game" + index + ".sgf");
+      File file2 = resolveSavedGameFile(false, index, "sgf");
       if (file2.exists() && file2.isFile()) file2.delete();
     }
     saveTempGame(new ArrayList<TempGameData>());
@@ -14806,80 +14809,125 @@ public class LizzieFrame extends JFrame {
   }
 
   public void saveTempGame(int index, String name) {
-    SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-    ArrayList<TempGameData> data = getSaveGameList();
-    data.get(index - 1).name = name;
-    data.get(index - 1).time = df.format(new Date());
-    data.get(index - 1).curMoveNumer = Lizzie.board.getCurrentMovenumber();
-    data.get(index - 1).moves =
-        Lizzie.board.moveListToString(Lizzie.board.getmovelistForSaveLoad());
-    saveTempGame(data);
-    File file = new File("save" + File.separator + "game" + index + ".bmp");
-    try {
-      SGFParser.save(Lizzie.board, "save" + File.separator + "game" + index + ".sgf");
-      ImageIO.write((RenderedImage) saveMainBoardToImageOri(), "bmp", file);
-    } catch (IOException e1) {
-      // TODO Auto-generated catch block
-      e1.printStackTrace();
-    }
-    try {
-      Lizzie.config.saveTempBoard();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
+    runSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, false));
   }
 
   public void addTempGame(int index, String name) {
-    SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+    runSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, true));
+  }
+
+  private void saveTemporaryGameOnEdt(int index, String name, boolean add) {
     ArrayList<TempGameData> data = getSaveGameList();
-    TempGameData newData = new TempGameData();
-    newData.name = name;
-    newData.time = df.format(new Date());
-    newData.curMoveNumer = Lizzie.board.getCurrentMovenumber();
-    newData.moves = Lizzie.board.moveListToString(Lizzie.board.getMoveList());
-    data.add(newData);
-    saveTempGame(data);
-    File file = new File("save" + File.separator + "game" + index + ".bmp");
-    try {
-      SGFParser.save(Lizzie.board, "save" + File.separator + "game" + index + ".sgf");
-      ImageIO.write((RenderedImage) saveMainBoardToImageOri(), "bmp", file);
-    } catch (IOException e1) {
-      // TODO Auto-generated catch block
-      e1.printStackTrace();
-    }
-    try {
-      Lizzie.config.saveTempBoard();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
+    TempGameData saved = add ? new TempGameData() : data.get(index - 1);
+    saved.name = name;
+    saved.time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
+    saved.curMoveNumer = Lizzie.board.getCurrentMovenumber();
+    saved.moves =
+        Lizzie.board.moveListToString(
+            add ? Lizzie.board.getMoveList() : Lizzie.board.getmovelistForSaveLoad());
+    if (add) data.add(saved);
+    saveTemporaryGame(index, data);
+  }
+
+  private void saveTemporaryGame(int index, ArrayList<TempGameData> data) {
+    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
+    putTempGameList(candidate, data);
+    saveGameRecord(
+        resolveSavedGameFile(false, index, "sgf"),
+        resolveSavedGameFile(false, index, "bmp"),
+        false,
+        candidate);
   }
 
   public void saveAutoGame(int index) {
-    SimpleDateFormat df = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-    Lizzie.config.saveBoardConfig.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
-    Lizzie.config.saveBoardConfig.put("save-auto-game-time" + index, df.format(new Date()));
-    Lizzie.config.saveBoardConfig.put(
-        "save-auto-game-move-number" + index, Lizzie.board.getCurrentMovenumber());
-    Lizzie.config.saveBoardConfig.put(
+    runSavedGameAction(() -> saveAutoGameOnEdt(index));
+  }
+
+  private void saveAutoGameOnEdt(int index) {
+    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
+    candidate.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
+    candidate.put(
+        "save-auto-game-time" + index,
+        new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
+    candidate.put("save-auto-game-move-number" + index, Lizzie.board.getCurrentMovenumber());
+    candidate.put(
         "save-auto-game-move-list" + index,
         Lizzie.board.moveListToString(Lizzie.board.getmovelistForSaveLoad()));
-    if (index == 1) Lizzie.config.saveBoardConfig.put("save-auto-game-index2", -1);
-    File imageFile = resolveAutoSaveFile(index, "bmp");
-    File sgfFile = resolveAutoSaveFile(index, "sgf");
-    try {
-      SGFParser.save(Lizzie.board, sgfFile.getPath(), true);
-      ImageIO.write((RenderedImage) saveMainBoardToImageOri(), "bmp", imageFile);
-    } catch (IOException e1) {
-      // TODO Auto-generated catch block
-      e1.printStackTrace();
+    if (index == 1) candidate.put("save-auto-game-index2", -1);
+    saveGameRecord(
+        resolveAutoSaveFile(index, "sgf"), resolveAutoSaveFile(index, "bmp"), true, candidate);
+  }
+
+  private static void runSavedGameAction(Runnable action) {
+    if (SwingUtilities.isEventDispatchThread()) {
+      action.run();
+      return;
     }
+    // The periodic caller is a scheduler thread. Serialize it with UI saves/exports and
+    // their raw flags; keep the synchronous contract required by shutdown's final save.
+    java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(action, null);
+    SwingUtilities.invokeLater(task);
+    boolean interrupted = false;
     try {
-      Lizzie.config.saveTempBoard();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
+      while (true) {
+        try {
+          task.get();
+          return;
+        } catch (InterruptedException failure) {
+          interrupted = true;
+        }
+      }
+    } catch (java.util.concurrent.ExecutionException failure) {
+      throw new IllegalStateException("Saved-game action failed", failure.getCause());
+    } finally {
+      if (interrupted) Thread.currentThread().interrupt();
+    }
+  }
+
+  private void saveGameRecord(File sgfFile, File imageFile, boolean autoSave, JSONObject candidate) {
+    try {
+      SGFParser.save(Lizzie.board, sgfFile.getPath(), autoSave);
+      // Never advertise a failed SGF write or hide the previous crash-recovery slot.
+      // These are individual atomic replacements, not a multi-file crash transaction:
+      // a later metadata failure leaves the complete new SGF available for manual recovery.
+      Lizzie.config.saveTempBoard(candidate);
+    } catch (IOException | RuntimeException failure) {
+      failure.printStackTrace();
+      return;
+    }
+    // A thumbnail is optional. Its failure must not make the successfully saved SGF undiscoverable.
+    saveGamePreview(imageFile);
+  }
+
+  private void saveGamePreview(File imageFile) {
+    Path staged = null;
+    try {
+      RenderedImage image = (RenderedImage) saveMainBoardToImageOri();
+      Path target = imageFile.toPath().toAbsolutePath();
+      staged = Files.createTempFile(target.getParent(), ".lizzie-preview-", ".tmp");
+      if (!ImageIO.write(image, "bmp", staged.toFile())) {
+        throw new IOException("No BMP writer for saved-game preview");
+      }
+      Files.move(
+          staged,
+          target,
+          StandardCopyOption.ATOMIC_MOVE,
+          StandardCopyOption.REPLACE_EXISTING);
+    } catch (IOException | RuntimeException failure) {
+      try {
+        Files.deleteIfExists(imageFile.toPath());
+      } catch (IOException cleanupFailure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+      failure.printStackTrace();
+    } finally {
+      if (staged != null) {
+        try {
+          Files.deleteIfExists(staged);
+        } catch (IOException cleanupFailure) {
+          cleanupFailure.printStackTrace();
+        }
+      }
     }
   }
 
@@ -14895,11 +14943,7 @@ public class LizzieFrame extends JFrame {
       boolean oriShowListPane,
       boolean OriShowVariationGraph) {
     JLabel boardImage = new JLabel();
-    File file =
-        new File(
-            (isAutoSave ? "save" + File.separator + "autoGame" : "save" + File.separator + "game")
-                + index
-                + ".bmp");
+    File file = resolveSavedGameFile(isAutoSave, index, "bmp");
     try {
       BufferedImage img = ImageIO.read(file);
       Image img2 = zoomImage(img, 300, 300);
@@ -14935,12 +14979,7 @@ public class LizzieFrame extends JFrame {
             // TBD未完成
             canShowBigBoardImage = false;
             loadFile(
-                new File(
-                    (isAutoSave
-                            ? "save" + File.separator + "autoGame"
-                            : "save" + File.separator + "game")
-                        + index
-                        + ".sgf"),
+                resolveSavedGameFile(isAutoSave, index, "sgf"),
                 true,
                 true);
             if (!moveList.equals("")) Lizzie.board.playList(moveList);
@@ -15121,6 +15160,10 @@ public class LizzieFrame extends JFrame {
   }
 
   public void saveTempGame(ArrayList<TempGameData> tempGameList) {
+    putTempGameList(Lizzie.config.saveBoardConfig, tempGameList);
+  }
+
+  private static void putTempGameList(JSONObject target, ArrayList<TempGameData> tempGameList) {
     JSONArray saveIndex = new JSONArray();
     JSONArray saveName = new JSONArray();
     JSONArray saveTime = new JSONArray();
@@ -15135,11 +15178,11 @@ public class LizzieFrame extends JFrame {
       saveMoveList.put(data.moves);
       s++;
     }
-    Lizzie.config.saveBoardConfig.put("save-game-index", saveIndex);
-    Lizzie.config.saveBoardConfig.put("save-game-name", saveName);
-    Lizzie.config.saveBoardConfig.put("save-game-time", saveTime);
-    Lizzie.config.saveBoardConfig.put("save-game-move-number", saveMoveNumber);
-    Lizzie.config.saveBoardConfig.put("save-game-move-list", saveMoveList);
+    target.put("save-game-index", saveIndex);
+    target.put("save-game-name", saveName);
+    target.put("save-game-time", saveTime);
+    target.put("save-game-move-number", saveMoveNumber);
+    target.put("save-game-move-list", saveMoveList);
   }
 
   public ArrayList<TempGameData> getSaveGameList() {
@@ -15494,12 +15537,7 @@ public class LizzieFrame extends JFrame {
                 if (data.y < y && (data.y + 300) > y) {
                   canShowBigBoardImage = false;
                   loadFile(
-                      new File(
-                          (data.isAutoSave
-                                  ? "save" + File.separator + "autoGame"
-                                  : "save" + File.separator + "game")
-                              + data.index
-                              + ".sgf"),
+                      resolveSavedGameFile(data.isAutoSave, data.index, "sgf"),
                       true,
                       true);
                   if (!data.moves.equals("")) Lizzie.board.playList(data.moves);
@@ -15535,11 +15573,7 @@ public class LizzieFrame extends JFrame {
     }
     bigBoardPanel = new JPopupMenu();
     Image img2 = null;
-    File file =
-        new File(
-            (isAutoSave ? "save" + File.separator + "autoGame" : "save" + File.separator + "game")
-                + index
-                + ".bmp");
+    File file = resolveSavedGameFile(isAutoSave, index, "bmp");
     try {
       BufferedImage img = ImageIO.read(file);
       img2 = zoomImage(img, 600, 600);
@@ -15563,12 +15597,7 @@ public class LizzieFrame extends JFrame {
             if (e.getX() == 0 && e.getY() == 0) {
               canShowBigBoardImage = false;
               loadFile(
-                  new File(
-                      (isAutoSave
-                              ? "save" + File.separator + "autoGame"
-                              : "save" + File.separator + "game")
-                          + index
-                          + ".sgf"),
+                  resolveSavedGameFile(isAutoSave, index, "sgf"),
                   true,
                   true);
               if (!moveList.equals("")) Lizzie.board.playList(moveList);
@@ -16428,19 +16457,28 @@ public class LizzieFrame extends JFrame {
   }
 
   private File resolveAutoSaveFile(int index, String extension) {
+    return resolveSavedGameFile(true, index, extension);
+  }
+
+  private File resolveSavedGameFile(boolean autoSave, int index, String extension) {
     File workDirectory =
         Lizzie.config != null
             ? Lizzie.config.getWorkDirectory()
             : new File(System.getProperty("user.dir", "."));
-    return autoSaveFile(workDirectory, index, extension);
+    return savedGameFile(workDirectory, autoSave, index, extension);
   }
 
   static File autoSaveFile(File workDirectory, int index, String extension) {
+    return savedGameFile(workDirectory, true, index, extension);
+  }
+
+  private static File savedGameFile(
+      File workDirectory, boolean autoSave, int index, String extension) {
     File saveDirectory = new File(workDirectory, "save");
     if (!saveDirectory.isDirectory()) {
       saveDirectory.mkdirs();
     }
-    return new File(saveDirectory, "autoGame" + index + "." + extension);
+    return new File(saveDirectory, (autoSave ? "autoGame" : "game") + index + "." + extension);
   }
 
   private void promptForMissingFlashAnalysisCommand(boolean isAllGame, boolean isAllBranches) {

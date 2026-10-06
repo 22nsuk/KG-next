@@ -3005,6 +3005,11 @@ public class Config {
   }
 
   private void writeConfig(JSONObject config, File file) throws IOException, JSONException {
+    writeConfig(config, file, false);
+  }
+
+  private void writeConfig(JSONObject config, File file, boolean requireAtomicReplacement)
+      throws IOException, JSONException {
     Path target = file.toPath().toAbsolutePath();
     Path parent = target.getParent();
     if (parent == null) {
@@ -3014,6 +3019,10 @@ public class Config {
     try (FileOutputStream fp = new FileOutputStream(temporary.toFile());
         OutputStreamWriter writer = new OutputStreamWriter(fp, "utf-8")) {
       writer.write(config.toString(2));
+      if (requireAtomicReplacement) {
+        writer.flush();
+        fp.getChannel().force(true);
+      }
     } catch (IOException | RuntimeException e) {
       Files.deleteIfExists(temporary);
       throw e;
@@ -3023,6 +3032,7 @@ public class Config {
         Files.move(
             temporary, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
       } catch (AtomicMoveNotSupportedException e) {
+        if (requireAtomicReplacement) throw e;
         Files.move(temporary, target, StandardCopyOption.REPLACE_EXISTING);
       }
     } finally {
@@ -3618,7 +3628,17 @@ public class Config {
   }
 
   public void saveTempBoard() throws IOException {
-    writeConfig(this.saveBoard, new File(saveBoardFilename));
+    writeConfig(this.saveBoard, new File(saveBoardFilename), true);
+  }
+
+  /** Publish saved-game metadata only after its complete replacement reaches disk. */
+  public void saveTempBoard(JSONObject candidateSave) throws IOException {
+    JSONObject candidateRoot = new JSONObject(this.saveBoard.toString());
+    candidateRoot.put("save", new JSONObject(candidateSave.toString()));
+    // A non-atomic fallback could discard the only record of the last successful save.
+    writeConfig(candidateRoot, new File(saveBoardFilename), true);
+    this.saveBoard = candidateRoot;
+    this.saveBoardConfig = candidateRoot.getJSONObject("save");
   }
 
   public boolean isFrameFontSmall() {
