@@ -549,8 +549,13 @@ public class BoardHistoryList {
   }
 
   public boolean violatesKoRule(BoardData data) {
-    // check if the current position is identical to the position two moves ago
-    return this.head
+    return violatesKoRule(head, data);
+  }
+
+  /** Test a detached candidate without moving the real history cursor. */
+  public static boolean violatesKoRule(BoardHistoryNode parent, BoardData data) {
+    // Match the existing desktop rule: the candidate may not repeat the previous position.
+    return parent
         .previous()
         .map(p -> p != null && data.zobrist.equals(p.getData().zobrist))
         .orElse(false);
@@ -864,12 +869,7 @@ public class BoardHistoryList {
       newState.moveMNNumber = moveMNNumber;
 
       // don't make this coordinate if it is suicidal or violates superko
-      boolean violatesKoRule =
-          curNode
-              .previous()
-              .map(p -> p != null && newState.zobrist.equals(p.getData().zobrist))
-              .orElse(false);
-      if (violatesKoRule) {
+      if (violatesKoRule(curNode, newState)) {
         //    Lizzie.board.modifyEnd();
         return;
       }

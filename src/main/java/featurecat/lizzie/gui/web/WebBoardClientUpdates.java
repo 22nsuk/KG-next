@@ -19,6 +19,7 @@ final class WebBoardClientUpdates implements AutoCloseable {
   private String fullState;
   private String analysis;
   private String history;
+  private String trialState;
   private boolean closed;
 
   WebBoardClientUpdates() {
@@ -43,6 +44,7 @@ final class WebBoardClientUpdates implements AutoCloseable {
     pending.fullState = fullState;
     pending.analysis = analysis;
     pending.history = history;
+    pending.trialState = trialState;
     clients.put(connection, pending);
     flush();
   }
@@ -77,6 +79,13 @@ final class WebBoardClientUpdates implements AutoCloseable {
     if (closed) return;
     history = message;
     for (Pending pending : clients.values()) pending.history = message;
+    flush();
+  }
+
+  synchronized void trialState(String message) {
+    if (closed) return;
+    trialState = message;
+    for (Pending pending : clients.values()) pending.trialState = message;
     flush();
   }
 
@@ -135,6 +144,7 @@ final class WebBoardClientUpdates implements AutoCloseable {
     fullState = null;
     analysis = null;
     history = null;
+    trialState = null;
     executor.shutdownNow();
   }
 
@@ -142,9 +152,10 @@ final class WebBoardClientUpdates implements AutoCloseable {
     String fullState;
     String analysis;
     String history;
+    String trialState;
 
     boolean hasMessages() {
-      return fullState != null || analysis != null || history != null;
+      return fullState != null || analysis != null || history != null || trialState != null;
     }
 
     String removeFirst() {
@@ -152,6 +163,9 @@ final class WebBoardClientUpdates implements AutoCloseable {
       if (fullState != null) {
         message = fullState;
         fullState = null;
+      } else if (trialState != null) {
+        message = trialState;
+        trialState = null;
       } else if (history != null) {
         message = history;
         history = null;

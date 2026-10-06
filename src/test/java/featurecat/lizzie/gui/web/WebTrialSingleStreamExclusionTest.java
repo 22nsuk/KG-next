@@ -151,7 +151,7 @@ class WebTrialSingleStreamExclusionTest {
     manager.attachWebSocketServer(server);
     String bytesBeforeEnter = output.toString(StandardCharsets.UTF_8);
 
-    server.onMessage(null, "{\"type\":\"enter_trial\",\"clientId\":\"browser-client\"}");
+    server.onMessage(new TrialTestConnection().socket, "{\"type\":\"enter_trial\",\"clientId\":\"browser-client\"}");
 
     JSONObject denied = new JSONObject(server.lastMessage.get());
     assertEquals("trial_denied", denied.getString("type"));
@@ -176,7 +176,7 @@ class WebTrialSingleStreamExclusionTest {
           assertTrue(manager.enterTrial("replacement-owner", anchor));
         };
 
-    server.onMessage(null, "{\"type\":\"enter_trial\",\"clientId\":\"challenger\"}");
+    server.onMessage(new TrialTestConnection().socket, "{\"type\":\"enter_trial\",\"clientId\":\"challenger\"}");
 
     JSONObject denied = new JSONObject(server.lastMessage.get());
     assertEquals("trial_denied", denied.getString("type"));
@@ -196,7 +196,7 @@ class WebTrialSingleStreamExclusionTest {
     RecordingWebBoardServer server = new RecordingWebBoardServer();
     manager.attachWebSocketServer(server);
 
-    server.onMessage(null, "{\"type\":\"enter_trial\",\"clientId\":\"browser-client\"}");
+    server.onMessage(new TrialTestConnection().socket, "{\"type\":\"enter_trial\",\"clientId\":\"browser-client\"}");
 
     JSONObject denied = new JSONObject(server.lastMessage.get());
     assertEquals("engine_busy", denied.getString("reason"));

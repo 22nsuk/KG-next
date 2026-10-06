@@ -179,13 +179,13 @@ public class WebBoardDataCollector {
   public void broadcastTrialState(WebBoardManager.TrialSession s) {
     if (server == null) return;
     if (s == null) {
-      server.broadcastMessage(buildIdleTrialStateJson().toString());
+      server.broadcastTrialState(buildIdleTrialStateJson().toString());
       return;
     }
     TrialSessionView view =
         new TrialSessionView(
             s.ownerClientId, s.anchorNode.getData().moveNumber, s.anchorNode, s.displayNode);
-    server.broadcastMessage(buildTrialStateJson(view).toString());
+    server.broadcastTrialState(buildTrialStateJson(view).put("sessionId", s.sessionId).toString());
   }
 
   /** Web 试下：不可变快照，避免跨线程共享 TrialSession 可变字段。 */

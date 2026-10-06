@@ -9,19 +9,28 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import java.io.IOException;
+import java.net.BindException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
-import java.net.ServerSocket;
 import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.Enumeration;
+import java.util.UUID;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import org.java_websocket.WebSocket;
 import org.json.JSONObject;
 
 public class WebBoardManager {
+  private static final SecureRandom TOKENS = new SecureRandom();
+  private static final int START_TIMEOUT_MS = 5000;
+  private final Object lifecycleLock = new Object();
   private static final long IDLE_TIMEOUT_MS = 5 * 60 * 1000L;
 
   @FunctionalInterface
@@ -46,6 +55,10 @@ public class WebBoardManager {
 
   public static class TrialSession {
     public final String ownerClientId;
+    public final String sessionId = UUID.randomUUID().toString();
+    private WebBoardServer ownerServer;
+    private WebSocket ownerConnection;
+    private String resumeToken;
     public final BoardHistoryNode anchorNode;
     public volatile BoardHistoryNode displayNode;
     final int boardWidth;
@@ -203,90 +216,231 @@ public class WebBoardManager {
     if (s != null) this.mainlineTailSupplier = s;
   }
 
-  public synchronized boolean start() {
-    if (running) return true;
-    JSONObject cfg = Lizzie.config.config.optJSONObject("web-board");
-    int httpPort = cfg != null ? cfg.optInt("http-port", 9998) : 9998;
-    int wsPort = cfg != null ? cfg.optInt("ws-port", 9999) : 9999;
-    int maxConn = cfg != null ? cfg.optInt("max-connections", 20) : 20;
+  public boolean start() {
+    synchronized (lifecycleLock) {
+      if (running) return true;
+      JSONObject cfg = Lizzie.config.config.optJSONObject("web-board");
+      int httpPort = configuredInteger(cfg, "http-port", 9998);
+      int wsPort = configuredInteger(cfg, "ws-port", 9999);
+      int maxConn = configuredInteger(cfg, "max-connections", 20);
+      // Port zero requests an ephemeral port. Near 65535, retry only representable ports.
+      if (!validPort(httpPort) || !validPort(wsPort) || maxConn < 1) return false;
 
-    httpServer = null;
-    for (int i = 0; i < 10; i++) {
+      WebBoardHttpServer http = null;
+      WebBoardServer socket = null;
+      WebBoardDataCollector data = null;
+      boolean started = false;
       try {
-        httpServer = new WebBoardHttpServer(httpPort + i);
-        httpServer.start();
-        actualHttpPort = httpServer.getPort();
-        break;
-      } catch (Exception e) {
-        httpServer = null;
+        http = startHttpServer(httpPort);
+        socket = startWebSocketServer(wsPort, maxConn);
+        data = new WebBoardDataCollector();
+        data.setServer(socket);
+        http.setWsPort(socket.getPort());
+        synchronized (this) {
+          httpServer = http;
+          collector = data;
+          actualHttpPort = http.getPort();
+          actualWsPort = socket.getPort();
+          attachWebSocketServer(socket);
+          accessUrl = "http://" + getLanIp() + ":" + actualHttpPort;
+          running = true;
+          publishTrialState();
+        }
+        started = true;
+        return true;
+      } catch (IOException failure) {
+        org.slf4j.LoggerFactory.getLogger(WebBoardManager.class)
+            .warn("Could not start web board", failure);
+        return false;
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        return false;
+      } finally {
+        if (!started) {
+          synchronized (this) {
+            if (wsServer == socket) wsServer = null;
+            if (httpServer == http) httpServer = null;
+            if (collector == data) collector = null;
+            resetPublishedServerState();
+          }
+          closeServers(data, socket, http);
+        }
       }
     }
-    if (httpServer == null) return false;
-
-    wsServer = null;
-    for (int i = 0; i < 10; i++) {
-      int candidatePort = wsPort + i;
-      if (!isPortAvailable(candidatePort)) continue;
-      try {
-        wsServer = new WebBoardServer(new InetSocketAddress("0.0.0.0", candidatePort), maxConn);
-        wsServer.start();
-        actualWsPort = candidatePort;
-        break;
-      } catch (Exception e) {
-        wsServer = null;
-      }
-    }
-    if (wsServer == null) {
-      httpServer.stop();
-      return false;
-    }
-
-    httpServer.setWsPort(actualWsPort);
-
-    collector = new WebBoardDataCollector();
-    collector.setServer(wsServer);
-
-    attachWebSocketServer(wsServer);
-
-    String ip = getLanIp();
-    accessUrl = "http://" + ip + ":" + actualHttpPort;
-    running = true;
-    collector.onBoardStateChanged();
-    return true;
   }
 
-  private void handleClientMessage(
-      WebBoardServer source, org.java_websocket.WebSocket conn, JSONObject msg) {
-    if (!"enter_trial".equals(msg.optString("type"))) {
+  private static int configuredInteger(JSONObject config, String key, int fallback) {
+    if (config == null || !config.has(key)) return fallback;
+    return trialCoordinate(config, key);
+  }
+
+  private static boolean validPort(int port) {
+    return port >= 0 && port <= 65535;
+  }
+
+  private static int lastCandidatePort(int port) {
+    return port == 0 ? 0 : Math.min(port + 9, 65535);
+  }
+
+  private static WebBoardHttpServer startHttpServer(int port) throws IOException {
+    for (int candidate = port; ; candidate++) {
+      WebBoardHttpServer server = new WebBoardHttpServer(candidate);
+      boolean ready = false;
+      try {
+        server.start();
+        ready = true;
+        return server;
+      } catch (BindException occupied) {
+        if (candidate == lastCandidatePort(port)) throw occupied;
+      } finally {
+        if (!ready) server.stop();
+      }
+    }
+  }
+
+  private static WebBoardServer startWebSocketServer(int port, int maxConnections)
+      throws IOException, InterruptedException {
+    for (int candidate = port; ; candidate++) {
+      WebBoardServer server =
+          new WebBoardServer(new InetSocketAddress("0.0.0.0", candidate), maxConnections);
+      boolean ready = false;
+      try {
+        server.start();
+        server.awaitStarted(START_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        ready = true;
+        return server;
+      } catch (BindException occupied) {
+        if (candidate == lastCandidatePort(port)) throw occupied;
+      } finally {
+        if (!ready) closeServers(null, server, null);
+      }
+    }
+  }
+
+  private synchronized void handleClientMessage(
+      WebBoardServer source, WebSocket connection, JSONObject message) {
+    if (!currentConnection(source, connection)) return;
+    String type = message.optString("type");
+    if (!isTrialCommand(type)) return;
+    String clientId = message.optString("clientId");
+    if (clientId.isBlank() || clientId.length() > 128) return;
+    if (!"enter_trial".equals(type) && !"resume_trial".equals(type)) {
+      if (!authorizedCommand(activeSession, source, connection, message)) return;
+      // An invalidated board blocks edits, not the authenticated owner's ability to exit.
+      if (!"exit_trial".equals(type) && !validTrialBoard(activeSession)) return;
+      if ("trial_move".equals(type)
+          && !validTrialCoordinates(activeSession,
+              trialCoordinate(message, "x"), trialCoordinate(message, "y"))) return;
+      if ("trial_navigate".equals(type)) {
+        if (message.has("childIndex")) {
+          if (trialCoordinate(message, "childIndex") < 0) return;
+        } else if (!"back".equals(message.optString("direction"))
+            && !"forward".equals(message.optString("direction"))) return;
+      }
+    }
+    // One FIFO hop for ALL network commands, including enter/exit/navigation. Never queue a
+    // second move behind a later reset. The production TrialEvents uses the collector's single
+    // executor; synchronous desktop force-exit can still invalidate queued session commands.
+    trialEvents.execute(() -> processClientMessage(source, connection, message));
+  }
+
+  private static boolean isTrialCommand(String type) {
+    return "enter_trial".equals(type) || "resume_trial".equals(type)
+        || "exit_trial".equals(type) || "trial_move".equals(type)
+        || "trial_navigate".equals(type) || "trial_reset".equals(type);
+  }
+
+  private boolean currentConnection(WebBoardServer source, WebSocket connection) {
+    return wsServer == source && connection != null && connection.isOpen();
+  }
+
+  private void processClientMessage(
+      WebBoardServer source, WebSocket connection, JSONObject message) {
+    String type = message.optString("type");
+    String clientId = message.optString("clientId");
+    if (!"enter_trial".equals(type)) {
       synchronized (this) {
-        if (wsServer == source) handleTrialCommand(msg);
+        if (!currentConnection(source, connection)) return;
+        TrialSession session = activeSession;
+        if ("resume_trial".equals(type)) {
+          if (session == null || session.ownerServer != source
+              || !session.ownerClientId.equals(clientId)
+              || !session.sessionId.equals(message.optString("sessionId"))
+              || !validTrialBoard(session) || session.resumeToken == null
+              || message.optString("resumeToken").length() != 43
+              || !MessageDigest.isEqual(session.resumeToken.getBytes(StandardCharsets.US_ASCII),
+                  message.optString("resumeToken").getBytes(StandardCharsets.US_ASCII))) {
+            denyTrial(source, connection, "expired", "");
+            return;
+          }
+          if (session.ownerConnection != connection && session.ownerConnection.isOpen()) {
+            denyTrial(source, connection, "in_use", session.ownerClientId);
+            return;
+          }
+          session.ownerConnection = connection;
+          session.resumeToken = newResumeToken();
+          touchActivity(session);
+          publishTrialState();
+          grantTrial(source, connection, session);
+        } else if (authorizedCommand(session, source, connection, message)
+            && ("exit_trial".equals(type) || validTrialBoard(session))) {
+          handleTrialCommand(message);
+        }
       }
       return;
     }
 
-    // Enter must acquire the engine reservation outside the manager monitor.
-    // Keep the originating server, rather than capturing a replacement after dispatch.
-    String clientId = msg.optString("clientId");
-    Board capturedBoard = Lizzie.board;
-    if (capturedBoard == null || wsServer != source) return;
-    BoardHistoryNode anchor = capturedBoard.getHistory().getCurrentHistoryNode();
+    Board capturedBoard;
+    BoardHistoryNode anchor;
+    synchronized (this) {
+      if (!currentConnection(source, connection) || Lizzie.board == null) return;
+      // A replaced board cannot be resumed. Retire its reservation before admitting a new trial.
+      if (activeSession != null && !validTrialBoard(activeSession)) endTrial();
+      capturedBoard = Lizzie.board;
+      anchor = capturedBoard.getHistory().getCurrentHistoryNode();
+    }
+    // Engine admission must remain outside the manager monitor (engine -> manager lock order).
     TrialEnterResult result =
-        enterTrialWithResult(clientId, anchor, capturedBoard, source, conn);
+        enterTrialWithResult(clientId, anchor, capturedBoard, source, connection);
     if (!result.isAccepted()) {
-      boolean inUse = result.kind() == TrialEnterResult.Kind.IN_USE;
-      JSONObject denied =
-          new JSONObject()
-              .put("type", "trial_denied")
-              .put("reason", inUse ? "in_use" : "engine_busy")
-              .put("ownerClientId", result.capturedOwnerClientId());
-      source.sendToConnection(conn, denied.toString());
+      denyTrial(source, connection,
+          result.kind() == TrialEnterResult.Kind.IN_USE ? "in_use" : "engine_busy",
+          result.capturedOwnerClientId());
     } else {
       synchronized (this) {
-        if (wsServer == source
-            && activeSession != null
-            && activeSession.ownerClientId.equals(clientId)) publishTrialState();
+        TrialSession session = activeSession;
+        if (currentConnection(source, connection) && session != null
+            && session.ownerConnection == connection) {
+          publishTrialState();
+          grantTrial(source, connection, session);
+        }
       }
     }
+  }
+
+  private static boolean authorizedCommand(
+      TrialSession session, WebBoardServer source, WebSocket connection, JSONObject message) {
+    return session != null && session.ownerServer == source && session.ownerConnection == connection
+        && session.ownerClientId.equals(message.optString("clientId"))
+        && session.sessionId.equals(message.optString("sessionId"));
+  }
+
+  private static String newResumeToken() {
+    byte[] bytes = new byte[32];
+    TOKENS.nextBytes(bytes);
+    return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+  }
+
+  private static void grantTrial(WebBoardServer server, WebSocket connection, TrialSession session) {
+    // Never broadcast this credential, include it in URLs, or use the public clientId as a secret.
+    server.sendToConnection(connection, new JSONObject().put("type", "trial_granted")
+        .put("sessionId", session.sessionId).put("resumeToken", session.resumeToken).toString());
+  }
+
+  private static void denyTrial(
+      WebBoardServer server, WebSocket connection, String reason, String owner) {
+    server.sendToConnection(connection, new JSONObject().put("type", "trial_denied")
+        .put("reason", reason).put("ownerClientId", owner).toString());
   }
 
   /** Existing-session commands and their publications share the same state-transition lock. */
@@ -336,29 +490,56 @@ public class WebBoardManager {
     server.setMessageHandler((conn, message) -> handleClientMessage(server, conn, message));
   }
 
-  public synchronized void stop() {
-    if (!running) return;
-    if (wsServer != null) wsServer.setMessageHandler(null);
-    forceExitTrial();
-    if (collector != null) {
-      collector.shutdown();
-      collector = null;
-    }
-    if (wsServer != null) {
+  public void stop() {
+    synchronized (lifecycleLock) {
+      WebBoardServer socket = wsServer;
+      WebBoardHttpServer http = httpServer;
+      WebBoardDataCollector data = collector;
       try {
-        wsServer.stop(500);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-      } catch (Exception ignored) {
+        synchronized (this) {
+          if (socket != null) socket.setMessageHandler(null);
+          wsServer = null; // Invalidate old callbacks before waiting for server threads.
+          try {
+            forceExitTrial();
+          } finally {
+            collector = null;
+            httpServer = null;
+            resetPublishedServerState();
+          }
+        }
+      } finally {
+        // Even an exit callback failure must release partially started resources. Never join
+        // socket threads under the transition monitor they may be waiting to enter.
+        closeServers(data, socket, http);
       }
-      wsServer = null;
     }
-    if (httpServer != null) {
-      httpServer.stop();
-      httpServer = null;
-    }
+  }
+
+  private void resetPublishedServerState() {
     running = false;
     accessUrl = null;
+    actualHttpPort = 0;
+    actualWsPort = 0;
+  }
+
+  private static void closeServers(
+      WebBoardDataCollector data, WebBoardServer socket, WebBoardHttpServer http) {
+    // Preserve interruption without letting it bypass the other resources' cleanup.
+    boolean interrupted = Thread.interrupted();
+    try {
+      if (data != null) data.shutdown();
+      if (socket != null) {
+        socket.setMessageHandler(null);
+        try {
+          socket.stop(1000);
+        } catch (InterruptedException stopInterrupted) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (http != null) http.stop();
+      if (interrupted) Thread.currentThread().interrupt();
+    }
   }
 
   public boolean isRunning() {
@@ -396,14 +577,6 @@ public class WebBoardManager {
     return "127.0.0.1";
   }
 
-  private static boolean isPortAvailable(int port) {
-    try (ServerSocket ss = new ServerSocket(port)) {
-      return true;
-    } catch (IOException e) {
-      return false;
-    }
-  }
-
   // --- Trial session API ---
 
   public synchronized String getCurrentTrialOwner() {
@@ -419,7 +592,7 @@ public class WebBoardManager {
     return enterTrialWithResult(clientId, anchor, null, null, null);
   }
 
-  private TrialEnterResult enterTrialWithResult(
+  TrialEnterResult enterTrialWithResult(
       String clientId,
       BoardHistoryNode anchor,
       Board capturedBoard,
@@ -428,7 +601,7 @@ public class WebBoardManager {
     Leelaz capturedEngine;
     synchronized (this) {
       if (activeSession != null) {
-        return activeSession.ownerClientId.equals(clientId)
+        return sameTrialOwner(activeSession, clientId, capturedServer, capturedConnection)
             ? TrialEnterResult.IDEMPOTENT
             : TrialEnterResult.inUse(activeSession.ownerClientId);
       }
@@ -448,20 +621,22 @@ public class WebBoardManager {
     try {
       synchronized (this) {
         if (activeSession != null) {
-          return activeSession.ownerClientId.equals(clientId)
+          return sameTrialOwner(activeSession, clientId, capturedServer, capturedConnection)
               ? TrialEnterResult.IDEMPOTENT
               : TrialEnterResult.inUse(activeSession.ownerClientId);
         }
         if (desktopPlayingProbe.getAsBoolean()
             || Lizzie.leelaz != capturedEngine
+            || (capturedServer != null && !currentConnection(capturedServer, capturedConnection))
             || (capturedBoard != null
                 && (Lizzie.board != capturedBoard
-                    || capturedBoard.getHistory().getCurrentHistoryNode() != anchor
-                    || wsServer != capturedServer
-                    || (capturedConnection != null && !capturedConnection.isOpen())))) {
+                    || capturedBoard.getHistory().getCurrentHistoryNode() != anchor))) {
           return TrialEnterResult.ENGINE_BUSY;
         }
         TrialSession session = new TrialSession(clientId, anchor, capturedBoard);
+        session.ownerServer = capturedServer;
+        session.ownerConnection = capturedConnection;
+        session.resumeToken = capturedConnection == null ? null : newResumeToken();
         // 试下子要走分叉而非接续 mainline。若 anchor 是 mainline 末端（无主线下一手），
         // 先插一个 dummy 占据 variations[0]，让后续试下子永远 add 到 index>=1。
         // ReadBoard 同步推进 mainline 时会识别 dummy 并把它替换走（line ~1035），互不干扰。
@@ -491,6 +666,12 @@ public class WebBoardManager {
         reservation.close();
       }
     }
+  }
+
+  private static boolean sameTrialOwner(
+      TrialSession session, String clientId, WebBoardServer server, WebSocket connection) {
+    return session.ownerClientId.equals(clientId) && session.ownerServer == server
+        && session.ownerConnection == connection;
   }
 
   public boolean isEngineOperationExcludedByTrial() {
@@ -554,20 +735,23 @@ public class WebBoardManager {
   public synchronized void applyTrialMove(String clientId, int x, int y) {
     TrialSession s = activeSession;
     if (s == null || !s.ownerClientId.equals(clientId) || !validTrialCoordinates(s, x, y)) return;
-    trialEvents.execute(() -> doApplyMove(s, x, y));
+    doApplyMove(s, x, y);
     touchActivity(s);
   }
 
   private static boolean validTrialCoordinates(TrialSession s, int x, int y) {
-    if (x < 0 || y < 0 || x >= s.boardWidth || y >= s.boardHeight
-        || Board.boardWidth != s.boardWidth || Board.boardHeight != s.boardHeight
+    return x >= 0 && y >= 0 && x < s.boardWidth && y < s.boardHeight && validTrialBoard(s);
+  }
+
+  private static boolean validTrialBoard(TrialSession s) {
+    if (Board.boardWidth != s.boardWidth || Board.boardHeight != s.boardHeight
         || (s.sourceBoard != null
             && (Lizzie.board != s.sourceBoard || s.sourceBoard.getHistory() != s.sourceHistory))) {
       return false;
     }
     BoardData data = s.displayNode.getData();
     long points = (long) s.boardWidth * s.boardHeight;
-    return data != null && data.stones != null && data.stones.length == points
+    return data != null && data.zobrist != null && data.stones != null && data.stones.length == points
         && (data.moveNumberList == null || data.moveNumberList.length == points);
   }
 
@@ -655,22 +839,6 @@ public class WebBoardManager {
         }
       }
 
-      // 复用同位置子节点（跳过 dummy 占位）
-      for (BoardHistoryNode existing : parent.variations) {
-        BoardData ed = existing.getData();
-        if (ed.dummy) continue;
-        if (ed.lastMove.isPresent() && ed.lastMove.get()[0] == x && ed.lastMove.get()[1] == y) {
-          s.displayNode = existing;
-          applyOverrideAndRefresh(existing);
-          {
-            EngineFollowController c = engineController;
-            if (c != null) c.onTrialDisplayNodeChanged(existing);
-          }
-          publishTrialState();
-          return;
-        }
-      }
-
       int idx = Board.getIndex(x, y);
       if (parentData.stones[idx] != Stone.EMPTY) return;
 
@@ -691,7 +859,9 @@ public class WebBoardManager {
       capturedStones += Board.removeDeadChain(x - 1, y, opp, newStones, newZobrist);
       capturedStones += Board.removeDeadChain(x, y - 1, opp, newStones, newZobrist);
       // 自杀手禁手：上面提子后，如果新落子链自身仍无气，拒绝该落子
-      if (Board.removeDeadChain(x, y, color, newStones, newZobrist) > 0) return;
+      int suicidalStones = Board.removeDeadChain(x, y, color, newStones, newZobrist);
+      boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
+      if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return;
 
       int newMoveNumber = parentData.moveNumber + 1;
       int[] newMoveNumberList =
@@ -721,6 +891,24 @@ public class WebBoardManager {
               0,
               0);
       // 试下分支没有引擎分析（默认 bestMoves 即空、playouts=0）
+
+      if (BoardHistoryList.violatesKoRule(parent, newData)) return;
+
+      // 复用同位置子节点（跳过 dummy 占位）
+      for (BoardHistoryNode existing : parent.variations) {
+        BoardData ed = existing.getData();
+        if (ed.dummy || !ed.isMoveNode() || ed.lastMoveColor != color) continue;
+        if (ed.lastMove.isPresent() && ed.lastMove.get()[0] == x && ed.lastMove.get()[1] == y) {
+          s.displayNode = existing;
+          applyOverrideAndRefresh(existing);
+          {
+            EngineFollowController c = engineController;
+            if (c != null) c.onTrialDisplayNodeChanged(existing);
+          }
+          publishTrialState();
+          return;
+        }
+      }
 
       BoardHistoryNode child = new BoardHistoryNode(newData);
       // 试下永远走分叉：如果第一个子是 dummy 占位，把 child add 到末尾（自然在 dummy 之后）
