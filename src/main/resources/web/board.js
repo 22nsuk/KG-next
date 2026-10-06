@@ -71,6 +71,22 @@
     return id;
   })();
 
+  // This tab's credential is never derived from the publicly broadcast ownerClientId.
+  var trialGrant = null;
+  var trialAuthorized = false;
+  try { trialGrant = JSON.parse(sessionStorage.getItem("webBoardTrialGrant")); } catch (_) {}
+  function rememberTrialGrant(grant) {
+    trialGrant = grant;
+    try {
+      if (grant) sessionStorage.setItem("webBoardTrialGrant", JSON.stringify(grant));
+      else sessionStorage.removeItem("webBoardTrialGrant");
+    } catch (_) {}
+  }
+  function ownsTrial() {
+    return trialAuthorized && trialGrant && trialState
+      && trialGrant.sessionId === trialState.sessionId;
+  }
+
   var trialState = null;          // 最新一次 trial_state 消息（null = idle）
   var siblingMarkers = null;       // 当前试下分叉处的非主线子节点位置
 
@@ -122,14 +138,19 @@
         : parseInt(location.port, 10) + 1;
     var url = "ws://" + location.hostname + ":" + port;
 
-    ws = new WebSocket(url);
+    var socket = new WebSocket(url);
+    ws = socket;
 
-    ws.onopen = function () {
+    socket.onopen = function () {
+      if (ws !== socket) return;
+      trialAuthorized = false;
+      if (trialGrant) sendTrial("resume_trial", trialGrant);
       reconnectDelay = 1000;
       overlay.style.display = "none";
     };
 
-    ws.onmessage = function (evt) {
+    socket.onmessage = function (evt) {
+      if (ws !== socket) return;
       var msg;
       try {
         msg = JSON.parse(evt.data);
@@ -160,27 +181,46 @@
           renderScoreChart();
           renderBlunderList();
           break;
+        case "trial_granted":
+          if (typeof msg.sessionId !== "string" || typeof msg.resumeToken !== "string") break;
+          rememberTrialGrant({ sessionId: msg.sessionId, resumeToken: msg.resumeToken });
+          trialAuthorized = true;
+          applyTrialUiState();
+          break;
         case "trial_state":
           trialState = msg.active ? msg : null;
+          // A cached public state can arrive before the private resume result. Only discard
+          // an established grant here; pending reconnect credentials survive that ordering.
+          if (trialAuthorized && (!msg.active || msg.sessionId !== trialGrant.sessionId)) {
+            trialAuthorized = false;
+            rememberTrialGrant(null);
+          }
           siblingMarkers = (msg.active && msg.siblingMarkers) ? msg.siblingMarkers : null;
           applyTrialUiState();
           render();  // 重画棋盘以反映 sibling markers 变化
           break;
         case "trial_denied":
-          // 简单 alert 即可（spec 没要求 toast）
-          alert("另一位用户正在试下中，稍后再试");
+          trialAuthorized = false;
+          rememberTrialGrant(null);
+          applyTrialUiState();
+          if (msg.reason !== "expired") {
+            alert(msg.reason === "engine_busy" ? "引擎忙碌中，稍后再试" : "另一位用户正在试下中，稍后再试");
+          }
           break;
       }
     };
 
-    ws.onclose = function () {
+    socket.onclose = function () {
+      if (ws !== socket) return;
+      trialAuthorized = false;
+      applyTrialUiState();
       overlay.style.display = "flex";
       scheduleReconnect();
     };
 
-    ws.onerror = function () {
+    socket.onerror = function () {
       try {
-        ws.close();
+        socket.close();
       } catch (_) {
         /* ignore */
       }
@@ -864,7 +904,9 @@
   // ---------------------------------------------------------------------------
   function sendTrial(type, extra) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (type !== "enter_trial" && type !== "resume_trial" && !ownsTrial()) return;
     var msg = { type: type, clientId: clientId };
+    if (type !== "enter_trial" && trialGrant) msg.sessionId = trialGrant.sessionId;
     if (extra) {
       for (var k in extra) {
         if (Object.prototype.hasOwnProperty.call(extra, k)) msg[k] = extra[k];
@@ -887,7 +929,7 @@
       followText.style.display = "none";
       return;
     }
-    if (trialState.ownerClientId === clientId) {
+    if (ownsTrial()) {
       enterBtn.style.display = "none";
       activeControls.style.display = "";
       followText.style.display = "none";
@@ -1008,7 +1050,7 @@
   });
 
   boardCanvas.addEventListener("click", function (e) {
-    if (!trialState || trialState.ownerClientId !== clientId) return;
+    if (!ownsTrial()) return;
     var coord = pixelToBoardCoord(e);
     if (!coord) return;
     if (siblingMarkers) {

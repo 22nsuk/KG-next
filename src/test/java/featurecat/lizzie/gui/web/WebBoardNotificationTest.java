@@ -187,6 +187,11 @@ class WebBoardNotificationTest {
     }
 
     @Override
+    public void broadcastTrialState(String json) {
+      broadcastMessage(json);
+    }
+
+    @Override
     public void broadcastAnalysis(String json) {
       broadcastMessage(json);
     }

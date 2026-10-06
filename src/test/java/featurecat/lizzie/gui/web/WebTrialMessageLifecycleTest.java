@@ -3,175 +3,232 @@ package featurecat.lizzie.gui.web;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
-import featurecat.lizzie.analysis.Leelaz;
-import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.rules.Board;
-import featurecat.lizzie.rules.BoardData;
-import featurecat.lizzie.rules.BoardHistoryNode;
 import java.math.BigDecimal;
 import java.net.InetSocketAddress;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.Delayed;
 import java.util.concurrent.FutureTask;
-import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class WebTrialMessageLifecycleTest {
+  @ParameterizedTest
+  @ValueSource(strings = {"trial_reset", "trial_navigate", "exit_trial"})
+  void laterCommandsCannotOvertakeAQueuedMove(String type) throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
+      f.enqueue(f.owner, type, "direction", "back");
+      assertSame(f.anchor, f.display.get());
+      assertEquals(2, f.events.work.size());
+      f.events.drain();
+      assertEquals(2, f.events.publications.size());
+      assertEquals(1, f.events.publications.get(0).node().getData().moveNumber);
+      assertSame("exit_trial".equals(type) ? null : f.anchor, f.display.get());
+      assertSame(
+          f.anchor,
+          f.board.getHistory().getCurrentHistoryNode(),
+          "trial never moves the real cursor");
+    }
+  }
+
   @Test
-  void nonOwnerMessagesCannotPublishAnExitOrMutateTheTrial() throws Exception {
-    try (Fixture f = new Fixture()) {
-      f.message("trial_move", "other", "x", 3, "y", 3);
-      f.message("trial_navigate", "other", "direction", "back");
-      f.message("trial_reset", "other");
-      f.message("exit_trial", "other");
+  void consecutiveMovesAndNavigationUseFifoStateRatherThanCapturedParents() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
+      f.enqueue(f.owner, "trial_move", "x", 4, "y", 4);
+      f.enqueue(f.owner, "trial_navigate", "direction", "back");
+      f.enqueue(f.owner, "trial_navigate", "childIndex", 0);
+      f.events.drain();
+      assertEquals(
+          List.of(1, 2, 1, 2),
+          f.events.publications.stream().map(p -> p.node().getData().moveNumber).toList());
+      assertArrayEquals(new int[] {4, 4}, f.display.get().getData().lastMove.orElseThrow());
+    }
+  }
+
+  @Test
+  void publicIdentityAndSessionIdDoNotAuthorizeAnotherConnection() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.send(f.visitor, "trial_move", "x", 3, "y", 3);
+      f.send(f.visitor, "trial_navigate", "direction", "back");
+      f.send(f.visitor, "trial_reset");
+      f.send(f.visitor, "exit_trial");
       assertEquals("owner", f.manager.getCurrentTrialOwner());
-      assertSame(f.anchor, f.override.get());
-      assertTrue(f.events.work.isEmpty());
-      assertTrue(f.events.publications.isEmpty(), "rejected commands must not broadcast a state change");
-      assertEquals(1, f.events.timers.size(), "rejected commands must not refresh activity");
+      assertSame(f.anchor, f.display.get());
+      assertTrue(f.events.publications.isEmpty());
+      assertEquals(1, f.events.timers.size());
+      f.send(f.visitor, "enter_trial");
+      assertEquals("in_use", f.visitor.messages.get(0).getString("reason"));
+      assertFalse(f.visitor.messages.toString().contains(f.resumeToken));
+      f.send(f.visitor, "resume_trial", "resumeToken", f.sessionId);
+      assertEquals("expired", f.visitor.messages.get(1).getString("reason"));
     }
   }
 
   @Test
-  void ownerExitThroughJsonDispatchPublishesExactlyOnce() throws Exception {
-    try (Fixture f = new Fixture()) {
-      f.message("exit_trial", "owner");
-      assertEquals("", f.manager.getCurrentTrialOwner());
-      assertNull(f.override.get());
-      assertEquals(List.of(new Publication("", null)), f.events.publications);
-      assertTrue(f.anchor.variations.isEmpty(), "unused mainline dummy must be removed");
-      assertTrue(f.events.timers.get(0).isCancelled());
-      f.message("exit_trial", "owner");
-      f.manager.forceExitTrial();
-      assertEquals(1, f.events.publications.size());
-    }
-  }
-
-  @Test
-  void forcedAndIdleExitShareTheSamePublicationPath() throws Exception {
-    try (Fixture f = new Fixture()) {
-      f.manager.forceExitTrial();
-      assertEquals(List.of(new Publication("", null)), f.events.publications);
-      assertTrue(f.manager.enterTrial("owner", f.anchor));
+  void reconnectNeedsPrivateTokenAndRevokesTheOldConnectionAndOldToken() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
+      Runnable oldMove = f.events.work.remove();
+      String oldToken = f.resumeToken;
+      f.owner.open = false;
+      f.send(f.visitor, "resume_trial", "resumeToken", oldToken);
+      JSONObject grant =
+          f.visitor.messages.stream()
+              .filter(m -> "trial_granted".equals(m.optString("type")))
+              .findFirst()
+              .orElseThrow();
+      assertEquals(f.sessionId, grant.getString("sessionId"));
+      assertNotEquals(oldToken, grant.getString("resumeToken"));
       f.events.publications.clear();
-      TimerTask current = f.events.timers.get(f.events.timers.size() - 1);
-      current.fireEvenIfCancelled();
-      current.fireEvenIfCancelled();
-      assertEquals(List.of(new Publication("", null)), f.events.publications);
-      assertNull(f.override.get());
+      f.owner.open = true; // Even an already-decoded old callback cannot regain ownership.
+      oldMove.run();
+      f.send(f.owner, "trial_reset");
+      assertTrue(f.events.publications.isEmpty());
+      f.visitor.open = false;
+      f.send(f.owner, "resume_trial", "resumeToken", oldToken);
+      assertEquals("expired", f.owner.messages.get(0).getString("reason"));
+      f.visitor.open = true;
+      f.send(f.visitor, "trial_move", "x", 4, "y", 4);
+      assertEquals(1, f.display.get().getData().moveNumber);
     }
   }
 
   @Test
-  void cancelledIdleCallbackCannotEndTheSameSessionAfterNewActivity() throws Exception {
-    try (Fixture f = new Fixture()) {
-      TimerTask old = f.events.timers.get(0);
-      f.message("trial_reset", "owner");
-      TimerTask current = f.events.timers.get(1);
+  void liveOwnerCannotBeDisplacedEvenByAClonedResumeCredential() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.send(f.visitor, "resume_trial", "resumeToken", f.resumeToken);
+      assertEquals("in_use", f.visitor.messages.get(0).getString("reason"));
+      f.send(f.owner, "trial_move", "x", 3, "y", 3);
+      assertEquals(1, f.display.get().getData().moveNumber);
+    }
+  }
+
+  @Test
+  void ownerExitPublishesExactlyOnceAndCleansTheUnusedDummy() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.send(f.owner, "exit_trial");
+      f.send(f.owner, "exit_trial");
+      f.manager.forceExitTrial();
+      assertEquals("", f.manager.getCurrentTrialOwner());
+      assertNull(f.display.get());
+      assertEquals(1, f.events.publications.size());
+      assertTrue(f.anchor.variations.isEmpty());
+      assertTrue(f.events.timers.get(0).isCancelled());
+    }
+  }
+
+  @Test
+  void cancelledTimerCannotEndTheSameSessionAfterNewActivity() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      WebTrialTestFixture.Timer old = f.events.timers.get(0);
+      f.send(f.owner, "trial_reset");
       assertTrue(old.isCancelled());
       f.events.publications.clear();
-      old.fireEvenIfCancelled(); // Simulates a callback already waiting for the manager monitor.
+      old.callback.run();
       assertEquals("owner", f.manager.getCurrentTrialOwner());
       assertTrue(f.events.publications.isEmpty());
-      current.fireEvenIfCancelled();
-      assertEquals(List.of(new Publication("", null)), f.events.publications);
+      f.events.timers.get(1).callback.run();
+      f.events.timers.get(1).callback.run();
+      assertEquals(1, f.events.publications.size());
+      assertNull(f.display.get());
     }
   }
 
   @Test
-  void invalidCoordinatesAreRejectedBeforeQueueingAndAValidMoveStillPublishes() throws Exception {
-    try (Fixture f = new Fixture()) {
+  void queuedCommandsAndOldCredentialsCannotAffectSameOwnerReplacementSession() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
+      f.enqueue(f.owner, "trial_reset");
+      f.enqueue(f.owner, "exit_trial");
+      var oldWork = List.copyOf(f.events.work);
+      f.events.work.clear();
+      var oldTimer = f.events.timers.get(0);
+      String oldToken = f.resumeToken;
+      String oldId = f.sessionId;
+      f.manager.forceExitTrial();
+      f.enter();
+      assertNotEquals(oldId, f.sessionId);
+      oldWork.forEach(Runnable::run);
+      oldTimer.callback.run();
+      assertTrue(f.events.publications.isEmpty());
+      assertSame(f.anchor, f.display.get());
+      f.owner.open = false;
+      f.send(f.visitor, "resume_trial", "sessionId", oldId, "resumeToken", oldToken);
+      assertEquals("expired", f.visitor.messages.get(0).getString("reason"));
+    }
+  }
+
+  @Test
+  void invalidCoordinatesAreRejectedBeforeQueueing() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
       Object[][] invalid = {
-        {-1, 0}, {0, -1}, {Board.boardWidth, 0}, {0, Board.boardHeight},
-        {Integer.MAX_VALUE, 0}, {Long.MAX_VALUE, 0}, {1.5, 0}, {"3", 0}, {null, 0},
-        {new BigDecimal("3.0000000000000001"), 0}, {new BigDecimal("1e-400"), 0}
+        {-1, 0},
+        {0, -1},
+        {Board.boardWidth, 0},
+        {0, Board.boardHeight},
+        {Integer.MAX_VALUE, 0},
+        {Long.MAX_VALUE, 0},
+        {1.5, 0},
+        {"3", 0},
+        {null, 0},
+        {new BigDecimal("3.0000000000000001"), 0},
+        {new BigDecimal("1e-400"), 0}
       };
-      for (Object[] point : invalid) {
-        f.message("trial_move", "owner", "x", point[0], "y", point[1]);
-      }
-      f.server.onMessage(null, "not-json");
-      f.message("unknown", "owner");
+      for (Object[] point : invalid) f.enqueue(f.owner, "trial_move", "x", point[0], "y", point[1]);
+      f.enqueue(f.owner, "trial_navigate", "childIndex", 4294967297L);
+      f.enqueue(f.owner, "trial_navigate", "direction", "unknown");
+      f.enqueue(f.owner, "unknown");
+      f.server.onMessage(f.owner.socket, "not-json");
       assertTrue(f.events.work.isEmpty());
       assertTrue(f.events.publications.isEmpty());
       assertEquals(1, f.events.timers.size());
-      assertSame(f.anchor, f.manager.getDisplayNodeForTest());
-
-      f.message("trial_move", "owner", "x", 3, "y", 3);
-      assertEquals(1, f.events.work.size());
-      assertTrue(f.events.publications.isEmpty(), "queueing is not successful adoption");
-      f.events.work.remove().run();
-      BoardHistoryNode child = f.manager.getDisplayNodeForTest();
-      assertNotSame(f.anchor, child);
-      assertArrayEquals(new int[] {3, 3}, child.getData().lastMove.orElseThrow());
-      assertSame(child, f.override.get());
-      assertEquals(List.of(new Publication("owner", child)), f.events.publications);
-
-      f.message("trial_reset", "owner");
-      f.events.publications.clear();
-      f.message("trial_navigate", "owner", "childIndex", 4294967297L);
-      f.message("trial_navigate", "owner", "childIndex", new BigDecimal("1.0000000000000001"));
-      assertSame(f.anchor, f.manager.getDisplayNodeForTest());
-      assertTrue(f.events.publications.isEmpty());
-      f.message("trial_navigate", "owner", "childIndex", 1);
-      assertSame(child, f.manager.getDisplayNodeForTest());
-      assertEquals(List.of(new Publication("owner", child)), f.events.publications);
     }
   }
 
   @Test
-  void queuedMoveAndOldTimerCannotMutateAReplacementSessionWithTheSameOwner() throws Exception {
-    try (Fixture f = new Fixture()) {
-      f.message("trial_move", "owner", "x", 3, "y", 3);
-      Runnable oldMove = f.events.work.remove();
-      TimerTask oldTimer = f.events.timers.get(f.events.timers.size() - 1);
-      f.message("exit_trial", "owner");
-      BoardHistoryNode replacement = new BoardHistoryNode(BoardData.empty(Board.boardWidth, Board.boardHeight));
-      assertTrue(f.manager.enterTrial("owner", replacement));
-      f.events.publications.clear();
-      oldMove.run();
-      oldTimer.fireEvenIfCancelled();
-      assertSame(replacement, f.manager.getDisplayNodeForTest());
-      assertEquals("owner", f.manager.getCurrentTrialOwner());
-      assertEquals(1, replacement.variations.size(), "only the mainline placeholder may exist");
+  void queuedCommandsRecheckBoardIdentityAndDimensions() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
+      f.enqueue(f.owner, "trial_reset");
+      Lizzie.board = new Board();
+      f.events.drain();
       assertTrue(f.events.publications.isEmpty());
-    }
-  }
-
-  @Test
-  void queuedMoveRechecksBoardDimensionsBeforeIndexing() throws Exception {
-    try (Fixture f = new Fixture()) {
-      f.message("trial_move", "owner", "x", 3, "y", 3);
+      Lizzie.board = f.board;
+      f.enqueue(f.owner, "trial_move", "x", 3, "y", 3);
       int width = Board.boardWidth;
-      int height = Board.boardHeight;
       try {
-        Board.boardWidth = width == 9 ? 19 : 9;
-        Board.boardHeight = height == 9 ? 19 : 9;
-        assertDoesNotThrow(() -> f.events.work.remove().run());
-        assertSame(f.anchor, f.manager.getDisplayNodeForTest());
-        assertTrue(f.events.publications.isEmpty());
+        Board.boardWidth = width + 1;
+        f.events.drain();
+        assertSame(f.anchor, f.display.get());
       } finally {
         Board.boardWidth = width;
-        Board.boardHeight = height;
       }
     }
   }
 
   @Test
-  void replacedServerCannotDispatchIntoTheCurrentTrial() throws Exception {
-    try (Fixture f = new Fixture()) {
+  void replacedServerCannotDispatchQueuedOrNewMessages() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
       WebBoardServer replacement = new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 2);
       try {
+        f.enqueue(f.owner, "exit_trial");
         f.manager.attachWebSocketServer(replacement);
-        f.message("exit_trial", "owner");
-        assertEquals("owner", f.manager.getCurrentTrialOwner());
+        f.events.drain();
+        f.send(f.owner, "exit_trial");
+        replacement.onMessage(
+            f.owner.socket,
+            new JSONObject()
+                .put("type", "exit_trial")
+                .put("clientId", "owner")
+                .put("sessionId", f.sessionId)
+                .toString());
+        f.events.drain();
         assertTrue(f.events.publications.isEmpty());
-        replacement.onMessage(null, "{\"type\":\"exit_trial\",\"clientId\":\"owner\"}");
-        assertEquals(List.of(new Publication("", null)), f.events.publications);
+        assertEquals("owner", f.manager.getCurrentTrialOwner());
       } finally {
         replacement.stop(1000);
       }
@@ -179,123 +236,31 @@ class WebTrialMessageLifecycleTest {
   }
 
   @Test
-  void serverIdentityIsRecheckedAfterWaitingForTheTransitionLock() throws Exception {
-    try (Fixture f = new Fixture()) {
+  void serverIdentityIsRecheckedAfterWaitingForTransitionLock() throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture()) {
       WebBoardServer replacement = new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 2);
-      FutureTask<Void> dispatch = new FutureTask<>(() -> {
-        f.message("exit_trial", "owner");
-        return null;
-      });
+      FutureTask<Void> dispatch =
+          new FutureTask<>(
+              () -> {
+                f.enqueue(f.owner, "exit_trial");
+                return null;
+              });
       Thread reader = new Thread(dispatch, "test-old-web-reader");
       reader.setDaemon(true);
       try {
         synchronized (f.manager) {
           reader.start();
           long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
-          while (reader.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+          while (reader.getState() != Thread.State.BLOCKED && System.nanoTime() < deadline)
             Thread.sleep(1);
-          }
-          assertEquals(Thread.State.BLOCKED, reader.getState(), "reader must be waiting for the manager");
+          assertEquals(Thread.State.BLOCKED, reader.getState());
           f.manager.attachWebSocketServer(replacement);
         }
         dispatch.get(3, TimeUnit.SECONDS);
-        assertEquals("owner", f.manager.getCurrentTrialOwner());
-        assertTrue(f.events.publications.isEmpty());
+        assertTrue(f.events.work.isEmpty());
       } finally {
         reader.join(3000);
         replacement.stop(1000);
-      }
-    }
-  }
-
-  private record Publication(String owner, BoardHistoryNode displayNode) {}
-
-  private static final class ManualEvents implements WebBoardManager.TrialEvents {
-    final ArrayDeque<Runnable> work = new ArrayDeque<>();
-    final List<TimerTask> timers = new ArrayList<>();
-    final List<Publication> publications = new ArrayList<>();
-
-    @Override
-    public void execute(Runnable task) {
-      work.add(task);
-    }
-
-    @Override
-    public ScheduledFuture<?> schedule(Runnable task, long delay, TimeUnit unit) {
-      assertEquals(5 * 60 * 1000L, unit.toMillis(delay));
-      TimerTask timer = new TimerTask(task);
-      timers.add(timer);
-      return timer;
-    }
-
-    @Override
-    public void publish(WebBoardManager.TrialSession session) {
-      publications.add(new Publication(session == null ? "" : session.ownerClientId,
-          session == null ? null : session.displayNode));
-    }
-  }
-
-  private static final class TimerTask extends FutureTask<Void> implements ScheduledFuture<Void> {
-    private final Runnable callback;
-
-    TimerTask(Runnable callback) {
-      super(callback, null);
-      this.callback = callback;
-    }
-
-    void fireEvenIfCancelled() {
-      callback.run();
-    }
-
-    @Override
-    public long getDelay(TimeUnit unit) {
-      return 0;
-    }
-
-    @Override
-    public int compareTo(Delayed other) {
-      return 0;
-    }
-  }
-
-  /** Real model objects and an explicit event seam; no Unsafe or collector worker is needed. */
-  private static final class Fixture implements AutoCloseable {
-    final Leelaz previousEngine = Lizzie.leelaz;
-    final WebBoardManager previousManager = Lizzie.webBoardManager;
-    final LizzieFrame previousFrame = Lizzie.frame;
-    final ManualEvents events = new ManualEvents();
-    final WebBoardManager manager = new WebBoardManager(events);
-    final WebBoardServer server = new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 2);
-    final BoardHistoryNode anchor = new BoardHistoryNode(BoardData.empty(Board.boardWidth, Board.boardHeight));
-    final AtomicReference<BoardHistoryNode> override = new AtomicReference<>();
-
-    Fixture() throws Exception {
-      Lizzie.leelaz = new Leelaz("");
-      Lizzie.webBoardManager = manager;
-      Lizzie.frame = null;
-      manager.setOverrideSinkForTest(override::set);
-      manager.setDesktopRefresherForTest(() -> {});
-      manager.setMainlineTailSupplier(() -> anchor);
-      manager.attachWebSocketServer(server);
-      assertTrue(manager.enterTrial("owner", anchor));
-    }
-
-    void message(String type, String owner, Object... values) {
-      JSONObject json = new JSONObject().put("type", type).put("clientId", owner);
-      for (int i = 0; i < values.length; i += 2) json.put((String) values[i], values[i + 1]);
-      // Exercise the same JSON decoding + registered manager callback used by WebSocket input.
-      server.onMessage(null, json.toString());
-    }
-
-    @Override
-    public void close() throws Exception {
-      try {
-        manager.forceExitTrial();
-        server.stop(1000);
-      } finally {
-        Lizzie.leelaz = previousEngine;
-        Lizzie.webBoardManager = previousManager;
-        Lizzie.frame = previousFrame;
       }
     }
   }

@@ -131,6 +131,28 @@ class WebBoardClientUpdatesTest {
     assertTrue(executor.isShutdown());
   }
 
+  @Test
+  void trialStateIsBoundedSurvivesFullUpdatesAndReplaysToNewObservers() throws Exception {
+    try (WebBoardClientUpdates updates = new WebBoardClientUpdates()) {
+      Sink slow = new Sink(true);
+      slow.buffered.set(true);
+      updates.connected(slow.socket);
+      for (int i = 0; i < 10_000; i++) updates.trialState("trial-" + i);
+      updates.fullState("board");
+      assertTrue(slow.sent.isEmpty());
+      slow.buffered.set(false);
+      assertEquals("board", slow.next());
+      slow.buffered.set(false);
+      assertEquals("trial-9999", slow.next());
+      assertTrue(slow.sent.isEmpty());
+      updates.trialState("idle");
+      Sink observer = new Sink(false);
+      updates.connected(observer.socket);
+      assertEquals("board", observer.next());
+      assertEquals("idle", observer.next());
+    }
+  }
+
   /** Models the public socket contract: send enqueues, hasBufferedData stays true until drained. */
   private static final class Sink {
     final AtomicBoolean open = new AtomicBoolean(true);
