@@ -668,7 +668,10 @@ public class BoardHistoryList {
       // check to see if this move is being replayed in history
       if (!engineGamePure
           && !addLast
-          && this.getNext().map(BoardHistoryList::isReplayablePass).orElse(false)
+          && this.getNext()
+              .filter(next -> next.lastMoveColor == color)
+              .map(BoardHistoryList::isReplayablePass)
+              .orElse(false)
           && !newBranch) {
         // this is the next move in history. Just increment history so that we don't
         // erase the
@@ -786,9 +789,10 @@ public class BoardHistoryList {
       double nextWinrate = -100;
       if (curNode.getData().winrate >= 0) nextWinrate = 100 - curNode.getData().winrate;
 
-      // check to see if this coordinate is being replayed in history
+      // A replay must match both the coordinate and the requested color.
       if (!engineGamePure && !addLast) {
-        Optional<int[]> nextLast = this.getNext().flatMap(n -> n.lastMove);
+        Optional<int[]> nextLast =
+            this.getNext().filter(next -> next.lastMoveColor == color).flatMap(n -> n.lastMove);
         if (nextLast.isPresent()
             && nextLast.get()[0] == x
             && nextLast.get()[1] == y

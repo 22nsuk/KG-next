@@ -280,6 +280,10 @@ class CpuAcceptanceProvisionerTest(unittest.TestCase):
     def test_stalled_and_slow_http_bodies_fail_without_publication(self) -> None:
         stop = threading.Event()
         requested = threading.Event()
+        # Keep the size limit beyond the slow stream's deadline. The small default
+        # fixture could otherwise fail by size before exercising the deadline.
+        self.catalog["models"]["fixture-model"]["sizeBytes"] = 8192
+        self.catalog["models"]["fixture-model"]["sha256"] = sha256(b"x" * 8192)
 
         class Handler(http.server.BaseHTTPRequestHandler):
             def do_GET(self) -> None:
@@ -302,18 +306,22 @@ class CpuAcceptanceProvisionerTest(unittest.TestCase):
                 pass
 
         probe = """
-import json, sys, time
+import json, sys, time, urllib.request
 from pathlib import Path
 from scripts import prepare_cpu_engine_acceptance as provisioner
 # Exercise only HTTP failures with cached fixtures on every CI host.
 provisioner.supported_host = lambda: True
 provisioner.DOWNLOAD_TIMEOUT_SECONDS = 0.2
 provisioner.DOWNLOAD_DEADLINE_SECONDS = 0.5
+# Initialize urllib (including its default TLS context) before measuring HTTP.
+# This loopback fixture must not depend on the host's proxy configuration.
+urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
 started = time.monotonic()
 try:
     provisioner.prepare(Path(sys.argv[1]), catalog_path=Path(sys.argv[2]))
-except provisioner.ProvisioningError:
-    print(json.dumps({"failed": True, "elapsed": time.monotonic() - started}))
+except provisioner.ProvisioningError as failure:
+    print(json.dumps({"failed": True, "elapsed": time.monotonic() - started,
+                      "error": str(failure), "cause": type(failure.__cause__).__name__}))
 else:
     print(json.dumps({"failed": False}))
 """
@@ -347,7 +355,11 @@ else:
                     self.assertTrue(requested.is_set(), "download did not reach the HTTP peer")
                     observed = json.loads(result.stdout)
                     self.assertTrue(observed["failed"])
-                    self.assertLess(observed["elapsed"], 3, "HTTP deadline was not enforced")
+                    self.assertLess(observed["elapsed"], 3, f"HTTP deadline was not enforced: {observed}")
+                    if mode == "stall":
+                        self.assertEqual("TimeoutError", observed["cause"], observed)
+                    else:
+                        self.assertIn("download deadline exceeded", observed["error"], observed)
                     self.assertEqual({"cache"}, {entry.name for entry in root.iterdir()})
                     self.assertEqual(
                         {self.catalog["assets"]["linux-cpu"]["assetName"]},

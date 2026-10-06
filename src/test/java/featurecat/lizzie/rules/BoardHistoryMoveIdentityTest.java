@@ -2,14 +2,61 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class BoardHistoryMoveIdentityTest {
   private static final int BOARD_SIZE = 3;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
+
+  @ParameterizedTest
+  @CsvSource({
+    "BLACK, WHITE, false",
+    "WHITE, BLACK, false",
+    "BLACK, WHITE, true",
+    "WHITE, BLACK, true",
+    "BLACK, BLACK, false",
+    "WHITE, WHITE, false",
+    "BLACK, BLACK, true",
+    "WHITE, WHITE, true"
+  })
+  void historyReplayRequiresTheRequestedColor(
+      Stone originalColor, Stone requestedColor, boolean pass) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(BOARD_SIZE)) {
+      BoardHistoryList history = env.board().getHistory();
+      BoardHistoryNode parent = history.getCurrentHistoryNode();
+      if (pass) history.pass(originalColor, false);
+      else history.place(1, 1, originalColor);
+      BoardHistoryNode original = history.getCurrentHistoryNode();
+      original.getData().comment = "original branch";
+      history.place(0, 0, originalColor.opposite());
+      BoardHistoryNode continuation = history.getCurrentHistoryNode();
+      assertTrue(history.previous().isPresent());
+      assertTrue(history.previous().isPresent());
+      boolean parentTurn = parent.getData().blackToPlay;
+
+      if (pass) history.pass(requestedColor, false);
+      else history.place(1, 1, requestedColor);
+
+      if (originalColor == requestedColor) assertSame(original, history.getCurrentHistoryNode());
+      else assertNotSame(original, history.getCurrentHistoryNode());
+      assertEquals(originalColor == requestedColor ? 1 : 2, parent.numberOfChildren());
+      assertEquals(requestedColor, history.getData().lastMoveColor);
+      assertEquals(requestedColor == Stone.WHITE, history.getData().blackToPlay);
+      assertEquals(pass, history.getData().isPassNode());
+      if (!pass) assertEquals(requestedColor, history.getStones()[Board.getIndex(1, 1)]);
+      assertEquals(1, history.getData().moveNumber);
+      assertEquals(parentTurn, parent.getData().blackToPlay);
+      assertSame(original, parent.getVariation(0).orElseThrow());
+      assertSame(continuation, original.next().orElseThrow());
+      assertEquals("original branch", original.getData().comment);
+    }
+  }
 
   @Test
   void nextByMoveIdentityReusesExistingVariationWithDifferentComment() {
