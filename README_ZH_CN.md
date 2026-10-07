@@ -8,7 +8,7 @@
   <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/22nsuk/KG-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
   <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/22nsuk/KG-next?style=flat&color=444444" alt="Stars"></a>
   <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/22nsuk/KG-next/total.svg?label=Downloads&color=666666" alt="Downloads"></a>
-  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="官方网站"></a>
+  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Upstream-LizzieYzy%20Next-0b6b3a" alt="LizzieYzy Next (upstream)"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
 
@@ -22,11 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="https://goagent.top/"><strong>官方网站</strong></a>
+  <a href="https://goagent.top/"><strong>上游项目：LizzieYzy Next</strong></a>
   ·
-  <a href="https://github.com/22nsuk/KG-next/releases"><strong>正式版下载</strong></a>
-  ·
-  <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>百度网盘下载</strong></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><strong>KG-next 发布</strong></a>
   ·
   <a href="docs/INSTALL.md"><strong>安装说明</strong></a>
   ·
@@ -34,9 +32,7 @@
 </p>
 
 > [!NOTE]
-> 国内用户也可使用公开百度网盘下载：
-> [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
-> 提取码：`3i8w`
+> 请从 [KG-next 发布](https://github.com/22nsuk/KG-next/releases) 下载 KG-next，以所选发布中实际列出的文件为准。上游网站及其下载属于 LizzieYzy Next，并非 KG-next。
 
 > [!TIP]
 > [项目讨论 QQ 群：299419120](https://qm.qq.com/q/JZoeojjteg)
@@ -106,7 +102,7 @@ NVIDIA 和 TensorRT 说明：
 
 ## 三步开始
 
-1. 去 [正式版下载页](https://github.com/22nsuk/KG-next/releases) 下载适合自己系统的包。
+1. 去 [KG-next 发布](https://github.com/22nsuk/KG-next/releases) 下载适合自己系统的包。
 2. 打开程序后，点击 `野狐棋谱`，输入野狐昵称。
 3. 抓到棋谱后继续做快速全盘分析，用主胜率图和底部快速概览直接定位关键手。
 

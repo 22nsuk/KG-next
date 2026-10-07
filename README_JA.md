@@ -8,12 +8,12 @@
   <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/22nsuk/KG-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
   <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/22nsuk/KG-next?style=flat&color=444444" alt="Stars"></a>
   <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/22nsuk/KG-next/total?label=Downloads&color=666666" alt="Downloads"></a>
-  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="公式サイト"></a>
+  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Upstream-LizzieYzy%20Next-0b6b3a" alt="LizzieYzy Next (upstream)"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · <a href="README_EN.md">English</a> · 日本語 · <a href="README_KO.md">한국어</a> · <a href="README_TH.md">ภาษาไทย</a>
+  <a href="README_ZH_CN.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · <a href="README_EN.md">English</a> · 日本語 · <a href="README_KO.md">한국어</a> · <a href="README_TH.md">ภาษาไทย</a>
 </p>
 
 <p align="center">
@@ -22,11 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="https://goagent.top/"><strong>公式サイト</strong></a>
+  <a href="https://goagent.top/"><strong>上流プロジェクト: LizzieYzy Next</strong></a>
   ·
-  <a href="https://github.com/22nsuk/KG-next/releases"><strong>安定版ダウンロード</strong></a>
-  ·
-  <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>Baidu ダウンロード</strong></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><strong>KG-next リリース</strong></a>
   ·
   <a href="docs/INSTALL_JA.md"><strong>インストールガイド</strong></a>
   ·
@@ -34,9 +32,7 @@
 </p>
 
 > [!NOTE]
-> 中国本土から利用する場合は、公開されている Baidu Netdisk ダウンロードも使えます:
-> [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
-> 取り出しコード: `3i8w`
+> KG-next は [KG-next リリース](https://github.com/22nsuk/KG-next/releases) からダウンロードしてください。選んだリリースに掲載されたファイルが配布対象です。上流サイトとその配布物は LizzieYzy Next 用であり、KG-next 用ではありません。
 
 > [!TIP]
 > [中国語 QQ グループ: 299419120](https://qm.qq.com/q/JZoeojjteg)
@@ -99,7 +95,7 @@ NVIDIA と TensorRT:
 
 ## 3 ステップで開始
 
-1. [安定版ダウンロード](https://github.com/22nsuk/KG-next/releases) から環境に合うものを選びます。
+1. [KG-next リリース](https://github.com/22nsuk/KG-next/releases) から環境に合うものを選びます。
 2. `野狐棋譜` を開いて野狐のニックネームを入力します。
 3. 棋譜を取得し、全局を素早く解析して、グラフと概要から重要な手へ移動します。
 
