@@ -5,9 +5,9 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/22nsuk/KG-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/22nsuk/KG-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/22nsuk/KG-next/total?label=Downloads&color=666666" alt="Downloads"></a>
   <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="公式サイト"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
@@ -24,7 +24,7 @@
 <p align="center">
   <a href="https://goagent.top/"><strong>公式サイト</strong></a>
   ·
-  <a href="https://goagent.top/download/"><strong>安定版ダウンロード</strong></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><strong>安定版ダウンロード</strong></a>
   ·
   <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>Baidu ダウンロード</strong></a>
   ·
@@ -34,8 +34,6 @@
 </p>
 
 > [!NOTE]
-> 中国本土のユーザーには、安定版の [公式ダウンロードページ](https://goagent.top/download/) をおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/22nsuk/KG-next/releases) からダウンロードできます。
->
 > 中国本土から利用する場合は、公開されている Baidu Netdisk ダウンロードも使えます:
 > [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
 > 取り出しコード: `3i8w`
@@ -65,8 +63,6 @@
 Linux x86_64 の NVIDIA GPU サーバーがあり、まだ `WSS` リンクがない場合は、[KataGo リモート計算ワンクリックセットアップ](https://github.com/wimi321/katago-remote-one-click)を利用できます。サーバーでコマンドを 1 つ実行すると暗号化リンクと QR コードが生成され、`リモートコンピューティング -> 自前コンピューティング` で貼り付けまたは読み込めます。公開受信ポートを開く必要はありません。
 
 ## まずどれをダウンロードするか
-
-中国本土のユーザーには、よく使う安定版を [公式ダウンロードページ](https://goagent.top/download/) から選ぶことをおすすめします。インストーラ、Linux パッケージ、過去版は [GitHub Releases](https://github.com/22nsuk/KG-next/releases) からダウンロードできます。
 
 <p align="center">
   <img src="assets/package-guide.svg" alt="KG-next package guide" width="100%" />
@@ -103,7 +99,7 @@ NVIDIA と TensorRT:
 
 ## 3 ステップで開始
 
-1. [安定版ダウンロード](https://goagent.top/download/) から環境に合うものを選び、インストーラ、Linux、過去版が必要な場合は GitHub Releases を使います。
+1. [安定版ダウンロード](https://github.com/22nsuk/KG-next/releases) から環境に合うものを選びます。
 2. `野狐棋譜` を開いて野狐のニックネームを入力します。
 3. 棋譜を取得し、全局を素早く解析して、グラフと概要から重要な手へ移動します。
 
@@ -179,7 +175,7 @@ readboard の継続的な保守と改善に取り組む [qiyi71w](https://github
 
 <p align="left">
   <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="KG-next のコントリビューター" />
+    <img src="https://contrib.rocks/image?repo=22nsuk/KG-next" alt="KG-next のコントリビューター" />
   </a>
 </p>
 
