@@ -5,15 +5,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
-  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="เว็บไซต์ทางการ"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/22nsuk/KG-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/22nsuk/KG-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/22nsuk/KG-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Upstream-LizzieYzy%20Next-0b6b3a" alt="LizzieYzy Next (upstream)"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · <a href="README_EN.md">English</a> · <a href="README_JA.md">日本語</a> · <a href="README_KO.md">한국어</a> · ภาษาไทย
+  <a href="README_ZH_CN.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · <a href="README_EN.md">English</a> · <a href="README_JA.md">日本語</a> · <a href="README_KO.md">한국어</a> · ภาษาไทย
 </p>
 
 <p align="center">
@@ -22,11 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="https://goagent.top/"><strong>เว็บไซต์ทางการ</strong></a>
+  <a href="https://goagent.top/"><strong>โปรเจกต์ต้นทาง: LizzieYzy Next</strong></a>
   ·
-  <a href="https://goagent.top/download/"><strong>ดาวน์โหลดเวอร์ชันเสถียร</strong></a>
-  ·
-  <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>ดาวน์โหลดจาก Baidu</strong></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><strong>รุ่นเผยแพร่ KG-next</strong></a>
   ·
   <a href="docs/INSTALL.md"><strong>คู่มือติดตั้ง</strong></a>
   ·
@@ -34,11 +32,7 @@
 </p>
 
 > [!NOTE]
-> แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่ดาวน์โหลดเวอร์ชันเสถียรจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
->
-> ผู้ใช้ในจีนแผ่นดินใหญ่สามารถดาวน์โหลดจาก Baidu Netdisk สาธารณะได้เช่นกัน:
-> [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
-> รหัสแตกไฟล์: `3i8w`
+> ดาวน์โหลด KG-next จาก [รุ่นเผยแพร่ KG-next](https://github.com/22nsuk/KG-next/releases) โดยเลือกเฉพาะไฟล์ที่มีอยู่ในรุ่นนั้น เว็บไซต์และไฟล์ดาวน์โหลดของโปรเจกต์ต้นทางเป็นของ LizzieYzy Next ไม่ใช่ KG-next
 
 > [!TIP]
 > [กลุ่ม QQ ภาษาจีน: 299419120](https://qm.qq.com/q/JZoeojjteg)
@@ -65,8 +59,6 @@
 หากมีเซิร์ฟเวอร์ Linux x86_64 ที่ใช้ NVIDIA GPU แต่ยังไม่มีลิงก์ `WSS` ให้ใช้ [KataGo Remote One-Click](https://github.com/wimi321/katago-remote-one-click) เพียงเรียกคำสั่งเดียวบนเซิร์ฟเวอร์เพื่อสร้างลิงก์เข้ารหัสและคิวอาร์โค้ด จากนั้นวางหรือนำเข้าใน `คอมพิวเตอร์ระยะไกล -> คอมพิวเตอร์ที่ตั้งค่าเอง` โดยไม่ต้องเปิดพอร์ตรับสาธารณะ
 
 ## เลือกดาวน์โหลดตัวไหน
-
-แนะนำให้ผู้ใช้ในจีนแผ่นดินใหญ่เลือกเวอร์ชันเสถียรที่ใช้บ่อยจาก [หน้าดาวน์โหลดอย่างเป็นทางการ](https://goagent.top/download/) ส่วน installer, แพ็กเกจ Linux และเวอร์ชันเก่าสามารถดาวน์โหลดได้จาก [GitHub Releases](https://github.com/22nsuk/KG-next/releases)
 
 <p align="center">
   <img src="assets/package-guide.svg" alt="คู่มือเลือกแพ็กเกจ KG-next" width="100%" />
@@ -103,7 +95,7 @@
 
 ## เริ่มต้นใน 3 ขั้นตอน
 
-1. ไปที่ [ดาวน์โหลดเวอร์ชันเสถียร](https://goagent.top/download/) และเลือกแพ็กเกจที่เหมาะกับระบบของคุณ ส่วน installer, Linux และเวอร์ชันเก่าให้ใช้ GitHub Releases
+1. ไปที่ [รุ่นเผยแพร่ KG-next](https://github.com/22nsuk/KG-next/releases) และเลือกแพ็กเกจที่เหมาะกับระบบของคุณ
 2. เปิด `Fox Kifu` แล้วใส่ชื่อเล่น Fox
 3. หลังจากดึงเกมแล้ว ให้รันการวิเคราะห์ทั้งกระดานรวดเร็ว ใช้กราฟอัตราชนะและภาพรวมด้านล่างเพื่อหาจังหวะสำคัญ
 
@@ -179,7 +171,7 @@
 
 <p align="left">
   <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="ผู้ร่วมพัฒนา KG-next" />
+    <img src="https://contrib.rocks/image?repo=22nsuk/KG-next" alt="ผู้ร่วมพัฒนา KG-next" />
   </a>
 </p>
 

@@ -5,15 +5,15 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/wimi321/lizzieyzy-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
-  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/wimi321/lizzieyzy-next?style=flat&color=444444" alt="Stars"></a>
-  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/wimi321/lizzieyzy-next/total?label=Downloads&color=666666" alt="Downloads"></a>
-  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Website-goagent.top-0b6b3a" alt="Official website"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/v/release/22nsuk/KG-next?display_name=tag&label=Release&color=111111" alt="Release"></a>
+  <a href="https://github.com/22nsuk/KG-next/stargazers"><img src="https://img.shields.io/github/stars/22nsuk/KG-next?style=flat&color=444444" alt="Stars"></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><img src="https://img.shields.io/github/downloads/22nsuk/KG-next/total?label=Downloads&color=666666" alt="Downloads"></a>
+  <a href="https://goagent.top/"><img src="https://img.shields.io/badge/Upstream-LizzieYzy%20Next-0b6b3a" alt="LizzieYzy Next (upstream)"></a>
   <img src="https://img.shields.io/badge/Platforms-Windows%20%7C%20macOS%20%7C%20Linux-888888" alt="Platforms">
 </p>
 
 <p align="center">
-  <a href="README.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · English · <a href="README_JA.md">日本語</a> · <a href="README_KO.md">한국어</a> · <a href="README_TH.md">ภาษาไทย</a>
+  <a href="README_ZH_CN.md">简体中文</a> · <a href="README_ZH_TW.md">繁體中文</a> · English · <a href="README_JA.md">日本語</a> · <a href="README_KO.md">한국어</a> · <a href="README_TH.md">ภาษาไทย</a>
 </p>
 
 <p align="center">
@@ -22,11 +22,9 @@
 </p>
 
 <p align="center">
-  <a href="https://goagent.top/"><strong>Official Website</strong></a>
+  <a href="https://goagent.top/"><strong>Upstream: LizzieYzy Next</strong></a>
   ·
-  <a href="https://goagent.top/download/"><strong>Stable Downloads</strong></a>
-  ·
-  <a href="https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w"><strong>Baidu Download</strong></a>
+  <a href="https://github.com/22nsuk/KG-next/releases"><strong>KG-next Releases</strong></a>
   ·
   <a href="docs/INSTALL_EN.md"><strong>Installation Guide</strong></a>
   ·
@@ -34,11 +32,7 @@
 </p>
 
 > [!NOTE]
-> Users in mainland China are encouraged to use the [official download page](https://goagent.top/download/) for stable builds. Installers, Linux packages, and older versions remain available from [GitHub Releases](https://github.com/22nsuk/KG-next/releases).
->
-> For users in mainland China, a public Baidu Netdisk download is available:
-> [https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w](https://pan.baidu.com/s/1wthaL8YwGMxy_u0U7Mabpw?pwd=3i8w)
-> Extraction code: `3i8w`
+> Download KG-next from [KG-next Releases](https://github.com/22nsuk/KG-next/releases). Only the assets listed on the selected release are available. The upstream website and its downloads belong to LizzieYzy Next, not KG-next.
 
 > [!TIP]
 > [Chinese QQ group: 299419120](https://qm.qq.com/q/JZoeojjteg)
@@ -65,8 +59,6 @@ Saved login details are protected by Windows DPAPI, macOS Keychain, or Linux Sec
 If you have a Linux x86_64 NVIDIA GPU server but no `WSS` link yet, use [KataGo Remote One-Click](https://github.com/wimi321/katago-remote-one-click). Run one command on the server to generate an encrypted link and QR code, then paste or import it under `Remote Compute -> Custom Compute`; no public inbound port is required.
 
 ## What to download first
-
-Users in mainland China are encouraged to choose common stable builds from the [official download page](https://goagent.top/download/). Installers, Linux packages, and older versions are available from [GitHub Releases](https://github.com/22nsuk/KG-next/releases).
 
 <p align="center">
   <img src="assets/package-guide.svg" alt="KG-next package guide" width="100%" />
@@ -103,7 +95,7 @@ NVIDIA and TensorRT notes:
 
 ## Start in 3 steps
 
-1. Download the right stable package from [Stable Downloads](https://goagent.top/download/); use GitHub Releases for installers, Linux, or older versions.
+1. Download the appropriate package from [KG-next Releases](https://github.com/22nsuk/KG-next/releases).
 2. Open `Fox Kifu` and enter a Fox nickname.
 3. Fetch the games, run fast full-game analysis, and use the graph plus overview to jump to important moves.
 
@@ -179,7 +171,7 @@ Thanks to everyone who has contributed:
 
 <p align="left">
   <a href="https://github.com/22nsuk/KG-next/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=wimi321/lizzieyzy-next" alt="KG-next contributors" />
+    <img src="https://contrib.rocks/image?repo=22nsuk/KG-next" alt="KG-next contributors" />
   </a>
 </p>
 
