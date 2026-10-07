@@ -112,7 +112,6 @@ def load_bundle_metadata() -> dict[str, str]:
             'windows_bundle': r'WINDOWS_ASSET="\$\{WINDOWS_ASSET:-([^"]+)\}"',
             'windows_opencl_bundle': r'WINDOWS_OPENCL_ASSET="\$\{WINDOWS_OPENCL_ASSET:-([^"]+)\}"',
             'windows_nvidia_bundle': r'WINDOWS_NVIDIA_ASSET="\$\{WINDOWS_NVIDIA_ASSET:-([^"]+)\}"',
-            'windows_nvidia50_cuda_bundle': r'WINDOWS_NVIDIA50_CUDA_ASSET="\$\{WINDOWS_NVIDIA50_CUDA_ASSET:-([^"]+)\}"',
             'linux_bundle': r'LINUX_ASSET="\$\{LINUX_ASSET:-([^"]+)\}"',
             'linux_opencl_bundle': r'LINUX_OPENCL_ASSET="\$\{LINUX_OPENCL_ASSET:-([^"]+)\}"',
             'linux_nvidia_bundle': r'LINUX_NVIDIA_ASSET="\$\{LINUX_NVIDIA_ASSET:-([^"]+)\}"',
@@ -132,7 +131,6 @@ def load_bundle_metadata() -> dict[str, str]:
             'windows_bundle',
             'windows_opencl_bundle',
             'windows_nvidia_bundle',
-            'windows_nvidia50_cuda_bundle',
             'linux_bundle',
             'linux_opencl_bundle',
             'linux_nvidia_bundle',
@@ -7038,60 +7036,6 @@ def build_next_2026_06_18_1_notes(
     return notes
 
 
-def build_next_2026_06_20_1_notes(
-    asset_map: dict[str, str | None],
-    bundle: dict[str, str],
-    repo: str,
-    release_tag: str | None,
-) -> str:
-    notes = build_next_2026_06_18_1_notes(asset_map, bundle, repo, release_tag)
-    additions = {
-        '- 棋力评估主卡改为显示用户能理解的棋力区间，评分规则改成短标签，避免 `1.0段` 这类内部值和省略号误导用户。\n':
-            '- 加载野狐、腾讯、共享棋谱和弈客 SGF 后，胜率曲线启动更快；启用自动快速分析时会预热专用 KataGo 分析引擎，连续看谱不用反复等待冷启动。\n'
-            '- 打开新棋谱前会清理旧的快速分析队列，避免上一盘棋的排队任务拖慢当前棋谱；胜率图命中和同步诊断路径也做了回归加固。\n'
-            '- 多语言 README 补充官方网站入口，用户从 GitHub 文档可以更直接找到项目主页。\n',
-        '- 棋力評估主卡改為顯示使用者能理解的棋力區間，評分規則改成短標籤，避免 `1.0段` 這類內部值和省略號誤導使用者。\n':
-            '- 載入野狐、騰訊、共享棋譜和弈客 SGF 後，勝率曲線啟動更快；啟用自動快速分析時會預熱專用 KataGo 分析引擎，連續看譜不用反覆等待冷啟動。\n'
-            '- 開啟新棋譜前會清理舊的快速分析佇列，避免上一盤棋的排隊任務拖慢目前棋譜；勝率圖命中和同步診斷路徑也做了回歸加固。\n'
-            '- 多語言 README 補充官方網站入口，使用者從 GitHub 文件可以更直接找到專案首頁。\n',
-        '- Player Strength cards now show user-facing strength bands, and the score-scale labels are shorter so internal values such as `1.0 dan` and clipped ellipses no longer confuse users.\n':
-            '- Winrate curves now start faster after loading Fox, Tencent, shared-kifu, and Yike SGF records. When automatic quick analysis is enabled, a dedicated KataGo analysis engine is prewarmed so consecutive kifu reviews no longer wait on repeated cold starts.\n'
-            '- Opening a new kifu now clears stale queued quick-analysis work before starting the current game, reducing delays caused by previous reviews. Winrate-graph hit detection and sync-diagnostics path handling were also hardened.\n'
-            '- The multilingual README files now link the official website so users can reach the project homepage more directly from GitHub.\n',
-        '- 棋力評価カードはユーザー向けの棋力区間を表示し、スコア尺度ラベルを短くしました。`1.0段` のような内部値や省略表示で迷わないようにしています。\n':
-            '- 野狐、Tencent、共有棋譜、弈客 SGF を読み込んだ後の勝率曲線の立ち上がりを高速化しました。自動クイック分析が有効な場合は専用 KataGo 分析エンジンを事前に温め、連続レビューで毎回 cold start を待たないようにしています。\n'
-            '- 新しい棋譜を開く前に古いクイック分析キューを整理し、前の棋譜の待ち行列が現在の棋譜を遅らせないようにしました。勝率グラフのヒット判定と同期診断のパス処理も強化しています。\n'
-            '- 多言語 README に公式サイトへのリンクを追加し、GitHub のドキュメントからプロジェクトホームへ直接移動しやすくしました。\n',
-        '- Player Strength 카드는 사용자에게 이해되는 기력 구간을 표시하고 score-scale label 을 짧게 바꿔 `1.0 dan` 같은 내부 값이나 잘린 말줄임표로 혼동하지 않게 했습니다.\n':
-            '- Fox, Tencent, shared kifu, Yike SGF 를 불러온 뒤 승률 곡선이 더 빨리 시작됩니다. 자동 quick analysis 가 켜져 있으면 전용 KataGo analysis engine 을 미리 예열해 연속 기보 리뷰에서 반복 cold start 를 기다리지 않게 했습니다.\n'
-            '- 새 기보를 열기 전에 오래된 quick-analysis queue 를 정리해 이전 기보의 대기 작업이 현재 기보를 늦추지 않게 했습니다. Winrate graph hit detection 과 sync diagnostics path handling 도 더 단단하게 보강했습니다.\n'
-            '- 다국어 README 에 official website 링크를 추가해 GitHub 문서에서 프로젝트 홈페이지로 더 쉽게 이동할 수 있습니다.\n',
-        '- การ์ด Player Strength แสดงช่วงระดับที่ผู้ใช้เข้าใจง่ายขึ้น และย่อ label ของ score scale เพื่อไม่ให้ค่า internal อย่าง `1.0 dan` หรือข้อความที่ถูกตัดทำให้สับสน\n':
-            '- กราฟ winrate เริ่มทำงานเร็วขึ้นหลังโหลด SGF จาก Fox, Tencent, shared kifu และ Yike เมื่อเปิด automatic quick analysis โปรแกรมจะ prewarm KataGo analysis engine เฉพาะไว้ ทำให้การเปิดหลาย kifu ต่อเนื่องไม่ต้องรอ cold start ซ้ำ\n'
-            '- ก่อนเปิด kifu ใหม่ โปรแกรมจะล้าง quick-analysis queue เก่าก่อน เพื่อลดการหน่วงจากงานวิเคราะห์ของเกมก่อนหน้า และยังเสริมความเสถียรของ winrate graph hit detection กับ sync diagnostics path handling\n'
-            '- README หลายภาษาเพิ่มลิงก์ official website เพื่อให้ผู้ใช้จาก GitHub เข้า project homepage ได้ตรงขึ้น\n',
-    }
-    why_additions = {
-        '- 本版继续按“用户实际会点哪里”的方式做了本机启动检查，顺手修掉棋力评估显示里会误导普通用户的内部评分文案。\n':
-            '- 本版重点复测了“下载/打开棋谱后胜率曲线不应让用户等太久”的路径，并保留 GitHub Actions 的 Windows 升级 smoke、macOS/Linux 打包校验和 release notes 真实资产生成。\n',
-        '- 本版繼續按「使用者實際會點哪裡」的方式做了本機啟動檢查，順手修掉棋力評估顯示裡會誤導一般使用者的內部評分文案。\n':
-            '- 本版重點複測了「下載/開啟棋譜後勝率曲線不應讓使用者等太久」的路徑，並保留 GitHub Actions 的 Windows 升級 smoke、macOS/Linux 打包校驗和 release notes 真實資產生成。\n',
-        '- This build was checked from a user-flow perspective again, and the Player Strength display wording was cleaned up where internal score values could mislead everyday users.\n':
-            '- This build focuses on the path where users load or download a kifu and expect the winrate curve to become useful quickly, with GitHub Actions still covering Windows upgrade smoke, macOS/Linux packaging checks, and release notes generated from real uploaded assets.\n',
-        '- 今回も実際のユーザーフローに近い形でローカル起動確認を行い、棋力評価で内部スコア表示が一般ユーザーを迷わせる箇所を修正しました。\n':
-            '- 今回は、棋譜をダウンロードまたは開いた後に勝率曲線を早く使えるようにする経路を重点的に確認しました。GitHub Actions では Windows upgrade smoke、macOS/Linux packaging checks、実際のアップロード済み asset からの release notes 生成も継続しています。\n',
-        '- 이번 빌드도 실제 사용자가 누르는 흐름에 가깝게 로컬 실행 점검을 했고, Player Strength 화면에서 내부 점수 표현이 일반 사용자를 혼동시키는 부분을 정리했습니다.\n':
-            '- 이번 버전은 사용자가 기보를 다운로드하거나 연 뒤 승률 곡선을 빨리 활용할 수 있어야 하는 흐름을 중점 확인했습니다. GitHub Actions 에서는 Windows upgrade smoke, macOS/Linux packaging check, 실제 업로드 asset 기반 release notes 생성도 계속 검증합니다.\n',
-        '- build นี้ตรวจจากมุมมอง user flow อีกครั้ง และปรับข้อความ Player Strength ที่เป็น internal score ไม่ให้ทำให้ผู้ใช้ทั่วไปสับสน\n':
-            '- build นี้เน้นตรวจ flow ที่ผู้ใช้โหลดหรือเปิด kifu แล้วต้องการให้กราฟ winrate ใช้งานได้เร็วขึ้น พร้อมให้ GitHub Actions ตรวจ Windows upgrade smoke, macOS/Linux packaging และสร้าง release notes จาก asset ที่อัปโหลดจริงต่อไป\n',
-    }
-    for anchor, extra in additions.items():
-        notes = notes.replace(anchor, anchor + extra)
-    for anchor, extra in why_additions.items():
-        notes = notes.replace(anchor, anchor + extra)
-    return notes
-
-
 def build_next_2026_06_20_1_clean_notes(
     asset_map: dict[str, str | None],
     bundle: dict[str, str],
@@ -7817,109 +7761,6 @@ def build_next_2026_07_01_1_notes(
             'ถ้าคุณใช้ Zhizi Cloud, remote compute หรือ quick winrate curve รุ่นนี้จะลดความรู้สึกว่า analysis หยุดเงียบ ๆ ไปเอง',
         'release notes นี้เน้น Remote Compute interaction changes จาก PR #85 และไม่ซ้ำรายละเอียดของ release เก่ากว่า':
             'release notes นี้เน้น Remote Compute และ quick-curve stability changes จาก PR #87 และไม่ซ้ำรายละเอียดของ release เก่ากว่า',
-    }
-    for old, new in replacements.items():
-        notes = notes.replace(old, new)
-    return notes
-
-
-def build_next_2026_07_02_1_prerelease_notes(
-    asset_map: dict[str, str | None],
-    bundle: dict[str, str],
-    repo: str,
-    release_tag: str | None,
-) -> str:
-    notes = build_next_2026_07_01_1_notes(asset_map, bundle, repo, release_tag)
-    replacements = {
-        '这一版聚焦远程算力稳定性和快速胜率曲线：智子云算力/自建算力的重连状态更清楚，快速胜率曲线生成中点击胜率图跳手不会让分析停住，曲线跑完后会更快恢复棋盘上的实时分析。':
-            '这一版聚焦加载棋谱后的快速胜率曲线稳定性：修复加载 SGF、野狐/腾讯棋谱后快速曲线偶发不出的情况，并让远程算力桥接异常时不再卡住后台曲线队列。',
-        '远程算力连接状态更稳：减少不必要的反复重连，断线时保留当前状态并给出更清楚的恢复提示。':
-            '加载棋谱后的自动快速分析增加防抖和补发保护，旧棋谱的延迟恢复不会覆盖新棋谱，第一次静默分析消失时会自动重试。',
-        '智子云算力和自建算力的启用状态继续收紧，已启用时不会重复触发连接；修改连接方式后才允许重新启用。':
-            '远程 `kata-raw-nn` 空返回会自动降级到 `kata-analyze`，远程 `stop` 没有确认也不会让后续节点一直等待。',
-        '快速胜率曲线生成过程中，点击胜率图跳到某一手不再中断后台曲线分析。':
-            '快速曲线完成或异常结束后会恢复当前局面的棋盘分析，减少“曲线有了但选点迟迟不动”的感觉。',
-        '快速胜率曲线结束后会主动恢复当前局面的棋盘分析，避免用户等很久才看到选点。':
-            '棋力评估的一选率改为严格按 AI 首选统计，不再把低损失的“最佳档”误算成一选；大棋盘下一手虚线圈也保持在候选点上层，更容易分辨。',
-        '如果你使用智子云算力、远程算力或快速胜率曲线，这一版能明显减少“看起来停住了”的感觉。':
-            '如果你经常加载棋谱后马上看快速胜率曲线或棋力评估，这一版会更稳定、数据也更容易解释。',
-        '这一版只写 PR #87 的远程算力与快速曲线稳定性变化，不重复更早版本已经介绍过的内容。':
-            '这一版只写 PR #88 的棋谱加载、快速曲线和棋力评估修复，不重复更早版本已经介绍过的内容。',
-
-        '這一版聚焦遠端算力穩定性和快速勝率曲線：智子雲算力/自建算力的重連狀態更清楚，快速勝率曲線生成中點擊勝率圖跳手不會讓分析停住，曲線跑完後會更快恢復棋盤上的即時分析。':
-            '這一版聚焦載入棋譜後的快速勝率曲線穩定性：修復載入 SGF、野狐/騰訊棋譜後快速曲線偶爾不出現的情況，並讓遠端算力橋接異常時不再卡住背景曲線佇列。',
-        '遠端算力連線狀態更穩：減少不必要的反覆重連，斷線時保留目前狀態並給出更清楚的恢復提示。':
-            '載入棋譜後的自動快速分析增加防抖和補發保護，舊棋譜的延遲恢復不會覆蓋新棋譜，第一次靜默分析消失時會自動重試。',
-        '智子雲算力和自建算力的啟用狀態繼續收緊，已啟用時不會重複觸發連線；修改連線方式後才允許重新啟用。':
-            '遠端 `kata-raw-nn` 空返回會自動降級到 `kata-analyze`，遠端 `stop` 沒有確認也不會讓後續節點一直等待。',
-        '快速勝率曲線生成過程中，點擊勝率圖跳到某一手不再中斷背景曲線分析。':
-            '快速曲線完成或異常結束後會恢復目前局面的棋盤分析，減少「曲線有了但選點遲遲不動」的感覺。',
-        '快速勝率曲線結束後會主動恢復目前局面的棋盤分析，避免使用者等很久才看到選點。':
-            '棋力評估的一選率改為嚴格按 AI 首選統計，不再把低損失的「最佳檔」誤算成一選；大棋盤下一手虛線圈也保持在候選點上層，更容易分辨。',
-        '如果你使用智子雲算力、遠端算力或快速勝率曲線，這一版能明顯減少「看起來停住了」的感覺。':
-            '如果你經常載入棋譜後馬上看快速勝率曲線或棋力評估，這一版會更穩定、資料也更容易解讀。',
-        '這一版只寫 PR #87 的遠端算力與快速曲線穩定性變化，不重複更早版本已經介紹過的內容。':
-            '這一版只寫 PR #88 的棋譜載入、快速曲線和棋力評估修復，不重複更早版本已經介紹過的內容。',
-
-        'This prerelease focuses on Remote Compute stability and quick winrate curves: Zhizi Cloud and self-hosted reconnect states are clearer, clicking the winrate graph during quick-curve generation no longer stops analysis, and board analysis resumes sooner after the curve finishes.':
-            'This prerelease focuses on quick winrate stability after loading game records: it fixes intermittent missing quick curves after SGF, Fox, or Tencent kifu loads, and keeps remote-compute bridge edge cases from stalling the background curve queue.',
-        'Remote Compute connection state is more stable, with fewer unnecessary reconnect loops and clearer recovery messages when a session drops.':
-            'Post-load automatic quick analysis now has debounce and retry protection: stale delayed resumes from older records cannot override the latest load, and a vanished first silent analysis dispatch is retried.',
-        'Zhizi Cloud and self-hosted compute keep tighter enabled-state handling: active connections cannot be triggered again unless the connection choice changes.':
-            'An empty remote `kata-raw-nn` success falls back to `kata-analyze`, and a remote `stop` without an acknowledgement no longer leaves later nodes waiting forever.',
-        'Clicking the winrate graph to jump to a move during quick winrate generation no longer interrupts the background curve analysis.':
-            'When quick-curve analysis completes or aborts, current-board candidate analysis resumes so the graph does not appear while board suggestions stay idle.',
-        'When quick winrate generation finishes, the current-board analysis resumes proactively so candidates do not appear only after a long wait.':
-            'Strength evaluation now counts AI first-choice hits strictly instead of treating low-loss “best tier” moves as first choices, and the main-board next-move dashed outline stays above candidate markers.',
-        'If you use Zhizi Cloud, remote compute, or quick winrate curves, this build should feel much less like the analysis has silently stalled.':
-            'If you often load a record and immediately check quick curves or strength evaluation, this build should feel more reliable and easier to interpret.',
-        'These notes only cover the Remote Compute and quick-curve stability changes from PR #87, without repeating older release highlights.':
-            'These notes only cover the kifu-load, quick-curve, and strength-evaluation fixes from PR #88, without repeating older release highlights.',
-
-        'この prerelease は Remote Compute の安定性と quick winrate curve を改善した版です。Zhizi Cloud / self-hosted の reconnect 状態を分かりやすくし、quick curve 生成中に winrate graph をクリックしても分析が止まらず、curve 完了後は board analysis がより早く再開します。':
-            'この prerelease は棋譜読み込み後の quick winrate curve の安定性を改善した版です。SGF、Fox、Tencent kifu の読み込み後に quick curve が出ないことがある問題を修正し、remote compute bridge の異常系でも background curve queue が止まらないようにしました。',
-        'Remote Compute の connection state をより安定させ、不要な reconnect loop を減らし、切断時の recovery message も分かりやすくしました。':
-            '読み込み後の自動 quick analysis に debounce と retry protection を追加しました。古い棋譜の delayed resume が新しい読み込みを上書きせず、最初の silent analysis dispatch が消えた場合は自動 retry します。',
-        'Zhizi Cloud と self-hosted compute は enabled state をさらに厳密に扱い、有効化済みの場合は connection choice を変更するまで再度 trigger しません。':
-            'remote `kata-raw-nn` の空 success は `kata-analyze` に fallback し、remote `stop` の ack が無くても後続 node が待ち続けません。',
-        'quick winrate 生成中に winrate graph をクリックして手を移動しても、background curve analysis が中断されなくなりました。':
-            'quick curve analysis が完了または abort した後、current-board candidate analysis を再開し、graph だけ出て候補手が止まる状態を減らします。',
-        'quick winrate 生成が完了すると、現在局面の board analysis を能動的に再開し、candidate 表示を長く待たないようにしました。':
-            '棋力評価の AI first-choice rate は strict な AI 一選だけを数えるようになり、低損失の “best tier” を一選として数えません。大盤の next-move dashed outline も candidate marker の上に表示します。',
-        'Zhizi Cloud、remote compute、quick winrate curve を使う場合、この build は「分析が止まったように見える」場面を減らします。':
-            '棋譜を読み込んですぐ quick curve や棋力評価を見る人にとって、この build はより安定し、数字も解釈しやすくなります。',
-        'この説明は PR #87 の Remote Compute と quick-curve stability changes に絞り、より古い release highlights は繰り返しません。':
-            'この説明は PR #88 の kifu-load、quick-curve、strength-evaluation fixes に絞り、より古い release highlights は繰り返しません。',
-
-        '이번 prerelease 는 Remote Compute 안정성과 quick winrate curve 를 개선합니다. Zhizi Cloud / self-hosted reconnect 상태가 더 명확해지고, quick curve 생성 중 winrate graph 를 클릭해도 분석이 멈추지 않으며, curve 완료 뒤 board analysis 가 더 빨리 재개됩니다.':
-            '이번 prerelease 는 기보 로드 뒤 quick winrate curve 안정성에 집중합니다. SGF, Fox, Tencent kifu 로드 뒤 quick curve 가 가끔 나오지 않는 문제를 고치고, remote-compute bridge 예외 상황에서도 background curve queue 가 멈추지 않게 했습니다.',
-        'Remote Compute connection state 를 더 안정적으로 만들고 불필요한 reconnect loop 를 줄였으며, session 이 끊겼을 때 recovery message 를 더 명확히 했습니다.':
-            '로드 후 자동 quick analysis 에 debounce 와 retry protection 을 추가했습니다. 오래된 기보의 delayed resume 이 최신 로드를 덮지 않고, 첫 silent analysis dispatch 가 사라지면 자동 retry 합니다.',
-        'Zhizi Cloud 와 self-hosted compute 의 enabled-state 처리를 더 엄격하게 하여, connection choice 가 바뀌기 전에는 active connection 을 다시 trigger 하지 않습니다.':
-            'remote `kata-raw-nn` 이 빈 success 를 반환하면 `kata-analyze` 로 fallback 하고, remote `stop` ack 가 없어도 뒤 node 가 계속 기다리지 않습니다.',
-        'quick winrate 생성 중 winrate graph 를 클릭해 특정 수로 이동해도 background curve analysis 가 중단되지 않습니다.':
-            'quick-curve analysis 가 완료되거나 abort 된 뒤 current-board candidate analysis 를 재개해, graph 는 있는데 board suggestions 가 멈춰 있는 느낌을 줄였습니다.',
-        'quick winrate 생성이 끝나면 현재 국면의 board analysis 를 능동적으로 재개해 candidate 표시를 오래 기다리지 않게 했습니다.':
-            'strength evaluation 은 AI first-choice hit 를 strict 하게 계산해 low-loss “best tier” 를 일선으로 세지 않습니다. 큰 board 의 next-move dashed outline 도 candidate marker 위에 표시됩니다.',
-        'Zhizi Cloud, remote compute, quick winrate curve 를 쓴다면 이번 build 는 분석이 조용히 멈춘 것처럼 보이는 상황을 줄입니다.':
-            '기보를 로드한 직후 quick curve 나 strength evaluation 을 자주 확인한다면, 이번 build 는 더 안정적이고 해석하기 쉽습니다.',
-        '이번 설명은 PR #87 의 Remote Compute 및 quick-curve stability changes 만 다루며, 더 오래된 release highlights 는 반복하지 않습니다.':
-            '이번 설명은 PR #88 의 kifu-load, quick-curve, strength-evaluation fixes 만 다루며, 더 오래된 release highlights 는 반복하지 않습니다.',
-
-        'prerelease นี้เน้นความเสถียรของ Remote Compute และ quick winrate curve: สถานะ reconnect ของ Zhizi Cloud / self-hosted ชัดขึ้น, การคลิก winrate graph ระหว่างสร้าง quick curve จะไม่หยุด analysis, และหลัง curve เสร็จ board analysis จะกลับมาเร็วขึ้น':
-            'prerelease นี้เน้นความเสถียรของ quick winrate หลังโหลด game record: แก้ปัญหา quick curve ไม่ขึ้นเป็นบางครั้งหลังโหลด SGF, Fox หรือ Tencent kifu และไม่ให้ edge case ของ remote-compute bridge ทำให้ background curve queue ค้าง',
-        'สถานะ connection ของ Remote Compute เสถียรขึ้น ลด reconnect loop ที่ไม่จำเป็น และแสดง recovery message ชัดขึ้นเมื่อ session หลุด':
-            'automatic quick analysis หลังโหลดเพิ่ม debounce และ retry protection: delayed resume จาก record เก่าจะไม่ override การโหลดล่าสุด และ silent analysis dispatch ครั้งแรกที่หายไปจะ retry อัตโนมัติ',
-        'Zhizi Cloud และ self-hosted compute จัดการ enabled-state เข้มขึ้น: ถ้า connection active อยู่ จะไม่ trigger ซ้ำจนกว่าจะเปลี่ยน connection choice':
-            'remote `kata-raw-nn` ที่ตอบ success ว่างจะ fallback เป็น `kata-analyze` และ remote `stop` ที่ไม่มี acknowledgement จะไม่ทำให้ node ถัด ๆ ไปรอไม่จบ',
-        'ระหว่าง quick winrate generation การคลิก winrate graph เพื่อข้ามไป move ใด ๆ จะไม่ interrupt background curve analysis อีกต่อไป':
-            'เมื่อ quick-curve analysis จบหรือ abort ระบบจะ resume current-board candidate analysis เพื่อลดอาการ graph มาแล้วแต่ board suggestions ยังนิ่ง',
-        'เมื่อ quick winrate generation เสร็จ ระบบจะ resume board analysis ของตำแหน่งปัจจุบันแบบ proactive เพื่อไม่ให้ต้องรอนานกว่าจะเห็น candidate':
-            'strength evaluation นับ AI first-choice hit แบบ strict ไม่เอา low-loss “best tier” มานับเป็น first choice และ dashed outline ของ next move บน board หลักจะแสดงอยู่เหนือ candidate markers',
-        'ถ้าคุณใช้ Zhizi Cloud, remote compute หรือ quick winrate curve รุ่นนี้จะลดความรู้สึกว่า analysis หยุดเงียบ ๆ ไปเอง':
-            'ถ้าคุณมักโหลด record แล้วดู quick curve หรือ strength evaluation ทันที รุ่นนี้จะเสถียรกว่าและอ่านผลได้ง่ายขึ้น',
-        'release notes นี้เน้น Remote Compute และ quick-curve stability changes จาก PR #87 และไม่ซ้ำรายละเอียดของ release เก่ากว่า':
-            'release notes นี้เน้น kifu-load, quick-curve และ strength-evaluation fixes จาก PR #88 และไม่ซ้ำรายละเอียดของ release เก่ากว่า',
     }
     for old, new in replacements.items():
         notes = notes.replace(old, new)
