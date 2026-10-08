@@ -237,6 +237,7 @@ UNITTEST_MODULES = (
     "scripts.test_transfer_pinned_source_assets",
     "scripts.test_verify_saved_release_assets",
     "scripts.test_windows_download_guidance",
+    "scripts.test_macos_product_acceptance",
 )
 
 BASH_SYNTAX_FILES = (
