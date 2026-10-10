@@ -51,7 +51,6 @@ def load_bundle_metadata() -> dict[str, str]:
         'windows_opencl_bundle': 'Unknown',
         'windows_nvidia_bundle': 'Unknown',
         'windows_nvidia_cuda13_bundle': 'Unknown',
-        'windows_nvidia50_cuda_bundle': 'Unknown',
         'linux_bundle': 'Unknown',
         'linux_opencl_bundle': 'Unknown',
         'linux_nvidia_bundle': 'Unknown',
@@ -73,8 +72,6 @@ def load_bundle_metadata() -> dict[str, str]:
                 metadata['windows_nvidia_bundle'] = value
             elif key == 'windows nvidia cuda13 bundle':
                 metadata['windows_nvidia_cuda13_bundle'] = value
-            elif key == 'windows nvidia 50 cuda bundle':
-                metadata['windows_nvidia50_cuda_bundle'] = value
             elif key == 'linux bundle':
                 metadata['linux_bundle'] = value
             elif key == 'linux opencl bundle':
@@ -96,9 +93,6 @@ def load_bundle_metadata() -> dict[str, str]:
                 'windows_opencl_bundle': assets['windows-opencl']['assetName'],
                 'windows_nvidia_bundle': assets['windows-nvidia']['assetName'],
                 'windows_nvidia_cuda13_bundle': assets['windows-nvidia-cuda13']['assetName'],
-                # Historical note builders still expose this compatibility field. The current
-                # release deliberately uses the same unified CUDA asset for every RTX generation.
-                'windows_nvidia50_cuda_bundle': assets['windows-nvidia']['assetName'],
                 'linux_bundle': assets['linux-cpu']['assetName'],
                 'linux_opencl_bundle': assets['linux-opencl']['assetName'],
                 'linux_nvidia_bundle': assets['linux-nvidia']['assetName'],
@@ -143,7 +137,6 @@ def load_bundle_metadata() -> dict[str, str]:
         metadata['windows_bundle'] = metadata['windows_bundle'].replace('${KATAGO_TAG}', katago_version)
         metadata['windows_opencl_bundle'] = metadata['windows_opencl_bundle'].replace('${KATAGO_TAG}', katago_version)
         metadata['windows_nvidia_bundle'] = metadata['windows_nvidia_bundle'].replace('${KATAGO_TAG}', katago_version)
-        metadata['windows_nvidia50_cuda_bundle'] = metadata['windows_nvidia50_cuda_bundle'].replace('${KATAGO_TAG}', katago_version)
         metadata['linux_bundle'] = metadata['linux_bundle'].replace('${KATAGO_TAG}', katago_version)
         metadata['linux_opencl_bundle'] = metadata['linux_opencl_bundle'].replace('${KATAGO_TAG}', katago_version)
         metadata['linux_nvidia_bundle'] = metadata['linux_nvidia_bundle'].replace('${KATAGO_TAG}', katago_version)
@@ -155,10 +148,6 @@ def load_bundle_metadata() -> dict[str, str]:
         if metadata['windows_nvidia_bundle'] == 'Unknown':
             metadata['windows_nvidia_bundle'] = (
                 f'katago-{katago_version}-cuda12.1-cudnn9.8.0-windows-x64.zip'
-            )
-        if metadata['windows_nvidia50_cuda_bundle'] == 'Unknown':
-            metadata['windows_nvidia50_cuda_bundle'] = (
-                f'katago-{katago_version}-cuda12.8-cudnn9.8.0-windows-x64.zip'
             )
         if metadata['linux_bundle'] == 'Unknown':
             metadata['linux_bundle'] = f'katago-{katago_version}-eigen-linux-x64.zip'
@@ -411,7 +400,7 @@ def remove_windows_core_update_auto_notes(sections: list[dict[str, object]]) -> 
         before['items'] = [item for item in before['items'] if item != before_note]
 
 
-def add_nvidia50_download_rows(
+def add_core_update_row_and_cuda128_note(
     sections: list[dict[str, object]],
     assets_cn: dict[str, str],
     assets: dict[str, str],
@@ -1115,7 +1104,7 @@ def build_next_2026_05_17_2_notes(
         },
     ]
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     heading = f'# KG-next {release_tag} 4段纪念版' if release_tag else '# KG-next 4段纪念版'
@@ -1506,7 +1495,7 @@ def build_next_2026_05_03_1_notes(
         },
     ]
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
 
@@ -1884,7 +1873,7 @@ def build_next_2026_05_04_1_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
 
@@ -2245,7 +2234,7 @@ def build_next_2026_05_06_1_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
@@ -2512,7 +2501,7 @@ def build_next_2026_05_26_1_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
@@ -2777,7 +2766,7 @@ def build_next_2026_05_30_1_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
@@ -3065,7 +3054,7 @@ def build_next_2026_05_31_1_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
@@ -3326,7 +3315,7 @@ def build_next_2026_05_31_2_notes(
             }
         )
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
         render_language_section(section) for section in sections
@@ -3609,7 +3598,7 @@ def build_next_2026_06_01_1_notes(
             'contact': {'heading': 'ติดต่อ', 'items': ['QQ group: `299419120`']},
         },
     ]
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -3827,7 +3816,7 @@ def build_next_2026_06_01_2_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -4071,7 +4060,7 @@ def build_next_2026_06_06_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -4315,7 +4304,7 @@ def build_next_2026_06_08_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -4829,7 +4818,7 @@ def build_release_notes(asset_map: dict[str, str | None], bundle: dict[str, str]
         },
     ]
 
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     apply_current_windows_download_guidance(sections, assets_cn, assets)
     validate_release_sections(sections)
@@ -5079,7 +5068,7 @@ def build_next_2026_05_18_1_notes(
             'contact': {'heading': 'ติดต่อ', 'items': ['QQ group: `299419120`']},
         },
     ]
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     heading = f'# KG-next {release_tag} 4段纪念版更新' if release_tag else '# KG-next 4段纪念版更新'
     return heading + '\n\n' + '\n\n---\n\n'.join(
@@ -5333,7 +5322,7 @@ def build_next_2026_06_09_1_notes(
             'contact': {'heading': 'ติดต่อ', 'items': ['QQ group: `299419120`']},
         },
     ]
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     validate_release_sections(sections)
     heading = f'# KG-next {release_tag} 更新' if release_tag else '# KG-next 更新'
     return heading + '\n\n' + '\n\n---\n\n'.join(
@@ -5567,7 +5556,7 @@ def build_next_2026_06_10_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -5812,7 +5801,7 @@ def build_next_2026_06_11_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -6057,7 +6046,7 @@ def build_next_2026_06_11_2_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -6298,7 +6287,7 @@ def build_next_2026_06_12_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -6539,7 +6528,7 @@ def build_next_2026_06_12_2_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -6792,7 +6781,7 @@ def build_next_2026_06_13_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     validate_release_sections(sections)
     return release_heading(release_tag) + '\n\n' + '\n\n---\n\n'.join(
@@ -7243,7 +7232,7 @@ def build_next_2026_06_20_1_clean_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     remove_windows_core_update_auto_notes(sections)
     validate_release_sections(sections)
@@ -7997,7 +7986,7 @@ def build_next_2026_07_02_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     remove_windows_core_update_auto_notes(sections)
     validate_release_sections(sections)
@@ -8230,7 +8219,7 @@ def build_next_2026_07_05_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     remove_windows_core_update_auto_notes(sections)
     validate_release_sections(sections)
@@ -8507,7 +8496,7 @@ def build_next_2026_07_13_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     remove_windows_core_update_auto_notes(sections)
     validate_release_sections(sections)
@@ -8720,7 +8709,7 @@ def build_next_2026_07_19_1_notes(
                 'contact': {'heading': block['contact_heading'], 'items': block['contact']},
             }
         )
-    add_nvidia50_download_rows(sections, assets_cn, assets)
+    add_core_update_row_and_cuda128_note(sections, assets_cn, assets)
     add_tensorrt_split_download_row(sections, assets_cn, assets, asset_map)
     remove_windows_core_update_auto_notes(sections)
     validate_release_sections(sections)
