@@ -83,10 +83,7 @@ class GenerateReleaseNotesTest(unittest.TestCase):
             json.loads((Path(__file__).resolve().parents[1] / "src/main/resources/katago-assets.json").read_text())["assets"]["windows-nvidia"]["assetName"],
             metadata["windows_nvidia_bundle"],
         )
-        self.assertEqual(
-            metadata["windows_nvidia_bundle"],
-            metadata["windows_nvidia50_cuda_bundle"],
-        )
+        self.assertNotIn("windows_nvidia50_cuda_bundle", metadata)
         self.assertEqual(
             json.loads((Path(__file__).resolve().parents[1] / "src/main/resources/katago-assets.json").read_text())["assets"]["windows-nvidia-cuda13"]["assetName"],
             metadata["windows_nvidia_cuda13_bundle"],
