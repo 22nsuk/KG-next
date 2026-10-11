@@ -118,4 +118,4 @@ KataGo contribution 的 `-override-config` 中，`password=...` 引号赋值及�
 
 - [安装指南](INSTALL.md)
 - [发布包说明](PACKAGES.md)
-- [GitHub Issues](https://github.com/wimi321/lizzieyzy-next/issues)
+- [GitHub Issues](https://github.com/22nsuk/KG-next/issues)

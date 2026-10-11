@@ -10,6 +10,7 @@ FILES = [
     ROOT / "README_JA.md",
     ROOT / "README_KO.md",
     ROOT / "README_TH.md",
+    ROOT / "README_ZH_CN.md",
     ROOT / "README_ZH_TW.md",
     ROOT / "CONTRIBUTING.md",
     ROOT / "CODE_OF_CONDUCT.md",
