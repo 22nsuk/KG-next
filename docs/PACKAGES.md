@@ -1,5 +1,8 @@
 # 发布包说明
 
+> **KG-next：** 请从 [KG-next Releases](https://github.com/22nsuk/KG-next/releases) 查看实际发布的文件；
+> 尚无对应包时，请按[韩文主 README](../README.md)从源码构建。下文继承的上游包说明不代表 KG-next 已发布这些包或完成相同的平台验收。
+
 这份文档回答三件事：
 
 1. 当前维护版到底公开推荐哪些包
@@ -24,7 +27,7 @@
 - TensorRT 一键安装成功后会自动清理完整下载包缓存；首次运行产生的 CUDA/TensorRT 缓存会尽量写入软件自己的 `runtime/`，减少 C 盘额外占用
 - CUDA / TensorRT 吞吐与功耗对比必须固定模型、配置和缓存，并使用 [RTX 50 性能验收流程](RTX50_PERFORMANCE.md) 记录真实进程、功耗、显存和 KataGo 原始指标
 - Release 可附带 TensorRT 可选预装分卷包，但它不是默认推荐下载；必须下载全部 `.7z.00N` 并用 7-Zip 从 `.001` 解压
-- 当前正式版从 [GitHub Releases](https://github.com/22nsuk/KG-next/releases) 下载
+- KG-next 发布包从 [GitHub Releases](https://github.com/22nsuk/KG-next/releases) 下载
 
 如果你只想先看图再决定，先看这里：
 
