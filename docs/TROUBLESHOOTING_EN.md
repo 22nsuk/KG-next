@@ -108,4 +108,4 @@ Related docs:
 
 - [Installation Guide](INSTALL_EN.md)
 - [Package Overview](PACKAGES_EN.md)
-- [GitHub Issues](https://github.com/wimi321/lizzieyzy-next/issues)
+- [GitHub Issues](https://github.com/22nsuk/KG-next/issues)

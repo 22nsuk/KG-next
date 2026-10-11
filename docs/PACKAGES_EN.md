@@ -1,5 +1,8 @@
 # Package Overview
 
+> **KG-next:** Check [KG-next Releases](https://github.com/22nsuk/KG-next/releases) for the files actually published.
+> If a package is unavailable, build from source using the [main Korean README](../README.md). The inherited upstream package descriptions below are not evidence that KG-next ships every listed package or has completed the same platform acceptance.
+
 This document answers three practical questions:
 
 1. which package types are currently recommended in public releases
@@ -153,4 +156,4 @@ From the new maintained releases onward:
 - [Troubleshooting](TROUBLESHOOTING_EN.md)
 - [Tested Platforms](TESTED_PLATFORMS.md)
 - [Release Checklist](RELEASE_CHECKLIST.md)
-- [Chinese README](../README.md)
+- [Chinese README](../README_ZH_CN.md)

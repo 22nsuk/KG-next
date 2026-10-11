@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from validate_kg_metadata import validate
@@ -67,6 +69,47 @@ class LocalizedReadmeLinksTests(unittest.TestCase):
                 self.assertRegex(text, r'<a href="https://github\.com/22nsuk/KG-next/releases"><strong>[^<]*KG-next[^<]*</strong></a>')
                 self.assertRegex(text, r'<a href="https://goagent\.top/"><strong>[^<]*LizzieYzy Next[^<]*</strong></a>')
                 self.assertIn('alt="LizzieYzy Next (upstream)"', text)
+
+
+class DocumentationLinksTests(unittest.TestCase):
+    def test_package_and_support_links_use_the_fork(self):
+        targets = {
+            'docs/PACKAGES.md': 'releases',
+            'docs/PACKAGES_EN.md': 'releases',
+            'docs/TROUBLESHOOTING.md': 'issues',
+            'docs/TROUBLESHOOTING_EN.md': 'issues',
+        }
+        for name, destination in targets.items():
+            with self.subTest(document=name):
+                text = (ROOT / name).read_text(encoding='utf-8')
+                self.assertIn(f'https://github.com/22nsuk/KG-next/{destination}', text)
+                self.assertNotIn(f'https://github.com/wimi321/lizzieyzy-next/{destination}', text)
+                self.assertNotIn('https://goagent.top/download/', text)
+
+    def test_markdown_checker_detects_and_accepts_chinese_readme_link(self):
+        # Exercise the real checker without modifying repository documentation.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'scripts').mkdir()
+            (root / 'docs').mkdir()
+            checker = root / 'scripts/check_markdown_links.py'
+            shutil.copy2(ROOT / 'scripts/check_markdown_links.py', checker)
+            for source in ROOT.glob('*.md'):
+                (root / source.name).write_text('', encoding='utf-8')
+            (root / 'README_ZH_CN.md').write_text(
+                '[fixture](missing-chinese-guide.md)\n', encoding='utf-8')
+
+            def run_checker():
+                return subprocess.run(
+                    [sys.executable, str(checker)], cwd=root, capture_output=True,
+                    text=True, encoding='utf-8', timeout=10)
+
+            missing = run_checker()
+            self.assertEqual(1, missing.returncode, missing.stdout + missing.stderr)
+            self.assertIn('README_ZH_CN.md -> missing-chinese-guide.md', missing.stdout)
+            (root / 'missing-chinese-guide.md').write_text('', encoding='utf-8')
+            valid = run_checker()
+            self.assertEqual(0, valid.returncode, valid.stdout + valid.stderr)
 
 
 if __name__ == "__main__":
