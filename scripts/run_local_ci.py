@@ -237,7 +237,6 @@ UNITTEST_MODULES = (
     "scripts.test_transfer_pinned_source_assets",
     "scripts.test_verify_saved_release_assets",
     "scripts.test_windows_download_guidance",
-    "scripts.test_macos_product_acceptance",
 )
 
 BASH_SYNTAX_FILES = (
@@ -476,13 +475,17 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
             env={"PYTHON_BIN": python},
         )
     )
+    # These process fixtures emulate macOS from Linux; they are not native DMG acceptance.
+    modules = UNITTEST_MODULES
+    if sys.platform.startswith("linux"):
+        modules += ("scripts.test_macos_product_acceptance",)
     steps.extend(
         Step(
             f"Run {module}",
             (python, "-m", "unittest", module),
             env={"LIZZIE_BASH": bash, "LIZZIE_PYTHON": python},
         )
-        for module in UNITTEST_MODULES
+        for module in modules
     )
     steps.extend(
         Step(
