@@ -261,16 +261,6 @@ class R2ReleaseTest(unittest.TestCase):
             any(package["flavor"] == "rocm-gfx120x" for package in manifest["packages"])
         )
 
-    def test_legacy_manifest_stays_github_only(self):
-        source = release()
-        selected = r2_release.select_r2_assets(source, r2_release.DEFAULT_PUBLIC_BASE)
-        v2 = r2_release.build_manifest(source, selected, r2_release.DEFAULT_PUBLIC_BASE)
-        legacy = r2_release.build_legacy_manifest(v2)
-
-        self.assertEqual(1, legacy["schemaVersion"])
-        self.assertTrue(legacy["components"][0]["downloadUrl"].startswith("https://github.com/"))
-        self.assertEqual([], legacy["components"][0]["mirrorUrls"])
-
     def test_signing_covers_exact_payload(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

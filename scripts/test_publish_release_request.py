@@ -998,7 +998,6 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         self.assertIn("validate_release_workflow_identity.py", workflow)
         self.assertNotIn("default: 2026-", workflow)
         self.assertNotIn("gh api --paginate", workflow)
-        self.assertIn('LIZZIE_RELEASE_PRERELEASE="$release_prerelease"', workflow)
 
     def test_every_platform_serializes_by_workflow_and_release_tag(self) -> None:
         for workflow_name in (
@@ -1612,7 +1611,7 @@ class ReleasePublisherTest(unittest.TestCase):
         client.assets = [
             name
             for name in all_asset_names()
-            if name != "lizzieyzy-next-update-manifest.json"
+            if name != f"{DATE_TAG}-windows64.core-update.zip"
         ]
         self.seed_successful_workflows(client)
 

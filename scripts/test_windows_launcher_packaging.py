@@ -180,16 +180,6 @@ def main() -> None:
     if "windows-x64/libz.dll" in workflow:
         raise AssertionError("KataGo 1.18 Windows bundles use z.dll, not the legacy libz.dll name")
     require(
-        package_script,
-        'LIZZIE_RELEASE_PRERELEASE:-false',
-        "package_windows_exe.sh",
-    )
-    require(
-        package_script,
-        '"prerelease": prerelease == "true"',
-        "package_windows_exe.sh",
-    )
-    require(
         workflow,
         "RELEASE_PRERELEASE: ${{ inputs.release_prerelease }}",
         "build-windows-release.yml",

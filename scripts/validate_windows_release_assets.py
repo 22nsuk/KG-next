@@ -12,9 +12,6 @@ import sys
 import zipfile
 
 
-EXPECTED_RELEASE_REPOSITORY = "wimi321/lizzieyzy-next"
-
-
 class ValidationError(RuntimeError):
     """A Windows release asset invariant failed."""
 
@@ -57,80 +54,10 @@ def parse_sha256_file(path: Path) -> dict[str, str]:
     return checksums
 
 
-def validate_update_manifest(
-    release_dir: Path,
-    date_tag: str,
-    release_tag: str,
-    prerelease: bool,
-) -> None:
-    manifest_path = release_dir / "lizzieyzy-next-update-manifest.json"
-    manifest = load_json(manifest_path)
-    require(manifest.get("schemaVersion") == 1, "Update manifest schemaVersion must be 1")
-    require(
-        manifest.get("releaseTag") == release_tag,
-        f"Update manifest releaseTag must be {release_tag}",
-    )
-    require(
-        manifest.get("publishedAt") == f"{date_tag}T00:00:00Z",
-        f"Update manifest publishedAt must match {date_tag}",
-    )
-    require(
-        type(manifest.get("prerelease")) is bool
-        and manifest.get("prerelease") is prerelease,
-        f"Update manifest prerelease must be {str(prerelease).lower()}",
-    )
-    expected_notes_url = (
-        f"https://github.com/{EXPECTED_RELEASE_REPOSITORY}/releases/tag/{release_tag}"
-    )
-    require(
-        manifest.get("notesUrl") == expected_notes_url,
-        "Update manifest notesUrl must use the exact official repository and release tag",
-    )
-
-    components = manifest.get("components")
-    require(
-        isinstance(components, list) and bool(components),
-        "Update manifest must include components",
-    )
-    cores = [
-        item
-        for item in components
-        if isinstance(item, dict) and item.get("id") == "core"
-    ]
-    require(len(cores) == 1, "Update manifest must include exactly one core component")
-    core = cores[0]
+def validate_core_update_archive(release_dir: Path, date_tag: str) -> None:
     expected_asset = f"{date_tag}-windows64.core-update.zip"
-    require(core.get("assetName") == expected_asset, "Core update assetName is incorrect")
-    require(core.get("platform") == "windows", "Core update platform must be windows")
-    require(core.get("flavor") == "all", "Core update flavor must be all")
-    require(core.get("version") == release_tag, "Core update version must match release tag")
-    require(
-        core.get("installAction") == "replace-core",
-        "Core installAction is incorrect",
-    )
-    require(
-        core.get("defaultSelectedIfChanged") is True,
-        "Core update must be selected when changed",
-    )
-    expected_download_url = (
-        f"https://github.com/{EXPECTED_RELEASE_REPOSITORY}/releases/download/"
-        f"{release_tag}/{expected_asset}"
-    )
-    require(
-        core.get("downloadUrl") == expected_download_url,
-        "Core update downloadUrl must use the exact official repository, tag, and asset",
-    )
     core_path = release_dir / expected_asset
     require(core_path.is_file(), f"Missing core update asset: {expected_asset}")
-    require(
-        core.get("sizeBytes") == core_path.stat().st_size,
-        "Core update sizeBytes is incorrect",
-    )
-    core_hash = sha256(core_path)
-    require(
-        str(core.get("sha256") or "").lower() == core_hash,
-        "Core update SHA-256 is incorrect",
-    )
 
     try:
         with zipfile.ZipFile(core_path) as archive:
@@ -144,10 +71,6 @@ def validate_update_manifest(
     require(
         "app/lizzie-yzy2.5.3-shaded.jar" in entries,
         "Core update is missing the main jar",
-    )
-    require(
-        "lizzieyzy-next-core.jar" in entries,
-        "Core update is missing the legacy updater alias",
     )
     require(
         any(entry.startswith("app/KG-next") and entry.endswith(".cfg") for entry in entries),
@@ -265,7 +188,7 @@ def validate_windows_release_assets(
     release_dir: Path,
     date_tag: str,
     release_tag: str,
-    prerelease: bool,
+    _prerelease: bool,
 ) -> None:
     require(
         re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_tag) is not None,
@@ -275,7 +198,7 @@ def validate_windows_release_assets(
         re.fullmatch(rf"next-{re.escape(date_tag)}\.[1-9][0-9]*", release_tag) is not None,
         "Release tag must exactly match the date tag",
     )
-    validate_update_manifest(release_dir, date_tag, release_tag, prerelease)
+    validate_core_update_archive(release_dir, date_tag)
     validate_tensorrt_split(release_dir, date_tag, release_tag)
 
 
@@ -300,7 +223,7 @@ def main() -> int:
     except ValidationError as exc:
         print(f"Windows release validation failed: {exc}", file=sys.stderr)
         return 1
-    print("Validated Windows update manifest and TensorRT split integrity.")
+    print("Validated Windows core-update archive and TensorRT split integrity.")
     return 0
 
 

@@ -123,7 +123,7 @@ jobs:
           if [[ ! "$serial" =~ ^[0-9]+$ ]]; then
             serial="${GITHUB_RUN_ATTEMPT:-0}"
           fi
-          WINDOWS_BUILD_SERIAL="$serial" LIZZIE_RELEASE_PRERELEASE="$release_prerelease" \
+          WINDOWS_BUILD_SERIAL="$serial" \
             ./scripts/package_windows_exe.sh "$RELEASE_DATE_TAG" 1.0.0 target/lizzie-yzy2.5.3-shaded.jar "$RELEASE_TAG"
 
       - name: Validate public Windows assets
