@@ -12,11 +12,6 @@ import org.junit.jupiter.api.Test;
 class NetworkProxyInventoryTest {
   private static final Path MAIN_SOURCES = Path.of("src/main/java");
   private static final String HELPER = "featurecat/lizzie/util/NetworkProxy.java";
-  private static final String UPDATER = "featurecat/lizzie/update/WindowsUpdateService.java";
-  private static final String UPDATE_DOWNLOADER =
-      "featurecat/lizzie/update/ResumableDownloader.java";
-  private static final String UPDATE_MANIFEST_CLIENT =
-      "featurecat/lizzie/update/UpdateManifestClient.java";
   private static final String ONLINE_DIALOG = "featurecat/lizzie/gui/OnlineDialog.java";
 
   @Test
@@ -32,19 +27,6 @@ class NetworkProxyInventoryTest {
         violations.isEmpty(),
         "Outbound Java HTTP/WebSocket callers must use NetworkProxy:\n"
             + String.join("\n", violations));
-  }
-
-  @Test
-  void updaterNetworkLayersUseSharedProxyOpener() throws IOException {
-    String updater = Files.readString(MAIN_SOURCES.resolve(UPDATER));
-    String downloader = Files.readString(MAIN_SOURCES.resolve(UPDATE_DOWNLOADER));
-    String manifestClient = Files.readString(MAIN_SOURCES.resolve(UPDATE_MANIFEST_CLIENT));
-
-    assertTrue(updater.contains("ResumableDownloader"));
-    assertTrue(downloader.contains("NetworkProxy.openConnection("));
-    assertTrue(manifestClient.contains("NetworkProxy.openConnection("));
-    assertTrue(!downloader.contains(".toURL().openConnection("));
-    assertTrue(!manifestClient.contains(".toURL().openConnection("));
   }
 
   private static void collectNetworkViolations(Path path, List<String> violations) {

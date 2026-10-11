@@ -1,5 +1,11 @@
 # Cloudflare R2 正式版下载与升级
 
+> **KG-next 适用范围：** KG-next 的更新菜单仅在用户确认后打开
+> [KG-next Releases](https://github.com/22nsuk/KG-next/releases)，不读取下述更新清单，
+> 也不在应用内下载或安装更新。旧更新器及其内置公钥已从 KG-next 客户端移除。
+> 下文的客户端行为和 GoAgent 下载入口描述的是上游 LizzieYzy Next，不是 KG-next 的使用说明。
+> 发布端的签名清单、R2 和频道指针工具仍保留；保留这些工具不代表 KG-next 已发布相应资产或启用该更新服务。
+
 用户唯一公开入口是 `https://goagent.top/download/`。`download.goagent.top` 只作为安装包、
 公开目录和软件更新接口的技术后台；GitHub Release 始终保留完整资产、安装器、Linux 包、
 历史版本和自动备用下载，pre-release 安装包不上传 R2。
