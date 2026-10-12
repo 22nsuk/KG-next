@@ -13,7 +13,7 @@ Check these first:
 - Installer build: rerun `windows64.with-katago.installer.exe`
 - NVIDIA CUDA bundle: RTX 20/30/40/50 all use the unified `windows64.nvidia.installer.exe` or `windows64.nvidia.portable.zip`; do not use the separate `nvidia50` package from an old tag
 - Driver `570.65` or newer loads directly; `528.33–570.64` runs one lightweight real-inference probe; older drivers show a repair state. RTX 40/50 default to CUDA, while RTX 30 series and earlier may optionally install TensorRT in `KataGo Auto Setup`
-- Portable build: make sure you are launching `LizzieYzy Next.exe`
+- Portable build: make sure you are launching `KG-next.exe`
 - The current public release should not require `.bat` launchers for the main Windows path
 
 ### macOS

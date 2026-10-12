@@ -230,7 +230,7 @@ macOS 校验不是只看 DMG 布局：打包脚本会在 App image 中运行内�
 
 上传前需要在真实 Mac 上打开最终签名 DMG 截图复核：App 和 Applications 图标必须分别位于
 左右卡片，箭头、双语安装说明和芯片标识完整显示；完成拖拽并弹出 DMG 后，只从
-`/Applications/LizzieYzy Next.app` 启动一次。
+`/Applications/KG-next.app` 启动一次。
 
 ### 8. 生成发布页文案
 

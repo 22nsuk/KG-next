@@ -1,10 +1,10 @@
 # インストールガイド
 
-このガイドは、`LizzieYzy Next` をできるだけ早く使い始めたい人向けです。
+このガイドは、`KG-next` をできるだけ早く使い始めたい人向けです。
 
 ## 先に結論
 
-このガイドは、現在も保守されている `LizzieYzy Next` 向けです。多くの人が探している `lizzieyzy の保守版 / 代替版` にあたります。
+このガイドは、現在も保守されている `KG-next` 向けです。多くの人が探している `lizzieyzy の保守版 / 代替版` にあたります。
 
 1. `KataGo 復盤ソフト` の Windows 非インストール版を探しているなら、まず `windows64.opencl.portable.zip` を選べば大丈夫です。
 2. `まだ使える lizzieyzy の保守版` を探しているなら、このプロジェクトを優先して見れば大丈夫です。
@@ -37,7 +37,7 @@
 ## Windows
 
 1. まずは `windows64.opencl.portable.zip` をダウンロードします。
-2. 展開して `LizzieYzy Next OpenCL.exe` を起動します。
+2. 展開して `KG-next OpenCL.exe` を起動します。
 3. インストーラの流れが必要なら `windows64.opencl.installer.exe` を選べます。
 
 通常の Windows パッケージでも `KataGo Auto Setup` から `Smart Optimize` を一度実行すると、より合いやすいスレッド数を自動で保存できます。
@@ -45,7 +45,7 @@
 NVIDIA GPU があり、速度を優先したい場合:
 
 1. `windows64.nvidia.portable.zip` を選びます。
-2. 展開して `LizzieYzy Next NVIDIA.exe` を起動します。
+2. 展開して `KG-next NVIDIA.exe` を起動します。
 3. 初回起動時に、必要な公式 NVIDIA ランタイムがユーザーフォルダに自動で準備されます。
 4. インストーラが必要なら `windows64.nvidia.installer.exe` を選べます。
 
@@ -57,14 +57,14 @@ NVIDIA GPU かどうかわからない場合は、通常の `windows64.opencl.po
 自分のエンジンを使いたい場合:
 
 1. `windows64.without.engine.portable.zip` または `windows64.without.engine.installer.exe` を選びます。
-2. portable 版なら展開して `LizzieYzy Next.exe` を起動し、インストーラ版ならそのままセットアップします。
+2. portable 版なら展開して `KG-next.exe` を起動し、インストーラ版ならそのままセットアップします。
 3. 起動後に自分のエンジンを設定します。
 
 ## macOS
 
 1. Apple Silicon か Intel かを確認します。
 2. 対応する `.dmg` を開きます。
-3. `LizzieYzy Next.app` を `Applications` にドラッグします。
+3. `KG-next.app` を `Applications` にドラッグします。
 4. 初回にブロックされた場合は、`システム設定 -> プライバシーとセキュリティ` から `このまま開く` を選びます。
 
 ## Linux

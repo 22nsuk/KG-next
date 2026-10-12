@@ -9,7 +9,7 @@
 
 ## 先直接说结论
 
-这份安装指南对应的是当前仍在维护的 `LizzieYzy Next`，也就是很多人还在找的 `lizzieyzy 维护版 / 替代版本`。
+这份安装指南对应的是当前仍在维护的 `KG-next`，也就是很多人还在找的 `lizzieyzy 维护版 / 替代版本`。
 
 - 如果你在找 `KataGo 围棋复盘软件` 的 Windows 免安装包，先按显卡选择：RTX 20/30/40/50 用 NVIDIA CUDA，AMD/Intel/较老 NVIDIA 用 OpenCL，没有合适 GPU 再用 CPU 兼容版
 - 如果你想找 `还能继续用的 lizzieyzy 维护版`，这个项目就是现在应该优先看的版本
@@ -71,9 +71,9 @@
 ### Windows 64 位 OpenCL 免安装包
 
 1. 下载 `windows64.opencl.portable.zip`。
-2. 解压到普通目录，例如 `D:\LizzieYzy-Next`。
+2. 解压到普通目录，例如 `D:\KG-next`。
 3. 打开解压后的目录。
-4. 双击 `LizzieYzy Next OpenCL.exe`。
+4. 双击 `KG-next OpenCL.exe`。
 
 这是 AMD、Intel 和较老 NVIDIA 显卡的兼容路径。
 OpenCL 免安装包也能直接打开 `KataGo 一键设置`，点一次“智能测速优化”，自动写入更合适的线程数。
@@ -92,7 +92,7 @@ OpenCL 免安装包也能直接打开 `KataGo 一键设置`，点一次“智能
 如果 OpenCL 在你的电脑上表现不稳定：
 
 1. 优先下载 `windows64.with-katago.portable.zip`。
-2. 解压后运行 `LizzieYzy Next.exe`。
+2. 解压后运行 `KG-next.exe`。
 3. 如果你更喜欢安装流程，再改用 `windows64.with-katago.installer.exe`。
 
 ### Windows 64 位 NVIDIA CUDA 推荐版
@@ -100,7 +100,7 @@ OpenCL 免安装包也能直接打开 `KataGo 一键设置`，点一次“智能
 如果你的电脑有 NVIDIA 显卡，而且你更在意分析速度：
 
 1. 优先下载 `windows64.nvidia.portable.zip`。
-2. 解压后运行 `LizzieYzy Next NVIDIA.exe`。
+2. 解压后运行 `KG-next NVIDIA.exe`。
 3. 第一次启动时，程序会自动把需要的官方 NVIDIA 运行库准备到你的用户目录。
 4. 这个包内置的是官方 KataGo CUDA Windows 版本。想把线程数调到更合适，可以打开 `KataGo 一键设置`，点一次“智能测速优化”。
 
@@ -117,7 +117,7 @@ OpenCL 免安装包也能直接打开 `KataGo 一键设置`，点一次“智能
 
 ### Windows 64 位统一 NVIDIA CUDA 和 TensorRT 可选方案
 
-RTX 20/30/40/50 统一下载 `windows64.nvidia.portable.zip`，解压后运行 `LizzieYzy Next NVIDIA.exe`；喜欢安装流程则使用同名安装器。该包使用 CUDA 12.8 + cuDNN 9.8，RTX 40/50 默认推荐 CUDA。
+RTX 20/30/40/50 统一下载 `windows64.nvidia.portable.zip`，解压后运行 `KG-next NVIDIA.exe`；喜欢安装流程则使用同名安装器。该包使用 CUDA 12.8 + cuDNN 9.8，RTX 40/50 默认推荐 CUDA。
 
 TensorRT 不再作为普通用户优先下载的巨大单文件包。RTX 30 系及以下用户可进入 `KataGo 一键设置`，点击 `安装 TensorRT 加速` 作为可选方案。安装界面会检测本机 NVIDIA GPU / Compute Capability，并显示推荐、可尝试、不推荐或未知状态。软件只从 KataGo / NVIDIA 官方源下载并校验；未点击安装就不会下载。需要完全离线安装的用户也可以从 Release 下载全部 `.7z.00N` 分卷，并按同名 README、清单和 SHA-256 文件校验后从 `.001` 解压。
 
@@ -126,7 +126,7 @@ TensorRT 不再作为普通用户优先下载的巨大单文件包。RTX 30 系�
 如果你想自己配引擎：
 
 1. 优先下载 `windows64.without.engine.portable.zip`。
-2. 解压后运行 `LizzieYzy Next.exe`。
+2. 解压后运行 `KG-next.exe`。
 3. 这个包带程序和 Java，但不带 KataGo。
 4. 启动后请在软件里配置你自己的引擎。
 
@@ -148,9 +148,9 @@ TensorRT 不再作为普通用户优先下载的巨大单文件包。RTX 30 系�
 
 1. 下载对应的 `.dmg`。
 2. 打开 `.dmg`，确认安装画面右上角显示的芯片类型与你的 Mac 一致。
-3. 按画面箭头，把 `LizzieYzy Next.app` 拖到右侧的“应用程序”文件夹。
-4. 等待复制完成，然后在 Finder 侧边栏弹出 `LizzieYzy Next` 安装磁盘。
-5. 打开 Finder 的“应用程序”，从这里启动 `LizzieYzy Next`。
+3. 按画面箭头，把 `KG-next.app` 拖到右侧的“应用程序”文件夹。
+4. 等待复制完成，然后在 Finder 侧边栏弹出 `KG-next - Apple Silicon` 或 `KG-next - Intel` 安装磁盘。
+5. 打开 Finder 的“应用程序”，从这里启动 `KG-next`。
 
 不要直接双击安装磁盘里的 App。这样只是从临时挂载的 DMG 运行，并没有完成安装，
 关闭或弹出安装磁盘后就无法继续从该位置打开。

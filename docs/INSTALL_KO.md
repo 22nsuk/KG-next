@@ -1,10 +1,10 @@
 # 설치 가이드
 
-이 문서는 `LizzieYzy Next` 를 최대한 빨리 설치해서 사용하고 싶은 사용자를 위한 안내입니다.
+이 문서는 `KG-next` 를 최대한 빨리 설치해서 사용하고 싶은 사용자를 위한 안내입니다.
 
 ## 먼저 결론
 
-이 가이드는 지금도 유지보수 중인 `LizzieYzy Next` 용입니다. 많은 사용자가 찾는 `lizzieyzy 유지보수판 / 대체판` 이라고 보면 됩니다.
+이 가이드는 지금도 유지보수 중인 `KG-next` 용입니다. 많은 사용자가 찾는 `lizzieyzy 유지보수판 / 대체판` 이라고 보면 됩니다.
 
 1. Windows 용 `KataGo 복기 프로그램` 무설치 패키지를 찾는다면 먼저 `windows64.opencl.portable.zip` 을 선택하면 됩니다.
 2. `아직 쓸 수 있는 lizzieyzy 유지보수판` 을 찾고 있다면 이 프로젝트를 우선 보면 됩니다.
@@ -37,7 +37,7 @@
 ## Windows
 
 1. 먼저 `windows64.opencl.portable.zip` 를 다운로드합니다.
-2. 압축을 풀고 `LizzieYzy Next OpenCL.exe` 를 실행합니다.
+2. 압축을 풀고 `KG-next OpenCL.exe` 를 실행합니다.
 3. 설치형 흐름이 필요하면 `windows64.opencl.installer.exe` 를 선택할 수 있습니다.
 
 일반 Windows 패키지도 `KataGo Auto Setup` 에서 `Smart Optimize` 를 한 번 실행하면 더 잘 맞는 스레드 수를 자동으로 저장할 수 있습니다.
@@ -45,7 +45,7 @@
 NVIDIA 그래픽카드가 있고 속도를 더 원한다면:
 
 1. `windows64.nvidia.portable.zip` 를 다운로드합니다.
-2. 압축을 푼 뒤 `LizzieYzy Next NVIDIA.exe` 를 실행합니다.
+2. 압축을 푼 뒤 `KG-next NVIDIA.exe` 를 실행합니다.
 3. 처음 실행할 때 필요한 공식 NVIDIA 런타임을 사용자 폴더에 자동으로 준비합니다.
 4. 설치형이 필요하면 `windows64.nvidia.installer.exe` 를 선택할 수 있습니다.
 
@@ -56,14 +56,14 @@ NVIDIA 그래픽카드인지 확실하지 않다면 일반 `windows64.opencl.por
 직접 엔진을 쓰고 싶다면:
 
 1. `windows64.without.engine.portable.zip` 또는 `windows64.without.engine.installer.exe` 를 선택합니다.
-2. portable 이면 압축을 푼 뒤 `LizzieYzy Next.exe` 를 실행하고, 설치형이면 설치를 완료합니다.
+2. portable 이면 압축을 푼 뒤 `KG-next.exe` 를 실행하고, 설치형이면 설치를 완료합니다.
 3. 실행 후 자신의 엔진을 설정합니다.
 
 ## macOS
 
 1. Apple Silicon 인지 Intel 인지 확인합니다.
 2. 맞는 `.dmg` 를 엽니다.
-3. `LizzieYzy Next.app` 을 `Applications` 로 드래그합니다.
+3. `KG-next.app` 을 `Applications` 로 드래그합니다.
 4. 처음 막히면 `시스템 설정 -> 개인정보 보호 및 보안` 에서 `그래도 열기` 를 선택합니다.
 
 ## Linux
