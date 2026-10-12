@@ -18,6 +18,11 @@ import urllib.parse
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from scripts.legacy_update_manifest import build_pinned_legacy_manifest
+except ModuleNotFoundError:  # python scripts/r2_release.py
+    from legacy_update_manifest import build_pinned_legacy_manifest
+
 
 R2_SIZE_LIMIT = 9_000_000_000
 HUMAN_SL_SIZE_BYTES = 99_066_230
@@ -31,6 +36,7 @@ DEFAULT_PUBLIC_BASE = "https://download.goagent.top"
 DEFAULT_WEBSITE_DOWNLOAD_URL = "https://goagent.top/download/"
 DEFAULT_KEY_ID = "stable-2026-08"
 UPDATE_ENVELOPE_ASSET = "lizzieyzy-next-update-envelope.json"
+LEGACY_MANIFEST_ASSET = "lizzieyzy-next-update-manifest.json"
 CATALOG_ASSET = "lizzieyzy-next-download-catalog.json"
 TEST_CHANNEL_POINTER_TAG = "channel-beta"
 PACKAGED_RELEASE_TAG = re.compile(r"^next-\d{4}-\d{2}-\d{2}\.[1-9]\d*$")
@@ -332,6 +338,25 @@ def plan_test_channel_publish(
         pointer_make_latest="false",
         pointer_allowed_assets=(UPDATE_ENVELOPE_ASSET,),
         r2_keys=(),
+    )
+
+
+def build_legacy_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Schema v1 file for updaters that still read releases/latest.
+
+    Identity fields follow this release. The core download stays pinned to
+    next-2026-09-26.2 so pre-migration clients do not install the new zip.
+    """
+    release_tag = str(manifest.get("releaseTag") or "").strip()
+    published_at = str(manifest.get("publishedAt") or "").strip()
+    notes_url = str(manifest.get("notesUrl") or "").strip()
+    if not release_tag or not published_at or not notes_url:
+        raise ReleaseError("Legacy update manifest is missing release identity")
+    return build_pinned_legacy_manifest(
+        release_tag=release_tag,
+        published_at=published_at,
+        notes_url=notes_url,
+        prerelease=False,
     )
 
 
@@ -1657,6 +1682,7 @@ def promote(args: argparse.Namespace) -> None:
         release, selected, args.public_base, github_primary=True
     )
     envelope = sign_manifest(manifest, private_key, args.key_id)
+    legacy = build_legacy_manifest(manifest)
 
     client = r2_client(account_id, access_key, secret_key)
     verify_combined_storage_budget(client, args.bucket, total)
@@ -1686,6 +1712,7 @@ def promote(args: argparse.Namespace) -> None:
     )
     replace_github_asset(session, release, UPDATE_ENVELOPE_ASSET, envelope_body, "application/json")
     replace_github_asset(session, release, CATALOG_ASSET, catalog_body, "application/json")
+    replace_github_asset(session, release, LEGACY_MANIFEST_ASSET, json_bytes(legacy), "application/json")
 
     release_body = stable_release_body(
         release,

@@ -283,7 +283,7 @@ class ReleaseAssetProvenanceTest(unittest.TestCase):
             "run_id": RUN_ID,
             "run_attempt": RUN_ATTEMPT,
         }
-        support_name = f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.sha256.txt"
+        support_name = "lizzieyzy-next-update-manifest.json"
         with self.assertRaisesRegex(provenance.ProvenanceError, "not an acceptance candidate"):
             provenance.verify_candidate(
                 **common,

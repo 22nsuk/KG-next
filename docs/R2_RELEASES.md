@@ -73,7 +73,7 @@ Cloudflare Redirect Rule 必须仅匹配 `download.goagent.top` 的 `/` 和 `/in
 5. 通过自定义域名检查 HTTPS、长度、Range、缓存、下载响应头和根入口 301。
 6. 发布 R2 主链接 catalog 与轻量跳转页，最后发布签名 envelope 作为稳定频道的激活指针。
 7. 使用缓存穿透参数核对公网根入口、catalog 和 envelope 与本次发布一致。
-8. 将 v2 签名清单和 catalog 上传到 Release。
+8. 将 v2 签名清单、catalog，以及旧客户端仍能解析的 schema v1 `lizzieyzy-next-update-manifest.json` 上传到 Release。v1 清单的 core `downloadUrl`、大小和 SHA-256 固定为 `next-2026-09-26.2` 的 core-update zip，不能改成刚构建的 zip。
 9. 最后才把 GitHub pre-release 改为正式版和 latest。
 
 重复执行同一 tag 会复用大小与 SHA 已匹配的 R2 对象。已是正式版时，只有明确启用

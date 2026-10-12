@@ -11,6 +11,23 @@ import re
 import sys
 import zipfile
 
+try:
+    from scripts.legacy_update_manifest import (
+        OFFICIAL_REPOSITORY,
+        PINNED_LEGACY_CORE_ASSET_NAME,
+        PINNED_LEGACY_CORE_DOWNLOAD_URL,
+        PINNED_LEGACY_CORE_SHA256,
+        PINNED_LEGACY_CORE_SIZE_BYTES,
+    )
+except ModuleNotFoundError:  # python scripts/validate_windows_release_assets.py
+    from legacy_update_manifest import (  # type: ignore[no-redef]
+        OFFICIAL_REPOSITORY,
+        PINNED_LEGACY_CORE_ASSET_NAME,
+        PINNED_LEGACY_CORE_DOWNLOAD_URL,
+        PINNED_LEGACY_CORE_SHA256,
+        PINNED_LEGACY_CORE_SIZE_BYTES,
+    )
+
 
 class ValidationError(RuntimeError):
     """A Windows release asset invariant failed."""
@@ -54,6 +71,85 @@ def parse_sha256_file(path: Path) -> dict[str, str]:
     return checksums
 
 
+def validate_update_manifest(
+    release_dir: Path,
+    date_tag: str,
+    release_tag: str,
+    prerelease: bool,
+) -> None:
+    manifest_path = release_dir / "lizzieyzy-next-update-manifest.json"
+    manifest = load_json(manifest_path)
+    require(manifest.get("schemaVersion") == 1, "Update manifest schemaVersion must be 1")
+    require(
+        type(manifest.get("schemaVersion")) is int,
+        "Update manifest schemaVersion must be a JSON number",
+    )
+    require(
+        manifest.get("releaseTag") == release_tag,
+        f"Update manifest releaseTag must be {release_tag}",
+    )
+    require(
+        manifest.get("publishedAt") == f"{date_tag}T00:00:00Z",
+        f"Update manifest publishedAt must match {date_tag}",
+    )
+    require(
+        manifest.get("minUpdaterVersion") == "1",
+        "Update manifest minUpdaterVersion must be 1",
+    )
+    require(
+        type(manifest.get("prerelease")) is bool
+        and manifest.get("prerelease") is prerelease,
+        f"Update manifest prerelease must be {str(prerelease).lower()}",
+    )
+    expected_notes_url = f"https://github.com/{OFFICIAL_REPOSITORY}/releases/tag/{release_tag}"
+    require(
+        manifest.get("notesUrl") == expected_notes_url,
+        "Update manifest notesUrl must use the exact official repository and release tag",
+    )
+    require("packages" not in manifest, "Update manifest must stay schema v1 without packages")
+
+    components = manifest.get("components")
+    require(
+        isinstance(components, list) and bool(components),
+        "Update manifest must include components",
+    )
+    cores = [
+        item
+        for item in components
+        if isinstance(item, dict) and item.get("id") == "core"
+    ]
+    require(len(cores) == 1, "Update manifest must include exactly one core component")
+    core = cores[0]
+    require(
+        core.get("assetName") == PINNED_LEGACY_CORE_ASSET_NAME,
+        "Core update assetName must be the pinned zip name",
+    )
+    require(core.get("platform") == "windows", "Core update platform must be windows")
+    require(core.get("flavor") == "all", "Core update flavor must be all")
+    require(core.get("version") == release_tag, "Core update version must match release tag")
+    require(
+        core.get("installAction") == "replace-core",
+        "Core installAction is incorrect",
+    )
+    require(
+        core.get("defaultSelectedIfChanged") is True,
+        "Core update must be selected when changed",
+    )
+    require(core.get("mirrorUrls") == [], "Core update mirrorUrls must stay empty")
+    require(
+        core.get("downloadUrl") == PINNED_LEGACY_CORE_DOWNLOAD_URL,
+        "Core update downloadUrl must be the pinned next-2026-09-26.2 zip",
+    )
+    require(
+        core.get("sizeBytes") == PINNED_LEGACY_CORE_SIZE_BYTES,
+        "Core update sizeBytes must be the pinned zip size",
+    )
+    require(
+        str(core.get("sha256") or "").lower() == PINNED_LEGACY_CORE_SHA256,
+        "Core update SHA-256 must be the pinned zip digest",
+    )
+
+
 def validate_core_update_archive(release_dir: Path, date_tag: str) -> None:
     expected_asset = f"{date_tag}-windows64.core-update.zip"
     core_path = release_dir / expected_asset
@@ -71,6 +167,10 @@ def validate_core_update_archive(release_dir: Path, date_tag: str) -> None:
     require(
         "app/lizzie-yzy2.5.3-shaded.jar" in entries,
         "Core update is missing the main jar",
+    )
+    require(
+        "lizzieyzy-next-core.jar" not in entries,
+        "New core update must not include the legacy updater jar alias",
     )
     require(
         any(entry.startswith("app/KG-next") and entry.endswith(".cfg") for entry in entries),
@@ -188,7 +288,7 @@ def validate_windows_release_assets(
     release_dir: Path,
     date_tag: str,
     release_tag: str,
-    _prerelease: bool,
+    prerelease: bool,
 ) -> None:
     require(
         re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_tag) is not None,
@@ -198,6 +298,7 @@ def validate_windows_release_assets(
         re.fullmatch(rf"next-{re.escape(date_tag)}\.[1-9][0-9]*", release_tag) is not None,
         "Release tag must exactly match the date tag",
     )
+    validate_update_manifest(release_dir, date_tag, release_tag, prerelease)
     validate_core_update_archive(release_dir, date_tag)
     validate_tensorrt_split(release_dir, date_tag, release_tag)
 
@@ -223,7 +324,7 @@ def main() -> int:
     except ValidationError as exc:
         print(f"Windows release validation failed: {exc}", file=sys.stderr)
         return 1
-    print("Validated Windows core-update archive and TensorRT split integrity.")
+    print("Validated pinned Windows update manifest, core-update archive, and TensorRT split integrity.")
     return 0
 
 

@@ -179,6 +179,15 @@ def main() -> None:
     verify_nvidia_dependency_origin(workflow)
     if "windows-x64/libz.dll" in workflow:
         raise AssertionError("KataGo 1.18 Windows bundles use z.dll, not the legacy libz.dll name")
+    require(package_script, "scripts/legacy_update_manifest.py", "package_windows_exe.sh")
+    require(package_script, '"$RELEASE_PRERELEASE"', "package_windows_exe.sh")
+    if 'cp "$JAR_PATH" "$core_dir/lizzieyzy-next-core.jar"' in package_script:
+        raise AssertionError("new core zip must not copy the legacy jar alias")
+    require(
+        workflow,
+        'LIZZIE_RELEASE_PRERELEASE="$release_prerelease"',
+        "build-windows-release.yml",
+    )
     require(
         workflow,
         "RELEASE_PRERELEASE: ${{ inputs.release_prerelease }}",

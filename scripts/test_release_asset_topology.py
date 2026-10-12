@@ -37,6 +37,7 @@ WINDOWS_PUBLIC = (
     f"{DATE_TAG}-windows64.without.engine.installer.exe",
     f"{DATE_TAG}-windows64.without.engine.portable.zip",
     f"{DATE_TAG}-windows64.core-update.zip",
+    "lizzieyzy-next-update-manifest.json",
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.7z.001",
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.7z.002",
     f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.README.txt",
@@ -127,20 +128,22 @@ WORKFLOW_UNITS = (
 
 
 class ReleaseAssetTopologyContractTest(unittest.TestCase):
-    def test_universe_has_exactly_the_current_26_public_assets(self) -> None:
+    def test_universe_has_exactly_the_current_27_public_assets(self) -> None:
         keys = tuple(asset.key for asset in topology.assets())
         names = tuple(asset.filename.render(DATE_TAG) for asset in topology.assets())
 
-        self.assertEqual(26, len(keys))
-        self.assertEqual(26, len(set(keys)))
+        self.assertEqual(27, len(keys))
+        self.assertEqual(27, len(set(keys)))
         self.assertEqual(
             WINDOWS_PUBLIC + LINUX_PUBLIC + MAC_AMD64_PUBLIC + MAC_ARM64_PUBLIC,
             names,
         )
         self.assertEqual(
-            0,
+            1,
             sum(asset.filename.kind is topology.FilenameKind.LITERAL for asset in topology.assets()),
         )
+        manifest = topology.asset("windows_update_manifest")
+        self.assertEqual("lizzieyzy-next-update-manifest.json", manifest.filename.value)
         self.assertEqual(
             (
                 f"{DATE_TAG}-windows64.nvidia.tensorrt.portable.7z.001",
@@ -197,6 +200,14 @@ class ReleaseAssetTopologyContractTest(unittest.TestCase):
             (
                 "windows",
                 WINDOWS_PUBLIC[15],
+                "windows_update_manifest",
+                "x86_64",
+                topology.CandidateClass.SUPPORT,
+                False,
+            ),
+            (
+                "windows",
+                WINDOWS_PUBLIC[16],
                 "windows_tensorrt_split_001",
                 "x86_64",
                 topology.CandidateClass.SUPPORT,
@@ -254,6 +265,7 @@ class ReleaseAssetTopologyContractTest(unittest.TestCase):
                 "windows_tensorrt_split_002",
             }.issubset(notes_keys)
         )
+        self.assertNotIn("windows_update_manifest", notes_keys)
         self.assertEqual(
             tuple(sorted(WINDOWS_PUBLIC)),
             topology.provenance_names("windows", DATE_TAG),
