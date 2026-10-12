@@ -411,10 +411,13 @@ public final class TeacherDialog extends JDialog {
     int last = out.size() - 1;
     TeacherLlmClient.Message message = out.get(last);
     if ("user".equals(message.role)) {
+      String heading =
+          TeacherStrings.get(
+              TeacherStrings.locale(), "Teacher.prompt.knowledge", "【Knowledge】");
       out.set(
           last,
           new TeacherLlmClient.Message(
-              message.role, message.content + "\n\n【Knowledge】\n" + knowledge));
+              message.role, message.content + "\n\n" + heading + "\n" + knowledge));
     }
     return out;
   }
