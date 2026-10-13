@@ -100,12 +100,11 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
         )
         self.write_checksums()
 
-    def validate(self, prerelease: bool = True) -> None:
+    def validate(self) -> None:
         validator.validate_windows_release_assets(
             self.release_dir,
             DATE_TAG,
             RELEASE_TAG,
-            prerelease,
         )
 
     def test_accepts_exact_release_identity_and_integrity(self) -> None:
@@ -113,8 +112,7 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
 
     def test_manual_overlay_does_not_need_a_public_updater_manifest(self) -> None:
         self.assertFalse((self.release_dir / "lizzieyzy-next-update-manifest.json").exists())
-        self.validate(prerelease=False)
-        self.validate(prerelease=True)
+        self.validate()
 
     def test_rejects_retired_alias_and_preserved_resources_in_core(self) -> None:
         for name in ("lizzieyzy-next-core.jar", "app/weights/model.bin.gz", "user-data/config.txt"):
@@ -210,16 +208,6 @@ class WindowsReleaseValidationWiringTest(unittest.TestCase):
     def test_windows_workflow_passes_exact_release_identity_to_validator(self) -> None:
         workflow = (self.root / ".github/workflows/build-windows-release.yml").read_text(
             encoding="utf-8"
-        )
-        self.assertIn('echo "release_prerelease=$release_prerelease"', workflow)
-        self.assertIn(
-            "RELEASE_METADATA_PRERELEASE: "
-            "${{ steps.release_metadata.outputs.release_prerelease }}",
-            workflow,
-        )
-        self.assertIn('"$RELEASE_METADATA_PRERELEASE"', workflow)
-        self.assertNotIn(
-            '"${{ steps.release_metadata.outputs.release_prerelease }}"', workflow
         )
         self.assertIn("scripts/validate_release_assets.sh", workflow)
         validator_wrapper = (self.root / "scripts/validate_release_assets.sh").read_text(

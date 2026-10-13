@@ -97,7 +97,6 @@ jobs:
           ./scripts/prepare_bundled_katago.sh
 
       - name: Build Windows installer and portable package
-        id: release_metadata
         timeout-minutes: 150
         shell: bash
         env:
@@ -116,7 +115,6 @@ jobs:
             echo "Unable to determine pre-release state for $RELEASE_TAG" >&2
             exit 1
           fi
-          echo "release_prerelease=$release_prerelease" >> "$GITHUB_OUTPUT"
 
           serial="$RELEASE_TAG"
           serial="${serial##*.}"
@@ -128,15 +126,12 @@ jobs:
 
       - name: Validate public Windows assets
         shell: bash
-        env:
-          RELEASE_METADATA_PRERELEASE: ${{ steps.release_metadata.outputs.release_prerelease }}
         run: >-
           bash ./scripts/validate_release_assets.sh
           windows
           dist/release
           "$RELEASE_DATE_TAG"
           "$RELEASE_TAG"
-          "$RELEASE_METADATA_PRERELEASE"
 
       - name: Audit Windows bundle UX checkpoints
         shell: bash
