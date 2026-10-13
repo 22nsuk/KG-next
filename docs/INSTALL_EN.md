@@ -9,7 +9,7 @@ This guide answers four practical questions:
 
 ## Quick Answer First
 
-This installation guide is for the actively maintained `LizzieYzy Next` fork, which is the practical `LizzieYzy replacement / maintained fork` many users are actually looking for.
+This installation guide is for the actively maintained `KG-next` fork, which is the practical `LizzieYzy replacement / maintained fork` many users are actually looking for.
 
 - If you want a portable Windows `KataGo review software` package, start with `windows64.opencl.portable.zip`
 - If you are looking for a maintained `LizzieYzy` build that still works, this is the project to check first
@@ -73,7 +73,7 @@ The app labels these backends experimental. Use the stable OpenCL package if the
 1. Download `windows64.opencl.portable.zip`.
 2. Extract it to a normal folder.
 3. Open the extracted folder.
-4. Run `LizzieYzy Next OpenCL.exe`.
+4. Run `KG-next OpenCL.exe`.
 
 This is now the primary Windows path for regular users.
 The OpenCL bundle can also open `KataGo Auto Setup` and run `Smart Optimize` to write a better thread setting automatically.
@@ -92,7 +92,7 @@ If you prefer the installer flow:
 If OpenCL behaves badly on your PC:
 
 1. Download `windows64.with-katago.portable.zip`.
-2. Extract it and run `LizzieYzy Next.exe`.
+2. Extract it and run `KG-next.exe`.
 3. If you prefer the installer flow, switch to `windows64.with-katago.installer.exe`.
 
 ### Windows x64 NVIDIA bundle
@@ -101,20 +101,20 @@ If your PC has an NVIDIA GPU and you want higher analysis speed:
 
 1. Download `windows64.nvidia.portable.zip`.
 2. Extract it.
-3. Run `LizzieYzy Next NVIDIA.exe`.
+3. Run `KG-next NVIDIA.exe`.
 4. On first launch, the app automatically prepares the required official NVIDIA runtime files in your user folder.
 
 If you prefer the installer flow:
 
 1. Download `windows64.nvidia.installer.exe`.
 2. Double-click the installer.
-3. Finish setup and launch `LizzieYzy Next NVIDIA`.
+3. Finish setup and launch `KG-next NVIDIA`.
 
 This bundle ships with the official KataGo CUDA Windows build. If you want to tune speed further, open `KataGo Auto Setup` once and run `Smart Optimize` to apply a benchmark-based thread setting automatically. If you are not sure whether your PC has an NVIDIA GPU, use the regular `windows64.opencl.portable.zip` instead.
 
 ### Unified NVIDIA CUDA and optional TensorRT
 
-RTX 20/30/40/50 users all download `windows64.nvidia.portable.zip` and run `LizzieYzy Next NVIDIA.exe`; use the matching installer only when you prefer that flow. The package uses CUDA 12.8 + cuDNN 9.8, and CUDA is the default recommendation for RTX 40/50.
+RTX 20/30/40/50 users all download `windows64.nvidia.portable.zip` and run `KG-next NVIDIA.exe`; use the matching installer only when you prefer that flow. The package uses CUDA 12.8 + cuDNN 9.8, and CUDA is the default recommendation for RTX 40/50.
 
 TensorRT is no longer a huge standalone package recommended to regular users. RTX 30 series and earlier users may open `KataGo Auto Setup` and choose `Install TensorRT acceleration` as an optional alternative. The install UI detects the local NVIDIA GPU / Compute Capability and shows recommended, try, not recommended, or unknown status. The app downloads and verifies files from official KataGo / NVIDIA sources only; nothing is downloaded unless the user starts installation. Fully offline users can download every `.7z.00N` split asset, verify the matching README, manifest, and SHA-256 file, and extract from `.001`.
 
@@ -123,7 +123,7 @@ TensorRT is no longer a huge standalone package recommended to regular users. RT
 If you want your own engine without installation:
 
 1. Download `windows64.without.engine.portable.zip`.
-2. Extract it and run `LizzieYzy Next.exe`.
+2. Extract it and run `KG-next.exe`.
 3. This package includes the application runtime but not KataGo.
 4. Configure your own engine after launch.
 
@@ -131,7 +131,7 @@ If you prefer the installer flow:
 
 1. Download `windows64.without.engine.installer.exe`.
 2. Double-click the installer.
-3. Finish setup and launch `LizzieYzy Next`.
+3. Finish setup and launch `KG-next`.
 4. Configure your own engine after launch.
 
 ## macOS
@@ -145,9 +145,9 @@ If you prefer the installer flow:
 
 1. Open the correct `.dmg`.
 2. Confirm that the chip label in the top-right corner matches your Mac.
-3. Follow the arrow and drag `LizzieYzy Next.app` onto the `Applications` folder.
-4. Wait for the copy to finish, then eject the `LizzieYzy Next` installer disk in Finder.
-5. Open Finder's `Applications` folder and launch `LizzieYzy Next` from there.
+3. Follow the arrow and drag `KG-next.app` onto the `Applications` folder.
+4. Wait for the copy to finish, then eject the `KG-next - Apple Silicon` or `KG-next - Intel` installer disk in Finder.
+5. Open Finder's `Applications` folder and launch `KG-next` from there.
 
 Do not launch the app directly from the installer disk. That only runs the temporary
 copy mounted from the DMG and does not install the app.

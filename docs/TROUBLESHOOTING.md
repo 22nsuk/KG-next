@@ -13,7 +13,7 @@
 - 安装器版：重新运行 `windows64.with-katago.installer.exe`
 - NVIDIA CUDA 版：RTX 20/30/40/50 都确认下载的是统一 `windows64.nvidia.installer.exe` 或 `windows64.nvidia.portable.zip`，不要再使用旧 tag 的独立 `nvidia50` 包
 - 驱动 `570.65` 及以上会直接加载；`528.33–570.64` 首次执行一次轻量真实推理探测；更旧驱动会显示修复提示。RTX 40/50 默认使用 CUDA，RTX 30 系及以下可在 `KataGo 一键设置` 中选装 TensorRT
-- 便携版：确认你启动的是 `LizzieYzy Next.exe`
+- 便携版：确认你启动的是 `KG-next.exe`
 - 不要再从旧的 `.bat` 路径排查当前主发布版
 
 ### macOS
