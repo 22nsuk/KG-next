@@ -261,38 +261,6 @@ class R2ReleaseTest(unittest.TestCase):
             any(package["flavor"] == "rocm-gfx120x" for package in manifest["packages"])
         )
 
-    def test_legacy_manifest_is_schema_v1_with_pinned_core_zip(self):
-        source = release()
-        selected = r2_release.select_r2_assets(source, r2_release.DEFAULT_PUBLIC_BASE)
-        v2 = r2_release.build_manifest(source, selected, r2_release.DEFAULT_PUBLIC_BASE)
-        legacy = r2_release.build_legacy_manifest(v2)
-        core = legacy["components"][0]
-        built = v2["components"][0]
-
-        self.assertEqual(1, legacy["schemaVersion"])
-        self.assertIsInstance(legacy["schemaVersion"], int)
-        self.assertNotIsInstance(legacy["schemaVersion"], bool)
-        self.assertEqual("1", legacy["minUpdaterVersion"])
-        self.assertNotIn("packages", legacy)
-        self.assertFalse(legacy["prerelease"])
-        self.assertEqual(v2["releaseTag"], legacy["releaseTag"])
-        self.assertEqual([], core["mirrorUrls"])
-        self.assertEqual(
-            "https://github.com/wimi321/lizzieyzy-next/releases/download/"
-            "next-2026-09-26.2/2026-09-26-windows64.core-update.zip",
-            core["downloadUrl"],
-        )
-        self.assertEqual(43803520, core["sizeBytes"])
-        self.assertEqual(
-            "08d6d0846b7c892de49b16ff6d708d7ba231b37720bc521270f333dc26e16c3f",
-            core["sha256"],
-        )
-        self.assertEqual("2026-09-26-windows64.core-update.zip", core["assetName"])
-        self.assertNotEqual(built["downloadUrl"], core["downloadUrl"])
-        self.assertNotEqual(built["sizeBytes"], core["sizeBytes"])
-        self.assertNotEqual(built["sha256"], core["sha256"])
-        self.assertNotEqual(built["assetName"], core["assetName"])
-
     def test_signing_covers_exact_payload(self):
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey

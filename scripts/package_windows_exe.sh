@@ -10,7 +10,6 @@ DATE_TAG="${1:-$(date +%F)}"
 APP_VERSION="${2:-1.0.0}"
 JAR_PATH="${3:-target/lizzie-yzy2.5.3-shaded.jar}"
 APP_DISPLAY_VERSION="${LIZZIE_NEXT_VERSION:-${4:-next-dev}}"
-RELEASE_PRERELEASE="${LIZZIE_RELEASE_PRERELEASE:-false}"
 WINDOWS_UPGRADE_UUID="${WINDOWS_UPGRADE_UUID:-c2c4503c-1b53-5c0e-8759-40ad7d90d098}"
 WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE="${WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE:-1.0}"
 WINDOWS_JAVA_MAX_RAM_PERCENTAGE="${WINDOWS_JAVA_MAX_RAM_PERCENTAGE:-50.0}"
@@ -90,7 +89,6 @@ READBOARD_CACHE_DIR="$ROOT_DIR/.cache/readboard"
 READBOARD_STAGE_DIR="$DIST_DIR/readboard"
 PYTHON_BIN="${PYTHON_BIN:-}"
 INSTALLED_UPDATE_MANIFEST_NAME="lizzieyzy-next-installed-manifest.json"
-UPDATE_MANIFEST_NAME="lizzieyzy-next-update-manifest.json"
 RUNTIME_TOOLS_SCRIPT="$ROOT_DIR/scripts/package_runtime_tools.py"
 CUSTOM_RUNTIME_DIR="$DIST_DIR/custom-runtime/windows-x64"
 JPACKAGE_RUNTIME_ARGS=()
@@ -1379,18 +1377,6 @@ PY
   artifacts+=("$core_zip")
 }
 
-write_update_manifest() {
-  local manifest_file="$RELEASE_DIR/$UPDATE_MANIFEST_NAME"
-
-  resolve_python_bin
-  "$PYTHON_BIN" "$ROOT_DIR/scripts/legacy_update_manifest.py" \
-    --output "$manifest_file" \
-    --release-tag "$APP_DISPLAY_VERSION" \
-    --date-tag "$DATE_TAG" \
-    --prerelease "$RELEASE_PRERELEASE"
-  artifacts+=("$manifest_file")
-}
-
 assert_release_artifacts_within_limit() {
   local artifact
   for artifact in "${artifacts[@]}"; do
@@ -1608,7 +1594,6 @@ build_release_variant \
   "$WINDOWS_UPGRADE_UUID"
 
 create_core_update_asset
-write_update_manifest
 
 assert_release_artifacts_within_limit
 

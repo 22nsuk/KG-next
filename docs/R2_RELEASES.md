@@ -5,6 +5,7 @@
 > 也不在应用内下载或安装更新。旧更新器及其内置公钥已从 KG-next 客户端移除。
 > 下文的客户端行为和 GoAgent 下载入口描述的是上游 LizzieYzy Next，不是 KG-next 的使用说明。
 > 发布端的签名清单、R2 和频道指针工具仍保留；保留这些工具不代表 KG-next 已发布相应资产或启用该更新服务。
+> KG-next 不生成或上传旧版 schema v1 `lizzieyzy-next-update-manifest.json`，也不把上游 ZIP 标记为 KG-next 更新。下述签名 v2 清单与下载目录的发布流程保留。
 
 用户唯一公开入口是 `https://goagent.top/download/`。`download.goagent.top` 只作为安装包、
 公开目录和软件更新接口的技术后台；GitHub Release 始终保留完整资产、安装器、Linux 包、
@@ -73,7 +74,7 @@ Cloudflare Redirect Rule 必须仅匹配 `download.goagent.top` 的 `/` 和 `/in
 5. 通过自定义域名检查 HTTPS、长度、Range、缓存、下载响应头和根入口 301。
 6. 发布 R2 主链接 catalog 与轻量跳转页，最后发布签名 envelope 作为稳定频道的激活指针。
 7. 使用缓存穿透参数核对公网根入口、catalog 和 envelope 与本次发布一致。
-8. 将 v2 签名清单、catalog，以及旧客户端仍能解析的 schema v1 `lizzieyzy-next-update-manifest.json` 上传到 Release。v1 清单的 core `downloadUrl`、大小和 SHA-256 固定为 `next-2026-09-26.2` 的 core-update zip，不能改成刚构建的 zip。
+8. 将 v2 签名清单和 catalog 上传到 Release。
 9. 最后才把 GitHub pre-release 改为正式版和 latest。
 
 重复执行同一 tag 会复用大小与 SHA 已匹配的 R2 对象。已是正式版时，只有明确启用

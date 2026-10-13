@@ -68,7 +68,6 @@ Draft 身份。上传步骤整体超过 90 分钟也必须失败，不能跳过�
 - `windows64.experimental.rocm.gfx1151.portable.zip`
 - `windows64.experimental.rocm.gfx120x.portable.zip`
 - `windows64.core-update.zip`
-- `lizzieyzy-next-update-manifest.json`（schema v1。core 的 `downloadUrl`、`sizeBytes` 和 `sha256` 固定为 `next-2026-09-26.2` 的 `2026-09-26-windows64.core-update.zip`，不跟随本次构建）
 - `windows64.nvidia.tensorrt.portable.7z.001`
 - `windows64.nvidia.tensorrt.portable.7z.002`
 - `windows64.nvidia.tensorrt.portable.README.txt`
@@ -140,7 +139,7 @@ GitHub Actions：
 - 必须核对 6 个 `windows64.experimental.*.portable.zip`，其中 ROCm 包的架构目录和完整 `rocblas` / `hipblaslt` 数据不能被扁平化或漏包
 - 如果提供 OpenCL 包，要同时核对 `opencl.installer.exe` 和 `opencl.portable.zip`
 - 如果提供 Windows 无引擎包，要同时核对 `without.engine.installer.exe` 和 `without.engine.portable.zip`
-- 必须发布 schema v1 的 `lizzieyzy-next-update-manifest.json`。core 的下载地址、大小和 SHA-256 固定为 `https://github.com/wimi321/lizzieyzy-next/releases/download/next-2026-09-26.2/2026-09-26-windows64.core-update.zip`（43803520 字节，SHA-256 `08d6d0846b7c892de49b16ff6d708d7ba231b37720bc521270f333dc26e16c3f`），不能改成本次构建的 core zip
+- 必须核对 `windows64.core-update.zip`：内部清单的 tag、日期、文件集合、大小和 SHA-256 必须与本次构建一致；不得包含旧 updater 的根目录 jar 别名，也不发布指向上游程序的 v1 更新清单
 - Linux 必须同时核对 `linux64.with-katago.zip`、`linux64.opencl.zip` 和 `linux64.nvidia.zip`
 - 界面里仍然写的是 `野狐棋谱（输入野狐昵称获取）`
 - 发布页最上面的中文说明里，要明确写“普通 Windows 包也支持智能优化”
@@ -298,7 +297,7 @@ R2 只保留当前正式版且设有 `9,000,000,000` 字节硬门禁。完整配
 - 不把免安装包和安装器压缩成同一行，也不使用 `portable / installer` 这类需要用户猜测的短标签。
 - TensorRT 的 `.7z.001` 与 `.7z.002` 是同一套分卷，可以在同一行连续列出，但必须同时显示完整文件名和直链。
 - `publish_release_request.py` 会检查六种语言的下载表；任何语言缺少完整文件名直链都不能发布。
-- `lizzieyzy-next-update-manifest.json` 以及 TensorRT 的 README、manifest、SHA-256 辅助文件不进入普通用户下载表，但必须作为公开 Release 资产存在并通过发布器校验。v1 清单的 core 下载元数据固定指向 `next-2026-09-26.2`，不与本次 core zip 互相覆盖。
+- TensorRT 的 README、manifest、SHA-256 辅助文件不进入普通用户下载表，但必须作为公开 Release 资产存在并通过发布器校验。
 - pre-release 与 Release 正文中的文件直链都保持 GitHub；正式版正文顶部只额外推荐统一的官网下载页面。
 
 ## 七、上传前自查
@@ -308,8 +307,7 @@ R2 只保留当前正式版且设有 `9,000,000,000` 字节硬门禁。完整配
 - 文件名日期一致
 - Windows 主推荐资产确实是 `portable.zip`
 - Windows 无引擎包已经是 `.portable.zip`
-- `windows64.core-update.zip` 已生成，且根目录不再包含 `lizzieyzy-next-core.jar`
-- `lizzieyzy-next-update-manifest.json` 已生成，`schemaVersion` 为 1，core 下载地址与校验值固定为上述 2026-09-26.2 zip
+- `windows64.core-update.zip` 已生成
 - TensorRT `.7z.001`、`.7z.002`、README、manifest、SHA-256 文件全部存在，分卷连续且校验值正确
 - macOS 同时有 `arm64` 与 `amd64` 的 `.dmg`
 - Linux 同时有 `with-katago`、`opencl` 与 `nvidia` 三个 zip
