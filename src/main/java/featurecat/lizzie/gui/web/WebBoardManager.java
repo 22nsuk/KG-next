@@ -172,23 +172,8 @@ public class WebBoardManager {
   private volatile DesktopRefresher desktopRefresher =
       () -> {
         if (Lizzie.frame == null) return;
-        // 强制变化树重画：常规 path 只在 treeNode != currentHistoryNode 时重画
-        // (LizzieFrame.java:9772)，但试下不动真 currentNode，所以默认不会触发重画。
         Lizzie.frame.redrawTree = true;
         javax.swing.SwingUtilities.invokeLater(() -> Lizzie.frame.refresh());
-        // 变化树由异步线程算缓存图，第一次 paint 启动线程时缓存还没更新；
-        // 离散事件后没有连续 paint，延迟一次 repaint 让新缓存上屏。
-        javax.swing.Timer timer =
-            new javax.swing.Timer(
-                300,
-                ev -> {
-                  if (Lizzie.frame != null) {
-                    Lizzie.frame.redrawTree = true;
-                    Lizzie.frame.repaint();
-                  }
-                });
-        timer.setRepeats(false);
-        timer.start();
       };
   private volatile TrialSession activeSession;
 

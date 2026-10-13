@@ -543,8 +543,6 @@ public class LizzieFrame extends JFrame {
 
   public int varTreeMaxX = 1;
   public int varTreeMaxY = 1;
-  public int varTreeCurX;
-  public int varTreeCurY;
 
   private int varTreeX;
   private int varTreeY;
@@ -13668,8 +13666,6 @@ public class LizzieFrame extends JFrame {
     } else {
       varTreeMaxX = result.image().getWidth();
       varTreeMaxY = result.image().getHeight();
-      varTreeCurX = result.currentX();
-      varTreeCurY = result.currentY();
       varTreePane.setPreferredSize(new Dimension(Utils.zoomIn(varTreeMaxX), Utils.zoomIn(varTreeMaxY)));
       varTreeScrollPane.setHorizontalScrollBarPolicy(
           varTreeH < 100 || varTreeMaxX <= varTreeW
@@ -13711,10 +13707,6 @@ public class LizzieFrame extends JFrame {
         || request.board() != Lizzie.board || request.board().getHistory() != request.history()
         || request.history().getCurrentHistoryNode() != request.node()) return;
     renderVarTree(0, 0, false, request.toEnd());
-  }
-
-  public void renderVarTreeCur() {
-    renderVarTree(0, 0, false, false);
   }
 
   public void renderVarTree(int vw, int vh, boolean changeSize, boolean needGetEnd) {
