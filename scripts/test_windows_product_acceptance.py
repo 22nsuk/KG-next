@@ -320,7 +320,6 @@ namespace FixtureLauncher {
         payloads = {
             "app/lizzie-yzy2.5.3-shaded.jar": b"candidate core jar",
             "app/KG-next.cfg": b"candidate launcher cfg",
-            "lizzieyzy-next-core.jar": b"candidate core jar",
         }
         if noop_config:
             payloads["app/KG-next.cfg"] = b"[Application]\napp.mainjar=lizzie-yzy2.5.3-shaded.jar\n"

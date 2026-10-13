@@ -31,7 +31,6 @@ DEFAULT_PUBLIC_BASE = "https://download.goagent.top"
 DEFAULT_WEBSITE_DOWNLOAD_URL = "https://goagent.top/download/"
 DEFAULT_KEY_ID = "stable-2026-08"
 UPDATE_ENVELOPE_ASSET = "lizzieyzy-next-update-envelope.json"
-LEGACY_MANIFEST_ASSET = "lizzieyzy-next-update-manifest.json"
 CATALOG_ASSET = "lizzieyzy-next-download-catalog.json"
 TEST_CHANNEL_POINTER_TAG = "channel-beta"
 PACKAGED_RELEASE_TAG = re.compile(r"^next-\d{4}-\d{2}-\d{2}\.[1-9]\d*$")
@@ -334,21 +333,6 @@ def plan_test_channel_publish(
         pointer_allowed_assets=(UPDATE_ENVELOPE_ASSET,),
         r2_keys=(),
     )
-
-
-def build_legacy_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
-    core = dict(manifest["components"][0])
-    core["downloadUrl"] = core["mirrorUrls"][0]
-    core["mirrorUrls"] = []
-    return {
-        "schemaVersion": 1,
-        "releaseTag": manifest["releaseTag"],
-        "publishedAt": manifest["publishedAt"],
-        "notesUrl": manifest["notesUrl"],
-        "minUpdaterVersion": "1",
-        "prerelease": False,
-        "components": [core],
-    }
 
 
 def stable_release_body(
@@ -1673,7 +1657,6 @@ def promote(args: argparse.Namespace) -> None:
         release, selected, args.public_base, github_primary=True
     )
     envelope = sign_manifest(manifest, private_key, args.key_id)
-    legacy = build_legacy_manifest(manifest)
 
     client = r2_client(account_id, access_key, secret_key)
     verify_combined_storage_budget(client, args.bucket, total)
@@ -1703,7 +1686,6 @@ def promote(args: argparse.Namespace) -> None:
     )
     replace_github_asset(session, release, UPDATE_ENVELOPE_ASSET, envelope_body, "application/json")
     replace_github_asset(session, release, CATALOG_ASSET, catalog_body, "application/json")
-    replace_github_asset(session, release, LEGACY_MANIFEST_ASSET, json_bytes(legacy), "application/json")
 
     release_body = stable_release_body(
         release,

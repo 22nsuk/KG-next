@@ -216,16 +216,6 @@ _WINDOWS_ASSETS = (
     ),
     _asset("windows_core_update", "windows64.core-update.zip", "windows", "x86_64", CandidateClass.CORE_UPDATE, False, public=14, notes=True, direct=1),
     _asset(
-        "windows_update_manifest",
-        "lizzieyzy-next-update-manifest.json",
-        "windows",
-        "x86_64",
-        CandidateClass.SUPPORT,
-        False,
-        public=15,
-        literal=True,
-    ),
-    _asset(
         "windows_tensorrt_split_001",
         "windows64.nvidia.tensorrt.portable.7z.001",
         "windows",

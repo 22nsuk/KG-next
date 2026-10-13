@@ -64,7 +64,8 @@
 - TensorRT 分卷包是可选资产，不计入普通用户主推荐路径；只下载 `.7z.001` 没用，必须下载全部 `.7z.00N`。
 - Windows 64 位现在优先推荐免安装包，安装器作为可选路径保留。
 - Windows 免安装包会在解压目录内启用便携模式，配置、日志、保存棋谱、下载权重和软件内安装的 TensorRT 文件都随这个文件夹保存，主要位于 `user-data/`。
-- 已有 Windows 免安装版时，关闭软件后把 `<date>-windows64.core-update.zip` 解压到旧目录覆盖即可；它更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/LizzieYzy Next*.cfg`，并携带 `lizzieyzy-next-core.jar` 兼容旧版自动更新请求。这个兼容文件与主 jar 内容、校验值相同，不会覆盖权重、引擎、运行环境、JCEF、readboard、TensorRT 或 `user-data/`。
+- 已有 KG-next Windows 免安装版时，关闭软件后把 `<date>-windows64.core-update.zip` 解压到旧目录覆盖即可；它更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/KG-next*.cfg`，不会覆盖权重、引擎、运行环境、JCEF、readboard、TensorRT 或 `user-data/`。
+- KG-next 不发布旧版应用内更新器的 `lizzieyzy-next-update-manifest.json`，也不在 core zip 中保留 `lizzieyzy-next-core.jar` 别名。KG-next 的更新入口只打开本项目的 Release 页面；上游旧客户端读取的是上游发布地址，不能把上游 core zip 当作 KG-next 更新发布。core zip 内的 `lizzieyzy-next-core-update-manifest.json` 仍记录本次构建的版本、文件大小和 SHA-256，供手动覆盖包校验使用。
 - 远程算力不属于发布包资产：`设置 -> 远程算力中心` 只保存非敏感连接配置；勾选记住的智子凭据进入系统安全存储，不写普通配置。智子云算力、KaTrain/SWHub 自建远程服务或任何云端模型都不会打进安装包。
 - 旧 tag 里如果还看到兼容 zip 或历史包，那属于历史发布格式。
 

@@ -10,7 +10,6 @@ DATE_TAG="${1:-$(date +%F)}"
 APP_VERSION="${2:-1.0.0}"
 JAR_PATH="${3:-target/lizzie-yzy2.5.3-shaded.jar}"
 APP_DISPLAY_VERSION="${LIZZIE_NEXT_VERSION:-${4:-next-dev}}"
-RELEASE_PRERELEASE="${LIZZIE_RELEASE_PRERELEASE:-false}"
 WINDOWS_UPGRADE_UUID="${WINDOWS_UPGRADE_UUID:-c2c4503c-1b53-5c0e-8759-40ad7d90d098}"
 WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE="${WINDOWS_JAVA_INITIAL_RAM_PERCENTAGE:-1.0}"
 WINDOWS_JAVA_MAX_RAM_PERCENTAGE="${WINDOWS_JAVA_MAX_RAM_PERCENTAGE:-50.0}"
@@ -90,7 +89,6 @@ READBOARD_CACHE_DIR="$ROOT_DIR/.cache/readboard"
 READBOARD_STAGE_DIR="$DIST_DIR/readboard"
 PYTHON_BIN="${PYTHON_BIN:-}"
 INSTALLED_UPDATE_MANIFEST_NAME="lizzieyzy-next-installed-manifest.json"
-UPDATE_MANIFEST_NAME="lizzieyzy-next-update-manifest.json"
 RUNTIME_TOOLS_SCRIPT="$ROOT_DIR/scripts/package_runtime_tools.py"
 CUSTOM_RUNTIME_DIR="$DIST_DIR/custom-runtime/windows-x64"
 JPACKAGE_RUNTIME_ARGS=()
@@ -1268,8 +1266,6 @@ create_core_update_asset() {
   rm -rf "$core_dir" "$core_zip"
   mkdir -p "$core_dir/app"
   cp "$JAR_PATH" "$core_dir/app/$MAIN_JAR"
-  # Clients released before the component-path migration still request this root-level alias.
-  cp "$JAR_PATH" "$core_dir/lizzieyzy-next-core.jar"
   shopt -s nullglob
   for launcher_cfg in "$DIST_DIR"/app-image-*/*/app/*.cfg; do
     cp "$launcher_cfg" "$core_dir/app/$(basename "$launcher_cfg")"
@@ -1296,7 +1292,6 @@ Date: $DATE_TAG
 这个包只更新 KG-next 主程序核心和启动器配置。
 启动器配置用于同步标题栏版本号和必要 JVM 参数；不会改变你的引擎、权重或用户数据。
 KataGo 引擎、权重、JCEF、readboard、Java runtime、设置、棋谱、TensorRT 和 user-data 都会保留。
-只有未来更新 manifest 明确列出资源组件时，才需要下载对应的大资源更新。
 
 Manual update:
 - Existing Windows portable users can use this small package for regular updates.
@@ -1306,7 +1301,7 @@ Manual update:
 
 This package updates the application core and launcher configuration only.
 The launcher configuration keeps the title-bar version and required JVM options in sync.
-KataGo engines, weights, JCEF, readboard, Java runtime, settings, saves, TensorRT, and user-data are preserved unless a future update manifest explicitly lists a changed resource component.
+KataGo engines, weights, JCEF, readboard, Java runtime, settings, saves, TensorRT, and user-data are preserved.
 EOF
 
   resolve_python_bin
@@ -1337,13 +1332,6 @@ jar_sha256 = sha256(jar)
 files = [
     {
         "path": f"app/{main_jar}",
-        "purpose": "in-app-updater-and-manual-overlay-target",
-        "sizeBytes": jar.stat().st_size,
-        "sha256": jar_sha256,
-    },
-    {
-        "path": "lizzieyzy-next-core.jar",
-        "purpose": "legacy-in-app-updater-source",
         "sizeBytes": jar.stat().st_size,
         "sha256": jar_sha256,
     },
@@ -1387,65 +1375,6 @@ PY
   powershell.exe -NoProfile -Command \
     "Compress-Archive -Path '$native_core_dir\\*' -DestinationPath '$native_core_zip' -Force"
   artifacts+=("$core_zip")
-}
-
-write_update_manifest() {
-  local manifest_file="$RELEASE_DIR/$UPDATE_MANIFEST_NAME"
-  local core_zip="$RELEASE_DIR/${DATE_TAG}-${ARCH_TAG}.core-update.zip"
-  local repo="${GITHUB_REPOSITORY:-wimi321/lizzieyzy-next}"
-  local core_sha
-  local core_size
-
-  if [[ ! -f "$core_zip" ]]; then
-    echo "Core update asset missing: $core_zip" >&2
-    return 1
-  fi
-  core_sha="$(release_sha256 "$core_zip")"
-  core_size="$(stat -c '%s' "$core_zip")"
-  resolve_python_bin
-  "$PYTHON_BIN" - \
-    "$manifest_file" \
-    "$repo" \
-    "$APP_DISPLAY_VERSION" \
-    "$DATE_TAG" \
-    "$RELEASE_PRERELEASE" \
-    "$(basename "$core_zip")" \
-    "$core_size" \
-    "$core_sha" <<'PY'
-import json
-import pathlib
-import sys
-
-manifest_file, repo, release_tag, date_tag, prerelease, core_asset, core_size, core_sha = sys.argv[1:]
-if prerelease not in {"true", "false"}:
-    raise SystemExit(f"LIZZIE_RELEASE_PRERELEASE must be true or false, got {prerelease!r}")
-download_base = f"https://github.com/{repo}/releases/download/{release_tag}"
-payload = {
-    "schemaVersion": 1,
-    "releaseTag": release_tag,
-    "publishedAt": f"{date_tag}T00:00:00Z",
-    "notesUrl": f"https://github.com/{repo}/releases/tag/{release_tag}",
-    "minUpdaterVersion": "1",
-    "prerelease": prerelease == "true",
-    "components": [
-        {
-            "id": "core",
-            "platform": "windows",
-            "flavor": "all",
-            "version": release_tag,
-            "assetName": core_asset,
-            "downloadUrl": f"{download_base}/{core_asset}",
-            "sizeBytes": int(core_size),
-            "sha256": core_sha,
-            "installAction": "replace-core",
-            "defaultSelectedIfChanged": True,
-            "mirrorUrls": [],
-        }
-    ],
-}
-pathlib.Path(manifest_file).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-PY
-  artifacts+=("$manifest_file")
 }
 
 assert_release_artifacts_within_limit() {
@@ -1665,7 +1594,6 @@ build_release_variant \
   "$WINDOWS_UPGRADE_UUID"
 
 create_core_update_asset
-write_update_manifest
 
 assert_release_artifacts_within_limit
 

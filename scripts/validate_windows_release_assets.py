@@ -12,9 +12,6 @@ import sys
 import zipfile
 
 
-EXPECTED_RELEASE_REPOSITORY = "wimi321/lizzieyzy-next"
-
-
 class ValidationError(RuntimeError):
     """A Windows release asset invariant failed."""
 
@@ -57,88 +54,17 @@ def parse_sha256_file(path: Path) -> dict[str, str]:
     return checksums
 
 
-def validate_update_manifest(
-    release_dir: Path,
-    date_tag: str,
-    release_tag: str,
-    prerelease: bool,
-) -> None:
-    manifest_path = release_dir / "lizzieyzy-next-update-manifest.json"
-    manifest = load_json(manifest_path)
-    require(manifest.get("schemaVersion") == 1, "Update manifest schemaVersion must be 1")
-    require(
-        manifest.get("releaseTag") == release_tag,
-        f"Update manifest releaseTag must be {release_tag}",
-    )
-    require(
-        manifest.get("publishedAt") == f"{date_tag}T00:00:00Z",
-        f"Update manifest publishedAt must match {date_tag}",
-    )
-    require(
-        type(manifest.get("prerelease")) is bool
-        and manifest.get("prerelease") is prerelease,
-        f"Update manifest prerelease must be {str(prerelease).lower()}",
-    )
-    expected_notes_url = (
-        f"https://github.com/{EXPECTED_RELEASE_REPOSITORY}/releases/tag/{release_tag}"
-    )
-    require(
-        manifest.get("notesUrl") == expected_notes_url,
-        "Update manifest notesUrl must use the exact official repository and release tag",
-    )
-
-    components = manifest.get("components")
-    require(
-        isinstance(components, list) and bool(components),
-        "Update manifest must include components",
-    )
-    cores = [
-        item
-        for item in components
-        if isinstance(item, dict) and item.get("id") == "core"
-    ]
-    require(len(cores) == 1, "Update manifest must include exactly one core component")
-    core = cores[0]
+def validate_core_update_archive(release_dir: Path, date_tag: str, release_tag: str) -> None:
     expected_asset = f"{date_tag}-windows64.core-update.zip"
-    require(core.get("assetName") == expected_asset, "Core update assetName is incorrect")
-    require(core.get("platform") == "windows", "Core update platform must be windows")
-    require(core.get("flavor") == "all", "Core update flavor must be all")
-    require(core.get("version") == release_tag, "Core update version must match release tag")
-    require(
-        core.get("installAction") == "replace-core",
-        "Core installAction is incorrect",
-    )
-    require(
-        core.get("defaultSelectedIfChanged") is True,
-        "Core update must be selected when changed",
-    )
-    expected_download_url = (
-        f"https://github.com/{EXPECTED_RELEASE_REPOSITORY}/releases/download/"
-        f"{release_tag}/{expected_asset}"
-    )
-    require(
-        core.get("downloadUrl") == expected_download_url,
-        "Core update downloadUrl must use the exact official repository, tag, and asset",
-    )
     core_path = release_dir / expected_asset
     require(core_path.is_file(), f"Missing core update asset: {expected_asset}")
-    require(
-        core.get("sizeBytes") == core_path.stat().st_size,
-        "Core update sizeBytes is incorrect",
-    )
-    core_hash = sha256(core_path)
-    require(
-        str(core.get("sha256") or "").lower() == core_hash,
-        "Core update SHA-256 is incorrect",
-    )
 
     try:
         with zipfile.ZipFile(core_path) as archive:
-            entries = {
-                name.replace("\\", "/")
-                for name in archive.namelist()
-                if name and not name.endswith("/")
-            }
+            members = [entry for entry in archive.infolist() if not entry.is_dir()]
+            by_path = {entry.filename.replace("\\", "/"): entry for entry in members}
+            require(len(by_path) == len(members), "Core update has duplicate file paths")
+            entries = set(by_path)
     except (OSError, zipfile.BadZipFile) as exc:
         raise ValidationError(f"Invalid core update ZIP: {exc}") from exc
     require(
@@ -146,8 +72,8 @@ def validate_update_manifest(
         "Core update is missing the main jar",
     )
     require(
-        "lizzieyzy-next-core.jar" in entries,
-        "Core update is missing the legacy updater alias",
+        "lizzieyzy-next-core.jar" not in entries,
+        "Core update must not include the retired updater jar alias",
     )
     require(
         any(entry.startswith("app/KG-next") and entry.endswith(".cfg") for entry in entries),
@@ -174,6 +100,45 @@ def validate_update_manifest(
             remainder = normalized[4:]
             second = remainder.split("/", 1)[0] if "/" in remainder else ""
             require(second not in forbidden, f"Core update contains app resource path: {entry}")
+
+    # The manual overlay's own manifest describes this build; no public updater
+    # manifest or upstream bridge is needed to verify its identity and bytes.
+    manifest_name = "lizzieyzy-next-core-update-manifest.json"
+    try:
+        with zipfile.ZipFile(core_path) as archive:
+            manifest = json.loads(archive.read(manifest_name))
+            require(isinstance(manifest, dict), "Core installed manifest must be an object")
+            require(
+                type(manifest.get("schemaVersion")) is int
+                and manifest["schemaVersion"] == 1,
+                "Core installed manifest schemaVersion must be 1",
+            )
+            require(manifest.get("kind") == "windows-core-update", "Core manifest kind is incorrect")
+            require(manifest.get("releaseTag") == release_tag, "Core manifest releaseTag is incorrect")
+            require(manifest.get("dateTag") == date_tag, "Core manifest dateTag is incorrect")
+            files = manifest.get("files")
+            require(isinstance(files, list) and bool(files), "Core manifest files must be nonempty")
+            expected = entries - {manifest_name, "README.txt"}
+            seen: set[str] = set()
+            for item in files:
+                require(isinstance(item, dict), "Core manifest file must be an object")
+                name = item.get("path")
+                require(isinstance(name, str) and name in expected, "Core manifest file inventory mismatch")
+                require(name not in seen, "Core manifest has a duplicate file")
+                seen.add(name)
+                require(
+                    type(item.get("sizeBytes")) is int
+                    and item["sizeBytes"] == by_path[name].file_size,
+                    f"Core file size mismatch: {name}",
+                )
+                digest = hashlib.sha256()
+                with archive.open(by_path[name]) as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                require(item.get("sha256") == digest.hexdigest(), f"Core file SHA mismatch: {name}")
+            require(seen == expected, "Core manifest file inventory mismatch")
+    except (OSError, zipfile.BadZipFile, KeyError, ValueError) as exc:
+        raise ValidationError(f"Invalid core installed manifest: {exc}") from exc
 
 
 def validate_tensorrt_split(
@@ -275,7 +240,7 @@ def validate_windows_release_assets(
         re.fullmatch(rf"next-{re.escape(date_tag)}\.[1-9][0-9]*", release_tag) is not None,
         "Release tag must exactly match the date tag",
     )
-    validate_update_manifest(release_dir, date_tag, release_tag, prerelease)
+    validate_core_update_archive(release_dir, date_tag, release_tag)
     validate_tensorrt_split(release_dir, date_tag, release_tag)
 
 
@@ -300,7 +265,7 @@ def main() -> int:
     except ValidationError as exc:
         print(f"Windows release validation failed: {exc}", file=sys.stderr)
         return 1
-    print("Validated Windows update manifest and TensorRT split integrity.")
+    print("Validated Windows core-update archive and TensorRT split integrity.")
     return 0
 
 

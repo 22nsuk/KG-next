@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -50,46 +51,29 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def create_valid_fixture(self) -> None:
+    def write_core(self, *, manifest_changes=None, file_changes=None) -> None:
+        files = {"app/lizzie-yzy2.5.3-shaded.jar": b"jar", "app/KG-next.cfg": b"cfg"}
+        manifest = {
+            "schemaVersion": 1,
+            "kind": "windows-core-update",
+            "releaseTag": RELEASE_TAG,
+            "dateTag": DATE_TAG,
+            "files": [
+                {"path": name, "sizeBytes": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+                for name, content in files.items()
+            ],
+        }
+        manifest.update(manifest_changes or {})
+        files.update(file_changes or {})
         core_path = self.release_dir / self.core_name
         with zipfile.ZipFile(core_path, "w") as archive:
-            archive.writestr("app/lizzie-yzy2.5.3-shaded.jar", b"jar")
-            archive.writestr("app/KG-next.cfg", b"cfg")
-            archive.writestr("lizzieyzy-next-core.jar", b"alias")
+            for name, content in files.items():
+                archive.writestr(name, content)
             archive.writestr("README.txt", b"readme")
-            archive.writestr("lizzieyzy-next-core-update-manifest.json", b"{}")
-        core_hash = validator.sha256(core_path)
-        self.write_json(
-            "lizzieyzy-next-update-manifest.json",
-            {
-                "schemaVersion": 1,
-                "releaseTag": RELEASE_TAG,
-                "publishedAt": f"{DATE_TAG}T00:00:00Z",
-                "notesUrl": (
-                    "https://github.com/wimi321/lizzieyzy-next/releases/tag/"
-                    f"{RELEASE_TAG}"
-                ),
-                "prerelease": True,
-                "components": [
-                    {
-                        "id": "core",
-                        "platform": "windows",
-                        "flavor": "all",
-                        "version": RELEASE_TAG,
-                        "assetName": self.core_name,
-                        "downloadUrl": (
-                            "https://github.com/wimi321/lizzieyzy-next/releases/download/"
-                            f"{RELEASE_TAG}/{self.core_name}"
-                        ),
-                        "sizeBytes": core_path.stat().st_size,
-                        "sha256": core_hash,
-                        "installAction": "replace-core",
-                        "defaultSelectedIfChanged": True,
-                    }
-                ],
-            },
-        )
+            archive.writestr("lizzieyzy-next-core-update-manifest.json", json.dumps(manifest))
 
+    def create_valid_fixture(self) -> None:
+        self.write_core()
         for index, name in enumerate(self.part_names, 1):
             (self.release_dir / name).write_bytes(f"part-{index}".encode("ascii"))
         (self.release_dir / self.readme_name).write_text(
@@ -126,6 +110,45 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
 
     def test_accepts_exact_release_identity_and_integrity(self) -> None:
         self.validate()
+
+    def test_manual_overlay_does_not_need_a_public_updater_manifest(self) -> None:
+        self.assertFalse((self.release_dir / "lizzieyzy-next-update-manifest.json").exists())
+        self.validate(prerelease=False)
+        self.validate(prerelease=True)
+
+    def test_rejects_retired_alias_and_preserved_resources_in_core(self) -> None:
+        for name in ("lizzieyzy-next-core.jar", "app/weights/model.bin.gz", "user-data/config.txt"):
+            with self.subTest(name=name):
+                self.write_core(file_changes={name: b"must not ship"})
+                with self.assertRaises(validator.ValidationError):
+                    self.validate()
+
+    def test_rejects_core_manifest_from_another_build(self) -> None:
+        for field, value in (("releaseTag", "next-old"), ("dateTag", "2026-08-18"),
+                             ("schemaVersion", True), ("kind", "upstream-bridge")):
+            with self.subTest(field=field):
+                self.write_core(manifest_changes={field: value})
+                with self.assertRaisesRegex(validator.ValidationError, field):
+                    self.validate()
+
+    def test_rejects_changed_core_bytes_and_incomplete_inventory(self) -> None:
+        for changes, message in (
+            ({"app/lizzie-yzy2.5.3-shaded.jar": b"bad"}, "SHA mismatch"),
+            ({"app/KG-next.cfg": b"longer"}, "size mismatch"),
+            ({"app/KG-next NVIDIA.cfg": b"cfg"}, "inventory mismatch"),
+        ):
+            with self.subTest(changes=changes):
+                self.write_core(file_changes=changes)
+                with self.assertRaisesRegex(validator.ValidationError, message):
+                    self.validate()
+
+    def test_rejects_empty_or_duplicate_core_inventory(self) -> None:
+        item = {"path": "app/KG-next.cfg", "sizeBytes": 3, "sha256": hashlib.sha256(b"cfg").hexdigest()}
+        for files, message in (([], "nonempty"), ([item, item], "duplicate")):
+            with self.subTest(files=files):
+                self.write_core(manifest_changes={"files": files})
+                with self.assertRaisesRegex(validator.ValidationError, message):
+                    self.validate()
 
     def test_rejects_missing_or_extra_tensorrt_volume(self) -> None:
         (self.release_dir / self.part_names[1]).unlink()
@@ -171,85 +194,6 @@ class WindowsReleaseAssetValidationTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(validator.ValidationError, "checksum mismatch"):
             self.validate()
-
-    def test_rejects_update_manifest_release_identity_mismatch(self) -> None:
-        for field, value, message in (
-            ("releaseTag", "next-2026-08-18.1", "releaseTag"),
-            ("publishedAt", "2026-08-18T00:00:00Z", "publishedAt"),
-            (
-                "notesUrl",
-                "https://github.com/example/repo/releases/tag/next-old",
-                "notesUrl",
-            ),
-        ):
-            with self.subTest(field=field):
-                self.create_valid_fixture()
-                manifest = self.read_json("lizzieyzy-next-update-manifest.json")
-                manifest[field] = value
-                self.write_json("lizzieyzy-next-update-manifest.json", manifest)
-                with self.assertRaisesRegex(validator.ValidationError, message):
-                    self.validate()
-
-    def test_rejects_manifest_urls_that_only_share_a_matching_suffix(self) -> None:
-        manifest = self.read_json("lizzieyzy-next-update-manifest.json")
-        expected_notes = str(manifest["notesUrl"])
-        components = manifest["components"]
-        assert isinstance(components, list) and isinstance(components[0], dict)
-        expected_download = str(components[0]["downloadUrl"])
-
-        for field, malicious, message in (
-            (
-                "notesUrl",
-                f"https://evil.invalid/proxy/{expected_notes}",
-                "notesUrl",
-            ),
-            (
-                "notesUrl",
-                f"{expected_notes}?redirect=https://evil.invalid",
-                "notesUrl",
-            ),
-            (
-                "downloadUrl",
-                f"https://evil.invalid/proxy/{expected_download}",
-                "downloadUrl",
-            ),
-            (
-                "downloadUrl",
-                f"{expected_download}#stale-replacement",
-                "downloadUrl",
-            ),
-        ):
-            with self.subTest(field=field):
-                self.create_valid_fixture()
-                manifest = self.read_json("lizzieyzy-next-update-manifest.json")
-                if field == "notesUrl":
-                    manifest[field] = malicious
-                else:
-                    items = manifest["components"]
-                    assert isinstance(items, list) and isinstance(items[0], dict)
-                    items[0][field] = malicious
-                self.write_json("lizzieyzy-next-update-manifest.json", manifest)
-                with self.assertRaisesRegex(validator.ValidationError, message):
-                    self.validate()
-
-    def test_rejects_update_manifest_prerelease_mismatch(self) -> None:
-        with self.assertRaisesRegex(validator.ValidationError, "prerelease"):
-            self.validate(prerelease=False)
-
-    def test_rejects_core_component_version_or_download_tag_mismatch(self) -> None:
-        for field, value, message in (
-            ("version", "next-old", "version"),
-            ("downloadUrl", "https://example.invalid/wrong.zip", "downloadUrl"),
-        ):
-            with self.subTest(field=field):
-                self.create_valid_fixture()
-                manifest = self.read_json("lizzieyzy-next-update-manifest.json")
-                components = manifest["components"]
-                assert isinstance(components, list) and isinstance(components[0], dict)
-                components[0][field] = value
-                self.write_json("lizzieyzy-next-update-manifest.json", manifest)
-                with self.assertRaisesRegex(validator.ValidationError, message):
-                    self.validate()
 
     def test_rejects_tensorrt_manifest_release_tag_mismatch(self) -> None:
         manifest = self.read_json(self.manifest_name)

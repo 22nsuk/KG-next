@@ -6,9 +6,51 @@ import os
 import shutil
 import subprocess
 import tempfile
+import zipfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def verify_manual_core_update(package_script: str) -> None:
+    if "write_update_manifest" in package_script or "legacy_update_manifest.py" in package_script:
+        raise AssertionError("KG-next must not publish the retired upstream updater manifest")
+    if os.name == "nt" or shutil.which("bash") is None:
+        return  # Exercise the shell packager in the POSIX script gate.
+    from validate_windows_release_assets import validate_core_update_archive
+
+    start = package_script.index("create_core_update_asset() {")
+    end = package_script.index("\nassert_release_artifacts_within_limit() {", start)
+    with tempfile.TemporaryDirectory(prefix="manual core ") as temporary:
+        root = Path(temporary)
+        (root / "release").mkdir()
+        cfg = root / "dist/app-image-nvidia/KG-next NVIDIA/app/KG-next NVIDIA.cfg"
+        cfg.parent.mkdir(parents=True)
+        cfg.write_bytes(b"[Application]\napp.version=next-2026-10-13.1\n")
+        (root / "gui.jar").write_bytes(b"current KG-next core")
+        script = '''set -euo pipefail
+DIST_DIR="$1/dist"
+RELEASE_DIR="$1/release"
+JAR_PATH="$1/gui.jar"
+MAIN_JAR=lizzie-yzy2.5.3-shaded.jar
+DATE_TAG=2026-10-13
+ARCH_TAG=windows64
+APP_DISPLAY_VERSION=next-2026-10-13.1
+artifacts=()
+resolve_python_bin() { PYTHON_BIN=python3; }
+to_native_path() { printf '%s' "$1"; }
+log_step() { :; }
+powershell.exe() { :; }
+''' + package_script[start:end] + '\ncreate_core_update_asset\n'
+        # Only native ZIP compression is replaced; stage files and the installed
+        # manifest are produced by the actual release function above.
+        subprocess.run(["bash", "-c", script, "fixture", str(root)], check=True)
+        core_root = root / "dist/core-update"
+        with zipfile.ZipFile(root / "release/2026-10-13-windows64.core-update.zip", "w") as archive:
+            for file in core_root.rglob("*"):
+                if file.is_file():
+                    archive.write(file, file.relative_to(core_root).as_posix())
+        validate_core_update_archive(root / "release", "2026-10-13", "next-2026-10-13.1")
 
 
 def verify_engine_staging(package_script: str) -> None:
@@ -86,6 +128,7 @@ python3() {
 
 def main() -> None:
     package_script = (ROOT / "scripts/package_windows_exe.sh").read_text(encoding="utf-8")
+    verify_manual_core_update(package_script)
     verify_engine_staging(package_script)
     runtime_tools = (ROOT / "scripts/package_runtime_tools.py").read_text(encoding="utf-8")
     smoke_script = (ROOT / "scripts/windows_smoke_test.ps1").read_text(encoding="utf-8")
@@ -179,16 +222,6 @@ def main() -> None:
     verify_nvidia_dependency_origin(workflow)
     if "windows-x64/libz.dll" in workflow:
         raise AssertionError("KataGo 1.18 Windows bundles use z.dll, not the legacy libz.dll name")
-    require(
-        package_script,
-        'LIZZIE_RELEASE_PRERELEASE:-false',
-        "package_windows_exe.sh",
-    )
-    require(
-        package_script,
-        '"prerelease": prerelease == "true"',
-        "package_windows_exe.sh",
-    )
     require(
         workflow,
         "RELEASE_PRERELEASE: ${{ inputs.release_prerelease }}",
