@@ -230,7 +230,6 @@ def validate_windows_release_assets(
     release_dir: Path,
     date_tag: str,
     release_tag: str,
-    prerelease: bool,
 ) -> None:
     require(
         re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_tag) is not None,
@@ -249,7 +248,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("release_dir", type=Path)
     parser.add_argument("date_tag")
     parser.add_argument("release_tag")
-    parser.add_argument("prerelease", choices=("true", "false"))
     return parser.parse_args()
 
 
@@ -260,7 +258,6 @@ def main() -> int:
             args.release_dir,
             args.date_tag,
             args.release_tag,
-            args.prerelease == "true",
         )
     except ValidationError as exc:
         print(f"Windows release validation failed: {exc}", file=sys.stderr)

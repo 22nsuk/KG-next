@@ -195,7 +195,7 @@ python3 scripts/generate_app_icons.py
 
 ```bash
 ./scripts/package_windows_exe.sh 2026-04-24 1.0.0 target/lizzie-yzy2.5.3-shaded.jar next-2026-04-24.2
-./scripts/validate_release_assets.sh windows dist/release 2026-04-24 next-2026-04-24.2 true
+./scripts/validate_release_assets.sh windows dist/release 2026-04-24 next-2026-04-24.2
 ```
 
 ### 6. 构建 Linux 主整合包

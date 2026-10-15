@@ -5,11 +5,10 @@ PLATFORM="${1:-}"
 RELEASE_DIR="${2:-dist/release}"
 DATE_TAG="${3:-}"
 RELEASE_TAG="${4:-}"
-RELEASE_PRERELEASE="${5:-}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ -z "$PLATFORM" || -z "$DATE_TAG" ]]; then
-  echo "Usage: $0 <windows|mac-arm64|mac-amd64|linux> [release_dir] <date_tag> [release_tag] [prerelease]"
+  echo "Usage: $0 <windows|mac-arm64|mac-amd64|linux> [release_dir] <date_tag> [release_tag]"
   exit 1
 fi
 
@@ -102,8 +101,8 @@ done
 
 case "$PLATFORM" in
   windows)
-    if [[ -z "$RELEASE_TAG" || ( "$RELEASE_PRERELEASE" != "true" && "$RELEASE_PRERELEASE" != "false" ) ]]; then
-      echo "Windows validation requires the exact release tag and prerelease=true|false" >&2
+    if [[ -z "$RELEASE_TAG" ]]; then
+      echo "Windows validation requires the exact release tag" >&2
       exit 1
     fi
     PYTHON_BIN="python3"
@@ -113,8 +112,7 @@ case "$PLATFORM" in
     "$PYTHON_BIN" "$SCRIPT_DIR/validate_windows_release_assets.py" \
       "$RELEASE_DIR" \
       "$DATE_TAG" \
-      "$RELEASE_TAG" \
-      "$RELEASE_PRERELEASE"
+      "$RELEASE_TAG"
     ;;
   mac-arm64|mac-amd64)
     if command -v hdiutil >/dev/null 2>&1; then
