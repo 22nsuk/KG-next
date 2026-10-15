@@ -1043,33 +1043,8 @@ public class Lizzie {
                 e1.printStackTrace();
               }
             }
-            if (mainArgs.length == 1) {
-              if (!mainArgs[0].equals("read")) {
-                File file = new File(mainArgs[0]);
-                frame.loadFile(file, true, true);
-                LizzieFrame.curFile = file;
-              }
-            } else if (config.autoResume) {
-              frame.resumeFile();
-            }
+            frame.restoreStartupGame(mainArgs);
             Lizzie.frame.setMainPanelFocus();
-            if (Lizzie.config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5) {
-              Lizzie.config.saveBoardConfig.put("save-auto-game-index1", 1);
-              File file = new File("save\\autoGame1.bmp");
-              if (file.exists() && file.isFile()) file.delete();
-              File file2 = new File("save\\autoGame1.sgf");
-              if (file2.exists() && file2.isFile()) file2.delete();
-              File oldfile = new File("save\\autoGame2.bmp");
-              File newfile = new File("save\\autoGame1.bmp");
-              if (oldfile.exists()) {
-                oldfile.renameTo(newfile);
-              }
-              File oldfile2 = new File("save\\autoGame2.sgf");
-              File newfile2 = new File("save\\autoGame1.sgf");
-              if (oldfile2.exists()) {
-                oldfile2.renameTo(newfile2);
-              }
-            }
             if (Lizzie.config.analysisEnginePreLoad) {
               frame.preloadConfiguredAnalysisEngineAfterStartup();
             }

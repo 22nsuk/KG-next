@@ -53,6 +53,7 @@ import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.teacher.CommentDisplayRenderer;
 import featurecat.lizzie.theme.MorandiPalette;
 import featurecat.lizzie.training.HumanSlTrainingSession;
+import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.GraphicsDriverDiagnostics;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
@@ -4628,11 +4629,125 @@ public class LizzieFrame extends JFrame {
     return file == null ? new File[0] : new File[] {file};
   }
 
+  // EDT-owned. Current-session periodic saves also use marker -5; only a previous
+  // session is recovered. Never save an empty board before startup opens its game.
+  private boolean autoSaveStartupPrepared;
+  private boolean autoSaveRecoveryComplete;
+  private boolean autoSaveRecoveryFailureReported;
+
+  public void restoreStartupGame(String[] args) {
+    runSavedGameAction(
+        () -> {
+          if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> restoreStartupGame(args))) {
+            return;
+          }
+          recoverAutoSaveOnEdt();
+          if (args.length == 1) {
+            if (!args[0].equals("read")) {
+              File file = new File(args[0]);
+              loadFile(file, true, true);
+              curFile = file;
+            }
+          } else if (Lizzie.config.autoResume) {
+            resumeFile();
+          }
+          autoSaveStartupPrepared = true;
+        });
+  }
+
+  private boolean recoverAutoSaveOnEdt() {
+    if (autoSaveRecoveryComplete) return true;
+    JSONObject metadata = Lizzie.config.saveBoardConfig;
+    if (metadata.optInt("save-auto-game-index2", -1) != -5) {
+      autoSaveRecoveryComplete = true;
+      return true;
+    }
+    Path source = resolveAutoSaveFile(2, "sgf").toPath();
+    try {
+      // Missing recovery data must never cause deletion of the last exit save.
+      // Attribute/access errors, unlike genuine absence, leave recovery pending.
+      if (!savedGameFileExists(source)) {
+        autoSaveRecoveryComplete = true;
+        return true;
+      }
+      String sgf = Files.readString(source);
+      if (SGFParser.parseSgf(sgf, true) == null) {
+        throw new IOException("Invalid automatic recovery SGF: " + source);
+      }
+      AtomicSgfFileWriter.write(resolveAutoSaveFile(1, "sgf").toPath(), sgf);
+      recoverAutoSavePreview();
+      JSONObject candidate = new JSONObject(metadata.toString());
+      candidate.put("save-auto-game-index1", 1);
+      for (String field : List.of("time", "move-number", "move-list")) {
+        String key = "save-auto-game-" + field;
+        candidate.remove(key + "1");
+        if (metadata.has(key + "2")) candidate.put(key + "1", metadata.get(key + "2"));
+      }
+      candidate.put("save-auto-game-index2", -1);
+      Lizzie.config.saveTempBoard(candidate);
+      // Keep source2 intact even after commit. It is inactive now and can be reused
+      // by the next periodic save. A failure before commit can safely retry it.
+      autoSaveRecoveryComplete = true;
+      return true;
+    } catch (IOException | RuntimeException failure) {
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Automatic save recovery remains pending; automatic saves are suspended", failure);
+      if (!autoSaveRecoveryFailureReported) {
+        autoSaveRecoveryFailureReported = true;
+        savedGameEditFailed(
+            new IOException(
+                "Automatic save recovery failed; automatic saves suspended. Original: " + source,
+                failure));
+      }
+      return false;
+    }
+  }
+
+  private void recoverAutoSavePreview() {
+    Path target = resolveAutoSaveFile(1, "bmp").toPath();
+    Path staged = null;
+    try {
+      Path source = resolveAutoSaveFile(2, "bmp").toPath();
+      if (Files.isRegularFile(source)) {
+        staged = Files.createTempFile(target.getParent(), ".lizzie-preview-", ".tmp");
+        Files.copy(source, staged, StandardCopyOption.REPLACE_EXISTING);
+        Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+      } else {
+        Files.deleteIfExists(target);
+      }
+    } catch (IOException | RuntimeException failure) {
+      try {
+        Files.deleteIfExists(target);
+      } catch (IOException cleanupFailure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Recovered SGF has no usable preview", failure);
+    } finally {
+      if (staged != null) {
+        try {
+          Files.deleteIfExists(staged);
+        } catch (IOException failure) {
+          org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+              .warn("Could not remove recovery preview staging file", failure);
+        }
+      }
+    }
+  }
+
+  private int previousAutoSaveIndex() {
+    return !autoSaveRecoveryComplete
+            && Lizzie.config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5
+            && resolveAutoSaveFile(2, "sgf").isFile()
+        ? 2
+        : 1;
+  }
+
   public void resumeFile() {
     if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(this::resumeFile)) {
       return;
     }
-    File file = resolveAutoSaveFile(1, "sgf");
+    File file = resolveAutoSaveFile(previousAutoSaveIndex(), "sgf");
     if (file.exists()) loadFile(file, true, true);
     else {
       File file2 = resolveAutoSaveFile(2, "sgf");
@@ -15174,6 +15289,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private void saveAutoGameOnEdt(int index) {
+    if (!autoSaveStartupPrepared || !recoverAutoSaveOnEdt()) return;
     JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
     candidate.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
     candidate.put(
@@ -15562,15 +15678,16 @@ public class LizzieFrame extends JFrame {
   public ArrayList<TempGameData> getTempGameList() {
     ArrayList<TempGameData> tempGameList = new ArrayList<TempGameData>();
 
-    if (Lizzie.config.saveBoardConfig.optInt("save-auto-game-index1", -1) > 0) {
-      String time = Lizzie.config.saveBoardConfig.optString("save-auto-game-time1", "");
-      int moveNumer = Lizzie.config.saveBoardConfig.optInt("save-auto-game-move-number1", 0);
+    int autoIndex = previousAutoSaveIndex();
+    if (autoIndex == 2 || Lizzie.config.saveBoardConfig.optInt("save-auto-game-index1", -1) > 0) {
+      String time = Lizzie.config.saveBoardConfig.optString("save-auto-game-time" + autoIndex, "");
+      int moveNumer = Lizzie.config.saveBoardConfig.optInt("save-auto-game-move-number" + autoIndex, 0);
       TempGameData data = new TempGameData();
-      data.index = 1;
+      data.index = autoIndex;
       data.name = Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.exitRecord");
       data.time = time;
       data.curMoveNumer = moveNumer;
-      data.moves = Lizzie.config.saveBoardConfig.optString("save-auto-game-move-list1", "");
+      data.moves = Lizzie.config.saveBoardConfig.optString("save-auto-game-move-list" + autoIndex, "");
       data.isAutoSave = true;
       tempGameList.add(data);
     }

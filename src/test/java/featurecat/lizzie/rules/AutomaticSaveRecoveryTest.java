@@ -1,0 +1,394 @@
+package featurecat.lizzie.rules;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+import featurecat.lizzie.Config;
+import featurecat.lizzie.ConfigTestHelper;
+import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.TempGameData;
+import java.awt.Image;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import javax.imageio.ImageIO;
+import javax.swing.SwingUtilities;
+import org.json.JSONObject;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+
+class AutomaticSaveRecoveryTest {
+  private static final String OLD = "(;SZ[5]C[OLD_EXIT];B[aa])";
+  private static final String NEW = "(;SZ[5]C[NEW_PERIODIC];B[aa];W[bb])";
+  private static final String CURRENT = "(;SZ[5]C[CURRENT_SESSION];B[dd])";
+  @TempDir Path directory;
+  private RulesLayerTestHarness rules;
+  private RecoveryFrame frame;
+  private Config config;
+  private String originalMetadata;
+  private File previousCurFile;
+
+  @BeforeEach
+  void prepare() throws Exception {
+    rules = RulesLayerTestHarness.open();
+    previousCurFile = LizzieFrame.curFile;
+    config = ConfigTestHelper.createForTests(directory);
+    config.autoResume = true;
+    config.saveBoardConfig =
+        new JSONObject()
+            .put("save-auto-game-index1", 1)
+            .put("save-auto-game-index2", -5)
+            .put("save-auto-game-time1", "old time")
+            .put("save-auto-game-time2", "new time")
+            .put("save-auto-game-move-number1", 1)
+            .put("save-auto-game-move-number2", 2)
+            .put("save-auto-game-move-list1", "old cursor")
+            .put("save-auto-game-move-list2", "new cursor");
+    config.saveBoard = new JSONObject().put("save", config.saveBoardConfig).put("other", "keep");
+    Files.createDirectories(directory.resolve("save"));
+    config.saveTempBoard();
+    originalMetadata = Files.readString(metadataFile());
+    Files.writeString(slot(1, "sgf"), OLD);
+    Files.writeString(slot(2, "sgf"), NEW);
+    ImageIO.write(
+        new BufferedImage(3, 3, BufferedImage.TYPE_INT_RGB), "bmp", slot(1, "bmp").toFile());
+    ImageIO.write(
+        new BufferedImage(5, 5, BufferedImage.TYPE_INT_RGB), "bmp", slot(2, "bmp").toFile());
+    Lizzie.config = config;
+    frame = RulesLayerTestHarness.allocate(RecoveryFrame.class);
+    Lizzie.frame = frame;
+    setCurrentBoard();
+  }
+
+  @AfterEach
+  void restore() {
+    LizzieFrame.curFile = previousCurFile;
+    if (rules != null) rules.close();
+  }
+
+  @Test
+  void startupRecoversBeforeResumeAndExitCannotOverwriteWithTheOldGame() throws Exception {
+    frame.restoreStartupGame(new String[0]);
+    assertEquals(slot(1, "sgf").toFile(), frame.loadedFile);
+    assertEquals(NEW, frame.loadedSgf);
+    assertEquals("new time", frame.metadataAtLoad.getString("save-auto-game-time1"));
+    assertEquals(2, Lizzie.board.getCurrentMovenumber());
+    assertRecovered();
+    assertEquals(5, ImageIO.read(slot(1, "bmp").toFile()).getWidth());
+    frame.saveAutoGame(1);
+    assertTrue(Files.readString(slot(1, "sgf")).contains("NEW_PERIODIC"));
+    assertFalse(Files.readString(slot(1, "sgf")).contains("OLD_EXIT"));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+  }
+
+  @Test
+  void recoveryUsesConfiguredWorkDirectoryEvenWhenAutoResumeIsDisabled() throws Exception {
+    assertNotEquals(Path.of("").toAbsolutePath(), directory.toAbsolutePath());
+    config.autoResume = false;
+    frame.restoreStartupGame(new String[0]);
+    assertNull(frame.loadedFile);
+    assertRecovered();
+    assertTrue(SGFParser.saveToString(false).contains("CURRENT_SESSION"));
+    frame.saveAutoGame(2);
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+    assertTrue(Files.readString(slot(2, "sgf")).contains("CURRENT_SESSION"));
+    // A current-session -5 marker must not be treated as another startup recovery.
+    Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[AFTER_PERIODIC];B[cc])", true));
+    frame.saveAutoGame(1);
+    assertTrue(Files.readString(slot(1, "sgf")).contains("AFTER_PERIODIC"));
+    assertEquals(-1, config.saveBoardConfig.getInt("save-auto-game-index2"));
+  }
+
+  @Test
+  void explicitStartupFileStillWinsAfterRecoveringThePreviousSession() throws Exception {
+    Path requested = directory.resolve("requested.sgf");
+    Files.writeString(requested, CURRENT);
+    frame.restoreStartupGame(new String[] {requested.toString()});
+    assertEquals(requested.toFile(), frame.loadedFile);
+    assertEquals(requested.toFile(), LizzieFrame.curFile);
+    assertEquals(CURRENT, frame.loadedSgf);
+    assertRecovered();
+  }
+
+  @Test
+  void savesBeforeStartupSelectionCannotOverwriteEitherSlot() throws Exception {
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+  }
+
+  @Test
+  void deferredStartupKeepsBothSlotsProtectedUntilTheContinuationRuns() throws Exception {
+    Field cleanup = LizzieFrame.class.getDeclaredField("analysisControlCleanupInProgress");
+    cleanup.setAccessible(true);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            cleanup.setBoolean(frame, true);
+          } catch (IllegalAccessException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+    frame.restoreStartupGame(new String[0]);
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertNull(frame.loadedFile);
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            cleanup.setBoolean(frame, false);
+            var finish =
+                LizzieFrame.class.getDeclaredMethod("finishDeferredKifuOpenAfterQuickAnalysisRestore");
+            finish.setAccessible(true);
+            assertEquals(true, finish.invoke(frame));
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+    assertRecovered();
+    frame.saveAutoGame(1);
+    assertTrue(Files.readString(slot(1, "sgf")).contains("NEW_PERIODIC"));
+  }
+
+  @Test
+  void missingPeriodicSourceKeepsThePreviousExitRecordAndMetadata() throws Exception {
+    Files.delete(slot(2, "sgf"));
+    byte[] preview = Files.readAllBytes(slot(1, "bmp"));
+    frame.restoreStartupGame(new String[0]);
+    assertEquals(OLD, frame.loadedSgf);
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertArrayEquals(preview, Files.readAllBytes(slot(1, "bmp")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    assertEquals("old time", frame.getTempGameList().get(0).time);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "not an SGF"})
+  void invalidPeriodicSourceDoesNotReplaceTheExitRecord(String invalid) throws Exception {
+    Files.writeString(slot(2, "sgf"), invalid);
+    config.autoResume = false;
+    frame.restoreStartupGame(new String[0]);
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertEquals(invalid, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+  }
+
+  @Test
+  void unreadablePeriodicSourceIsNotTreatedAsMissing() throws Exception {
+    Files.delete(slot(2, "sgf"));
+    Files.createDirectory(slot(2, "sgf"));
+    Path blocker = slot(2, "sgf").resolve("keep");
+    Files.writeString(blocker, "do not delete");
+    frame.restoreStartupGame(new String[0]);
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertEquals("do not delete", Files.readString(blocker));
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    assertEquals(1, frame.recoveryFailures);
+  }
+
+  @Test
+  void absentPeriodicMetadataDoesNotInheritTheOldExitCursor() throws Exception {
+    config.saveBoardConfig.remove("save-auto-game-time2");
+    config.saveBoardConfig.remove("save-auto-game-move-number2");
+    config.saveBoardConfig.remove("save-auto-game-move-list2");
+    config.saveTempBoard();
+    frame.restoreStartupGame(new String[0]);
+    TempGameData entry = frame.getTempGameList().get(0);
+    assertEquals("", entry.time);
+    assertEquals(0, entry.curMoveNumer);
+    assertEquals("", entry.moves);
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+  }
+
+  @Test
+  void failedSgfPromotionResumesTheSourceAndProtectsBothAutomaticWritesUntilRetry() throws Exception {
+    Files.delete(slot(1, "sgf"));
+    Files.createDirectory(slot(1, "sgf"));
+    Path blocker = slot(1, "sgf").resolve("keep");
+    Files.writeString(blocker, "do not delete");
+    frame.restoreStartupGame(new String[0]);
+    assertEquals(slot(2, "sgf").toFile(), frame.loadedFile);
+    assertEquals(NEW, frame.loadedSgf);
+    assertPendingRecord();
+    setCurrentBoard();
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertEquals("do not delete", Files.readString(blocker));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    assertEquals(1, frame.recoveryFailures);
+    Files.delete(blocker);
+    Files.delete(slot(1, "sgf"));
+    // A subsequent periodic save retries recovery before reusing source2.
+    frame.saveAutoGame(2);
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+    assertTrue(Files.readString(slot(2, "sgf")).contains("CURRENT_SESSION"));
+    assertEquals("new time", config.saveBoardConfig.getString("save-auto-game-time1"));
+  }
+
+  @Test
+  void failedMetadataCommitRetainsTheSourceAndSupportsRestartRecovery() throws Exception {
+    Field filename = Config.class.getDeclaredField("saveBoardFilename");
+    filename.setAccessible(true);
+    Path blocked = directory.resolve("blocked-metadata");
+    Files.createDirectory(blocked);
+    Files.writeString(blocked.resolve("keep"), "do not delete");
+    filename.set(config, blocked.toString());
+    frame.restoreStartupGame(new String[0]);
+    assertEquals(slot(2, "sgf").toFile(), frame.loadedFile);
+    assertPendingRecord();
+    setCurrentBoard();
+    frame.saveAutoGame(2);
+    frame.saveAutoGame(1);
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    assertEquals(-5, config.saveBoardConfig.getInt("save-auto-game-index2"));
+    filename.set(config, metadataFile().toString());
+    // Simulate restart from the unchanged disk manifest after SGF copy succeeded.
+    config.saveBoard = new JSONObject(Files.readString(metadataFile()));
+    config.saveBoardConfig = config.saveBoard.getJSONObject("save");
+    frame = RulesLayerTestHarness.allocate(RecoveryFrame.class);
+    Lizzie.frame = frame;
+    frame.restoreStartupGame(new String[0]);
+    assertRecovered();
+    assertEquals(NEW, frame.loadedSgf);
+    frame.saveAutoGame(1);
+    assertTrue(Files.readString(slot(1, "sgf")).contains("NEW_PERIODIC"));
+  }
+
+  @Test
+  void successfulRecoveryIsNotRepeatedAfterRestartWithAnInactiveSource() throws Exception {
+    frame.restoreStartupGame(new String[0]);
+    setCurrentBoard();
+    frame.saveAutoGame(1);
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    config.saveBoard = new JSONObject(Files.readString(metadataFile()));
+    config.saveBoardConfig = config.saveBoard.getJSONObject("save");
+    frame = RulesLayerTestHarness.allocate(RecoveryFrame.class);
+    Lizzie.frame = frame;
+    frame.restoreStartupGame(new String[0]);
+    assertTrue(frame.loadedSgf.contains("CURRENT_SESSION"));
+    assertFalse(frame.loadedSgf.contains("NEW_PERIODIC"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void optionalPreviewFailureOrAbsenceDoesNotPreventRecovery(boolean blocked) throws Exception {
+    if (blocked) {
+      Files.delete(slot(1, "bmp"));
+      Files.createDirectory(slot(1, "bmp"));
+      Files.writeString(slot(1, "bmp").resolve("keep"), "do not delete");
+    } else {
+      Files.delete(slot(2, "bmp"));
+    }
+    frame.restoreStartupGame(new String[0]);
+    assertRecovered();
+    assertFalse(Files.isRegularFile(slot(1, "bmp")));
+  }
+
+  private void assertPendingRecord() {
+    TempGameData entry = frame.getTempGameList().get(0);
+    assertEquals(2, entry.index);
+    assertEquals("new time", entry.time);
+    assertEquals(2, entry.curMoveNumer);
+    assertEquals("new cursor", entry.moves);
+  }
+
+  private void assertRecovered() throws IOException {
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    JSONObject persisted = new JSONObject(Files.readString(metadataFile()));
+    assertEquals("keep", persisted.getString("other"));
+    assertTrue(persisted.getJSONObject("save").similar(config.saveBoardConfig));
+    assertEquals(1, config.saveBoardConfig.getInt("save-auto-game-index1"));
+    assertEquals(-1, config.saveBoardConfig.getInt("save-auto-game-index2"));
+    TempGameData entry = frame.getTempGameList().get(0);
+    assertEquals(1, entry.index);
+    assertEquals("new time", entry.time);
+    assertEquals(2, entry.curMoveNumer);
+    assertEquals("new cursor", entry.moves);
+    try (var files = Files.walk(directory)) {
+      assertFalse(files.anyMatch(p -> p.getFileName().toString().endsWith(".tmp")));
+    }
+  }
+
+  private void setCurrentBoard() {
+    Lizzie.board.setHistory(SGFParser.parseSgf(CURRENT, true));
+  }
+
+  private Path metadataFile() {
+    return directory.resolve("save/save");
+  }
+
+  private Path slot(int index, String extension) {
+    return directory.resolve("save/autoGame" + index + "." + extension);
+  }
+
+  static class RecoveryFrame extends LizzieFrame {
+    File loadedFile;
+    String loadedSgf;
+    JSONObject metadataAtLoad;
+    int recoveryFailures;
+
+    @Override
+    protected void savedGameEditFailed(IOException failure) {
+      recoveryFailures++;
+    }
+
+    @Override
+    public boolean loadFile(File file, boolean fromTemp, boolean showHint) {
+      assertTrue(SwingUtilities.isEventDispatchThread());
+      try {
+        loadedFile = file;
+        loadedSgf = Files.readString(file.toPath());
+        metadataAtLoad =
+            new JSONObject(
+                    Files.readString(
+                        Lizzie.config.getWorkDirectory().toPath().resolve("save/save")))
+                .getJSONObject("save");
+        BoardHistoryList history = SGFParser.parseSgf(loadedSgf, true);
+        if (history == null) return false;
+        Lizzie.board.setHistory(history);
+        return true;
+      } catch (IOException failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    @Override
+    public void refresh() {}
+
+    @Override
+    public void refresh(int mode) {}
+
+    @Override
+    public void clearKataEstimate() {}
+
+    @Override
+    public void requestProblemListRefresh() {}
+
+    @Override
+    public void refreshProblemListSnapshot() {}
+
+    @Override
+    public Image saveMainBoardToImageOri() {
+      return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+    }
+  }
+}
