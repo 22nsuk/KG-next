@@ -99,6 +99,7 @@ class AutomaticSaveSafetyTest {
     oldMetadata = Files.readString(metadataFile());
     frame = RulesLayerTestHarness.allocate(PreviewFrame.class);
     Lizzie.frame = frame;
+    frame.restoreStartupGame(new String[] {"read"});
   }
 
   @AfterEach
