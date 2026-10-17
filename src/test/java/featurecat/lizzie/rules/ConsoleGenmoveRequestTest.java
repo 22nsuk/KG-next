@@ -9,6 +9,9 @@ import featurecat.lizzie.gui.LizzieFrame;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.awt.event.ActionEvent;
+import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -16,16 +19,23 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.LeelazResponseTestBridge;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import featurecat.lizzie.gui.GtpConsolePane;
+import featurecat.lizzie.gui.JFontTextField;
+import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 /** Real command output, reader dispatcher and Board; no engine process or network. */
 class ConsoleGenmoveRequestTest {
@@ -62,7 +72,8 @@ class ConsoleGenmoveRequestTest {
     engine.isKatago = analyze;
     assertTrue(engine.genmove(color, true));
     String command = output.toString(StandardCharsets.UTF_8).lines()
-        .filter(row -> row.contains("genmove")).reduce((first, second) -> second).orElseThrow();
+        .filter(row -> row.contains("genmove")).reduce((first, second) -> second)
+        .orElseThrow(() -> new AssertionError("Missing genmove: " + output.toString(StandardCharsets.UTF_8)));
     assertTrue(command.matches("[0-9]+ .*genmove.*"), command);
     return Integer.parseInt(command.substring(0, command.indexOf(' ')));
   }
@@ -75,6 +86,157 @@ class ConsoleGenmoveRequestTest {
   private void idle() {
     assertFalse(engine.isThinking);
     assertFalse(engine.isInputCommand);
+  }
+
+  static Stream<Arguments> consoleGameMoves() {
+    return Stream.of("review", "human", "analysis").flatMap(mode ->
+        Stream.of(false, true).flatMap(analyze ->
+            Stream.of("b", "w").flatMap(color ->
+                Stream.of("D4", "pass").map(move -> Arguments.of(mode, analyze, color, move)))));
+  }
+
+  @ParameterizedTest
+  @MethodSource("consoleGameMoves")
+  void consoleGenmovePreservesColorInEveryGameMode(
+      String mode, boolean analyze, String color, String move) throws Exception {
+    Lizzie.frame.isPlayingAgainstLeelaz = mode.equals("human");
+    Lizzie.frame.isAnaPlayingAgainstLeelaz = mode.equals("analysis");
+    boolean black = color.equals("b");
+    Lizzie.frame.playerIsBlack = !black;
+    // Deliberately request the color opposite the current turn; never rewrite this parent.
+    BoardHistoryNode parent = rules.current();
+    parent.getData().blackToPlay = !black;
+    engine.isKatago = analyze;
+    Method post = GtpConsolePane.class.getDeclaredMethod("postCommand", ActionEvent.class);
+    post.setAccessible(true);
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        Field input = GtpConsolePane.class.getDeclaredField("txtCommand");
+        input.setAccessible(true);
+        input.set(Lizzie.gtpConsole, new JFontTextField());
+        Lizzie.gtpConsole.txtCommand.setText("genmove " + color);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+    post.invoke(Lizzie.gtpConsole, new ActionEvent(Lizzie.gtpConsole, 0, "send"));
+    String sent = output.toString(StandardCharsets.UTF_8).lines()
+        .filter(row -> row.contains("genmove")).findFirst()
+        .orElseThrow(() -> new AssertionError("Missing genmove: " + output.toString(StandardCharsets.UTF_8)));
+    // Accept the old unnumbered transport too, so the pre-fix failure is the wrong Board color.
+    String id = sent.matches("[0-9]+ .*" ) ? sent.substring(0, sent.indexOf(' ')) : "";
+    if (analyze) {
+      line("=" + id);
+      line("play " + move);
+    } else {
+      line("=" + id + " " + move);
+    }
+    line("");
+    assertEquals(black ? Stone.BLACK : Stone.WHITE, rules.current().getData().lastMoveColor);
+    assertEquals(!black, parent.getData().blackToPlay);
+    assertEquals(1, rules.current().getData().moveNumber);
+    assertEquals(move.equals("pass"), rules.current().getData().isPassNode());
+    assertFalse(output.toString(StandardCharsets.UTF_8).contains("play "),
+        "A generated move must not be echoed to the generating engine");
+    assertEquals(1, output.toString(StandardCharsets.UTF_8).lines()
+        .filter(row -> row.contains("genmove")).count());
+    idle();
+  }
+
+  @Test
+  void undoCannotOvertakeTheCommittedMoveToTheMirror() throws Exception {
+    Leelaz previousMirror = Lizzie.leelaz2;
+    Leelaz mirror = new Leelaz("");
+    mirror.started = mirror.isLoaded = true;
+    MirrorSelectionEngine primary = new MirrorSelectionEngine();
+    primary.started = primary.isLoaded = true;
+    LeelazResponseTestBridge.reset(engine);
+    engine = primary;
+    Lizzie.setPrimaryEngine(primary);
+    EngineManager.isEmpty = false;
+    LeelazResponseTestBridge.installOutput(primary, output);
+    ByteArrayOutputStream mirrorOutput = new ByteArrayOutputStream();
+    ExecutorService executor = Executors.newFixedThreadPool(2);
+    try {
+      LeelazResponseTestBridge.installOutput(mirror, mirrorOutput);
+      Lizzie.leelaz2 = mirror;
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      rules.board().getHistory().place(0, 18, Stone.BLACK);
+      primary.sendCommandNoLeelaz2("play B A1");
+      mirror.sendCommandNoLeelaz2("play B A1");
+      line("=" + output.toString(StandardCharsets.UTF_8).split(" ")[0]);
+      line("");
+      LeelazResponseTestBridge.dispatch(mirror,
+          "=" + mirrorOutput.toString(StandardCharsets.UTF_8).split(" ")[0]);
+      LeelazResponseTestBridge.dispatch(mirror, "");
+      BoardHistoryNode parent = rules.current();
+      int id = request(false, "w");
+      line("=" + id + " D4");
+      primary.pauseSelection = true;
+      Future<?> response = executor.submit(() -> {
+        try { line(""); } catch (Exception failure) { throw new RuntimeException(failure); }
+      });
+      assertTrue(primary.selectionEntered.await(3, TimeUnit.SECONDS));
+      AtomicReference<Thread> navigationThread = new AtomicReference<>();
+      CountDownLatch navigationStarted = new CountDownLatch(1);
+      Future<Boolean> navigation = executor.submit(() -> {
+        navigationThread.set(Thread.currentThread());
+        navigationStarted.countDown();
+        return rules.board().previousMove(false);
+      });
+      assertTrue(navigationStarted.await(3, TimeUnit.SECONDS));
+      // Wait for either the original faulty undo to finish or the fixed Board lock to fence it.
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      boolean blockedOnBoard = false;
+      while (!navigation.isDone() && System.nanoTime() < deadline) {
+        var info = ManagementFactory.getThreadMXBean().getThreadInfo(navigationThread.get().getId());
+        blockedOnBoard = info != null && info.getThreadState() == Thread.State.BLOCKED
+            && info.getLockInfo() != null
+            && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(rules.board());
+        if (blockedOnBoard) break;
+        Thread.yield();
+      }
+      assertTrue(navigation.isDone() || blockedOnBoard, "Navigation never reached the Board boundary");
+      primary.releaseSelection.countDown();
+      response.get(3, TimeUnit.SECONDS);
+      assertTrue(navigation.get(3, TimeUnit.SECONDS));
+      assertSame(parent, rules.current());
+      List<String> positionCommands = mirrorOutput.toString(StandardCharsets.UTF_8).lines()
+          .map(row -> row.replaceFirst("^[0-9]+ ", ""))
+          .filter(row -> row.startsWith("play ") || row.equals("undo")).toList();
+      assertEquals(List.of("play B A1", "play W D4", "undo"), positionCommands);
+      idle();
+    } finally {
+      primary.releaseSelection.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      LeelazResponseTestBridge.reset(mirror);
+      Lizzie.leelaz2 = previousMirror;
+    }
+  }
+
+  static class MirrorSelectionEngine extends Leelaz {
+    final CountDownLatch selectionEntered = new CountDownLatch(1);
+    final CountDownLatch releaseSelection = new CountDownLatch(1);
+    volatile boolean pauseSelection;
+
+    MirrorSelectionEngine() throws IOException { super(""); }
+
+    @Override public Leelaz activeComparisonEngine() {
+      Leelaz selected = super.activeComparisonEngine();
+      if (pauseSelection) {
+        pauseSelection = false;
+        selectionEntered.countDown();
+        try {
+          if (!releaseSelection.await(5, TimeUnit.SECONDS))
+            throw new AssertionError("Mirror selection release timed out");
+        } catch (InterruptedException failure) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError(failure);
+        }
+      }
+      return selected;
+    }
   }
 
   @Test

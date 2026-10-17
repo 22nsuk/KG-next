@@ -19911,11 +19911,6 @@ public class Leelaz {
   }
 
   public boolean genmove(String color, boolean inputCommand) {
-    boolean manualRequest =
-        inputCommand
-            && (Lizzie.frame == null
-                || (!Lizzie.frame.isPlayingAgainstLeelaz
-                    && !Lizzie.frame.isAnaPlayingAgainstLeelaz));
     if (rejectNewExclusiveWorkDuringGtpLease()) return false;
     String command =
         (this.isKatago
@@ -19925,7 +19920,8 @@ public class Leelaz {
                 : (this.isSai || this.isLeela
                     ? ("lz-genmove_analyze " + color + " " + getInterval())
                     : ("genmove " + color))));
-    if (manualRequest) {
+    // Console requests keep their explicit color and response owner in every game mode.
+    if (inputCommand) {
       Stone requestedColor = "b".equalsIgnoreCase(color) ? Stone.BLACK
           : "w".equalsIgnoreCase(color) ? Stone.WHITE : Stone.EMPTY;
       Board board = Lizzie.board;
@@ -19938,6 +19934,7 @@ public class Leelaz {
       }
       boolean accepted = false;
       try {
+        sendPlayingAgainstHumanTimeLeftBeforeGenmove();
         accepted = sendCommand(command, request, null, false, false, request, true, request.binding);
         return accepted;
       } finally {
@@ -19947,7 +19944,6 @@ public class Leelaz {
     synchronized (this) {
       if (manualGenmoveRequestOwner != null) return false;
       sendPlayingAgainstHumanTimeLeftBeforeGenmove();
-      if (inputCommand) isInputCommand = true;
       sendCommand(command);
       isThinking = true;
       LizzieFrame.menu.toggleEngineMenuStatus(false, true);
@@ -20045,6 +20041,8 @@ public class Leelaz {
             || !Board.convertCoordinatesToName(coordinates.get()[0], coordinates.get()[1]).equalsIgnoreCase(move))) return;
         BoardHistoryNode committed;
         long committedRevision;
+        OrdinaryEnqueueEffects mirrorEffects = mirror == null ? null : mirror.new OrdinaryEnqueueEffects();
+        boolean mirrorQueued = false;
         // Freeze selection and this reader without holding endpoint locks across Board/UI calls.
         try (Lizzie.EngineAuthorityPresentationLease authority =
                 Lizzie.claimEngineAuthorityPresentation(board, manager, Leelaz.this, primaryGeneration);
@@ -20058,20 +20056,32 @@ public class Leelaz {
             else board.place(coordinates.get()[0], coordinates.get()[1], color);
             committed = board.getHistory().getCurrentHistoryNode();
             committedRevision = board.getContextRevision();
+            if (committed != node && mirror != null && activeComparisonEngine() == mirror) {
+              // Navigation registers its undo under the same Board monitor. Append play here,
+              // but defer cancellation callbacks and transport until all leases are released.
+              mirrorQueued = mirror.enqueueOrdinaryCommandUnderLocks(
+                  "play " + (color == Stone.BLACK ? "B" : "W") + " " + move,
+                  null, null, mirror.foregroundRestoreCommandSession.get() != null,
+                  null, false, false, true, mirrorBinding, null,
+                  mirror.restartBootstrapReceiptContext.get(),
+                  mirror.engineGameStartupCommandContext.get(), mirrorEffects);
+            }
           }
         }
         // Never hold the global authority lease through transport output/flush.
+        // Once queued, play must precede a later undo even if navigation changed the target.
+        if (mirrorQueued) {
+          mirror.publishOrdinaryEnqueueEffects(mirrorEffects);
+          mirror.trySendCommandFromQueue();
+          if (mirror.canSetNotPlayed) {
+            mirror.canSetNotPlayed = false;
+            mirror.played = false;
+          }
+        }
         if (committed != node && isCurrentTarget(committed, committedRevision)) {
-          if (mirror != null && activeComparisonEngine() == mirror) {
-            mirror.sendCommandNoLeelaz2(
-                "play " + (color == Stone.BLACK ? "B" : "W") + " " + move,
-                null, mirrorBinding, null);
-          }
           // A slow mirror flush may have yielded to navigation or engine replacement.
-          if (isCurrentTarget(committed, committedRevision)) {
-            if (isPondering) ponder();
-            else sendCommandNoLeelaz2(isKatago ? "stop" : "name", null, binding, null);
-          }
+          if (isPondering) ponder();
+          else sendCommandNoLeelaz2(isKatago ? "stop" : "name", null, binding, null);
         }
       } finally {
         clearOwner();
