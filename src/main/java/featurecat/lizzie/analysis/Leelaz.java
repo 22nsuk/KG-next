@@ -19991,11 +19991,15 @@ public class Leelaz {
       }
     }
 
-    private boolean isCurrentTarget(BoardHistoryNode expectedNode, long expectedRevision) {
+    private boolean isCurrentAuthority() {
       return isCurrentLiveEngineIncarnation(binding)
           && primaryGeneration >= 0
           && primaryGeneration == Lizzie.capturePrimaryEngineGeneration(Leelaz.this)
-          && manager == Lizzie.engineManager && board == Lizzie.board
+          && manager == Lizzie.engineManager && board == Lizzie.board;
+    }
+
+    private boolean isCurrentTarget(BoardHistoryNode expectedNode, long expectedRevision) {
+      return isCurrentAuthority()
           && expectedRevision == board.getContextRevision()
           && expectedNode == board.getHistory().getCurrentHistoryNode();
     }
@@ -20008,8 +20012,10 @@ public class Leelaz {
     private boolean validAfterOutputAdmission() {
       // Navigation and requireEngineAlignment advance this volatile revision. Do not call
       // synchronized Board accessors under output admission: Board may be enqueueing undo.
+      // Selection/manager changes do not advance it; also recheck the captured authority using
+      // the same short primary-generation lookup as the pre-admission validation.
       return !settled.get() && manualGenmoveRequestOwner == this
-          && board == Lizzie.board && revision == board.getContextRevision();
+          && isCurrentAuthority() && revision == board.getContextRevision();
     }
 
     @Override

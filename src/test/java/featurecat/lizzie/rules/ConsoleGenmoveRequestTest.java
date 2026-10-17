@@ -113,14 +113,15 @@ class ConsoleGenmoveRequestTest {
 
   static Stream<Arguments> outputAdmissionChanges() {
     return Stream.of(false, true).flatMap(analyze ->
-        Stream.of("unchanged", "navigation", "alignment")
+        Stream.of("unchanged", "navigation", "alignment", "primary", "primary-return", "manager")
             .map(change -> Arguments.of(analyze, change)));
   }
 
   @ParameterizedTest
   @MethodSource("outputAdmissionChanges")
-  void outputAdmissionRechecksRevisionWithoutTakingBoardMonitor(boolean analyze, String change)
+  void outputAdmissionRechecksTargetWithoutTakingBoardMonitor(boolean analyze, String change)
       throws Exception {
+    EngineManager previousManager = Lizzie.engineManager;
     engine.isKatago = analyze;
     EngineManager.isEmpty = false; // Preserve real Board -> engine undo forwarding.
     rules.board().getHistory().place(3, 3, Stone.BLACK);
@@ -145,8 +146,20 @@ class ConsoleGenmoveRequestTest {
             "genmove must reach physical output admission after its initial Board check");
         assertEquals("", output.toString(StandardCharsets.UTF_8));
         synchronized (rules.board()) {
+          long revision = rules.board().getContextRevision();
+          long generation = Lizzie.capturePrimaryEngineGeneration(engine);
           if (change.equals("navigation")) assertTrue(rules.board().previousMove(false));
           else if (change.equals("alignment")) rules.board().requireEngineAlignment();
+          else if (change.equals("primary") || change.equals("primary-return")) {
+            Lizzie.setPrimaryEngine(new Leelaz(""));
+            if (change.equals("primary-return")) Lizzie.setPrimaryEngine(engine);
+            assertNotEquals(generation, Lizzie.capturePrimaryEngineGeneration(engine));
+            assertEquals(revision, rules.board().getContextRevision());
+          } else if (change.equals("manager")) {
+            Lizzie.setEngineManager(new EngineManager(List.of(engine)));
+            assertEquals(generation, Lizzie.capturePrimaryEngineGeneration(engine));
+            assertEquals(revision, rules.board().getContextRevision());
+          }
           admission.unlock();
           // Keep Board held while the writer finishes: a synchronized post-admission check
           // would recreate the Board -> admission / admission -> Board lock inversion.
@@ -172,10 +185,14 @@ class ConsoleGenmoveRequestTest {
           response(undoId, "");
         } else {
           assertEquals("", commands);
-          rules.board().completeEngineAlignment(rules.board().getHistory().getStart(),
-              rules.current(), rules.board().getContextRevision());
+          if (change.equals("alignment")) {
+            rules.board().completeEngineAlignment(rules.board().getHistory().getStart(),
+                rules.current(), rules.board().getContextRevision());
+          }
         }
         idle();
+        if (change.equals("primary")) Lizzie.setPrimaryEngine(engine);
+        if (change.equals("manager")) Lizzie.setEngineManager(previousManager);
         // Cancellation must retire the old request and leave the queue usable.
         int id = request(analyze, "w");
         response(id, "D4");
@@ -184,7 +201,11 @@ class ConsoleGenmoveRequestTest {
       idle();
     } finally {
       executor.shutdownNow();
-      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      try {
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      } finally {
+        Lizzie.setEngineManager(previousManager);
+      }
     }
   }
 
