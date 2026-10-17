@@ -153,6 +153,7 @@ PY_COMPILE_FILES = (
     "scripts/r2_release.py",
     "scripts/release_asset_provenance.py",
     "scripts/release_asset_topology.py",
+    "scripts/release_source_assets.py",
     "scripts/run_local_ci.py",
     "scripts/summarize_jfr.py",
     "scripts/measure_analysis.py",

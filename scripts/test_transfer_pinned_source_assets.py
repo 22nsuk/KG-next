@@ -1,13 +1,14 @@
 from copy import deepcopy
+import base64
 import hashlib
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from scripts.test_upload_release_assets import FakeClient
 from scripts.transfer_pinned_source_assets import (
-    transfer_archive, validate_transfer_catalog, verify_source_inventory,
+    main, transfer_archive, validate_transfer_catalog, verify_source_inventory,
 )
 from scripts.validate_release_workflow_identity import IdentityError
 from scripts.katago_asset_catalog import validate_catalog
@@ -58,7 +59,7 @@ class TransferTests(unittest.TestCase):
     def test_wrong_identity_or_missing_target_rejected(self):
         for field, value in (('katagoSourceCommit', '0' * 40),
                              ('engineReleaseRepository', 'other/repo'),
-                             ('engineReleaseTag', 'next-2026-01-01.1')):
+                             ('engineReleaseTag', 'latest')):
             with self.subTest(field=field):
                 catalog = deepcopy(self.catalog)
                 catalog[field] = value
@@ -68,6 +69,31 @@ class TransferTests(unittest.TestCase):
         del catalog['assets']['linux-cpu']
         with self.assertRaises((IdentityError, ValueError)):
             self.validate(catalog)
+
+    def test_external_sources_are_not_copied_to_gui_destination(self):
+        self.assertEqual({}, validate_transfer_catalog(
+            self.catalog, '22nsuk/KG-next', 'next-2026-10-17.1'))
+        self.assertEqual({}, validate_transfer_catalog(
+            self.catalog, 'wimi321/lizzieyzy-next', 'next-2026-10-17.1'))
+        with self.assertRaises(IdentityError):
+            validate_transfer_catalog(self.catalog, 'other/repo', 'next-2026-10-17.1')
+
+    def test_fork_cli_validates_destination_and_exact_catalog_then_skips_transfer(self):
+        raw = json.dumps(self.catalog).encode()
+        client = Mock()
+        client.get_json.return_value = dict(encoding='base64', size=len(raw),
+                                            content=base64.b64encode(raw).decode())
+        with patch.dict('os.environ', {'GITHUB_REPOSITORY': '22nsuk/KG-next'}), \
+                patch('sys.argv', ['transfer', '--source-tag', self.catalog['engineReleaseTag'],
+                                  '--target-tag', 'next-2026-10-17.1', '--target-sha', 'a' * 40]), \
+                patch('scripts.transfer_pinned_source_assets.UploadClient', return_value=client), \
+                patch('scripts.transfer_pinned_source_assets.subprocess.run') as run:
+            main()
+        client.guard.assert_called_once_with()
+        client.get_json.assert_called_once_with(
+            '/repos/22nsuk/KG-next/contents/src/main/resources/katago-assets.json?ref=' + 'a' * 40)
+        client.releases.assert_not_called()
+        run.assert_not_called()
 
     def test_budget_enforced(self):
         self.catalog['assets']['linux-cpu']['sizeBytes'] = 2_000_000_001

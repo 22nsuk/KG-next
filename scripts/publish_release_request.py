@@ -27,12 +27,14 @@ try:
     from scripts import release_asset_provenance as provenance
     from scripts import release_asset_topology as topology
     from scripts import katago_asset_catalog as katago_catalog
-    from scripts.katago_source_targets import SOURCE_COMMIT, TARGETS
+    from scripts.release_source_assets import source_asset_groups, verify_source_inventory
+    from scripts.validate_release_workflow_identity import IdentityError
 except ModuleNotFoundError:  # Direct execution: python scripts/publish_release_request.py
     import release_asset_provenance as provenance  # type: ignore[no-redef]
     import release_asset_topology as topology  # type: ignore[no-redef]
     import katago_asset_catalog as katago_catalog
-    from katago_source_targets import SOURCE_COMMIT, TARGETS
+    from release_source_assets import source_asset_groups, verify_source_inventory
+    from validate_release_workflow_identity import IdentityError
 
 
 API_VERSION = "2026-03-10"
@@ -543,12 +545,25 @@ class GitHubClient:
         assert isinstance(response, dict)
         return response
 
-    def list_release_assets(self, release_id: int) -> list[dict[str, object]]:
+    def list_public_source_assets(self, repository: str, tag: str) -> list[dict[str, object]]:
+        _status, repo = self._request("GET", f"/repos/{repository}")
+        if not isinstance(repo, dict) or repo.get("private") is not False:
+            raise PublishError(f"Source repository must be public: {repository}")
+        _status, release = self._request(
+            "GET", f"/repos/{repository}/releases/tags/{quote(tag, safe='')}",
+        )
+        if (not isinstance(release, dict) or release.get("tag_name") != tag
+                or release.get("draft") is not False
+                or type(release.get("id")) is not int or release["id"] <= 0):
+            raise PublishError(f"Source release must be public at the catalog tag: {repository}@{tag}")
+        return self.list_release_assets(release["id"], repository=repository)
+
+    def list_release_assets(self, release_id: int, *, repository: str | None = None) -> list[dict[str, object]]:
         assets: list[dict[str, object]] = []
         for page in range(1, 11):
             _status, payload = self._request(
                 "GET",
-                f"/repos/{self.repository}/releases/{release_id}/assets"
+                f"/repos/{repository or self.repository}/releases/{release_id}/assets"
                 f"?per_page=100&page={page}",
             )
             if not isinstance(payload, list) or len(payload) > 100:
@@ -696,7 +711,12 @@ class ReleasePublisher:
         self.run_timeout_seconds = run_timeout_seconds
         self.ci_timeout_seconds = ci_timeout_seconds
         self.run_urls: dict[str, str] = {}
-        self.source_assets = self._source_asset_records(source_catalog)
+        try:
+            self.external_source_assets = source_asset_groups(source_catalog) if source_catalog is not None else {}
+        except (KeyError, TypeError, ValueError, IdentityError) as error:
+            raise PublishError(f"Invalid source engine catalog: {error}") from error
+        self.source_assets = self.external_source_assets.pop(
+            (client.repository, request.release_tag), {})
         self.prepare_only = prepare_only
         if not self._notes_text_complete(release_notes):
             raise PublishError("Reviewed release notes are missing the tag or a language section")
@@ -708,22 +728,13 @@ class ReleasePublisher:
             client.repository,
         )
 
-    def _source_asset_records(self, catalog: dict | None) -> dict[str, dict]:
-        if catalog is None or catalog.get("origin", "official-release") == "official-release":
-            return {}
-        try:
-            katago_catalog.validate_catalog(catalog)
-        except (KeyError, TypeError, ValueError) as error:
-            raise PublishError(f"Invalid source engine catalog: {error}") from error
-        independent = {key for key, value in catalog["assets"].items() if "katagoSourceCommit" in value}
-        inherited = {key: value for key, value in catalog["assets"].items()
-                     if value.get("origin", catalog["origin"]) == "project-source-build" and key not in independent}
-        if (catalog.get("katagoSourceCommit") != SOURCE_COMMIT
-                or catalog.get("engineReleaseRepository") != self.client.repository
-                or catalog.get("engineReleaseTag") != self.request.release_tag
-                or set(inherited) != set(TARGETS) - independent):
-            raise PublishError("All inherited pinned source assets must belong to this exact release")
-        return {asset["assetName"]: asset for asset in inherited.values()}
+    def _verify_external_source_assets(self) -> None:
+        for (repository, tag), records in self.external_source_assets.items():
+            rows = self.client.list_public_source_assets(repository, tag)
+            try:
+                verify_source_inventory(rows, records)
+            except IdentityError as error:
+                raise PublishError(f"Invalid source assets at {repository}@{tag}: {error}") from error
 
     def _wait_for_source_assets(self, release_id: int) -> None:
         if not self.source_assets:
@@ -1206,6 +1217,7 @@ class ReleasePublisher:
     def _verify_platform_assets(
         self, release_id: int, selected_runs: dict[str, dict[str, object]]
     ) -> list[str]:
+        self._verify_external_source_assets()
         expected_records: dict[str, dict[str, object]] = {}
         expected_records.update(self.source_assets)
         for spec in WORKFLOWS:
@@ -1323,6 +1335,7 @@ class ReleasePublisher:
 
     def publish(self) -> dict[str, object]:
         self._wait_for_target_ci()
+        self._verify_external_source_assets()
         self._ensure_tag()
         release, already_published = self._ensure_draft_release()
         release_id = int(release["id"])

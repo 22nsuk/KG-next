@@ -14,43 +14,24 @@ import tempfile
 from types import SimpleNamespace
 
 try:
-    from scripts.katago_asset_catalog import validate_catalog
-    from scripts.katago_source_targets import SOURCE_COMMIT, TARGETS
+    from scripts.release_source_assets import source_asset_groups, verify_source_inventory
     from scripts.upload_release_assets import UploadClient, completed, fingerprint, upload_one
     from scripts.validate_release_workflow_identity import require
 except ModuleNotFoundError:
-    from katago_asset_catalog import validate_catalog
-    from katago_source_targets import SOURCE_COMMIT, TARGETS
+    from release_source_assets import source_asset_groups, verify_source_inventory
     from upload_release_assets import UploadClient, completed, fingerprint, upload_one
     from validate_release_workflow_identity import require
 
 
 def validate_transfer_catalog(catalog, repository, tag):
-    validate_catalog(catalog)
+    groups = source_asset_groups(catalog)
     require(catalog.get('origin') == 'project-source-build', 'Not a project source build')
-    require(catalog.get('katagoSourceCommit') == SOURCE_COMMIT, 'Unexpected source commit')
-    require(catalog.get('engineReleaseRepository') == repository, 'Unexpected engine repository')
-    require(catalog.get('engineReleaseTag') == tag, 'Unexpected engine release tag')
-    independent = {key for key, value in catalog['assets'].items() if 'katagoSourceCommit' in value}
-    records = {key: value for key, value in catalog['assets'].items()
-               if value.get('origin', catalog['origin']) == 'project-source-build' and key not in independent}
-    require(set(records) == set(TARGETS) - independent, 'Incomplete inherited source target matrix')
+    require(repository in ('wimi321/lizzieyzy-next', '22nsuk/KG-next'), 'Unexpected destination repository')
+    names = groups.get((repository, tag), {})
+    records = {key: value for key, value in catalog['assets'].items() if value['assetName'] in names}
     require(sum(record['sizeBytes'] for record in records.values()) <= 2_000_000_000,
             'Source inventory exceeds transfer budget')
     return records
-
-
-def verify_source_inventory(rows, records):
-    expected = {record['assetName']: record for record in records.values()}
-    require(len(expected) == len(records), 'Duplicate catalog asset name')
-    selected = [row for row in rows if row.get('name') in expected]
-    require(len(selected) == len(expected) and len({row['name'] for row in selected}) == len(expected),
-            'Missing or duplicate source archive')
-    for row in selected:
-        record = expected[row['name']]
-        require(row.get('state') == 'uploaded' and row.get('size') == record['sizeBytes']
-                and row.get('digest') == 'sha256:' + record['sha256'],
-                'Source archive metadata differs from pinned catalog')
 
 
 def transfer_archive(client, source_tag, record, download):
@@ -77,7 +58,7 @@ def main():
             'Invalid release tag')
     require(args.source_tag != args.target_tag, 'Source and destination must differ')
     repository = os.environ.get('GITHUB_REPOSITORY', '')
-    require(repository == 'wimi321/lizzieyzy-next', 'Unexpected repository')
+    require(repository in ('wimi321/lizzieyzy-next', '22nsuk/KG-next'), 'Unexpected repository')
     client = UploadClient(SimpleNamespace(
         repository=repository, release_tag=args.target_tag, date_tag=target.group(1),
         prerelease='true', target_sha=args.target_sha, github_ref='refs/tags/' + args.target_tag,
@@ -90,6 +71,9 @@ def main():
             'Invalid catalog response')
     catalog = json.loads(base64.b64decode(''.join(payload['content'].split()), validate=True))
     records = validate_transfer_catalog(catalog, repository, args.target_tag)
+    if not records:
+        print('All pinned engines remain in their catalog releases; no archives need transfer', flush=True)
+        return
     sources = [release for release in client.releases() if release.get('tag_name') == args.source_tag]
     require(len(sources) == 1, 'Source release must exist exactly once')
     source_id = sources[0].get('id')
