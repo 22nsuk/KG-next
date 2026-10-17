@@ -20,6 +20,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Stream;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.EngineManager;
@@ -93,6 +94,119 @@ class ConsoleGenmoveRequestTest {
         Stream.of(false, true).flatMap(analyze ->
             Stream.of("b", "w").flatMap(color ->
                 Stream.of("D4", "pass").map(move -> Arguments.of(mode, analyze, color, move)))));
+  }
+
+  @Test
+  void pendingImportedPositionRejectsConsoleGenmoveUntilAlignmentIsConfirmed() throws Exception {
+    Board board = Lizzie.board;
+    board.requireEngineAlignment();
+    assertFalse(engine.genmove("w", true));
+    assertEquals("", output.toString(StandardCharsets.UTF_8));
+    idle();
+    board.completeEngineAlignment(board.getHistory().getStart(),
+        board.getHistory().getCurrentHistoryNode(), board.getContextRevision());
+    int id = request(false, "w");
+    response(id, "D4");
+    assertEquals(Stone.WHITE, board.getData().lastMoveColor);
+    idle();
+  }
+
+  static Stream<Arguments> outputAdmissionChanges() {
+    return Stream.of(false, true).flatMap(analyze ->
+        Stream.of("unchanged", "navigation", "alignment", "primary", "primary-return", "manager")
+            .map(change -> Arguments.of(analyze, change)));
+  }
+
+  @ParameterizedTest
+  @MethodSource("outputAdmissionChanges")
+  void outputAdmissionRechecksTargetWithoutTakingBoardMonitor(boolean analyze, String change)
+      throws Exception {
+    EngineManager previousManager = Lizzie.engineManager;
+    engine.isKatago = analyze;
+    EngineManager.isEmpty = false; // Preserve real Board -> engine undo forwarding.
+    rules.board().getHistory().place(3, 3, Stone.BLACK);
+    Field lockField =
+        EngineManager.class.getDeclaredField("ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK");
+    lockField.setAccessible(true);
+    ReentrantLock admission = (ReentrantLock) lockField.get(null);
+    AtomicReference<Thread> writer = new AtomicReference<>();
+    ExecutorService executor = Executors.newSingleThreadExecutor();
+    try {
+      admission.lock();
+      try {
+        Future<Boolean> sent = executor.submit(() -> {
+          writer.set(Thread.currentThread());
+          return engine.genmove("w", true);
+        });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while ((writer.get() == null || !admission.hasQueuedThread(writer.get()))
+            && System.nanoTime() < deadline) Thread.sleep(1);
+        assertNotNull(writer.get());
+        assertTrue(admission.hasQueuedThread(writer.get()),
+            "genmove must reach physical output admission after its initial Board check");
+        assertEquals("", output.toString(StandardCharsets.UTF_8));
+        synchronized (rules.board()) {
+          long revision = rules.board().getContextRevision();
+          long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+          if (change.equals("navigation")) assertTrue(rules.board().previousMove(false));
+          else if (change.equals("alignment")) rules.board().requireEngineAlignment();
+          else if (change.equals("primary") || change.equals("primary-return")) {
+            Lizzie.setPrimaryEngine(new Leelaz(""));
+            if (change.equals("primary-return")) Lizzie.setPrimaryEngine(engine);
+            assertNotEquals(generation, Lizzie.capturePrimaryEngineGeneration(engine));
+            assertEquals(revision, rules.board().getContextRevision());
+          } else if (change.equals("manager")) {
+            Lizzie.setEngineManager(new EngineManager(List.of(engine)));
+            assertEquals(generation, Lizzie.capturePrimaryEngineGeneration(engine));
+            assertEquals(revision, rules.board().getContextRevision());
+          }
+          admission.unlock();
+          // Keep Board held while the writer finishes: a synchronized post-admission check
+          // would recreate the Board -> admission / admission -> Board lock inversion.
+          sent.get(3, TimeUnit.SECONDS);
+        }
+      } finally {
+        if (admission.isHeldByCurrentThread()) admission.unlock();
+      }
+      String commands = output.toString(StandardCharsets.UTF_8);
+      if (change.equals("unchanged")) {
+        assertEquals(1, commands.lines().filter(row -> row.contains("genmove")).count());
+        int id = Integer.parseInt(commands.substring(0, commands.indexOf(' ')));
+        response(id, "D4");
+        assertEquals(2, rules.current().getData().moveNumber);
+        assertEquals(Stone.WHITE, rules.current().getData().lastMoveColor);
+      } else {
+        assertFalse(commands.contains("genmove"), "obsolete genmove reached the engine: " + commands);
+        if (change.equals("navigation")) {
+          assertEquals(1, commands.lines().count());
+          assertTrue(commands.trim().endsWith(" undo"), commands);
+          assertEquals(0, rules.current().getData().moveNumber);
+          int undoId = Integer.parseInt(commands.substring(0, commands.indexOf(' ')));
+          response(undoId, "");
+        } else {
+          assertEquals("", commands);
+          if (change.equals("alignment")) {
+            rules.board().completeEngineAlignment(rules.board().getHistory().getStart(),
+                rules.current(), rules.board().getContextRevision());
+          }
+        }
+        idle();
+        if (change.equals("primary")) Lizzie.setPrimaryEngine(engine);
+        if (change.equals("manager")) Lizzie.setEngineManager(previousManager);
+        // Cancellation must retire the old request and leave the queue usable.
+        int id = request(analyze, "w");
+        response(id, "D4");
+        assertEquals(Stone.WHITE, rules.current().getData().lastMoveColor);
+      }
+      idle();
+    } finally {
+      executor.shutdownNow();
+      try {
+        assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      } finally {
+        Lizzie.setEngineManager(previousManager);
+      }
+    }
   }
 
   @ParameterizedTest
@@ -349,8 +463,14 @@ class ConsoleGenmoveRequestTest {
   void changedBoardRevisionRejectsReplyEvenAtSameNode() throws Exception {
     int id = request(false, "w");
     rules.board().requireEngineAlignment();
+    // Completing the newer restore must not revive the old request's revision.
+    rules.board().completeEngineAlignment(rules.board().getHistory().getStart(),
+        rules.current(), rules.board().getContextRevision());
     response(id, "D4");
     assertEquals(0, rules.current().getData().moveNumber);
+    idle();
+    response(request(false, "w"), "D4");
+    assertEquals(Stone.WHITE, rules.current().getData().lastMoveColor);
     idle();
   }
 

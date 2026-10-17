@@ -13348,6 +13348,14 @@ public class Leelaz {
         return null;
       }
       try {
+        // Validate Board before taking the global output admission lock: Board mutations may
+        // enqueue engine commands while holding their own monitor.
+        if (queuedCommand.onResponse instanceof ManualGenmoveRequest
+            && !((ManualGenmoveRequest) queuedCommand.onResponse).validBeforeWrite()) {
+          queuedCommand.cancelBeforeOutputWrite(new IllegalStateException("Manual genmove target changed"));
+          finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
+          return null;
+        }
         // Canonical physical-write order is transaction/global admission -> short selection
         // validation -> binding owner -> output stream. Never wait for either manager admission
         // while already owning the output monitor.
@@ -13365,7 +13373,7 @@ public class Leelaz {
           }
         }
         if (queuedCommand.onResponse instanceof ManualGenmoveRequest
-            && !((ManualGenmoveRequest) queuedCommand.onResponse).validBeforeWrite()) {
+            && !((ManualGenmoveRequest) queuedCommand.onResponse).validAfterOutputAdmission()) {
           queuedCommand.cancelBeforeOutputWrite(new IllegalStateException("Manual genmove target changed"));
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
@@ -19925,7 +19933,8 @@ public class Leelaz {
       Stone requestedColor = "b".equalsIgnoreCase(color) ? Stone.BLACK
           : "w".equalsIgnoreCase(color) ? Stone.WHITE : Stone.EMPTY;
       Board board = Lizzie.board;
-      if (requestedColor == Stone.EMPTY || board == null || this != Lizzie.leelaz) return false;
+      if (requestedColor == Stone.EMPTY || board == null || this != Lizzie.leelaz
+          || board.isEngineAlignmentPending()) return false;
       ManualGenmoveRequest request = new ManualGenmoveRequest(board, requestedColor, command);
       synchronized (this) {
         if (manualGenmoveRequestOwner != null || isThinking) return false;
@@ -19982,17 +19991,31 @@ public class Leelaz {
       }
     }
 
-    private boolean isCurrentTarget(BoardHistoryNode expectedNode, long expectedRevision) {
+    private boolean isCurrentAuthority() {
       return isCurrentLiveEngineIncarnation(binding)
           && primaryGeneration >= 0
           && primaryGeneration == Lizzie.capturePrimaryEngineGeneration(Leelaz.this)
-          && manager == Lizzie.engineManager && board == Lizzie.board
+          && manager == Lizzie.engineManager && board == Lizzie.board;
+    }
+
+    private boolean isCurrentTarget(BoardHistoryNode expectedNode, long expectedRevision) {
+      return isCurrentAuthority()
           && expectedRevision == board.getContextRevision()
           && expectedNode == board.getHistory().getCurrentHistoryNode();
     }
 
     private boolean validBeforeWrite() {
-      return !settled.get() && manualGenmoveRequestOwner == this && isCurrentTarget(node, revision);
+      return !settled.get() && manualGenmoveRequestOwner == this
+          && !board.isEngineAlignmentPending() && isCurrentTarget(node, revision);
+    }
+
+    private boolean validAfterOutputAdmission() {
+      // Navigation and requireEngineAlignment advance this volatile revision. Do not call
+      // synchronized Board accessors under output admission: Board may be enqueueing undo.
+      // Selection/manager changes do not advance it; also recheck the captured authority using
+      // the same short primary-generation lookup as the pre-admission validation.
+      return !settled.get() && manualGenmoveRequestOwner == this
+          && isCurrentAuthority() && revision == board.getContextRevision();
     }
 
     @Override
@@ -20050,7 +20073,8 @@ public class Leelaz {
           if (authority == null || incarnation == null) return;
           synchronized (board) {
             if (!isCurrentLiveEngineIncarnation(binding) || manualGenmoveRequestOwner != this
-                || board != Lizzie.board || revision != board.getContextRevision()
+                || board != Lizzie.board || board.isEngineAlignmentPending()
+                || revision != board.getContextRevision()
                 || node != board.getHistory().getCurrentHistoryNode()) return;
             if (pass) board.pass(color);
             else board.place(coordinates.get()[0], coordinates.get()[1], color);
