@@ -46,6 +46,11 @@ public class ContributeStartupDesktopTest {
   }
 
   @Test
+  void normalExitSurvivesPausedEdtWithoutMaskingFailures() throws Exception {
+    probe("paused-clean");
+  }
+
+  @Test
   void modalNotificationsDoNotBlockDrainOrStopReplacement() throws Exception {
     probe("modal");
   }
@@ -212,6 +217,60 @@ public class ContributeStartupDesktopTest {
         assertTrue(Lizzie.frame.contributeView.isShowing());
         assertEquals(1, launches(replaced).size());
         assertEquals(1, launches(successor).size());
+      } else if (args[0].equals("paused-clean")) {
+        for (String mode :
+            List.of(
+                "paused-clean-out", "paused-clean-err", "paused-signal-out", "paused-signal-err",
+                "paused-retry", "paused-error-json", "paused-clean-fatal")) {
+          boolean normal = mode.endsWith("-out") || mode.endsWith("-err");
+          Path run = start(work, mode, true);
+          await(() -> Files.exists(run.resolve("ready")));
+          ProcessHandle child =
+              ProcessHandle.of(Long.parseLong(Files.readString(run.resolve("pid"))))
+                  .orElseThrow();
+          var entered = new java.util.concurrent.CountDownLatch(1);
+          var release = new java.util.concurrent.CountDownLatch(1);
+          SwingUtilities.invokeLater(
+              () -> {
+                entered.countDown();
+                try {
+                  assertTrue(release.await(20, TimeUnit.SECONDS));
+                } catch (InterruptedException error) {
+                  throw new AssertionError(error);
+                }
+              });
+          assertTrue(entered.await(10, TimeUnit.SECONDS));
+          try {
+            Files.writeString(run.resolve("release"), "release");
+            child.onExit().get(10, TimeUnit.SECONDS);
+            // Keep normal-exit UI work queued beyond the production drain deadline.
+            assertFalse(
+                release.await(
+                    featurecat.lizzie.analysis.EngineStartupDiagnostics.Policy.production()
+                            .deadlineMillis()
+                        + 1000,
+                    TimeUnit.MILLISECONDS));
+            if (normal)
+              assertEquals(1, launches(run).size(), "Normal exit cannot retry behind a busy EDT");
+          } finally {
+            release.countDown();
+          }
+          if (normal) {
+            await(() -> !Lizzie.frame.isContributing);
+            SwingUtilities.invokeAndWait(
+                () -> {
+                  assertNull(failureWindow());
+                  assertEquals(
+                      Lizzie.resourceBundle.getString("Menu.noEngine"),
+                      Menu.engineMenu.getText());
+                });
+            assertEquals(1, launches(run).size(), "Late UI work cannot restart a clean exit");
+          } else {
+            verifyFailure(
+                run, mode.equals("paused-clean-fatal") ? 1 : 4,
+                mode.equals("paused-clean-fatal") ? "Contribute.tips.buildRejected" : null);
+          }
+        }
       } else if (args[0].equals("paused-edt")) {
         for (String mode : List.of("paused-reject-json", "paused-unsupported-err")) {
           Path run = start(work, mode, true);
@@ -329,6 +388,24 @@ public class ContributeStartupDesktopTest {
         StandardOpenOption.CREATE,
         StandardOpenOption.APPEND);
     switch (mode) {
+      case "paused-clean-out", "paused-clean-err", "paused-signal-out", "paused-signal-err",
+          "paused-retry", "paused-error-json", "paused-clean-fatal" -> {
+        Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
+        Files.writeString(run.resolve("ready"), "ready");
+        waitFile(run.resolve("release"));
+        if (mode.equals("paused-error-json")) {
+          System.out.println(new JSONObject().put("error", "ERROR: All cleaned up, quitting"));
+        } else if (mode.equals("paused-retry")) {
+          System.out.println("ERROR controlled failure while EDT is paused");
+        } else {
+          var output = mode.endsWith("-err") ? System.err : System.out;
+          output.println(
+              mode.contains("signal")
+                  ? "Exited cleanly after signal" : "All cleaned up, quitting");
+          if (mode.equals("paused-clean-fatal")) output.println(REJECTION);
+          else System.exit(0);
+        }
+      }
       case "stderr-clean", "stderr-retry", "stderr-fatal" -> {
         Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
         System.err.close();

@@ -300,6 +300,8 @@ public class ContributeEngine {
       }
     } else {
       classify(launch, line);
+      // Lifecycle decisions must not wait for EDT delivery of the exit notification.
+      if (!launch.permanent() && isNormalExitLine(line)) isNormalEnd = true;
       if (!launch.permanent() && STARTING_GAME.matcher(line).matches()) launch.diagnostic.ready();
     }
     if (launch.permanent()) return;
@@ -399,7 +401,7 @@ public class ContributeEngine {
         launch.error.isEmpty()
             ? Lizzie.resourceBundle.getString("Leelaz.engineEndUnormalHint")
             : launch.error;
-    boolean normal = isNormalEnd || isSlowQuiting;
+    boolean normal = !launch.permanent() && (isNormalEnd || isSlowQuiting);
     if (!normal) launch.diagnostic.fail("startup-exit", message);
     terminate(launch);
     if (!complete && launch.process != null && launch.process.isAlive())
@@ -564,6 +566,10 @@ public class ContributeEngine {
       Lizzie.frame.contributeView.setGames(finishedGames, playingGames);
   }
 
+  private static boolean isNormalExitLine(String line) {
+    return line.contains("Exited cleanly after signal") || line.contains("All cleaned up, quitting");
+  }
+
   private Runnable parseTips(String line, Launch launch) {
     Runnable notification = null;
     if (STARTING_GAME.matcher(line).matches()) {
@@ -632,8 +638,7 @@ public class ContributeEngine {
     if (line.contains("Signal to stop")) {
       setEternalTip(Lizzie.resourceBundle.getString("Contribute.tips.signalToStop"));
     }
-    if (line.contains("Exited cleanly after signal") || line.contains("All cleaned up, quitting")) {
-      isNormalEnd = true;
+    if (isNormalExitLine(line)) {
       notification = outputNotification(
           launch, Lizzie.resourceBundle.getString("Contribute.tips.exitedAfterSignal"), false);
       Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Menu.noEngine"));

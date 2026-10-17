@@ -64,6 +64,7 @@ ENGINE_PROCESS_REQUIRED_TESTS = (
             "stderrEofKeepsProcessAliveUntilExitOrFatalError",
             "stopRestartAndValidGameDisplay",
             "permanentOutputSurvivesPausedEdt",
+            "normalExitSurvivesPausedEdtWithoutMaskingFailures",
             "modalNotificationsDoNotBlockDrainOrStopReplacement",
         )
     ),
