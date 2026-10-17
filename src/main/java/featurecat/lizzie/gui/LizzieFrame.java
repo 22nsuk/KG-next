@@ -20,6 +20,7 @@ import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.EngineRulesResult;
 import featurecat.lizzie.analysis.ForegroundRestoreResult;
 import featurecat.lizzie.analysis.GameInfo;
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.analysis.MoveRankDefinition;
@@ -9118,13 +9119,13 @@ public class LizzieFrame extends JFrame {
     EngineGameSnapshot snapshot = EngineGamePresentation.current();
     if (snapshot.playing()) {
       Leelaz whiteEngine = EngineGamePresentation.whiteEngine(snapshot);
-      if (whiteEngine != null && whiteEngine.isKatago && whiteEngine.usingSpecificRules > 0)
+      if (whiteEngine != null && whiteEngine.isKatago && whiteEngine.rulesSummary != null)
         return true;
       Leelaz blackEngine = EngineGamePresentation.blackEngine(snapshot);
-      if (blackEngine != null && blackEngine.isKatago && blackEngine.usingSpecificRules > 0)
+      if (blackEngine != null && blackEngine.isKatago && blackEngine.rulesSummary != null)
         return true;
     }
-    if (Lizzie.leelaz != null && Lizzie.leelaz.isKatago && Lizzie.leelaz.usingSpecificRules > 0)
+    if (Lizzie.leelaz != null && Lizzie.leelaz.isKatago && Lizzie.leelaz.rulesSummary != null)
       return true;
     return false;
   }
@@ -9424,27 +9425,10 @@ public class LizzieFrame extends JFrame {
               snapshot, Lizzie.board.getHistory().isBlacksTurn());
     else if (!usingSpecificRues) leela = Lizzie.leelaz;
     if (!usingSpecificRues && leela != null && leela.isKatago && !EngineManager.isEmpty) {
-      switch (leela.usingSpecificRules) {
-        case 1:
-          moveOrRules = Lizzie.resourceBundle.getString("LizzieFrame.currentRules.chinese");
-          usingSpecificRues = true;
-          break;
-        case 2:
-          moveOrRules = Lizzie.resourceBundle.getString("LizzieFrame.currentRules.chn-ancient");
-          usingSpecificRues = true;
-          break;
-        case 3:
-          moveOrRules = Lizzie.resourceBundle.getString("LizzieFrame.currentRules.japanese");
-          usingSpecificRues = true;
-          break;
-        case 4:
-          moveOrRules = Lizzie.resourceBundle.getString("LizzieFrame.currentRules.tromp-taylor");
-          usingSpecificRues = true;
-          break;
-        case 5:
-          moveOrRules = Lizzie.resourceBundle.getString("LizzieFrame.currentRules.others");
-          usingSpecificRues = true;
-          break;
+      KataGoRules.Summary summary = leela.rulesSummary;
+      if (summary != null) {
+        moveOrRules = Lizzie.resourceBundle.getString(summary.labelKey());
+        usingSpecificRues = true;
       }
     }
     if (usingSpecificRues && !moveOrRules.isEmpty()) {

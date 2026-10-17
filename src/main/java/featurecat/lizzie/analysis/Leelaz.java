@@ -385,7 +385,8 @@ public class Leelaz {
   private final Object parameterReadLock = new Object();
   private ParameterRead activeParameterRead;
   public volatile String recentRulesLine = "";
-  public int usingSpecificRules = -1; // 1=中国规则2=中古规则3=日本规则4=TT规则5=其他规则
+  /** Display summary of the last observed engine rules; null until a rules line is parsed. */
+  public volatile KataGoRules.Summary rulesSummary;
   private final Object engineRulesLock = new Object();
   private final ThreadLocal<EngineRulesOperation> engineRulesOperationContext =
       new ThreadLocal<>();
@@ -25361,14 +25362,14 @@ public class Leelaz {
   }
 
   public void getSuicidalAndRules() {
-    usingSpecificRules = -1;
+    rulesSummary = null;
     KataGoRules rules = KataGoRules.parse(recentRulesLine).orElse(null);
     if (rules == null) {
       canSuicidal = false;
       return;
     }
     canSuicidal = rules.bool(KataGoRules.SUICIDE);
-    usingSpecificRules = rules.legacyClassification();
+    rulesSummary = rules.summary();
   }
 
   private final class EngineRulesResponseHandler implements Runnable {

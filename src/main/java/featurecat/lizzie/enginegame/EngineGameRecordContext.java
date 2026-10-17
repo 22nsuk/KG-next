@@ -27,7 +27,7 @@ public record EngineGameRecordContext(
   public static EngineGameRecordContext saveFormattingMarker() {
     EngineParticipantIdentity identity = new EngineParticipantIdentity("", "");
     EngineGameParticipantDescriptor descriptor =
-        new EngineGameParticipantDescriptor(identity, "", false, false, 0);
+        new EngineGameParticipantDescriptor(identity, "", false, false, null);
     return new EngineGameRecordContext(null, descriptor, descriptor, null);
   }
 

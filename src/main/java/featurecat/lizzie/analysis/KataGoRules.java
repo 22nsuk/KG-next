@@ -7,6 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalDouble;
 import java.util.TreeMap;
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -14,7 +15,7 @@ import org.json.JSONObject;
 
 /**
  * Immutable KataGo rules value used for parse, semantic comparison, display summary, and editing.
- * JSON key order is not identity. Display name and integer classification are not identity.
+ * JSON key order is not identity. A display summary names a preset only when every field equals it.
  */
 public final class KataGoRules {
   public static final String KO = "ko";
@@ -28,15 +29,50 @@ public final class KataGoRules {
   private static final List<String> REQUIRED_FIELDS =
       List.of(KO, SCORING, TAX, SUICIDE, HAS_BUTTON, WHITE_HANDICAP_BONUS, FRIENDLY_PASS_OK);
 
+  /** Display summary: the named preset family whose fields this rules value equals exactly. */
   public enum Summary {
-    CHINESE,
-    CHINESE_ANCIENT,
-    JAPANESE,
-    TROMP_TAYLOR,
-    OTHER
+    CHINESE("LizzieFrame.currentRules.chinese"),
+    CHINESE_ANCIENT("LizzieFrame.currentRules.chn-ancient"),
+    JAPANESE("LizzieFrame.currentRules.japanese"),
+    TROMP_TAYLOR("LizzieFrame.currentRules.tromp-taylor"),
+    GOE("LizzieFrame.currentRules.goe"),
+    OTHER("LizzieFrame.currentRules.others");
+
+    private final String labelKey;
+
+    Summary(String labelKey) {
+      this.labelKey = labelKey;
+    }
+
+    /** Localized display-string key for this summary. */
+    public String labelKey() {
+      return labelKey;
+    }
   }
 
   private static final Map<String, KataGoRules> PRESETS = officialPresets();
+
+  /**
+   * Declaration spellings that name a preset under another normalized name: KataGo's own shorthand
+   * spellings plus short country codes seen in SGF RU properties.
+   */
+  private static final Map<String, String> ALIASES =
+      Map.ofEntries(
+          Map.entry("cn", "chinese"),
+          Map.entry("jp", "japanese"),
+          Map.entry("kr", "korean"),
+          Map.entry("chineseogs", "chinese-ogs"),
+          Map.entry("chinesekgs", "chinese-kgs"),
+          Map.entry("stonescoring", "stone-scoring"),
+          Map.entry("ancientarea", "stone-scoring"),
+          Map.entry("ancient-area", "stone-scoring"),
+          Map.entry("ancientterritory", "ancient-territory"),
+          Map.entry("agabutton", "aga-button"),
+          Map.entry("french", "aga"),
+          Map.entry("nz", "new-zealand"),
+          Map.entry("newzealand", "new-zealand"),
+          Map.entry("tromptaylor", "tromp-taylor"),
+          Map.entry("ing", "goe"));
 
   private final Map<String, Object> fields;
 
@@ -75,7 +111,8 @@ public final class KataGoRules {
         return Optional.empty();
       }
     }
-    return Optional.ofNullable(PRESETS.get(normalizePresetName(trimmed)));
+    String name = normalizePresetName(trimmed);
+    return Optional.ofNullable(PRESETS.get(ALIASES.getOrDefault(name, name)));
   }
 
   public static KataGoRules fromJson(JSONObject json) {
@@ -143,7 +180,8 @@ public final class KataGoRules {
       boolean suicide,
       String tax,
       String whiteHandicapBonus,
-      boolean hasButton) {
+      boolean hasButton,
+      boolean friendlyPassOk) {
     Map<String, Object> next = new TreeMap<>(fields);
     next.put(SCORING, scoring);
     next.put(KO, ko);
@@ -151,61 +189,46 @@ public final class KataGoRules {
     next.put(TAX, tax);
     next.put(WHITE_HANDICAP_BONUS, whiteHandicapBonus);
     next.put(HAS_BUTTON, hasButton);
+    next.put(FRIENDLY_PASS_OK, friendlyPassOk);
     return new KataGoRules(next);
   }
 
   public Summary summary() {
-    if (matchesOfficial("tromp-taylor") || matchesLegacyTrompTaylor()) {
-      return Summary.TROMP_TAYLOR;
+    if (matchesOfficial("chinese") || matchesOfficial("chinese-ogs")) {
+      return Summary.CHINESE;
     }
-    if (matchesOfficial("stone-scoring") || matchesLegacyChineseAncient()) {
-      return Summary.CHINESE_ANCIENT;
-    }
-    if (matchesOfficial("japanese")
-        || matchesOfficial("korean")
-        || matchesLegacyJapanese()) {
+    if (matchesOfficial("japanese")) {
       return Summary.JAPANESE;
     }
-    if (matchesOfficial("chinese")
-        || matchesOfficial("chinese-ogs")
-        || matchesOfficial("chinese-kgs")
-        || matchesLegacyChinese()) {
-      return Summary.CHINESE;
+    if (matchesOfficial("stone-scoring")) {
+      return Summary.CHINESE_ANCIENT;
+    }
+    if (matchesOfficial("tromp-taylor")) {
+      return Summary.TROMP_TAYLOR;
+    }
+    if (matchesOfficial("goe")) {
+      return Summary.GOE;
     }
     return Summary.OTHER;
   }
 
   /**
-   * Existing integer classification used by Engine Game labels. Name identity is not rule identity.
+   * KataGo's default komi for these rules, mirroring its rules parser: the New Zealand preset sets
+   * 7; otherwise territory scoring uses 6.5, area scoring with a button 7, other area scoring 7.5.
+   * Empty when the scoring rule is unknown.
    */
-  public int legacyClassification() {
+  public OptionalDouble defaultKomi() {
     String scoring = string(SCORING);
-    String ko = string(KO);
-    String tax = string(TAX);
-    String bonus = string(WHITE_HANDICAP_BONUS);
-    boolean suicide = bool(SUICIDE);
-    boolean hasButton = bool(HAS_BUTTON);
-    if (scoring.contentEquals("AREA")
-        && ko.contentEquals("POSITIONAL")
-        && suicide
-        && tax.contentEquals("NONE")
-        && bonus.contentEquals("N")
-        && !hasButton) {
-      return 4;
+    if ("TERRITORY".equals(scoring)) {
+      return OptionalDouble.of(6.5);
     }
-    if (scoring.contentEquals("AREA") && tax.contentEquals("NONE") && !hasButton) {
-      return 1;
+    if (!"AREA".equals(scoring)) {
+      return OptionalDouble.empty();
     }
-    if (scoring.contentEquals("AREA") && tax.contentEquals("ALL") && !hasButton) {
-      return 2;
+    if (matchesOfficial("new-zealand") || bool(HAS_BUTTON)) {
+      return OptionalDouble.of(7.0);
     }
-    if (scoring.contentEquals("TERRITORY") && tax.contentEquals("SEKI")) {
-      return 3;
-    }
-    if (scoring.contentEquals("AREA") || scoring.contentEquals("TERRITORY")) {
-      return 5;
-    }
-    return -1;
+    return OptionalDouble.of(7.5);
   }
 
   public JSONObject toJson() {
@@ -244,31 +267,6 @@ public final class KataGoRules {
     return preset != null && semanticallyEquals(preset);
   }
 
-  private boolean matchesLegacyTrompTaylor() {
-    return string(SCORING).contentEquals("AREA")
-        && string(KO).contentEquals("POSITIONAL")
-        && bool(SUICIDE)
-        && string(TAX).contentEquals("NONE")
-        && string(WHITE_HANDICAP_BONUS).contentEquals("N")
-        && !bool(HAS_BUTTON);
-  }
-
-  private boolean matchesLegacyChineseAncient() {
-    return string(SCORING).contentEquals("AREA")
-        && string(TAX).contentEquals("ALL")
-        && !bool(HAS_BUTTON);
-  }
-
-  private boolean matchesLegacyJapanese() {
-    return string(SCORING).contentEquals("TERRITORY") && string(TAX).contentEquals("SEKI");
-  }
-
-  private boolean matchesLegacyChinese() {
-    return string(SCORING).contentEquals("AREA")
-        && string(TAX).contentEquals("NONE")
-        && !bool(HAS_BUTTON);
-  }
-
   private static String stripGtpPrefix(String raw) {
     if (raw.isEmpty() || (raw.charAt(0) != '=' && raw.charAt(0) != '?')) {
       return raw;
@@ -280,8 +278,9 @@ public final class KataGoRules {
     return raw.substring(index).trim();
   }
 
+  /** Case-insensitive; underscores and spaces are equivalent to hyphens. */
   private static String normalizePresetName(String name) {
-    return name.trim().toLowerCase(Locale.ROOT).replace('_', '-');
+    return name.trim().toLowerCase(Locale.ROOT).replace('_', '-').replace(' ', '-');
   }
 
   private static Object normalizeValue(Object value) {
@@ -351,6 +350,9 @@ public final class KataGoRules {
     presets.put("bga", preset("SITUATIONAL", "AREA", "NONE", false, false, "N-1", true));
     presets.put("new-zealand", preset("SITUATIONAL", "AREA", "NONE", true, false, "0", true));
     presets.put("aga-button", preset("SITUATIONAL", "AREA", "NONE", false, true, "N-1", true));
+    presets.put("goe", preset("POSITIONAL", "AREA", "NONE", true, false, "0", true));
+    presets.put(
+        "ancient-territory", preset("SIMPLE", "TERRITORY", "ALL", false, false, "0", false));
     return Map.copyOf(presets);
   }
 

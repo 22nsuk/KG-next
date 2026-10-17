@@ -11,7 +11,8 @@ public enum MatchRuleOption {
   JAPANESE_KOREAN("japanese", "MatchRules.option.japaneseKorean"),
   AGA_BGA("aga", "MatchRules.option.agaBga"),
   NEW_ZEALAND("new-zealand", "MatchRules.option.newZealand"),
-  TROMP_TAYLOR("tromp-taylor", "MatchRules.option.trompTaylor");
+  TROMP_TAYLOR("tromp-taylor", "MatchRules.option.trompTaylor"),
+  GOE("goe", "LizzieFrame.currentRules.goe");
 
   private static final List<MatchRuleOption> OPTIONS = List.of(values());
   private final KataGoRules rules;

@@ -209,7 +209,7 @@ class LeelazEngineRulesProtocolTest {
       assertTrue(result.isConfirmed());
       assertEquals("POSITIONAL", result.observed().string("ko"));
       assertFalse(result.observed().semanticallyEquals(KataGoRules.parse("chinese").orElseThrow()));
-      assertEquals(1, fixture.engine.usingSpecificRules);
+      assertEquals(KataGoRules.Summary.CHINESE, fixture.engine.rulesSummary);
     }
   }
 

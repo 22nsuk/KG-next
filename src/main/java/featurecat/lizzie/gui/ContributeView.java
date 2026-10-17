@@ -877,6 +877,7 @@ public class ContributeView extends JFrame {
     // TODO Auto-generated method stub
     btnSlowShutdown.setVisible(false);
     btnForceShutdown.setVisible(false);
+    btnPauseResume.setEnabled(false);
     btnCloseView.setVisible(true);
     exitedAfterSignal = true;
   }

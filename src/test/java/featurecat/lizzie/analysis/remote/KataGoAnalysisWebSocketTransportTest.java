@@ -992,7 +992,9 @@ public class KataGoAnalysisWebSocketTransportTest {
       {"bga", "\"whiteHandicapBonus\":\"N-1\""},
       {"new-zealand", "\"suicide\":true"},
       {"aga-button", "\"hasButton\":true"},
-      {"tromp-taylor", "\"friendlyPassOk\":false"}
+      {"tromp-taylor", "\"friendlyPassOk\":false"},
+      {"goe", "\"ko\":\"POSITIONAL\""},
+      {"nz", "\"ko\":\"SITUATIONAL\""}
     };
 
     for (String[] rulesCase : cases) {

@@ -163,10 +163,6 @@ final class VariationPreviewState {
     return published;
   }
 
-  synchronized boolean isPending() {
-    return requested != null && published == null;
-  }
-
   synchronized void select(Selection next) {
     stopReplay();
     retireWork();

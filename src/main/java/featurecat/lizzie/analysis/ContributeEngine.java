@@ -4,6 +4,8 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.RemoteEngineData;
+import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
@@ -12,7 +14,6 @@ import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
-import featurecat.lizzie.logging.EngineObservation;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.File;
@@ -25,12 +26,18 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import javax.swing.SwingUtilities;
 import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 public class ContributeEngine {
+  private static final java.util.regex.Pattern STARTING_GAME =
+      java.util.regex.Pattern.compile(
+          "(?:\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}[^ ]*: )?Starting game \\d+.*");
+
   private ArrayList<ContributeGameInfo> contributeGames;
   private ArrayList<ContributeUnParseGameInfo> unParseGameInfos;
   public int watchingGameIndex = -1;
@@ -46,12 +53,53 @@ public class ContributeEngine {
   private BufferedReader errorStream;
 
   private String engineCommand;
-  private ScheduledExecutorService executor;
-  private ScheduledExecutorService executorErr;
+  private final ScheduledExecutorService lifecycle =
+      Executors.newSingleThreadScheduledExecutor(
+          r -> {
+            Thread thread = new Thread(r, "contribution-lifecycle");
+            thread.setDaemon(true);
+            return thread;
+          });
   private List<String> commands;
 
   private volatile EngineStartupDiagnostics.Attempt currentAttempt;
-  private EngineStartupDiagnostics.Attempt presentedAttempt;
+  private Launch active;
+  private volatile boolean stopped;
+  private int launches;
+  private final ExportSanitizer sanitizer = new ExportSanitizer();
+
+  private enum Failure {
+    OTHER,
+    DISTRIBUTED_UNSUPPORTED,
+    BUILD_REJECTED,
+    CA_CERTIFICATES
+  }
+
+  private static final class Launch {
+    final EngineStartupDiagnostics.Attempt diagnostic;
+    Process process;
+    ContributeSSHController ssh;
+    BufferedReader stdout;
+    BufferedReader stderr;
+    boolean stdoutEnded;
+    boolean stderrEnded;
+    boolean draining;
+    boolean terminal;
+    boolean terminated;
+    boolean presented;
+    int pendingUi;
+    long deadline;
+    Failure failure = Failure.OTHER;
+    String error = "";
+
+    Launch(EngineStartupDiagnostics.Attempt diagnostic) {
+      this.diagnostic = diagnostic;
+    }
+
+    boolean permanent() {
+      return failure == Failure.DISTRIBUTED_UNSUPPORTED || failure == Failure.BUILD_REJECTED;
+    }
+  }
 
   private boolean useJavaSSH = false;
   private ContributeSSHController javaSSH;
@@ -64,8 +112,8 @@ public class ContributeEngine {
   public boolean javaSSHClosed;
   private String courseFile = "";
   private String timeStamp;
-  private int errorTimes;
-  private String errorTips = "";
+  private final boolean pureCommand =
+      Lizzie.config.contributeUseCommand && Lizzie.config.contributeUsePureCommand;
   private boolean addCacerts = false;
   // private boolean useProcessHandler = false;
   private boolean isSlowQuiting = false;
@@ -121,29 +169,20 @@ public class ContributeEngine {
 
     contributeGames = new ArrayList<ContributeGameInfo>();
     unParseGameInfos = new ArrayList<ContributeUnParseGameInfo>();
-    startEngine();
     timeStamp = new SimpleDateFormat("yyyy-MM-dd-HH").format(new Date());
     Lizzie.frame.isContributing = true;
-    Lizzie.board.clear(false);
+    Lizzie.board.clearWithoutPrimaryEngineForwarding();
     Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Contribute.engineMenu.contributing"));
     Lizzie.frame.refresh();
+    startEngine();
   }
 
-  private void startEngine() {
+  private synchronized void startEngine() {
+    if (stopped) return;
+    launches++;
     hasEternalTip = false;
     getVersion = false;
     paused = false;
-    if (!Lizzie.config.contributeUseCommand || !Lizzie.config.contributeUsePureCommand) {
-      if (errorTimes > 1 && !addCacerts && !Lizzie.config.contributeUseCommand) {
-        addCacerts = true;
-        engineCommand +=
-            " -cacerts "
-                + new File(Lizzie.config.contributeEnginePath).getParent()
-                + File.separator
-                + "cacert.pem";
-        errorTimes = 0;
-      }
-    }
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
@@ -157,8 +196,11 @@ public class ContributeEngine {
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
     this.currentAttempt = attempt;
+    Launch launch = new Launch(attempt);
+    active = launch;
     if (this.useJavaSSH) {
       this.javaSSH = new ContributeSSHController(this, this.ip, this.port);
+      launch.ssh = this.javaSSH;
       boolean loginStatus = false;
       if (this.useKeyGen) {
         loginStatus =
@@ -176,7 +218,9 @@ public class ContributeEngine {
         javaSSHClosed = false;
       } else {
         javaSSHClosed = true;
-        attempt.fail("process-create", "SSH login failed");
+        launch.error = "SSH login failed";
+        attempt.fail("process-create", launch.error);
+        beginDrain(launch);
         return;
       }
     } else {
@@ -186,122 +230,266 @@ public class ContributeEngine {
       attempt.capture(processBuilder);
       try {
         process = processBuilder.start();
+        launch.process = process;
         attempt.attachProcess(process);
         AnalysisResourceCoordinator.processStarted(
             this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, true);
       } catch (IOException e) {
-        attempt.fail("process-create", e.toString());
-        tryToDignostic(
-            Lizzie.resourceBundle.getString("Leelaz.engineFailed")
-                + ": "
-                + e.getLocalizedMessage(),
-            attempt);
+        launch.error = e.toString();
+        attempt.fail("process-create", launch.error);
+        beginDrain(launch);
         return;
       }
       initializeStreams();
     }
-    BufferedReader readerInput = inputStream;
-    BufferedReader readerError = errorStream;
-    executor = Executors.newSingleThreadScheduledExecutor();
-    executor.execute(() -> read(attempt, readerInput));
-    executorErr = Executors.newSingleThreadScheduledExecutor();
-    executorErr.execute(() -> readError(attempt, readerError));
+    launch.stdout = inputStream;
+    launch.stderr = errorStream;
     isNormalEnd = false;
-    setTip(Lizzie.resourceBundle.getString("ContributeView.lblTip"));
+    reader(launch, launch.stdout, false);
+    reader(launch, launch.stderr, true);
+    if (launch.process != null) launch.process.onExit().thenRun(() -> beginDrain(launch));
+    publish(launch, () -> setTip(Lizzie.resourceBundle.getString("ContributeView.lblTip")));
   }
 
-  // }
-
-  private void readError(
-      final EngineStartupDiagnostics.Attempt launchAttempt, BufferedReader readerError) {
-    String line = "";
-    String error = null;
-    try {
-      while ((line = readerError.readLine()) != null) {
-        if (launchAttempt != null) {
-          launchAttempt.output("stderr", line);
-        }
-        try {
-          parseLineForError(line, launchAttempt);
-        } catch (Exception e) {
-          e.printStackTrace();
-        }
-      }
-    } catch (IOException e) {
-      error = e.getMessage();
-      e.printStackTrace();
-    } finally {
-      if (launchAttempt != null) {
-        launchAttempt.streamEnded("stderr", error);
-      }
-    }
+  private void reader(Launch launch, BufferedReader reader, boolean stderr) {
+    Thread thread =
+        new Thread(
+            () -> {
+              String error = null;
+              try {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                  synchronized (ContributeEngine.this) {
+                    launch.diagnostic.output(stderr ? "stderr" : "stdout", line);
+                    if (active == launch && !stopped && !launch.terminal && !launch.permanent())
+                      consumeOutput(launch, line, stderr);
+                  }
+                }
+              } catch (Exception failure) {
+                error = failure.toString();
+              } finally {
+                launch.diagnostic.streamEnded(stderr ? "stderr" : "stdout", error);
+                synchronized (ContributeEngine.this) {
+                  if (stderr) launch.stderrEnded = true;
+                  else launch.stdoutEnded = true;
+                  beginDrain(launch);
+                }
+              }
+            },
+            stderr ? "contribution-stderr" : "contribution-stdout");
+    thread.setDaemon(true);
+    thread.start();
   }
 
-  private void read(
-      final EngineStartupDiagnostics.Attempt launchAttempt, BufferedReader readerInput) {
-    String error = null;
-    try {
-      String line = "";
-      while ((line = readerInput.readLine()) != null) {
-        if (launchAttempt != null) {
-          launchAttempt.output("stdout", line);
-        }
-        try {
-          if (!isNormalEnd) parseLine(line.toString(), launchAttempt);
-        } catch (Exception ex) {
-          ex.printStackTrace();
-        }
+  private void consumeOutput(Launch launch, String line, boolean stderr) {
+    JSONObject json = null;
+    String trimmed = line.trim();
+    if (trimmed.startsWith("{")) {
+      try {
+        json = new JSONObject(trimmed);
+      } catch (JSONException malformed) {
+        return;
       }
-      // this line will be reached when engine shuts down
-      if (this.useJavaSSH) javaSSHClosed = true;
-      System.out.println("contribute process ended.");
-      // Do no exit for switching weights
-      // System.exit(-1);
-    } catch (IOException e) {
-      error = e.getMessage();
-    } finally {
-      if (launchAttempt != null) {
-        launchAttempt.streamEnded("stdout", error);
-      }
-    }
-    boolean abnormal = !isNormalEnd && !isSlowQuiting;
-    if (abnormal) {
-      String failMessage =
-          errorTips.length() > 0
-              ? errorTips
-              : Lizzie.resourceBundle.getString("Leelaz.engineEndUnormalHint");
-      if (launchAttempt != null) {
-        launchAttempt.fail("startup-exit", failMessage);
-        launchAttempt.beforeTermination();
-      }
-      shutdown();
-      if (this.useJavaSSH) javaSSHClosed = true;
-      if (errorTimes < 3) {
-        errorTimes++;
-        Lizzie.frame.isContributing = true;
-        startEngine();
-      } else {
-        tryToDignostic(failMessage, launchAttempt);
+      if (json.has("error")) {
+        launch.error =
+            EngineStartupDiagnostic.bounded(
+                sanitizer.sanitize(json.optString("error", line)), 4096);
+        classify(launch, json.optString("error", line));
       }
     } else {
-      if (launchAttempt != null) {
-        launchAttempt.beforeTermination();
-      }
-      shutdown();
-      if (this.useJavaSSH) javaSSHClosed = true;
+      classify(launch, line);
+      if (!launch.permanent() && STARTING_GAME.matcher(line).matches()) launch.diagnostic.ready();
     }
-    // process = null;
-    return;
+    if (launch.permanent()) return;
+    JSONObject outputJson = json;
+    launch.pendingUi++;
+    SwingUtilities.invokeLater(
+        () -> {
+          Runnable notification = null;
+          synchronized (ContributeEngine.this) {
+            try {
+              if (ownsOutput(launch) && !launch.terminal && !launch.permanent())
+                notification = consumeUiOutput(launch, line, stderr, outputJson);
+            } finally {
+              launch.pendingUi--;
+            }
+          }
+          if (notification != null) notification.run();
+        });
   }
 
-  private void parseLineForError(
-      String line, EngineStartupDiagnostics.Attempt launchAttempt) {
-    Lizzie.frame.addContributeLine(line, false);
-    parseTips(line, launchAttempt);
+  private Runnable consumeUiOutput(Launch launch, String line, boolean stderr, JSONObject json) {
+    if (json != null) {
+      if (json.has("error")) {
+        Lizzie.frame.addContributeLine(sanitizer.sanitize(line), !stderr);
+        return null;
+      }
+      if (json.has("gameId")
+          && json.has("initialStones")
+          && json.has("moves")
+          && json.has("move")
+          && json.has("moveInfos")
+          && getJsonGameInfo(json, contributeGames, unParseGameInfos)) {
+        launch.diagnostic.ready();
+        setViewGames();
+        if (watchingGameIndex == -1 && !contributeGames.isEmpty()) {
+          watchingGameIndex = 0;
+          setGameToBoard(contributeGames.get(0), watchingGameIndex, false);
+          startWatchingGameThread();
+        }
+      }
+      return null;
+    }
+    if (stderr) {
+      Lizzie.frame.addContributeLine(sanitizer.sanitize(line), false);
+      return parseTips(line, launch);
+    } else return parseLine(line, launch);
   }
 
-  private void parseLine(String line, EngineStartupDiagnostics.Attempt launchAttempt) {
-    // TODO Auto-generated method stub
+  private void classify(Launch launch, String line) {
+    if (launch.permanent()) return;
+    String key = null;
+    if (line.contains("Compile with -DBUILD_DISTRIBUTED")) {
+      launch.failure = Failure.DISTRIBUTED_UNSUPPORTED;
+      key = "Contribute.tips.useOfficialEngineSupportDistributedTraining";
+    } else if (line.contains("This version of KataGo is not enabled for distributed")) {
+      launch.failure = Failure.BUILD_REJECTED;
+      key = "Contribute.tips.buildRejected";
+    } else if (line.contains("not find CA certs")) {
+      launch.failure = Failure.CA_CERTIFICATES;
+      key = "Contribute.tips.noCAcerts";
+    }
+    if (key != null) launch.error = Lizzie.resourceBundle.getString(key);
+    else if (line.toLowerCase(java.util.Locale.ROOT).contains("error") || line.startsWith("This "))
+      launch.error = EngineStartupDiagnostic.bounded(sanitizer.sanitize(line), 4096);
+    if (launch.permanent()) {
+      launch.diagnostic.fail("startup-output", launch.error);
+      beginDrain(launch);
+      lifecycle.execute(() -> terminate(launch));
+    }
+  }
+
+  private synchronized void beginDrain(Launch launch) {
+    if (active != launch || stopped || launch.terminal || launch.draining) return;
+    launch.draining = true;
+    launch.deadline =
+        System.nanoTime()
+            + TimeUnit.MILLISECONDS.toNanos(
+                EngineStartupDiagnostics.Policy.production().deadlineMillis());
+    lifecycle.execute(() -> finishWhenDrained(launch));
+  }
+
+  private synchronized void finishWhenDrained(Launch launch) {
+    if (active != launch || stopped || launch.terminal) return;
+    boolean complete =
+        (launch.process == null || !launch.process.isAlive())
+            && (launch.stdout == null || launch.stdoutEnded)
+            && (launch.stderr == null || launch.stderrEnded);
+    // Give already queued game parsing its normal EOF ordering, but never wait indefinitely
+    // for UI dispatch. Permanent failures have already been recorded by the readers.
+    if ((!complete || (!launch.permanent() && launch.pendingUi > 0))
+        && System.nanoTime() < launch.deadline) {
+      lifecycle.schedule(() -> finishWhenDrained(launch), 20, TimeUnit.MILLISECONDS);
+      return;
+    }
+    launch.terminal = true;
+    String message =
+        launch.error.isEmpty()
+            ? Lizzie.resourceBundle.getString("Leelaz.engineEndUnormalHint")
+            : launch.error;
+    boolean normal = isNormalEnd || isSlowQuiting;
+    if (!normal) launch.diagnostic.fail("startup-exit", message);
+    terminate(launch);
+    if (!complete && launch.process != null && launch.process.isAlive())
+      launch.process.destroyForcibly();
+    if (!normal && !launch.permanent() && launches < 4) {
+      if (launch.failure == Failure.CA_CERTIFICATES && !pureCommand && !addCacerts) {
+        addCacerts = true;
+        engineCommand =
+            certificateRecoveryCommand(engineCommand, commands.get(0), useJavaSSH, pureCommand);
+      }
+      startEngine();
+    } else {
+      presentWhenCaptured(launch, message, normal);
+    }
+  }
+
+  static String certificateRecoveryCommand(
+      String command, String executable, boolean remote, boolean pure) {
+    if (remote || pure) return command;
+    return command
+        + " -cacerts \""
+        + new File(new File(executable).getAbsoluteFile().getParentFile(), "cacert.pem")
+        + "\"";
+  }
+
+  private synchronized void presentWhenCaptured(Launch launch, String message, boolean normal) {
+    if (active != launch || stopped) return;
+    if (launch.diagnostic.snapshot() != null && launch.diagnostic.collectingOutput()) {
+      lifecycle.schedule(
+          () -> presentWhenCaptured(launch, message, normal), 20, TimeUnit.MILLISECONDS);
+      return;
+    }
+    publish(
+        launch,
+        () -> {
+          Lizzie.frame.isContributing = false;
+          Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Menu.noEngine"));
+          if (Lizzie.frame.contributeView != null) Lizzie.frame.contributeView.exitedAfterSignal();
+          if (!normal) tryToDignostic(message, launch.diagnostic);
+        });
+    lifecycle.shutdown();
+  }
+
+  private synchronized void terminate(Launch launch) {
+    if (launch.terminated) return;
+    launch.terminated = true;
+    launch.diagnostic.beforeTermination();
+    AnalysisResourceCoordinator.processStopped(
+        this, AnalysisResourceCoordinator.Purpose.OTHER, launch.process);
+    if (launch.process != null) launch.process.destroy();
+    if (launch.ssh != null) launch.ssh.close();
+  }
+
+  private void publish(Launch launch, Runnable action) {
+    SwingUtilities.invokeLater(
+        () -> {
+          synchronized (ContributeEngine.this) {
+            if (active == launch
+                && !stopped
+                && (Lizzie.frame.contributeEngine == null || Lizzie.frame.contributeEngine == this))
+              action.run();
+          }
+        });
+  }
+
+  private boolean ownsOutput(Launch launch) {
+    return active == launch
+        && !stopped
+        && (Lizzie.frame.contributeEngine == null || Lizzie.frame.contributeEngine == this);
+  }
+
+  private Runnable outputNotification(Launch launch, String message, boolean quitAfterDismissal) {
+    return () -> {
+      synchronized (ContributeEngine.this) {
+        if (!ownsOutput(launch)) return;
+      }
+      // A modal dialog runs a nested EDT loop. Readers and lifecycle cleanup must stay free,
+      // and dismissal must not act on an owner replaced inside that nested loop.
+      Utils.showMsg(message);
+      if (quitAfterDismissal) {
+        synchronized (ContributeEngine.this) {
+          if (!ownsOutput(launch) || launch.terminal || launch.permanent()) return;
+          normalQuit();
+          if (Lizzie.frame.contributeView != null)
+            Lizzie.frame.contributeView.setVisible(false);
+        }
+      }
+    };
+  }
+
+  private Runnable parseLine(String line, Launch launch) {
+    Runnable notification = null;
     // 2022-03-14 09:00:41+0800: KataGo v1.10.0
     if (!getVersion && line.contains("KataGo")) {
       String params[] = line.split(" ");
@@ -312,15 +500,14 @@ public class ContributeEngine {
             int ver1 = Integer.parseInt(version[0].substring(1));
             int ver2 = Integer.parseInt(version[1]);
             if (ver1 <= 1 && ver2 < 11) {
-              Utils.showMsg(
+              notification = outputNotification(
+                  launch,
                   Lizzie.resourceBundle.getString("Contribute.version.outOfDate")
                       + " ("
                       + params[3]
                       + "), "
-                      + Lizzie.resourceBundle.getString("Contribute.version.outOfDate2"));
-              normalQuit();
-              if (Lizzie.frame.contributeView != null)
-                Lizzie.frame.contributeView.setVisible(false);
+                      + Lizzie.resourceBundle.getString("Contribute.version.outOfDate2"),
+                  true);
             }
           } catch (NumberFormatException e) {
             e.printStackTrace();
@@ -329,58 +516,39 @@ public class ContributeEngine {
         }
       }
     }
-    if (line.contains("Starting game") || line.startsWith("{")) {
-      if (launchAttempt != null) {
-        launchAttempt.ready();
+    Lizzie.frame.addContributeLine(sanitizer.sanitize(line), true);
+    if (line.contains("Finis")) {
+      // 2021-11-02 09:21:45+0800: Finished game 8 (training), uploaded sgf
+      // katago_contribute/kata1/sgfs/kata1-b40c256-s10312780288-d2513725330/155A1E55A4145135.sgf
+      // and training data
+      // katago_contribute/kata1/tdata/kata1-b40c256-s10312780288-d2513725330/273F621AC4CF6ACF.npz
+      // (8 rows)
+      String params[] = line.split(" ");
+      String sgfPath = "";
+      for (int i = 0; i < params.length - 1; i++) {
+        if (params[i].equals("sgf")) sgfPath = params[i + 1];
       }
-    }
-    if (line.startsWith("{")) {
-      // Lizzie.gtpConsole.addLine(line);
-      // json game info
-      if (getJsonGameInfo(tryToGetJsonString(line), contributeGames, unParseGameInfos)) {
+      // katago_contribute/kata1/sgfs/kata1-b40c256-s10312780288-d2513725330/155A1E55A4145135.sgf
+      if (sgfPath.length() > 0) {
+        String gameId =
+            sgfPath.substring(getLastIndexOfFileSep(sgfPath) + 1, sgfPath.lastIndexOf("."));
         if (contributeGames != null) {
-          setViewGames();
-          if (watchingGameIndex == -1 && contributeGames.size() > 0) {
-            watchingGameIndex = 0;
-            setGameToBoard(contributeGames.get(0), watchingGameIndex, false);
-            startWatchingGameThread();
-          }
-        }
-      }
-    } else {
-      Lizzie.frame.addContributeLine(line, true);
-      if (line.contains("Finis")) {
-        // 2021-11-02 09:21:45+0800: Finished game 8 (training), uploaded sgf
-        // katago_contribute/kata1/sgfs/kata1-b40c256-s10312780288-d2513725330/155A1E55A4145135.sgf
-        // and training data
-        // katago_contribute/kata1/tdata/kata1-b40c256-s10312780288-d2513725330/273F621AC4CF6ACF.npz
-        // (8 rows)
-        String params[] = line.split(" ");
-        String sgfPath = "";
-        for (int i = 0; i < params.length - 1; i++) {
-          if (params[i].equals("sgf")) sgfPath = params[i + 1];
-        }
-        // katago_contribute/kata1/sgfs/kata1-b40c256-s10312780288-d2513725330/155A1E55A4145135.sgf
-        if (sgfPath.length() > 0) {
-          String gameId =
-              sgfPath.substring(getLastIndexOfFileSep(sgfPath) + 1, sgfPath.lastIndexOf("."));
-          if (contributeGames != null) {
-            for (ContributeGameInfo game : contributeGames) {
-              if (game.gameId.equals(gameId)) {
-                game.complete = true;
-                if (game == currentWatchGame) maybePlayLastMove(game);
-                if (!useJavaSSH) {
-                  game.gameResult = SGFParser.getResult(courseFile + File.separator + sgfPath);
-                  if (game == currentWatchGame) setReultToView(game.gameResult);
-                }
+          for (ContributeGameInfo game : contributeGames) {
+            if (game.gameId.equals(gameId)) {
+              game.complete = true;
+              if (game == currentWatchGame) maybePlayLastMove(game);
+              if (!useJavaSSH) {
+                game.gameResult = SGFParser.getResult(courseFile + File.separator + sgfPath);
+                if (game == currentWatchGame) setReultToView(game.gameResult);
               }
             }
-            setViewGames();
           }
+          setViewGames();
         }
       }
-      parseTips(line, launchAttempt);
     }
+    Runnable tipNotification = parseTips(line, launch);
+    return notification == null ? tipNotification : notification;
   }
 
   private void setViewGames() {
@@ -394,18 +562,11 @@ public class ContributeEngine {
       Lizzie.frame.contributeView.setGames(finishedGames, playingGames);
   }
 
-  private void parseTips(String line) {
-    parseTips(line, this.currentAttempt);
-  }
-
-  private void parseTips(
-      String line, EngineStartupDiagnostics.Attempt launchAttempt) {
-    // TODO Auto-generated method stub
-    if (line.contains("Starting game")) {
-      if (launchAttempt != null) {
-        launchAttempt.ready();
-      }
-      setTip(Lizzie.resourceBundle.getString("Contribute.tips.startingNewGame")); // ("开始新的一局...");
+  private Runnable parseTips(String line, Launch launch) {
+    Runnable notification = null;
+    if (STARTING_GAME.matcher(line).matches()) {
+      launch.diagnostic.ready();
+      setTip(Lizzie.resourceBundle.getString("Contribute.tips.startingNewGame"));
     }
     if (line.toLowerCase().contains("predownload")) {
       setTip(Lizzie.resourceBundle.getString("Contribute.tips.predownload")); // ("预先下载权重中...");
@@ -416,45 +577,45 @@ public class ContributeEngine {
       setTip(
           Lizzie.resourceBundle.getString(
               "Contribute.tips.invalidUserNamePassword")); // ("错误的用户名或密码");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString(
               "Contribute.tips.invalidUserNamePassword"); //// "错误的用户名或密码";
     }
     if (line.contains("No response from server")) {
       setTip(
           Lizzie.resourceBundle.getString("Contribute.tips.noResponseFromServer")); // ("服务器无回应");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString("Contribute.tips.noResponseFromServer"); // //"服务器无回应";
     }
     if (line.contains("Error connecting to server")) {
       setTip(
           Lizzie.resourceBundle.getString(
               "Contribute.tips.errorConnectingToServer")); // ("服务器连接失败");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString("Contribute.tips.errorConnectingToServer"); // "服务器连接失败";
     }
     if (line.contains(" When uploading")) {
       setTip(Lizzie.resourceBundle.getString("Contribute.tips.uploadError")); // ("上传数据出错,请查看控制台");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString("Contribute.tips.uploadError"); // "上传数据出错,请查看控制台";
     }
     if (line.contains("status 200 for initial query")) {
       setTip(Lizzie.resourceBundle.getString("Contribute.tips.initialQuery")); // ("初始化错误,请查看控制台");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString("Contribute.tips.initialQuery"); // "初始化错误,请查看控制台";
     }
     if (line.contains("Could not parse serverUrl")) {
       setTip(
           Lizzie.resourceBundle.getString(
               "Contribute.tips.couldNotParseServerUrl")); // ("无法解析服务器地址");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString("Contribute.tips.couldNotParseServerUrl"); // "无法解析服务器地址";
     }
     if (line.contains("Did you verify your email address")) {
       setTip(
           Lizzie.resourceBundle.getString(
               "Contribute.tips.didYouVerifyYourEmailAddress")); // ("请确认用户是否经过邮箱验证!");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString(
               "Contribute.tips.didYouVerifyYourEmailAddress"); // "请确认用户是否经过邮箱验证!";
     }
@@ -462,28 +623,17 @@ public class ContributeEngine {
       setTip(
           Lizzie.resourceBundle.getString(
               "Contribute.tips.modelFileWasIncompletelyDownloaded")); // ("权重未完全下载");
-      errorTips =
+      active.error =
           Lizzie.resourceBundle.getString(
               "Contribute.tips.modelFileWasIncompletelyDownloaded"); // 权重未完全下载";
-    }
-    if (line.contains("Compile with -DBUILD_DISTRIBUTED")) {
-      setTip(
-          Lizzie.resourceBundle.getString(
-              "Contribute.tips.useOfficialEngineSupportDistributedTraining")); // ("请使用支持分布式训练的官方引擎");
-      errorTips =
-          Lizzie.resourceBundle.getString(
-              "Contribute.tips.useOfficialEngineSupportDistributedTraining"); // "请使用支持分布式训练的官方引擎";
-    }
-    if (line.contains("not find CA certs")) {
-      setTip(Lizzie.resourceBundle.getString("Contribute.tips.noCAcerts"));
-      errorTips = Lizzie.resourceBundle.getString("Contribute.tips.noCAcerts");
     }
     if (line.contains("Signal to stop")) {
       setEternalTip(Lizzie.resourceBundle.getString("Contribute.tips.signalToStop"));
     }
     if (line.contains("Exited cleanly after signal") || line.contains("All cleaned up, quitting")) {
       isNormalEnd = true;
-      Utils.showMsg(Lizzie.resourceBundle.getString("Contribute.tips.exitedAfterSignal"));
+      notification = outputNotification(
+          launch, Lizzie.resourceBundle.getString("Contribute.tips.exitedAfterSignal"), false);
       Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Menu.noEngine"));
       if (Lizzie.frame.contributeView != null) Lizzie.frame.contributeView.exitedAfterSignal();
     }
@@ -493,6 +643,7 @@ public class ContributeEngine {
     if (line.contains("Resuming contribute")) {
       setTip(Lizzie.resourceBundle.getString("Contribute.tips.ResumeHaveSent"), true);
     }
+    return notification;
   }
 
   private boolean hasEternalTip = false;
@@ -587,50 +738,24 @@ public class ContributeEngine {
     togglePause();
   }
 
-  public void normalQuit() {
+  public synchronized void normalQuit() {
+    stopped = true;
     isNormalEnd = true;
-    if (currentAttempt != null) {
-      currentAttempt.beforeTermination();
-    }
-    AnalysisResourceCoordinator.processStopped(
-        this, AnalysisResourceCoordinator.Purpose.OTHER, process);
-    Lizzie.frame.isShowingContributeGame = false;
-    Lizzie.frame.isContributing = false;
-    if (useJavaSSH) {
-      try {
-        outputStream.write(("forcequit" + "\n").getBytes());
-        outputStream.flush();
-      } catch (IOException e) {
-      }
-    } else {
-      try {
-        process.destroy();
-      } catch (Exception e) {
-      }
-    }
-    if (useJavaSSH) javaSSH.close();
+    if (active != null) terminate(active);
+    lifecycle.shutdownNow();
     if (watchGameThread != null) watchGameThread.interrupt();
-    Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Menu.noEngine"));
-    Lizzie.frame.contributeEngine = null;
-  }
-
-  private void shutdown() {
-    AnalysisResourceCoordinator.processStopped(
-        this, AnalysisResourceCoordinator.Purpose.OTHER, process);
-    if (useJavaSSH) {
-      try {
-        outputStream.write(("forcequit" + "\n").getBytes());
-        outputStream.flush();
-      } catch (IOException e) {
-      }
-    } else {
-      try {
-        process.destroy();
-      } catch (Exception e) {
-      }
-    }
-    Lizzie.frame.isContributing = false;
-    if (useJavaSSH) javaSSH.close();
+    Runnable update =
+        () -> {
+          if (Lizzie.frame.contributeEngine != null && Lizzie.frame.contributeEngine != this)
+            return;
+          Lizzie.frame.isShowingContributeGame = false;
+          Lizzie.frame.isContributing = false;
+          Menu.engineMenu.setText(Lizzie.resourceBundle.getString("Menu.noEngine"));
+          if (Lizzie.frame.contributeView != null) Lizzie.frame.contributeView.exitedAfterSignal();
+          if (Lizzie.frame.contributeEngine == this) Lizzie.frame.contributeEngine = null;
+        };
+    if (SwingUtilities.isEventDispatchThread()) update.run();
+    else SwingUtilities.invokeLater(update);
   }
 
   private void initializeStreams() {
@@ -639,16 +764,6 @@ public class ContributeEngine {
     errorStream = new BufferedReader(new InputStreamReader(process.getErrorStream()));
   }
 
-  private JSONObject tryToGetJsonString(String input) {
-    JSONObject json = null;
-    try {
-      json = new JSONObject(input);
-    } catch (JSONException e) {
-      e.printStackTrace();
-    }
-
-    return json;
-  }
 
   public boolean getJsonGameInfo(
       JSONObject jsonInfo,
@@ -683,14 +798,13 @@ public class ContributeEngine {
                       .next()
                       .isPresent()) Lizzie.board.nextMove(true);
           }
-        }
+        } else return false;
       } else {
         currentGame = new ContributeGameInfo();
-        if (tryToParseJsonGame(currentGame, true, jsonInfo, unParseInfos, false))
-          games.add(currentGame);
+        if (!tryToParseJsonGame(currentGame, true, jsonInfo, unParseInfos, false)) return false;
+        games.add(currentGame);
       }
     } catch (Exception e) {
-      e.printStackTrace();
       return false;
     }
     return true;
@@ -1156,17 +1270,25 @@ public class ContributeEngine {
   }
 
   public void tryToDignostic(String message, EngineStartupDiagnostics.Attempt attempt) {
-    if (attempt != null && attempt != this.currentAttempt) {
+    if (active == null || attempt != currentAttempt || stopped) return;
+    Launch launch = active;
+    if (!launch.terminal) {
+      launch.error = message;
+      attempt.fail("process-create", message);
+      beginDrain(launch);
       return;
     }
-    if (attempt != null && attempt.snapshot() == null) {
-      attempt.fail(process == null ? "process-create" : "startup-exit", message);
+    if (!SwingUtilities.isEventDispatchThread()) {
+      publish(launch, () -> tryToDignostic(message, attempt));
+      return;
     }
-    this.presentedAttempt = attempt;
+    if (launch.presented) return;
+    launch.presented = true;
+    if (attempt.snapshot() == null) attempt.fail("startup-exit", message);
     EngineFailedMessage.showDialog(
         commands != null ? commands : Utils.splitCommand(engineCommand),
-        engineCommand,
-        message,
+        sanitizer.sanitize(engineCommand),
+        sanitizer.sanitize(message),
         !useJavaSSH && OS.isWindows(),
         false,
         true,
