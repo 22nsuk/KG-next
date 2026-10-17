@@ -13372,6 +13372,12 @@ public class Leelaz {
                 "analysis/state output is blocked by an unrelated game or recovery owner");
           }
         }
+        if (queuedCommand.onResponse instanceof ManualGenmoveRequest
+            && !((ManualGenmoveRequest) queuedCommand.onResponse).validAfterOutputAdmission()) {
+          queuedCommand.cancelBeforeOutputWrite(new IllegalStateException("Manual genmove target changed"));
+          finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
+          return null;
+        }
         if (!queuedCommand.beginOutputWrite()) {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
@@ -19997,6 +20003,13 @@ public class Leelaz {
     private boolean validBeforeWrite() {
       return !settled.get() && manualGenmoveRequestOwner == this
           && !board.isEngineAlignmentPending() && isCurrentTarget(node, revision);
+    }
+
+    private boolean validAfterOutputAdmission() {
+      // Navigation and requireEngineAlignment advance this volatile revision. Do not call
+      // synchronized Board accessors under output admission: Board may be enqueueing undo.
+      return !settled.get() && manualGenmoveRequestOwner == this
+          && board == Lizzie.board && revision == board.getContextRevision();
     }
 
     @Override
