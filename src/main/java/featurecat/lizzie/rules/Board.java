@@ -2619,9 +2619,11 @@ public class Board {
         // redo's
         history.next();
         if (Lizzie.config.playSound) Utils.playVoiceFile();
-        if (!engineGamePlaying()) feedEngineForMainlineMove(color, "pass");
+        if (!engineGamePlaying() && (Lizzie.leelaz == null || !Lizzie.leelaz.isInputCommand))
+          feedEngineForMainlineMove(color, "pass");
 
         if (Lizzie.leelaz != null
+            && !Lizzie.leelaz.isInputCommand
             && Lizzie.frame.isPlayingAgainstLeelaz
             && Lizzie.frame.playerIsBlack != getData().blackToPlay)
           Lizzie.leelaz.genmove((history.isBlacksTurn() ? "b" : "w"));
@@ -2658,6 +2660,7 @@ public class Board {
         feedEngineForMainlineMove(color, "pass");
 
       if (Lizzie.leelaz != null
+          && !Lizzie.leelaz.isInputCommand
           && Lizzie.frame.isPlayingAgainstLeelaz
           && Lizzie.frame.playerIsBlack != getData().blackToPlay)
         Lizzie.leelaz.genmove((history.isBlacksTurn() ? "b" : "w"));
@@ -3058,6 +3061,7 @@ public class Board {
             previousBlackToPlay, color, move, color.isWhite());
       } else if (Lizzie.leelaz != null
           && Lizzie.frame.isPlayingAgainstLeelaz
+          && !Lizzie.leelaz.isInputCommand
           && Lizzie.frame.playerIsBlack == previousBlackToPlay
           && !isEngineFollowTrialActive()) {
         Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y), true, color.isWhite());
