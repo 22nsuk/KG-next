@@ -51,6 +51,11 @@ public class ContributeStartupDesktopTest {
   }
 
   @Test
+  void queuedGamesSurviveCleanExitButNotReplacement() throws Exception {
+    probe("paused-games");
+  }
+
+  @Test
   void modalNotificationsDoNotBlockDrainOrStopReplacement() throws Exception {
     probe("modal");
   }
@@ -271,6 +276,79 @@ public class ContributeStartupDesktopTest {
                 mode.equals("paused-clean-fatal") ? "Contribute.tips.buildRejected" : null);
           }
         }
+      } else if (args[0].equals("paused-games")) {
+        for (String mode : List.of("queued-first", "queued-final", "queued-replaced")) {
+          Path run = start(work, mode, true);
+          var engine = Lizzie.frame.contributeEngine;
+          await(() -> Files.exists(run.resolve("ready")));
+          if (mode.equals("queued-final")) {
+            await(() -> engine.watchingGameIndex == 0);
+            SwingUtilities.invokeAndWait(() -> assertEquals(2, games(engine).get(0).moveList.size()));
+          }
+          ProcessHandle child =
+              ProcessHandle.of(Long.parseLong(Files.readString(run.resolve("pid"))))
+                  .orElseThrow();
+          Path successor = Files.createTempDirectory(work, "queued-successor-");
+          var entered = new java.util.concurrent.CountDownLatch(1);
+          var release = new java.util.concurrent.CountDownLatch(1);
+          SwingUtilities.invokeLater(
+              () -> {
+                entered.countDown();
+                try {
+                  assertTrue(release.await(20, TimeUnit.SECONDS));
+                } catch (InterruptedException error) {
+                  throw new AssertionError(error);
+                }
+                if (mode.equals("queued-replaced")) {
+                  Lizzie.frame.closeContributeEngine();
+                  Lizzie.config.contributeCommand = command(successor, "game");
+                  Lizzie.frame.startContributeEngine();
+                }
+              });
+          assertTrue(entered.await(10, TimeUnit.SECONDS));
+          try {
+            Files.writeString(run.resolve("release"), "release");
+            child.onExit().get(10, TimeUnit.SECONDS);
+            assertFalse(
+                release.await(
+                    featurecat.lizzie.analysis.EngineStartupDiagnostics.Policy.production()
+                            .deadlineMillis()
+                        + 1000,
+                    TimeUnit.MILLISECONDS));
+            assertEquals(1, launches(run).size(), "Queued games cannot restart a clean exit");
+          } finally {
+            release.countDown();
+          }
+          if (mode.equals("queued-replaced")) {
+            await(
+                () -> {
+                  var current = Lizzie.frame.contributeEngine;
+                  return current != null && current != engine && current.watchingGameIndex == 0;
+                });
+            SwingUtilities.invokeAndWait(
+                () -> {
+                  assertTrue(games(engine).isEmpty(), "Stopped owner must discard queued games");
+                  assertEquals(1, games(Lizzie.frame.contributeEngine).size());
+                  assertEquals(2, games(Lizzie.frame.contributeEngine).get(0).moveList.size());
+                  assertTrue(Lizzie.frame.isContributing);
+                  assertNull(failureWindow());
+                });
+            assertEquals(1, launches(successor).size());
+          } else {
+            await(() -> !Lizzie.frame.isContributing);
+            SwingUtilities.invokeAndWait(
+                () -> {
+                  assertSame(engine, Lizzie.frame.contributeEngine);
+                  assertEquals(1, games(engine).size(), "Collected game must remain available");
+                  assertEquals(3, games(engine).get(0).moveList.size(), "Final move must be retained");
+                  assertEquals(0, engine.watchingGameIndex);
+                  assertNull(failureWindow());
+                  assertEquals(
+                      Lizzie.resourceBundle.getString("Menu.noEngine"), Menu.engineMenu.getText());
+                });
+          }
+          assertEquals(1, launches(run).size());
+        }
       } else if (args[0].equals("paused-edt")) {
         for (String mode : List.of("paused-reject-json", "paused-unsupported-err")) {
           Path run = start(work, mode, true);
@@ -388,6 +466,18 @@ public class ContributeStartupDesktopTest {
         StandardOpenOption.CREATE,
         StandardOpenOption.APPEND);
     switch (mode) {
+      case "queued-first", "queued-final", "queued-replaced" -> {
+        Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
+        JSONObject game = gameOutput();
+        if (mode.equals("queued-final")) System.out.println(game);
+        Files.writeString(run.resolve("ready"), "ready");
+        waitFile(run.resolve("release"));
+        game.getJSONArray("moves").put(new org.json.JSONArray(List.of("W", "Q16")));
+        game.put("move", new org.json.JSONArray(List.of("B", "C3")));
+        System.out.println(game);
+        System.out.println("All cleaned up, quitting");
+        System.exit(0);
+      }
       case "paused-clean-out", "paused-clean-err", "paused-signal-out", "paused-signal-err",
           "paused-retry", "paused-error-json", "paused-clean-fatal" -> {
         Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
@@ -488,27 +578,7 @@ public class ContributeStartupDesktopTest {
           System.out.println(new JSONObject().put("error", REJECTION));
       }
       case "game", "game-ready", "game-exit" -> {
-        System.out.println(
-            new JSONObject()
-                .put("gameId", "fixture-" + ProcessHandle.current().pid())
-                .put("blackPlayer", "fixture-game")
-                .put("whitePlayer", "fixture-game")
-                .put("boardXSize", 19)
-                .put("boardYSize", 19)
-                .put(
-                    "rules",
-                    new JSONObject()
-                        .put("komi", 7.5)
-                        .put("ko", "SIMPLE")
-                        .put("scoring", "AREA")
-                        .put("tax", "NONE")
-                        .put("suicide", false))
-                .put("initialStones", new org.json.JSONArray())
-                .put(
-                    "moves",
-                    new org.json.JSONArray().put(new org.json.JSONArray(List.of("B", "D4"))))
-                .put("move", new org.json.JSONArray(List.of("W", "Q16")))
-                .put("moveInfos", new org.json.JSONArray()));
+        System.out.println(gameOutput());
         if (!mode.equals("game-exit")) {
           waitFile(run.resolve("release"));
           Files.writeString(run.resolve("emitted"), "emitted");
@@ -520,6 +590,41 @@ public class ContributeStartupDesktopTest {
               "ERROR controlled failure password=fixture-password token=fixture-token username=fixture-user");
     }
     System.exit(1);
+  }
+
+  private static JSONObject gameOutput() {
+    return new JSONObject()
+        .put("gameId", "fixture-" + ProcessHandle.current().pid())
+        .put("blackPlayer", "fixture-game")
+        .put("whitePlayer", "fixture-game")
+        .put("boardXSize", 19)
+        .put("boardYSize", 19)
+        .put(
+            "rules",
+            new JSONObject()
+                .put("komi", 7.5)
+                .put("ko", "SIMPLE")
+                .put("scoring", "AREA")
+                .put("tax", "NONE")
+                .put("suicide", false))
+        .put("initialStones", new org.json.JSONArray())
+        .put(
+            "moves",
+            new org.json.JSONArray().put(new org.json.JSONArray(List.of("B", "D4"))))
+        .put("move", new org.json.JSONArray(List.of("W", "Q16")))
+        .put("moveInfos", new org.json.JSONArray());
+  }
+
+  @SuppressWarnings("unchecked")
+  private static List<featurecat.lizzie.analysis.ContributeGameInfo> games(
+      featurecat.lizzie.analysis.ContributeEngine engine) {
+    try {
+      var field = engine.getClass().getDeclaredField("contributeGames");
+      field.setAccessible(true);
+      return (List<featurecat.lizzie.analysis.ContributeGameInfo>) field.get(engine);
+    } catch (ReflectiveOperationException error) {
+      throw new AssertionError(error);
+    }
   }
 
   private static Path start(Path work, String mode, boolean pure) throws Exception {

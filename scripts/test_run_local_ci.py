@@ -206,7 +206,7 @@ class RunLocalCiTest(unittest.TestCase):
             ),
             steps[0].command,
         )
-        self.assertEqual(21, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
+        self.assertEqual(22, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
 
     def test_tensorrt_ui_plan_is_windows_only_and_selects_exact_parent_methods(self):
         steps = run_local_ci.build_steps(

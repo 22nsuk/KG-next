@@ -312,7 +312,9 @@ public class ContributeEngine {
           Runnable notification = null;
           synchronized (ContributeEngine.this) {
             try {
-              if (ownsOutput(launch) && !launch.terminal && !launch.permanent())
+              // Process cleanup can finish before EDT dispatch; collected output still belongs
+              // to this launch until stop/replacement or a permanent failure invalidates it.
+              if (ownsOutput(launch) && !launch.permanent())
                 notification = consumeUiOutput(launch, line, stderr, outputJson);
             } finally {
               launch.pendingUi--;

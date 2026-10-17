@@ -65,6 +65,7 @@ ENGINE_PROCESS_REQUIRED_TESTS = (
             "stopRestartAndValidGameDisplay",
             "permanentOutputSurvivesPausedEdt",
             "normalExitSurvivesPausedEdtWithoutMaskingFailures",
+            "queuedGamesSurviveCleanExitButNotReplacement",
             "modalNotificationsDoNotBlockDrainOrStopReplacement",
         )
     ),
