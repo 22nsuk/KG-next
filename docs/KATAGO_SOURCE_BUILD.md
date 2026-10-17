@@ -400,8 +400,11 @@ configuration templates, license inventory and every archive member. Its output 
 only the two CUDA assets; it does not upload anything. Source archive metadata itself is
 hash-pinned so an installed receipt cannot change the recorded static-link evidence.
 The legacy fifteen-target staging process preserves independent overrides instead of
-promoting an upstream CUDA12 build over the fork. GUI release asset transfer copies
-only the fourteen inherited assets, leaving both custom assets in their engine release.
+promoting an upstream CUDA12 build over the fork. Release asset transfer copies only
+archives whose catalog repository and tag match the destination. In the current
+`22nsuk/KG-next` catalog, all fourteen inherited engines remain in the pinned upstream
+release and both custom CUDA engines remain in `22nsuk/KataGo`, so no engine archives
+are copied to the GUI release.
 
 Linux CUDA packages also carry the hash-locked SDK's `libz.so.1`, required dynamically by
 cuDNN. CUDA/cuDNN remain external; zlib must not be silently resolved from the build host.
@@ -435,14 +438,24 @@ when the optional TensorRT companion is present, the audit verifies its catalog 
 as well. Final platform signing may legitimately change macOS executable hashes afterwards;
 the final signed assets are bound to their workflow by the existing release provenance.
 
-The reviewed source catalog must point to the exact forthcoming application release
-tag, not another release. The publisher first creates its normal immutable tag/Draft,
-then waits up to 20 minutes for the 15 previously staged source archives to be uploaded.
-Every asset must match the committed catalog's size and GitHub SHA-256 digest before
-application packaging is dispatched. Release jobs use the short-lived workflow token
-to read those Draft assets; repair downloads use the same public URLs after publication.
-Missing archives leave the Draft unpublished. Unexpected, duplicate or modified assets
-fail verification, including the final public recheck. No old engine is substituted.
+The GUI release destination is independent of each engine's catalog-bound repository
+and immutable tag. For `22nsuk/KG-next`, the publisher verifies the fourteen inherited
+upstream engines and both custom CUDA engines in their existing public releases.
+It requires public source repositories, public releases at the exact catalog tags,
+and uploaded archives with the committed sizes and GitHub SHA-256 digests. Missing,
+duplicate or modified source assets fail before creating a GUI tag or Draft. Sources
+are checked again before and after publication, including a completed-release rerun.
+They are not included in the GUI release's expected upload inventory; packaging and
+runtime repair continue to download from the original catalog URLs and verify bytes.
+
+If an engine's catalog repository and tag instead match the forthcoming GUI release,
+the publisher creates its normal immutable tag/Draft and waits up to 20 minutes for
+those previously staged archives. Their size and digest must match before packaging
+starts, and the final GUI inventory includes them. The transfer tool retains its
+Draft/target-SHA guards and copies only this destination-owned subset; an external-only
+catalog produces an explicit no-transfer result. No source URL or engine pin is changed
+automatically, and no old engine is substituted. The existing prepare-only and explicit
+post-acceptance publication steps remain required for source catalogs.
 
 For the first source-catalog activation, the reviewed archives may be uploaded to an
 unpublished Draft before the activation PR is merged, so its Linux CPU acceptance job

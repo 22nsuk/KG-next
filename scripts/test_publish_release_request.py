@@ -24,6 +24,7 @@ import zipfile
 
 from scripts import release_asset_provenance as provenance
 from scripts import release_asset_topology as topology
+from scripts.katago_source_targets import SOURCE_COMMIT, TARGETS
 
 
 SCRIPT_PATH = Path(__file__).with_name("publish_release_request.py")
@@ -797,6 +798,38 @@ class GitHubClientTagAliasTest(unittest.TestCase):
         self.assertIn("page=2", requested_paths[1])
 
 
+class PublicSourceAssetsTest(unittest.TestCase):
+    def test_reads_exact_source_repository_and_all_asset_pages(self):
+        client = PUBLISH.GitHubClient("22nsuk/KG-next", "test-token")
+        responses = [(200, {"private": False}),
+                     (200, {"id": 71, "tag_name": "kg-next-abc", "draft": False}),
+                     (200, [{"name": str(i)} for i in range(100)]),
+                     (200, [{"name": "last"}])]
+        with mock.patch.object(client, "_request", side_effect=responses) as request:
+            self.assertEqual(101, len(client.list_public_source_assets("22nsuk/KataGo", "kg-next-abc")))
+        self.assertEqual([
+            "/repos/22nsuk/KataGo",
+            "/repos/22nsuk/KataGo/releases/tags/kg-next-abc",
+            "/repos/22nsuk/KataGo/releases/71/assets?per_page=100&page=1",
+            "/repos/22nsuk/KataGo/releases/71/assets?per_page=100&page=2",
+        ], [call.args[1] for call in request.call_args_list])
+        self.assertTrue(all(call.args[0] == "GET" for call in request.call_args_list))
+
+    def test_private_missing_or_malformed_source_releases_fail_closed(self):
+        client = PUBLISH.GitHubClient("22nsuk/KG-next", "test-token")
+        for repo in ({"private": True}, {}, None):
+            with self.subTest(repo=repo), mock.patch.object(client, "_request", return_value=(200, repo)):
+                with self.assertRaisesRegex(PUBLISH.PublishError, "repository must be public"):
+                    client.list_public_source_assets("22nsuk/KataGo", "kg-next-abc")
+        for release in (None, {}, {"id": 1, "tag_name": "kg-next-abc", "draft": True},
+                        {"id": 1, "tag_name": "other", "draft": False},
+                        {"id": True, "tag_name": "kg-next-abc", "draft": False}):
+            with self.subTest(release=release), mock.patch.object(client, "_request", side_effect=[
+                    (200, {"private": False}), (200, release)]):
+                with self.assertRaisesRegex(PUBLISH.PublishError, "catalog tag"):
+                    client.list_public_source_assets("22nsuk/KataGo", "kg-next-abc")
+
+
 class WorkflowSpecTest(unittest.TestCase):
     def test_complete_asset_set_satisfies_every_platform(self) -> None:
         assets = all_asset_names()
@@ -1130,13 +1163,13 @@ class ReleasePublisherTest(unittest.TestCase):
 
     def source_catalog(self) -> dict:
         catalog = PUBLISH.katago_catalog.load_catalog(PUBLISH.katago_catalog.DEFAULT_CATALOG)
-        catalog.update(origin="project-source-build", katagoSourceCommit=PUBLISH.SOURCE_COMMIT,
+        catalog.update(origin="project-source-build", katagoSourceCommit=SOURCE_COMMIT,
                        engineReleaseRepository=FakeClient.repository, engineReleaseTag=RELEASE_TAG)
         catalog["assets"] = {target: {
-            "assetName": f"katago-source-{PUBLISH.SOURCE_COMMIT[:12]}-{target}.zip",
+            "assetName": f"katago-source-{SOURCE_COMMIT[:12]}-{target}.zip",
             "sizeBytes": 100, "sha256": "b" * 64, "executableSha256": "c" * 64,
             "zlibLinkage": "static" if target in ("windows-nvidia", "windows-tensorrt") else "dynamic",
-        } for target in PUBLISH.TARGETS}
+        } for target in TARGETS}
         return catalog
 
     def source_publisher(self, client, catalog=None):
@@ -1144,15 +1177,112 @@ class ReleasePublisherTest(unittest.TestCase):
             sleep=lambda seconds: None, poll_seconds=0, ci_timeout_seconds=0,
             source_catalog=self.source_catalog() if catalog is None else catalog)
 
-    def test_source_catalog_cannot_reference_another_release_or_omit_a_target(self):
+    def test_source_catalog_cannot_change_source_commit_or_omit_a_target(self):
         for missing in (False, True):
             catalog = self.source_catalog()
             if missing:
                 catalog["assets"].pop("linux-cpu")
             else:
-                catalog["engineReleaseTag"] = "next-2026-01-01.1"
-            with self.assertRaisesRegex(PUBLISH.PublishError, "exact release"):
+                catalog["katagoSourceCommit"] = "0" * 40
+            with self.assertRaisesRegex(PUBLISH.PublishError, "Invalid source engine catalog"):
                 self.source_publisher(FakeClient(), catalog)
+
+    def fork_source_publisher(self, client):
+        client.repository = "22nsuk/KG-next"
+        catalog = PUBLISH.katago_catalog.load_catalog(PUBLISH.katago_catalog.DEFAULT_CATALOG)
+        publisher = PUBLISH.ReleasePublisher(
+            client, self.request(), TARGET_SHA,
+            self.release_notes().replace(FakeClient.repository, client.repository),
+            sleep=lambda seconds: None, poll_seconds=0, ci_timeout_seconds=0, source_catalog=catalog)
+        rows = {key: [{"name": name, "size": asset["sizeBytes"], "state": "uploaded",
+                      "digest": "sha256:" + asset["sha256"]} for name, asset in records.items()]
+                for key, records in publisher.external_source_assets.items()}
+        client.list_public_source_assets = mock.Mock(side_effect=lambda repo, tag: rows[(repo, tag)])
+        return publisher, rows
+
+    def test_fork_publishes_using_unchanged_catalog_without_copying_external_engines(self):
+        client = FakeClient()
+        publisher, rows = self.fork_source_publisher(client)
+        self.assertEqual({}, publisher.source_assets)
+        self.assertEqual({"wimi321/lizzieyzy-next", "22nsuk/KataGo"}, {repo for repo, tag in rows})
+        self.assertEqual(16, sum(len(assets) for assets in rows.values()))
+        release = publisher.publish()
+        self.assertFalse(release["draft"])
+        self.assertCountEqual(all_asset_names(), client.assets)
+        for key in rows:
+            # Startup, completed build, immediately before visibility, after visibility.
+            self.assertEqual(4, client.list_public_source_assets.call_args_list.count(mock.call(*key)))
+        publisher.publish()  # Already-published recovery must still revalidate external pins.
+        for key in rows:
+            self.assertEqual(6, client.list_public_source_assets.call_args_list.count(mock.call(*key)))
+
+    def test_fork_source_corruption_blocks_before_tag_draft_or_build(self):
+        for change in ("missing", "duplicate", "digest", "size", "state"):
+            for repository in ("wimi321/lizzieyzy-next", "22nsuk/KataGo"):
+                with self.subTest(change=change, repository=repository):
+                    client = FakeClient()
+                    publisher, groups = self.fork_source_publisher(client)
+                    rows = next(rows for (repo, tag), rows in groups.items() if repo == repository)
+                    if change == "missing":
+                        rows.pop()
+                    elif change == "duplicate":
+                        rows.append(dict(rows[0]))
+                    else:
+                        rows[0][change] = {"digest": "sha256:" + "0" * 64, "size": 1, "state": "starter"}[change]
+                    with self.assertRaisesRegex(PUBLISH.PublishError, "Invalid source assets"):
+                        publisher.publish()
+                    self.assertEqual((0, 0, []), (client.create_tag_calls, client.create_draft_release_calls, client.dispatched))
+
+    def test_fork_rechecks_external_engines_before_and_after_publication(self):
+        for changed_pass in (3, 4):
+            with self.subTest(changed_pass=changed_pass):
+                client = FakeClient()
+                publisher, groups = self.fork_source_publisher(client)
+                calls = {}
+
+                def assets(repo, tag):
+                    key = (repo, tag)
+                    calls[key] = calls.get(key, 0) + 1
+                    if calls[key] == changed_pass:
+                        groups[key][0]["digest"] = "sha256:" + "0" * 64
+                    return groups[key]
+
+                client.list_public_source_assets.side_effect = assets
+                with self.assertRaisesRegex(PUBLISH.PublishError, "Invalid source assets"):
+                    publisher.publish()
+                self.assertEqual(changed_pass == 3, client.release["draft"])
+
+    def test_fork_prepare_only_preserves_explicit_publication_gate(self):
+        client = FakeClient()
+        publisher, _ = self.fork_source_publisher(client)
+        publisher.prepare_only = True
+        self.assertTrue(publisher.publish()["draft"])
+        self.assertTrue(all(update.get("draft") is not False for update in client.update_payloads))
+
+    def test_previous_same_repository_release_is_verified_as_external(self):
+        catalog = self.source_catalog()
+        catalog["engineReleaseTag"] = "next-2026-01-01.1"
+        client = FakeClient()
+        publisher = self.source_publisher(client, catalog)
+        self.assertEqual({}, publisher.source_assets)
+        self.assertEqual([(client.repository, "next-2026-01-01.1")], list(publisher.external_source_assets))
+        client.list_public_source_assets = mock.Mock(return_value=[])
+        with self.assertRaisesRegex(PUBLISH.PublishError, "Missing or duplicate"):
+            publisher.publish()
+
+    def test_fork_catalog_still_rejects_untrusted_repository_and_incomplete_matrix(self):
+        for change in ("repository", "matrix", "custom_source"):
+            catalog = PUBLISH.katago_catalog.load_catalog(PUBLISH.katago_catalog.DEFAULT_CATALOG)
+            if change == "repository":
+                catalog["engineReleaseRepository"] = "other/repo"
+            elif change == "matrix":
+                del catalog["assets"]["linux-cpu"]
+            else:
+                catalog["assets"]["windows-nvidia"]["katagoSourceCommit"] = "0" * 40
+            client = FakeClient()
+            client.repository = "22nsuk/KG-next"
+            with self.subTest(change=change), self.assertRaisesRegex(PUBLISH.PublishError, "Invalid source engine catalog"):
+                self.source_publisher(client, catalog)
 
     def test_missing_source_archives_block_before_any_workflow_dispatch(self):
         client = FakeClient()
