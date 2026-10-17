@@ -61,6 +61,7 @@ ENGINE_PROCESS_REQUIRED_TESTS = (
         for method in (
             "serverRejectionUsesOneLaunchAndRetainsFailure",
             "outputOrderingReadinessAndRetryBudget",
+            "stderrEofKeepsProcessAliveUntilExitOrFatalError",
             "stopRestartAndValidGameDisplay",
             "permanentOutputSurvivesPausedEdt",
             "modalNotificationsDoNotBlockDrainOrStopReplacement",

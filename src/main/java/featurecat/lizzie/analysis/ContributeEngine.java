@@ -272,7 +272,9 @@ public class ContributeEngine {
                 synchronized (ContributeEngine.this) {
                   if (stderr) launch.stderrEnded = true;
                   else launch.stdoutEnded = true;
-                  beginDrain(launch);
+                  // Redirected or closed stderr can reach EOF while contribution continues.
+                  // Keep stdout EOF, reader failures and the process onExit callback terminal.
+                  if (!stderr || error != null) beginDrain(launch);
                 }
               }
             },

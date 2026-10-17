@@ -31,6 +31,11 @@ public class ContributeStartupDesktopTest {
   }
 
   @Test
+  void stderrEofKeepsProcessAliveUntilExitOrFatalError() throws Exception {
+    probe("stderr-eof");
+  }
+
+  @Test
   void stopRestartAndValidGameDisplay() throws Exception {
     probe("display");
   }
@@ -132,6 +137,42 @@ public class ContributeStartupDesktopTest {
           assertEquals(mode.endsWith("-exit") ? 4 : 1, launches(ready).size());
           if (mode.startsWith("game-"))
             assertEquals(0, Lizzie.frame.contributeEngine.watchingGameIndex);
+        }
+      } else if (args[0].equals("stderr-eof")) {
+        for (String mode : List.of("stderr-clean", "stderr-retry", "stderr-fatal")) {
+          Path run = start(work, mode, true);
+          var engine = Lizzie.frame.contributeEngine;
+          await(() -> Files.exists(run.resolve("closed")));
+          ProcessHandle child =
+              ProcessHandle.of(Long.parseLong(Files.readString(run.resolve("pid"))))
+                  .orElseThrow();
+          // A normal stderr EOF must not start the bounded process-termination timer.
+          assertThrows(
+              java.util.concurrent.TimeoutException.class,
+              () ->
+                  child.onExit().get(
+                      featurecat.lizzie.analysis.EngineStartupDiagnostics.Policy.production()
+                              .deadlineMillis()
+                          + 1000,
+                      TimeUnit.MILLISECONDS));
+          assertEquals(1, launches(run).size(), "stderr EOF must not spend the retry budget");
+          SwingUtilities.invokeAndWait(
+              () -> {
+                assertSame(engine, Lizzie.frame.contributeEngine);
+                assertTrue(Lizzie.frame.isContributing);
+                assertNull(failureWindow());
+              });
+          Files.writeString(run.resolve("release"), "release");
+          if (mode.equals("stderr-clean")) {
+            await(() -> !Lizzie.frame.isContributing);
+            assertEquals(1, launches(run).size(), "Clean exit must not retry");
+            assertNull(failureWindow());
+          } else {
+            verifyFailure(
+                run, mode.equals("stderr-retry") ? 4 : 1,
+                mode.equals("stderr-fatal") ? "Contribute.tips.buildRejected" : null);
+          }
+          child.onExit().get(10, TimeUnit.SECONDS);
         }
       } else if (args[0].equals("modal")) {
         Path rejected = start(work, "modal-reject", true);
@@ -288,6 +329,21 @@ public class ContributeStartupDesktopTest {
         StandardOpenOption.CREATE,
         StandardOpenOption.APPEND);
     switch (mode) {
+      case "stderr-clean", "stderr-retry", "stderr-fatal" -> {
+        Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
+        System.err.close();
+        Files.writeString(run.resolve("closed"), "closed");
+        waitFile(run.resolve("release"));
+        if (mode.equals("stderr-clean")) {
+          System.out.println("All cleaned up, quitting");
+          System.exit(0);
+        } else if (mode.equals("stderr-fatal")) {
+          System.out.println(REJECTION);
+          System.out.flush();
+          // Fatal output must terminate even a process that has not exited on its own.
+          System.in.read();
+        } else System.out.println("ERROR controlled failure after stderr EOF");
+      }
       case "modal-reject", "modal-replace", "modal-clean" -> {
         System.out.println(mode.equals("modal-clean")
             ? "All cleaned up, quitting"
