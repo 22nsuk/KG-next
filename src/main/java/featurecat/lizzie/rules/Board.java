@@ -92,6 +92,8 @@ public class Board {
   private boolean setupMode = false;
   public String boardstatbeforeedit = "";
   public String boardstatafteredit = "";
+  private List<Integer> positionBeforeEdit = List.of();
+  private List<Integer> positionAfterEdit = List.of();
   public boolean isLoadingFile = false;
   public boolean isPkBoard = false;
   public boolean isGameBoard = false;
@@ -122,7 +124,7 @@ public class Board {
     advanceContextRevision();
   }
 
-  private boolean isEngineAlignmentPending() {
+  public synchronized boolean isEngineAlignmentPending() {
     return pendingEngineAlignmentHistory != null && pendingEngineAlignmentHistory == history;
   }
 
@@ -177,6 +179,8 @@ public class Board {
     private final ArrayList<Movelistwr> moveListWr;
     private final String boardStateBeforeEdit;
     private final String boardStateAfterEdit;
+    private final List<Integer> positionBeforeEdit;
+    private final List<Integer> positionAfterEdit;
     private final ArrayList<Movelist> tempMoveList;
     private final ArrayList<Movelist> tempMoveList2;
     private final boolean isTsumegoMode;
@@ -209,6 +213,8 @@ public class Board {
               : new ArrayList<Movelistwr>(board.movelistwr);
       boardStateBeforeEdit = board.boardstatbeforeedit;
       boardStateAfterEdit = board.boardstatafteredit;
+      positionBeforeEdit = board.positionBeforeEdit;
+      positionAfterEdit = board.positionAfterEdit;
       tempMoveList = board.tempmovelist;
       tempMoveList2 = board.tempmovelist2;
       isTsumegoMode = board.isTusmegoMode;
@@ -836,6 +842,7 @@ public class Board {
   public ArrayList<Movelist> saveListForEdit() {
     try {
       boardstatbeforeedit = SGFParser.saveToString(false);
+      positionBeforeEdit = captureEditPosition();
     } catch (IOException e) {
       // TODO Auto-generated catch block
       e.printStackTrace();
@@ -865,6 +872,7 @@ public class Board {
     if (boardstatbeforeedit != "") {
       try {
         boardstatafteredit = SGFParser.saveToString(false);
+        positionAfterEdit = captureEditPosition();
       } catch (IOException e) {
         // TODO Auto-generated catch block
         e.printStackTrace();
@@ -872,7 +880,7 @@ public class Board {
       tempmovelist2 = getMoveList();
     }
     SGFParser.loadFromStringforedit(boardstatbeforeedit);
-    setmovelistForEditClean(tempmovelist);
+    restoreEditPosition(positionBeforeEdit);
     boardstatbeforeedit = "";
     tempmovelist = new ArrayList<Movelist>();
     return;
@@ -882,6 +890,7 @@ public class Board {
     if (boardstatafteredit != "") {
       try {
         boardstatbeforeedit = SGFParser.saveToString(false);
+        positionBeforeEdit = captureEditPosition();
       } catch (IOException e) {
         // TODO Auto-generated catch block
         e.printStackTrace();
@@ -889,7 +898,7 @@ public class Board {
       tempmovelist = getMoveList();
     }
     SGFParser.loadFromStringforedit(boardstatafteredit);
-    setmovelistForEditClean(tempmovelist2);
+    restoreEditPosition(positionAfterEdit);
     boardstatafteredit = "";
     tempmovelist2.clear();
     return;
@@ -1654,32 +1663,25 @@ public class Board {
     Lizzie.config.playSound = oriPlaySound;
   }
 
-  public void setmovelistForEditClean(ArrayList<Movelist> movelist) {
-    boolean oriPlaySound = Lizzie.config.playSound;
-    Lizzie.config.playSound = false;
-    while (previousMove(false))
-      ;
-    int lenth = movelist.size();
-    if (hasStartStone) {
-      for (int i = 0; i < startStonelist.size(); i++) {
-        Movelist move = startStonelist.get(i);
-        feedEngineForMainlineMove(
-            move.isblack ? Stone.BLACK : Stone.WHITE, convertCoordinatesToName(move.x, move.y));
-      }
+  private List<Integer> captureEditPosition() {
+    List<Integer> path = new ArrayList<>();
+    BoardHistoryNode node = history.getCurrentHistoryNode();
+    while (node.previous().isPresent()) {
+      BoardHistoryNode parent = node.previous().get();
+      path.add(parent.indexOfNode(node));
+      node = parent;
     }
-    for (int i = 0; i < lenth; i++) {
-      Movelist move = movelist.get(lenth - 1 - i);
-      if (!move.ispass) {
-        place(move.x, move.y, move.isblack ? Stone.BLACK : Stone.WHITE);
-        //	        try {
-        //	          mvnumber[getIndex(move.x, move.y)] = i + 1;
-        //	        } catch (Exception ex) {
-        //	        }
-      } else {
-        pass(move.isblack ? Stone.BLACK : Stone.WHITE, true, false, false);
-      }
+    return List.copyOf(path);
+  }
+
+  private void restoreEditPosition(List<Integer> path) {
+    BoardHistoryNode target = history.getStart();
+    for (int index = path.size() - 1; index >= 0; index--) {
+      target = target.getVariation(path.get(index)).orElseThrow();
     }
-    Lizzie.config.playSound = oriPlaySound;
+    // The saved SGF already contains the entire tree, including static setup boundaries.
+    // Navigate it instead of playing the move-only list into a second branch.
+    moveToAnyPosition(target);
   }
 
   private boolean isKnownPass(BoardData data) {
@@ -5239,6 +5241,8 @@ public class Board {
       movelistwr.addAll(snapshot.moveListWr);
       boardstatbeforeedit = snapshot.boardStateBeforeEdit;
       boardstatafteredit = snapshot.boardStateAfterEdit;
+      positionBeforeEdit = snapshot.positionBeforeEdit;
+      positionAfterEdit = snapshot.positionAfterEdit;
       tempmovelist = snapshot.tempMoveList;
       tempmovelist2 = snapshot.tempMoveList2;
       isTusmegoMode = snapshot.isTsumegoMode;

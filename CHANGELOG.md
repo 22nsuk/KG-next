@@ -6,6 +6,9 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Preserve saved handicap analysis, explicit and inferred initial turns, and DD placeholder nodes with their own comments and analysis when opening, editing, saving, and recovering SGF files.
+- Stop background retries when an imported position cannot prepare a readable engine snapshot. Keep the game available and analysis paused; after repairing the launcher or writable directories, use Continue to restore the current position before analysis resumes.
+- Reject console `genmove` while the displayed position still needs engine alignment, including after snapshot preparation failure; preserve explicit move colors and request ownership after recovery.
 - Keep same-position first-ply allow/exclude subtrees with the capability-gated extension maintained in the 22nsuk/KataGo engine repository; preserve legacy behavior for unpatched engines and deeper restrictions.
 - Stop marking unrelated positions stale when changing menu or rectangle restrictions, preserve the other allowed moves when removing one, and default new allow/exclude settings to the first ply without overriding saved depths.
 - Add a separate NVIDIA CUDA 13.2 / cuDNN 9.24.0.43 portable with pinned official engine/runtime assets, complete DLL validation, separate driver inference checks, and release/download integration. Keep CUDA 12.8 and TensorRT companion compatibility.

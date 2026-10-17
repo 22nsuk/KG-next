@@ -74,6 +74,57 @@ class AutomaticSaveRecoveryTest {
   }
 
   @Test
+  void periodicSaveAndStartupRecoveryPreserveSetupTurnDummySiblingAndAnalysis() throws Exception {
+    // Complete the previous recovery first, then create a new crash-recovery record through
+    // the production atomic save path rather than writing a hand-made recovery file.
+    frame.restoreStartupGame(new String[0]);
+    String sgf = "(;SZ[5]HA[2]KM[0.5]AB[aa][ee]PL[W]C[SETUP]"
+        + "LZ[KataGo 45 123 2.5 1.2 0 rootVisits=123\n"
+        + "move B4 visits 200 winrate 5500 pv B4]"
+        + "(;W[bb]C[REAL];B[dd])(;DD[true]C[PLACEHOLDER]LB[cc:X]))";
+    Lizzie.board.setHistory(SGFParser.parseSgf(sgf, true));
+    BoardHistoryNode originalRoot = Lizzie.board.getHistory().getStart();
+    assertFalse(originalRoot.getData().blackToPlay);
+    assertEquals(123, originalRoot.getData().getPlayouts());
+    frame.saveAutoGame(2);
+    String saved = Files.readString(slot(2, "sgf"));
+    assertTrue(saved.contains("DD[true]"));
+    assertEquals(-5, config.saveBoardConfig.getInt("save-auto-game-index2"));
+    String savedCursor = config.saveBoardConfig.getString("save-auto-game-move-list2");
+    assertSame(originalRoot, Lizzie.board.getHistory().getStart(), "save must not replace the live tree");
+
+    // Reload the disk manifest, as a new process would, retaining the older exit record.
+    config.saveBoard = new JSONObject(Files.readString(metadataFile()));
+    config.saveBoardConfig = config.saveBoard.getJSONObject("save");
+    setCurrentBoard();
+    frame = RulesLayerTestHarness.allocate(RecoveryFrame.class);
+    Lizzie.frame = frame;
+    frame.restoreStartupGame(new String[0]);
+    assertEquals(saved, frame.loadedSgf);
+    assertEquals(saved, Files.readString(slot(1, "sgf")));
+    assertEquals(saved, Files.readString(slot(2, "sgf")), "recovery source stays intact");
+    assertEquals(savedCursor, config.saveBoardConfig.getString("save-auto-game-move-list1"));
+    assertEquals(-1, config.saveBoardConfig.getInt("save-auto-game-index2"));
+    BoardHistoryNode recovered = Lizzie.board.getHistory().getStart();
+    assertFalse(recovered.getData().blackToPlay);
+    assertEquals(0.5, Lizzie.board.getHistory().getGameInfo().getKomi());
+    assertEquals(Stone.BLACK, recovered.getData().stones[Board.getIndex(0, 0)]);
+    assertEquals(Stone.BLACK, recovered.getData().stones[Board.getIndex(4, 4)]);
+    assertEquals(123, recovered.getData().getPlayouts());
+    assertEquals(123, recovered.getData().rootVisits);
+    assertEquals(200, recovered.getData().bestMoves.get(0).playouts);
+    assertEquals(2, recovered.getVariations().size());
+    BoardHistoryNode real = recovered.getVariations().get(0);
+    BoardHistoryNode dummy = recovered.getVariations().get(1);
+    assertEquals(Stone.WHITE, real.getData().lastMoveColor);
+    assertEquals("REAL", real.getData().comment);
+    assertTrue(dummy.getData().dummy);
+    assertEquals("PLACEHOLDER", dummy.getData().comment);
+    assertSame(real.getVariations().get(0), Lizzie.board.getHistory().getCurrentHistoryNode());
+    assertEquals(Stone.BLACK, Lizzie.board.getData().lastMoveColor);
+  }
+
+  @Test
   void startupRecoversBeforeResumeAndExitCannotOverwriteWithTheOldGame() throws Exception {
     frame.restoreStartupGame(new String[0]);
     assertEquals(slot(1, "sgf").toFile(), frame.loadedFile);

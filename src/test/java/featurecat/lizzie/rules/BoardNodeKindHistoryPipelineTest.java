@@ -1403,101 +1403,12 @@ class BoardNodeKindHistoryPipelineTest {
   }
 
   @Test
-  void loadFromStringHandicapKomiDiscardsImportedAnalysisBeforeEngineDefaultKomiInitializes()
-      throws Exception {
-    TestEnvironment env = TestEnvironment.open();
-    int previousCurrentEngineNo = EngineManager.currentEngineNo;
-    try {
-      Lizzie.config.readKomi = true;
-      EngineManager.currentEngineNo = 0;
-      EngineManager.isEmpty = false;
-      TrackingLeelaz leelaz = (TrackingLeelaz) Lizzie.leelaz;
-      leelaz.komi = 7.5f;
-      leelaz.orikomi = 7.5f;
-      leelaz.isLoaded = true;
-      leelaz.notPondering();
-      setStarted(leelaz, true);
-      String staleAnalysis =
-          "zhizi28Bmuonfd2 0.8 536 13.8015 14.4396\n"
-              + "move B2 visits 211 winrate 9918 prior 1764 scoreMean 13.80 pv B2 C2";
-      String sgf =
-          "(;SZ[3]KM[0]HA[2]AB[aa]AB[ca]PL[W]LZOP["
-              + staleAnalysis
-              + "]LZ["
-              + staleAnalysis
-              + "];W[ba])";
-
-      assertTrue(SGFParser.loadFromString(sgf));
-
-      BoardData root = Lizzie.board.getHistory().getStart().getData();
-      assertFalse(
-          root.hasAnyAnalysisPayload(),
-          "stale imported analysis must not hide fresh analysis for non-default-komi handicap"
-              + " SGFs.");
-      assertEquals(0, root.getPlayouts(), "root playouts should wait for fresh engine analysis.");
-      assertEquals(0.0, root.scoreMean, 0.0001, "stale 13.7-point score must be cleared.");
-      assertEquals(7.5, leelaz.orikomi, 0.0001);
-    } finally {
-      EngineManager.currentEngineNo = previousCurrentEngineNo;
-      env.close();
-    }
-  }
-
-  @Test
-  void loadFromStringHandicapKomiUsesSgfKomiAndClearsStaleAnalysisWhenReadKomiDisabled()
-      throws Exception {
-    TestEnvironment env = TestEnvironment.open();
-    int previousCurrentEngineNo = EngineManager.currentEngineNo;
-    try {
-      Lizzie.config.readKomi = false;
-      EngineManager.currentEngineNo = 0;
-      EngineManager.isEmpty = false;
-      TrackingLeelaz leelaz = (TrackingLeelaz) Lizzie.leelaz;
-      leelaz.komi = 7.5f;
-      leelaz.orikomi = 0.0f;
-      leelaz.isLoaded = true;
-      leelaz.notPondering();
-      setStarted(leelaz, true);
-      String staleAnalysis =
-          "zhizi28Bmuonfd2 0.8 536 13.8015 14.4396\n"
-              + "move B2 visits 211 winrate 9918 prior 1764 scoreMean 13.80 pv B2 C2";
-      String sgf =
-          "(;SZ[3]KM[0.0]HA[2]AB[aa][ca]PL[W]LZOP["
-              + staleAnalysis
-              + "]LZ["
-              + staleAnalysis
-              + "];W[ba])";
-
-      assertTrue(SGFParser.loadFromString(sgf));
-
-      BoardData root = Lizzie.board.getHistory().getStart().getData();
-      assertEquals(
-          0.0,
-          Lizzie.board.getHistory().getGameInfo().getKomi(),
-          0.0001,
-          "handicap/root-setup SGFs must use their own KM even when general SGF-komi import is"
-              + " off.");
-      assertFalse(
-          root.hasAnyAnalysisPayload(),
-          "stale embedded analysis must be discarded after forcing the setup SGF komi.");
-      assertEquals(0.0, root.scoreMean, 0.0001);
-      assertEquals(
-          0.0,
-          leelaz.orikomi,
-          0.0001,
-          "clearing stale SGF analysis must not depend on a fully initialized engine default"
-              + " komi.");
-    } finally {
-      EngineManager.currentEngineNo = previousCurrentEngineNo;
-      env.close();
-    }
-  }
-
-  @Test
   void loadFromStringYikeHandicapHeaderOrderUsesSgfKomiWhenReadKomiDisabled() throws Exception {
     TestEnvironment env = TestEnvironment.open();
+    BoardRenderer previousBoardRenderer = LizzieFrame.boardRenderer;
     int previousCurrentEngineNo = EngineManager.currentEngineNo;
     try {
+      LizzieFrame.boardRenderer = new BoardRenderer(false);
       Lizzie.config.readKomi = false;
       EngineManager.currentEngineNo = 0;
       EngineManager.isEmpty = false;
@@ -1519,11 +1430,10 @@ class BoardNodeKindHistoryPipelineTest {
               + staleAnalysis
               + "];W[ba])";
 
-      assertTrue(SGFParser.loadFromString(sgf));
+      assertTrue(SGFParser.loadFromString(sgf, false));
 
       BoardHistoryList history = Lizzie.board.getHistory();
       assertEquals(0.0, history.getGameInfo().getKomi(), 0.0001);
-      assertFalse(history.getStart().getData().hasAnyAnalysisPayload());
       assertFalse(
           (boolean)
               requireMethod(Leelaz.class, "shouldApplyInitialEngineKomiToCurrentGame")
@@ -1537,6 +1447,7 @@ class BoardNodeKindHistoryPipelineTest {
           0.0001,
           "late engine first-load board-size initialization must not overwrite a loaded SGF komi.");
     } finally {
+      LizzieFrame.boardRenderer = previousBoardRenderer;
       EngineManager.currentEngineNo = previousCurrentEngineNo;
       env.close();
     }
@@ -3482,26 +3393,26 @@ class BoardNodeKindHistoryPipelineTest {
   }
 
   @Test
-  void rootSetupWithoutPlKeepsDefaultBlackToPlayAcrossRoundTrip() throws Exception {
+  void rootSetupWithoutPlKeepsInferredWhiteToPlayAcrossRoundTrip() throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[3]AB[aa];W[bb])", false);
       history.getGameInfo().setDate("2020-01-02");
       Lizzie.board.setHistory(history);
 
-      assertTrue(
+      assertFalse(
           history.getStart().getData().blackToPlay,
-          "root setup without PL should keep the fixed default side to play.");
+          "root setup should use the first real White action.");
 
       String exported = SGFParser.saveToString(false);
       BoardData roundTripRoot = SGFParser.parseSgf(exported, false).getStart().getData();
 
       assertTrue(
-          exported.contains("PL[B]"), "root export should materialize default black-to-play.");
+          exported.contains("PL[W]"), "root export should materialize inferred white-to-play.");
       assertEquals(
-          "B", roundTripRoot.getProperty("PL"), "round-trip root should keep materialized PL.");
-      assertTrue(
-          roundTripRoot.blackToPlay, "round-trip root should keep the fixed default side to play.");
+          "W", roundTripRoot.getProperty("PL"), "round-trip root should keep materialized PL.");
+      assertFalse(
+          roundTripRoot.blackToPlay, "round-trip root should keep the resolved side to play.");
       assertEquals(Stone.BLACK, roundTripRoot.stones[Board.getIndex(0, 0)]);
     } finally {
       env.close();
@@ -5863,10 +5774,7 @@ class BoardNodeKindHistoryPipelineTest {
 
       assertTrue(SGFParser.loadFromString(sgf), "loadFromString should parse handicap SGF.");
       awaitCondition(
-          () ->
-              engine.recordedCommands().contains("clear_board")
-                  && engine.recordedCommands().stream()
-                      .anyMatch(command -> command.startsWith("loadsgf ")),
+          () -> LizzieFrame.canGoAfterload,
           "live SGF synchronization should finish through the coordinator");
       assertEquals(
           1L,

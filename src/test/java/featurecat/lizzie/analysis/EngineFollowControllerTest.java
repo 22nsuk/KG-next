@@ -238,7 +238,7 @@ public class EngineFollowControllerTest {
                   ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION,
                   ExactSnapshotEngineRestore.NO_WRITABLE_SNAPSHOT_LOCATION_DETAIL)));
       assertEquals(
-          "无法准备引擎可读取的局面快照文件：此引擎命令无法证明能访问本地快照文件。请使用远程算力或直接运行本地引擎可执行文件。",
+          "无法准备引擎可读取的局面快照文件：此引擎命令无法证明能访问本地快照文件。请使用相同的 GTP 参数直接运行本地引擎可执行文件。",
           EngineFollowController.snapshotPreparationFailureMessage(
               new ExactSnapshotEngineRestore.Failure(
                   ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION,

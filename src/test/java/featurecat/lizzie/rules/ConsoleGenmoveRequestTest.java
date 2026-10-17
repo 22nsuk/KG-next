@@ -95,6 +95,21 @@ class ConsoleGenmoveRequestTest {
                 Stream.of("D4", "pass").map(move -> Arguments.of(mode, analyze, color, move)))));
   }
 
+  @Test
+  void pendingImportedPositionRejectsConsoleGenmoveUntilAlignmentIsConfirmed() throws Exception {
+    Board board = Lizzie.board;
+    board.requireEngineAlignment();
+    assertFalse(engine.genmove("w", true));
+    assertEquals("", output.toString(StandardCharsets.UTF_8));
+    idle();
+    board.completeEngineAlignment(board.getHistory().getStart(),
+        board.getHistory().getCurrentHistoryNode(), board.getContextRevision());
+    int id = request(false, "w");
+    response(id, "D4");
+    assertEquals(Stone.WHITE, board.getData().lastMoveColor);
+    idle();
+  }
+
   @ParameterizedTest
   @MethodSource("consoleGameMoves")
   void consoleGenmovePreservesColorInEveryGameMode(
@@ -349,8 +364,14 @@ class ConsoleGenmoveRequestTest {
   void changedBoardRevisionRejectsReplyEvenAtSameNode() throws Exception {
     int id = request(false, "w");
     rules.board().requireEngineAlignment();
+    // Completing the newer restore must not revive the old request's revision.
+    rules.board().completeEngineAlignment(rules.board().getHistory().getStart(),
+        rules.current(), rules.board().getContextRevision());
     response(id, "D4");
     assertEquals(0, rules.current().getData().moveNumber);
+    idle();
+    response(request(false, "w"), "D4");
+    assertEquals(Stone.WHITE, rules.current().getData().lastMoveColor);
     idle();
   }
 

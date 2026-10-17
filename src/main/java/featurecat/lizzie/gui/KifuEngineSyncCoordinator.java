@@ -1,6 +1,7 @@
 package featurecat.lizzie.gui;
 
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.ExactSnapshotEngineRestore;
 import featurecat.lizzie.analysis.Leelaz;
 import java.util.Objects;
 import java.util.concurrent.Executors;
@@ -28,6 +29,10 @@ final class KifuEngineSyncCoordinator {
     void onSynchronized();
 
     default void onFailed() {}
+
+    default void onFailed(RuntimeException failure) {
+      onFailed();
+    }
 
     default void onContextChanged() {}
 
@@ -91,11 +96,17 @@ final class KifuEngineSyncCoordinator {
       return;
     }
     AttemptResult result;
+    RuntimeException terminalFailure = null;
     try {
       result = request.synchronize();
     } catch (RuntimeException failure) {
-      request.onRetry(failure, retryCount);
-      result = AttemptResult.RETRY;
+      if (ExactSnapshotEngineRestore.isSnapshotPreparationFailure(failure)) {
+        terminalFailure = failure;
+        result = AttemptResult.PERMANENT_FAILURE;
+      } else {
+        request.onRetry(failure, retryCount);
+        result = AttemptResult.RETRY;
+      }
     }
     if (!isCurrent(requestGeneration, request)) {
       return;
@@ -108,9 +119,10 @@ final class KifuEngineSyncCoordinator {
       return;
     }
     if (result == AttemptResult.PERMANENT_FAILURE) {
+      RuntimeException reportedFailure = terminalFailure;
       SwingUtilities.invokeLater(
           () -> {
-            if (isCurrent(requestGeneration, request)) request.onFailed();
+            if (isCurrent(requestGeneration, request)) request.onFailed(reportedFailure);
           });
       return;
     }

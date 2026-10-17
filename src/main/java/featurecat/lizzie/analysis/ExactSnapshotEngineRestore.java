@@ -35,8 +35,8 @@ public final class ExactSnapshotEngineRestore {
       "No writable snapshot location is available. Check permissions for the temporary, engine "
           + "working, and application runtime directories.";
   static final String UNSUPPORTED_SNAPSHOT_TRANSPORT_DETAIL =
-      "This engine command cannot prove access to local snapshot files. Use Remote Compute or a "
-          + "direct local engine executable.";
+      "This engine command cannot prove access to local snapshot files. Run a direct local engine "
+          + "executable with the same GTP options.";
   private static final ScheduledExecutorService DELETE_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(ExactSnapshotEngineRestore::newCleanupThread);
 
@@ -68,6 +68,12 @@ public final class ExactSnapshotEngineRestore {
     FailureCategory category() {
       return category;
     }
+  }
+
+  /** Preparation needs a different launcher or writable location, not a background retry. */
+  public static boolean isSnapshotPreparationFailure(Throwable failure) {
+    return failure instanceof Failure exactFailure
+        && exactFailure.category() == FailureCategory.SNAPSHOT_PREPARATION;
   }
 
   public static Optional<PreparedRestore> prepare(
