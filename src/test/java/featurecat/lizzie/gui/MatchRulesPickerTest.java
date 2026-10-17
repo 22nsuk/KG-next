@@ -41,7 +41,7 @@ class MatchRulesPickerTest {
     KataGoRules custom =
         KataGoRules.parse("chinese")
             .orElseThrow()
-            .overlayEditor("AREA", "POSITIONAL", true, "NONE", "0", false);
+            .overlayEditor("AREA", "POSITIONAL", true, "NONE", "N", false, true);
     assertTrue(KataGoRules.officialNameOf(custom).isEmpty());
 
     MatchRulesPicker picker = new MatchRulesPicker();
@@ -90,7 +90,8 @@ class MatchRulesPickerTest {
         ConfigTestHelper.createForTests(Files.createTempDirectory("match-rules-picker"));
     Lizzie.config = config;
     List<String> presets =
-        List.of("chinese", "stone-scoring", "japanese", "aga", "new-zealand", "tromp-taylor");
+        List.of(
+            "chinese", "stone-scoring", "japanese", "aga", "new-zealand", "tromp-taylor", "goe");
     List<String> labelKeys =
         List.of(
             "LizzieFrame.currentRules.chinese",
@@ -98,7 +99,8 @@ class MatchRulesPickerTest {
             "MatchRules.option.japaneseKorean",
             "MatchRules.option.agaBga",
             "MatchRules.option.newZealand",
-            "MatchRules.option.trompTaylor");
+            "MatchRules.option.trompTaylor",
+            "LizzieFrame.currentRules.goe");
     MatchRulesPicker picker = new MatchRulesPicker();
     Set<String> names = new HashSet<>();
     for (int i = 0; i < presets.size(); i++) {
@@ -168,7 +170,7 @@ class MatchRulesPickerTest {
     KataGoRules ancient = KataGoRules.parse("stone-scoring").orElseThrow();
     for (KataGoRules custom :
         List.of(
-            ancient.overlayEditor("AREA", "POSITIONAL", false, "ALL", "N", false),
+            ancient.overlayEditor("AREA", "POSITIONAL", false, "ALL", "N", false, true),
             KataGoRules.fromJson(ancient.toJson().put("futureRule", "keep-me")))) {
       String saved = custom.toJson().toString(2);
       config.engineGameMatchRules = saved;

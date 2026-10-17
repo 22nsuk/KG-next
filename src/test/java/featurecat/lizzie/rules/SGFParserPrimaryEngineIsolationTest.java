@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.KataGoRules;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
@@ -50,6 +51,21 @@ class SGFParserPrimaryEngineIsolationTest {
       BoardHistoryList.SessionRulesTarget adopted = Lizzie.board.getHistory().captureSessionRules();
       assertEquals(BoardHistoryList.SessionRulesKind.VALID, adopted.kind());
       assertEquals(BoardHistoryList.SessionRulesSource.EXTERNAL_IMPORT, adopted.source());
+    }
+  }
+
+  @Test
+  void shortChineseDeclarationAdoptsTheChinesePreset() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      assertTrue(SGFParser.loadFromString("(;FF[4]SZ[5]RU[cn];B[aa])", true));
+      BoardHistoryList.SessionRulesTarget adopted = Lizzie.board.getHistory().captureSessionRules();
+      assertEquals(BoardHistoryList.SessionRulesKind.VALID, adopted.kind());
+      assertEquals("cn", adopted.rawDeclaration());
+      assertTrue(
+          adopted
+              .parsedRules()
+              .orElseThrow()
+              .semanticallyEquals(KataGoRules.parse("chinese").orElseThrow()));
     }
   }
 

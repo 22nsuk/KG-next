@@ -26,6 +26,10 @@ JAVA_REQUIRED_TESTS = (
     ("featurecat.lizzie.logging.LoggingProviderSmokeIT", "shadedArtifactWritesOneProviderEvent"),
 )
 DESKTOP_REQUIRED_TESTS = (
+    ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
+    ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
+    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
+    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
@@ -51,6 +55,32 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
 )
 ENGINE_PROCESS_REQUIRED_TESTS = (
+    ("featurecat.lizzie.gui.ContributeSavedEngineSelectionDesktopTest", "selectSavedEngineSaveReloadAndStartContribution"),
+    *tuple(
+        ("featurecat.lizzie.gui.ContributeStartupDesktopTest", method)
+        for method in (
+            "serverRejectionUsesOneLaunchAndRetainsFailure",
+            "outputOrderingReadinessAndRetryBudget",
+            "stderrEofKeepsProcessAliveUntilExitOrFatalError",
+            "stopRestartAndValidGameDisplay",
+            "permanentOutputSurvivesPausedEdt",
+            "normalExitSurvivesPausedEdtWithoutMaskingFailures",
+            "modalNotificationsDoNotBlockDrainOrStopReplacement",
+        )
+    ),
+    *tuple(
+        ("featurecat.lizzie.gui.ContributionLocalClearDesktopTest",
+         f"contributionClearsLocallyAndHonorsRealOccupancy(String)[{invocation}]")
+        for invocation in range(1, 4)
+    ),
+    *tuple(
+        ("featurecat.lizzie.analysis.ContributeCertificateRecoveryTest", method)
+        for method in (
+            "remoteCommandsNeverAcquireClientCertificatePaths",
+            "pureCommandsRemainUserOwned",
+            "localRecoveryUsesCertificateBesideExecutable",
+        )
+    ),
     (
         "featurecat.lizzie.gui.EngineProcessSmokeTest",
         "restoresSnapshotAnalyzesAndQuits",
@@ -575,7 +605,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame",
+                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest",
                     "test",
                 ),
                 group="desktop",
@@ -589,7 +619,7 @@ def build_steps(
             "EngineProcessFailureTest#rejectsSnapshotErrorWithoutTailOrAnalysis+"
             "retiresSnapshotTimeoutAndRejectsLateResponse+recoversSnapshotAfterPeerCrash+"
             "isolatesLateOutputAfterEngineSwitch+drainsPeerPipeBurstAndRemainsResponsive+"
-            "cleansUpPeerThatRefusesQuit"
+            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest"
         )
         return [
             Step(

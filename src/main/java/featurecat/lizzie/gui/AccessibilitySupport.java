@@ -16,6 +16,7 @@ import javax.swing.AbstractButton;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
+import javax.swing.JList;
 import javax.swing.JProgressBar;
 import javax.swing.JRootPane;
 import javax.swing.JTable;
@@ -391,6 +392,8 @@ public final class AccessibilitySupport {
     if (component instanceof AbstractButton
         || component instanceof JTextComponent
         || component instanceof JComboBox
+        || component instanceof JList
+        || component instanceof SidebarHeaderPanel
         || component instanceof JTable) {
       result.add((JComponent) component);
       return;

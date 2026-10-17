@@ -5428,11 +5428,11 @@ public class Board {
   }
 
   /**
-   * Clears board-owned state for an SGF load while allowing the caller to defer primary-engine
-   * synchronization. Downloaded and local SGF loaders use the deferred form so parsing never queues
-   * a partial clear before the immutable post-load snapshot is ready.
+   * Clears board-owned state and runs deferred notifications without forwarding to the primary
+   * engine. SGF loaders defer synchronization until their final snapshot is ready; contribution
+   * startup uses this after stopping the foreground engine under its mode reservation.
    */
-  void clearForSgfLoadWithoutPrimaryEngineForwarding() {
+  public void clearWithoutPrimaryEngineForwarding() {
     EngineForwardingPlan forwarding;
     synchronized (this) {
       forwarding = clearBoardState(false);

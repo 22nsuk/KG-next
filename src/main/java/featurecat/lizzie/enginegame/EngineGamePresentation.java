@@ -108,24 +108,6 @@ public final class EngineGamePresentation {
     return engine != null && engine.isSai;
   }
 
-  public static int blackSpecificRules(GameInfo info, EngineGameSnapshot live) {
-    EngineGameParticipantDescriptor descriptor = blackDescriptor(info);
-    if (descriptor != null) {
-      return descriptor.usingSpecificRules();
-    }
-    Leelaz engine = blackEngine(live);
-    return engine == null ? 0 : engine.usingSpecificRules;
-  }
-
-  public static int whiteSpecificRules(GameInfo info, EngineGameSnapshot live) {
-    EngineGameParticipantDescriptor descriptor = whiteDescriptor(info);
-    if (descriptor != null) {
-      return descriptor.usingSpecificRules();
-    }
-    Leelaz engine = whiteEngine(live);
-    return engine == null ? 0 : engine.usingSpecificRules;
-  }
-
   public static Leelaz engine(int index) {
     EngineManager manager = Lizzie.engineManager;
     if (manager == null

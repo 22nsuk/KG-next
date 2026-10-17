@@ -6,6 +6,11 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Keep ordinary and low-visit candidate markers visible until the first complete variation preview is ready, preserving cancellation and stale-result protection.
+- Add problem-list sorting by loss or move order, keyboard navigation, stable selection and scroll position, and readable colors on supported custom theme surfaces.
+- Make contribution startup clear only the local board, classify permanent build failures without repeated launches, and keep output draining during delayed or modal notifications. Select a saved local engine executable from contribution settings without changing its analysis profile.
+- Share the rule editor across analysis and game setup, recognize SGF rule aliases and Ing (GOE), preserve imported fields that are inactive under territory scoring, and show komi convention hints without changing komi. Cancel leaves analysis unchanged.
+
 - Preserve saved handicap analysis, explicit and inferred initial turns, and DD placeholder nodes with their own comments and analysis when opening, editing, saving, and recovering SGF files.
 - Stop background retries when an imported position cannot prepare a readable engine snapshot. Keep the game available and analysis paused; after repairing the launcher or writable directories, use Continue to restore the current position before analysis resumes.
 - Reject console `genmove` while the displayed position still needs engine alignment, including after snapshot preparation failure; preserve explicit move colors and request ownership after recovery.

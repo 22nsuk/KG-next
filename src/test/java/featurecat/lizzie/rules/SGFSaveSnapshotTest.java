@@ -3,6 +3,7 @@ package featurecat.lizzie.rules;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.gui.LizzieFrame;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -116,7 +117,7 @@ class SGFSaveSnapshotTest {
   void normalSnapshotKeepsRulesHeaderOnTheDetachedRoot() throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       Lizzie.leelaz.isKatago = true;
-      Lizzie.leelaz.usingSpecificRules = 1;
+      Lizzie.leelaz.rulesSummary = KataGoRules.Summary.CHINESE;
       BoardData root = Lizzie.board.getHistory().getData();
       root.comment = "original comment";
       String saved = capture(false, false, false);

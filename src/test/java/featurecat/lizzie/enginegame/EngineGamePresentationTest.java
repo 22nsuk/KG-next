@@ -65,15 +65,15 @@ class EngineGamePresentationTest {
   void historicalRecordKatagoWinsOverLiveSnapshot() {
     GameInfo info = new GameInfo();
     EngineGameParticipantDescriptor black =
-        new EngineGameParticipantDescriptor(FIRST, "OldBlack", false, false, 0);
+        new EngineGameParticipantDescriptor(FIRST, "OldBlack", false, false, null);
     EngineGameParticipantDescriptor white =
-        new EngineGameParticipantDescriptor(SECOND, "OldWhite", true, true, 2);
+        new EngineGameParticipantDescriptor(
+            SECOND, "OldWhite", true, true, KataGoRules.Summary.CHINESE_ANCIENT);
     info.attachEngineGameRecordContext(new EngineGameRecordContext(null, black, white));
     EngineGameSnapshot liveNextGame = playing(false, 9, 8);
 
     assertTrue(EngineGamePresentation.whiteKatago(info, liveNextGame));
     assertTrue(EngineGamePresentation.whiteSai(info, liveNextGame));
-    assertEquals(2, EngineGamePresentation.whiteSpecificRules(info, liveNextGame));
     assertFalse(EngineGamePresentation.blackKatago(info, liveNextGame));
     assertEquals("OldWhite", EngineGamePresentation.whiteDescriptor(info).displayName());
   }
@@ -165,8 +165,10 @@ class EngineGamePresentationTest {
     EngineGameRecordContext context =
         new EngineGameRecordContext(
             null,
-            new EngineGameParticipantDescriptor(FIRST, "First", true, false, 1),
-            new EngineGameParticipantDescriptor(SECOND, "Second", true, false, 1),
+            new EngineGameParticipantDescriptor(
+                FIRST, "First", true, false, KataGoRules.Summary.CHINESE),
+            new EngineGameParticipantDescriptor(
+                SECOND, "Second", true, false, KataGoRules.Summary.CHINESE),
             frozen);
     info.attachEngineGameRecordContext(context);
     info.freezeEngineGameRecord(

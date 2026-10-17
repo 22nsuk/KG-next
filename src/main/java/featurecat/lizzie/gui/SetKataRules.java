@@ -3,21 +3,22 @@ package featurecat.lizzie.gui;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.EngineRulesResult;
+import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.util.Utils;
 import java.awt.Dimension;
-import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
+import java.text.MessageFormat;
+import java.util.OptionalDouble;
 import java.util.ResourceBundle;
 import javax.imageio.ImageIO;
-import javax.swing.ButtonGroup;
 import javax.swing.BorderFactory;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
@@ -28,25 +29,12 @@ import org.json.JSONObject;
 public class SetKataRules extends JDialog {
   // private JDialog thisFrame = this;
   private ResourceBundle resourceBundle = Lizzie.resourceBundle;
-  JFontRadioButton rdoArea;
-  JFontRadioButton rdoTerritory;
-  JFontRadioButton rdoSimpleKo;
-  JFontRadioButton rdoPositionKo;
-  JFontRadioButton rdoSituationalKo;
-  JFontRadioButton rdoSuicide;
-  JFontRadioButton rdoNoSuicide;
-  JFontRadioButton rdoNoTax;
-  JFontRadioButton rdoSeKiTax;
-  JFontRadioButton rdoAllTax;
-  JFontRadioButton rdoNoHandicapKomi;
-  JFontRadioButton rdoHandicapKomiN;
-  JFontRadioButton rdoHandicapKomiN1;
+  final KataRulesEditor editor;
   JFontCheckBox chkbxAutoLoadRules;
   JSONObject jo;
   // private JFontLabel lblNewLabel_3;
-  private JFontRadioButton rdoButtonGo;
-  private JFontRadioButton rdoNoButtonGo;
   private JFontLabel lblStatus;
+  private JFontLabel lblKomiHint;
   private final Leelaz engine;
   private final boolean composeOnly;
   private final KataGoRules composeBaseline;
@@ -98,239 +86,15 @@ public class SetKataRules extends JDialog {
           public void windowClosing(WindowEvent e) {
             closeDialog();
           }
+
+          public void windowActivated(WindowEvent e) {
+            if (!composeOnly) refreshKomiHint();
+          }
         });
     AccessibilitySupport.installEscapeAction(getRootPane(), this, this::closeDialog);
 
-    JFontLabel lblScoringRule =
-        new JFontLabel(resourceBundle.getString("SetKataRules.lblScoringRule")); // ("胜负判断:");
-    lblScoringRule.setBounds(21, 48, 146, 27);
-    getContentPane().add(lblScoringRule);
-
-    rdoTerritory =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoTerritory")); // ("点目");
-    rdoTerritory.setBounds(280, 50, 119, 23);
-    getContentPane().add(rdoTerritory);
-
-    rdoArea = new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoArea")); // ("数子");
-    rdoArea.setBounds(173, 50, 105, 23);
-    getContentPane().add(rdoArea);
-
-    rdoTerritory.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoNoButtonGo.setEnabled(false);
-            rdoButtonGo.setEnabled(false);
-          }
-        });
-
-    rdoArea.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoNoButtonGo.setEnabled(true);
-            rdoButtonGo.setEnabled(true);
-          }
-        });
-
-    ButtonGroup group1 = new ButtonGroup();
-    group1.add(rdoArea);
-    group1.add(rdoTerritory);
-
-    JFontLabel lblKoRule =
-        new JFontLabel(resourceBundle.getString("SetKataRules.lblKoRule")); // ("打劫规则:");
-    lblKoRule.setBounds(21, 85, 129, 27);
-    getContentPane().add(lblKoRule);
-
-    rdoSimpleKo =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoSimpleKo")); // ("不禁全同");
-    rdoSimpleKo.setBounds(173, 87, 105, 23);
-    getContentPane().add(rdoSimpleKo);
-
-    rdoPositionKo =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoPositionKo")); // ("严格禁全同");
-    rdoPositionKo.setBounds(
-        280,
-        87,
-        Lizzie.config.isFrameFontSmall() ? 119 : (Lizzie.config.isFrameFontMiddle() ? 119 : 130),
-        23);
-    getContentPane().add(rdoPositionKo);
-
-    rdoSituationalKo =
-        new JFontRadioButton(
-            resourceBundle.getString("SetKataRules.rdoSituationalKo")); // ("同一色落子后禁全同");
-    rdoSituationalKo.setBounds(
-        Lizzie.config.isFrameFontSmall()
-            ? Lizzie.config.isFrameFontSmall()
-                ? 401
-                : (Lizzie.config.isFrameFontMiddle() ? 401 : 450)
-            : (Lizzie.config.isFrameFontMiddle()
-                ? Lizzie.config.isFrameFontSmall()
-                    ? 401
-                    : (Lizzie.config.isFrameFontMiddle() ? 401 : 450)
-                : 450),
-        87,
-        295,
-        23);
-    getContentPane().add(rdoSituationalKo);
-
-    ButtonGroup group2 = new ButtonGroup();
-    group2.add(rdoSimpleKo);
-    group2.add(rdoPositionKo);
-    group2.add(rdoSituationalKo);
-
-    JFontLabel lblMultiStoneSuicide =
-        new JFontLabel(
-            resourceBundle.getString("SetKataRules.lblMultiStoneSuicide")); // ("允许棋块自杀:");
-    lblMultiStoneSuicide.setBounds(21, 122, 146, 27);
-    getContentPane().add(lblMultiStoneSuicide);
-
-    rdoSuicide =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoSuicide")); // ("是");
-    rdoSuicide.setBounds(173, 124, 105, 23);
-    getContentPane().add(rdoSuicide);
-
-    rdoNoSuicide =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoNoSuicide")); // ("否");
-    rdoNoSuicide.setBounds(280, 124, 119, 23);
-    getContentPane().add(rdoNoSuicide);
-
-    ButtonGroup group3 = new ButtonGroup();
-    group3.add(rdoSuicide);
-    group3.add(rdoNoSuicide);
-
-    JFontLabel lblTaxRule =
-        new JFontLabel(resourceBundle.getString("SetKataRules.lblTaxRule")); // ("还棋头:");
-    lblTaxRule.setBounds(21, 159, 146, 27);
-    getContentPane().add(lblTaxRule);
-
-    rdoNoTax = new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoNoTax")); // ("无");
-    rdoNoTax.setBounds(173, 161, 84, 23);
-    getContentPane().add(rdoNoTax);
-
-    rdoSeKiTax =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoSeKiTax")); // ("仅双活棋块");
-    rdoSeKiTax.setBounds(
-        280,
-        161,
-        Lizzie.config.isFrameFontSmall() ? 119 : (Lizzie.config.isFrameFontMiddle() ? 119 : 130),
-        23);
-    getContentPane().add(rdoSeKiTax);
-
-    rdoAllTax =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoAllTax")); // ("每一块棋");
-    rdoAllTax.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 401 : (Lizzie.config.isFrameFontMiddle() ? 401 : 450),
-        161,
-        143,
-        23);
-    getContentPane().add(rdoAllTax);
-
-    ButtonGroup group4 = new ButtonGroup();
-    group4.add(rdoNoTax);
-    group4.add(rdoSeKiTax);
-    group4.add(rdoAllTax);
-
-    JFontLabel lblWhiteHandicapBonus =
-        new JFontLabel(
-            resourceBundle.getString("SetKataRules.lblWhiteHandicapBonus")); // ("让子贴还(让N子):");
-    lblWhiteHandicapBonus.setBounds(21, 196, 153, 27);
-    getContentPane().add(lblWhiteHandicapBonus);
-
-    rdoNoHandicapKomi =
-        new JFontRadioButton(
-            resourceBundle.getString("SetKataRules.rdoNoHandicapKomi")); // ("不贴还");
-    rdoNoHandicapKomi.setBounds(173, 198, 105, 23);
-    getContentPane().add(rdoNoHandicapKomi);
-
-    rdoHandicapKomiN =
-        new JFontRadioButton(
-            resourceBundle.getString("SetKataRules.rdoHandicapKomiN")); // ("贴还N目");
-    rdoHandicapKomiN.setBounds(280, 198, 119, 23);
-    getContentPane().add(rdoHandicapKomiN);
-
-    rdoHandicapKomiN1 =
-        new JFontRadioButton(
-            resourceBundle.getString("SetKataRules.rdoHandicapKomiN1")); // ("贴还N-1目");
-    rdoHandicapKomiN1.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 401 : (Lizzie.config.isFrameFontMiddle() ? 401 : 450),
-        198,
-        143,
-        23);
-    getContentPane().add(rdoHandicapKomiN1);
-
-    ButtonGroup group5 = new ButtonGroup();
-    group5.add(rdoNoHandicapKomi);
-    group5.add(rdoHandicapKomiN);
-    group5.add(rdoHandicapKomiN1);
-
-    JFontLabel lblClassicRules =
-        new JFontLabel(resourceBundle.getString("SetKataRules.lblClassicRules")); // ("典型规则:");
-    lblClassicRules.setBounds(10, 9, 91, 27);
-    getContentPane().add(lblClassicRules);
-
-    JFontButton btnChnRule =
-        new JFontButton(resourceBundle.getString("SetKataRules.btnChnRule")); // ("中国规则");
-    btnChnRule.setMargin(new Insets(0, 0, 0, 0));
-    btnChnRule.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoArea.setSelected(true);
-            rdoNoTax.setSelected(true);
-            rdoHandicapKomiN.setSelected(true);
-            rdoSimpleKo.setSelected(true);
-            rdoNoSuicide.setSelected(true);
-            rdoNoButtonGo.setSelected(true);
-            rdoNoButtonGo.setEnabled(true);
-            rdoButtonGo.setEnabled(true);
-          }
-        });
-    btnChnRule.setBounds(99, 11, 93, 23);
-    getContentPane().add(btnChnRule);
-
-    JFontButton btnJpnRule =
-        new JFontButton(resourceBundle.getString("SetKataRules.btnJpnRule")); // ("日本规则");
-    btnJpnRule.setMargin(new Insets(0, 0, 0, 0));
-    btnJpnRule.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoTerritory.setSelected(true);
-            rdoSeKiTax.setSelected(true);
-            rdoNoHandicapKomi.setSelected(true);
-            rdoSimpleKo.setSelected(true);
-            rdoNoSuicide.setSelected(true);
-            rdoNoButtonGo.setSelected(true);
-            rdoNoButtonGo.setEnabled(false);
-            rdoButtonGo.setEnabled(false);
-          }
-        });
-    btnJpnRule.setBounds(202, 11, 93, 23);
-    getContentPane().add(btnJpnRule);
-
-    JFontButton btnTTRule =
-        new JFontButton(resourceBundle.getString("SetKataRules.btnTTRule")); // ("Tromp-Taylor规则");
-    btnTTRule.setMargin(new Insets(0, 0, 0, 0));
-    btnTTRule.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoArea.setSelected(true);
-            rdoNoTax.setSelected(true);
-            rdoHandicapKomiN.setSelected(true);
-            rdoPositionKo.setSelected(true);
-            rdoSuicide.setSelected(true);
-            rdoNoButtonGo.setSelected(true);
-            rdoNoButtonGo.setEnabled(true);
-            rdoButtonGo.setEnabled(true);
-          }
-        });
-    btnChnRule.setFocusable(false);
-    btnTTRule.setFocusable(false);
-    btnJpnRule.setFocusable(false);
-
-    btnTTRule.setBounds(
-        416,
-        11,
-        Lizzie.config.isFrameFontSmall() ? 142 : (Lizzie.config.isFrameFontMiddle() ? 142 : 180),
-        23);
-    getContentPane().add(btnTTRule);
+    editor = new KataRulesEditor(getContentPane(), resourceBundle);
+    int below = editor.bottom();
 
     JFontButton btnCancel =
         new JFontButton(resourceBundle.getString("SetKataRules.btnCancel")); // ("取消");
@@ -340,7 +104,7 @@ public class SetKataRules extends JDialog {
             closeDialog();
           }
         });
-    btnCancel.setBounds(292, 318, 93, 23);
+    btnCancel.setBounds(292, below + 53, 93, 23);
     getContentPane().add(btnCancel);
 
     JFontButton btnApply =
@@ -351,66 +115,34 @@ public class SetKataRules extends JDialog {
             applySelectedRules();
           }
         });
-    btnApply.setBounds(184, 318, 93, 23);
+    btnApply.setBounds(184, below + 53, 93, 23);
     getContentPane().add(btnApply);
 
-    JFontButton btnChnOldRule =
-        new JFontButton(resourceBundle.getString("SetKataRules.btnChnOldRule")); // ("中国古棋");
-    btnChnOldRule.setMargin(new Insets(0, 0, 0, 0));
-    btnChnOldRule.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            rdoArea.setSelected(true);
-            rdoAllTax.setSelected(true);
-            rdoHandicapKomiN.setSelected(true);
-            rdoSimpleKo.setSelected(true);
-            rdoSuicide.setSelected(false);
-            rdoNoButtonGo.setEnabled(true);
-            rdoButtonGo.setEnabled(true);
-            rdoNoButtonGo.setSelected(true);
-          }
-        });
-    btnChnOldRule.setBounds(305, 11, 101, 23);
-    getContentPane().add(btnChnOldRule);
-    btnChnOldRule.setFocusable(false);
     chkbxAutoLoadRules =
         new JFontCheckBox(
             resourceBundle.getString(
                 "SetKataRules.chkbxAutoLoadRules")); // ("自动设置为此规则(勾选则所有Katago引擎启动时自动设置为此规则,仅支持KataGo v1.3引擎)");
-    chkbxAutoLoadRules.setBounds(18, 265, 897, 23);
+    chkbxAutoLoadRules.setBounds(18, below, 897, 23);
     getContentPane().add(chkbxAutoLoadRules);
     if (Lizzie.config.autoLoadKataRules) {
       chkbxAutoLoadRules.setSelected(true);
     }
-
-    JFontLabel lblHasButton =
-        new JFontLabel(
-            resourceBundle.getString("SetKataRules.lblHasButton")); // ("数子规则下收后方贴还0.5目");
-    lblHasButton.setBounds(21, 233, 256, 27);
-    getContentPane().add(lblHasButton);
-
-    rdoButtonGo =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoButtonGo")); // ("是");
-    rdoButtonGo.setBounds(280, 235, 105, 23);
-    getContentPane().add(rdoButtonGo);
-
-    rdoNoButtonGo =
-        new JFontRadioButton(resourceBundle.getString("SetKataRules.rdoNoButtonGo")); // ("否");
-    rdoNoButtonGo.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 401 : (Lizzie.config.isFrameFontMiddle() ? 401 : 450),
-        235,
-        143,
-        23);
-
-    ButtonGroup group6 = new ButtonGroup();
-    group6.add(rdoButtonGo);
-    group6.add(rdoNoButtonGo);
-    getContentPane().add(rdoNoButtonGo);
-    setSize(592, 390);
-    Lizzie.setFrameSize(
-        this,
-        Lizzie.config.isFrameFontSmall() ? 592 : (Lizzie.config.isFrameFontMiddle() ? 720 : 890),
-        390);
+    // Size the row for the widest komi KataGo accepts (-400..400) so any real value fits.
+    lblKomiHint = new JFontLabel(formatKomiHint(-400.0, 7.5));
+    int width = Math.max(editor.width(), composeOnly ? 0
+        : Math.max(chkbxAutoLoadRules.getPreferredSize().width,
+            lblKomiHint.getPreferredSize().width) + 36);
+    lblKomiHint.setText("");
+    int checkHeight = chkbxAutoLoadRules.getPreferredSize().height;
+    chkbxAutoLoadRules.setBounds(18, below, width - 36, checkHeight);
+    int buttonHeight = Math.max(btnApply.getPreferredSize().height, btnCancel.getPreferredSize().height);
+    int buttonWidth = Math.max(93, Math.max(btnApply.getPreferredSize().width,
+        btnCancel.getPreferredSize().width));
+    int buttonY = below + (composeOnly ? 0 : checkHeight + 2 * configuredStatusHeight());
+    btnApply.setBounds(width / 2 - buttonWidth - 6, buttonY, buttonWidth, buttonHeight);
+    btnCancel.setBounds(width / 2 + 6, buttonY, buttonWidth, buttonHeight);
+    getContentPane().setPreferredSize(new Dimension(width, buttonY + buttonHeight + 16));
+    pack();
     try {
       this.setIconImage(ImageIO.read(MoreEngines.class.getResourceAsStream("/assets/logo.png")));
       Dimension screensize = Toolkit.getDefaultToolkit().getScreenSize();
@@ -425,15 +157,21 @@ public class SetKataRules extends JDialog {
       Utils.showMsg(resourceBundle.getString("SetKataRules.notKataGoHint"));
     }
     lblStatus = new JFontLabel("");
-    lblStatus.setBounds(18, 288, 897, 23);
+    lblStatus.setBounds(18, below + checkHeight, width - 36, configuredStatusHeight());
     getContentPane().add(lblStatus);
+    lblKomiHint.setBounds(
+        18, below + checkHeight + configuredStatusHeight(), width - 36, configuredStatusHeight());
+    getContentPane().add(lblKomiHint);
     if (composeOnly) {
       chkbxAutoLoadRules.setVisible(false);
       lblStatus.setVisible(false);
+      lblKomiHint.setVisible(false);
       if (initial != null) {
         applyJsonToEditor(initial.toJson());
       }
     } else {
+      editor.onChange(this::refreshKomiHint);
+      refreshKomiHint();
       if (rejectEngineGameInteraction()) return;
       rulesOperation = engine.queryEngineRulesOperation();
       refreshStatus();
@@ -441,28 +179,34 @@ public class SetKataRules extends JDialog {
     }
   }
 
+  private static int configuredStatusHeight() {
+    return Math.max(27, featurecat.lizzie.Config.frameFontSize + 12);
+  }
+
   void locateRulesEditor() {
     clearRulesHighlight();
-    areaOriginalBorder = rdoArea.getBorder();
-    territoryOriginalBorder = rdoTerritory.getBorder();
-    areaOriginalBorderPainted = rdoArea.isBorderPainted();
-    territoryOriginalBorderPainted = rdoTerritory.isBorderPainted();
-    rdoArea.setBorder(
+    JFontRadioButton area = editor.rdoArea;
+    JFontRadioButton territory = editor.rdoTerritory;
+    areaOriginalBorder = area.getBorder();
+    territoryOriginalBorder = territory.getBorder();
+    areaOriginalBorderPainted = area.isBorderPainted();
+    territoryOriginalBorderPainted = territory.isBorderPainted();
+    area.setBorder(
         BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(new java.awt.Color(185, 156, 93), 2),
             areaOriginalBorder));
-    rdoTerritory.setBorder(
+    territory.setBorder(
         BorderFactory.createCompoundBorder(
             BorderFactory.createLineBorder(new java.awt.Color(185, 156, 93), 2),
             territoryOriginalBorder));
-    rdoArea.setBorderPainted(true);
-    rdoTerritory.setBorderPainted(true);
+    area.setBorderPainted(true);
+    territory.setBorderPainted(true);
     rulesHighlightTimer = new Timer(2400, event -> clearRulesHighlight());
     rulesHighlightTimer.setRepeats(false);
     rulesHighlightTimer.start();
     SwingUtilities.invokeLater(
         () -> {
-          JFontRadioButton target = rdoTerritory.isSelected() ? rdoTerritory : rdoArea;
+          JFontRadioButton target = territory.isSelected() ? territory : area;
           if (isDisplayable()) target.requestFocusInWindow();
         });
   }
@@ -470,18 +214,19 @@ public class SetKataRules extends JDialog {
   private void clearRulesHighlight() {
     if (rulesHighlightTimer != null) rulesHighlightTimer.stop();
     rulesHighlightTimer = null;
+    if (editor == null) return;
     if (areaOriginalBorder != null) {
-      rdoArea.setBorder(areaOriginalBorder);
-      rdoArea.setBorderPainted(areaOriginalBorderPainted);
+      editor.rdoArea.setBorder(areaOriginalBorder);
+      editor.rdoArea.setBorderPainted(areaOriginalBorderPainted);
     }
     if (territoryOriginalBorder != null) {
-      rdoTerritory.setBorder(territoryOriginalBorder);
-      rdoTerritory.setBorderPainted(territoryOriginalBorderPainted);
+      editor.rdoTerritory.setBorder(territoryOriginalBorder);
+      editor.rdoTerritory.setBorderPainted(territoryOriginalBorderPainted);
     }
     areaOriginalBorder = null;
     territoryOriginalBorder = null;
-    if (rdoArea != null) rdoArea.repaint();
-    if (rdoTerritory != null) rdoTerritory.repaint();
+    editor.rdoArea.repaint();
+    editor.rdoTerritory.repaint();
   }
 
   @Override
@@ -568,23 +313,6 @@ public class SetKataRules extends JDialog {
   }
 
   private KataGoRules rulesFromEditor() {
-    String scoring = rdoArea.isSelected() ? "AREA" : rdoTerritory.isSelected() ? "TERRITORY" : "";
-    String ko =
-        rdoSimpleKo.isSelected()
-            ? "SIMPLE"
-            : rdoPositionKo.isSelected()
-                ? "POSITIONAL"
-                : rdoSituationalKo.isSelected() ? "SITUATIONAL" : "";
-    boolean suicide = rdoSuicide.isSelected();
-    String tax =
-        rdoNoTax.isSelected()
-            ? "NONE"
-            : rdoSeKiTax.isSelected() ? "SEKI" : rdoAllTax.isSelected() ? "ALL" : "";
-    String whiteHandicapBonus =
-        rdoNoHandicapKomi.isSelected()
-            ? "0"
-            : rdoHandicapKomiN.isSelected() ? "N" : rdoHandicapKomiN1.isSelected() ? "N-1" : "";
-    boolean hasButton = rdoButtonGo.isSelected();
     KataGoRules base = null;
     if (composeOnly) {
       base = composeBaseline;
@@ -595,25 +323,7 @@ public class SetKataRules extends JDialog {
         base = result.observed();
       }
     }
-    if (base != null) {
-      return base.overlayEditor(scoring, ko, suicide, tax, whiteHandicapBonus, hasButton);
-    }
-    JSONObject json = new JSONObject();
-    if (!scoring.isEmpty()) {
-      json.put("scoring", scoring);
-    }
-    if (!ko.isEmpty()) {
-      json.put("ko", ko);
-    }
-    json.put("suicide", suicide);
-    if (!tax.isEmpty()) {
-      json.put("tax", tax);
-    }
-    if (!whiteHandicapBonus.isEmpty()) {
-      json.put("whiteHandicapBonus", whiteHandicapBonus);
-    }
-    json.put("hasButton", hasButton);
-    return KataGoRules.fromJson(json);
+    return editor.overlay(base);
   }
 
   public boolean hasRulesResponse() {
@@ -703,42 +413,36 @@ public class SetKataRules extends JDialog {
 
   private void applyJsonToEditor(JSONObject jo) {
     this.jo = jo;
-    if (jo == null) {
-      return;
-    }
-    if (jo.optBoolean("hasButton", false)) rdoButtonGo.setSelected(true);
-    else rdoNoButtonGo.setSelected(true);
-    if (jo.optBoolean("suicide", false)) rdoSuicide.setSelected(true);
-    else rdoNoSuicide.setSelected(true);
-    if (jo.optString("ko", "").contentEquals("POSITIONAL")) rdoPositionKo.setSelected(true);
-    if (jo.optString("ko", "").contentEquals("SIMPLE")) rdoSimpleKo.setSelected(true);
-    if (jo.optString("ko", "").contentEquals("SITUATIONAL")) rdoSituationalKo.setSelected(true);
-
-    if (jo.optString("scoring", "").contentEquals("AREA")) {
-      rdoArea.setSelected(true);
-      rdoNoButtonGo.setEnabled(true);
-      rdoButtonGo.setEnabled(true);
-    }
-    if (jo.optString("scoring", "").contentEquals("TERRITORY")) {
-      rdoTerritory.setSelected(true);
-      rdoNoButtonGo.setEnabled(false);
-      rdoButtonGo.setEnabled(false);
-    }
-
-    if (jo.optString("whiteHandicapBonus", "").contentEquals("0"))
-      rdoNoHandicapKomi.setSelected(true);
-    if (jo.optString("whiteHandicapBonus", "").contentEquals("N"))
-      rdoHandicapKomiN.setSelected(true);
-    if (jo.optString("whiteHandicapBonus", "").contentEquals("N-1"))
-      rdoHandicapKomiN1.setSelected(true);
-
-    if (jo.optString("tax", "").contentEquals("NONE")) rdoNoTax.setSelected(true);
-    if (jo.optString("tax", "").contentEquals("ALL")) rdoAllTax.setSelected(true);
-    if (jo.optString("tax", "").contentEquals("SEKI")) rdoSeKiTax.setSelected(true);
+    editor.apply(jo);
   }
 
   String statusText() {
     return lblStatus.getText();
+  }
+
+  String komiHintText() {
+    return lblKomiHint.getText();
+  }
+
+  /** Hints when the current game's komi differs from KataGo's default for the edited rules. */
+  private void refreshKomiHint() {
+    lblKomiHint.setText(currentKomiHint());
+  }
+
+  private String currentKomiHint() {
+    if (Lizzie.board == null) return "";
+    GameInfo game = Lizzie.board.getHistory().getGameInfo();
+    if (game.getHandicap() > 0) return "";
+    OptionalDouble conventional = rulesFromEditor().defaultKomi();
+    if (conventional.isEmpty() || conventional.getAsDouble() == game.getKomi()) return "";
+    return formatKomiHint(game.getKomi(), conventional.getAsDouble());
+  }
+
+  private String formatKomiHint(double current, double conventional) {
+    return MessageFormat.format(
+        resourceBundle.getString("SetKataRules.komiConventionHint"),
+        String.valueOf(current),
+        String.valueOf(conventional));
   }
 
   void refreshStatus() {
