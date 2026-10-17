@@ -7,7 +7,6 @@ import featurecat.lizzie.enginegame.EngineGamePresentation;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.rules.Board;
-import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.DocType;
 import featurecat.lizzie.util.Utils;
@@ -371,15 +370,7 @@ public class GtpConsolePane extends JDialog {
         if (color == Stone.EMPTY) {
           wrongParameters();
         } else if (!Lizzie.leelaz.isThinking) {
-          BoardData position = Lizzie.board.getData();
-          boolean previousBlackToPlay = position.blackToPlay;
-          boolean accepted = false;
-          position.blackToPlay = color == Stone.BLACK;
-          try {
-            accepted = Lizzie.leelaz.genmove(color == Stone.BLACK ? "b" : "w", true);
-          } finally {
-            if (!accepted) position.blackToPlay = previousBlackToPlay;
-          }
+          Lizzie.leelaz.genmove(color == Stone.BLACK ? "b" : "w", true);
         }
       } else if ("showboard".equals(commandName)) {
         if (moveParams.length != 1) wrongParameters();

@@ -255,7 +255,7 @@ class GtpConsoleCommandTest {
   }
 
   @Test
-  void genmoveValidatesColorAndRestoresTurnOnAdmissionFailure() throws Exception {
+  void genmoveValidatesColorWithoutChangingParentTurn() throws Exception {
     rules.current().getData().blackToPlay = false;
     engine.acceptGenmove = false;
     submit("genmove BLACK");
@@ -263,7 +263,7 @@ class GtpConsoleCommandTest {
     assertEquals(List.of("genmove b"), engine.commands);
     engine.acceptGenmove = true;
     submit("genmove BLACK");
-    assertTrue(rules.current().getData().blackToPlay);
+    assertFalse(rules.current().getData().blackToPlay);
   }
 
   @Test

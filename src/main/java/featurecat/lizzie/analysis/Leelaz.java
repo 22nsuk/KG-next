@@ -519,7 +519,7 @@ public class Leelaz {
   public double heatScore;
   private boolean heatCanGetPolicy;
   private boolean heatCanGetOwnership;
-  private Object manualGenmoveRequestOwner;
+  private volatile ManualGenmoveRequest manualGenmoveRequestOwner;
 
   private boolean canheatRedraw = false;
   public ArrayList<Double> heatPolicy = new ArrayList<Double>();
@@ -8049,7 +8049,7 @@ public class Leelaz {
           isThinking = false;
           return;
         }
-        if (isInputCommand) {
+        if (isInputCommand && manualGenmoveRequestOwner == null) {
           //	getGenmoveInfoPrevious = true;
           Lizzie.board.place(params[1]);
           if (isPondering) ponder();
@@ -8102,7 +8102,7 @@ public class Leelaz {
           YikeSyncDebugLog.log("Leelaz marked isPondering=false after engine play line");
         }
         isThinking = false;
-        if (isInputCommand) {
+        if (isInputCommand && manualGenmoveRequestOwner == null) {
           isInputCommand = false;
         }
       } else if (line.startsWith("=")) {
@@ -8122,7 +8122,7 @@ public class Leelaz {
             }
           }
         }
-        if (isInputCommand) {
+        if (isInputCommand && manualGenmoveRequestOwner == null) {
           //	getGenmoveInfoPrevious = true;
           Lizzie.board.place(params[1]);
           if (isPondering) ponder();
@@ -8154,8 +8154,8 @@ public class Leelaz {
             }
           }
           Lizzie.frame.refresh();
-        } else if (isThinking && !isPondering) {
-          if (isInputCommand) {
+        } else if (isThinking && !isPondering && manualGenmoveRequestOwner == null) {
+          if (isInputCommand && manualGenmoveRequestOwner == null) {
             Lizzie.board.place(params[1]);
             togglePonder();
           }
@@ -8196,7 +8196,7 @@ public class Leelaz {
             if (!Lizzie.config.playponder) Lizzie.leelaz.nameCmdfornoponder();
           }
           isThinking = false;
-          if (isInputCommand) {
+          if (isInputCommand && manualGenmoveRequestOwner == null) {
             isInputCommand = false;
           }
         }
@@ -10248,6 +10248,11 @@ public class Leelaz {
           endReaderLine(binding);
           continue;
         }
+        if (dispatchManualGenmoveLine(binding, line)) {
+          lineInProgress = false;
+          endReaderLine(binding);
+          continue;
+        }
         if (shouldQuarantineUnmatchedStrictResponseCarrier(line, binding)) {
           // An exact engine-game or parameter-read request owns this terminal frame until its
           // matching numbered response arrives. Do not let an unframed or wrong-id predecessor
@@ -11294,6 +11299,7 @@ public class Leelaz {
     }
     ReaderStreamBinding binding = currentReaderStreamBinding();
     if (dispatchMoveFocusLine(binding, line)) return;
+    if (dispatchManualGenmoveLine(binding, line)) return;
     if (shouldQuarantineUnmatchedStrictResponseCarrier(line, binding)) {
       isCommandLine = false;
       return;
@@ -13358,6 +13364,12 @@ public class Leelaz {
                 "analysis/state output is blocked by an unrelated game or recovery owner");
           }
         }
+        if (queuedCommand.onResponse instanceof ManualGenmoveRequest
+            && !((ManualGenmoveRequest) queuedCommand.onResponse).validBeforeWrite()) {
+          queuedCommand.cancelBeforeOutputWrite(new IllegalStateException("Manual genmove target changed"));
+          finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
+          return null;
+        }
         if (!queuedCommand.beginOutputWrite()) {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
@@ -14069,6 +14081,7 @@ public class Leelaz {
     return handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler
         || (queuedCommand != null && queuedCommand.positionResponseTimeout != null)
         || handler instanceof EngineGameResponseHandler
+        || handler instanceof ManualGenmoveRequest
         || handler instanceof EngineGameTimeLeftResponseHandler
         || handler instanceof EngineRulesResponseHandler
         || (queuedCommand != null
@@ -14095,7 +14108,7 @@ public class Leelaz {
     if (handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler) {
       return boardSynchronizationResponseCommandIds.getAndIncrement();
     }
-    if (handler instanceof EngineGameResponseHandler) {
+    if (handler instanceof EngineGameResponseHandler || handler instanceof ManualGenmoveRequest) {
       return engineGameResponseCommandIds.getAndIncrement();
     }
     if (handler instanceof EngineGameTimeLeftResponseHandler) {
@@ -19893,20 +19906,17 @@ public class Leelaz {
             : "");
   }
 
-  public synchronized void genmove(String color) {
+  public void genmove(String color) {
     genmove(color, false);
   }
 
-  public synchronized boolean genmove(String color, boolean inputCommand) {
+  public boolean genmove(String color, boolean inputCommand) {
     boolean manualRequest =
         inputCommand
             && (Lizzie.frame == null
                 || (!Lizzie.frame.isPlayingAgainstLeelaz
                     && !Lizzie.frame.isAnaPlayingAgainstLeelaz));
-    if (rejectNewExclusiveWorkDuringGtpLease()) {
-      return false;
-    }
-    sendPlayingAgainstHumanTimeLeftBeforeGenmove();
+    if (rejectNewExclusiveWorkDuringGtpLease()) return false;
     String command =
         (this.isKatago
             ? ("kata-genmove_analyze " + color + " " + getInterval() + addKataTag())
@@ -19916,60 +19926,197 @@ public class Leelaz {
                     ? ("lz-genmove_analyze " + color + " " + getInterval())
                     : ("genmove " + color))));
     if (manualRequest) {
-      Object requestOwner = new Object();
-      QueuedCommandSettlement settlement =
-          new QueuedCommandSettlement() {
-            @Override
-            public void onWriteClaimed() {
-              synchronized (Leelaz.this) {
-                manualGenmoveRequestOwner = requestOwner;
-                isInputCommand = true;
-                isThinking = true;
-              }
-              LizzieFrame.menu.toggleEngineMenuStatus(false, true);
-            }
-
-            @Override
-            public void onRequestFailed(RuntimeException failure) {
-              boolean cleared;
-              synchronized (Leelaz.this) {
-                cleared = manualGenmoveRequestOwner == requestOwner;
-                if (cleared) {
-                  manualGenmoveRequestOwner = null;
-                  isInputCommand = false;
-                  isThinking = false;
-                }
-              }
-              if (cleared) {
-                LizzieFrame.menu.toggleEngineMenuStatus(false, false);
-              }
-            }
-
-            @Override
-            public void onResponseSettled() {
-              synchronized (Leelaz.this) {
-                if (manualGenmoveRequestOwner == requestOwner) {
-                  manualGenmoveRequestOwner = null;
-                }
-              }
-            }
-          };
-      return sendCommand(
-          command,
-          null,
-          null,
-          false,
-          true,
-          settlement,
-          true);
+      Stone requestedColor = "b".equalsIgnoreCase(color) ? Stone.BLACK
+          : "w".equalsIgnoreCase(color) ? Stone.WHITE : Stone.EMPTY;
+      Board board = Lizzie.board;
+      if (requestedColor == Stone.EMPTY || board == null || this != Lizzie.leelaz) return false;
+      ManualGenmoveRequest request = new ManualGenmoveRequest(board, requestedColor, command);
+      synchronized (this) {
+        if (manualGenmoveRequestOwner != null || isThinking) return false;
+        manualGenmoveRequestOwner = request;
+        isThinking = true;
+      }
+      boolean accepted = false;
+      try {
+        accepted = sendCommand(command, request, null, false, false, request, true, request.binding);
+        return accepted;
+      } finally {
+        if (!accepted) request.onRequestFailed(new IllegalStateException("Manual genmove rejected"));
+      }
     }
-    if (inputCommand) {
-      isInputCommand = true;
+    synchronized (this) {
+      if (manualGenmoveRequestOwner != null) return false;
+      sendPlayingAgainstHumanTimeLeftBeforeGenmove();
+      if (inputCommand) isInputCommand = true;
+      sendCommand(command);
+      isThinking = true;
+      LizzieFrame.menu.toggleEngineMenuStatus(false, true);
+      return true;
     }
-    sendCommand(command);
-    isThinking = true;
-    LizzieFrame.menu.toggleEngineMenuStatus(false, true);
-    return true;
+  }
+
+  /** One console move owns its numbered response through the terminating blank line. */
+  private final class ManualGenmoveRequest implements Runnable, QueuedCommandSettlement {
+    private final Board board;
+    private final BoardHistoryNode node;
+    private final long revision;
+    private final Stone color;
+    private final ReaderStreamBinding binding;
+    private final EngineManager manager;
+    private final Leelaz mirror;
+    private final ReaderStreamBinding mirrorBinding;
+    private final long primaryGeneration;
+    private final boolean analyzeStream;
+    private final AtomicBoolean settled = new AtomicBoolean();
+    private boolean headerSeen;
+    private String terminalResponse;
+
+    private ManualGenmoveRequest(Board board, Stone color, String command) {
+      this.board = board;
+      this.color = color;
+      this.binding = currentReaderStreamBinding();
+      this.manager = Lizzie.engineManager;
+      this.mirror = activeComparisonEngine();
+      this.mirrorBinding = mirror == null ? null : mirror.currentReaderStreamBinding();
+      this.primaryGeneration = Lizzie.capturePrimaryEngineGeneration(Leelaz.this);
+      this.analyzeStream = isAnalyzeStyleEngineGameGenmove(command);
+      synchronized (board) {
+        this.node = board.getHistory().getCurrentHistoryNode();
+        this.revision = board.getContextRevision();
+      }
+    }
+
+    private boolean isCurrentTarget(BoardHistoryNode expectedNode, long expectedRevision) {
+      return isCurrentLiveEngineIncarnation(binding)
+          && primaryGeneration >= 0
+          && primaryGeneration == Lizzie.capturePrimaryEngineGeneration(Leelaz.this)
+          && manager == Lizzie.engineManager && board == Lizzie.board
+          && expectedRevision == board.getContextRevision()
+          && expectedNode == board.getHistory().getCurrentHistoryNode();
+    }
+
+    private boolean validBeforeWrite() {
+      return !settled.get() && manualGenmoveRequestOwner == this && isCurrentTarget(node, revision);
+    }
+
+    @Override
+    public void onWriteClaimed() {
+      synchronized (Leelaz.this) {
+        if (settled.get() || manualGenmoveRequestOwner != this)
+          throw new IllegalStateException("Manual genmove retired before output write");
+        isInputCommand = true;
+        if (LizzieFrame.menu != null) LizzieFrame.menu.toggleEngineMenuStatus(false, true);
+      }
+    }
+
+    @Override
+    public void onRequestFailed(RuntimeException failure) {
+      if (settled.compareAndSet(false, true)) clearOwner();
+    }
+
+    @Override
+    public void onResponseSettled() {
+      // Diagnostics can fail after the pending carrier was removed but before run().
+      onRequestFailed(new IllegalStateException("Manual genmove response settled without a move"));
+    }
+
+    private void clearOwner() {
+      synchronized (Leelaz.this) {
+        if (manualGenmoveRequestOwner == this) {
+          manualGenmoveRequestOwner = null;
+          isInputCommand = false;
+          isThinking = false;
+          if (Leelaz.this == Lizzie.leelaz && LizzieFrame.menu != null)
+            LizzieFrame.menu.toggleEngineMenuStatus(isPondering, false);
+        }
+      }
+    }
+
+    @Override
+    public void run() {
+      if (!settled.compareAndSet(false, true)) return;
+      try {
+        if (currentCommandResponseError) return;
+        String move = gtpResponsePayload(currentCommandResponseLine);
+        if (move.equalsIgnoreCase("resign")) return;
+        boolean pass = move.equalsIgnoreCase("pass");
+        Optional<int[]> coordinates = pass ? Optional.empty() : Board.asCoordinates(move);
+        if (!pass && (coordinates.isEmpty() || !Board.isValid(coordinates.get())
+            || !Board.convertCoordinatesToName(coordinates.get()[0], coordinates.get()[1]).equalsIgnoreCase(move))) return;
+        BoardHistoryNode committed;
+        long committedRevision;
+        // Freeze selection and this reader without holding endpoint locks across Board/UI calls.
+        try (Lizzie.EngineAuthorityPresentationLease authority =
+                Lizzie.claimEngineAuthorityPresentation(board, manager, Leelaz.this, primaryGeneration);
+            EngineIncarnationLease incarnation = claimEngineIncarnationLease(binding)) {
+          if (authority == null || incarnation == null) return;
+          synchronized (board) {
+            if (!isCurrentLiveEngineIncarnation(binding) || manualGenmoveRequestOwner != this
+                || board != Lizzie.board || revision != board.getContextRevision()
+                || node != board.getHistory().getCurrentHistoryNode()) return;
+            if (pass) board.pass(color);
+            else board.place(coordinates.get()[0], coordinates.get()[1], color);
+            committed = board.getHistory().getCurrentHistoryNode();
+            committedRevision = board.getContextRevision();
+          }
+        }
+        // Never hold the global authority lease through transport output/flush.
+        if (committed != node && isCurrentTarget(committed, committedRevision)) {
+          if (mirror != null && activeComparisonEngine() == mirror) {
+            mirror.sendCommandNoLeelaz2(
+                "play " + (color == Stone.BLACK ? "B" : "W") + " " + move,
+                null, mirrorBinding, null);
+          }
+          // A slow mirror flush may have yielded to navigation or engine replacement.
+          if (isCurrentTarget(committed, committedRevision)) {
+            if (isPondering) ponder();
+            else sendCommandNoLeelaz2(isKatago ? "stop" : "name", null, binding, null);
+          }
+        }
+      } finally {
+        clearOwner();
+      }
+    }
+  }
+
+  private boolean dispatchManualGenmoveLine(ReaderStreamBinding binding, String line) {
+    ManualGenmoveRequest request = manualGenmoveRequestOwner;
+    if (request == null || request.binding != binding || binding.terminated) return false;
+    PendingResponseHandler pending = peekPendingResponseHandler(line);
+    if ((line.startsWith("=") || line.startsWith("?"))
+        && pending != null && pending.handler == request) {
+      displayManualGenmoveLine(line);
+      if (request.headerSeen) return true;
+      request.headerSeen = true;
+      if (line.startsWith("?") || !request.analyzeStream || !gtpResponsePayload(line).isEmpty())
+        request.terminalResponse = line;
+      return true;
+    }
+    if (line.equals("play") || line.startsWith("play ")) {
+      displayManualGenmoveLine(line);
+      if (request.headerSeen && request.analyzeStream && request.terminalResponse == null) {
+        String[] parts = line.trim().split("\\s+");
+        int id = pendingResponseCommandIdFor(request);
+        request.terminalResponse = parts.length == 2 ? "=" + id + " " + parts[1]
+            : "?" + id + " Invalid genmove terminal";
+      }
+      return true;
+    }
+    if (line.trim().isEmpty() && request.headerSeen) {
+      displayManualGenmoveLine(line);
+      String terminal = request.terminalResponse;
+      if (terminal == null)
+        terminal = "?" + pendingResponseCommandIdFor(request) + " Genmove ended without a move";
+      processCommandResponseLine(terminal, binding);
+      return true;
+    }
+    return false;
+  }
+
+  private void displayManualGenmoveLine(String line) {
+    if (Lizzie.gtpConsole != null
+        && (Lizzie.gtpConsole.isVisible() || Lizzie.config.alwaysGtp || !isLoaded))
+      Lizzie.gtpConsole.addLine(line + "\n");
   }
 
   private static final class ReadBoardGmaRuntimeParam {

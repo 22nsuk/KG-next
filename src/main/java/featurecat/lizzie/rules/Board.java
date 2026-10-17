@@ -2619,7 +2619,8 @@ public class Board {
         // redo's
         history.next();
         if (Lizzie.config.playSound) Utils.playVoiceFile();
-        if (!engineGamePlaying()) feedEngineForMainlineMove(color, "pass");
+        if (!engineGamePlaying() && (Lizzie.leelaz == null || !Lizzie.leelaz.isInputCommand))
+          feedEngineForMainlineMove(color, "pass");
 
         if (Lizzie.leelaz != null
             && Lizzie.frame.isPlayingAgainstLeelaz
