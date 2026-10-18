@@ -24,6 +24,9 @@ import java.util.UUID;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.function.Supplier;
 import org.java_websocket.WebSocket;
 import org.json.JSONObject;
 
@@ -31,6 +34,9 @@ public class WebBoardManager {
   private static final SecureRandom TOKENS = new SecureRandom();
   private static final int START_TIMEOUT_MS = 5000;
   private final Object lifecycleLock = new Object();
+  // Serialize trial transitions and their effects without tree/manager monitors during callbacks.
+  // Nested state locks follow Board -> history -> manager; state-only reads use manager alone.
+  private final Object trialTransitionLock = new Object();
   private static final long IDLE_TIMEOUT_MS = 5 * 60 * 1000L;
 
   @FunctionalInterface
@@ -221,14 +227,16 @@ public class WebBoardManager {
         data = new WebBoardDataCollector();
         data.setServer(socket);
         http.setWsPort(socket.getPort());
-        synchronized (this) {
-          httpServer = http;
-          collector = data;
-          actualHttpPort = http.getPort();
-          actualWsPort = socket.getPort();
-          attachWebSocketServer(socket);
-          accessUrl = "http://" + getLanIp() + ":" + actualHttpPort;
-          running = true;
+        synchronized (trialTransitionLock) {
+          synchronized (this) {
+            httpServer = http;
+            collector = data;
+            actualHttpPort = http.getPort();
+            actualWsPort = socket.getPort();
+            attachWebSocketServer(socket);
+            accessUrl = "http://" + getLanIp() + ":" + actualHttpPort;
+            running = true;
+          }
           publishTrialState();
         }
         started = true;
@@ -302,30 +310,33 @@ public class WebBoardManager {
     }
   }
 
-  private synchronized void handleClientMessage(
+  private void handleClientMessage(
       WebBoardServer source, WebSocket connection, JSONObject message) {
-    if (!currentConnection(source, connection)) return;
-    String type = message.optString("type");
-    if (!isTrialCommand(type)) return;
-    String clientId = message.optString("clientId");
-    if (clientId.isBlank() || clientId.length() > 128) return;
-    if (!"enter_trial".equals(type) && !"resume_trial".equals(type)) {
-      if (!authorizedCommand(activeSession, source, connection, message)) return;
-      // An invalidated board blocks edits, not the authenticated owner's ability to exit.
-      if (!"exit_trial".equals(type) && !validTrialBoard(activeSession)) return;
-      if ("trial_move".equals(type)
-          && !validTrialCoordinates(activeSession,
-              trialCoordinate(message, "x"), trialCoordinate(message, "y"))) return;
-      if ("trial_navigate".equals(type)) {
-        if (message.has("childIndex")) {
-          if (trialCoordinate(message, "childIndex") < 0) return;
-        } else if (!"back".equals(message.optString("direction"))
-            && !"forward".equals(message.optString("direction"))) return;
+    synchronized (this) {
+      if (!currentConnection(source, connection)) return;
+      String type = message.optString("type");
+      if (!isTrialCommand(type)) return;
+      String clientId = message.optString("clientId");
+      if (clientId.isBlank() || clientId.length() > 128) return;
+      if (!"enter_trial".equals(type) && !"resume_trial".equals(type)) {
+        if (!authorizedCommand(activeSession, source, connection, message)) return;
+        // An invalidated board blocks edits, not the authenticated owner's ability to exit.
+        if (!"exit_trial".equals(type) && !validTrialBoard(activeSession)) return;
+        if ("trial_move".equals(type)
+            && !validTrialCoordinates(activeSession,
+                trialCoordinate(message, "x"), trialCoordinate(message, "y"))) return;
+        if ("trial_navigate".equals(type)) {
+          if (message.has("childIndex")) {
+            if (trialCoordinate(message, "childIndex") < 0) return;
+          } else if (!"back".equals(message.optString("direction"))
+              && !"forward".equals(message.optString("direction"))) return;
+        }
       }
     }
     // One FIFO hop for ALL network commands, including enter/exit/navigation. Never queue a
     // second move behind a later reset. The production TrialEvents uses the collector's single
     // executor; synchronous desktop force-exit can still invalidate queued session commands.
+    // An executor may run inline; never enter the transition/tree locks with this monitor held.
     trialEvents.execute(() -> processClientMessage(source, connection, message));
   }
 
@@ -343,11 +354,14 @@ public class WebBoardManager {
       WebBoardServer source, WebSocket connection, JSONObject message) {
     String type = message.optString("type");
     String clientId = message.optString("clientId");
-    if (!"enter_trial".equals(type)) {
-      synchronized (this) {
-        if (!currentConnection(source, connection)) return;
-        TrialSession session = activeSession;
-        if ("resume_trial".equals(type)) {
+    if ("resume_trial".equals(type)) {
+      synchronized (trialTransitionLock) {
+        TrialSession session;
+        String deniedReason = null;
+        String deniedOwner = "";
+        synchronized (this) {
+          if (!currentConnection(source, connection)) return;
+          session = activeSession;
           if (session == null || session.ownerServer != source
               || !session.ownerClientId.equals(clientId)
               || !session.sessionId.equals(message.optString("sessionId"))
@@ -355,33 +369,45 @@ public class WebBoardManager {
               || message.optString("resumeToken").length() != 43
               || !MessageDigest.isEqual(session.resumeToken.getBytes(StandardCharsets.US_ASCII),
                   message.optString("resumeToken").getBytes(StandardCharsets.US_ASCII))) {
-            denyTrial(source, connection, "expired", "");
-            return;
+            deniedReason = "expired";
+          } else if (session.ownerConnection != connection && session.ownerConnection.isOpen()) {
+            deniedReason = "in_use";
+            deniedOwner = session.ownerClientId;
+          } else {
+            session.ownerConnection = connection;
+            session.resumeToken = newResumeToken();
           }
-          if (session.ownerConnection != connection && session.ownerConnection.isOpen()) {
-            denyTrial(source, connection, "in_use", session.ownerClientId);
-            return;
-          }
-          session.ownerConnection = connection;
-          session.resumeToken = newResumeToken();
+        }
+        if (deniedReason != null) {
+          denyTrial(source, connection, deniedReason, deniedOwner);
+        } else {
           touchActivity(session);
           publishTrialState();
           grantTrial(source, connection, session);
-        } else if (authorizedCommand(session, source, connection, message)
-            && ("exit_trial".equals(type) || validTrialBoard(session))) {
-          handleTrialCommand(message);
         }
       }
       return;
     }
+    if (!"enter_trial".equals(type)) {
+      transitionTrial(
+          session -> currentConnection(source, connection)
+              && authorizedCommand(session, source, connection, message)
+              && ("exit_trial".equals(type) || validTrialBoard(session)),
+          session -> handleTrialCommand(session, message));
+      return;
+    }
 
+    // A replaced board cannot be resumed. Retire its reservation before admitting a new trial.
+    transitionTrial(
+        session -> currentConnection(source, connection) && !validTrialBoard(session),
+        this::endTrial);
     Board capturedBoard;
     BoardHistoryNode anchor;
     synchronized (this) {
       if (!currentConnection(source, connection) || Lizzie.board == null) return;
-      // A replaced board cannot be resumed. Retire its reservation before admitting a new trial.
-      if (activeSession != null && !validTrialBoard(activeSession)) endTrial();
       capturedBoard = Lizzie.board;
+    }
+    synchronized (capturedBoard) {
       anchor = capturedBoard.getHistory().getCurrentHistoryNode();
     }
     // Engine admission must remain outside the manager monitor (engine -> manager lock order).
@@ -392,13 +418,15 @@ public class WebBoardManager {
           result.kind() == TrialEnterResult.Kind.IN_USE ? "in_use" : "engine_busy",
           result.capturedOwnerClientId());
     } else {
-      synchronized (this) {
-        TrialSession session = activeSession;
-        if (currentConnection(source, connection) && session != null
-            && session.ownerConnection == connection) {
-          publishTrialState();
-          grantTrial(source, connection, session);
+      synchronized (trialTransitionLock) {
+        TrialSession session;
+        synchronized (this) {
+          session = activeSession;
+          if (!currentConnection(source, connection) || session == null
+              || session.ownerConnection != connection) return;
         }
+        publishTrialState();
+        grantTrial(source, connection, session);
       }
     }
   }
@@ -428,35 +456,18 @@ public class WebBoardManager {
         .put("reason", reason).put("ownerClientId", owner).toString());
   }
 
-  /** Existing-session commands and their publications share the same state-transition lock. */
-  private void handleTrialCommand(JSONObject msg) {
-    switch (msg.optString("type")) {
-      case "exit_trial":
-        exitTrial(msg.optString("clientId"));
-        break;
-      case "trial_move":
-        {
-          int x = trialCoordinate(msg, "x");
-          int y = trialCoordinate(msg, "y");
-          if (x < 0 || y < 0) return;
-          applyTrialMove(msg.optString("clientId"), x, y);
-          break;
-        }
-      case "trial_navigate":
-        if (msg.has("childIndex")) {
-          int childIndex = trialCoordinate(msg, "childIndex");
-          if (childIndex < 0) return;
-          trialNavigateForward(msg.optString("clientId"), childIndex);
-        } else {
-          trialNavigate(msg.optString("clientId"), msg.optString("direction"));
-        }
-        break;
-      case "trial_reset":
-        trialReset(msg.optString("clientId"));
-        break;
-      default:
-        // unknown type — ignore
-    }
+  /** The dispatcher commits one local transition, then runs its effects after releasing the tree. */
+  private TrialChange handleTrialCommand(TrialSession session, JSONObject msg) {
+    return switch (msg.optString("type")) {
+      case "exit_trial" -> endTrial(session);
+      case "trial_move" -> applyTrialMove(session,
+          trialCoordinate(msg, "x"), trialCoordinate(msg, "y"));
+      case "trial_navigate" -> msg.has("childIndex")
+          ? trialNavigateForward(session, trialCoordinate(msg, "childIndex"))
+          : trialNavigate(session, msg.optString("direction"));
+      case "trial_reset" -> trialReset(session);
+      default -> TrialChange.NONE;
+    };
   }
 
   private static int trialCoordinate(JSONObject message, String key) {
@@ -481,15 +492,19 @@ public class WebBoardManager {
       WebBoardHttpServer http = httpServer;
       WebBoardDataCollector data = collector;
       try {
-        synchronized (this) {
-          if (socket != null) socket.setMessageHandler(null);
-          wsServer = null; // Invalidate old callbacks before waiting for server threads.
+        synchronized (trialTransitionLock) {
+          synchronized (this) {
+            if (socket != null) socket.setMessageHandler(null);
+            wsServer = null; // Invalidate old callbacks before waiting for server threads.
+          }
           try {
             forceExitTrial();
           } finally {
-            collector = null;
-            httpServer = null;
-            resetPublishedServerState();
+            synchronized (this) {
+              collector = null;
+              httpServer = null;
+              resetPublishedServerState();
+            }
           }
         }
       } finally {
@@ -574,7 +589,30 @@ public class WebBoardManager {
   }
 
   public TrialEnterResult enterTrialWithResult(String clientId, BoardHistoryNode anchor) {
-    return enterTrialWithResult(clientId, anchor, null, null, null);
+    Board board = Lizzie.board;
+    Board source = null;
+    if (board != null) {
+      synchronized (board) {
+        BoardHistoryList history = board.getHistory();
+        synchronized (history) {
+          if (belongsToHistory(history, anchor)) source = board;
+        }
+      }
+    }
+    return enterTrialWithResult(clientId, anchor, source, null, null);
+  }
+
+  private static boolean belongsToHistory(BoardHistoryList history, BoardHistoryNode anchor) {
+    BoardHistoryNode root = anchor;
+    while (true) {
+      Optional<BoardHistoryNode> previous = root.previous();
+      // addOrGoto(changeMove=true) clears the displaced node's parent to null, not Optional.empty.
+      if (previous == null) return false;
+      if (previous.isEmpty()) return root == history.getStart();
+      BoardHistoryNode parent = previous.orElseThrow();
+      if (!parent.variations.contains(root)) return false;
+      root = parent;
+    }
   }
 
   TrialEnterResult enterTrialWithResult(
@@ -604,38 +642,40 @@ public class WebBoardManager {
     }
     boolean reservationClosed = false;
     try {
-      synchronized (this) {
-        if (activeSession != null) {
-          return sameTrialOwner(activeSession, clientId, capturedServer, capturedConnection)
-              ? TrialEnterResult.IDEMPOTENT
-              : TrialEnterResult.inUse(activeSession.ownerClientId);
-        }
-        if (desktopPlayingProbe.getAsBoolean()
-            || Lizzie.leelaz != capturedEngine
-            || (capturedServer != null && !currentConnection(capturedServer, capturedConnection))
-            || (capturedBoard != null
-                && (Lizzie.board != capturedBoard
-                    || capturedBoard.getHistory().getCurrentHistoryNode() != anchor))) {
-          return TrialEnterResult.ENGINE_BUSY;
-        }
+      synchronized (trialTransitionLock) {
         TrialSession session = new TrialSession(clientId, anchor, capturedBoard);
         session.ownerServer = capturedServer;
         session.ownerConnection = capturedConnection;
         session.resumeToken = capturedConnection == null ? null : newResumeToken();
-        // 试下子要走分叉而非接续 mainline。若 anchor 是 mainline 末端（无主线下一手），
-        // 先插一个 dummy 占据 variations[0]，让后续试下子永远 add 到 index>=1。
-        // ReadBoard 同步推进 mainline 时会识别 dummy 并把它替换走（line ~1035），互不干扰。
-        if (anchor.variations.isEmpty()) {
-          BoardData dummyData = anchor.getData().clone();
-          dummyData.dummy = true;
-          // 清掉 lastMove，否则 BoardRenderer 画 variations[0] 的 ghost 时会落在 anchor 真实棋子位置。
-          dummyData.lastMove = java.util.Optional.empty();
-          BoardHistoryNode dummy = new BoardHistoryNode(dummyData);
-          anchor.variations.add(dummy);
-          anchor.setPreviousForChild(dummy);
-          session.mainlineDummy = dummy;
-        }
-        activeSession = session;
+        TrialEnterResult result = withTrialHistory(session, () -> {
+          if (activeSession != null) {
+            return sameTrialOwner(activeSession, clientId, capturedServer, capturedConnection)
+                ? TrialEnterResult.IDEMPOTENT
+                : TrialEnterResult.inUse(activeSession.ownerClientId);
+          }
+          if (desktopPlayingProbe.getAsBoolean()
+              || Lizzie.leelaz != capturedEngine
+              || (capturedServer != null && !currentConnection(capturedServer, capturedConnection))
+              || (capturedBoard != null
+                  && (Lizzie.board != capturedBoard
+                      || capturedBoard.getHistory() != session.sourceHistory
+                      || !belongsToHistory(session.sourceHistory, anchor)
+                      || (capturedServer != null
+                          && session.sourceHistory.getCurrentHistoryNode() != anchor)))) {
+            return TrialEnterResult.ENGINE_BUSY;
+          }
+          // Reserve variations[0] for the real mainline. ReadBoard replaces this terminal dummy
+          // when that line advances; trial moves remain variations[1+] after trial exit and save.
+          if (anchor.variations.isEmpty()) {
+            BoardHistoryNode dummy = new BoardHistoryNode(mainlinePlaceholder(anchor.getData()));
+            anchor.variations.add(dummy);
+            anchor.setPreviousForChild(dummy);
+            session.mainlineDummy = dummy;
+          }
+          activeSession = session;
+          return TrialEnterResult.ENTERED;
+        });
+        if (result != TrialEnterResult.ENTERED) return result;
         applyOverrideAndRefresh(anchor);
         scheduleIdleTimeout(session);
         EngineFollowController controller = engineController;
@@ -653,6 +693,20 @@ public class WebBoardManager {
     }
   }
 
+  private static BoardData mainlinePlaceholder(BoardData anchor) {
+    // Clearing a cloned MOVE's coordinates violates BoardData's MOVE invariant and makes every
+    // later SGF snapshot fail. A dummy is an explicit PASS with no coordinates; it neither plays
+    // a move nor changes the anchor's turn/number, and does not inherit its comment or analysis.
+    BoardData dummy = BoardData.pass(
+        anchor.stones.clone(), anchor.blackToPlay ? Stone.WHITE : Stone.BLACK, anchor.blackToPlay,
+        anchor.zobrist.clone(), anchor.moveNumber,
+        anchor.moveNumberList == null ? null : anchor.moveNumberList.clone(),
+        anchor.blackCaptures, anchor.whiteCaptures, 0, 0);
+    dummy.moveMNNumber = anchor.moveMNNumber;
+    dummy.dummy = true;
+    return dummy;
+  }
+
   private static boolean sameTrialOwner(
       TrialSession session, String clientId, WebBoardServer server, WebSocket connection) {
     return session.ownerClientId.equals(clientId) && session.ownerServer == server
@@ -664,28 +718,73 @@ public class WebBoardManager {
     return activeSession != null || (controller != null && controller.isTrialActive());
   }
 
-  public synchronized void exitTrial(String clientId) {
-    if (activeSession == null || !activeSession.ownerClientId.equals(clientId)) return;
-    endTrial();
+  public void exitTrial(String clientId) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId), this::endTrial);
   }
 
-  public synchronized void forceExitTrial() {
-    if (activeSession == null) return;
-    endTrial();
+  public void forceExitTrial() {
+    transitionTrial(session -> true, this::endTrial);
   }
 
-  /** Called under the manager monitor; only a completed transition publishes an exit. */
-  private void endTrial() {
-    cancelIdleTimer(activeSession);
-    cleanupMainlineDummy(activeSession);
-    activeSession = null;
-    applyOverrideAndRefresh(null);
-    EngineFollowController c = engineController;
-    if (c != null) {
-      BoardHistoryNode tail = mainlineTailSupplier.get();
-      if (tail != null) c.onTrialExit(tail);
+  private enum TrialChange {
+    NONE, ACTIVITY, DISPLAY, EXIT
+  }
+
+  private void transitionTrial(
+      Predicate<TrialSession> authorized, Function<TrialSession, TrialChange> update) {
+    synchronized (trialTransitionLock) {
+      TrialSession session = activeSession;
+      if (session == null) return;
+      TrialChange change = withTrialHistory(session,
+          () -> activeSession == session && authorized.test(session)
+              ? update.apply(session) : TrialChange.NONE);
+      // Keep callbacks in transition order, but never let them retain Board/history or manager.
+      if (change == TrialChange.EXIT) {
+        cancelIdleTimer(session);
+        applyOverrideAndRefresh(null);
+        EngineFollowController controller = engineController;
+        if (controller != null) {
+          BoardHistoryNode tail = mainlineTailSupplier.get();
+          if (tail != null) controller.onTrialExit(tail);
+        }
+        publishTrialState();
+      } else {
+        if (change == TrialChange.DISPLAY) {
+          applyOverrideAndRefresh(session.displayNode);
+          EngineFollowController controller = engineController;
+          if (controller != null) controller.onTrialDisplayNodeChanged(session.displayNode);
+          publishTrialState();
+        }
+        if (change != TrialChange.NONE) touchActivity(session);
+      }
     }
-    publishTrialState();
+  }
+
+  /**
+   * A live trial shares Board's render lock and the history's SGF capture lock, in desktop move
+   * order. Detached API anchors have no live history reader. Callers own the transition gate and
+   * acquire the manager monitor last, so waiting for a snapshot never blocks manager-only reads.
+   */
+  private <T> T withTrialHistory(TrialSession session, Supplier<T> update) {
+    if (session.sourceBoard != null) {
+      synchronized (session.sourceBoard) {
+        synchronized (session.sourceHistory) {
+          synchronized (this) {
+            return update.get();
+          }
+        }
+      }
+    }
+    synchronized (this) {
+      return update.get();
+    }
+  }
+
+  /** Called with the tree and manager monitors; effects follow after the tree is released. */
+  private TrialChange endTrial(TrialSession session) {
+    cleanupMainlineDummy(session);
+    activeSession = null;
+    return TrialChange.EXIT;
   }
 
   private void publishTrialState() {
@@ -717,11 +816,14 @@ public class WebBoardManager {
     s.mainlineDummy = null;
   }
 
-  public synchronized void applyTrialMove(String clientId, int x, int y) {
-    TrialSession s = activeSession;
-    if (s == null || !s.ownerClientId.equals(clientId) || !validTrialCoordinates(s, x, y)) return;
-    doApplyMove(s, x, y);
-    touchActivity(s);
+  public void applyTrialMove(String clientId, int x, int y) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId),
+        session -> applyTrialMove(session, x, y));
+  }
+
+  private TrialChange applyTrialMove(TrialSession session, int x, int y) {
+    if (!validTrialCoordinates(session, x, y)) return TrialChange.NONE;
+    return doApplyMove(session, x, y) ? TrialChange.DISPLAY : TrialChange.ACTIVITY;
   }
 
   private static boolean validTrialCoordinates(TrialSession s, int x, int y) {
@@ -740,13 +842,16 @@ public class WebBoardManager {
         && (data.moveNumberList == null || data.moveNumberList.length == points);
   }
 
-  public synchronized void trialNavigate(String clientId, String direction) {
-    TrialSession s = activeSession;
-    if (s == null || !s.ownerClientId.equals(clientId)) return;
+  public void trialNavigate(String clientId, String direction) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId),
+        session -> trialNavigate(session, direction));
+  }
+
+  private TrialChange trialNavigate(TrialSession s, String direction) {
     if ("back".equals(direction)) {
-      if (s.displayNode == s.anchorNode) return;
+      if (s.displayNode == s.anchorNode) return TrialChange.NONE;
       Optional<BoardHistoryNode> prev = s.displayNode.previous();
-      if (!prev.isPresent()) return;
+      if (!prev.isPresent()) return TrialChange.NONE;
       s.displayNode = prev.get();
     } else if ("forward".equals(direction)) {
       // 跳过 dummy 占位（enter 时插的 mainline 占位 + ReadBoard 同步可能产生的 dummy）
@@ -757,174 +862,143 @@ public class WebBoardManager {
           break;
         }
       }
-      if (firstReal == null) return;
+      if (firstReal == null) return TrialChange.NONE;
       s.displayNode = firstReal;
     } else {
-      return;
+      return TrialChange.NONE;
     }
-    applyOverrideAndRefresh(s.displayNode);
-    {
-      EngineFollowController c = engineController;
-      if (c != null) c.onTrialDisplayNodeChanged(s.displayNode);
-    }
-    publishTrialState();
-    touchActivity(s);
+    return TrialChange.DISPLAY;
   }
 
-  public synchronized void trialNavigateForward(String clientId, int childIndex) {
-    TrialSession s = activeSession;
-    if (s == null || !s.ownerClientId.equals(clientId)) return;
-    if (childIndex < 0 || childIndex >= s.displayNode.variations.size()) return;
+  public void trialNavigateForward(String clientId, int childIndex) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId),
+        session -> trialNavigateForward(session, childIndex));
+  }
+
+  private TrialChange trialNavigateForward(TrialSession s, int childIndex) {
+    if (childIndex < 0 || childIndex >= s.displayNode.variations.size()) return TrialChange.NONE;
     BoardHistoryNode target = s.displayNode.variations.get(childIndex);
-    if (target.getData().dummy) return; // 不允许跳到 dummy 占位
+    if (target.getData().dummy) return TrialChange.NONE; // 不允许跳到 dummy 占位
     s.displayNode = target;
-    applyOverrideAndRefresh(s.displayNode);
-    {
-      EngineFollowController c = engineController;
-      if (c != null) c.onTrialDisplayNodeChanged(s.displayNode);
-    }
-    publishTrialState();
-    touchActivity(s);
+    return TrialChange.DISPLAY;
   }
 
-  public synchronized void trialReset(String clientId) {
-    TrialSession s = activeSession;
-    if (s == null || !s.ownerClientId.equals(clientId)) return;
+  public void trialReset(String clientId) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId), WebBoardManager::trialReset);
+  }
+
+  private static TrialChange trialReset(TrialSession s) {
     s.displayNode = s.anchorNode;
-    applyOverrideAndRefresh(s.anchorNode);
-    {
-      EngineFollowController c = engineController;
-      if (c != null) c.onTrialDisplayNodeChanged(s.anchorNode);
-    }
-    publishTrialState();
-    touchActivity(s);
+    return TrialChange.DISPLAY;
   }
 
-  private void doApplyMove(TrialSession s, int x, int y) {
-    synchronized (this) {
-      // A queued command must still belong to this session and board when it executes.
-      if (activeSession != s || !validTrialCoordinates(s, x, y)) return;
-      BoardHistoryNode parent = s.displayNode;
-      BoardData parentData = parent.getData();
-      // 试下诊断（默认关闭，-Dlizzie.trial.diag=true 打开）：用户落子坐标 + 落子前 displayNode 引擎首选
-      if (featurecat.lizzie.analysis.TrialDiag.ENABLED) {
-        try {
-          String userCoord = featurecat.lizzie.rules.Board.convertCoordinatesToName(x, y);
-          String topEng = "(none)";
-          double topWR = -1;
-          if (parentData.bestMoves != null && !parentData.bestMoves.isEmpty()) {
-            featurecat.lizzie.analysis.MoveData top = parentData.bestMoves.get(0);
-            topEng = top.coordinate;
-            topWR = top.winrate;
-          }
-          System.out.printf(
-              "[trial-apply] parent moveNum=%d blackToPlay=%s userClick=%s engineTop=%s engineTopWR=%.2f%n",
-              parentData.moveNumber, parentData.blackToPlay, userCoord, topEng, topWR);
-        } catch (Exception ignored) {
+  private boolean doApplyMove(TrialSession s, int x, int y) {
+    BoardHistoryNode parent = s.displayNode;
+    BoardData parentData = parent.getData();
+    // 试下诊断（默认关闭，-Dlizzie.trial.diag=true 打开）：用户落子坐标 + 落子前 displayNode 引擎首选
+    if (featurecat.lizzie.analysis.TrialDiag.ENABLED) {
+      try {
+        String userCoord = featurecat.lizzie.rules.Board.convertCoordinatesToName(x, y);
+        String topEng = "(none)";
+        double topWR = -1;
+        if (parentData.bestMoves != null && !parentData.bestMoves.isEmpty()) {
+          featurecat.lizzie.analysis.MoveData top = parentData.bestMoves.get(0);
+          topEng = top.coordinate;
+          topWR = top.winrate;
         }
+        System.out.printf(
+            "[trial-apply] parent moveNum=%d blackToPlay=%s userClick=%s engineTop=%s engineTopWR=%.2f%n",
+            parentData.moveNumber, parentData.blackToPlay, userCoord, topEng, topWR);
+      } catch (Exception ignored) {
       }
-
-      int idx = Board.getIndex(x, y);
-      if (parentData.stones[idx] != Stone.EMPTY) return;
-
-      Stone color = parentData.blackToPlay ? Stone.BLACK : Stone.WHITE;
-
-      // 用 BoardData.move(...) 工厂构造，保证 nodeKind=MOVE、moveNumberList、zobrist 等渲染必须字段齐全
-      Stone[] newStones = parentData.stones.clone();
-      newStones[idx] = color;
-      featurecat.lizzie.rules.Zobrist newZobrist =
-          parentData.zobrist == null ? null : parentData.zobrist.clone();
-      if (newZobrist != null) newZobrist.toggleStone(x, y, color);
-
-      // 提子：移除四邻方向上对方的死子链（与 Board.place 主流程一致）
-      int capturedStones = 0;
-      Stone opp = color.opposite();
-      capturedStones += Board.removeDeadChain(x + 1, y, opp, newStones, newZobrist);
-      capturedStones += Board.removeDeadChain(x, y + 1, opp, newStones, newZobrist);
-      capturedStones += Board.removeDeadChain(x - 1, y, opp, newStones, newZobrist);
-      capturedStones += Board.removeDeadChain(x, y - 1, opp, newStones, newZobrist);
-      // 自杀手禁手：上面提子后，如果新落子链自身仍无气，拒绝该落子
-      int suicidalStones = Board.removeDeadChain(x, y, color, newStones, newZobrist);
-      boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
-      if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return;
-
-      int newMoveNumber = parentData.moveNumber + 1;
-      int[] newMoveNumberList =
-          parentData.moveNumberList == null ? null : parentData.moveNumberList.clone();
-      if (newMoveNumberList != null) {
-        newMoveNumberList[idx] = newMoveNumber;
-        // 提子位置上的旧编号要清掉
-        for (int i = 0; i < newStones.length; i++) {
-          if (newStones[i] == Stone.EMPTY) newMoveNumberList[i] = 0;
-        }
-      }
-
-      int newBlackCaptures = parentData.blackCaptures + (color.isBlack() ? capturedStones : 0);
-      int newWhiteCaptures = parentData.whiteCaptures + (color.isWhite() ? capturedStones : 0);
-
-      BoardData newData =
-          BoardData.move(
-              newStones,
-              new int[] {x, y},
-              color,
-              !parentData.blackToPlay,
-              newZobrist,
-              newMoveNumber,
-              newMoveNumberList,
-              newBlackCaptures,
-              newWhiteCaptures,
-              0,
-              0);
-      // 试下分支没有引擎分析（默认 bestMoves 即空、playouts=0）
-
-      if (BoardHistoryList.violatesKoRule(parent, newData)) return;
-
-      // 复用同位置子节点（跳过 dummy 占位）
-      for (BoardHistoryNode existing : parent.variations) {
-        BoardData ed = existing.getData();
-        if (ed.dummy || !ed.isMoveNode() || ed.lastMoveColor != color) continue;
-        if (ed.lastMove.isPresent() && ed.lastMove.get()[0] == x && ed.lastMove.get()[1] == y) {
-          s.displayNode = existing;
-          applyOverrideAndRefresh(existing);
-          {
-            EngineFollowController c = engineController;
-            if (c != null) c.onTrialDisplayNodeChanged(existing);
-          }
-          publishTrialState();
-          return;
-        }
-      }
-
-      BoardHistoryNode child = new BoardHistoryNode(newData);
-      // 试下永远走分叉：如果第一个子是 dummy 占位，把 child add 到末尾（自然在 dummy 之后）
-      parent.variations.add(child);
-      parent.setPreviousForChild(child);
-
-      s.displayNode = child;
-      applyOverrideAndRefresh(child);
-      {
-        EngineFollowController c = engineController;
-        if (c != null) c.onTrialDisplayNodeChanged(child);
-      }
-      publishTrialState();
     }
+
+    int idx = Board.getIndex(x, y);
+    if (parentData.stones[idx] != Stone.EMPTY) return false;
+
+    Stone color = parentData.blackToPlay ? Stone.BLACK : Stone.WHITE;
+
+    // 用 BoardData.move(...) 工厂构造，保证 nodeKind=MOVE、moveNumberList、zobrist 等渲染必须字段齐全
+    Stone[] newStones = parentData.stones.clone();
+    newStones[idx] = color;
+    featurecat.lizzie.rules.Zobrist newZobrist =
+        parentData.zobrist == null ? null : parentData.zobrist.clone();
+    if (newZobrist != null) newZobrist.toggleStone(x, y, color);
+
+    // 提子：移除四邻方向上对方的死子链（与 Board.place 主流程一致）
+    int capturedStones = 0;
+    Stone opp = color.opposite();
+    capturedStones += Board.removeDeadChain(x + 1, y, opp, newStones, newZobrist);
+    capturedStones += Board.removeDeadChain(x, y + 1, opp, newStones, newZobrist);
+    capturedStones += Board.removeDeadChain(x - 1, y, opp, newStones, newZobrist);
+    capturedStones += Board.removeDeadChain(x, y - 1, opp, newStones, newZobrist);
+    // 自杀手禁手：上面提子后，如果新落子链自身仍无气，拒绝该落子
+    int suicidalStones = Board.removeDeadChain(x, y, color, newStones, newZobrist);
+    boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
+    if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return false;
+
+    int newMoveNumber = parentData.moveNumber + 1;
+    int[] newMoveNumberList =
+        parentData.moveNumberList == null ? null : parentData.moveNumberList.clone();
+    if (newMoveNumberList != null) {
+      newMoveNumberList[idx] = newMoveNumber;
+      // 提子位置上的旧编号要清掉
+      for (int i = 0; i < newStones.length; i++) {
+        if (newStones[i] == Stone.EMPTY) newMoveNumberList[i] = 0;
+      }
+    }
+
+    int newBlackCaptures = parentData.blackCaptures + (color.isBlack() ? capturedStones : 0);
+    int newWhiteCaptures = parentData.whiteCaptures + (color.isWhite() ? capturedStones : 0);
+
+    BoardData newData =
+        BoardData.move(
+            newStones,
+            new int[] {x, y},
+            color,
+            !parentData.blackToPlay,
+            newZobrist,
+            newMoveNumber,
+            newMoveNumberList,
+            newBlackCaptures,
+            newWhiteCaptures,
+            0,
+            0);
+    // 试下分支没有引擎分析（默认 bestMoves 即空、playouts=0）
+
+    if (BoardHistoryList.violatesKoRule(parent, newData)) return false;
+
+    // 复用同位置子节点（跳过 dummy 占位）
+    for (BoardHistoryNode existing : parent.variations) {
+      BoardData ed = existing.getData();
+      if (ed.dummy || !ed.isMoveNode() || ed.lastMoveColor != color) continue;
+      if (ed.lastMove.isPresent() && ed.lastMove.get()[0] == x && ed.lastMove.get()[1] == y) {
+        s.displayNode = existing;
+        return true;
+      }
+    }
+
+    BoardHistoryNode child = new BoardHistoryNode(newData);
+    // 试下永远走分叉：如果第一个子是 dummy 占位，把 child add 到末尾（自然在 dummy 之后）
+    parent.variations.add(child);
+    parent.setPreviousForChild(child);
+
+    s.displayNode = child;
+    return true;
   }
 
   private void scheduleIdleTimeout(TrialSession s) {
     long generation = ++s.idleGeneration;
     s.idleTimer =
         trialEvents.schedule(
-            () -> {
-              synchronized (this) {
-                if (activeSession == s && s.idleGeneration == generation) forceExitTrial();
-              }
-            },
+            () -> transitionTrial(
+                session -> session == s && s.idleGeneration == generation, this::endTrial),
             IDLE_TIMEOUT_MS,
             TimeUnit.MILLISECONDS);
   }
 
   private void cancelIdleTimer(TrialSession s) {
-    // A cancelled callback may already be waiting for the manager monitor.
+    // A cancelled callback may already be waiting for the transition gate or a snapshot owner.
     ++s.idleGeneration;
     if (s.idleTimer != null) {
       s.idleTimer.cancel(false);

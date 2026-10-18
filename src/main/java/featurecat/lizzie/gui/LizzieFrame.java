@@ -14096,38 +14096,11 @@ public class LizzieFrame extends JFrame {
   }
 
   public void autoSavePlayedGame() {
-    new Thread() {
-      public void run() {
-        String fileName = Lizzie.board.getHistory().getGameInfo().getSaveFileName();
-        if (fileName.equals("")) {
-          fileName = new SimpleDateFormat("yyyy-MM-dd-HH-mmss").format(new Date());
-        } else {
-          fileName =
-              new SimpleDateFormat("yyyy-MM-dd-HH-mmss").format(new Date()) + "(" + fileName + ")";
-        }
-        File file = new File("");
-        String courseFile = "";
-        try {
-          courseFile = file.getCanonicalPath();
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        }
-        File autoSaveFile;
-        autoSaveFile =
-            new File(courseFile + File.separator + "MyGames" + File.separator + fileName + ".sgf");
-        File fileParent = autoSaveFile.getParentFile();
-        if (!fileParent.exists()) {
-          fileParent.mkdirs();
-        }
-        try {
-          SGFParser.save(Lizzie.board, autoSaveFile.getPath());
-        } catch (IOException e) {
-          // TODO Auto-generated catch block
-          e.printStackTrace();
-        }
-      }
-    }.start();
+    Board board = Lizzie.board;
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    runSavedGameAction(
+        () -> SgfSaveCoordinator.savePlayedGame(board, history, root, this::savedGameEditFailed));
   }
 
   public boolean stopAiPlayingAndPolicy() {
@@ -15206,6 +15179,10 @@ public class LizzieFrame extends JFrame {
   private boolean persistTemporaryGameList(ArrayList<TempGameData> data) {
     JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
     putTempGameList(candidate, data);
+    return persistSavedGameConfig(candidate);
+  }
+
+  private boolean persistSavedGameConfig(JSONObject candidate) {
     try {
       Lizzie.config.saveTempBoard(candidate);
       return true;
@@ -15541,12 +15518,9 @@ public class LizzieFrame extends JFrame {
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
             if (isAutoSave) {
-              Lizzie.config.saveBoardConfig.put("save-auto-game-index" + index, -2);
-              try {
-                Lizzie.config.saveTempBoard();
-              } catch (IOException es) {
-                es.printStackTrace();
-              }
+              JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
+              candidate.put("save-auto-game-index" + index, -2);
+              if (!persistSavedGameConfig(candidate)) return;
             } else {
               deleteTempGame(index);
             }

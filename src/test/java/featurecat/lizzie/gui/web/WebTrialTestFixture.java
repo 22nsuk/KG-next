@@ -120,6 +120,7 @@ final class WebTrialTestFixture implements AutoCloseable {
     final ArrayDeque<Runnable> work = new ArrayDeque<>();
     final List<Timer> timers = new ArrayList<>();
     final List<Publication> publications = new ArrayList<>();
+    Runnable beforePublish = () -> {};
 
     public void execute(Runnable task) {
       work.add(task);
@@ -133,6 +134,7 @@ final class WebTrialTestFixture implements AutoCloseable {
     }
 
     public void publish(WebBoardManager.TrialSession session) {
+      beforePublish.run();
       publications.add(
           new Publication(
               session == null ? "" : session.ownerClientId,

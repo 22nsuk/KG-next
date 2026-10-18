@@ -11,12 +11,18 @@ import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.Utils;
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
@@ -100,6 +106,66 @@ public final class SgfSaveCoordinator {
       return;
     }
     captureAndSave(Mode.NORMAL, target);
+  }
+
+  static void savePlayedGame(
+      Board board,
+      BoardHistoryList history,
+      BoardHistoryNode root,
+      Consumer<IOException> onFailure) {
+    try {
+      requireCurrentGame(board, history, root);
+      String name = history.getGameInfo().getSaveFileName();
+      String snapshot = SGFParser.saveSnapshot(board, false, false, false);
+      requireCurrentGame(board, history, root);
+      String timestamp = new SimpleDateFormat("yyyy-MM-dd-HH-mmss").format(new Date());
+      // Player names are display text, not paths (including on Windows).
+      String safeName = name.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_");
+      // Leave room for the timestamp and unique suffix even with four-byte UTF-8 characters.
+      int nameLength = Math.min(48, safeName.codePointCount(0, safeName.length()));
+      safeName = safeName.substring(0, safeName.offsetByCodePoints(0, nameLength));
+      String prefix = timestamp + (safeName.isEmpty() ? "" : "(" + safeName + ")") + "-";
+      Path directory = Lizzie.config.getWorkDirectory().toPath().resolve("MyGames");
+      Files.createDirectories(directory);
+      // Reserve a distinct file even for simultaneous saves of identically named games.
+      // The queue only replaces this request's own reservation; existing SGFs stay untouched.
+      Path target = Files.createTempFile(directory, prefix, ".sgf");
+      SAVES.submit(
+          target,
+          snapshot,
+          () -> true,
+          () -> {},
+          failure -> {
+            try {
+              BasicFileAttributes attributes =
+                  Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+              // A post-commit error can follow a successful atomic replacement. Keep any
+              // completed SGF; only the still-empty reservation belongs to failure cleanup.
+              if (attributes.isRegularFile() && attributes.size() == 0) Files.deleteIfExists(target);
+            } catch (NoSuchFileException absent) {
+              // There is no reservation left to remove.
+            } catch (IOException cleanupFailure) {
+              failure.addSuppressed(cleanupFailure);
+            }
+            playedGameSaveFailed(onFailure, failure);
+          });
+    } catch (IOException | RuntimeException failure) {
+      playedGameSaveFailed(onFailure, failure);
+    }
+  }
+
+  private static void requireCurrentGame(
+      Board board, BoardHistoryList history, BoardHistoryNode root) throws IOException {
+    if (Lizzie.board != board || board.getHistory() != history || history.getStart() != root) {
+      throw new IOException("The completed game changed before its SGF could be captured");
+    }
+  }
+
+  private static void playedGameSaveFailed(Consumer<IOException> onFailure, Throwable failure) {
+    onFailure.accept(
+        failure instanceof IOException
+            ? (IOException) failure
+            : new IOException("Could not save the completed game", failure));
   }
 
   private static void captureAndSave(Mode mode, File target) {
