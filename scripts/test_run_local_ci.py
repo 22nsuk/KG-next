@@ -146,11 +146,41 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest",
             steps[0].command,
         )
         self.assertEqual(
             (
+                *tuple(
+                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest", method)
+                    for method in (
+                        "verifiedCompletionWritesOriginalNodeAfterCursorMoves",
+                        "followUpRetainsFrozenEvidenceAndOriginalTarget",
+                        "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
+                        "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
+                        "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
+                        "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
+                        "disposalDropsAnAnswerAlreadyQueuedOnEdt",
+                        "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
+                        "cancelledFollowUpRestoresQuestionAndLastVerifiedAnswer",
+                        "settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork",
+                    )
+                ),
+                *tuple(
+                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
+                     f"{method}(boolean)[{invocation}]")
+                    for method in (
+                        "replacementDropsOldCompletionOrFailureAlreadyQueuedOnEdt",
+                        "deletedOrEditedTargetRejectsPendingAnswer",
+                        "rangeAndWholeGameRejectEditsOutsideSelectedEvidence",
+                    )
+                    for invocation in range(1, 3)
+                ),
+                *tuple(
+                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
+                     f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]")
+                    for invocation in range(1, 5)
+                ),
                 ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
                 ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
                 ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),

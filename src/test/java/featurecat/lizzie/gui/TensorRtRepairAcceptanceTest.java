@@ -1580,6 +1580,7 @@ public final class TensorRtRepairAcceptanceTest {
                 "nvrtc64_120_0.dll",
                 "nvrtc-builtins64_128.dll",
                 "nvinfer_10.dll",
+                "nvonnxparser_10.dll",
                 "nvinfer_plugin_10.dll",
                 "z.dll")) {
           zip.putNextEntry(new ZipEntry(name));

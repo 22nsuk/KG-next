@@ -13,7 +13,12 @@ import featurecat.lizzie.rules.Zobrist;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class TeacherEvidenceTest {
   @Test
@@ -67,9 +72,14 @@ class TeacherEvidenceTest {
   @Test
   void genericCornerMoveIsNotInjectedAsAHighConfidenceNamedOpening() {
     BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    parent.getData().bestMoves = List.of(move("Q16", 60, 3, 1000, 0));
     append(parent, moveData(1, 3, 15, false));
 
-    assertEquals("", TeacherEvidence.knowledgeMatchText(parent));
+    String prompt =
+        TeacherPromptBuilder.formatPosition(
+            TeacherEvidence.current(parent).orElseThrow(), Locale.ENGLISH);
+
+    assertFalse(prompt.contains("Position-specific knowledge:"));
   }
 
   @Test
@@ -84,6 +94,134 @@ class TeacherEvidenceTest {
     assertFalse(TeacherEvidence.hasGroundedKnowledgeEvidence(weaklyGrounded));
     assertTrue(TeacherEvidence.hasGroundedKnowledgeEvidence(sequenceGrounded));
     assertTrue(TeacherEvidence.hasGroundedKnowledgeEvidence(signalGrounded));
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, false", "false, false", "true, true", "false, true"})
+  void actualMoveOutsideTopThreeKeepsItsOwnEvaluationAndPv(
+      boolean blackToPlay, boolean blackScorePerspective) {
+    BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    parent.getData().blackToPlay = blackToPlay;
+    MoveData best = move("Q16", 60, 3.0, 1200, 0);
+    best.variation = List.of("Q16", "D16");
+    MoveData played = move("D4", 20, 2.5, 400, 0);
+    played.variation = List.of("D4", "Q4");
+    parent.getData().bestMoves =
+        List.of(best, move("D16", 58, 2.9, 900, 0), move("Q4", 55, 2.7, 700, 0), played);
+    for (MoveData candidate : parent.getData().bestMoves) {
+      candidate.scoreMeanIsBlackPerspective = blackScorePerspective;
+      if (blackScorePerspective && !blackToPlay) {
+        candidate.scoreMean = -candidate.scoreMean;
+      }
+    }
+    append(parent, moveData(1, 3, 15, !blackToPlay));
+
+    TeacherEvidence.Position evidence = TeacherEvidence.current(parent).orElseThrow();
+
+    assertEquals(4, evidence.candidates.size());
+    assertEquals(4, evidence.candidates.get(3).rank);
+    assertEquals("D4", evidence.candidates.get(3).coordinate);
+    assertEquals(List.of("D4", "Q4"), evidence.candidates.get(3).variation);
+    assertEquals(2.5, evidence.candidates.get(3).scoreLead);
+    assertEquals(40, evidence.actualWinrateLoss.orElseThrow());
+    String prompt = TeacherPromptBuilder.formatPosition(evidence, Locale.ENGLISH);
+    assertTrue(prompt.contains("40.0 percentage points"));
+    assertTrue(prompt.contains("score loss (points, NOT percentage points): 0.5"));
+    assertTrue(prompt.contains("Candidate D4: 1." + (blackToPlay ? "B" : "W") + " D4"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"snapshot", "dummy", "wrong-color", "wrong-next-turn", "jump-number", "removed-stone"})
+  void invalidRecordedTransitionIsNotDescribedAsAnActualMove(String invalidKind) {
+    BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    parent.getData().bestMoves = List.of(move("Q16", 60, 3, 1000, 0));
+    BoardData after = moveData(1, 3, 15, false);
+    if (invalidKind.equals("snapshot")) {
+      after =
+          BoardData.snapshot(
+              after.stones,
+              Optional.of(new int[] {3, 15}),
+              Stone.BLACK,
+              false,
+              after.zobrist,
+              1,
+              after.moveNumberList,
+              0,
+              0,
+              50,
+              0);
+    } else if (invalidKind.equals("dummy")) {
+      after.dummy = true;
+    } else if (invalidKind.equals("wrong-color")) {
+      after.lastMoveColor = Stone.WHITE;
+    } else if (invalidKind.equals("wrong-next-turn")) {
+      after.blackToPlay = true;
+    } else if (invalidKind.equals("jump-number")) {
+      after.moveNumber = 2;
+    }
+    BoardHistoryNode child = append(parent, after);
+    if (invalidKind.equals("removed-stone")) {
+      child.setRemovedStone();
+    }
+
+    TeacherEvidence.Position evidence = TeacherEvidence.current(parent).orElseThrow();
+
+    assertEquals("", evidence.actualMove);
+    assertTrue(evidence.playedContinuation.isEmpty());
+    assertTrue(evidence.actualWinrateLoss.isEmpty());
+    assertEquals(0, TeacherEvidence.wholeGame(parent).analyzedPositions);
+  }
+
+  @Test
+  void recordedPassKeepsParityAndTheNextInvalidNodeStopsTheContinuation() {
+    BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    parent.getData().bestMoves = List.of(move("Q16", 60, 3, 1000, 0));
+    BoardData pass =
+        BoardData.pass(
+            parent.getData().stones.clone(), Stone.BLACK, false, new Zobrist(), 1,
+            new int[361], 0, 0, 50, 0);
+    BoardHistoryNode passed = append(parent, pass);
+    BoardHistoryNode reply = append(passed, moveData(2, 15, 3, true));
+    append(reply, moveData(4, 3, 15, false)); // A missing move must not be silently skipped.
+
+    TeacherEvidence.Position evidence = TeacherEvidence.current(parent).orElseThrow();
+    assertEquals("pass", evidence.actualMove);
+    assertEquals(List.of("pass", "Q16"), evidence.playedContinuation);
+    String prompt = TeacherPromptBuilder.formatPosition(evidence, Locale.ENGLISH);
+    assertTrue(prompt.contains("Recorded continuation: 1.B pass; 2.W Q16;"));
+    assertFalse(prompt.contains("D4"));
+  }
+
+  @Test
+  void promptAndVerifierExcludeIllegalPvSuffixOnTheProductionCapturePath() {
+    BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    MoveData candidate = move("D4", 60, 3, 1000, 0);
+    candidate.variation = List.of("D4", "D4", "T1");
+    parent.getData().bestMoves = List.of(candidate);
+
+    TeacherEvidence.Position evidence = TeacherEvidence.current(parent).orElseThrow();
+    String prompt = TeacherPromptBuilder.formatPosition(evidence, Locale.ENGLISH);
+
+    assertTrue(prompt.contains("STOPPED"));
+    assertFalse(prompt.contains("T1"));
+    assertFalse(TeacherVerifier.verify("The continuation ends at T1.", evidence).ok());
+  }
+
+  @Test
+  void actualMoveWithoutCandidateEvaluationHasUnknownLossDespiteChildDefaults() {
+    BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));
+    parent.getData().bestMoves = List.of(move("Q16", 60, 3, 1000, 0));
+    BoardHistoryNode child = append(parent, moveData(1, 3, 15, false));
+    child.getData().winrate = 0;
+    child.getData().scoreMean = 0;
+
+    TeacherEvidence.Position evidence = TeacherEvidence.current(parent).orElseThrow();
+    String prompt = TeacherPromptBuilder.formatPosition(evidence, Locale.ENGLISH);
+
+    assertEquals("D4", evidence.actualMove);
+    assertTrue(evidence.actualWinrateLoss.isEmpty());
+    assertFalse(prompt.contains("Actual move score loss"));
+    assertFalse(prompt.contains("Actual move winrate loss"));
   }
 
   private static featurecat.lizzie.teacher.knowledge.MatchEngine.KnowledgeMatch knowledgeMatch(

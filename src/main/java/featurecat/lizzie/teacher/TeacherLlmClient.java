@@ -22,10 +22,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /** Small OpenAI-compatible client with streaming and Responses API fallback. */
-public final class TeacherLlmClient {
+public final class TeacherLlmClient implements CommentaryClient {
   private static final int MAX_ERROR_BODY_BYTES = 4096;
   private static final int MAX_PROMPT_CHARACTERS = 250_000;
 
@@ -87,6 +88,7 @@ public final class TeacherLlmClient {
     return Collections.unmodifiableList(models);
   }
 
+  @Override
   public String stream(List<Message> messages, Cancellation cancellation, Consumer<String> onText)
       throws IOException, InterruptedException {
     List<Message> safeMessages = validateMessages(messages);
@@ -176,12 +178,13 @@ public final class TeacherLlmClient {
     return new JSONObject().put("model", model).put("stream", true).put("input", input);
   }
 
-  private static String parseChatCompletions(
+  private String parseChatCompletions(
       InputStream input, Cancellation cancelled, Consumer<String> receiver) throws IOException {
     return parseSse(
         input,
         cancelled,
         receiver,
+        false,
         event -> {
           JSONArray choices = event.optJSONArray("choices");
           if (choices == null || choices.isEmpty()) {
@@ -193,12 +196,13 @@ public final class TeacherLlmClient {
         });
   }
 
-  private static String parseResponses(
+  private String parseResponses(
       InputStream input, Cancellation cancelled, Consumer<String> receiver) throws IOException {
     return parseSse(
         input,
         cancelled,
         receiver,
+        true,
         event -> {
           String type = event.optString("type", "");
           if ("response.output_text.delta".equals(type) || "output_text_delta".equals(type)) {
@@ -209,13 +213,15 @@ public final class TeacherLlmClient {
         });
   }
 
-  private static String parseSse(
+  private String parseSse(
       InputStream input,
       Cancellation cancelled,
       Consumer<String> receiver,
+      boolean responses,
       EventTextExtractor extractor)
       throws IOException {
     StringBuilder complete = new StringBuilder();
+    boolean finished = false;
     cancelled.attach(input);
     try (InputStream source = input;
         BufferedReader reader =
@@ -231,6 +237,9 @@ public final class TeacherLlmClient {
         String data = line.substring("data:".length()).trim();
         if (data.isEmpty() || "[DONE]".equals(data)) {
           if ("[DONE]".equals(data)) {
+            // Some compatible chat providers send only [DONE]. Responses must explicitly
+            // report response.completed, since [DONE] also follows incomplete responses.
+            finished = !responses;
             break;
           }
           continue;
@@ -238,14 +247,43 @@ public final class TeacherLlmClient {
         JSONObject event;
         try {
           event = new JSONObject(data);
-        } catch (RuntimeException malformedEvent) {
-          continue;
+        } catch (JSONException malformedEvent) {
+          throw incompleteStream();
         }
         throwIfStreamFailed(event);
+        if (responses) {
+          String type = event.optString("type", "");
+          if ("response.incomplete".equals(type)
+              || "response.failed".equals(type)
+              || "error".equals(type)) {
+            throw incompleteStream();
+          }
+          if ("response.completed".equals(type)) {
+            JSONObject response = event.optJSONObject("response");
+            if (response == null || !"completed".equals(response.optString("status", ""))) {
+              throw incompleteStream();
+            }
+            finished = true;
+            break;
+          }
+        } else {
+          JSONArray choices = event.optJSONArray("choices");
+          JSONObject choice = choices == null ? null : choices.optJSONObject(0);
+          String reason = choice == null ? "" : choice.optString("finish_reason", "");
+          if (!reason.isEmpty()) {
+            if (!"stop".equals(reason)) {
+              throw incompleteStream();
+            }
+            finished = true;
+          }
+        }
         String text = extractor.extract(event);
         if (!text.isEmpty()) {
           complete.append(text);
           receiver.accept(text);
+        }
+        if (finished) {
+          break;
         }
       }
     } finally {
@@ -254,10 +292,20 @@ public final class TeacherLlmClient {
     if (cancelled.isCancelled() || Thread.currentThread().isInterrupted()) {
       throw new CancellationException("AI commentary request was cancelled.");
     }
+    if (!finished) {
+      throw incompleteStream();
+    }
     return complete.toString();
   }
 
-  private static void throwIfStreamFailed(JSONObject event) throws IOException {
+  private static IOException incompleteStream() {
+    return new IOException(
+        TeacherStrings.get(
+            "Teacher.error.incomplete",
+            "The reply was interrupted and was not saved. Please try again."));
+  }
+
+  private void throwIfStreamFailed(JSONObject event) throws IOException {
     JSONObject error = event.optJSONObject("error");
     if (error == null && "response.failed".equals(event.optString("type", ""))) {
       JSONObject response = event.optJSONObject("response");
@@ -266,7 +314,7 @@ public final class TeacherLlmClient {
     if (error == null) {
       return;
     }
-    String detail = sanitizeError(error.optString("message", ""), "");
+    String detail = sanitizeError(error.optString("message", ""), apiKey);
     if (detail.length() > 240) {
       detail = detail.substring(0, 240) + "...";
     }

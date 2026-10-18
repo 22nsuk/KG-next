@@ -33,6 +33,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class TeacherLlmClientTest {
   private HttpServer server;
@@ -117,7 +119,7 @@ class TeacherLlmClientTest {
               exchange,
               "event: response.output_text.delta\n"
                   + "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Fallback works\"}\n\n"
-                  + "data: [DONE]\n\n");
+                  + "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n");
         });
     server.start();
 
@@ -130,6 +132,104 @@ class TeacherLlmClientTest {
 
     assertEquals("Fallback works", result);
     assertEquals(1, responsesCalls.get());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "",
+        "data: {broken json}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"finish_reason\":\"content_filter\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n",
+        "data: {\"choices\":[{\"finish_reason\":\"function_call\"}]}\n\ndata: [DONE]\n\n"
+      })
+  void rejectsIncompleteChatRepliesWithoutRetryingAnotherEndpoint(String ending) throws Exception {
+    AtomicInteger chatCalls = new AtomicInteger();
+    AtomicInteger responsesCalls = new AtomicInteger();
+    server.createContext(
+        "/v1/chat/completions",
+        exchange -> {
+          chatCalls.incrementAndGet();
+          respondSse(
+              exchange,
+              "data: {\"choices\":[{\"delta\":{\"content\":\"Unfinished lesson\"}}]}\n\n"
+                  + ending);
+        });
+    server.createContext(
+        "/v1/responses",
+        exchange -> {
+          responsesCalls.incrementAndGet();
+          respond(exchange, 500, "unexpected retry");
+        });
+    server.start();
+
+    assertThrows(IOException.class, this::requestCommentary);
+    assertEquals(1, chatCalls.get());
+    assertEquals(0, responsesCalls.get());
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "",
+        "data: [DONE]\n\n",
+        "data: {broken json}\n\n",
+        "data: {\"type\":\"response.incomplete\"}\n\ndata: [DONE]\n\n",
+        "data: {\"type\":\"response.failed\"}\n\ndata: [DONE]\n\n",
+        "data: {\"type\":\"error\"}\n\ndata: [DONE]\n\n",
+        "data: {\"type\":\"response.completed\"}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"incomplete\"}}\n\n"
+      })
+  void rejectsResponsesWithoutSuccessfulCompletion(String ending) throws Exception {
+    server.createContext("/v1/chat/completions", exchange -> respond(exchange, 405, "unavailable"));
+    server.createContext(
+        "/v1/responses",
+        exchange ->
+            respondSse(
+                exchange,
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"Unfinished lesson\"}\n\n"
+                    + ending));
+    server.start();
+
+    assertThrows(IOException.class, this::requestCommentary);
+  }
+
+  @Test
+  void acceptsNaturalChatCompletionWithoutADoneMarkerAndKeepsTheFinalDelta() throws Exception {
+    server.createContext(
+        "/v1/chat/completions",
+        exchange ->
+            respondSse(
+                exchange,
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Complete lesson\"},"
+                    + "\"finish_reason\":\"stop\"}]}\n\n"));
+    server.start();
+
+    assertEquals("Complete lesson", requestCommentary());
+  }
+
+  @Test
+  void redactsTheActualApiKeyFromAStreamingErrorMessage() throws Exception {
+    server.createContext(
+        "/v1/chat/completions",
+        exchange ->
+            respondSse(
+                exchange,
+                "data: {\"error\":{\"message\":\"Rejected key secret-value\"}}\n\n"));
+    server.start();
+
+    IOException failure = assertThrows(IOException.class, this::requestCommentary);
+    assertTrue(failure.getMessage().contains("Rejected key [redacted]"));
+    assertFalse(failure.getMessage().contains("secret-value"));
+  }
+
+  private String requestCommentary() throws IOException, InterruptedException {
+    return new TeacherLlmClient(baseUrl, "secret-value", "model")
+        .stream(
+            List.of(new TeacherLlmClient.Message("user", "Explain")),
+            new TeacherLlmClient.Cancellation(),
+            ignored -> {});
   }
 
   @Test

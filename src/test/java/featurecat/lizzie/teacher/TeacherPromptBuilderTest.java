@@ -2,13 +2,29 @@ package featurecat.lizzie.teacher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryList;
+import featurecat.lizzie.rules.Stone;
+import featurecat.lizzie.rules.Zobrist;
+import java.lang.reflect.Method;
+import java.net.http.HttpClient;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.OptionalDouble;
 import java.util.ResourceBundle;
+import java.util.regex.Pattern;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class TeacherPromptBuilderTest {
   @Test
@@ -173,6 +189,254 @@ class TeacherPromptBuilderTest {
               .contains("2.5"),
           locale.toLanguageTag());
     }
+  }
+
+  @Test
+  void preservesPointAndPercentagePointUnitsForAnEvaluatedRecordedMove() {
+    TeacherEvidence.Position position =
+        new TeacherEvidence.Position(
+            12,
+            "W",
+            1000,
+            "D4",
+            OptionalDouble.of(40),
+            List.of(
+                new TeacherEvidence.Candidate(1, "Q16", 60, 3, 800, List.of("Q16")),
+                new TeacherEvidence.Candidate(4, "D4", 20, 2.5, 200, List.of("D4", "Q4"))));
+
+    List<TeacherLlmClient.Message> messages =
+        TeacherPromptBuilder.forPosition(position, Locale.KOREAN, null);
+    String prompt = messages.get(1).content;
+
+    assertTrue(prompt.contains("score loss (points, NOT percentage points): 0.5"));
+    assertTrue(prompt.contains("Candidate winrate and scoreLead perspective: side to play (W)"));
+    assertTrue(prompt.contains("retained outside the top three"));
+    assertTrue(messages.get(0).content.contains("loss is unknown, not zero"));
+    assertTrue(messages.get(0).content.contains("Never reconstruct an omitted suffix"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TeacherPromptBuilder.Mode.class,
+      names = {"RANGE", "WHOLE_GAME"})
+  void ordinaryRangeKeepsEveryPositionAndItsOriginalMessages(TeacherPromptBuilder.Mode mode) {
+    TeacherEvidence.Range range =
+        new TeacherEvidence.Range(List.of(position(12, "D4"), position(38, "Q16")), 2, 0);
+    List<TeacherLlmClient.Message> original =
+        TeacherPromptBuilder.forRange(range, mode, Locale.KOREAN, snapshot("d", 3));
+
+    var prepared =
+        TeacherPromptBuilder.prepareRange(range, mode, Locale.KOREAN, snapshot("d", 3));
+
+    assertSame(range, prepared.evidence());
+    assertEquals(0, prepared.evidence().omittedPositions);
+    assertEquals(
+        original.stream().map(message -> message.role + "\n" + message.content).toList(),
+        prepared.messages().stream().map(message -> message.role + "\n" + message.content).toList());
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = TeacherPromptBuilder.Mode.class,
+      names = {"RANGE", "WHOLE_GAME"})
+  void denseRealGameKeepsCompleteEvidenceWithinTheRequestBudget(TeacherPromptBuilder.Mode mode)
+      throws Exception {
+    TeacherEvidence.Range range = analyzedRealGame(mode);
+    List<TeacherLlmClient.Message> oversized =
+        TeacherPromptBuilder.forRange(range, mode, Locale.ENGLISH, snapshot("d", 3));
+    assertEquals(40, range.positions.size());
+    assertTrue(contentCharacters(oversized) > 250_000, "The old request must exceed the real cap.");
+    TeacherLlmClient transport =
+        new TeacherLlmClient(
+            HttpClient.newHttpClient(), "http://127.0.0.1:1/v1", "test-key", "test-model");
+    assertEquals(
+        "AI commentary context is too large.",
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> transport.stream(oversized, new TeacherLlmClient.Cancellation(), ignored -> {}))
+            .getMessage());
+
+    var prepared =
+        TeacherPromptBuilder.prepareRange(range, mode, Locale.ENGLISH, snapshot("d", 3));
+    TeacherEvidence.Range selected = prepared.evidence();
+    assertTrue(selected.positions.size() >= 2 && selected.positions.size() < 40);
+    assertEquals(range.analyzedPositions, selected.analyzedPositions);
+    assertEquals(selected.analyzedPositions - selected.positions.size(), selected.omittedPositions);
+    assertSame(range.positions.get(0), selected.positions.get(0));
+    assertSame(range.positions.get(39), selected.positions.get(selected.positions.size() - 1));
+    List<Integer> expectedMoves = new ArrayList<>();
+    expectedMoves.add(range.positions.get(0).moveNumber);
+    // This fixture's actual-move loss increases on every move, so later moves take priority.
+    for (int move = 206 - selected.positions.size(); move < 205; move++) {
+      expectedMoves.add(move);
+    }
+    assertEquals(
+        expectedMoves, selected.positions.stream().map(position -> position.moveNumber).toList());
+
+    String userMessage = prepared.messages().get(1).content;
+    assertEquals(
+        expectedMoves,
+        Pattern.compile("Position after move (\\d+)\\n")
+            .matcher(userMessage)
+            .results()
+            .map(match -> Integer.parseInt(match.group(1)))
+            .toList());
+    assertTrue(userMessage.contains("selected key positions: " + selected.positions.size()));
+    assertTrue(userMessage.contains("omitted lower-priority positions: " + selected.omittedPositions));
+    for (TeacherEvidence.Position position : selected.positions) {
+      assertTrue(userMessage.contains(TeacherPromptBuilder.formatPosition(position, Locale.ENGLISH)));
+    }
+    assertTrue(contentCharacters(prepared.messages()) <= 200_000);
+
+    // Exercise ordinary-size follow-up plus the real one-correction wrapper, including its
+    // instructions. This does not promise room for arbitrarily large questions or replies.
+    List<TeacherLlmClient.Message> followUp =
+        TeacherPromptBuilder.forFollowUp(
+            prepared.messages(), "a".repeat(14_000), "q".repeat(12_000), Locale.ENGLISH, null);
+    List<List<TeacherLlmClient.Message>> attempts = new ArrayList<>();
+    String corrected = "Review each retained position using its shown liberties.";
+    CommentaryClient replies =
+        (messages, cancellation, onText) -> {
+          attempts.add(messages);
+          assertTrue(contentCharacters(messages) <= 250_000);
+          return attempts.size() == 1 ? "Z99 " + "x".repeat(23_996) : corrected;
+        };
+    assertEquals(
+        corrected,
+        new GroundedCommentaryClient(replies, selected.positions)
+            .stream(followUp, new TeacherLlmClient.Cancellation(), ignored -> {}));
+    assertEquals(2, attempts.size());
+    assertEquals(userMessage, attempts.get(1).get(1).content);
+  }
+
+  @Test
+  void rangeBudgetCanRetainOnlyBothEnds() {
+    TeacherEvidence.Position first = position(0, "a".repeat(70_000));
+    TeacherEvidence.Position middle = position(1, "b".repeat(70_000));
+    TeacherEvidence.Position last = position(2, "c".repeat(70_000));
+    TeacherEvidence.Range range = new TeacherEvidence.Range(List.of(first, middle, last), 8, 5);
+
+    var prepared =
+        TeacherPromptBuilder.prepareRange(
+            range, TeacherPromptBuilder.Mode.RANGE, Locale.ENGLISH, null);
+
+    assertEquals(List.of(first, last), prepared.evidence().positions);
+    assertEquals(8, prepared.evidence().analyzedPositions);
+    assertEquals(6, prepared.evidence().omittedPositions);
+    assertFalse(prepared.messages().get(1).content.contains("Position after move 1\n"));
+    assertTrue(contentCharacters(prepared.messages()) <= 200_000);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  void oversizedEndsFailWithoutTruncatingTheirEvidence(int count) {
+    List<TeacherEvidence.Position> positions = new ArrayList<>();
+    for (int move = 0; move < count; move++) {
+      positions.add(position(move, "a".repeat(200_000)));
+    }
+    TeacherEvidence.Range range = new TeacherEvidence.Range(positions, count, 0);
+
+    assertEquals(
+        "AI commentary context is too large.",
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                    TeacherPromptBuilder.prepareRange(
+                        range, TeacherPromptBuilder.Mode.RANGE, Locale.ENGLISH, null))
+            .getMessage());
+    assertEquals(count, range.positions.size());
+  }
+
+  private static long contentCharacters(List<TeacherLlmClient.Message> messages) {
+    return messages.stream().mapToLong(message -> message.content.length()).sum();
+  }
+
+  private static TeacherEvidence.Position position(int move, String coordinate) {
+    return new TeacherEvidence.Position(
+        move,
+        "B",
+        100,
+        "",
+        OptionalDouble.empty(),
+        List.of(new TeacherEvidence.Candidate(1, coordinate, 50, 0, 100, List.of())));
+  }
+
+  private static TeacherEvidence.Range analyzedRealGame(TeacherPromptBuilder.Mode mode)
+      throws Exception {
+    int previousWidth = Board.boardWidth;
+    int previousHeight = Board.boardHeight;
+    Method captureTables = Zobrist.class.getDeclaredMethod("captureTables");
+    captureTables.setAccessible(true);
+    Object previousTables = captureTables.invoke(null);
+    try {
+      Board.boardWidth = 19;
+      Board.boardHeight = 19;
+      Zobrist.init();
+      BoardHistoryList history =
+          new BoardHistoryList(BoardData.empty(19, 19)) {
+            @Override
+            public void addOrGoto(BoardData data, boolean branch, boolean change) {
+              add(data);
+            }
+
+            @Override
+            public void addOrGoto(BoardData data, boolean branch) {
+              add(data);
+            }
+          };
+      String sgf;
+      try (var input =
+          TeacherPromptBuilderTest.class.getResourceAsStream(
+              "/featurecat/lizzie/rules/issue223-reporter-205-moves.sgf")) {
+        sgf = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+      }
+      // The fixture is a single 19x19 main line of 205 explicit B/W moves. Replay those
+      // moves with production capture/ko rules, without foreground SGF/UI callbacks.
+      var moves = Pattern.compile(";([BW])\\[([a-s])([a-s])\\]").matcher(sgf);
+      int count = 0;
+      while (moves.find()) {
+        int x = moves.group(2).charAt(0) - 'a';
+        int y = moves.group(3).charAt(0) - 'a';
+        BoardData before = history.getData();
+        before.bestMoves =
+            List.of(
+                candidate("A19", 60),
+                candidate("A18", 59),
+                candidate("A17", 58),
+                candidate(Board.convertCoordinatesToName(x, y), 60 - (count + 1) / 10.0));
+        history.place(
+            x,
+            y,
+            "B".equals(moves.group(1)) ? Stone.BLACK : Stone.WHITE,
+            false,
+            false,
+            false,
+            false,
+            false);
+        assertEquals(++count, history.getData().moveNumber, "The recorded move must replay.");
+      }
+      assertEquals(205, count);
+      return mode == TeacherPromptBuilder.Mode.WHOLE_GAME
+          ? TeacherEvidence.wholeGame(history.getStart())
+          : TeacherEvidence.mainLine(history.getStart(), 120, 205);
+    } finally {
+      Board.boardWidth = previousWidth;
+      Board.boardHeight = previousHeight;
+      Method restoreTables =
+          Zobrist.class.getDeclaredMethod("restoreTables", previousTables.getClass());
+      restoreTables.setAccessible(true);
+      restoreTables.invoke(null, previousTables);
+    }
+  }
+
+  private static MoveData candidate(String coordinate, double winrate) {
+    MoveData candidate = new MoveData();
+    candidate.coordinate = coordinate;
+    candidate.winrate = winrate;
+    candidate.scoreMean = 3;
+    candidate.playouts = 1000;
+    candidate.variation = List.of(coordinate);
+    return candidate;
   }
 
   private static String systemPrompt(TeacherSettings.Snapshot snapshot) {

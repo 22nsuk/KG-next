@@ -52,6 +52,8 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 public class KataGoRuntimeHelperTest {
@@ -641,6 +643,7 @@ public class KataGoRuntimeHelperTest {
           Path runtimeDir = Files.createDirectories(runtimeWorkDirectory.resolve("nvidia-runtime"));
           touchRequiredCuda12_8Dlls(runtimeDir);
           touch(runtimeDir.resolve("nvinfer_10.dll"));
+          touch(runtimeDir.resolve("nvonnxparser_10.dll"));
           touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
           Path originalDirectory = Files.createDirectories(portableRoot.resolve("app"));
           ProcessBuilder processBuilder =
@@ -697,6 +700,7 @@ public class KataGoRuntimeHelperTest {
           touchRequiredCuda12_8Dlls(runtimeDir);
           Files.delete(runtimeDir.resolve("z.dll"));
           touch(runtimeDir.resolve("nvinfer_10.dll"));
+          touch(runtimeDir.resolve("nvonnxparser_10.dll"));
           touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
 
           withConfig(
@@ -713,8 +717,10 @@ public class KataGoRuntimeHelperTest {
         });
   }
 
-  @Test
-  void pinnedProjectCudaBuildWithStaticZlibIsRuntimeReadyWithoutZlibDll() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void pinnedProjectCudaBuildWithStaticZlibIsRuntimeReadyWithoutZlibDll(boolean cuda13)
+      throws Exception {
     withOsName(
         WINDOWS_OS_NAME,
         () -> {
@@ -722,20 +728,34 @@ public class KataGoRuntimeHelperTest {
           Path runtimeWorkDirectory = Files.createDirectories(tempRoot.resolve("runtime-root"));
           Path engineDir =
               Files.createDirectories(
-                  runtimeWorkDirectory.resolve("engines/katago/windows-x64-nvidia"));
+                  runtimeWorkDirectory.resolve(
+                      cuda13
+                          ? "engines/katago/windows-x64-nvidia-cuda13"
+                          : "engines/katago/windows-x64-nvidia"));
           Path enginePath = touch(engineDir.resolve("katago.exe"));
           Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia\n");
-          writeProjectEngineManifest(engineDir, "windows-nvidia");
+          writeProjectEngineManifest(
+              engineDir, cuda13 ? "windows-nvidia-cuda13" : "windows-nvidia");
           Path runtimeDir = Files.createDirectories(runtimeWorkDirectory.resolve("nvidia-runtime"));
-          touchRequiredCuda12_8Dlls(runtimeDir);
+          if (cuda13) {
+            touchRequiredCuda13_2Dlls(runtimeDir);
+          } else {
+            touchRequiredCuda12_8Dlls(runtimeDir);
+          }
           Files.delete(runtimeDir.resolve("z.dll"));
 
           withConfig(
               runtimeWorkDirectory,
-              () ->
-                  assertTrue(
-                      KataGoRuntimeHelper.inspectNvidiaRuntime(enginePath, "").ready,
-                      "Pinned project CUDA builds statically link zlib and need no zlib DLL."));
+              () -> {
+                KataGoRuntimeHelper.NvidiaRuntimeStatus status =
+                    KataGoRuntimeHelper.inspectNvidiaRuntime(enginePath, "");
+                assertTrue(status.ready, status.detailText);
+                assertTrue(status.verifiedStaticZlib);
+                assertFalse(Files.exists(runtimeDir.resolve("nvonnxparser_10.dll")));
+                assertFalse(
+                    Files.exists(
+                        runtimeDir.resolve(cuda13 ? "cudart64_12.dll" : "cudart64_13.dll")));
+              });
         });
   }
 
@@ -980,6 +1000,7 @@ public class KataGoRuntimeHelperTest {
           touchRequiredCuda12_8Dlls(runtimeDir);
           Files.delete(runtimeDir.resolve("z.dll"));
           touch(runtimeDir.resolve("nvinfer_10.dll"));
+          touch(runtimeDir.resolve("nvonnxparser_10.dll"));
           touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
 
           withConfig(
@@ -1031,6 +1052,7 @@ public class KataGoRuntimeHelperTest {
           touchRequiredCuda12_8Dlls(engineDir);
           Files.delete(engineDir.resolve("z.dll"));
           touch(engineDir.resolve("nvinfer_10.dll"));
+          touch(engineDir.resolve("nvonnxparser_10.dll"));
           touch(engineDir.resolve("nvinfer_plugin_10.dll"));
 
           assertMissingDynamicZlib(enginePath);
@@ -1308,6 +1330,7 @@ public class KataGoRuntimeHelperTest {
           Path enginePath = touch(engineDir.resolve("katago.exe"));
           touchRequiredCuda12_8Dlls(engineDir);
           touch(engineDir.resolve("nvinfer_10.dll"));
+          touch(engineDir.resolve("nvonnxparser_10.dll"));
           touch(engineDir.resolve("nvinfer_plugin_10.dll"));
           Path runtimeWorkDirectory = Files.createDirectories(tempRoot.resolve("runtime-root"));
 
@@ -1937,6 +1960,7 @@ public class KataGoRuntimeHelperTest {
                 touch(targetDir.resolve("libz.dll"));
                 touchRequiredCuda12_8Dlls(runtimeDir);
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 Files.writeString(
                     targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2008,6 +2032,7 @@ public class KataGoRuntimeHelperTest {
                 Path runtimeDir = runtimeWorkDirectory.resolve("nvidia-runtime");
                 touchRequiredCuda12_8Dlls(runtimeDir);
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 Files.writeString(
                     targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2055,6 +2080,7 @@ public class KataGoRuntimeHelperTest {
                 Path runtimeDir = runtimeWorkDirectory.resolve("nvidia-runtime");
                 touchRequiredCuda12_8Dlls(runtimeDir);
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 Files.writeString(
                     targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2108,6 +2134,7 @@ public class KataGoRuntimeHelperTest {
                 Path runtimeDir = runtimeWorkDirectory.resolve("nvidia-runtime");
                 touchRequiredCuda12_8Dlls(runtimeDir);
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 Files.writeString(
                     targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2161,6 +2188,7 @@ public class KataGoRuntimeHelperTest {
               targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
           touchRequiredCuda12_8Dlls(runtimeDir);
           touch(runtimeDir.resolve("nvinfer_10.dll"));
+          touch(runtimeDir.resolve("nvonnxparser_10.dll"));
           touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
           Path runtimeSentinel = touch(runtimeDir.resolve("existing-runtime-sentinel.txt"));
           Path fixtureZip =
@@ -2266,6 +2294,7 @@ public class KataGoRuntimeHelperTest {
                 touchCuda12CoreWithoutNvrtc(runtimeDir);
                 touch(runtimeDir.resolve("cudnn64_9.dll"));
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 touch(runtimeDir.resolve("z.dll"));
                 Files.writeString(
@@ -2303,6 +2332,7 @@ public class KataGoRuntimeHelperTest {
           Path enginePath = touch(targetDir.resolve("katago.exe"));
           touchRequiredCuda12_8Dlls(targetDir);
           touch(targetDir.resolve("nvinfer_10.dll"));
+          touch(targetDir.resolve("nvonnxparser_10.dll"));
           touch(targetDir.resolve("nvinfer_plugin_10.dll"));
           Files.writeString(
               targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2351,6 +2381,7 @@ public class KataGoRuntimeHelperTest {
           Path tensorRtEnginePath = touch(targetDir.resolve("katago.exe"));
           touchRequiredCuda12_8Dlls(targetDir);
           touch(targetDir.resolve("nvinfer_10.dll"));
+          touch(targetDir.resolve("nvonnxparser_10.dll"));
           touch(targetDir.resolve("nvinfer_plugin_10.dll"));
           Files.writeString(
               targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
@@ -2402,6 +2433,7 @@ public class KataGoRuntimeHelperTest {
                 touch(targetDir.resolve("libz.dll"));
                 touchRequiredCuda12_8Dlls(runtimeDir);
                 touch(runtimeDir.resolve("nvinfer_10.dll"));
+                touch(runtimeDir.resolve("nvonnxparser_10.dll"));
                 touch(runtimeDir.resolve("nvinfer_plugin_10.dll"));
                 Files.writeString(
                     targetDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
