@@ -89,9 +89,13 @@ Recommended path:
 
 If you only want to replace the weight, you can usually keep the bundled KataGo.
 
-You can rename bundled KataGo in engine settings. Restarts, Auto Setup, and path updates after moving a portable package preserve its name and entry settings. Replacing `default.bin.gz` at the same path changes model information, not entry ownership. After you edit the engine command or enable Java SSH, bundled-profile repair leaves that command intact; a complete package still recreates its bundled default entry when needed.
+You can rename managed KataGo profiles in engine settings. Restarts and Auto Setup preserve their names, identities, selected models (including explicitly selected older models), board settings and preload choices. CUDA12 and CUDA13 profiles remain separate when applying or reusing a model. Replacing `default.bin.gz` at the same path changes model information, not entry ownership.
 
-Legacy entries are migrated when their bundled ownership can be established. Already-renamed legacy entries pointing to another complete package are left alone, and historical duplicates are not merged by guesswork.
+When moving a portable package, move the complete folder, including `app` and `user-data`. Every managed profile is reconnected to matching engine, model and config files that exist in the new location, including downloaded models under `user-data/weights`; external files retain their original paths. User-edited engine commands, Java SSH settings and customized independent analysis commands are preserved. A complete package still recreates its bundled default entry when needed.
+
+If a selected model is missing from both locations, or files required by an old local Java launcher are missing, the existing bundled-resource recovery can still apply.
+
+Legacy entries are migrated when their bundled ownership can be established. The recognized legacy `KataGo Bundled` / `KataGo Auto Setup` pair can still be deduplicated. Already-renamed legacy entries pointing to another complete package and other historical duplicates are not merged by guesswork.
 
 ## 6. What should I include in a bug report
 

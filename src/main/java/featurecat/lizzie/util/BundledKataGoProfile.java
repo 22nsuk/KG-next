@@ -38,6 +38,15 @@ public final class BundledKataGoProfile {
         && entry.optString("managedProfileCommand").equals(entry.optString("command"));
   }
 
+  public static boolean isManagedCuda13(EngineData entry) {
+    return entry != null
+        && !entry.useJavaSSH
+        && CUDA13_TYPE.equals(entry.managedProfileType)
+        && entry.managedProfileCommand != null
+        && !entry.managedProfileCommand.isBlank()
+        && entry.managedProfileCommand.equals(entry.commands);
+  }
+
   public static boolean isCuda13Command(String command) {
     List<String> parts = Utils.splitCommand(command == null ? "" : command);
     if (parts.isEmpty()) return false;

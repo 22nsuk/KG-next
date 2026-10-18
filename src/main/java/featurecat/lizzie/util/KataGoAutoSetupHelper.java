@@ -1089,6 +1089,7 @@ public final class KataGoAutoSetupHelper {
       }
     }
     if (!needsRewrite
+        && canUpdateAnalysisCommand()
         && hasRelativeBundledPath(
             Lizzie.config.uiConfig.optString("analysis-engine-command", ""))) {
       needsRewrite = true;
@@ -1120,29 +1121,19 @@ public final class KataGoAutoSetupHelper {
         return false;
       }
       ArrayList<EngineData> engines = Utils.getEngineData();
-      int defaultEngine = Lizzie.config.uiConfig.optInt("default-engine", -1);
-      boolean repairDefault = false;
-      if (defaultEngine >= 0 && defaultEngine < engines.size()) {
-        EngineData engineData = engines.get(defaultEngine);
-        repairDefault = shouldRepairBundledCommand(engineData, snapshot);
-      }
-      if (!repairDefault) {
-        for (EngineData engineData : engines) {
-          if (engineData != null
-              && engineData.isDefault
-              && shouldRepairBundledCommand(engineData, snapshot)) {
-            repairDefault = true;
-            break;
-          }
-        }
-      }
+      int startupEngineIndex = resolveStartupEngineIndex(engines);
+      boolean repairStartup =
+          startupEngineIndex >= 0
+              && startupEngineIndex < engines.size()
+              && shouldRepairBundledCommand(engines.get(startupEngineIndex), snapshot);
       boolean repairAnalysis =
-          shouldRepairAuxCommand(
-              Lizzie.config.uiConfig.optString("analysis-engine-command", ""),
-              snapshot.enginePath,
-              snapshot.analysisConfigPath,
-              snapshot.activeWeightPath);
-      if (!(repairDefault || repairAnalysis)) {
+          canUpdateAnalysisCommand()
+              && shouldRepairAuxCommand(
+                  Lizzie.config.uiConfig.optString("analysis-engine-command", ""),
+                  snapshot.enginePath,
+                  snapshot.analysisConfigPath,
+                  snapshot.activeWeightPath);
+      if (!(repairStartup || repairAnalysis)) {
         return false;
       }
       applyAutoSetup(snapshot.withActiveWeight(snapshot.activeWeightPath), false);
@@ -1933,7 +1924,7 @@ public final class KataGoAutoSetupHelper {
     int existingIndex = findManagedWeightProfileIndex(engines, resolvedSnapshot);
     if (existingIndex < 0) {
       existingIndex =
-          findManagedEngineIndex(engines, AUTO_SETUP_ENGINE_NAME, resolvedSnapshot.appRoot);
+          findManagedEngineIndex(engines, AUTO_SETUP_ENGINE_NAME, resolvedSnapshot);
     }
     String engineName =
         existingIndex >= 0
@@ -1948,7 +1939,7 @@ public final class KataGoAutoSetupHelper {
     int existingIndex = findManagedWeightProfileIndex(engines, resolvedSnapshot);
     String profileName;
     if (existingIndex >= 0
-        && (BundledKataGoProfile.isManaged(engines.get(existingIndex))
+        && (isManagedBundledProfile(engines.get(existingIndex))
             || (engines.get(existingIndex).name != null
                 && engines.get(existingIndex).name.startsWith(WEIGHT_ENGINE_NAME_PREFIX)))) {
       profileName = engines.get(existingIndex).name;
@@ -1973,7 +1964,7 @@ public final class KataGoAutoSetupHelper {
       throws IOException {
     ArrayList<EngineData> engines = Utils.getEngineData();
     if (snapshot == null) snapshot = inspectLocalSetup();
-    int existingIndex = findManagedEngineIndex(engines, engineName, snapshot.appRoot);
+    int existingIndex = findManagedEngineIndex(engines, engineName, snapshot);
     if (existingIndex < 0 && preferredExecutable != null) {
       existingIndex = findEngineIndexByExecutable(engines, preferredExecutable);
     }
@@ -2027,7 +2018,7 @@ public final class KataGoAutoSetupHelper {
     int engineIndex =
         preferredEngineIndex >= 0 && preferredEngineIndex < engines.size()
             ? preferredEngineIndex
-            : findManagedEngineIndex(engines, resolvedEngineName, snapshot.appRoot);
+            : findManagedEngineIndex(engines, resolvedEngineName, snapshot);
     EngineData engineData;
     boolean createdEngine = engineIndex < 0;
     if (engineIndex >= 0) {
@@ -2037,6 +2028,11 @@ public final class KataGoAutoSetupHelper {
       engines.add(engineData);
       engineIndex = engines.size() - 1;
     }
+    // Capture ownership before rewriting; a reused user command must not regain it by name.
+    boolean managedProfile =
+        isManagedBundledProfile(engineData)
+            || BundledKataGoProfile.canMigrate(engineData, snapshot.appRoot)
+            || (createdEngine && isManagedWeightProfileName(resolvedEngineName));
 
     for (int i = 0; i < engines.size(); i++) {
       EngineData existing = engines.get(i);
@@ -2051,7 +2047,8 @@ public final class KataGoAutoSetupHelper {
       engineData.name = resolvedEngineName;
     }
     engineData.commands = engineCommand;
-    if (BundledKataGoProfile.isDefaultCommand(engineCommand, snapshot.appRoot, false)) {
+    if (managedProfile
+        || BundledKataGoProfile.isDefaultCommand(engineCommand, snapshot.appRoot, false)) {
       BundledKataGoProfile.claim(engineData);
     }
     engineData.preload = createdEngine ? false : engineData.preload;
@@ -2086,7 +2083,8 @@ public final class KataGoAutoSetupHelper {
     candidateUi.put(
         "katago-preferred-weight-path",
         snapshot.activeWeightPath.toAbsolutePath().normalize().toString());
-    if (!Lizzie.config.analysisEngineCommandCustomized) {
+    boolean updateAnalysisCommand = canUpdateAnalysisCommand();
+    if (updateAnalysisCommand) {
       candidateUi.put("analysis-engine-command", analysisCommand);
     }
     candidateUi.put(
@@ -2107,14 +2105,18 @@ public final class KataGoAutoSetupHelper {
     } catch (UncheckedIOException failure) {
       throw failure.getCause();
     }
-    if (!Lizzie.config.analysisEngineCommandCustomized)
-      Lizzie.config.analysisEngineCommand = analysisCommand;
+    if (updateAnalysisCommand) Lizzie.config.analysisEngineCommand = analysisCommand;
     return new SetupResult(
         inspectSavedEngine(engineData), engineIndex, resolvedEngineName, createdEngine);
   }
 
   private static int normalizeBoardSize(int size) {
     return size > 0 ? size : 19;
+  }
+
+  private static boolean canUpdateAnalysisCommand() {
+    return !Lizzie.config.analysisEngineCommandCustomized
+        && !Utils.getAnalysisEngineRemoteEngineData().useJavaSSH;
   }
 
   private static float normalizeKomi(float komi) {
@@ -2177,15 +2179,30 @@ public final class KataGoAutoSetupHelper {
   }
 
   private static int findManagedEngineIndex(
-      ArrayList<EngineData> engines, String engineName, Path appRoot) {
+      ArrayList<EngineData> engines, String engineName, SetupSnapshot snapshot) {
     boolean bundledProfile =
         AUTO_SETUP_ENGINE_NAME.equals(engineName) || "KataGo Bundled".equals(engineName);
     if (bundledProfile) {
+      boolean cuda13 =
+          snapshot.enginePath != null
+              && BundledKataGoProfile.isCuda13Command(
+                  quoteCommandPath(snapshot.workingDir, snapshot.enginePath));
+      int firstManaged = -1;
       for (int i = 0; i < engines.size(); i++) {
-        if (BundledKataGoProfile.isManaged(engines.get(i))) return i;
+        EngineData entry = engines.get(i);
+        boolean matchesVariant =
+            cuda13
+                ? BundledKataGoProfile.isManagedCuda13(entry)
+                : BundledKataGoProfile.isManaged(entry);
+        if (!matchesVariant) continue;
+        if (!snapshot.savedEntryId.isBlank() && snapshot.savedEntryId.equals(entry.id)) return i;
+        if (firstManaged < 0) firstManaged = i;
       }
-      for (int i = 0; i < engines.size(); i++) {
-        if (BundledKataGoProfile.canMigrate(engines.get(i), appRoot)) return i;
+      if (firstManaged >= 0) return firstManaged;
+      if (!cuda13) {
+        for (int i = 0; i < engines.size(); i++) {
+          if (BundledKataGoProfile.canMigrate(engines.get(i), snapshot.appRoot)) return i;
+        }
       }
     } else {
       for (int i = 0; i < engines.size(); i++) {
@@ -2193,6 +2210,10 @@ public final class KataGoAutoSetupHelper {
       }
     }
     return -1;
+  }
+
+  private static boolean isManagedBundledProfile(EngineData entry) {
+    return BundledKataGoProfile.isManaged(entry) || BundledKataGoProfile.isManagedCuda13(entry);
   }
 
   private static int findEngineIndexByExecutable(
@@ -2224,21 +2245,23 @@ public final class KataGoAutoSetupHelper {
       return -1;
     }
     List<String> generated = Utils.splitCommand(generatedGtpCommand(snapshot));
+    int firstMatch = -1;
     for (int i = 0; i < engines.size(); i++) {
       EngineData engineData = engines.get(i);
       if (engineData == null
           || engineData.useJavaSSH
           || (!engineData.managedProfileType.isBlank()
-              && !BundledKataGoProfile.isManaged(engineData))
-          || (!BundledKataGoProfile.isManaged(engineData)
+              && !isManagedBundledProfile(engineData))
+          || (!isManagedBundledProfile(engineData)
               && !isManagedWeightProfileName(engineData.name))) {
         continue;
       }
       if (generated.equals(Utils.splitCommand(engineData.commands))) {
-        return i;
+        if (!snapshot.savedEntryId.isBlank() && snapshot.savedEntryId.equals(engineData.id)) return i;
+        if (firstMatch < 0) firstMatch = i;
       }
     }
-    return -1;
+    return firstMatch;
   }
 
   private static boolean isManagedWeightProfileName(String engineName) {
@@ -3966,6 +3989,11 @@ public final class KataGoAutoSetupHelper {
   private static int resolveStartupEngineIndex(ArrayList<EngineData> engines) {
     if (engines == null || engines.isEmpty()) {
       return -1;
+    }
+    // Inspect and repair the same selected profile when startup uses the last engine.
+    int configuredStartup = configuredStartupEngineIndex(engines);
+    if (configuredStartup >= 0 && configuredStartup < engines.size()) {
+      return configuredStartup;
     }
     int defaultEngine = Lizzie.config.uiConfig.optInt("default-engine", -1);
     if (defaultEngine >= 0 && defaultEngine < engines.size()) {

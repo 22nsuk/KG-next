@@ -35,10 +35,324 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.GZIPOutputStream;
+import org.json.JSONArray;
+import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 public class KataGoAutoSetupHelperTest {
+  @ParameterizedTest
+  @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+  void applyingCudaVariantPreservesSiblingAndManualSettings(boolean cuda13, boolean remoteAnalysis)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-cuda-variant-selection");
+    Path first = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path second = touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path bundled = touch(root.resolve("weights/default.bin.gz"));
+    Path alternate = touch(root.resolve("weights/selected.bin.gz"));
+    Path manualEngine = touch(root.resolve("manual/katago"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> original = new ArrayList<>(List.of(
+          engineData("내 CUDA 12", first, gtp, bundled, false),
+          engineData("내 CUDA 13", second, gtp, bundled, false),
+          engineData("Manual default", manualEngine, gtp, bundled, true)));
+      for (int index = 0; index < 2; index++) {
+        EngineData entry = original.get(index);
+        BundledKataGoProfile.claim(entry);
+        entry.preload = true;
+        entry.komi = 6.5F;
+        entry.width = 13;
+        entry.height = 9;
+        entry.initialCommand = "kata-set-rules chinese";
+      }
+      String customAnalysis = remoteAnalysis
+          ? "\"engines/katago/windows-x64/katago.exe\" analysis -model \"weights/remote.bin.gz\""
+              + " -config \"engines/katago/configs/analysis.cfg\""
+          : "my-katago analysis -model my-model.bin.gz";
+      JSONObject remoteSettings = new JSONObject()
+          .put("useJavaSSH", true).put("ip", "example.invalid").put("port", "2222")
+          .put("userName", "fixture-user").put("useKeyGen", true)
+          .put("keyGenPath", root.resolve("fixture-key").toString());
+      if (remoteAnalysis) {
+        Lizzie.config.leelazConfig.put("analysis-engine-ssh-info", remoteSettings);
+      }
+      Lizzie.config.analysisEngineCommand = customAnalysis;
+      Lizzie.config.analysisEngineCommandCustomized = !remoteAnalysis;
+      Lizzie.config.uiConfig
+          .put("autoload-default", false).put("autoload-empty", true).put("autoload-last", false)
+          .put("last-engine", 2)
+          .put("analysis-engine-command", customAnalysis)
+          .put("analysis-engine-command-customized", !remoteAnalysis);
+      Utils.saveEngineSettings(original);
+      int target = cuda13 ? 1 : 0;
+      Path executable = cuda13 ? second : first;
+      var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(original.get(target));
+      List<String> expectedIds = original.stream().map(entry -> entry.id).toList();
+      for (Path weight : List.of(bundled, alternate)) {
+        var result = KataGoAutoSetupHelper.applyAutoSetup(snapshot.withActiveWeight(weight), false);
+        assertFalse(result.createdEngine);
+        assertEquals(target, result.engineIndex);
+        assertEquals(executable, result.snapshot.enginePath);
+        assertEquals(weight, result.snapshot.activeWeightPath);
+        assertFalse(KataGoAutoSetupHelper.migrateAutoSetupCommandsIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenBundledCommandsIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenStartupEngineIfNeeded());
+        ArrayList<EngineData> actual = Utils.getEngineData();
+        assertEquals(expectedIds, actual.stream().map(entry -> entry.id).toList());
+        for (int index = 0; index < original.size(); index++) {
+          JSONObject expected = Utils.engineDataToJson(original.get(index));
+          if (index == target) {
+            String command = engineData("", executable, gtp, weight, false).commands;
+            expected.put("command", command).put("managedProfileCommand", command);
+          }
+          assertTrue(expected.similar(Utils.engineDataToJson(actual.get(index))),
+              "Only the selected variant's generated command may change");
+        }
+        JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+        assertPersistedEngineSettings(actual, persisted);
+        JSONObject ui = persisted.getJSONObject("ui");
+        assertEquals(2, ui.getInt("default-engine"));
+        assertEquals(2, ui.getInt("last-engine"));
+        assertFalse(ui.getBoolean("autoload-default"));
+        assertTrue(ui.getBoolean("autoload-empty"));
+        assertFalse(ui.getBoolean("autoload-last"));
+        assertEquals(customAnalysis, ui.getString("analysis-engine-command"));
+        assertEquals(customAnalysis, Lizzie.config.analysisEngineCommand);
+        assertEquals(!remoteAnalysis, ui.getBoolean("analysis-engine-command-customized"));
+        if (remoteAnalysis) {
+          assertTrue(remoteSettings.similar(persisted.getJSONObject("leelaz")
+              .getJSONObject("analysis-engine-ssh-info")));
+        }
+      }
+    });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void creatingMissingCudaVariantDoesNotClaimSiblingOrUserProfiles(boolean cuda13)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-new-cuda-variant");
+    Path first = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path second = touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path weight = touch(root.resolve("weights/default.bin.gz"));
+    Path selected = cuda13 ? second : first;
+    Path sibling = cuda13 ? first : second;
+    withUserDirAndConfig(root, () -> {
+      EngineData other = engineData("Sibling CUDA", sibling, gtp, weight, true);
+      EngineData remote = engineData("KataGo Auto Setup", selected, gtp, weight, false);
+      EngineData edited = engineData("KataGo Auto Setup", selected, gtp, weight, false);
+      for (EngineData entry : List.of(other, remote, edited)) BundledKataGoProfile.claim(entry);
+      remote.useJavaSSH = true;
+      remote.ip = "example.invalid";
+      remote.port = "2222";
+      remote.userName = "fixture-user";
+      remote.useKeyGen = true;
+      remote.keyGenPath = root.resolve("fixture-key").toString();
+      edited.commands += " -override-config numSearchThreads=3";
+      ArrayList<EngineData> original = new ArrayList<>(List.of(other, remote, edited));
+      Lizzie.config.uiConfig
+          .put("autoload-default", false).put("autoload-empty", true).put("autoload-last", false);
+      Utils.saveEngineSettings(original);
+      var snapshot = KataGoAutoSetupHelper.inspectSelectedLocalKataGo(selected, gtp, weight).toSnapshot();
+      var created = KataGoAutoSetupHelper.applyAutoSetup(snapshot, false);
+      assertTrue(created.createdEngine);
+      assertEquals(3, created.engineIndex);
+      for (int selection = 0; selection < 2; selection++) {
+        var repeated = KataGoAutoSetupHelper.applyAutoSetup(snapshot, false);
+        assertFalse(repeated.createdEngine);
+        assertEquals(created.engineIndex, repeated.engineIndex);
+        ArrayList<EngineData> actual = Utils.getEngineData();
+        assertEquals(4, actual.size());
+        for (int index = 0; index < original.size(); index++) {
+          assertTrue(Utils.engineDataToJson(original.get(index))
+              .similar(Utils.engineDataToJson(actual.get(index))),
+              "The other variant, SSH fields, and edited command must remain untouched");
+        }
+        EngineData added = actual.get(created.engineIndex);
+        assertEquals(created.snapshot.savedEntryId, added.id);
+        assertEquals(engineData("", selected, gtp, weight, false).commands, added.commands);
+        assertEquals(cuda13 ? BundledKataGoProfile.CUDA13_TYPE : BundledKataGoProfile.TYPE,
+            added.managedProfileType);
+        assertEquals(added.commands, added.managedProfileCommand);
+        JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+        assertPersistedEngineSettings(actual, persisted);
+        assertEquals(0, persisted.getJSONObject("ui").getInt("default-engine"));
+      }
+    });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void addedWeightProfileRetainsRenamedOwnerForEachCudaVariant(boolean cuda13) throws Exception {
+    Path root = Files.createTempDirectory("katago-cuda-weight-profile");
+    Path first = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path second = touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path bundled = touch(root.resolve("weights/default.bin.gz"));
+    Path alternate = touch(root.resolve("weights/downloaded.bin.gz"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> original = new ArrayList<>(List.of(
+          engineData("CUDA12", first, gtp, bundled, true),
+          engineData("CUDA13", second, gtp, bundled, false)));
+      for (EngineData entry : original) BundledKataGoProfile.claim(entry);
+      Lizzie.config.uiConfig
+          .put("autoload-default", false).put("autoload-empty", true).put("autoload-last", false);
+      Utils.saveEngineSettings(original);
+      var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(original.get(cuda13 ? 1 : 0));
+      var existing = KataGoAutoSetupHelper.addWeightEngineProfile(snapshot);
+      assertFalse(existing.createdEngine);
+      assertEquals(cuda13 ? 1 : 0, existing.engineIndex);
+      assertEquals(cuda13 ? "CUDA13" : "CUDA12", existing.engineName);
+      var selected = snapshot.withActiveWeight(alternate);
+      var added = KataGoAutoSetupHelper.addWeightEngineProfile(selected);
+      assertTrue(added.createdEngine);
+      assertEquals(2, added.engineIndex);
+      ArrayList<EngineData> entries = Utils.getEngineData();
+      EngineData customized = entries.get(added.engineIndex);
+      customized.name = "내가 고른 모델";
+      customized.preload = true;
+      customized.komi = 6.5F;
+      customized.initialCommand = "kata-set-rules chinese";
+      Utils.saveEngineSettings(entries);
+      JSONObject expected = Utils.engineDataToJson(customized);
+      var repeated = KataGoAutoSetupHelper.addWeightEngineProfile(selected);
+      var reapplied = KataGoAutoSetupHelper.applyAutoSetup(selected, false);
+      for (var result : List.of(repeated, reapplied)) {
+        assertFalse(result.createdEngine);
+        assertEquals(added.engineIndex, result.engineIndex);
+        assertEquals(customized.id, result.snapshot.savedEntryId);
+        assertEquals(customized.name, result.engineName);
+      }
+      ArrayList<EngineData> actual = Utils.getEngineData();
+      assertEquals(3, actual.size());
+      assertTrue(expected.similar(Utils.engineDataToJson(actual.get(added.engineIndex))));
+      assertEquals(cuda13 ? BundledKataGoProfile.CUDA13_TYPE : BundledKataGoProfile.TYPE,
+          actual.get(added.engineIndex).managedProfileType);
+      for (int index = 0; index < original.size(); index++) {
+        assertEquals(original.get(index).commands, actual.get(index).commands);
+        assertEquals(original.get(index).id, actual.get(index).id);
+        assertFalse(actual.get(index).isDefault);
+      }
+      JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+      assertPersistedEngineSettings(actual, persisted);
+      assertEquals(2, persisted.getJSONObject("ui").getInt("default-engine"));
+      assertTrue(persisted.getJSONObject("ui").getBoolean("autoload-empty"));
+    });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void explicitSavedProfileSelectionKeepsItsIdentityAmongMatchingCommands(boolean cuda13)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-saved-profile-selection");
+    Path engine = touch(root.resolve("engines/katago")
+        .resolve(cuda13 ? "windows-x64-nvidia-cuda13" : "windows-x64").resolve("katago.exe"));
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path bundled = touch(root.resolve("weights/default.bin.gz"));
+    Path alternate = touch(root.resolve("weights/alternate.bin.gz"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> original = new ArrayList<>(List.of(
+          engineData("First profile", engine, gtp, bundled, true),
+          engineData("Selected profile", engine, gtp, bundled, false)));
+      for (EngineData entry : original) BundledKataGoProfile.claim(entry);
+      original.get(1).preload = true;
+      original.get(1).komi = 6.5F;
+      Lizzie.config.uiConfig
+          .put("autoload-default", false).put("autoload-empty", true).put("autoload-last", false);
+      Utils.saveEngineSettings(original);
+      var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(original.get(1));
+      var applied = KataGoAutoSetupHelper.applyAutoSetup(snapshot, false);
+      assertEquals(1, applied.engineIndex);
+      assertFalse(applied.createdEngine);
+      assertEquals(0, Lizzie.config.uiConfig.getInt("default-engine"));
+      var reselected = KataGoAutoSetupHelper.addWeightEngineProfile(snapshot);
+      assertEquals(1, reselected.engineIndex);
+      assertFalse(reselected.createdEngine);
+      var changed = KataGoAutoSetupHelper.applyAutoSetup(snapshot.withActiveWeight(alternate), false);
+      assertEquals(1, changed.engineIndex);
+      assertFalse(changed.createdEngine);
+      ArrayList<EngineData> actual = Utils.getEngineData();
+      assertEquals(original.stream().map(entry -> entry.id).toList(),
+          actual.stream().map(entry -> entry.id).toList());
+      assertEquals(original.get(0).commands, actual.get(0).commands);
+      assertEquals("Selected profile", actual.get(1).name);
+      assertTrue(actual.get(1).preload);
+      assertEquals(6.5F, actual.get(1).komi);
+      assertEquals(engineData("", engine, gtp, alternate, true).commands, actual.get(1).commands);
+      assertEquals(actual.get(1).commands, actual.get(1).managedProfileCommand);
+      JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+      assertPersistedEngineSettings(actual, persisted);
+      assertEquals(1, persisted.getJSONObject("ui").getInt("default-engine"));
+    });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void lastEngineStartupPreservesTheSeparateDefaultProfile(boolean differentCudaVariant)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-last-engine-preservation");
+    Path first = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path last = differentCudaVariant
+        ? touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe")) : first;
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path firstWeight = touch(root.resolve("weights/default.bin.gz"));
+    Path lastWeight = touch(root.resolve("weights/last-model.bin.gz"));
+    Files.createDirectories(root.resolve("save"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> entries = new ArrayList<>(List.of(
+          engineData("Default profile", first, gtp, firstWeight, true),
+          engineData("Last profile", last, gtp, lastWeight, false)));
+      for (EngineData entry : entries) BundledKataGoProfile.claim(entry);
+      Lizzie.config.uiConfig.put("autoload-default", false)
+          .put("autoload-last", true).put("autoload-empty", false)
+          .put("default-engine", 0).put("last-engine", 1)
+          .put("analysis-engine-command", "my-independent-analysis")
+          .put("analysis-engine-command-customized", true);
+      Lizzie.config.analysisEngineCommand = "my-independent-analysis";
+      Lizzie.config.analysisEngineCommandCustomized = true;
+      Utils.saveEngineSettings(entries);
+      Lizzie.config.save();
+      List<JSONObject> expected = Utils.getEngineData().stream()
+          .map(Utils::engineDataToJson).toList();
+      for (int restart = 0; restart < 3; restart++) {
+        Lizzie.config = ConfigTestHelper.createBootstrapped(root);
+        Utils.applyMaintainedDefaultSettings();
+        ArrayList<EngineData> actual = Utils.getEngineData();
+        assertEquals(2, actual.size());
+        for (int index = 0; index < actual.size(); index++) {
+          assertTrue(expected.get(index).similar(Utils.engineDataToJson(actual.get(index))),
+              "Starting the last engine must preserve the separate default profile");
+        }
+        assertFalse(KataGoAutoSetupHelper.repairBrokenStartupEngineIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenBundledCommandsIfNeeded());
+        JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+        assertPersistedEngineSettings(actual, persisted);
+        assertEquals(0, persisted.getJSONObject("ui").getInt("default-engine"));
+        assertEquals(1, persisted.getJSONObject("ui").getInt("last-engine"));
+        assertTrue(persisted.getJSONObject("ui").getBoolean("autoload-last"));
+        assertFalse(persisted.getJSONObject("ui").getBoolean("autoload-default"));
+      }
+    });
+  }
+
+  private static void assertPersistedEngineSettings(List<EngineData> engines, JSONObject config) {
+    JSONArray persisted = config.getJSONObject("leelaz").getJSONArray("engine-settings-list");
+    assertEquals(engines.size(), persisted.length());
+    for (int index = 0; index < engines.size(); index++) {
+      assertTrue(Utils.engineDataToJson(engines.get(index)).similar(persisted.getJSONObject(index)));
+    }
+  }
+
   @Test
   void automaticRepairPreservesBothCudaVariantsWhenBoardAndAnalysisUseDifferentEngines()
       throws Exception {
@@ -2127,7 +2441,9 @@ public class KataGoAutoSetupHelperTest {
           assertFalse(repeated.createdEngine);
           assertEquals(second.engineIndex, repeated.engineIndex);
           assertEquals(2, engines.size());
-          assertTrue(engines.get(first.engineIndex).name.startsWith("KataGo · "));
+          assertEquals(KataGoAutoSetupHelper.getAutoSetupEngineName(),
+              engines.get(first.engineIndex).name,
+              "Selecting the same model must retain the existing owned profile's name");
           assertTrue(engines.get(first.engineIndex).commands.contains(firstWeight.toString()));
           assertTrue(engines.get(second.engineIndex).commands.contains(secondWeight.toString()));
           assertFalse(engines.get(first.engineIndex).isDefault);
