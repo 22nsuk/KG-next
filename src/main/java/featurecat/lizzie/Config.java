@@ -23,6 +23,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
@@ -631,6 +632,56 @@ public class Config {
         appRoot.resolve(BUNDLED_WEIGHT_ROOT).resolve(BUNDLED_WEIGHT_NAME));
   }
 
+  private static String rebindManagedBundledCommand(String command, Path currentRoot) {
+    List<String> parts = Utils.splitCommand(command);
+    if (parts.size() < 2
+        || !("gtp".equals(parts.get(1)) || "analysis".equals(parts.get(1)))) return command;
+    currentRoot = currentRoot.toAbsolutePath().normalize();
+    Optional<Path> source = bundledAppRootForExecutable(currentRoot, parts.get(0));
+    if (source.isEmpty() || source.get().equals(currentRoot)) return command;
+    Path previousRoot = source.get();
+    // A portable package keeps downloaded models beside app/, in user-data/. Only this known
+    // layout authorizes relocating a sibling directory; arbitrary external paths stay untouched.
+    boolean portableData =
+        currentRoot.getFileName() != null
+            && previousRoot.getFileName() != null
+            && "app".equals(currentRoot.getFileName().toString())
+            && "app".equals(previousRoot.getFileName().toString())
+            && currentRoot.getParent() != null
+            && previousRoot.getParent() != null
+            && Files.isRegularFile(
+                currentRoot.getParent().resolve(WINDOWS_PORTABLE_MARKER_NAME));
+    Path previousData = portableData ? previousRoot.getParent().resolve("user-data") : null;
+    Path currentData = portableData ? currentRoot.getParent().resolve("user-data") : null;
+    for (int i = 0; i < parts.size(); i++) {
+      if (i != 0
+          && !"-model".equals(parts.get(i - 1))
+          && !"-config".equals(parts.get(i - 1))) continue;
+      Path original;
+      try {
+        original = Path.of(parts.get(i));
+      } catch (InvalidPathException invalidPath) {
+        continue;
+      }
+      if (!original.isAbsolute()) continue;
+      original = original.normalize();
+      Path relocated;
+      if (original.startsWith(previousRoot)) {
+        relocated = currentRoot.resolve(previousRoot.relativize(original));
+      } else if (portableData && original.startsWith(previousData)) {
+        relocated = currentData.resolve(previousData.relativize(original));
+      } else {
+        continue;
+      }
+      // Generated paths are quoted. A missing destination never licenses replacing the user's
+      // chosen model/config with a different default, even when the old package has been removed.
+      if (Files.isRegularFile(relocated)) {
+        command = command.replace('"' + parts.get(i) + '"', quotePath(relocated));
+      }
+    }
+    return command;
+  }
+
   private boolean applyBundledKataGoDefaults() {
     BundledKataGoConfig bundledConfig = detectBundledKataGoConfig();
     if (bundledConfig == null) {
@@ -650,10 +701,17 @@ public class Config {
     int legacyIndex = -1;
     int legacyBundledIndex = -1;
     int autoSetupIndex = -1;
+    boolean hadManagedProfile = false;
     for (int i = 0; i < engineSettings.length(); i++) {
       JSONObject entry = engineSettings.optJSONObject(i);
       if (entry == null) continue;
+      hadManagedProfile |=
+          BundledKataGoProfile.isManaged(entry) || BundledKataGoProfile.isManagedCuda13(entry);
       if (BundledKataGoProfile.isManaged(entry)) {
+        // Every owned weight profile must move before startup discovery selects one of them.
+        entry.put("command",
+            rebindManagedBundledCommand(entry.optString("command"), bundledConfig.appRoot));
+        BundledKataGoProfile.claim(entry);
         if (bundledIndex < 0) bundledIndex = i;
       } else if (BundledKataGoProfile.canMigrate(entry, bundledConfig.appRoot)) {
         if (legacyIndex < 0) legacyIndex = i;
@@ -695,26 +753,36 @@ public class Config {
     if (bundledEngine.optString("id", "").isBlank()) {
       bundledEngine.put("id", UUID.randomUUID().toString());
     }
-    bundledEngine.put("command", bundledConfig.engineCommand);
+    if (!BundledKataGoProfile.isManaged(bundledEngine)) {
+      // Untagged legacy defaults still follow their existing one-time migration contract.
+      bundledEngine.put("command", bundledConfig.engineCommand);
+    }
     BundledKataGoProfile.claim(bundledEngine);
-      if (!newProfile) {
-        boolean analysisCustomized =
-            AnalysisEngineCommandHelper.isAnalysisCommandCustomized(
-                ui.has("analysis-engine-command-customized"),
-                ui.optBoolean("analysis-engine-command-customized", false),
-                ui.optString("analysis-engine-command", ""));
-        String analysisCommand = ui.optString("analysis-engine-command", "");
-        if ((!analysisCustomized
-                && !analysisCommandUsesJavaSsh(leelaz)
-                && isManagedBundledDefaultCommand(analysisCommand, bundledConfig.appRoot))
-            || isClearlyBrokenJavaJarCommand(analysisCommand)) {
-          ui.put("analysis-engine-command", bundledConfig.analysisCommand);
-          ui.put("analysis-engine-command-customized", false);
-        }
-        if (bundledConfig.transformerDefault) {
-          ui.put(DEFAULT_TRANSFORMER_MIGRATION_KEY, true);
-        }
+    if (!newProfile) {
+      boolean analysisCustomized =
+          AnalysisEngineCommandHelper.isAnalysisCommandCustomized(
+              ui.has("analysis-engine-command-customized"),
+              ui.optBoolean("analysis-engine-command-customized", false),
+              ui.optString("analysis-engine-command", ""));
+      String analysisCommand = ui.optString("analysis-engine-command", "");
+      boolean brokenAnalysisLauncher = isClearlyBrokenJavaJarCommand(analysisCommand);
+      if (!analysisCommandUsesJavaSsh(leelaz)
+          && (brokenAnalysisLauncher
+              || (!analysisCustomized
+                  && (analysisCommand.isBlank() || isBundledKataGoCommand(analysisCommand))))) {
+        boolean legacyDefault =
+            !hadManagedProfile
+                && isManagedBundledDefaultCommand(analysisCommand, bundledConfig.appRoot);
+        ui.put("analysis-engine-command",
+            brokenAnalysisLauncher || analysisCommand.isBlank() || legacyDefault
+                ? bundledConfig.analysisCommand
+                : rebindManagedBundledCommand(analysisCommand, bundledConfig.appRoot));
+        ui.put("analysis-engine-command-customized", false);
       }
+      if (bundledConfig.transformerDefault) {
+        ui.put(DEFAULT_TRANSFORMER_MIGRATION_KEY, true);
+      }
+    }
     if (createdBundledEngine) {
       bundledEngine.put("preload", false);
       bundledEngine.put("komi", 7.5);
@@ -794,8 +862,10 @@ public class Config {
     for (int i = 0; i < engines.length(); i++) {
       JSONObject candidate = engines.optJSONObject(i);
       if (candidate != null && BundledKataGoProfile.isManagedCuda13(candidate)) {
-        entry = candidate;
-        break;
+        candidate.put("command",
+            rebindManagedBundledCommand(candidate.optString("command"), appRoot));
+        BundledKataGoProfile.claim(candidate);
+        if (entry == null) entry = candidate;
       }
     }
     if (entry == null) {
@@ -805,11 +875,11 @@ public class Config {
           .put("preload", false)
           .put("komi", 7.5)
           .put("width", 19)
-          .put("height", 19);
+          .put("height", 19)
+          .put("command", cuda13.engineCommand);
       engines.put(entry);
     }
     if (entry.optString("id").isBlank()) entry.put("id", UUID.randomUUID().toString());
-    entry.put("command", cuda13.engineCommand);
     BundledKataGoProfile.claim(entry);
   }
 

@@ -6,6 +6,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Preserve managed engine profiles and selected models across restarts and portable package moves, including downloaded models in `user-data/weights`; keep CUDA12/CUDA13 profile selection separate and retain customized independent analysis commands.
 - Keep ordinary and low-visit candidate markers visible until the first complete variation preview is ready, preserving cancellation and stale-result protection.
 - Add problem-list sorting by loss or move order, keyboard navigation, stable selection and scroll position, and readable colors on supported custom theme surfaces.
 - Make contribution startup clear only the local board, classify permanent build failures without repeated launches, and keep output draining during delayed or modal notifications. Select a saved local engine executable from contribution settings without changing its analysis profile.

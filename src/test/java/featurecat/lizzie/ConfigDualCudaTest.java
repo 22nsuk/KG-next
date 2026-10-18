@@ -12,6 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ConfigDualCudaTest {
   @TempDir Path temp;
@@ -79,6 +81,51 @@ class ConfigDualCudaTest {
     assertFalse(repaired.getString("command").contains(first.toString()));
     assertTrue(repaired.getString("command").contains(moved.resolve("weights/default.bin.gz").toString()));
     assertTrue(BundledKataGoProfile.isManagedCuda13(repaired));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void everyOptionalWeightProfileKeepsItsModelAndSettingsAfterRelocation(boolean removeOldEngine)
+      throws Exception {
+    Path previous = bundle("previous CUDA13 한글");
+    Path current = bundle("current CUDA13 한글");
+    String[] models = {"explicit-legacy.bin.gz", "my-study.bin.gz"};
+    JSONArray engines = new JSONArray();
+    register(previous, engines);
+    JSONObject template = new JSONObject(engines.getJSONObject(0).toString());
+    engines.remove(0);
+    for (int i = 0; i < models.length; i++) {
+      for (Path root : new Path[] {previous, current}) {
+        Files.writeString(root.resolve("weights").resolve(models[i]), "selected model");
+      }
+      JSONObject entry = new JSONObject(template.toString())
+          .put("id", "cuda13-model-" + i)
+          .put("name", "My CUDA13 model " + i)
+          .put("isDefault", i == 1)
+          .put("preload", true)
+          .put("komi", 6.5)
+          .put("command", template.getString("command").replace("default.bin.gz", models[i]));
+      BundledKataGoProfile.claim(entry);
+      engines.put(entry);
+    }
+    JSONArray before = new JSONArray(engines.toString());
+    if (removeOldEngine) {
+      Files.delete(previous.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+    }
+    for (int restart = 0; restart < 3; restart++) {
+      register(current, engines);
+      assertEquals(2, engines.length());
+      for (int i = 0; i < engines.length(); i++) {
+        JSONObject expected = new JSONObject(before.getJSONObject(i).toString());
+        expected.put("command", expected.getString("command")
+            .replace(previous.toString(), current.toString()));
+        BundledKataGoProfile.claim(expected);
+        assertTrue(expected.similar(engines.getJSONObject(i)));
+        assertTrue(BundledKataGoProfile.isManagedCuda13(engines.getJSONObject(i)));
+        assertFalse(BundledKataGoProfile.isManaged(engines.getJSONObject(i)));
+      }
+      engines = new JSONArray(engines.toString());
+    }
   }
 
   @Test
