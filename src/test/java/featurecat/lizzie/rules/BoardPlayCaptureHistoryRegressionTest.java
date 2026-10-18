@@ -8,7 +8,10 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.util.StoneSoundTestSupport;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -334,6 +337,37 @@ class BoardPlayCaptureHistoryRegressionTest {
       assertEquals(blackCaptures, env.current().getData().blackCaptures);
       assertEquals(moveNumber, env.current().getData().moveNumber);
       assertFalse(board.nextMove(false), "redo past the end should be a no-op.");
+    }
+  }
+
+  @Test
+  void forwardNavigationSoundsEachDestinationMove() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.place(1, 0, Stone.BLACK);
+      board.place(0, 0, Stone.WHITE);
+      board.place(0, 1, Stone.BLACK);
+      board.place(4, 4, Stone.WHITE);
+      List<BoardHistoryNode> mainline = new ArrayList<>();
+      BoardHistoryNode node = board.getHistory().getStart();
+      while (node.next().isPresent()) {
+        node = node.next().orElseThrow();
+        mainline.add(node);
+      }
+      assertTrue(
+          mainline.get(2).getData().blackCaptures > mainline.get(1).getData().blackCaptures,
+          "the third move must capture so its sound differs from its neighbours.");
+      while (board.previousMove(false)) {}
+      List<BoardHistoryNode> sounded = new ArrayList<>();
+      Lizzie.config.playSound = true;
+      StoneSoundTestSupport.setStoneSound(sounded::add);
+      try {
+        while (board.nextMove(false)) {}
+      } finally {
+        StoneSoundTestSupport.setStoneSound(null);
+      }
+
+      assertEquals(mainline, sounded);
     }
   }
 

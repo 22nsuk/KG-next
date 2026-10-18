@@ -22,6 +22,7 @@ import featurecat.lizzie.util.Utils;
 import java.awt.Dialog;
 import java.awt.Window;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -398,6 +399,15 @@ public final class EngineProcessFailureTest {
       DesktopProbeProcess.phase(result, "production-cleanup-complete");
       exitCode = 0;
     } catch (Throwable failure) {
+      try {
+        StringBuilder threads = new StringBuilder();
+        for (var thread : ManagementFactory.getThreadMXBean().dumpAllThreads(true, true)) {
+          threads.append(thread).append('\n');
+        }
+        Files.writeString(result.resolveSibling("failure-threads.txt"), threads);
+      } catch (Throwable diagnosticFailure) {
+        failure.addSuppressed(diagnosticFailure);
+      }
       Files.writeString(
           result,
           "failure.class="

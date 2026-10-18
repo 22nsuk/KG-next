@@ -1383,7 +1383,7 @@ public class MoreEngines extends JPanel {
 
   private void applyThreadPolicyOffEdt(String entryId) {
     if (entryId == null || entryId.isBlank()) return;
-    new SwingWorker<Void, Void>() {
+    SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
       @Override
       protected Void doInBackground() {
         EngineData saved = EngineThreadPolicy.findSavedEntry(entryId);
@@ -1403,7 +1403,12 @@ public class MoreEngines extends JPanel {
         updateThreadPolicyDetails();
         scheduleThreadPolicyStatusRefresh(entryId);
       }
-    }.execute();
+    };
+    executeThreadPolicyWorker(worker);
+  }
+
+  void executeThreadPolicyWorker(SwingWorker<Void, Void> worker) {
+    worker.execute();
   }
 
   private void scheduleThreadPolicyStatusRefresh(String entryId) {

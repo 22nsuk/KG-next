@@ -10436,7 +10436,25 @@ public class EngineManager {
       }
       throw (Error) failure[0];
     }
-    return committed[0];
+    EngineGamePostMoveToken token = committed[0];
+    if (token != null) {
+      playEngineGameMoveSound(token.boardNode);
+    }
+    return token;
+  }
+
+  /** Engine-game moves follow the global stone-sound preference; audio never fails the move. */
+  private static void playEngineGameMoveSound(BoardHistoryNode committedNode) {
+    if (Lizzie.config == null || !Lizzie.config.playSound) {
+      return;
+    }
+    try {
+      Utils.playVoiceFile(committedNode);
+    } catch (RuntimeException soundFailure) {
+      ENGINE_LOG.warn(
+          "Engine-game move sound failed ({}); the committed move is unaffected",
+          soundFailure.getClass().getSimpleName());
+    }
   }
 
   static boolean isCurrentEngineGamePostMoveToken(EngineGamePostMoveToken token) {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.TrackingAnalysisController;
+import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.SGFParser;
 import java.awt.Robot;
 import java.nio.file.Files;
@@ -162,9 +163,16 @@ public class MoveFocusNativeAcceptanceIT {
       assertTrue(saved.contains("rootVisits="), "SGF must retain exact root visits");
       assertTrue(saved.contains("edgeVisits "), "SGF must retain edge allocations");
       Files.writeString(output.resolveSibling("saved.sgf"), saved);
-      assertTrue(Lizzie.frame.getDisplayNode().getData().rootVisits > 0);
+      BoardData displayed = Lizzie.frame.getDisplayNode().getData();
+      int verifiedRootVisits;
+      // The reader updates root visits under this monitor. Record the same coherent
+      // positive value we assert, not a second unsynchronized read after the screenshot.
+      synchronized (displayed) {
+        verifiedRootVisits = displayed.rootVisits;
+      }
+      assertTrue(verifiedRootVisits > 0);
       screenshot(output, "resumed");
-      result.put("rootVisits", Lizzie.frame.getDisplayNode().getData().rootVisits).put("status", "PASS");
+      result.put("rootVisits", verifiedRootVisits).put("status", "PASS");
       phase(output, result, "complete");
       exit = 0;
     } catch (Throwable failure) {

@@ -46,6 +46,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.StringTokenizer;
+import java.util.function.Consumer;
 import javax.swing.Box;
 import javax.swing.JComponent;
 import javax.swing.JTable;
@@ -66,6 +67,7 @@ public class Utils {
   public static String aesKey2 = "iyekeeay2ueeaesk";
   public static String iv2 = "s6st73f49adc4c5d";
   private static int msemaphoretryroom = 1;
+  private static volatile Consumer<BoardHistoryNode> stoneSoundForTest;
   private static final int MAX_AUTO_KATAGO_THREADS = 16;
   private static final String GTP_CONSOLE_MIGRATION_KEY = "migrated-hide-gtp-console-default-v2";
   private static final String APPLE_STYLE_MIGRATION_KEY = "migrated-apple-style-default-v1";
@@ -1082,7 +1084,22 @@ public class Utils {
   }
 
   public static void playVoiceFile() {
+    playVoiceFile(Lizzie.board.getHistory().getCurrentHistoryNode());
+  }
+
+  /** Replaces asynchronous stone-sound playback with {@code sound}; {@code null} restores it. */
+  static void setStoneSoundForTest(Consumer<BoardHistoryNode> sound) {
+    stoneSoundForTest = sound;
+  }
+
+  /** Plays the stone or capture sound for {@code node}, the move that was just placed. */
+  public static void playVoiceFile(BoardHistoryNode node) {
     if (Lizzie.config.notPlaySoundInSync && (LizzieFrame.urlSgf || Lizzie.frame.syncBoard)) return;
+    Consumer<BoardHistoryNode> testSound = stoneSoundForTest;
+    if (testSound != null) {
+      testSound.accept(node);
+      return;
+    }
     Runnable runnable =
         new Runnable() {
           public void run() {
@@ -1091,7 +1108,6 @@ public class Utils {
             }
             msemaphoretryroom--;
             try {
-              BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
               if (node.previous().isPresent()) {
                 if (node.getData().blackCaptures > node.previous().get().getData().blackCaptures) {
                   if (node.getData().blackCaptures - node.previous().get().getData().blackCaptures
