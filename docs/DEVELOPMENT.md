@@ -160,6 +160,11 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp
 - `FunctionSearchInputTest.chineseInputChain`
 - `FunctionSearchInputTest.englishInputChain`
 - `TeacherDialogRequestOwnershipTest` 的全部解说请求、修正、取消和 SGF 保存场景
+- `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
+
+官方最强模型用例通过本地 HTTP 服务返回受控元数据，点击生产窗口的刷新按钮并等待真实异步回调。
+它覆盖新增模型和命中已固定模型两种显示，验证当前模型、推荐卡片及配置文件不变；不下载或运行模型。
+韩文窗口截图保存在 `target/desktop-smoke/probes/official-strongest/`。
 
 解说用例运行真实 `TeacherDialog` 和 API-key 客户端，以本地 HTTP/SSE 服务代替收费模型。
 它们验证冻结证据、一次有界修正、光标导航后的原节点保存、后续问题的原始上下文，以及
