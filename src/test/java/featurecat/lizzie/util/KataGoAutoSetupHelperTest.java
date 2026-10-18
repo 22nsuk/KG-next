@@ -295,6 +295,56 @@ public class KataGoAutoSetupHelperTest {
     });
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void lastEngineStartupPreservesTheSeparateDefaultProfile(boolean differentCudaVariant)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-last-engine-preservation");
+    Path first = touch(root.resolve("engines/katago/windows-x64/katago.exe"));
+    Path last = differentCudaVariant
+        ? touch(root.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe")) : first;
+    Path gtp = touch(root.resolve("engines/katago/configs/gtp.cfg"));
+    touch(gtp.resolveSibling("analysis.cfg"));
+    Path firstWeight = touch(root.resolve("weights/default.bin.gz"));
+    Path lastWeight = touch(root.resolve("weights/last-model.bin.gz"));
+    Files.createDirectories(root.resolve("save"));
+    withUserDirAndConfig(root, () -> {
+      ArrayList<EngineData> entries = new ArrayList<>(List.of(
+          engineData("Default profile", first, gtp, firstWeight, true),
+          engineData("Last profile", last, gtp, lastWeight, false)));
+      for (EngineData entry : entries) BundledKataGoProfile.claim(entry);
+      Lizzie.config.uiConfig.put("autoload-default", false)
+          .put("autoload-last", true).put("autoload-empty", false)
+          .put("default-engine", 0).put("last-engine", 1)
+          .put("analysis-engine-command", "my-independent-analysis")
+          .put("analysis-engine-command-customized", true);
+      Lizzie.config.analysisEngineCommand = "my-independent-analysis";
+      Lizzie.config.analysisEngineCommandCustomized = true;
+      Utils.saveEngineSettings(entries);
+      Lizzie.config.save();
+      List<JSONObject> expected = Utils.getEngineData().stream()
+          .map(Utils::engineDataToJson).toList();
+      for (int restart = 0; restart < 3; restart++) {
+        Lizzie.config = ConfigTestHelper.createBootstrapped(root);
+        Utils.applyMaintainedDefaultSettings();
+        ArrayList<EngineData> actual = Utils.getEngineData();
+        assertEquals(2, actual.size());
+        for (int index = 0; index < actual.size(); index++) {
+          assertTrue(expected.get(index).similar(Utils.engineDataToJson(actual.get(index))),
+              "Starting the last engine must preserve the separate default profile");
+        }
+        assertFalse(KataGoAutoSetupHelper.repairBrokenStartupEngineIfNeeded());
+        assertFalse(KataGoAutoSetupHelper.repairBrokenBundledCommandsIfNeeded());
+        JSONObject persisted = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())));
+        assertPersistedEngineSettings(actual, persisted);
+        assertEquals(0, persisted.getJSONObject("ui").getInt("default-engine"));
+        assertEquals(1, persisted.getJSONObject("ui").getInt("last-engine"));
+        assertTrue(persisted.getJSONObject("ui").getBoolean("autoload-last"));
+        assertFalse(persisted.getJSONObject("ui").getBoolean("autoload-default"));
+      }
+    });
+  }
+
   private static void assertPersistedEngineSettings(List<EngineData> engines, JSONObject config) {
     JSONArray persisted = config.getJSONObject("leelaz").getJSONArray("engine-settings-list");
     assertEquals(engines.size(), persisted.length());

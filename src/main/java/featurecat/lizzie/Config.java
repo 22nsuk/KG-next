@@ -812,8 +812,8 @@ public class Config {
     }
 
     // Existing profiles may deliberately use manual or no-engine startup. Preserve that choice;
-    // only a new profile or an automatically loaded Java launcher whose JAR is gone may switch to
-    // the complete package's bundled engine.
+    // only a new profile or an automatically loaded local Java launcher whose JAR is gone may
+    // switch to the complete package's bundled engine.
     int configuredDefaultIndex = ui.optInt("default-engine", -1);
     JSONObject configuredDefaultEngine =
         configuredDefaultIndex >= 0 && configuredDefaultIndex < engineSettings.length()
@@ -824,6 +824,8 @@ public class Config {
     boolean brokenAutomaticDefault =
         !newProfile
             && ui.optBoolean("autoload-default", false)
+            && (configuredDefaultEngine == null
+                || !configuredDefaultEngine.optBoolean("useJavaSSH", false))
             && (configuredDefaultEngine == null
                 || configuredDefaultCommand.trim().isEmpty()
                 || isClearlyBrokenJavaJarCommand(configuredDefaultCommand));

@@ -43,9 +43,9 @@ class ConfigManagedProfilePreservationTest {
     withConfig(previousApp, previousWork, () -> {
       ArrayList<EngineData> original = new ArrayList<>();
       original.add(profile("Legacy selection", executable(previousApp), legacyWeight,
-          previousApp.resolve("engines/katago/configs/gtp.cfg"), false));
+          previousApp.resolve("engines/katago/configs/gtp.cfg"), true));
       original.add(profile("Study selection", executable(previousApp), studyWeight,
-          studyConfig, true));
+          studyConfig, false));
       for (int i = 0; i < original.size(); i++) {
         EngineData entry = original.get(i);
         entry.id = "saved-weight-" + i;
@@ -67,7 +67,7 @@ class ConfigManagedProfilePreservationTest {
 
       Lizzie.config.uiConfig.put("autoload-default", false)
           .put("autoload-empty", false).put("autoload-last", true)
-          .put("default-engine", 1).put("last-engine", 1);
+          .put("default-engine", 0).put("last-engine", 1);
       String analysis = analysisCommand(executable(previousApp), studyWeight, studyAnalysis);
       Lizzie.config.uiConfig.put("analysis-engine-command", analysis)
           .put("analysis-engine-command-customized", false);
@@ -107,7 +107,7 @@ class ConfigManagedProfilePreservationTest {
                 after.commands);
             assertEquals(i < 2, BundledKataGoProfile.isManaged(after));
           }
-          assertEquals(1, Lizzie.config.uiConfig.getInt("default-engine"));
+          assertEquals(0, Lizzie.config.uiConfig.getInt("default-engine"));
           assertEquals(1, Lizzie.config.uiConfig.getInt("last-engine"));
           assertTrue(Lizzie.config.uiConfig.getBoolean("autoload-last"));
           assertFalse(Lizzie.config.uiConfig.getBoolean("autoload-default"));
@@ -121,6 +121,58 @@ class ConfigManagedProfilePreservationTest {
       JSONObject persisted = new JSONObject(Files.readString(currentWork.resolve("config.txt")));
       assertEquals(expectedAnalysis,
           persisted.getJSONObject("ui").getString("analysis-engine-command"));
+    });
+  }
+
+  @Test
+  void remoteJavaStartupKeepsItsDefaultSelectionAcrossMaintainedRestarts() throws Exception {
+    Path packageRoot = temp.resolve("remote Java startup");
+    Path app = createBundle(packageRoot, true);
+    Path work = workDirectory(packageRoot, true);
+    withConfig(app, work, () -> {
+      EngineData local = Utils.getEngineData().get(0);
+      local.isDefault = false;
+      EngineData remote = new EngineData();
+      remote.id = "remote-java-engine";
+      remote.name = "My remote Java engine";
+      remote.commands = "java -jar remote/engine.jar";
+      remote.isDefault = true;
+      remote.useJavaSSH = true;
+      remote.ip = "engine.example.test";
+      remote.port = "2222";
+      remote.userName = "fixture-user";
+      remote.initialCommand = "cd my-engine";
+      remote.width = 13;
+      remote.height = 9;
+      remote.komi = 6.5F;
+      Lizzie.config.uiConfig.put("autoload-default", true)
+          .put("autoload-last", false).put("autoload-empty", false)
+          .put("default-engine", 0).put("last-engine", 1);
+      Utils.saveEngineSettings(new ArrayList<>(List.of(remote, local)));
+      Lizzie.config.save();
+      JSONObject expectedRemote = new JSONObject(Lizzie.config.leelazConfig
+          .getJSONArray("engine-settings-list").getJSONObject(0).toString());
+      for (int restart = 0; restart < 3; restart++) {
+        Lizzie.config = ConfigTestHelper.createBootstrapped(work);
+        Utils.applyMaintainedDefaultSettings();
+        ArrayList<EngineData> actual = Utils.getEngineData();
+        assertEquals(2, actual.size());
+        assertTrue(expectedRemote.similar(Lizzie.config.leelazConfig
+            .getJSONArray("engine-settings-list").getJSONObject(0)));
+        assertEquals(remote.commands, actual.get(0).commands);
+        assertTrue(actual.get(0).useJavaSSH);
+        assertTrue(actual.get(0).isDefault);
+        assertFalse(actual.get(1).isDefault);
+        assertEquals(0, Lizzie.config.uiConfig.getInt("default-engine"));
+        assertEquals(1, Lizzie.config.uiConfig.getInt("last-engine"));
+        assertTrue(Lizzie.config.uiConfig.getBoolean("autoload-default"));
+        assertFalse(Lizzie.config.uiConfig.getBoolean("autoload-last"));
+        Lizzie.config.save();
+        JSONObject persisted = new JSONObject(Files.readString(work.resolve("config.txt")));
+        assertTrue(expectedRemote.similar(persisted.getJSONObject("leelaz")
+            .getJSONArray("engine-settings-list").getJSONObject(0)));
+        assertEquals(0, persisted.getJSONObject("ui").getInt("default-engine"));
+      }
     });
   }
 

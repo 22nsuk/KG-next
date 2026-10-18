@@ -1121,22 +1121,11 @@ public final class KataGoAutoSetupHelper {
         return false;
       }
       ArrayList<EngineData> engines = Utils.getEngineData();
-      int defaultEngine = Lizzie.config.uiConfig.optInt("default-engine", -1);
-      boolean repairDefault = false;
-      if (defaultEngine >= 0 && defaultEngine < engines.size()) {
-        EngineData engineData = engines.get(defaultEngine);
-        repairDefault = shouldRepairBundledCommand(engineData, snapshot);
-      }
-      if (!repairDefault) {
-        for (EngineData engineData : engines) {
-          if (engineData != null
-              && engineData.isDefault
-              && shouldRepairBundledCommand(engineData, snapshot)) {
-            repairDefault = true;
-            break;
-          }
-        }
-      }
+      int startupEngineIndex = resolveStartupEngineIndex(engines);
+      boolean repairStartup =
+          startupEngineIndex >= 0
+              && startupEngineIndex < engines.size()
+              && shouldRepairBundledCommand(engines.get(startupEngineIndex), snapshot);
       boolean repairAnalysis =
           canUpdateAnalysisCommand()
               && shouldRepairAuxCommand(
@@ -1144,7 +1133,7 @@ public final class KataGoAutoSetupHelper {
                   snapshot.enginePath,
                   snapshot.analysisConfigPath,
                   snapshot.activeWeightPath);
-      if (!(repairDefault || repairAnalysis)) {
+      if (!(repairStartup || repairAnalysis)) {
         return false;
       }
       applyAutoSetup(snapshot.withActiveWeight(snapshot.activeWeightPath), false);
@@ -4000,6 +3989,11 @@ public final class KataGoAutoSetupHelper {
   private static int resolveStartupEngineIndex(ArrayList<EngineData> engines) {
     if (engines == null || engines.isEmpty()) {
       return -1;
+    }
+    // Inspect and repair the same selected profile when startup uses the last engine.
+    int configuredStartup = configuredStartupEngineIndex(engines);
+    if (configuredStartup >= 0 && configuredStartup < engines.size()) {
+      return configuredStartup;
     }
     int defaultEngine = Lizzie.config.uiConfig.optInt("default-engine", -1);
     if (defaultEngine >= 0 && defaultEngine < engines.size()) {
