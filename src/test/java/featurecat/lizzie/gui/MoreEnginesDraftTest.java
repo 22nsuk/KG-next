@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -18,11 +19,17 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Locale;
 import java.util.ResourceBundle;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.JTable;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 import org.junit.jupiter.api.io.TempDir;
 
 class MoreEnginesDraftTest {
@@ -33,7 +40,9 @@ class MoreEnginesDraftTest {
   private EngineManager previousManager;
   private JTable previousTable;
   private boolean previousNeedUpdate;
-  private MoreEngines editor;
+  private TrackedMoreEngines editor;
+  private Thread.UncaughtExceptionHandler previousExceptionHandler;
+  private final AtomicReference<Throwable> asynchronousFailure = new AtomicReference<>();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -42,27 +51,51 @@ class MoreEnginesDraftTest {
     previousManager = Lizzie.engineManager;
     previousTable = MoreEngines.table;
     previousNeedUpdate = MoreEngines.needUpdateEngine;
+    previousExceptionHandler = Thread.getDefaultUncaughtExceptionHandler();
+    Thread.setDefaultUncaughtExceptionHandler(
+        (thread, failure) -> asynchronousFailure.compareAndSet(null, failure));
     Files.createDirectories(directory.resolve("save"));
     Lizzie.config = ConfigTestHelper.createBootstrapped(directory);
     Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.ENGLISH);
     Lizzie.engineManager = null;
     Utils.saveEngineSettings(new ArrayList<>());
-    SwingUtilities.invokeAndWait(() -> editor = new MoreEngines());
+    SwingUtilities.invokeAndWait(() -> editor = new TrackedMoreEngines());
   }
 
   @AfterEach
-  void tearDown() throws Exception {
-    SwingUtilities.invokeAndWait(
-        () -> {
-          if (editor != null && editor.threadPolicyRefreshTimer != null) {
-            editor.threadPolicyRefreshTimer.stop();
-          }
-          Lizzie.config = previousConfig;
-          Lizzie.resourceBundle = previousBundle;
-          Lizzie.engineManager = previousManager;
-          MoreEngines.table = previousTable;
-          MoreEngines.needUpdateEngine = previousNeedUpdate;
-        });
+  void tearDown() {
+    try {
+      assertAll(
+          () -> {
+            if (editor != null) editor.finishThreadPolicyWorkers();
+          },
+          () -> SwingUtilities.invokeAndWait(this::restoreGlobals),
+          () ->
+              SwingUtilities.invokeAndWait(
+                  () ->
+                      assertTrue(
+                          editor == null
+                              || editor.threadPolicyRefreshTimer == null
+                              || !editor.threadPolicyRefreshTimer.isRunning(),
+                          "fixture cleanup must consume worker done() before stopping its refresh timer")),
+          () ->
+              assertNull(
+                  asynchronousFailure.get(),
+                  () -> "Unhandled asynchronous fixture failure: " + asynchronousFailure.get()));
+    } finally {
+      Thread.setDefaultUncaughtExceptionHandler(previousExceptionHandler);
+    }
+  }
+
+  private void restoreGlobals() {
+    if (editor != null && editor.threadPolicyRefreshTimer != null) {
+      editor.threadPolicyRefreshTimer.stop();
+    }
+    Lizzie.config = previousConfig;
+    Lizzie.resourceBundle = previousBundle;
+    Lizzie.engineManager = previousManager;
+    MoreEngines.table = previousTable;
+    MoreEngines.needUpdateEngine = previousNeedUpdate;
   }
 
   @Test
@@ -227,5 +260,47 @@ class MoreEnginesDraftTest {
             1,
             false,
             MouseEvent.BUTTON1));
+  }
+
+  private static final class TrackedMoreEngines extends MoreEngines {
+    private record PendingWorker(SwingWorker<Void, Void> worker, CountDownLatch doneOnEdt) {}
+
+    private final ArrayList<PendingWorker> workers = new ArrayList<>();
+
+    @Override
+    void executeThreadPolicyWorker(SwingWorker<Void, Void> worker) {
+      CountDownLatch doneOnEdt = new CountDownLatch(1);
+      worker.addPropertyChangeListener(
+          event -> {
+            if ("state".equals(event.getPropertyName())
+                && event.getNewValue() == SwingWorker.StateValue.DONE) {
+              doneOnEdt.countDown();
+            }
+          });
+      workers.add(new PendingWorker(worker, doneOnEdt));
+      super.executeThreadPolicyWorker(worker);
+    }
+
+    void finishThreadPolicyWorkers() {
+      // A failed background result must not skip its EDT callback or another owned worker.
+      ArrayList<Executable> completionChecks = new ArrayList<>();
+      for (PendingWorker pending : workers) {
+        completionChecks.add(
+            () -> {
+              try {
+                pending.worker().get(5, TimeUnit.SECONDS);
+              } catch (InterruptedException | TimeoutException failure) {
+                pending.worker().cancel(true);
+                throw failure;
+              }
+            });
+        completionChecks.add(
+            () ->
+                assertTrue(
+                    pending.doneOnEdt().await(5, TimeUnit.SECONDS),
+                    "owned SwingWorker must finish its done() callback on the EDT"));
+      }
+      assertAll(completionChecks);
+    }
   }
 }
