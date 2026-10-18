@@ -334,6 +334,59 @@ class AutomaticSaveSafetyTest {
     assertEquals(1, frame.editFailures);
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  void automaticDeletePublishesOnlyAfterPersistenceAndCanRetryFailure(int index) throws Exception {
+    Path sgf = directory.resolve("save/autoGame" + index + ".sgf");
+    Path preview = directory.resolve("save/autoGame" + index + ".bmp");
+    Files.writeString(sgf, "(;SZ[5]C[automatic record];B[aa])");
+    assertTrue(
+        ImageIO.write(
+            new BufferedImage(7, 7, BufferedImage.TYPE_INT_RGB), "bmp", preview.toFile()));
+    byte[] savedSgf = Files.readAllBytes(sgf);
+    byte[] savedPreview = Files.readAllBytes(preview);
+    JSONObject original = config.saveBoardConfig;
+    config.showListPane = false;
+    config.showVariationGraph = false;
+    Field filename = blockMetadataDestination();
+
+    clickRecordButton(index, "LizzieFrame.saveAndLoad.del", "unused", true);
+
+    assertSame(original, config.saveBoardConfig);
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertEquals(1, frame.editFailures);
+    assertEquals(0, frame.panelRefreshes, "a failed delete must leave the current panel intact");
+    assertFalse(config.showListPane);
+    assertFalse(config.showVariationGraph);
+    assertArrayEquals(savedSgf, Files.readAllBytes(sgf));
+    assertArrayEquals(savedPreview, Files.readAllBytes(preview));
+
+    filename.set(config, metadataFile().toString());
+    frame.afterPanelRefresh =
+        () -> {
+          try {
+            JSONObject persisted =
+                new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
+            assertEquals(-2, persisted.getInt("save-auto-game-index" + index));
+            assertTrue(persisted.similar(config.saveBoardConfig));
+          } catch (IOException failure) {
+            throw new AssertionError(failure);
+          }
+        };
+    clickRecordButton(index, "LizzieFrame.saveAndLoad.del", "unused", true);
+
+    assertEquals(1, frame.panelRefreshes);
+    assertEquals(1, frame.editFailures);
+    assertEquals(-2, config.saveBoardConfig.getInt("save-auto-game-index" + index));
+    int otherIndex = index == 1 ? 2 : 1;
+    assertEquals(
+        original.getInt("save-auto-game-index" + otherIndex),
+        config.saveBoardConfig.getInt("save-auto-game-index" + otherIndex));
+    assertArrayEquals(savedSgf, Files.readAllBytes(sgf));
+    assertArrayEquals(savedPreview, Files.readAllBytes(preview));
+    assertNoStagingFiles();
+  }
+
   @Test
   void sparseRecordRowDisplaysOrdinalButEditsItsFileIdentity() throws Exception {
     seedTemporaryRecords(1, 3);
@@ -655,6 +708,11 @@ class AutomaticSaveSafetyTest {
   }
 
   private void clickRecordButton(int index, String key, String name) throws Exception {
+    clickRecordButton(index, key, name, false);
+  }
+
+  private void clickRecordButton(int index, String key, String name, boolean autoSave)
+      throws Exception {
     SwingUtilities.invokeAndWait(
         () -> {
           JPanel panel = new JPanel();
@@ -665,7 +723,7 @@ class AutomaticSaveSafetyTest {
           } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
           }
-          frame.addTempGameOne(index, 0, 0, "old name", "old time", false, 1, "", true, true);
+          frame.addTempGameOne(index, 0, 0, "old name", "old time", autoSave, 1, "", true, true);
           Arrays.stream(panel.getComponents())
               .filter(JTextField.class::isInstance)
               .map(JTextField.class::cast)
