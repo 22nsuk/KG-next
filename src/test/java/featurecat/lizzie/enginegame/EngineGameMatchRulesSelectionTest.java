@@ -59,7 +59,7 @@ class EngineGameMatchRulesSelectionTest {
     KataGoRules selected =
         KataGoRules.parse("chinese")
             .orElseThrow()
-            .overlayEditor("AREA", "POSITIONAL", true, "NONE", "0", false);
+            .overlayEditor("AREA", "POSITIONAL", true, "NONE", "N", false, true);
     assertTrue(KataGoRules.officialNameOf(selected).isEmpty());
 
     EngineGameMatchRulesSelection.persist(config, selected);

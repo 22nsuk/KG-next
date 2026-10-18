@@ -922,7 +922,6 @@ public class FloatBoardRenderer {
   }
 
   private void renderImagesUnimportant(Graphics2D g) {
-    if (editMode && preview.isPending()) return;
     if (Lizzie.frame.isShowingPolicy || Lizzie.frame.isShowingHeatmap) return;
     if (!branchOpt.isPresent()) {
       g.drawImage(unImportantSugg, x, y, null);
@@ -1087,8 +1086,6 @@ public class FloatBoardRenderer {
    * Draw all of Leelaz's suggestions as colored stones with winrate/playout statistics overlayed
    */
   private void drawLeelazSuggestions(Graphics2D g) {
-    // A transparent browse overlay must keep its hover target until the first image is ready.
-    if (editMode && preview.isPending()) return;
     //  g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_SPEED);
     int minAlpha = 32;
     // float winrateHueFactor = 0.9f;

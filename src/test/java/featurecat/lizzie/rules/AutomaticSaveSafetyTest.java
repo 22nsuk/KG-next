@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.TempGameData;
 import java.awt.AWTEvent;
@@ -699,7 +700,7 @@ class AutomaticSaveSafetyTest {
   void fileSaveUsesDetachedHistoryAndPreservesAutomaticSaveOptions(boolean autoSave)
       throws Exception {
     Lizzie.leelaz.isKatago = true;
-    Lizzie.leelaz.usingSpecificRules = 1;
+    Lizzie.leelaz.rulesSummary = KataGoRules.Summary.CHINESE;
     BoardHistoryList history = Lizzie.board.getHistory();
     BoardHistoryNode current = history.getCurrentHistoryNode();
     Path target = directory.resolve("대국.sgf");

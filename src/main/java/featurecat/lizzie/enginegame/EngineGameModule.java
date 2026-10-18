@@ -4,6 +4,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.EngineRulesResult;
 import featurecat.lizzie.analysis.GameInfo;
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.DesktopTimeControl;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -787,7 +788,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     String displayName = "";
     boolean katago = false;
     boolean sai = false;
-    int rules = 0;
+    KataGoRules.Summary rules = null;
     if (engine != null) {
       if (engine.oriEnginename != null && !engine.oriEnginename.isEmpty()) {
         displayName = engine.oriEnginename;
@@ -796,7 +797,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       }
       katago = engine.isKatago;
       sai = engine.isSai;
-      rules = engine.usingSpecificRules;
+      rules = engine.rulesSummary;
     }
     if (displayName.isEmpty() && identity != null) {
       displayName = identity.name();

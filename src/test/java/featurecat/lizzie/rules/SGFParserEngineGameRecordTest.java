@@ -65,8 +65,9 @@ class SGFParserEngineGameRecordTest {
       info.attachEngineGameRecordContext(
           new EngineGameRecordContext(
               null,
-              new EngineGameParticipantDescriptor(black, "BlackEngine", true, false, 1),
-              new EngineGameParticipantDescriptor(white, "WhiteEngine", false, false, 0)));
+              new EngineGameParticipantDescriptor(
+                  black, "BlackEngine", true, false, KataGoRules.Summary.CHINESE),
+              new EngineGameParticipantDescriptor(white, "WhiteEngine", false, false, null)));
 
       String sgf = SGFParser.saveToString(false);
 
@@ -92,9 +93,17 @@ class SGFParserEngineGameRecordTest {
           new EngineGameRecordContext(
               null,
               new EngineGameParticipantDescriptor(
-                  new EngineParticipantIdentity("b", "BlackEngine"), "BlackEngine", true, false, 1),
+                  new EngineParticipantIdentity("b", "BlackEngine"),
+                  "BlackEngine",
+                  true,
+                  false,
+                  KataGoRules.Summary.CHINESE),
               new EngineGameParticipantDescriptor(
-                  new EngineParticipantIdentity("w", "WhiteEngine"), "WhiteEngine", true, false, 1),
+                  new EngineParticipantIdentity("w", "WhiteEngine"),
+                  "WhiteEngine",
+                  true,
+                  false,
+                  KataGoRules.Summary.CHINESE),
               snapshot);
       info.attachEngineGameRecordContext(context);
       info.freezeEngineGameRecord(
@@ -106,7 +115,7 @@ class SGFParserEngineGameRecordTest {
               "WhiteEngine",
               snapshot));
       if (Lizzie.leelaz != null) {
-        Lizzie.leelaz.usingSpecificRules = 3;
+        Lizzie.leelaz.rulesSummary = KataGoRules.Summary.JAPANESE;
       }
 
       String first = SGFParser.saveToString(false);

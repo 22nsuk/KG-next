@@ -1,5 +1,6 @@
 package featurecat.lizzie.analysis.remote;
 
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.logging.NetworkEndpointCategory;
 import featurecat.lizzie.logging.NetworkObservation;
 import featurecat.lizzie.util.NetworkProxy;
@@ -40,37 +41,7 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
   private static final double DEFAULT_PLAYOUT_DOUBLING_ADVANTAGE = 0.0;
   private static final double DEFAULT_ANALYSIS_WIDE_ROOT_NOISE = 0.04;
   private static final String CHINESE_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"SIMPLE\","
-          + "\"scoring\":\"AREA\",\"suicide\":false,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"N\"}";
-  private static final String CHINESE_POSITIONAL_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"POSITIONAL\","
-          + "\"scoring\":\"AREA\",\"suicide\":false,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"N\"}";
-  private static final String JAPANESE_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"SIMPLE\","
-          + "\"scoring\":\"TERRITORY\",\"suicide\":false,\"tax\":\"SEKI\","
-          + "\"whiteHandicapBonus\":\"0\"}";
-  private static final String STONE_SCORING_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"SIMPLE\","
-          + "\"scoring\":\"AREA\",\"suicide\":false,\"tax\":\"ALL\","
-          + "\"whiteHandicapBonus\":\"0\"}";
-  private static final String AGA_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"SITUATIONAL\","
-          + "\"scoring\":\"AREA\",\"suicide\":false,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"N-1\"}";
-  private static final String NEW_ZEALAND_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":false,\"ko\":\"SITUATIONAL\","
-          + "\"scoring\":\"AREA\",\"suicide\":true,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"0\"}";
-  private static final String AGA_BUTTON_RULES =
-      "{\"friendlyPassOk\":true,\"hasButton\":true,\"ko\":\"SITUATIONAL\","
-          + "\"scoring\":\"AREA\",\"suicide\":false,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"N-1\"}";
-  private static final String TROMP_TAYLOR_RULES =
-      "{\"friendlyPassOk\":false,\"hasButton\":false,\"ko\":\"POSITIONAL\","
-          + "\"scoring\":\"AREA\",\"suicide\":true,\"tax\":\"NONE\","
-          + "\"whiteHandicapBonus\":\"0\"}";
+      KataGoRules.parse("chinese").orElseThrow().toGtpArgument();
   private static final String SGF_COORD_ALPHABET =
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final Pattern SNAPSHOT_SGF_PATTERN =
@@ -559,36 +530,10 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
 
   private String normalizeRules(String value) {
     String trimmed = value == null ? "" : value.trim();
-    if (trimmed.startsWith("{")) {
-      new JSONObject(trimmed);
-      return trimmed;
-    }
-    String normalized = trimmed.toLowerCase(Locale.ROOT);
-    if ("chinese".equals(normalized)) {
-      return CHINESE_RULES;
-    }
-    if ("chinese-ogs".equals(normalized) || "chinese-kgs".equals(normalized)) {
-      return CHINESE_POSITIONAL_RULES;
-    }
-    if ("japanese".equals(normalized) || "korean".equals(normalized)) {
-      return JAPANESE_RULES;
-    }
-    if ("stone-scoring".equals(normalized)) {
-      return STONE_SCORING_RULES;
-    }
-    if ("aga".equals(normalized) || "bga".equals(normalized)) {
-      return AGA_RULES;
-    }
-    if ("new-zealand".equals(normalized)) {
-      return NEW_ZEALAND_RULES;
-    }
-    if ("aga-button".equals(normalized)) {
-      return AGA_BUTTON_RULES;
-    }
-    if ("tromp-taylor".equals(normalized) || "tromp_taylor".equals(normalized)) {
-      return TROMP_TAYLOR_RULES;
-    }
-    throw new IllegalArgumentException("unsupported rules: " + value);
+    KataGoRules parsed =
+        KataGoRules.parse(trimmed)
+            .orElseThrow(() -> new IllegalArgumentException("unsupported rules: " + value));
+    return trimmed.startsWith("{") ? trimmed : parsed.toGtpArgument();
   }
 
   private List<Move> parseSetPosition(String line) {

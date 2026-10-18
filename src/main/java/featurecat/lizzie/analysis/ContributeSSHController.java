@@ -8,6 +8,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import org.json.JSONException;
 
 public class ContributeSSHController {
@@ -85,8 +86,19 @@ public class ContributeSSHController {
 
   public void close() {
     owner.javaSSHClosed = true;
-    // owner.isNormalEnd = true;
-    if (this.session != null) this.session.close();
+    if (this.session != null) {
+      try {
+        // EOF alone does not stop KataGo's contribution workers. Use this session's stdin,
+        // so retiring an old launch can never send forcequit to its successor.
+        OutputStream stdin = this.session.getStdin();
+        stdin.write("forcequit\n".getBytes(StandardCharsets.UTF_8));
+        stdin.flush();
+      } catch (IOException closed) {
+        // An exited or disconnected peer may already have closed stdin; still release transport.
+      } finally {
+        this.session.close();
+      }
+    }
     if (this.conn != null) this.conn.close();
   }
 

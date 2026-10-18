@@ -202,7 +202,7 @@ jobs:
       - name: Install display and font dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk
+          sudo apt-get install -y xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
       - name: Run Linux desktop smoke verification
         timeout-minutes: 10
         env:
@@ -285,7 +285,7 @@ jobs:
         if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth fonts-dejavu-core fonts-noto-cjk
+          sudo apt-get install -y xvfb xauth fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
       - name: Run Linux engine process verification
         if: ${{ runner.os == 'Linux' }}
         timeout-minutes: 10

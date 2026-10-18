@@ -146,11 +146,15 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest",
             steps[0].command,
         )
         self.assertEqual(
             (
+                ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
+                ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
+                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
+                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
@@ -189,7 +193,7 @@ class RunLocalCiTest(unittest.TestCase):
             "EngineProcessFailureTest#rejectsSnapshotErrorWithoutTailOrAnalysis+"
             "retiresSnapshotTimeoutAndRejectsLateResponse+recoversSnapshotAfterPeerCrash+"
             "isolatesLateOutputAfterEngineSwitch+drainsPeerPipeBurstAndRemainsResponsive+"
-            "cleansUpPeerThatRefusesQuit",
+            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest,ContributeSshShutdownDesktopTest",
             steps[0].command,
         )
         self.assertIn(
@@ -202,7 +206,7 @@ class RunLocalCiTest(unittest.TestCase):
             ),
             steps[0].command,
         )
-        self.assertEqual(7, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
+        self.assertEqual(23, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
 
     def test_tensorrt_ui_plan_is_windows_only_and_selects_exact_parent_methods(self):
         steps = run_local_ci.build_steps(
@@ -720,7 +724,7 @@ class RunLocalCiTest(unittest.TestCase):
             result, summary = run_with_report(suite_xml(required[:-1]))
             self.assertEqual(1, result)
             self.assertEqual("FAIL", summary["result"])
-            self.assertEqual(6, summary["junit"]["tests"])
+            self.assertEqual(len(required) - 1, summary["junit"]["tests"])
             self.assertTrue(desktop_report.is_file())
             self.assertTrue(java_report.is_file())
 
@@ -732,7 +736,7 @@ class RunLocalCiTest(unittest.TestCase):
             result, summary = run_with_report(suite_xml(required))
             self.assertEqual(0, result)
             self.assertEqual("PASS", summary["result"])
-            self.assertEqual(7, summary["junit"]["tests"])
+            self.assertEqual(len(required), summary["junit"]["tests"])
 
     def test_desktop_and_java_and_nonjava_report_isolation(self):
         with tempfile.TemporaryDirectory() as temporary:

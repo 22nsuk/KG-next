@@ -1216,7 +1216,7 @@ class EngineManagerEngineGameStateMachineTest {
 
     assertEquals("= " + rulesPayload, black.recentRulesLine);
     assertEquals("= " + rulesPayload, Lizzie.config.currentKataGoRules);
-    assertEquals(4, black.usingSpecificRules);
+    assertEquals(KataGoRules.Summary.OTHER, black.rulesSummary);
     assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
     assertTrue(black.isInputCommand);
 
