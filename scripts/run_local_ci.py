@@ -55,6 +55,7 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
 )
 ENGINE_PROCESS_REQUIRED_TESTS = (
+    ("featurecat.lizzie.gui.ContributeSshShutdownDesktopTest", "stopsRemoteChildrenOnUserStopFatalErrorAndRetry"),
     ("featurecat.lizzie.gui.ContributeSavedEngineSelectionDesktopTest", "selectSavedEngineSaveReloadAndStartContribution"),
     *tuple(
         ("featurecat.lizzie.gui.ContributeStartupDesktopTest", method)
@@ -620,7 +621,7 @@ def build_steps(
             "EngineProcessFailureTest#rejectsSnapshotErrorWithoutTailOrAnalysis+"
             "retiresSnapshotTimeoutAndRejectsLateResponse+recoversSnapshotAfterPeerCrash+"
             "isolatesLateOutputAfterEngineSwitch+drainsPeerPipeBurstAndRemainsResponsive+"
-            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest"
+            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest,ContributeSshShutdownDesktopTest"
         )
         return [
             Step(
