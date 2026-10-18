@@ -86,7 +86,7 @@
 
 Windows `portable.zip` 把配置、日志、棋谱、权重和软件内安装的 TensorRT 文件保存在解压目录，主要位于 `user-data/`。删除整个目录即可卸载；换目录升级时，复制 `user-data/` 可保留设置。
 
-已有 Windows 免安装版时，小版本升级可下载 `*windows64.core-update.zip`。关闭软件后，把 zip 内容解压到原目录并覆盖旧文件。该包只更新 `app/lizzie-yzy2.5.3-shaded.jar`、`app/KG-next*.cfg` 和供旧版自动更新器识别的兼容文件，不会覆盖 `weights/`、`engines/`、`runtime/`、`jcef-bundle/`、`readboard/` 或 `user-data/`。如果 release 说明包含 KataGo、权重或运行环境升级，请改用完整包或对应资源包。
+已有 Windows 免安装版时，小版本升级可下载 `*windows64.core-update.zip`。关闭软件后，把 zip 内容解压到原目录并覆盖旧文件。该包只更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/KG-next*.cfg`，不会覆盖 `weights/`、`engines/`、`runtime/`、`jcef-bundle/`、`readboard/` 或 `user-data/`。如果 release 说明包含 KataGo、权重或运行环境升级，请改用完整包或对应资源包。
 
 完整包的 CPU、OpenCL、CUDA、TensorRT、Metal 后端和 Linux 包均使用 KataGo `v1.18.2`。Linux NVIDIA 仍使用 CUDA 12.1，以兼顾系统运行环境。
 

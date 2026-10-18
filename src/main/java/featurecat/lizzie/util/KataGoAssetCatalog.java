@@ -17,7 +17,6 @@ public final class KataGoAssetCatalog {
   private final String katagoReleaseTag;
   private final String katagoSourceCommit;
   private final String origin;
-  private final String engineReleaseBase;
   private final String modelReleaseTag;
   private final String defaultModelId;
   private final Map<String, Model> models;
@@ -32,7 +31,7 @@ public final class KataGoAssetCatalog {
     katagoReleaseTag = required(root, "katagoReleaseTag");
     katagoSourceCommit = required(root, "katagoSourceCommit");
     origin = root.optString("origin", "official-release").trim();
-    engineReleaseBase = engineReleaseBase(root);
+    engineReleaseBase(root);
     modelReleaseTag = required(root, "modelReleaseTag");
     defaultModelId = required(root, "defaultModelId");
     models = Collections.unmodifiableMap(parseModels(root.getJSONObject("models")));

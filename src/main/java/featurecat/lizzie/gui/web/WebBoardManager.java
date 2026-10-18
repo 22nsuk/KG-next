@@ -79,10 +79,6 @@ public class WebBoardManager {
     ScheduledFuture<?> idleTimer;
     long idleGeneration;
 
-    TrialSession(String owner, BoardHistoryNode anchor) {
-      this(owner, anchor, null);
-    }
-
     TrialSession(String owner, BoardHistoryNode anchor, Board sourceBoard) {
       this.ownerClientId = owner;
       this.anchorNode = anchor;

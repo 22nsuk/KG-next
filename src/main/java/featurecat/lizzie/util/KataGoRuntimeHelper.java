@@ -163,7 +163,6 @@ public final class KataGoRuntimeHelper {
       "lizzie.tensorrt.runtimeSearchPath";
   private static final String TENSORRT_KATAGO_VERSION = KATAGO_ASSETS.katagoReleaseTag();
   private static final String TENSORRT_INSTALL_LOCK_NAME = "tensorrt-install.lock";
-  private static final String TENSORRT_KATAGO_ASSET = TENSORRT_KATAGO_ASSET_INFO.assetName();
   private static final String TENSORRT_KATAGO_URL =
       KATAGO_ASSETS.assetDownloadUrl(TENSORRT_KATAGO_ASSET_INFO);
   private static final String TENSORRT_KATAGO_SHA256 = TENSORRT_KATAGO_ASSET_INFO.sha256();

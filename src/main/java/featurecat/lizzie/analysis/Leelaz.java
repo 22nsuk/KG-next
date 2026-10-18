@@ -8156,7 +8156,7 @@ public class Leelaz {
           }
           Lizzie.frame.refresh();
         } else if (isThinking && !isPondering && manualGenmoveRequestOwner == null) {
-          if (isInputCommand && manualGenmoveRequestOwner == null) {
+          if (isInputCommand) {
             Lizzie.board.place(params[1]);
             togglePonder();
           }
@@ -8197,7 +8197,7 @@ public class Leelaz {
             if (!Lizzie.config.playponder) Lizzie.leelaz.nameCmdfornoponder();
           }
           isThinking = false;
-          if (isInputCommand && manualGenmoveRequestOwner == null) {
+          if (isInputCommand) {
             isInputCommand = false;
           }
         }
