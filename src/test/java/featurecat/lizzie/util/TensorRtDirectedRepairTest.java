@@ -758,6 +758,9 @@ public class TensorRtDirectedRepairTest {
 
   @Test
   void customDirectMlOpenClOrdinaryContributeAndRemoteGtpDoNotAutoRepair() throws Exception {
+    // Remote credential checks can initialize JNA, which caches its OS for the whole JVM.
+    // Capture the real host before simulating Windows for the application preflight.
+    com.sun.jna.Platform.getOSType();
     withOsName(
         WINDOWS_OS_NAME,
         () -> {
@@ -993,6 +996,7 @@ public class TensorRtDirectedRepairTest {
       "nvrtc64_120_0.dll",
       "nvrtc-builtins64_128.dll",
       "nvinfer_10.dll",
+      "nvonnxparser_10.dll",
       "nvinfer_plugin_10.dll",
       "z.dll"
     };
@@ -1098,6 +1102,7 @@ public class TensorRtDirectedRepairTest {
       "nvrtc64_120_0.dll",
       "nvrtc-builtins64_128.dll",
       "nvinfer_10.dll",
+      "nvonnxparser_10.dll",
       "nvinfer_plugin_10.dll",
       "z.dll"
     };

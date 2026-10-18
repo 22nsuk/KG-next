@@ -117,7 +117,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `repository` | 换行自测、换行、Markdown 链接 | 换行 | 无 |
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法 | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 凭据专项，再执行原完整 Maven verify | Maven、JDK 21；不查找 Bash/PowerShell |
-| `desktop` | 五个生产窗口导航 / 搜索输入 / 引擎进程生命周期测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
+| `desktop` | 生产窗口导航 / 搜索输入 / 引擎进程生命周期 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 | `engine-process` | 七个真实引擎进程生命周期 / 失败恢复用例 | 相同七个用例的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 例如仅运行无 Java 的仓库检查：
@@ -152,13 +152,20 @@ Linux 安装 `xvfb xauth fonts-dejavu-core fonts-noto-cjk` 后运行：
 LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' bash scripts/run_local_ci.sh --profile portable --group desktop --summary-dir target/local-ci/portable-desktop
 ```
 
-该组要求以下五个用例全部成功执行：
+该组的强制用例包括以下检查，完整方法列表见 `scripts/run_local_ci.py`：
 
 - `FunctionSearchNavigationTest.navigationPreservesRealStateAcrossNativeAndCustomMenus`
 - `ConfigDialog2NavigationTest.blackWinrateRemainsReachableAcrossRebuildsAndRecreation`
 - `EngineProcessSmokeTest.restoresSnapshotAnalyzesAndQuits`
 - `FunctionSearchInputTest.chineseInputChain`
 - `FunctionSearchInputTest.englishInputChain`
+- `TeacherDialogRequestOwnershipTest` 的全部解说请求、修正、取消和 SGF 保存场景
+
+解说用例运行真实 `TeacherDialog` 和 API-key 客户端，以本地 HTTP/SSE 服务代替收费模型。
+它们验证冻结证据、一次有界修正、光标导航后的原节点保存、后续问题的原始上下文，以及
+取消、换谱、节点或实战续走编辑、模态设置和 EDT 排队回调的失效处理。
+成功与换谱拒绝状态的截图保存在 `target/desktop-smoke/probes/teacher/`。
+该验收验证显示与保存边界；坐标、百分比和数值措辞检查不能证明所有自然语言棋理都正确。
 
 两个搜索输入用例在独立的 zh_CN/native 和 en_US/custom 子 JVM 中，通过真实 Robot 输入覆盖工具栏、
 `Ctrl+K`、查询、方向键、Enter、Escape、文本组件所有权和模态窗口边界。引擎进程用例在独立子 JVM 中

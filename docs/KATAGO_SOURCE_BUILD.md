@@ -389,6 +389,14 @@ asset ID/name/archive digest, executable digest, backend, source commit and zlib
 to the final executable. Runtime readiness omits the dynamic zlib DLL group only when
 that manifest and the executable still match the catalog exactly; official, external,
 unknown or modified engines remain subject to their dynamic dependency contract.
+The packaged `katago-human-sl-cuda.exe` shares the TensorRT engine manifest. Its zlib
+DLL exemption requires the verified sibling TensorRT executable, a strict manifest
+entry with the pinned companion digest, and the CUDA asset's own project origin and
+static linkage. All other CUDA DLL and pinned NVRTC checks remain required. TensorRT
+install status, component repair and AI Coach startup include the companion's runtime
+readiness; missing-runtime errors identify the executable that failed the check.
+The pinned Transformer TensorRT executable additionally requires `nvonnxparser_10.dll`;
+this TensorRT-only dependency does not apply to the CUDA companion.
 The checked-in production catalog is **not switched by staging**. Final archive upload,
 application package integration, signing and publication remain separate gates.
 

@@ -1,15 +1,21 @@
 package featurecat.lizzie.teacher;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.BoardNodeKind;
+import featurecat.lizzie.rules.Stone;
 import java.awt.Dimension;
 import java.awt.Window;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.Supplier;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComponent;
@@ -28,14 +34,14 @@ import javax.swing.Timer;
 public final class TeacherDialog extends JDialog {
   private static TeacherDialog activeDialog;
 
-  private final TeacherSettings settings = TeacherSettings.createDefault();
+  private final TeacherSettings settings;
+  private final Supplier<BoardHistoryNode> currentNodeProvider;
+  private final Supplier<BoardHistoryNode> rootNodeProvider;
   private final TeacherRequestController requests = new TeacherRequestController();
-  private final ConcurrentLinkedQueue<String> pendingText = new ConcurrentLinkedQueue<>();
-  private final Timer textFlushTimer;
+  private final Timer gameGuardTimer;
 
   private final TeacherDialogView view = new TeacherDialogView();
   private final JEditorPane output = view.output();
-  private final StringBuilder rawOutput = new StringBuilder();
   private final JToggleButton explainNext = view.explainNext();
   private final JToggleButton explainRange = view.explainRange();
   private final JToggleButton explainWhole = view.explainWhole();
@@ -47,11 +53,10 @@ public final class TeacherDialog extends JDialog {
   private final JSpinner rangeStart = view.rangeStart();
   private final JSpinner rangeEnd = view.rangeEnd();
 
-  private BoardHistoryNode requestTarget;
-  private List<TeacherLlmClient.Message> lastEvidenceContext = List.of();
-  private List<TeacherEvidence.Position> lastEvidencePositions = List.of();
-  private List<TeacherEvidence.Position> requestPositions = List.of();
-  private String requestModel = "";
+  private BoardHistoryNode displayedGame;
+  private CommentaryContext lastCommentary;
+  private Request activeRequest;
+  private long uiGeneration;
   private boolean requestRunning;
   private boolean settingsLoaded;
   private boolean settingsUsable;
@@ -76,7 +81,28 @@ public final class TeacherDialog extends JDialog {
   }
 
   private TeacherDialog(Window owner) {
+    this(
+        owner,
+        TeacherSettings.createDefault(),
+        () ->
+            Lizzie.board == null || Lizzie.board.getHistory() == null
+                ? null
+                : Lizzie.board.getHistory().getCurrentHistoryNode(),
+        () ->
+            Lizzie.board == null || Lizzie.board.getHistory() == null
+                ? null
+                : Lizzie.board.getHistory().getStart());
+  }
+
+  TeacherDialog(
+      Window owner,
+      TeacherSettings settings,
+      Supplier<BoardHistoryNode> currentNodeProvider,
+      Supplier<BoardHistoryNode> rootNodeProvider) {
     super(owner, TeacherStrings.get("Teacher.title", "AI commentary"), ModalityType.MODELESS);
+    this.settings = settings;
+    this.currentNodeProvider = currentNodeProvider;
+    this.rootNodeProvider = rootNodeProvider;
     setDefaultCloseOperation(DISPOSE_ON_CLOSE);
     setContentPane(view);
     bindActions();
@@ -89,15 +115,17 @@ public final class TeacherDialog extends JDialog {
             KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0),
             JComponent.WHEN_IN_FOCUSED_WINDOW);
 
-    textFlushTimer = new Timer(140, event -> flushPendingText());
-    textFlushTimer.setRepeats(false);
+    gameGuardTimer = new Timer(200, event -> guardGameContext());
+    gameGuardTimer.start();
 
     addWindowListener(
         new WindowAdapter() {
           @Override
           public void windowClosed(WindowEvent event) {
+            uiGeneration++;
+            activeRequest = null;
             requests.close();
-            textFlushTimer.stop();
+            gameGuardTimer.stop();
             if (activeDialog == TeacherDialog.this) {
               activeDialog = null;
             }
@@ -135,56 +163,98 @@ public final class TeacherDialog extends JDialog {
     followUp.addActionListener(event -> askFollowUp());
   }
 
+  private void guardGameContext() {
+    BoardHistoryNode root = rootNodeProvider.get();
+    if (displayedGame != root
+        || (activeRequest != null && !activeRequest.context.owner.targetIsCurrent(root))
+        || (lastCommentary != null && !lastCommentary.owner.targetIsCurrent(root))) {
+      discardChangedContext();
+    } else if (!requestRunning && lastCommentary == null) {
+      BoardHistoryNode current = currentNodeProvider.get();
+      view.setCurrentMove(current == null ? 0 : current.getData().moveNumber);
+    }
+  }
+
+  private void discardChangedContext() {
+    uiGeneration++;
+    activeRequest = null;
+    requests.cancel();
+    lastCommentary = null;
+    followUp.setText("");
+    setRunning(false);
+    clearOutputForEmptyState();
+    refreshFromBoard();
+    setStatus(
+        TeacherStrings.get(
+            "Teacher.status.gameChanged",
+            "The game or commentary position changed. Generate a new commentary."),
+        TeacherDialogView.StatusTone.WARNING);
+  }
+
   private void refreshFromBoard() {
-    if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
-      if (!requests.isRunning()) {
-        clearOutputForEmptyState();
-      }
+    BoardHistoryNode root = rootNodeProvider.get();
+    if (displayedGame != root) {
+      uiGeneration++;
+      activeRequest = null;
+      requests.cancel();
+      lastCommentary = null;
+      followUp.setText("");
+      setRunning(false);
+    }
+    displayedGame = root;
+    BoardHistoryNode current = currentNodeProvider.get();
+    if (root == null || current == null || current.getData() == null) {
+      clearOutputForEmptyState();
       view.setCurrentMove(0);
       setStatus(
           TeacherStrings.get("Teacher.status.noGame", "No game is loaded."),
           TeacherDialogView.StatusTone.WARNING);
       return;
     }
-    BoardHistoryNode current = Lizzie.board.getHistory().getCurrentHistoryNode();
-    int currentMove = current.getData() == null ? 0 : current.getData().moveNumber;
-    view.setCurrentMove(currentMove);
-    int lastMove = Math.max(1, Lizzie.board.getHistory().getStart().getLast().getData().moveNumber);
+    view.setCurrentMove(current.getData().moveNumber);
+    // Reopening the same dialog or moving the cursor does not replace an existing discussion.
+    if (requestRunning || (lastCommentary != null && lastCommentary.owner.isCurrent(root))) {
+      return;
+    }
+    lastCommentary = null;
+    int lastMove = Math.max(1, root.getLast().getData().moveNumber);
     rangeStart.setModel(new SpinnerNumberModel(1, 1, lastMove, 1));
     rangeEnd.setModel(new SpinnerNumberModel(lastMove, 1, lastMove, 1));
     TeacherDialogStyle.styleSpinner(rangeStart);
     TeacherDialogStyle.styleSpinner(rangeEnd);
     Optional<String> saved = TeacherCommentCodec.extract(current.getData().comment);
-    if (!requests.isRunning() && saved.isPresent()) {
-      lastEvidenceContext = List.of();
-      lastEvidencePositions = List.of();
-      rawOutput.setLength(0);
-      rawOutput.append(saved.get());
-      output.setText(markdownToHtml(rawOutput.toString()));
-      output.setCaretPosition(0);
-      view.showOutput();
-      setStatus(
-          TeacherStrings.get(
-              "Teacher.status.savedLoaded", "Loaded saved commentary from this SGF node."),
-          TeacherDialogView.StatusTone.SUCCESS);
-    } else if (!requests.isRunning()) {
-      lastEvidenceContext = List.of();
-      lastEvidencePositions = List.of();
-      clearOutputForEmptyState();
-      boolean hasEvidence = TeacherEvidence.current(current).isPresent();
-      setStatus(
-          evidenceStatus(current),
-          hasEvidence
-              ? TeacherDialogView.StatusTone.NEUTRAL
-              : TeacherDialogView.StatusTone.WARNING);
+    if (saved.isPresent()) {
+      TargetSnapshot owner = TargetSnapshot.capture(root, current);
+      if (owner != null) {
+        // SGF commentary has no persisted evidence snapshot. Capture it only if a question is sent.
+        lastCommentary = new CommentaryContext(owner, List.of(), List.of(), saved.get());
+        showCommentary(saved.get());
+        setStatus(
+            TeacherStrings.get(
+                "Teacher.status.savedLoaded", "Loaded saved commentary from this SGF node."),
+            TeacherDialogView.StatusTone.SUCCESS);
+        return;
+      }
     }
+    clearOutputForEmptyState();
+    boolean hasEvidence = TeacherEvidence.position(current).isPresent();
+    setStatus(
+        evidenceStatus(current),
+        hasEvidence
+            ? TeacherDialogView.StatusTone.NEUTRAL
+            : TeacherDialogView.StatusTone.WARNING);
   }
 
   private void clearOutputForEmptyState() {
-    rawOutput.setLength(0);
     output.setText("<html><body></body></html>");
     view.resetEmptyTitle();
     view.showEmpty();
+  }
+
+  private void showCommentary(String commentary) {
+    output.setText(markdownToHtml(commentary));
+    output.setCaretPosition(0);
+    view.showOutput();
   }
 
   private void refreshSettingsStatus() {
@@ -221,39 +291,59 @@ public final class TeacherDialog extends JDialog {
   }
 
   private void explainNextMove() {
+    if (requestRunning) {
+      return;
+    }
     BoardHistoryNode current = currentNode();
-    if (current == null) {
+    TargetSnapshot owner = TargetSnapshot.capture(rootNodeProvider.get(), current);
+    if (owner == null) {
       return;
     }
     Optional<TeacherEvidence.Position> position = TeacherEvidence.current(current);
     if (position.isEmpty()) {
-      setStatus(
-          TeacherStrings.get(
-              "Teacher.status.needsAnalysis",
-              "This position has no KataGo candidates yet. Analyze it first."),
-          TeacherDialogView.StatusTone.WARNING);
+      needsAnalysis();
       return;
     }
-    lastEvidenceContext =
+    List<TeacherLlmClient.Message> context =
         TeacherPromptBuilder.forPosition(
             position.get(), TeacherStrings.locale(), settings.snapshot());
-    lastEvidencePositions = List.of(position.get());
-    startRequest(lastEvidenceContext, current);
+    startRequest(
+        context,
+        new CommentaryContext(owner, context, List.of(position.get()), ""),
+        requestingStatus(),
+        "");
   }
 
   private void explainRange() {
+    if (requestRunning) {
+      return;
+    }
     BoardHistoryNode root = rootNode();
-    if (root == null) {
+    TargetSnapshot owner = TargetSnapshot.capture(root, currentNodeProvider.get(), true);
+    if (owner == null) {
       return;
     }
     int first = ((Number) rangeStart.getValue()).intValue();
     int last = ((Number) rangeEnd.getValue()).intValue();
-    if (first > last) {
-      int temporary = first;
-      first = last;
-      last = temporary;
+    TeacherEvidence.Range evidence =
+        TeacherEvidence.mainLine(root, Math.min(first, last), Math.max(first, last));
+    explainRange(owner, evidence, TeacherPromptBuilder.Mode.RANGE);
+  }
+
+  private void explainWholeGame() {
+    if (requestRunning) {
+      return;
     }
-    TeacherEvidence.Range evidence = TeacherEvidence.mainLine(root, first, last);
+    BoardHistoryNode root = rootNode();
+    TargetSnapshot owner = TargetSnapshot.capture(root, root, true);
+    if (owner == null) {
+      return;
+    }
+    explainRange(owner, TeacherEvidence.wholeGame(root), TeacherPromptBuilder.Mode.WHOLE_GAME);
+  }
+
+  private void explainRange(
+      TargetSnapshot owner, TeacherEvidence.Range evidence, TeacherPromptBuilder.Mode mode) {
     if (evidence.isEmpty()) {
       setStatus(
           TeacherStrings.get(
@@ -262,167 +352,171 @@ public final class TeacherDialog extends JDialog {
           TeacherDialogView.StatusTone.WARNING);
       return;
     }
-    lastEvidenceContext =
-        TeacherPromptBuilder.forRange(
-            evidence,
-            TeacherPromptBuilder.Mode.RANGE,
-            TeacherStrings.locale(),
-            settings.snapshot());
-    lastEvidencePositions = evidence.positions;
-    startRequest(
-        lastEvidenceContext,
-        currentNode(),
-        TeacherStrings.format(
-            "Teacher.status.evidenceReady",
-            "{0} key positions selected ({1} analyzed, {2} omitted). Generating commentary...",
-            evidence.positions.size(),
-            evidence.analyzedPositions,
-            evidence.omittedPositions));
-  }
-
-  private void explainWholeGame() {
-    BoardHistoryNode root = rootNode();
-    if (root == null) {
-      return;
-    }
-    TeacherEvidence.Range evidence = TeacherEvidence.wholeGame(root);
-    if (evidence.isEmpty()) {
+    TeacherPromptBuilder.PreparedRange prepared;
+    try {
+      prepared =
+          TeacherPromptBuilder.prepareRange(
+              evidence, mode, TeacherStrings.locale(), settings.snapshot());
+    } catch (IllegalArgumentException tooLarge) {
       setStatus(
-          TeacherStrings.get(
-              "Teacher.status.rangeNeedsAnalysis",
-              "No analyzed positions were found in this game."),
-          TeacherDialogView.StatusTone.WARNING);
+          TeacherStrings.format(
+              "Teacher.status.failed", "Commentary failed: {0}", localError(tooLarge)),
+          TeacherDialogView.StatusTone.ERROR);
       return;
     }
-    lastEvidenceContext =
-        TeacherPromptBuilder.forRange(
-            evidence,
-            TeacherPromptBuilder.Mode.WHOLE_GAME,
-            TeacherStrings.locale(),
-            settings.snapshot());
-    lastEvidencePositions = evidence.positions;
+    TeacherEvidence.Range selected = prepared.evidence();
+    List<TeacherLlmClient.Message> context = prepared.messages();
     startRequest(
-        lastEvidenceContext,
-        root,
+        context,
+        new CommentaryContext(owner, context, selected.positions, ""),
         TeacherStrings.format(
             "Teacher.status.evidenceReady",
             "{0} key positions selected ({1} analyzed, {2} omitted). Generating commentary...",
-            evidence.positions.size(),
-            evidence.analyzedPositions,
-            evidence.omittedPositions));
+            selected.positions.size(),
+            selected.analyzedPositions,
+            selected.omittedPositions),
+        "");
   }
 
   private void askFollowUp() {
+    if (requestRunning || !settingsLoaded || !settingsUsable) {
+      return;
+    }
+    if (displayedGame != rootNodeProvider.get()
+        || (lastCommentary != null && !lastCommentary.owner.isCurrent(rootNodeProvider.get()))) {
+      discardChangedContext();
+      return;
+    }
     String question = followUp.getText().trim();
     if (question.isEmpty()) {
       return;
     }
-    if (lastEvidenceContext.isEmpty()) {
-      BoardHistoryNode current = currentNode();
-      if (current == null) {
+    CommentaryContext context = lastCommentary;
+    if (context == null || context.messages.isEmpty()) {
+      // A loaded SGF answer keeps its original target even after the user moves the cursor.
+      BoardHistoryNode target = context == null ? currentNode() : context.owner.target;
+      TargetSnapshot owner =
+          context == null ? TargetSnapshot.capture(rootNodeProvider.get(), target) : context.owner;
+      if (owner == null) {
         return;
       }
-      Optional<TeacherEvidence.Position> position = TeacherEvidence.current(current);
+      Optional<TeacherEvidence.Position> position = TeacherEvidence.current(target);
       if (position.isEmpty()) {
-        setStatus(
-            TeacherStrings.get(
-                "Teacher.status.needsAnalysis",
-                "This position has no KataGo candidates yet. Analyze it first."),
-            TeacherDialogView.StatusTone.WARNING);
+        needsAnalysis();
         return;
       }
-      lastEvidenceContext =
-          TeacherPromptBuilder.forPosition(
-              position.get(), TeacherStrings.locale(), settings.snapshot());
-      lastEvidencePositions = List.of(position.get());
+      context =
+          new CommentaryContext(
+              owner,
+              TeacherPromptBuilder.forPosition(
+                  position.get(), TeacherStrings.locale(), settings.snapshot()),
+              List.of(position.get()),
+              context == null ? "" : context.answer);
     }
-    startRequest(
+    if (startRequest(
         TeacherPromptBuilder.forFollowUp(
-            lastEvidenceContext,
-            rawOutput.toString(),
+            context.messages,
+            context.answer,
             question,
             TeacherStrings.locale(),
             settings.snapshot()),
-        currentNode());
-    followUp.setText("");
-  }
-
-  private void startRequest(List<TeacherLlmClient.Message> messages, BoardHistoryNode targetNode) {
-    startRequest(
-        messages,
-        targetNode,
-        TeacherStrings.get("Teacher.status.requesting", "Generating commentary..."));
-  }
-
-  private void startRequest(
-      List<TeacherLlmClient.Message> messages, BoardHistoryNode targetNode, String runningStatus) {
-    messages = appendKnowledge(messages, targetNode);
-    TeacherLlmClient client = configuredClient();
-    if (client == null) {
-      return;
+        context,
+        requestingStatus(),
+        question)) {
+      followUp.setText("");
     }
-    TeacherSettings.Snapshot snapshot = settings.snapshot();
-    requestModel = snapshot.model;
-    requestTarget = targetNode;
-    requestPositions = List.copyOf(lastEvidencePositions);
-    pendingText.clear();
-    rawOutput.setLength(0);
+  }
+
+  private void needsAnalysis() {
+    setStatus(
+        TeacherStrings.get(
+            "Teacher.status.needsAnalysis",
+            "This position has no KataGo candidates yet. Analyze it first."),
+        TeacherDialogView.StatusTone.WARNING);
+  }
+
+  private String requestingStatus() {
+    return TeacherStrings.get("Teacher.status.requesting", "Generating commentary...");
+  }
+
+  private boolean startRequest(
+      List<TeacherLlmClient.Message> messages,
+      CommentaryContext context,
+      String runningStatus,
+      String question) {
+    if (requestRunning || !context.owner.isCurrent(rootNodeProvider.get())) {
+      return false;
+    }
+    long preparationGeneration = uiGeneration;
+    CommentaryClient client = configuredClient();
+    if (client == null) {
+      return false;
+    }
+    // The settings dialog has a nested event loop: the game may change while it is open.
+    if (preparationGeneration != uiGeneration
+        || !context.owner.isCurrent(rootNodeProvider.get())) {
+      discardChangedContext();
+      return false;
+    }
+    Request request =
+        new Request(++uiGeneration, context, settings.snapshot().model, question);
+    activeRequest = request;
+    displayedGame = context.owner.root;
+    if (question.isEmpty()) {
+      lastCommentary = null;
+    }
     output.setText("<html><body></body></html>");
     view.showLoading(runningStatus);
     setRunning(true);
     setStatus(runningStatus, TeacherDialogView.StatusTone.RUNNING);
     requests.start(
-        client,
+        new GroundedCommentaryClient(client, context.positions),
         messages,
         new TeacherRequestController.Listener() {
           @Override
           public void onText(String text) {
-            queuePendingText(text);
+            // Display only the verified, complete answer; partial drafts have no SGF ownership.
           }
 
           @Override
           public void onComplete(String fullText) {
-            SwingUtilities.invokeLater(() -> completeRequest(fullText));
+            SwingUtilities.invokeLater(
+                () -> {
+                  if (acceptCallback(request)) completeRequest(request, fullText);
+                });
           }
 
           @Override
           public void onFailure(Throwable error) {
-            SwingUtilities.invokeLater(() -> failRequest(error));
+            SwingUtilities.invokeLater(
+                () -> {
+                  if (acceptCallback(request)) failRequest(request, error);
+                });
           }
 
           @Override
           public void onCancelled() {
-            SwingUtilities.invokeLater(() -> cancelledRequest());
+            SwingUtilities.invokeLater(
+                () -> {
+                  if (acceptCallback(request)) cancelledRequest(request);
+                });
           }
         });
+    return true;
   }
 
-  /** 把知识库匹配结果（定式/棋形）拼到最后一条 user 消息；无匹配不改动。 */
-  private static List<TeacherLlmClient.Message> appendKnowledge(
-      List<TeacherLlmClient.Message> messages, BoardHistoryNode node) {
-    if (messages == null || messages.isEmpty()) {
-      return messages;
+  private boolean acceptCallback(Request request) {
+    if (!isDisplayable() || activeRequest != request || uiGeneration != request.generation) {
+      return false;
     }
-    String knowledge = TeacherEvidence.knowledgeMatchText(node);
-    if (knowledge.isEmpty()) {
-      return messages;
+    if (!request.context.owner.isCurrent(rootNodeProvider.get())) {
+      discardChangedContext();
+      return false;
     }
-    java.util.ArrayList<TeacherLlmClient.Message> out = new java.util.ArrayList<>(messages);
-    int last = out.size() - 1;
-    TeacherLlmClient.Message message = out.get(last);
-    if ("user".equals(message.role)) {
-      String heading =
-          TeacherStrings.get(
-              TeacherStrings.locale(), "Teacher.prompt.knowledge", "【Knowledge】");
-      out.set(
-          last,
-          new TeacherLlmClient.Message(
-              message.role, message.content + "\n\n" + heading + "\n" + knowledge));
-    }
-    return out;
+    return true;
   }
 
-  private TeacherLlmClient configuredClient() {
+  private CommentaryClient configuredClient() {
     try {
       TeacherSettings.Snapshot snapshot = settings.load();
       if (!snapshot.hasApiKey) {
@@ -445,22 +539,24 @@ public final class TeacherDialog extends JDialog {
     }
   }
 
-  private void completeRequest(String fullText) {
-    flushPendingText();
+  private void completeRequest(Request request, String fullText) {
     String result = fullText == null ? "" : fullText.trim();
     if (result.isEmpty()) {
-      failRequest(new IllegalStateException("AI service returned an empty response."));
+      failRequest(request, new IllegalStateException("AI service returned an empty response."));
       return;
     }
-    rawOutput.setLength(0);
-    rawOutput.append(result);
-    output.setText(markdownToHtml(result));
-    output.setCaretPosition(0);
-    view.showOutput();
-    appendVerifierNotes(result);
-    if (writeToSgf.isSelected() && requestTarget != null && requestTarget.getData() != null) {
-      requestTarget.getData().comment =
-          TeacherCommentCodec.upsert(requestTarget.getData().comment, result, requestModel);
+    CommentaryContext context = request.context;
+    String rendered = withVerifierNotes(result, context.positions);
+    if (writeToSgf.isSelected()) {
+      BoardData target = context.owner.target.getData();
+      String updatedComment;
+      try {
+        updatedComment = TeacherCommentCodec.upsert(target.comment, result, request.model);
+      } catch (IllegalArgumentException invalidComment) {
+        failRequest(request, invalidComment);
+        return;
+      }
+      target.comment = updatedComment;
       if (Lizzie.frame != null) {
         Lizzie.frame.refresh();
       }
@@ -474,127 +570,71 @@ public final class TeacherDialog extends JDialog {
           TeacherStrings.get("Teacher.status.completed", "Commentary completed."),
           TeacherDialogView.StatusTone.SUCCESS);
     }
+    lastCommentary =
+        new CommentaryContext(context.owner, context.messages, context.positions, result);
+    showCommentary(rendered);
+    activeRequest = null;
     setRunning(false);
   }
 
-  /** 防编造校验：轻量 TeacherVerifier + 重型 QualityGate（claim 级核对），附到输出末尾（不阻断显示）。 */
-  private void appendVerifierNotes(String result) {
-    try {
-      TeacherVerifier.Result verification = TeacherVerifier.verify(result, requestPositions);
-      java.util.ArrayList<String> notes = new java.util.ArrayList<>(verification.violations);
-      notes.addAll(verification.warnings);
-      appendQualityGateNotes(result, notes);
-      if (notes.isEmpty()) {
-        return;
-      }
-      java.util.ArrayList<String> shown = new java.util.ArrayList<>();
-      for (String note : notes) {
-        shown.add(note);
-        if (shown.size() >= 4) {
-          break;
-        }
-      }
-      StringBuilder builder =
-          new StringBuilder("\n\n> ")
-              .append(TeacherStrings.get("Teacher.verify.note", "Verifier notes"))
-              .append(": ")
-              .append(String.join("; ", shown));
-      rawOutput.append(builder);
-      output.setText(markdownToHtml(rawOutput.toString()));
-    } catch (Exception ignored) {
-      // 校验失败不阻断解说显示
+  private static String withVerifierNotes(
+      String result, List<TeacherEvidence.Position> requestPositions) {
+    // These are the same frozen positions sent to the provider, never rebuilt from the live node.
+    TeacherVerifier.Result verification = TeacherVerifier.verify(result, requestPositions);
+    ArrayList<String> notes = new ArrayList<>(verification.violations);
+    notes.addAll(verification.warnings);
+    if (notes.isEmpty()) {
+      return result;
     }
+    return result
+        + "\n\n> "
+        + TeacherStrings.get("Teacher.verify.note", "Verifier notes")
+        + ": "
+        + String.join("; ", notes.subList(0, Math.min(4, notes.size())));
   }
 
-  /** 重型校验链：构建 MoveAnalysis → TeachingEvidence → QualityGate（结构化/claim 级核对）。 */
-  private void appendQualityGateNotes(String result, java.util.ArrayList<String> notes) {
-    if (requestTarget == null
-        || requestTarget.getData() == null
-        || requestPositions.size() != 1
-        || requestPositions.get(0).moveNumber != requestTarget.getData().moveNumber) {
-      return;
-    }
-    try {
-      MoveAnalysis analysis = TeacherEvidence.moveAnalysis(requestTarget);
-      TeachingEvidenceBuilder.TeachingEvidence evidence =
-          TeachingEvidenceBuilder.buildTeachingEvidence(
-              analysis, "", java.util.List.of(), java.util.List.of(), java.util.List.of());
-      featurecat.lizzie.teacher.analysis.QualityGate.TeacherQualityGateResult gate =
-          featurecat.lizzie.teacher.analysis.QualityGate.runTeacherQualityGate(
-              result, evidence, false);
-      notes.addAll(gate.violations);
-      notes.addAll(gate.warnings);
-    } catch (Exception ignored) {
-      // 重型校验失败不阻断解说显示
-    }
-  }
-
-  private void failRequest(Throwable error) {
-    flushPendingText();
-    if (rawOutput.length() == 0) {
-      view.resetEmptyTitle();
-      view.showEmpty();
-    }
+  private void failRequest(Request request, Throwable error) {
+    finishUnsuccessfulRequest(request);
     setStatus(
         TeacherStrings.format("Teacher.status.failed", "Commentary failed: {0}", localError(error)),
         TeacherDialogView.StatusTone.ERROR);
-    setRunning(false);
   }
 
-  private void cancelledRequest() {
-    flushPendingText();
-    if (rawOutput.length() == 0) {
-      view.resetEmptyTitle();
-      view.showEmpty();
-    }
+  private void cancelledRequest(Request request) {
+    finishUnsuccessfulRequest(request);
     setStatus(
         TeacherStrings.get("Teacher.status.cancelled", "Commentary stopped."),
         TeacherDialogView.StatusTone.WARNING);
+  }
+
+  private void finishUnsuccessfulRequest(Request request) {
+    activeRequest = null;
+    if (lastCommentary == null) {
+      clearOutputForEmptyState();
+    } else {
+      showCommentary(withVerifierNotes(lastCommentary.answer, lastCommentary.positions));
+    }
+    if (followUp.getText().isBlank() && request.context.owner.isCurrent(rootNodeProvider.get())) {
+      followUp.setText(request.question);
+    }
     setRunning(false);
   }
 
   private void stopRequest() {
-    if (!requests.isRunning()) {
+    // The worker may already be finished while its completion is still queued on the EDT.
+    if (!requestRunning || activeRequest == null) {
       return;
     }
+    Request cancelled = activeRequest;
+    uiGeneration++;
     requests.cancel();
-    cancelledRequest();
-  }
-
-  private void flushPendingText() {
-    StringBuilder addition = new StringBuilder();
-    String text;
-    while ((text = pendingText.poll()) != null) {
-      addition.append(text);
-    }
-    if (addition.length() > 0) {
-      rawOutput.append(addition);
-      output.setText(markdownToHtml(rawOutput.toString()));
-      output.setCaretPosition(output.getDocument().getLength());
-      view.showOutput();
-    }
+    cancelledRequest(cancelled);
   }
 
   private void setRunning(boolean running) {
     requestRunning = running;
     view.setRunning(running);
-    if (!running) {
-      textFlushTimer.stop();
-    }
     updateControlState();
-  }
-
-  private void queuePendingText(String text) {
-    if (text == null || text.isEmpty()) {
-      return;
-    }
-    pendingText.add(text);
-    SwingUtilities.invokeLater(
-        () -> {
-          if (isDisplayable() && requestRunning && !textFlushTimer.isRunning()) {
-            textFlushTimer.start();
-          }
-        });
   }
 
   private void updateControlState() {
@@ -611,23 +651,23 @@ public final class TeacherDialog extends JDialog {
   }
 
   private BoardHistoryNode currentNode() {
-    if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
+    BoardHistoryNode current = currentNodeProvider.get();
+    if (current == null) {
       setStatus(TeacherStrings.get("Teacher.status.noGame", "No game is loaded."));
-      return null;
     }
-    return Lizzie.board.getHistory().getCurrentHistoryNode();
+    return current;
   }
 
   private BoardHistoryNode rootNode() {
-    if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
+    BoardHistoryNode root = rootNodeProvider.get();
+    if (root == null) {
       setStatus(TeacherStrings.get("Teacher.status.noGame", "No game is loaded."));
-      return null;
     }
-    return Lizzie.board.getHistory().getStart();
+    return root;
   }
 
   private String evidenceStatus(BoardHistoryNode node) {
-    Optional<TeacherEvidence.Position> position = TeacherEvidence.current(node);
+    Optional<TeacherEvidence.Position> position = TeacherEvidence.position(node);
     if (position.isEmpty()) {
       return TeacherStrings.get(
           "Teacher.status.needsAnalysis",
@@ -638,6 +678,181 @@ public final class TeacherDialog extends JDialog {
         "Ready: move {0}, {1} KataGo candidates.",
         position.get().moveNumber,
         position.get().candidates.size());
+  }
+
+  private record CommentaryContext(
+      TargetSnapshot owner,
+      List<TeacherLlmClient.Message> messages,
+      List<TeacherEvidence.Position> positions,
+      String answer) {
+    private CommentaryContext {
+      messages = List.copyOf(messages);
+      positions = List.copyOf(positions);
+    }
+  }
+
+  private record Request(
+      long generation, CommentaryContext context, String model, String question) {}
+
+  /** Saves may outlive cursor navigation, but never the target position or its game. */
+  private static final class TargetSnapshot {
+    final BoardHistoryNode root;
+    final BoardHistoryNode target;
+    private final NodeSnapshot position;
+    private final List<BoardHistoryNode> ancestry;
+    private final List<NodeSnapshot> recentHistory;
+    private final List<NodeSnapshot> continuation;
+    private final List<NodeSnapshot> mainLine;
+    private final int width = Board.boardWidth;
+    private final int height = Board.boardHeight;
+
+    private TargetSnapshot(
+        BoardHistoryNode root,
+        BoardHistoryNode target,
+        List<BoardHistoryNode> ancestry,
+        boolean includeMainLine) {
+      this.root = root;
+      this.target = target;
+      this.ancestry = List.copyOf(ancestry);
+      position = new NodeSnapshot(target);
+      recentHistory =
+          ancestry.stream()
+              .limit(TeacherEvidence.MAX_KNOWLEDGE_HISTORY)
+              .map(NodeSnapshot::new)
+              .toList();
+      ArrayList<NodeSnapshot> nextMoves = new ArrayList<>();
+      BoardHistoryNode next = target.next().orElse(null);
+      while (next != null && nextMoves.size() < TeacherEvidence.MAX_RECORDED_CONTINUATION) {
+        nextMoves.add(new NodeSnapshot(next));
+        next = next.next().orElse(null);
+      }
+      continuation = List.copyOf(nextMoves);
+      ArrayList<NodeSnapshot> line = new ArrayList<>();
+      if (includeMainLine) {
+        for (BoardHistoryNode node = root; node != null; node = node.next().orElse(null)) {
+          line.add(new NodeSnapshot(node));
+        }
+      }
+      mainLine = List.copyOf(line);
+    }
+
+    static TargetSnapshot capture(BoardHistoryNode root, BoardHistoryNode target) {
+      return capture(root, target, false);
+    }
+
+    static TargetSnapshot capture(
+        BoardHistoryNode root, BoardHistoryNode target, boolean includeMainLine) {
+      if (root == null || target == null || target.getData() == null) {
+        return null;
+      }
+      ArrayList<BoardHistoryNode> ancestry = new ArrayList<>();
+      BoardHistoryNode node = target;
+      while (node != root) {
+        Optional<BoardHistoryNode> previous = node.previous();
+        if (previous == null || previous.isEmpty() || !previous.get().getVariations().contains(node)) {
+          return null;
+        }
+        node = previous.get();
+        ancestry.add(node);
+      }
+      return new TargetSnapshot(root, target, ancestry, includeMainLine);
+    }
+
+    boolean targetIsCurrent(BoardHistoryNode currentRoot) {
+      if (root != currentRoot || width != Board.boardWidth || height != Board.boardHeight
+          || !position.matches(target)) {
+        return false;
+      }
+      BoardHistoryNode child = target;
+      for (BoardHistoryNode parent : ancestry) {
+        Optional<BoardHistoryNode> previous = child.previous();
+        if (previous == null || previous.orElse(null) != parent
+            || !parent.getVariations().contains(child)) {
+          return false;
+        }
+        child = parent;
+      }
+      return child == root && recentHistory.stream().allMatch(snapshot -> snapshot.matches(snapshot.node));
+    }
+
+    boolean isCurrent(BoardHistoryNode currentRoot) {
+      if (!targetIsCurrent(currentRoot)) {
+        return false;
+      }
+      BoardHistoryNode next = target.next().orElse(null);
+      for (NodeSnapshot expected : continuation) {
+        if (!expected.matches(next)) {
+          return false;
+        }
+        next = next.next().orElse(null);
+      }
+      if (continuation.size() < TeacherEvidence.MAX_RECORDED_CONTINUATION && next != null) {
+        return false;
+      }
+      if (mainLine.isEmpty()) {
+        return true;
+      }
+      BoardHistoryNode current = root;
+      for (NodeSnapshot expected : mainLine) {
+        if (!expected.matches(current)) {
+          return false;
+        }
+        current = current.next().orElse(null);
+      }
+      return current == null;
+    }
+  }
+
+  /** Analysis and user comments may change independently; the actual position must still match. */
+  private static final class NodeSnapshot {
+    private final BoardHistoryNode node;
+    private final BoardData data;
+    private final BoardNodeKind kind;
+    private final Stone[] stones;
+    private final int[] lastMove;
+    private final Stone lastMoveColor;
+    private final int moveNumber;
+    private final boolean blackToPlay;
+    private final boolean dummy;
+    private final boolean removedStone;
+    private final boolean extraStones;
+    private final int blackCaptures;
+    private final int whiteCaptures;
+    private final double komi;
+
+    NodeSnapshot(BoardHistoryNode node) {
+      this.node = node;
+      data = node.getData();
+      kind = data.getNodeKind();
+      stones = data.stones == null ? null : data.stones.clone();
+      lastMove = data.lastMove.map(int[]::clone).orElse(null);
+      lastMoveColor = data.lastMoveColor;
+      moveNumber = data.moveNumber;
+      blackToPlay = data.blackToPlay;
+      dummy = data.dummy;
+      removedStone = node.hasRemovedStone();
+      extraStones = node.extraStones != null && !node.extraStones.isEmpty();
+      blackCaptures = data.blackCaptures;
+      whiteCaptures = data.whiteCaptures;
+      komi = data.komi;
+    }
+
+    boolean matches(BoardHistoryNode current) {
+      return current == node
+          && current.getData() == data
+          && kind == data.getNodeKind()
+          && Arrays.equals(stones, data.stones)
+          && Arrays.equals(lastMove, data.lastMove.orElse(null))
+          && lastMoveColor == data.lastMoveColor
+          && moveNumber == data.moveNumber
+          && blackToPlay == data.blackToPlay
+          && dummy == data.dummy
+          && removedStone == current.hasRemovedStone()
+          && extraStones == (current.extraStones != null && !current.extraStones.isEmpty())
+          && blackCaptures == data.blackCaptures
+          && whiteCaptures == data.whiteCaptures
+          && Double.compare(komi, data.komi) == 0;
+    }
   }
 
   private void setStatus(String message) {

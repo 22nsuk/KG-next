@@ -16,6 +16,13 @@ final class TeacherPromptBuilder {
     FOLLOW_UP
   }
 
+  record PreparedRange(TeacherEvidence.Range evidence, List<TeacherLlmClient.Message> messages) {}
+
+  // The transport counts message content, including the system prompt and evidence header.
+  // Leave 50k of its 250k limit for a typical follow-up and one correction: the retained
+  // answer (12k), a question (12k), a rejected reply (24k), and request instructions (2k).
+  private static final int MAX_RANGE_PROMPT_CHARACTERS = 200_000;
+
   private static final DecimalFormat ONE_DECIMAL =
       new DecimalFormat("0.0", DecimalFormatSymbols.getInstance(Locale.ROOT));
 
@@ -51,6 +58,24 @@ final class TeacherPromptBuilder {
         new TeacherLlmClient.Message("system", systemPrompt(locale, snapshot)),
         new TeacherLlmClient.Message(
             "user", modeInstruction(mode, locale) + "\n\n【KataGo evidence】\n" + evidence));
+  }
+
+  static PreparedRange prepareRange(
+      TeacherEvidence.Range range, Mode mode, Locale locale, TeacherSettings.Snapshot snapshot) {
+    int limit = Math.min(range.positions.size(), TeacherEvidence.MAX_RANGE_POSITIONS);
+    while (true) {
+      TeacherEvidence.Range selected = TeacherEvidence.selectKeyPositions(range, limit);
+      List<TeacherLlmClient.Message> messages = forRange(selected, mode, locale, snapshot);
+      long characters = messages.stream().mapToLong(message -> message.content.length()).sum();
+      if (characters <= MAX_RANGE_PROMPT_CHARACTERS) {
+        return new PreparedRange(selected, messages);
+      }
+      // Preserve both ends. A single-position range also reaches this bounded failure path.
+      if (limit <= 2) {
+        throw new IllegalArgumentException("AI commentary context is too large.");
+      }
+      limit--;
+    }
   }
 
   static List<TeacherLlmClient.Message> forFollowUp(
@@ -118,7 +143,17 @@ final class TeacherPromptBuilder {
                   format(position.actualWinrateLoss.getAsDouble())))
           .append("\n");
     }
-    if (!position.playedContinuation.isEmpty()) {
+    position
+        .actualScoreLoss()
+        .ifPresent(
+            loss ->
+                text.append("Actual move score loss (points, NOT percentage points): ")
+                    .append(format(loss))
+                    .append('\n'));
+    text.append("Candidate winrate and scoreLead perspective: side to play (")
+        .append(position.toPlay)
+        .append("); scoreLead is measured in points.\n");
+    if (position.board == null && !position.playedContinuation.isEmpty()) {
       text.append(
               TeacherStrings.format(
                   locale,
@@ -141,7 +176,11 @@ final class TeacherPromptBuilder {
       if (Double.isFinite(candidate.scoreLead)) {
         text.append(", scoreLead=").append(format(candidate.scoreLead));
       }
-      if (!candidate.variation.isEmpty()) {
+      if (candidate.rank > TeacherEvidence.MAX_CANDIDATES
+          && candidate.coordinate.equals(position.actualMove)) {
+        text.append(" (actual recorded move; retained outside the top three)");
+      }
+      if (position.board == null && !candidate.variation.isEmpty()) {
         text.append(", pv=");
         boolean black = "B".equals(position.toPlay);
         String blackLabel = TeacherStrings.get(locale, "Teacher.prompt.black", "(B)");
@@ -161,7 +200,8 @@ final class TeacherPromptBuilder {
         && position.candidates.stream()
             .noneMatch(
                 candidate ->
-                    candidate.coordinate != null
+                    candidate.rank <= TeacherEvidence.MAX_CANDIDATES
+                        && candidate.coordinate != null
                         && candidate.coordinate.equalsIgnoreCase(position.actualMove))) {
       text.append(
               TeacherStrings.format(
@@ -170,6 +210,12 @@ final class TeacherPromptBuilder {
                   "Note: the played move {0} is NOT among the top candidates above; compare it against the list.",
                   position.actualMove))
           .append("\n");
+    }
+    if (position.board != null) {
+      text.append('\n').append(position.board.facts());
+    }
+    if (!position.knowledge.isBlank()) {
+      text.append("\nPosition-specific knowledge:\n").append(position.knowledge).append('\n');
     }
     return text.toString();
   }
@@ -211,6 +257,7 @@ final class TeacherPromptBuilder {
         .append("Perspective note: winrate and scoreLead are final values normalized by the ")
         .append("application. Use them exactly as supplied; do not infer another perspective, ")
         .append("convert them, or flip their sign.\n");
+    prompt.append(boardEvidenceContract());
     return prompt.toString();
   }
 
@@ -241,7 +288,18 @@ final class TeacherPromptBuilder {
     prompt.append("不要在回答中提及用户的段位。\n");
     prompt.append("输出语言：请全程使用 ").append(chineseOutputLanguage(locale)).append("，不要混用其他语言。\n");
     prompt.append("视角说明：胜率和目差都是应用已经处理好的最终值。").append("必须按原值使用，不得自行推测其他视角、再次换算或翻转正负号。\n");
+    prompt.append(boardEvidenceContract());
     return prompt.toString();
+  }
+
+  private static String boardEvidenceContract() {
+    return "\nBoard-evidence limits: explain only the supplied, locally replayed prefixes. "
+        + "Never reconstruct an omitted suffix. Groups and liberties are exact geometry, "
+        + "not proof of life, death or sente. Recorded continuation is what happened, "
+        + "not necessarily the best defense. Candidate PVs are reference lines, not forced "
+        + "sequences or KataGo's hidden reasoning. Winrate losses are percentage points; "
+        + "score losses are points and must not be interchanged. Missing actual-move "
+        + "evaluation means the loss is unknown, not zero.\n";
   }
 
   private static String buildChinesePersona(TeacherSettings.Snapshot s) {

@@ -67,6 +67,33 @@ only use it when Shift switches that IME to ASCII. It does not change production
 input handling and is not a test of Chinese composition. Leave it unset on
 ordinary ASCII-input desktops and hosted CI.
 
+### AI commentary correctness
+
+`TeacherEvidence` freezes the board, KataGo candidates, recorded continuation, and optional
+knowledge before an API request. `TeacherBoardContext` uses a detached history to replay only
+valid line prefixes with the existing capture, suicide, and simple-ko rules. It does not prove
+superko legality, best replies, life and death, or forced play. Point losses and winrate losses
+have separate units; an unevaluated recorded move has an unknown loss.
+
+Range and whole-game requests select at most 40 positions and keep their complete evidence
+within a 200,000-character initial message budget. If needed, lower-priority positions are
+omitted while both ends remain; the selected evidence is shared by the prompt, verifier, and
+follow-up. The transport's 250,000-character cap leaves room for ordinary follow-ups and one
+correction, but arbitrarily large questions or replies can still exceed that cap.
+
+`GroundedCommentaryClient` checks a completed reply against that same evidence and permits
+at most one correction request for unsupported coordinates or impossible percentages. It
+does not expose rejected drafts. Interrupted streams fail without a correction retry. Numeric
+consistency and overly certain wording remain nonblocking notes; these checks do not establish
+the truth of every natural-language claim.
+
+The required `desktop` group runs every `TeacherDialogRequestOwnershipTest` case against a
+local HTTP/SSE server through the real API-key client and Swing dialog. It covers original-node
+SGF storage after cursor navigation, frozen follow-up context, correction, cancellation, game
+and recorded-line edits, settings-dialog reentrancy, and callbacks already queued on the EDT.
+The gate rejects missing or skipped cases. Screenshots are retained under
+`target/desktop-smoke/probes/teacher/`; no paid model or real GPU is used by these tests.
+
 ## Repository Map
 
 ### Code directories
