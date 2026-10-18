@@ -9,6 +9,7 @@ import featurecat.lizzie.training.HumanMoveDecision;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
+import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -23,6 +24,7 @@ import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -59,6 +61,11 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     READY
   }
 
+  public enum LaunchProfile {
+    DEFAULT,
+    POLICY_SUPPLEMENT
+  }
+
   @FunctionalInterface
   public interface StartupListener {
     void onStartupProgress(StartupStage stage, String detail);
@@ -66,6 +73,8 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
 
   private final List<String> commandParts;
   private final ProcessStarter processStarter;
+  private final LaunchProfile launchProfile;
+  private PreparedLaunch preparedPolicyLaunch;
   private final AtomicInteger nextRequestId = new AtomicInteger(1);
   private final AtomicInteger processGeneration = new AtomicInteger();
   private final ConcurrentMap<String, CompletableFuture<JSONObject>> pendingResponses =
@@ -86,12 +95,44 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
   private volatile StartupListener startupListener;
 
   public HumanSlAnalysisRunner(String analysisCommand, Path humanModelPath) {
-    this(buildHumanSlCommand(analysisCommand, humanModelPath), ProcessBuilder::start);
+    this(analysisCommand, humanModelPath, LaunchProfile.DEFAULT);
+  }
+
+  public HumanSlAnalysisRunner(
+      String analysisCommand, Path humanModelPath, LaunchProfile launchProfile) {
+    this(
+        buildHumanSlCommand(analysisCommand, humanModelPath), ProcessBuilder::start, launchProfile);
   }
 
   HumanSlAnalysisRunner(List<String> commandParts, ProcessStarter processStarter) {
+    this(commandParts, processStarter, LaunchProfile.DEFAULT);
+  }
+
+  HumanSlAnalysisRunner(
+      List<String> commandParts, ProcessStarter processStarter, LaunchProfile launchProfile) {
     this.commandParts = new ArrayList<String>(commandParts);
     this.processStarter = processStarter;
+    this.launchProfile = java.util.Objects.requireNonNull(launchProfile);
+  }
+
+  record PreparedLaunch(
+      CommandLaunchHelper.LaunchSpec specification, List<String> commands, Path executable) {
+    PreparedLaunch {
+      commands = List.copyOf(commands);
+    }
+  }
+
+  /** Resolves once for a policy cache owner; start uses these exact commands after runtime preflight. */
+  synchronized PreparedLaunch preparePolicyLaunch() {
+    if (launchProfile != LaunchProfile.POLICY_SUPPLEMENT)
+      throw new IllegalStateException("A policy launch profile is required for policy caching.");
+    if (closed) {
+      unavailableReason = "HumanSL analysis runner is closed.";
+      tensorRtRepairContext = null;
+      return null;
+    }
+    if (preparedPolicyLaunch == null) preparedPolicyLaunch = prepareLaunch();
+    return preparedPolicyLaunch;
   }
 
   public synchronized boolean start() {
@@ -107,36 +148,16 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     if (started && process != null && process.isAlive()) {
       return true;
     }
-    if (commandParts.isEmpty()) {
-      unavailableReason = "HumanSL analysis command is empty.";
-      tensorRtRepairContext = null;
-      return false;
-    }
-
-    CommandLaunchHelper.LaunchSpec launchSpec = CommandLaunchHelper.prepare(commandParts);
-    List<String> preparedCommands = launchSpec.getCommandParts();
-    Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(preparedCommands);
-    tensorRtRepairContext =
-        KataGoRuntimeHelper.inspectHumanSlTensorRtStartupFailure(
-            engineExecutable, preparedCommands, String.join(" ", preparedCommands));
-    if (tensorRtRepairContext != null && tensorRtRepairContext.repairable) {
-      unavailableReason = tensorRtRepairContext.displayMessage;
-      return false;
-    }
+    PreparedLaunch launch = preparedPolicyLaunch == null ? prepareLaunch() : preparedPolicyLaunch;
+    if (launch == null) return false;
+    if (preparedPolicyLaunch != null
+        && !inspectTensorRtStartup(launch.specification().getCommandParts())) return false;
     if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       unavailableReason = "KataGo tuning is using the local compute device.";
       return false;
     }
-    List<String> launchCommands;
-    try {
-      launchCommands =
-          KataGoRuntimeHelper.prepareBundledLaunchCommand(
-              preparedCommands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.HUMAN_SL);
-    } catch (IllegalStateException e) {
-      unavailableReason = usefulMessage(e, "HumanSL engine launch configuration is invalid.");
-      return false;
-    }
-    Path launchExecutable = KataGoRuntimeHelper.resolveCommandExecutable(launchCommands);
+    List<String> launchCommands = launch.commands();
+    Path launchExecutable = launch.executable();
     if (Config.isBundledKataGoExecutable(launchExecutable)) {
       try {
         KataGoRuntimeHelper.ensureBundledRuntimeReady(
@@ -147,7 +168,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
       }
     }
     ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
-    CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
+    CommandLaunchHelper.configureProcessBuilder(processBuilder, launch.specification());
     KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, launchExecutable);
     processBuilder.redirectErrorStream(true);
     clearStartupDiagnostics();
@@ -191,6 +212,56 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
       appendFailure(failure, cleanupFailure);
       throw failure;
     }
+  }
+
+  private PreparedLaunch prepareLaunch() {
+    if (commandParts.isEmpty()) {
+      unavailableReason = "HumanSL analysis command is empty.";
+      tensorRtRepairContext = null;
+      return null;
+    }
+
+    CommandLaunchHelper.LaunchSpec launchSpec = CommandLaunchHelper.prepare(commandParts);
+    List<String> preparedCommands = launchSpec.getCommandParts();
+    Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(preparedCommands);
+    if (!inspectTensorRtStartup(preparedCommands)) return null;
+    if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+      unavailableReason = "KataGo tuning is using the local compute device.";
+      return null;
+    }
+    List<String> launchCommands;
+    try {
+      launchCommands =
+          KataGoRuntimeHelper.prepareBundledLaunchCommand(
+              preparedCommands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.HUMAN_SL);
+      if (launchProfile == LaunchProfile.POLICY_SUPPLEMENT
+          && Config.isBundledKataGoExecutable(engineExecutable)) {
+        // Retain bundled runtime/companion setup, but restore the policy-only batching budget.
+        launchCommands =
+            KataGoCommandSpec.parse(launchCommands)
+                .withForcedOverrides(
+                    Map.of(
+                        "numAnalysisThreads", "4",
+                        "numSearchThreadsPerAnalysisThread", "1",
+                        "nnMaxBatchSize", "32"));
+      }
+    } catch (IllegalStateException e) {
+      unavailableReason = usefulMessage(e, "HumanSL engine launch configuration is invalid.");
+      return null;
+    }
+    return new PreparedLaunch(
+        launchSpec, launchCommands, KataGoRuntimeHelper.resolveCommandExecutable(launchCommands));
+  }
+
+  private boolean inspectTensorRtStartup(List<String> preparedCommands) {
+    tensorRtRepairContext =
+        KataGoRuntimeHelper.inspectHumanSlTensorRtStartupFailure(
+            KataGoRuntimeHelper.resolveCommandExecutable(preparedCommands),
+            preparedCommands,
+            String.join(" ", preparedCommands));
+    if (tensorRtRepairContext == null || !tensorRtRepairContext.repairable) return true;
+    unavailableReason = tensorRtRepairContext.displayMessage;
+    return false;
   }
 
   /**
