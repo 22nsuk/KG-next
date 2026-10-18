@@ -864,8 +864,20 @@ public class Config {
     for (int i = 0; i < engines.length(); i++) {
       JSONObject candidate = engines.optJSONObject(i);
       if (candidate != null && BundledKataGoProfile.isManagedCuda13(candidate)) {
-        candidate.put("command",
-            rebindManagedBundledCommand(candidate.optString("command"), appRoot));
+        String command = rebindManagedBundledCommand(candidate.optString("command"), appRoot);
+        String selectedModel = modelToken(command);
+        // CUDA13 is excluded from primary-engine maintenance. After relocation, recover only a
+        // missing model here, retaining the CUDA13 binary, config and all profile settings.
+        try {
+          if (!selectedModel.isBlank()
+              && Files.notExists(resolveCommandPath(appRoot, selectedModel))) {
+            command = command.replace('"' + selectedModel + '"',
+                quotePath(appRoot.resolve(BUNDLED_WEIGHT_ROOT).resolve(BUNDLED_WEIGHT_NAME)));
+          }
+        } catch (InvalidPathException invalidPath) {
+          // An unresolvable path is not proof that the selected model was deleted.
+        }
+        candidate.put("command", command);
         BundledKataGoProfile.claim(candidate);
         if (entry == null) entry = candidate;
       }
