@@ -146,11 +146,12 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,HumanSlStrengthDialogTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest",
             steps[0].command,
         )
         self.assertEqual(
             (
+                ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
                 *tuple(
                     ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest", method)
                     for method in (
