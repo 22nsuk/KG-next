@@ -3,8 +3,10 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -38,6 +40,12 @@ import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
@@ -77,6 +85,282 @@ class AnalysisEngineRequestTest {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
       boardWithHistory(history);
+      try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+        assertLocalResponse(session.engine, history.getStart());
+        assertEquals(200, history.getStart().getData().getPlayouts());
+        session.engine.normalQuit();
+        session.assertStopped();
+      }
+    }
+  }
+
+  @Test
+  void repeatedLocalAnalysisReleasesProcessAndBothReaders() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      for (int run = 0; run < 3; run++) {
+        BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+        boardWithHistory(history);
+        try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+          assertLocalResponse(session.engine, history.getStart());
+          session.engine.normalQuit();
+          session.engine.normalQuit();
+          session.assertStopped();
+          assertFalse(session.engine.sendRequest(history.getStart()));
+        }
+      }
+    }
+  }
+
+  @Test
+  void localCancellationAndShutdownReleaseProcessAndBothReaders() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      for (boolean directShutdown : List.of(false, true)) {
+        BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+        boardWithHistory(history);
+        try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+          assertLocalResponse(session.engine, history.getStart());
+          if (directShutdown) {
+            session.engine.shutdown();
+          } else {
+            session.engine.requestShutdown();
+            assertFalse(session.engine.sendRequest(history.getStart()));
+            session.engine.normalQuit();
+          }
+          session.assertStopped();
+        }
+      }
+    }
+  }
+
+  @Test
+  void unexpectedLocalOutputEndReleasesProcessAndBothReaders() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      for (String mode : List.of("stdout-eof", "crash")) {
+        BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+        boardWithHistory(history);
+        try (LocalAnalysisSession session = LocalAnalysisSession.open(true, mode)) {
+          CountDownLatch aborted = new CountDownLatch(1);
+          session.engine.setFailureCallback(result -> aborted.countDown());
+          assertTrue(session.engine.sendRequest(history.getStart()));
+
+          // No explicit quit: the stdout reader must own cleanup even if the child is still alive.
+          session.assertStopped();
+          assertTrue(aborted.await(5, TimeUnit.SECONDS), "aborted analysis was not reported");
+          assertEquals(0, history.getStart().getData().getPlayouts());
+        }
+      }
+    }
+  }
+
+  @Test
+  void immediateLocalProcessExitDoesNotLeaveUnstartedReaders() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      for (int run = 0; run < 3; run++) {
+        try (LocalAnalysisSession session = LocalAnalysisSession.open(true, "immediate-exit")) {
+          session.assertStopped();
+        }
+      }
+    }
+  }
+
+  @Test
+  void localStartupEofRetainsLateStderrAndNaturalExitCode() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      try (LocalAnalysisSession session = LocalAnalysisSession.open(true, "late-stderr-exit")) {
+        EngineStartupDiagnostics.Attempt attempt = session.engine.startupDiagnosticAttempt();
+        CountDownLatch ownerClosed = new CountDownLatch(1);
+        session.engine.setFailureCallback(
+            result -> {
+              // WholeGameAnalysisSession closes a failed worker again from its callback.
+              session.engine.normalQuit();
+              ownerClosed.countDown();
+            });
+        assertTrue(session.engine.sendRequest(history.getStart()));
+        waitUntil(() -> attempt.snapshot() != null);
+        assertTrue(ownerClosed.await(5, TimeUnit.SECONDS), "owner cleanup was not called");
+        assertFalse(
+            session.process.waitFor(100, TimeUnit.MILLISECONDS),
+            "repeated cleanup cut off the pending startup diagnostic tail");
+        assertTrue(attempt.collectingOutput(), "startup diagnostic should still be collecting");
+
+        // Let the child finish only after production has observed its earlier stdout EOF.
+        session.process
+            .getOutputStream()
+            .write("release late stderr\n".getBytes(StandardCharsets.UTF_8));
+        session.process.getOutputStream().flush();
+
+        session.assertStopped();
+        waitUntil(() -> !attempt.collectingOutput());
+        JSONObject diagnostic = attempt.snapshot().toJson();
+        assertEquals("completed", diagnostic.getString("collectionState"));
+        assertEquals(17, diagnostic.getInt("exitCode"));
+        assertEquals("late analysis startup error", diagnostic.getString("stderr"));
+      }
+    }
+  }
+
+  @Test
+  void stderrEndDoesNotStopLocalAnalysisResponses() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      try (LocalAnalysisSession session = LocalAnalysisSession.open(true, "stderr-eof")) {
+        assertLocalResponse(session.engine, history.getStart());
+        assertEquals(200, history.getStart().getData().getPlayouts());
+        assertTrue(session.process.isAlive());
+        assertTrue(session.engine.isRunning());
+
+        session.engine.normalQuit();
+        session.assertStopped();
+      }
+    }
+  }
+
+  @Test
+  void readerCompletingLocalAnalysisCanAutoQuitItsOwnExecutor() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryNode node = singleUnanalyzedMoveNode();
+      Lizzie.config.analysisAutoQuit = true;
+      try (LocalAnalysisSession session = LocalAnalysisSession.open(false, "gated-response")) {
+        CountDownLatch completed = new CountDownLatch(1);
+        AtomicInteger completions = new AtomicInteger();
+        AtomicInteger failures = new AtomicInteger();
+        session.engine.setCompletionCallback(
+            result -> {
+              completions.incrementAndGet();
+              completed.countDown();
+            });
+        session.engine.setFailureCallback(
+            result -> {
+              failures.incrementAndGet();
+              completed.countDown();
+            });
+
+        session.engine.startRequest(1, 2, false);
+        assertTrue(session.engine.isAnalysisInProgress(), "the real request must await its reader");
+        // Release the result after dispatch returns, so the stdout reader performs auto-quit.
+        session.process.getOutputStream().write('\n');
+        session.process.getOutputStream().flush();
+
+        assertTrue(completed.await(10, TimeUnit.SECONDS), "automatic quit did not complete");
+        assertEquals(1, completions.get());
+        assertEquals(0, failures.get());
+        assertEquals(200, node.getData().getPlayouts());
+        assertTrue(session.engine.isNormalEnd);
+        session.assertStopped();
+      }
+    }
+  }
+
+  @Test
+  void localQuitDoesNotWaitForBusyReaderOnEdt() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+        SilentGtpConsole console = (SilentGtpConsole) Lizzie.gtpConsole;
+        console.errorEntered = new CountDownLatch(1);
+        console.releaseError = new CountDownLatch(1);
+        FutureTask<Void> quit =
+            new FutureTask<>(
+                () -> {
+                  session.engine.normalQuit();
+                  return null;
+                });
+        CountDownLatch nextEdtEvent = new CountDownLatch(1);
+        try {
+          assertLocalResponse(session.engine, history.getStart());
+          assertTrue(console.errorEntered.await(5, TimeUnit.SECONDS), "stderr reader did not enter");
+
+          javax.swing.SwingUtilities.invokeLater(quit);
+          javax.swing.SwingUtilities.invokeLater(nextEdtEvent::countDown);
+
+          quit.get(2, TimeUnit.SECONDS);
+          assertTrue(nextEdtEvent.await(2, TimeUnit.SECONDS), "quit blocked the next EDT event");
+          assertEquals(1, console.releaseError.getCount(), "reader must still be deliberately busy");
+        } finally {
+          console.releaseError.countDown();
+        }
+        session.assertStopped();
+      }
+    }
+  }
+
+  @Test
+  void concurrentLocalQuitAndShutdownReleaseBothReaders() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+        assertLocalResponse(session.engine, history.getStart());
+        ExecutorService callers = Executors.newFixedThreadPool(4);
+        CountDownLatch ready = new CountDownLatch(4);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+          List<Future<?>> quits = new ArrayList<>();
+          for (int index = 0; index < 4; index++) {
+            boolean normalQuit = index % 2 == 0;
+            quits.add(
+                callers.submit(
+                    () -> {
+                      ready.countDown();
+                      assertTrue(start.await(5, TimeUnit.SECONDS));
+                      for (int repeat = 0; repeat < 3; repeat++) {
+                        if (normalQuit) session.engine.normalQuit();
+                        else session.engine.shutdown();
+                      }
+                      return null;
+                    }));
+          }
+          assertTrue(ready.await(5, TimeUnit.SECONDS));
+          start.countDown();
+          for (Future<?> quit : quits) quit.get(5, TimeUnit.SECONDS);
+          session.assertStopped();
+        } finally {
+          start.countDown();
+          callers.shutdownNow();
+          assertTrue(callers.awaitTermination(5, TimeUnit.SECONDS), "quit callers did not finish");
+        }
+      }
+    }
+  }
+
+  private static void assertLocalResponse(AnalysisEngine engine, BoardHistoryNode node)
+      throws Exception {
+    CountDownLatch response = new CountDownLatch(1);
+    engine.setProgressListener((completed, total) -> response.countDown());
+    assertTrue(engine.sendRequest(node));
+    assertTrue(response.await(10, TimeUnit.SECONDS), "local analysis response was not received");
+    assertEquals(1, getField(AnalysisEngine.class, engine, "responseCount"));
+  }
+
+  private static final class LocalAnalysisSession implements AutoCloseable {
+    private final AnalysisEngine engine;
+    private final Object resources;
+    private final Process process;
+    private final List<ExecutorService> readers;
+    private final GtpConsolePane previousConsole;
+
+    private LocalAnalysisSession(AnalysisEngine engine, GtpConsolePane previousConsole)
+        throws Exception {
+      this.engine = engine;
+      this.resources = getField(AnalysisEngine.class, engine, "readerResources");
+      this.process = (Process) getField(resources.getClass(), resources, "process");
+      this.previousConsole = previousConsole;
+      this.readers =
+          List.of(
+              (ExecutorService) getField(resources.getClass(), resources, "executor"),
+              (ExecutorService) getField(resources.getClass(), resources, "executorErr"));
+      assertNotNull(process, "local analysis process did not start");
+    }
+
+    private static LocalAnalysisSession open() throws Exception {
+      return open(true, "respond");
+    }
+
+    private static LocalAnalysisSession open(boolean preload, String mode) throws Exception {
       Lizzie.config.leelazConfig = new JSONObject();
       Lizzie.config.analysisEngineCommand =
           "\""
@@ -84,34 +368,54 @@ class AnalysisEngineRequestTest {
               + "\" -cp \""
               + System.getProperty("java.class.path")
               + "\" "
-              + InterleavedAnalysisProcess.class.getName();
-      var oldConsole = Lizzie.gtpConsole;
+              + InterleavedAnalysisProcess.class.getName()
+              + " "
+              + mode;
+      GtpConsolePane previousConsole = Lizzie.gtpConsole;
       Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
-      AnalysisEngine engine = null;
+      return new LocalAnalysisSession(new AnalysisEngine(preload), previousConsole);
+    }
+
+    private void assertStopped() throws Exception {
+      assertTrue(process.waitFor(5, TimeUnit.SECONDS), "owned process was left alive");
+      for (ExecutorService reader : readers) {
+        assertTrue(
+            reader.awaitTermination(5, TimeUnit.SECONDS), "owned reader executor did not terminate");
+        assertTrue(reader.isTerminated());
+        assertThrows(RejectedExecutionException.class, () -> reader.submit(() -> {}));
+      }
+      Thread cleanup = (Thread) getField(resources.getClass(), resources, "cleanup");
+      assertNotNull(cleanup, "resource cleanup was not started");
+      cleanup.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(cleanup.isAlive(), "resource cleanup was left running");
+      assertFalse(engine.isRunning());
+    }
+
+    @Override
+    public void close() throws Exception {
       try {
-        engine = new AnalysisEngine(true);
-        assertTrue(engine.sendRequest(history.getStart()));
-        AnalysisEngine running = engine;
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-        while ((int) getField(AnalysisEngine.class, running, "responseCount") == 0
-            && System.nanoTime() < deadline) Thread.sleep(10);
-        assertEquals(1, getField(AnalysisEngine.class, engine, "responseCount"));
-        assertEquals(200, history.getStart().getData().getPlayouts());
-      } finally {
-        if (engine != null) {
-          Process process = engine.process;
-          engine.normalQuit();
-          if (process != null) assertTrue(process.waitFor(5, TimeUnit.SECONDS));
-          for (String name : List.of("executor", "executorErr")) {
-            var executor =
-                (java.util.concurrent.ExecutorService) getField(AnalysisEngine.class, engine, name);
-            if (executor != null) {
-              executor.shutdown();
-              assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
-            }
+        // Assertions above observe production cleanup. Only a failed/unfinished test needs this.
+        if (process.isAlive()) {
+          process.destroyForcibly();
+          assertTrue(process.waitFor(5, TimeUnit.SECONDS), "test process cleanup timed out");
+        }
+        for (ExecutorService reader : readers) {
+          if (!reader.isTerminated()) {
+            reader.shutdownNow();
+            assertTrue(reader.awaitTermination(5, TimeUnit.SECONDS), "test reader cleanup timed out");
           }
         }
-        Lizzie.gtpConsole = oldConsole;
+      } finally {
+        try {
+          Thread cleanup = (Thread) getField(resources.getClass(), resources, "cleanup");
+          if (cleanup != null && cleanup.isAlive()) {
+            cleanup.interrupt();
+            cleanup.join(TimeUnit.SECONDS.toMillis(5));
+            assertFalse(cleanup.isAlive(), "test resource cleanup timed out");
+          }
+        } finally {
+          Lizzie.gtpConsole = previousConsole;
+        }
       }
     }
   }
@@ -119,8 +423,28 @@ class AnalysisEngineRequestTest {
   public static final class InterleavedAnalysisProcess {
     public static void main(String[] args) throws Exception {
       var input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
+      String mode = args.length == 0 ? "respond" : args[0];
+      if ("immediate-exit".equals(mode)) return;
       String request;
       while ((request = input.readLine()) != null) {
+        if ("late-stderr-exit".equals(mode)) {
+          System.out.close();
+          if (input.readLine() != null) {
+            System.err.println("late analysis startup error");
+            System.err.flush();
+            System.exit(17);
+          }
+          return;
+        }
+        if ("stdout-eof".equals(mode)) {
+          System.out.close();
+          // Leave stderr and stdin open: stdout EOF alone must terminate the owned child.
+          while (input.readLine() != null) {}
+          return;
+        }
+        if ("crash".equals(mode)) Runtime.getRuntime().halt(17);
+        if ("stderr-eof".equals(mode)) System.err.close();
+        if ("gated-response".equals(mode) && input.readLine() == null) return;
         int id = new JSONObject(request).getInt("id");
         System.err.print("diagnostic fragment without newline: ");
         System.err.flush();
@@ -3618,6 +3942,9 @@ class AnalysisEngineRequestTest {
   }
 
   private static final class SilentGtpConsole extends GtpConsolePane {
+    private volatile CountDownLatch errorEntered;
+    private volatile CountDownLatch releaseError;
+
     private SilentGtpConsole() {
       super(null);
     }
@@ -3629,7 +3956,21 @@ class AnalysisEngineRequestTest {
     public void addLine(String line) {}
 
     @Override
-    public void addErrorLine(String line) {}
+    public void addErrorLine(String line) {
+      if (errorEntered == null) return;
+      errorEntered.countDown();
+      boolean interrupted = false;
+      while (true) {
+        try {
+          releaseError.await();
+          break;
+        } catch (InterruptedException e) {
+          // Keep the test reader busy until the test releases it, even if cleanup interrupts it.
+          interrupted = true;
+        }
+      }
+      if (interrupted) Thread.currentThread().interrupt();
+    }
   }
 
   private static final class PonderTrackingLeelaz extends Leelaz {
