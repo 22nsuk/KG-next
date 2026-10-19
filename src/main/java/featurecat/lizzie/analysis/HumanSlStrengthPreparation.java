@@ -290,8 +290,7 @@ public final class HumanSlStrengthPreparation implements AutoCloseable {
         if (candidate != null && Files.isRegularFile(candidate)) engine = candidate;
       }
     }
-    var model = KataGoAutoSetupHelper.inspectHumanSlModel(setup);
-    Path human = model.isInstalled() ? model.modelPath : null;
+    Path human = KataGoAutoSetupHelper.findOfficialHumanSlModel(setup);
     return new Assets(engine, human);
   }
 

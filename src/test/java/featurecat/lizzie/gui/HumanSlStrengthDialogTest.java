@@ -2,24 +2,30 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.sun.net.httpserver.HttpServer;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
 import featurecat.lizzie.analysis.HumanSlStrengthGuiFixture;
 import featurecat.lizzie.analysis.HumanSlStrengthPreparation;
 import featurecat.lizzie.analysis.HumanSlStrengthReuseSession;
 import featurecat.lizzie.analysis.PlayerStrengthEstimator;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import javax.imageio.ImageIO;
@@ -48,6 +54,13 @@ public final class HumanSlStrengthDialogTest {
   void explicitSupplementReturnsFrozenAnalysisResult() throws Exception {
     DesktopProbeProcess.requireDisplay();
     assertTrue(Files.readString(probe("complete", List.of())).contains("completed=true"));
+  }
+
+  @Test
+  void manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel()
+      throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    assertTrue(Files.readString(probe("download", List.of())).contains("custom-selection-preserved=2"));
   }
 
   @Test
@@ -99,6 +112,7 @@ public final class HumanSlStrengthDialogTest {
         case "selection" -> selectAndSave(result);
         case "reopen" -> reopenPreference();
         case "complete" -> manualComplete(work, result);
+        case "download" -> manualInstallAndReuse(work);
         case "cancel" -> manualCancel(work, result);
         case "change" -> manualGameChange(work, result);
         default -> throw new IllegalArgumentException("Unknown scenario " + scenario);
@@ -208,6 +222,59 @@ public final class HumanSlStrengthDialogTest {
     }
   }
 
+  private static String manualInstallAndReuse(Path work) throws Exception {
+    Path custom = Files.write(work.resolve("custom-human.bin.gz"), new byte[2 * 1024 * 1024]);
+    byte[] officialBytes = new byte[4096];
+    java.util.Arrays.fill(officialBytes, (byte) 7);
+    AtomicInteger requests = new AtomicInteger();
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext(
+        "/human.bin.gz",
+        exchange -> {
+          requests.incrementAndGet();
+          exchange.sendResponseHeaders(200, officialBytes.length);
+          try (var body = exchange.getResponseBody()) {
+            body.write(officialBytes);
+          }
+        });
+    server.start();
+    try {
+      System.setProperty(
+          "lizzie.humansl.model.url",
+          "http://127.0.0.1:" + server.getAddress().getPort() + "/human.bin.gz");
+      System.setProperty(
+          "lizzie.humansl.model.sha256",
+          HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(officialBytes)));
+      System.setProperty("lizzie.humansl.model.size", Integer.toString(officialBytes.length));
+      onEdt(() -> KataGoAutoSetupHelper.rememberHumanSlModel(custom));
+      Path installed =
+          work.resolve("human-sl-models").resolve(KataGoAutoSetupHelper.HUMAN_SL_MODEL_FILE_NAME);
+      assertFalse(Files.exists(installed));
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
+          // Both visits exercise the dialog's acquisition branch: download first, then reuse.
+          var pending = beginManual(manual, null);
+          manual.awaitStarted();
+          assertArrayEquals(officialBytes, Files.readAllBytes(installed));
+          assertEquals(
+              1, requests.get(), "A verified installed model must be reused without a download");
+          assertEquals(
+              custom.toString(),
+              onEdtValue(() -> Lizzie.config.uiConfig.getString("katago-human-sl-model-path")));
+          assertEquals(custom, onEdtValue(() -> KataGoAutoSetupHelper.inspectHumanSlModel().modelPath));
+          manual.complete();
+          awaitEdt(pending.returned()::get);
+          manual.awaitClosed();
+          assertNotNull(pending.result().get());
+          assertTrue(pending.result().get().model.isHumanSl40());
+        }
+      }
+      return "custom-selection-preserved=2\nfixed-model-downloads=1\n";
+    } finally {
+      server.stop(0);
+    }
+  }
+
   private static String manualCancel(Path work, Path result) throws Exception {
     for (String action : List.of("button", "escape", "window")) {
       try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
@@ -264,6 +331,10 @@ public final class HumanSlStrengthDialogTest {
 
   private static Pending beginManual(Path work, HumanSlStrengthGuiFixture.Manual manual) throws Exception {
     Path installed = Files.writeString(work.resolve("controlled-human-model"), "controlled worker; no engine inference");
+    return beginManual(manual, installed);
+  }
+
+  private static Pending beginManual(HumanSlStrengthGuiFixture.Manual manual, Path installed) throws Exception {
     var captured = onEdtValue(HumanSlStrengthReuseSession::preparationSnapshot);
     var pending = new Pending(new AtomicBoolean(), new AtomicReference<>());
     SwingUtilities.invokeLater(() -> {

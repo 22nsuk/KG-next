@@ -1494,6 +1494,19 @@ public final class KataGoAutoSetupHelper {
 
   static Path downloadHumanSlModel(
       ProgressListener listener, DownloadSession session, List<String> sources) throws IOException {
+    Path model = installOfficialHumanSlModel(listener, session, sources);
+    rememberHumanSlModel(model);
+    return model;
+  }
+
+  /** Installs the fixed network without changing the selected model for HumanSL games. */
+  public static Path installOfficialHumanSlModel(ProgressListener listener, DownloadSession session)
+      throws IOException {
+    return installOfficialHumanSlModel(listener, session, humanSlModelDownloadUrls());
+  }
+
+  private static Path installOfficialHumanSlModel(
+      ProgressListener listener, DownloadSession session, List<String> sources) throws IOException {
     SetupSnapshot snapshot = inspectLocalSetup();
     Path modelsDir = humanSlModelsDir(snapshot.workingDir);
     Files.createDirectories(modelsDir);
@@ -1502,7 +1515,6 @@ public final class KataGoAutoSetupHelper {
 
     Path target = modelsDir.resolve(HUMAN_SL_MODEL_FILE_NAME);
     if (isValidHumanSlModelFile(target)) {
-      rememberHumanSlModel(target);
       if (listener != null) {
         listener.onProgress(HUMAN_SL_MODEL_FILE_NAME, Files.size(target), Files.size(target));
       }
@@ -1533,7 +1545,6 @@ public final class KataGoAutoSetupHelper {
         } catch (AtomicMoveNotSupportedException e) {
           Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         }
-        rememberHumanSlModel(target);
         return target;
       } finally {
         Files.deleteIfExists(temp);
@@ -1980,6 +1991,24 @@ public final class KataGoAutoSetupHelper {
       }
     }
     return new HumanSlModelStatus(candidates.isEmpty() ? null : candidates.get(0), candidates);
+  }
+
+  /** Finds the fixed network by contents, independently of the selected HumanSL game model. */
+  public static Path findOfficialHumanSlModel(SetupSnapshot snapshot) {
+    SetupSnapshot resolvedSnapshot = snapshot == null ? inspectLocalSetup() : snapshot;
+    List<Path> candidates =
+        prependUnique(
+            humanSlModelFromConfig(resolvedSnapshot.workingDir),
+            collectHumanSlModelCandidates(resolvedSnapshot.workingDir, resolvedSnapshot.appRoot));
+    for (Path candidate : candidates) {
+      try {
+        verifyOfficialHumanSlModel(candidate);
+        return candidate;
+      } catch (IOException e) {
+        // Custom models and incomplete copies do not satisfy the fixed network requirement.
+      }
+    }
+    return null;
   }
 
   public static void rememberHumanSlModel(Path modelPath) {

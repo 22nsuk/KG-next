@@ -94,7 +94,7 @@ public final class HumanSlStrengthDialog extends JDialog {
       @Override
       protected Void doInBackground() throws Exception {
         if (installedHuman == null)
-          KataGoAutoSetupHelper.downloadHumanSlModel(
+          KataGoAutoSetupHelper.installOfficialHumanSlModel(
               (message, bytes, total) ->
                   publish(
                       text("HumanSL40.downloading")
