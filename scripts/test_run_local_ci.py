@@ -188,6 +188,10 @@ class RunLocalCiTest(unittest.TestCase):
                     for method in (
                         "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
                         "explicitSupplementReturnsFrozenAnalysisResult",
+                        "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
+                        "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
+                        "decliningOrClosingDownloadConsentPreservesHumanSelection",
+                        "downloadFailureAndCancellationPreserveHumanSelection",
                         "cancelEscapeAndCloseRetireLateManualCompletion",
                         "changedGameRejectsLateManualResult",
                     )

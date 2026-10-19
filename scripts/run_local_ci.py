@@ -63,6 +63,10 @@ DESKTOP_REQUIRED_TESTS = (
         for method in (
             "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
             "explicitSupplementReturnsFrozenAnalysisResult",
+            "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
+            "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
+            "decliningOrClosingDownloadConsentPreservesHumanSelection",
+            "downloadFailureAndCancellationPreserveHumanSelection",
             "cancelEscapeAndCloseRetireLateManualCompletion",
             "changedGameRejectsLateManualResult",
         )

@@ -4,8 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -74,6 +79,86 @@ class HumanSlStrengthPreparationTest {
     long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
     while (!check.getAsBoolean() && System.nanoTime() < end) Thread.sleep(10);
     assertTrue(check.getAsBoolean(), "Preparation did not reach the expected state");
+  }
+
+  @Test
+  void discoverAssetsUsesFixedContentsWithoutChangingCustomHumanSelection() throws Exception {
+    var previous = Lizzie.config;
+    String previousSha = System.getProperty("lizzie.humansl.model.sha256");
+    String previousSize = System.getProperty("lizzie.humansl.model.size");
+    Path models = Files.createDirectories(cache.resolve("human-sl-models"));
+    Path external = Files.createDirectories(cache.resolve("external"));
+    byte[] officialBytes = new byte[2 * 1024 * 1024];
+    java.util.Arrays.fill(officialBytes, (byte) 7);
+    Path custom = Files.write(external.resolve("custom-human.bin.gz"), new byte[officialBytes.length]);
+    Files.write(
+        models.resolve(KataGoAutoSetupHelper.HUMAN_SL_MODEL_FILE_NAME),
+        new byte[officialBytes.length]);
+    Path importedOfficial = Files.write(models.resolve("b18c384nbt-humanv0-1.bin.gz"), officialBytes);
+    try {
+      Lizzie.config = ConfigTestHelper.createForTests(cache);
+      Lizzie.config.uiConfig = new JSONObject().put("katago-human-sl-model-path", custom.toString());
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "";
+      System.setProperty(
+          "lizzie.humansl.model.sha256",
+          HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(officialBytes)));
+      System.setProperty("lizzie.humansl.model.size", Integer.toString(officialBytes.length));
+
+      assertEquals(custom, KataGoAutoSetupHelper.inspectHumanSlModel().modelPath);
+      assertEquals(
+          importedOfficial,
+          HumanSlStrengthPreparation.discoverAssets().human(),
+          "HumanSL40 must skip a corrupt official-name candidate and use the matching contents");
+      assertEquals(custom.toString(), Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+      assertEquals(custom, KataGoAutoSetupHelper.inspectHumanSlModel().modelPath);
+
+      Path renamedOfficial = Files.move(importedOfficial, external.resolve("renamed-human.bin.gz"));
+      KataGoAutoSetupHelper.rememberHumanSlModel(renamedOfficial);
+      assertEquals(
+          renamedOfficial,
+          HumanSlStrengthPreparation.discoverAssets().human(),
+          "An explicitly selected copy with the fixed contents remains usable under another name");
+      assertEquals(renamedOfficial, KataGoAutoSetupHelper.inspectHumanSlModel().modelPath);
+    } finally {
+      Lizzie.config = previous;
+      restoreProperty("lizzie.humansl.model.sha256", previousSha);
+      restoreProperty("lizzie.humansl.model.size", previousSize);
+    }
+  }
+
+  @Test
+  void customHumanModelDoesNotSatisfyStrength40DownloadRequirement() throws Exception {
+    var previous = Lizzie.config;
+    Path custom = Files.write(cache.resolve("custom-human.bin.gz"), new byte[2 * 1024 * 1024]);
+    Path engine = Files.writeString(cache.resolve("katago"), "model check must precede engine launch");
+    try {
+      Lizzie.config = ConfigTestHelper.createForTests(cache);
+      Lizzie.config.uiConfig = new JSONObject().put("katago-human-sl-model-path", custom.toString());
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\"" + engine + "\"";
+      assertEquals(custom, KataGoAutoSetupHelper.inspectHumanSlModel().modelPath);
+      assertEquals(engine, HumanSlStrengthPreparation.discoverAssets().engine());
+      var preparation = new HumanSlStrengthPreparation();
+      try {
+        var task = preparation.manual(snapshot(HumanSlStrength40Test.game()));
+        ExecutionException error =
+            assertThrows(
+                ExecutionException.class, () -> task.completion().get(5, TimeUnit.SECONDS));
+        assertEquals("HumanSL40.downloadRequired", error.getCause().getMessage());
+        assertEquals(custom.toString(), Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+      } finally {
+        preparation.close();
+        preparation.termination().get(5, TimeUnit.SECONDS);
+      }
+    } finally {
+      Lizzie.config = previous;
+    }
+  }
+
+  private static void restoreProperty(String key, String value) {
+    if (value == null) System.clearProperty(key);
+    else System.setProperty(key, value);
   }
 
   @Test

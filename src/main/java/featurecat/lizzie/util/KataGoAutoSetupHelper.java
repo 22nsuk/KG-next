@@ -158,6 +158,7 @@ public final class KataGoAutoSetupHelper {
   private static final String HUMAN_SL_MODEL_SIZE_PROPERTY = "lizzie.humansl.model.size";
   private static final String HUMAN_SL_MODEL_CONFIG_KEY = "katago-human-sl-model-path";
   private static final String HUMAN_SL_MODEL_DIR_NAME = "human-sl-models";
+  private static final Object HUMAN_SL_INSTALL_LOCK = new Object();
 
   private KataGoAutoSetupHelper() {}
 
@@ -174,6 +175,17 @@ public final class KataGoAutoSetupHelper {
       HttpURLConnection current = connection;
       if (current != null) {
         current.disconnect();
+      }
+    }
+
+    /** Marks cancellation immediately, without waiting for an in-flight read on the UI thread. */
+    public void cancelAsync() {
+      cancelled = true;
+      HttpURLConnection current = connection;
+      if (current != null) {
+        Thread disconnect = new Thread(current::disconnect, "katago-download-cancel");
+        disconnect.setDaemon(true);
+        disconnect.start();
       }
     }
 
@@ -1494,15 +1506,38 @@ public final class KataGoAutoSetupHelper {
 
   static Path downloadHumanSlModel(
       ProgressListener listener, DownloadSession session, List<String> sources) throws IOException {
+    Path model = installOfficialHumanSlModel(listener, session, sources);
+    rememberHumanSlModel(model);
+    return model;
+  }
+
+  /** Installs the fixed network without changing the selected model for HumanSL games. */
+  public static Path installOfficialHumanSlModel(ProgressListener listener, DownloadSession session)
+      throws IOException {
+    return installOfficialHumanSlModel(listener, session, humanSlModelDownloadUrls());
+  }
+
+  private static Path installOfficialHumanSlModel(
+      ProgressListener listener, DownloadSession session, List<String> sources) throws IOException {
+    DownloadSession activeSession = session != null ? session : new DownloadSession();
+    // The fixed target and .part file have one owner, including while cancellation unwinds.
+    // Use a dedicated lock so unrelated model validation never waits for this download.
+    synchronized (HUMAN_SL_INSTALL_LOCK) {
+      activeSession.throwIfCancelled();
+      return installOfficialHumanSlModelLocked(listener, activeSession, sources);
+    }
+  }
+
+  private static Path installOfficialHumanSlModelLocked(
+      ProgressListener listener, DownloadSession activeSession, List<String> sources)
+      throws IOException {
     SetupSnapshot snapshot = inspectLocalSetup();
     Path modelsDir = humanSlModelsDir(snapshot.workingDir);
     Files.createDirectories(modelsDir);
-    DownloadSession activeSession = session != null ? session : new DownloadSession();
     activeSession.throwIfCancelled();
 
     Path target = modelsDir.resolve(HUMAN_SL_MODEL_FILE_NAME);
     if (isValidHumanSlModelFile(target)) {
-      rememberHumanSlModel(target);
       if (listener != null) {
         listener.onProgress(HUMAN_SL_MODEL_FILE_NAME, Files.size(target), Files.size(target));
       }
@@ -1533,7 +1568,6 @@ public final class KataGoAutoSetupHelper {
         } catch (AtomicMoveNotSupportedException e) {
           Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         }
-        rememberHumanSlModel(target);
         return target;
       } finally {
         Files.deleteIfExists(temp);
@@ -1980,6 +2014,24 @@ public final class KataGoAutoSetupHelper {
       }
     }
     return new HumanSlModelStatus(candidates.isEmpty() ? null : candidates.get(0), candidates);
+  }
+
+  /** Finds the fixed network by contents, independently of the selected HumanSL game model. */
+  public static Path findOfficialHumanSlModel(SetupSnapshot snapshot) {
+    SetupSnapshot resolvedSnapshot = snapshot == null ? inspectLocalSetup() : snapshot;
+    List<Path> candidates =
+        prependUnique(
+            humanSlModelFromConfig(resolvedSnapshot.workingDir),
+            collectHumanSlModelCandidates(resolvedSnapshot.workingDir, resolvedSnapshot.appRoot));
+    for (Path candidate : candidates) {
+      try {
+        verifyOfficialHumanSlModel(candidate);
+        return candidate;
+      } catch (IOException e) {
+        // Custom models and incomplete copies do not satisfy the fixed network requirement.
+      }
+    }
+    return null;
   }
 
   public static void rememberHumanSlModel(Path modelPath) {
