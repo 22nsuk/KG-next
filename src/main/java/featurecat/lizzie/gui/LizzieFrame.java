@@ -4462,6 +4462,8 @@ public class LizzieFrame extends JFrame {
   private static final class KifuLoadRollbackState {
     private final File currentFile;
     private final String title;
+    private final String players;
+    private final String result;
     private final ReadBoard readBoard;
     private final boolean readBoardFirstSync;
     private final WinrateGraph winrateGraph;
@@ -4470,6 +4472,8 @@ public class LizzieFrame extends JFrame {
     private KifuLoadRollbackState() {
       currentFile = curFile;
       title = fileNameTitle;
+      players = Lizzie.frame == null ? "" : Lizzie.frame.playerTitle;
+      result = Lizzie.frame == null ? "" : Lizzie.frame.resultTitle;
       readBoard = Lizzie.frame == null ? null : Lizzie.frame.readBoard;
       readBoardFirstSync = readBoard != null && readBoard.firstSync;
       winrateGraph = LizzieFrame.winrateGraph;
@@ -4490,6 +4494,8 @@ public class LizzieFrame extends JFrame {
         winrateGraph.restoreMaxScoreLeadAfterFailedModeHandoff(maxScoreLead);
       }
       if (Lizzie.frame != null) {
+        Lizzie.frame.playerTitle = players;
+        Lizzie.frame.resultTitle = result;
         Lizzie.frame.updateTitle();
         Lizzie.frame.refresh();
       }
@@ -5225,13 +5231,19 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean loadFile(File file, boolean fromTemp, boolean showHint) {
+    return loadFile(file, fromTemp, showHint, null);
+  }
+
+  private boolean loadFile(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad) {
     if (EngineGamePresentation.current().startingOrPlaying()
         || isPlayingAgainstLeelaz
         || isAnaPlayingAgainstLeelaz) {
       Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.openFileFailed.inGame"));
       return false;
     }
-    if (deferUntilHumanSlExit(() -> loadFile(file, fromTemp, showHint))) {
+    if (deferUntilHumanSlExit(
+        () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad))) {
       return true;
     }
     boolean oriSound = Lizzie.config.playSound;
@@ -5293,14 +5305,20 @@ public class LizzieFrame extends JFrame {
     fileNameTitle = file.getName();
     updateTitle();
     if (file.getPath().toLowerCase().endsWith(".gib")) {
+      if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
       startNewKifuAnalysisContextAfterSuccessfulLoad();
       scheduleResumeAnalysisAfterLoad(0);
     } else {
-      // SGFParser finalizes last-move navigation on the next EDT turn. Queue the immutable
-      // snapshot capture after that work, then restore the engine away from the UI thread.
+      Board loadedBoard = Lizzie.board;
+      BoardHistoryList loadedHistory = loadedBoard.getHistory();
+      // SGFParser finalizes last-move navigation on the next EDT turn. Restore a saved cursor
+      // after that work and before capturing the position to synchronize with the engine.
       SwingUtilities.invokeLater(
-          () ->
-              scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad));
+          () -> {
+            if (Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
+            if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
+            scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+          });
     }
     refresh();
     return true;
@@ -15404,6 +15422,50 @@ public class LizzieFrame extends JFrame {
     }
   }
 
+  private void openSavedGame(
+      boolean isAutoSave,
+      int index,
+      int moveNumber,
+      String moveList,
+      boolean originalShowListPane,
+      boolean originalShowVariationGraph) {
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
+        () ->
+            openSavedGame(
+                isAutoSave, index, moveNumber, moveList,
+                originalShowListPane, originalShowVariationGraph))) {
+      return;
+    }
+    // A deferred loadFile return is only an acknowledgement, not a successful load. Keep
+    // position restoration and closing the saved list inside the actual success continuation.
+    loadFile(
+        resolveSavedGameFile(isAutoSave, index, "sgf"),
+        true,
+        true,
+        () -> {
+          Board board = Lizzie.board;
+          boolean originalLoading = board.isLoadingFile;
+          boolean originalSound = Lizzie.config.playSound;
+          board.isLoadingFile = true;
+          Lizzie.config.playSound = false;
+          try {
+            if (!moveList.isEmpty()) {
+              // Saved paths start at the root, even when "load last move" is enabled.
+              board.goToMoveNumber(0);
+              board.playList(moveList);
+            } else {
+              board.goToMoveNumber(moveNumber);
+            }
+          } finally {
+            board.isLoadingFile = originalLoading;
+            Lizzie.config.playSound = originalSound;
+          }
+          hideTempGamePanel(originalShowListPane, originalShowVariationGraph);
+          if (bigBoardPanel != null) bigBoardPanel.setVisible(false);
+          refresh();
+        });
+  }
+
   public void addTempGameOne(
       int index,
       int x,
@@ -15463,19 +15525,9 @@ public class LizzieFrame extends JFrame {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> actionPerformed(e))) {
-              return;
-            }
-            // TBD未完成
-            canShowBigBoardImage = false;
-            loadFile(
-                resolveSavedGameFile(isAutoSave, index, "sgf"),
-                true,
-                true);
-            if (!moveList.equals("")) Lizzie.board.playList(moveList);
-            else Lizzie.board.goToMoveNumber(moveNumber);
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            hideTempGamePanel(oriShowListPane, OriShowVariationGraph);
+            openSavedGame(
+                isAutoSave, index, moveNumber, moveList,
+                oriShowListPane, OriShowVariationGraph);
           }
         });
 
@@ -15993,24 +16045,14 @@ public class LizzieFrame extends JFrame {
     tempGamePanelMoveLis =
         new MouseAdapter() {
           public void mouseClicked(MouseEvent e) {
-            if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> mouseClicked(e))) {
-              return;
-            }
             int x = e.getX();
             int y = e.getY();
             for (TempGameData data : tempGameList) {
               if (data.x < x && (data.x + 300) > x)
                 if (data.y < y && (data.y + 300) > y) {
-                  canShowBigBoardImage = false;
-                  loadFile(
-                      resolveSavedGameFile(data.isAutoSave, data.index, "sgf"),
-                      true,
-                      true);
-                  if (!data.moves.equals("")) Lizzie.board.playList(data.moves);
-                  else Lizzie.board.goToMoveNumber(data.curMoveNumer);
-
-                  if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-                  hideTempGamePanel(oriShowListPane, OriShowVariationGraph);
+                  openSavedGame(
+                      data.isAutoSave, data.index, data.curMoveNumer, data.moves,
+                      oriShowListPane, OriShowVariationGraph);
                   break;
                 }
             }
@@ -16057,20 +16099,10 @@ public class LizzieFrame extends JFrame {
     bigBoardPanelLis =
         new MouseAdapter() {
           public void mouseClicked(MouseEvent e) {
-            if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> mouseClicked(e))) {
-              return;
-            }
             if (e.getX() == 0 && e.getY() == 0) {
-              canShowBigBoardImage = false;
-              loadFile(
-                  resolveSavedGameFile(isAutoSave, index, "sgf"),
-                  true,
-                  true);
-              if (!moveList.equals("")) Lizzie.board.playList(moveList);
-              else Lizzie.board.goToMoveNumber(moveNumber);
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-              hideTempGamePanel(oriShowListPane, OriShowVariationGraph);
-              bigBoardPanel.setVisible(false);
+              openSavedGame(
+                  isAutoSave, index, moveNumber, moveList,
+                  oriShowListPane, OriShowVariationGraph);
             }
           }
         };

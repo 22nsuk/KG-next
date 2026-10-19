@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
@@ -24,15 +25,25 @@ import featurecat.lizzie.rules.Zobrist;
 import featurecat.lizzie.training.HumanSlTrainingConfig;
 import featurecat.lizzie.training.HumanSlTrainingSession;
 import featurecat.lizzie.training.TrainingMode;
+import java.awt.AWTEvent;
+import java.awt.GraphicsEnvironment;
+import java.awt.HeadlessException;
+import java.awt.Toolkit;
 import java.awt.Window;
+import java.awt.event.AWTEventListener;
 import java.awt.event.KeyEvent;
+import java.awt.event.WindowEvent;
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
+import java.util.ResourceBundle;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -40,9 +51,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.imageio.ImageIO;
+import javax.swing.JButton;
+import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class HumanSlGameControllerIntegrationTest {
   private static final int BOARD_SIZE = 3;
@@ -1438,6 +1454,222 @@ class HumanSlGameControllerIntegrationTest {
   }
 
   @Test
+  void savedGamePositionWaitsForDeferredCoachTeardownAndParserFinalization(
+      @TempDir Path directory) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
+      writeSavedGame(
+          directory,
+          1,
+          "(;FF[4]SZ[3]C[saved root];B[aa](;W[bb];B[bc])(;W[cc]C[saved variation]))");
+      Lizzie.config.loadSgfLast = true;
+      BoardHistoryList original = prepareCurrentSavedGame(directory);
+      BoardHistoryNode originalNode = original.getCurrentHistoryNode();
+      HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
+      AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+      controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
+
+      SwingUtilities.invokeAndWait(
+          () -> savedGameLoadButton(frame, 1, 2, "2,2,w_0,0,b").doClick(0));
+
+      assertSame(original, Lizzie.board.getHistory());
+      assertSame(originalNode, original.getCurrentHistoryNode());
+      assertEquals(0, frame.hiddenSavedLists);
+      assertFalse(controller.isFinished());
+      assertNotNull(exitWorker.get());
+
+      finishSavedGameCoachExit(exitWorker.get());
+
+      assertTrue(controller.isFinished());
+      BoardHistoryList loaded = Lizzie.board.getHistory();
+      assertEquals("saved root", loaded.getStart().getData().comment);
+      assertEquals("saved variation", loaded.getData().comment);
+      assertEquals(2, loaded.getMoveNumber());
+      assertEquals(Stone.BLACK, loaded.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(Stone.WHITE, loaded.getData().stones[Board.getIndex(2, 2)]);
+      assertEquals(Stone.EMPTY, loaded.getData().stones[Board.getIndex(1, 1)]);
+      assertEquals(2, loaded.getStart().next().orElseThrow().numberOfChildren());
+      assertSame(loaded.getCurrentHistoryNode(), frame.positionWhenSavedListHidden);
+      assertEquals(1, frame.hiddenSavedLists);
+      assertEquals("game1.sgf", LizzieFrame.fileNameTitle);
+      assertFalse(Lizzie.board.isLoadingFile);
+    }
+  }
+
+  @Test
+  void deferredSavedGameFailurePreservesTheCurrentGameAndOpenList(@TempDir Path directory)
+      throws Exception {
+    for (boolean malformed : List.of(false, true)) {
+      Path workDirectory =
+          Files.createDirectories(directory.resolve(malformed ? "malformed" : "missing"));
+      try (CoachEnvironment env = CoachEnvironment.open();
+          SavedGameFailureDialogGuard dialogs = new SavedGameFailureDialogGuard()) {
+        SavedGameCompletionFrame frame = savedGameCompletionFrame(workDirectory);
+        writeSavedGame(workDirectory, 1, malformed ? "not an SGF" : null);
+        BoardHistoryList original = prepareCurrentSavedGame(workDirectory);
+        BoardHistoryNode originalNode = original.getCurrentHistoryNode();
+        java.io.File originalFile = LizzieFrame.curFile;
+        HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
+        AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+        controller.setExitLifecycleForTesting(
+            exitWorker::set,
+            completion ->
+                SwingUtilities.invokeLater(
+                    () -> {
+                      completion.run();
+                      // The actual load has returned. Its queued error notice cannot use this
+                      // constructor-free frame as a native dialog owner.
+                      Lizzie.frame = null;
+                    }),
+            () -> true,
+            null);
+
+        SwingUtilities.invokeAndWait(
+            () -> savedGameLoadButton(frame, 1, 2, "2,2,w_0,0,b").doClick(0));
+
+        assertSame(original, Lizzie.board.getHistory());
+        assertSame(originalNode, original.getCurrentHistoryNode());
+        assertEquals(0, frame.hiddenSavedLists);
+        assertNotNull(exitWorker.get());
+
+        try {
+          finishSavedGameCoachExit(exitWorker.get());
+        } finally {
+          Lizzie.frame = frame;
+        }
+
+        assertTrue(controller.isFinished());
+        assertSame(original, Lizzie.board.getHistory());
+        assertSame(originalNode, original.getCurrentHistoryNode());
+        assertEquals("current user comment", original.getData().comment);
+        assertEquals(2, original.getMoveNumber());
+        assertEquals(0, originalNode.numberOfChildren());
+        assertEquals(Stone.EMPTY, original.getData().stones[Board.getIndex(2, 2)]);
+        assertEquals(originalFile, LizzieFrame.curFile);
+        assertEquals("current game.sgf", LizzieFrame.fileNameTitle);
+        assertEquals(0, frame.hiddenSavedLists);
+        assertFalse(Lizzie.board.isLoadingFile);
+        dialogs.assertOnlyExpectedFailureDialog();
+      }
+    }
+  }
+
+  @Test
+  void secondSavedGameOpenCannotReplaceTheAcceptedCoachExitContinuation(
+      @TempDir Path directory) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
+      writeSavedGame(directory, 1, "(;FF[4]SZ[3]C[first saved game];B[aa];W[bb])");
+      writeSavedGame(directory, 2, "(;FF[4]SZ[3]C[second saved game];B[cc];W[bc])");
+      BoardHistoryList original = prepareCurrentSavedGame(directory);
+      BoardHistoryNode originalNode = original.getCurrentHistoryNode();
+      HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
+      AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+      controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
+
+      SwingUtilities.invokeAndWait(
+          () -> {
+            JButton first = savedGameLoadButton(frame, 1, 1, "");
+            JButton second = savedGameLoadButton(frame, 2, 2, "1,2,w_2,2,b");
+            first.doClick(0);
+            second.doClick(0);
+          });
+
+      assertSame(original, Lizzie.board.getHistory());
+      assertSame(originalNode, original.getCurrentHistoryNode());
+      assertEquals(0, frame.hiddenSavedLists);
+      assertNotNull(exitWorker.get());
+
+      finishSavedGameCoachExit(exitWorker.get());
+
+      assertTrue(controller.isFinished());
+      assertEquals("first saved game", Lizzie.board.getHistory().getStart().getData().comment);
+      assertEquals(1, Lizzie.board.getHistory().getMoveNumber());
+      assertEquals(Stone.BLACK, Lizzie.board.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(Stone.EMPTY, Lizzie.board.getData().stones[Board.getIndex(2, 2)]);
+      assertEquals(1, frame.hiddenSavedLists, "only the accepted saved entry may finish");
+      assertEquals("game1.sgf", LizzieFrame.fileNameTitle);
+    }
+  }
+
+  private static SavedGameCompletionFrame savedGameCompletionFrame(Path directory)
+      throws Exception {
+    Config config = ConfigTestHelper.createForTests(directory);
+    config.persisted = new JSONObject().put("filesystem", new JSONObject());
+    config.uiConfig = new JSONObject();
+    config.playSound = false;
+    config.readKomi = true;
+    config.showComment = true;
+    config.initialMaxScoreLead = 10;
+    Lizzie.config = config;
+    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.ENGLISH);
+    SavedGameCompletionFrame frame = allocate(SavedGameCompletionFrame.class);
+    Lizzie.frame = frame;
+    Lizzie.leelaz = new TrackingLeelaz();
+    LizzieFrame.boardRenderer = allocate(SilentSavedGameBoardRenderer.class);
+    java.lang.reflect.Field panel = LizzieFrame.class.getDeclaredField("tempGamePanel");
+    panel.setAccessible(true);
+    panel.set(frame, new JPanel());
+    return frame;
+  }
+
+  private static BoardHistoryList prepareCurrentSavedGame(Path directory) {
+    BoardHistoryList history = Lizzie.board.getHistory();
+    history.place(0, 0, Stone.BLACK);
+    history.place(1, 1, Stone.WHITE);
+    history.getData().comment = "current user comment";
+    LizzieFrame.curFile = directory.resolve("current game.sgf").toFile();
+    LizzieFrame.fileNameTitle = "current game.sgf";
+    return history;
+  }
+
+  private static void writeSavedGame(Path directory, int index, String sgf) throws IOException {
+    Path saveDirectory = Files.createDirectories(directory.resolve("save"));
+    if (sgf != null) {
+      Files.writeString(saveDirectory.resolve("game" + index + ".sgf"), sgf);
+    }
+    ImageIO.write(
+        new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB),
+        "bmp",
+        saveDirectory.resolve("game" + index + ".bmp").toFile());
+  }
+
+  private static JButton savedGameLoadButton(
+      SavedGameCompletionFrame frame, int index, int moveNumber, String moveList) {
+    try {
+      java.lang.reflect.Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+      panelField.setAccessible(true);
+      JPanel panel = (JPanel) panelField.get(frame);
+      int previousCount = panel.getComponentCount();
+      frame.addTempGameOne(
+          index, 0, 0, "saved game", "saved date", false, moveNumber, moveList, true, true);
+      return Arrays.stream(panel.getComponents())
+          .skip(previousCount)
+          .filter(JButton.class::isInstance)
+          .map(JButton.class::cast)
+          .filter(
+              button ->
+                  button
+                      .getText()
+                      .equals(Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.load")))
+          .findFirst()
+          .orElseThrow();
+    } catch (ReflectiveOperationException failure) {
+      throw new AssertionError(failure);
+    }
+  }
+
+  private static void finishSavedGameCoachExit(Runnable exitWorker) throws Exception {
+    Thread worker = new Thread(exitWorker, "saved-game-coach-exit-test");
+    worker.start();
+    worker.join(5000L);
+    assertFalse(worker.isAlive());
+    // The exit continuation queues the SGF parser finalizer and the saved-position callback.
+    SwingUtilities.invokeAndWait(() -> {});
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
+  @Test
   void downloadedSgfCompletionRemainsPendingAcrossExitRecoveryRetry() throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
@@ -1846,6 +2078,115 @@ class HumanSlGameControllerIntegrationTest {
     public void scheduleResumeAnalysisAfterLoad(int delayMillis, Runnable action) {}
   }
 
+  private static final class SavedGameCompletionFrame extends CoachFrame {
+    private int hiddenSavedLists;
+    private BoardHistoryNode positionWhenSavedListHidden;
+
+    @Override
+    public void setVisible(boolean visible) {}
+
+    @Override
+    public void refresh(int mode) {}
+
+    @Override
+    public void refreshAfterMove() {}
+
+    @Override
+    public void setPlayers(String white, String black) {}
+
+    @Override
+    public void tryToResetByoTime() {}
+
+    @Override
+    public void requestProblemListRefresh() {}
+
+    @Override
+    public void refreshProblemListSnapshot() {}
+
+    @Override
+    public void onMainEnginePonder() {}
+
+    @Override
+    protected void scheduleMovelistRefreshAfterKifuLoad() {}
+
+    @Override
+    public boolean resetMovelistFrameandAnalysisFrame() {
+      return false;
+    }
+
+    @Override
+    public void scheduleResumeAnalysisAfterLoad(int delayMillis, Runnable action) {}
+
+    @Override
+    public void hideTempGamePanel(boolean showList, boolean showVariations) {
+      hiddenSavedLists++;
+      positionWhenSavedListHidden = Lizzie.board.getHistory().getCurrentHistoryNode();
+    }
+  }
+
+  private static final class SilentSavedGameBoardRenderer extends BoardRenderer {
+    private SilentSavedGameBoardRenderer() {
+      super(false);
+    }
+
+    @Override
+    public void removedrawmovestone() {}
+
+    @Override
+    public void clearAfterMove() {}
+
+    @Override
+    public void clearBranch() {}
+  }
+
+  private static final class SavedGameFailureDialogGuard implements AutoCloseable {
+    private final List<Throwable> uncaught = new CopyOnWriteArrayList<>();
+    private final AtomicInteger dialogs = new AtomicInteger();
+    private Thread.UncaughtExceptionHandler previousHandler;
+    private final AWTEventListener closeDialog =
+        event -> {
+          if (event.getID() == WindowEvent.WINDOW_OPENED
+              && event.getSource() instanceof JDialog
+              && "Error".equals(((JDialog) event.getSource()).getTitle())) {
+            dialogs.incrementAndGet();
+            ((JDialog) event.getSource()).dispose();
+          }
+        };
+
+    private SavedGameFailureDialogGuard() throws Exception {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            Thread edt = Thread.currentThread();
+            previousHandler = edt.getUncaughtExceptionHandler();
+            edt.setUncaughtExceptionHandler((thread, failure) -> uncaught.add(failure));
+            if (!GraphicsEnvironment.isHeadless()) {
+              Toolkit.getDefaultToolkit().addAWTEventListener(closeDialog, AWTEvent.WINDOW_EVENT_MASK);
+            }
+          });
+    }
+
+    private void assertOnlyExpectedFailureDialog() {
+      if (GraphicsEnvironment.isHeadless()) {
+        assertEquals(1, uncaught.size(), "the failed file must still schedule its error notice");
+        assertTrue(uncaught.get(0) instanceof HeadlessException, uncaught.toString());
+      } else {
+        assertTrue(uncaught.isEmpty(), uncaught.toString());
+        assertEquals(1, dialogs.get());
+      }
+    }
+
+    @Override
+    public void close() throws Exception {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            Thread.currentThread().setUncaughtExceptionHandler(previousHandler);
+            if (!GraphicsEnvironment.isHeadless()) {
+              Toolkit.getDefaultToolkit().removeAWTEventListener(closeDialog);
+            }
+          });
+    }
+  }
+
   private static final class ScriptedPrimaryResyncAttempt
       implements HumanSlGameController.PrimaryEngineResyncAttempt {
     private final List<Boolean> currentAfterReplay;
@@ -2148,6 +2489,7 @@ class HumanSlGameControllerIntegrationTest {
     private final OnlineDialog previousOnlineDialog;
     private final java.io.File previousCurrentFile;
     private final String previousFileNameTitle;
+    private final ResourceBundle previousResourceBundle = Lizzie.resourceBundle;
     private final boolean previousCanGoAfterload = LizzieFrame.canGoAfterload;
 
     private CoachEnvironment(
@@ -2249,12 +2591,18 @@ class HumanSlGameControllerIntegrationTest {
     @Override
     public void close() throws Exception {
       try {
-        HumanSlGameController active = Lizzie.frame == null ? null : Lizzie.frame.humanSlGame;
+        LizzieFrame closingFrame = Lizzie.frame;
+        HumanSlGameController active = closingFrame == null ? null : closingFrame.humanSlGame;
         if (active != null && !active.isFinished()) {
           active.abort();
         }
         // Every default exit dispatcher in this fixture is synchronous. Drain the one deliberately
         // asynchronous boundary (the EDT continuation) before replacing Lizzie's global objects.
+        SwingUtilities.invokeAndWait(() -> {});
+        SwingUtilities.invokeAndWait(
+            () -> {
+              if (closingFrame != null) closingFrame.shutdownKifuEngineSyncCoordinator();
+            });
         SwingUtilities.invokeAndWait(() -> {});
       } finally {
         Board.boardWidth = previousBoardWidth;
@@ -2274,6 +2622,7 @@ class HumanSlGameControllerIntegrationTest {
         LizzieFrame.onlineDialog = previousOnlineDialog;
         LizzieFrame.curFile = previousCurrentFile;
         LizzieFrame.fileNameTitle = previousFileNameTitle;
+        Lizzie.resourceBundle = previousResourceBundle;
         LizzieFrame.canGoAfterload = previousCanGoAfterload;
       }
     }
