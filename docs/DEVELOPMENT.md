@@ -162,6 +162,11 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `TeacherDialogRequestOwnershipTest` 的全部解说请求、修正、取消和 SGF 保存场景
 - `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
 - `HumanSlStrengthDialogTest` 的手动选择、设置重启保留、显式补充、取消和换谱结果隔离场景
+- `SavedGameLoadDesktopTest` 的保存列表按钮、缩略图和放大预览打开失败保留当前棋谱、原位置与注释，并在修复同一文件后成功重试的场景
+
+保存列表用例在独立子 JVM 中运行实际应用，使用真实 SGF 文件、有效缩略图及生产错误对话框。
+它覆盖缺失和无效 SGF，确认失败后列表仍可操作，成功后才恢复保存位置并关闭列表。
+韩文失败与重试成功截图保存在 `target/desktop-smoke/probes/saved-game-load-*/`。
 
 官方最强模型用例通过本地 HTTP 服务返回受控元数据，点击生产窗口的刷新按钮并等待真实异步回调。
 它覆盖新增模型和命中已固定模型两种显示，验证当前模型、推荐卡片及配置文件不变；不下载或运行模型。
