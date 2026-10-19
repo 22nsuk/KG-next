@@ -118,7 +118,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法 | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 凭据专项，再执行原完整 Maven verify | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 引擎进程生命周期 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
-| `engine-process` | 七个真实引擎进程生命周期 / 失败恢复用例 | 相同七个用例的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
+| `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 例如仅运行无 Java 的仓库检查：
 
@@ -146,10 +146,10 @@ Portable 脚本组逐文件执行 Bash 语法检查，失败步骤直接显示�
 其他需要显示环境的可选用例仍可在 headless gate 跳过；不固定全仓测试或 skip 数量。
 
 `desktop` 必须有可用显示环境且 `java.awt.headless=false`；缺失显示、关键用例缺失或 skipped/失败/报错均失败。
-Linux 安装 `xvfb xauth fonts-dejavu-core fonts-noto-cjk` 后运行：
+Linux 安装 `xvfb xauth fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg` 后运行：
 
 ```bash
-LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp' bash scripts/run_local_ci.sh --profile portable --group desktop --summary-dir target/local-ci/portable-desktop
+LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp' bash scripts/run_local_ci.sh --profile portable --group desktop --summary-dir target/local-ci/portable-desktop
 ```
 
 该组的强制用例包括以下检查，完整方法列表见 `scripts/run_local_ci.py`：
@@ -195,11 +195,10 @@ desktop 的新鲜 XML 单独放在 `target/desktop-smoke/surefire-reports/`；�
 这证明 Linux/Xvfb 中的生产窗口导航和搜索输入链，不替代 Windows DPI/IME/theme、原生
 Windows/macOS 快捷键行为或引擎/GPU 验收。
 
-`engine-process` 单独执行 `EngineProcessSmokeTest` 的成功生命周期以及
-`EngineProcessFailureTest` 的六个错误、超时、崩溃恢复、切换隔离、双管道排空和拒绝退出场景。
+`engine-process` 单独执行 `scripts/run_local_ci.py` 里 `ENGINE_PROCESS_REQUIRED_TESTS` 的 23 个方法。
 它不包含 Robot 输入用例，且将 XML 与探针证据分别写入
 `target/engine-process-smoke/surefire-reports/` 和 `target/engine-process-smoke/probes/`，不会消费
-`desktop` 或 headless Java 的报告。七个指定方法必须全部成功；显示缺失、方法缺失、skip、失败或报错均失败。
+`desktop` 或 headless Java 的报告。这 23 个方法必须全部成功；显示缺失、方法缺失、skip、失败或报错均失败。
 Linux 本地运行：
 
 ```bash
@@ -215,22 +214,26 @@ pwsh -NoProfile -File scripts/run_local_ci.ps1 -Profile Windows -Group EnginePro
 设置 `java.awt.headless=false` 不会替代可用显示；显示不可用时 runner 必须失败，不能以 skip 通过。
 
 
-Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）和 main push 执行原有六个 job，另有
+Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）和 main push 执行原有七个 job，另有
 `engine-process` 的 Linux/Xvfb 与原生 Windows matrix：`repository-checks`、`script-tests`、
-`windows-script-tests`、`java-linux`、`java-windows`、`desktop-smoke`，以及两个进程 matrix leg。
+`windows-script-tests`、`java-linux`、`java17-web`、`java-windows`、`desktop-smoke`，以及两个进程 matrix leg。
 Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘要独立上传。
 两平台 Java job 保留全量测试、`LoggingProviderSmokeIT`、shaded JAR 和 JaCoCo；
 验证成功但 coverage artifact 缺失仍失败。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
-`ci-required` 是唯一汇总门禁，要求原有六项和 `engine-process` matrix 全部成功，拒绝失败、取消、
+`ci-required` 是 `ci.yml` 的汇总检查，要求原有七项和 `engine-process` matrix 全部成功，拒绝失败、取消、
 跳过、缺失或未知结果。发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
-main 分支保护要求 GitHub Actions 来源的 `ci-required`。回退 workflow 时必须保留
-可运行且真实验证六项执行结果的 `ci-required`；不能直接回退到缺少该检查的版本。
-如需调整 required checks，由维护者协调保护设置与 workflow，始终保留有效合并门禁。
+该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
+不会自动启用分支保护。fork 的设置需要单独确认，不能从上游仓库的保护状态或检查名称推断。
 
-本地预检用于在推送前尽早发现问题，不能代替受保护分支上的干净 Windows 和
+建议维护者为 main 将 GitHub Actions 来源的 `ci-required` 配置为必需检查，并在合并前确认
+实际生效的 required checks。回退 workflow 时必须保留可运行且真实验证七项和 `engine-process`
+matrix 执行结果的 `ci-required`；不能直接回退到缺少该检查的版本。调整 required checks 时，
+由维护者协调仓库保护设置与 workflow。
+
+本地预检用于在推送前尽早发现问题，不能代替 GitHub Actions 上的干净 Windows 和
 Ubuntu runner，也不能代替 macOS 签名、公证与多平台发布资产审计。
 
 如果你改了打包、引擎路径、首次启动流程、野狐抓谱流程，建议再做对应平台的手工验证。
