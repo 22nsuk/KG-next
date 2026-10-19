@@ -7,6 +7,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
@@ -230,12 +231,14 @@ public final class WorkDirectoryResolver {
     Path legacy = Path.of(environment.userHome(), LEGACY_USER_WORK_DIR_NAME);
     Path target = resolveWindowsSharedWorkDirCandidate(environment, diagnostics);
 
-    migrateWorkDirIfNeeded(target, diagnostics, preferred, legacy);
+    if (!migrateSelectedWorkDir(target, diagnostics, preferred, legacy)) {
+      return target;
+    }
 
     try {
       Path cwd = Path.of(environment.userDir()).toAbsolutePath().normalize();
       if (!target.equals(cwd)) {
-        migrateWorkDirIfNeeded(target, diagnostics, cwd);
+        migrateSelectedWorkDir(target, diagnostics, cwd);
       }
     } catch (Exception e) {
       addError(diagnostics, "windows-cwd-migrate", e);
@@ -325,8 +328,21 @@ public final class WorkDirectoryResolver {
     }
     Collection<Path> safeSources =
         migrationSources == null ? Collections.emptyList() : migrationSources;
-    migrateWorkDirIfNeeded(workDir, diagnostics, safeSources.toArray(new Path[0]));
+    migrateSelectedWorkDir(workDir, diagnostics, safeSources.toArray(new Path[0]));
     return workDir;
+  }
+
+  private static boolean migrateSelectedWorkDir(
+      Path target, List<WorkDirectoryDiagnostic> diagnostics, Path... sources) {
+    try {
+      migrateWorkDirIfNeeded(target, diagnostics, sources);
+      return true;
+    } catch (IOException e) {
+      // Keep the selected profile after a migration failure. Config will read it again and
+      // report an unreadable file; selecting another directory here would silently reset it.
+      addError(diagnostics, "migration-failed", e);
+      return false;
+    }
   }
 
   private static List<Path> windowsPortableMigrationSources(
@@ -510,13 +526,13 @@ public final class WorkDirectoryResolver {
     long selectedModified = Long.MIN_VALUE;
     for (Path candidate : candidates) {
       Path configFile = candidate.resolve("config.txt");
-      if (!hasUsableConfig(configFile)) {
-        continue;
-      }
       int tier;
       try {
+        if (!hasUsableConfig(configFile)) {
+          continue;
+        }
         tier = configUserStateTier(readJsonObject(configFile));
-      } catch (Exception e) {
+      } catch (IOException | JSONException e) {
         continue;
       }
       long modified = Long.MIN_VALUE;
@@ -559,14 +575,14 @@ public final class WorkDirectoryResolver {
     return engines != null && engines.length() > 0 ? 1 : 0;
   }
 
-  private static boolean hasUsableConfig(Path configFile) {
-    if (!Files.isRegularFile(configFile)) {
+  private static boolean hasUsableConfig(Path configFile) throws IOException {
+    if (Files.notExists(configFile, LinkOption.NOFOLLOW_LINKS)) {
       return false;
     }
     try {
       JSONObject parsed = readJsonObject(configFile);
       return parsed.optJSONObject("ui") != null || parsed.optJSONObject("leelaz") != null;
-    } catch (Exception e) {
+    } catch (JSONException e) {
       return false;
     }
   }
@@ -768,18 +784,18 @@ public final class WorkDirectoryResolver {
   }
 
   private static void backupUnreadableConfig(
-      Path configFile, List<WorkDirectoryDiagnostic> diagnostics) {
-    if (configFile == null || !Files.isRegularFile(configFile)) {
+      Path configFile, List<WorkDirectoryDiagnostic> diagnostics) throws IOException {
+    if (Files.notExists(configFile, LinkOption.NOFOLLOW_LINKS)) {
       return;
     }
     Path source = configFile.toAbsolutePath().normalize();
     Path parent = source.getParent();
     if (parent == null) {
-      return;
+      throw new IOException("Config file has no parent directory: " + source);
     }
     String fileName = configFile.getFileName() + ".unreadable-backup";
     Path backup = parent.resolve(fileName);
-    for (int suffix = 1; Files.exists(backup); suffix++) {
+    for (int suffix = 1; Files.exists(backup, LinkOption.NOFOLLOW_LINKS); suffix++) {
       backup = parent.resolve(fileName + "." + suffix);
     }
     try {
@@ -791,12 +807,24 @@ public final class WorkDirectoryResolver {
               "Saved unreadable config backup to " + backup));
     } catch (IOException backupError) {
       addError(diagnostics, "unreadable-backup", backupError);
+      throw backupError;
     }
   }
 
   private static JSONObject readJsonObject(Path file) throws IOException {
     try (Reader reader = openUtf8JsonReader(file)) {
+      return readJsonObject(reader);
+    }
+  }
+
+  private static JSONObject readJsonObject(Reader reader) throws IOException {
+    try {
       return new JSONObject(new JSONTokener(reader));
+    } catch (JSONException e) {
+      if (e.getCause() instanceof IOException) {
+        throw (IOException) e.getCause();
+      }
+      throw e;
     }
   }
 

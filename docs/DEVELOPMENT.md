@@ -145,6 +145,18 @@ Portable 脚本组逐文件执行 Bash 语法检查，失败步骤直接显示�
 确实成功执行：关键用例缺失，或关键类任一用例 skipped/失败/报错，均使预检失败并写出失败摘要。
 其他需要显示环境的可选用例仍可在 headless gate 跳过；不固定全仓测试或 skip 数量。
 
+`ConfigReadFailurePreservationTest` 与 `WorkDirectoryReadFailurePreservationTest` 使用真实文件权限，
+并先确认读取或创建文件确实被拒绝；不会因为权限限制未生效而跳过。Linux/macOS 应使用普通用户运行，
+Windows 使用临时文件的 ACL 并在测试后恢复。Linux 容器中以 root 运行时，需移除绕过文件权限的能力，例如：
+
+```bash
+setpriv --bounding-set=-dac_override,-dac_read_search --no-new-privs \
+  mvn -B -Djava.awt.headless=true \
+  -Dtest=ConfigReadFailurePreservationTest,WorkDirectoryReadFailurePreservationTest test
+```
+
+以 root 运行完整 `verify` 时也使用同样的 `setpriv` 前缀。
+
 `desktop` 必须有可用显示环境且 `java.awt.headless=false`；缺失显示、关键用例缺失或 skipped/失败/报错均失败。
 Linux 安装 `xvfb xauth fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg` 后运行：
 
