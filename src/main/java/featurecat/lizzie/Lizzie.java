@@ -1,5 +1,6 @@
 package featurecat.lizzie;
 
+import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineCommandSink;
 import featurecat.lizzie.analysis.EngineFollowController;
 import featurecat.lizzie.analysis.EngineManager;
@@ -1528,6 +1529,12 @@ public class Lizzie {
       APP.error("failed to shut down clock helper", e);
     }
     Lizzie.frame.destroyAnalysisEngine();
+    java.util.concurrent.CompletableFuture<Void> analysisShutdown =
+        AnalysisEngine.shutdownAllResources()
+            .whenComplete(
+                (ignored, failure) -> {
+                  if (failure != null) APP.error("failed to shut down analysis resources", failure);
+                });
     if (webBoardManager != null) {
       try {
         webBoardManager.stop();
@@ -1536,10 +1543,11 @@ public class Lizzie {
       }
     }
     if (engineManager == null) {
-      strengthShutdown.thenRun(() -> shutdownLoggingThenExit(exit));
+      java.util.concurrent.CompletableFuture.allOf(strengthShutdown, analysisShutdown)
+          .thenRun(() -> shutdownLoggingThenExit(exit));
     } else {
       java.util.concurrent.CompletableFuture.allOf(
-              strengthShutdown, engineManager.cancelBenchmarks())
+              strengthShutdown, analysisShutdown, engineManager.cancelBenchmarks())
           .thenRun(() -> shutdownLoggingThenExit(exit));
     }
   }

@@ -25,6 +25,7 @@ import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRuntimeException;
 import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
+import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -39,7 +40,10 @@ import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -72,18 +76,16 @@ public class AnalysisEngine {
   private static final long REMOTE_GTP_ANALYZE_STALL_TIMEOUT_MILLIS = 8000L;
   private static final long REMOTE_GTP_SETUP_ACK_TIMEOUT_MILLIS = 8000L;
   private static final String CURRENT_FOREGROUND_RULES = "__current_foreground_rules__";
+  private static final Set<ReaderResources> ACTIVE_READER_RESOURCES = new LinkedHashSet<>();
   public Process process;
-  public boolean isNormalEnd = false;
+  public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
 
-  private BufferedReader inputStream;
   private BufferedOutputStream outputStream;
-  private BufferedReader errorStream;
   private transient EngineTransport remoteTransport;
+  private volatile ReaderResources readerResources;
 
   private String engineCommand;
-  private ScheduledExecutorService executor;
-  private ScheduledExecutorService executorErr;
   private List<String> commands;
   private boolean isPreLoad;
   // private HashMap<Integer, List<MoveData>> resultMap = new HashMap<Integer, List<MoveData>>();
@@ -114,7 +116,7 @@ public class AnalysisEngine {
   public boolean javaSSHClosed;
   public boolean useRemoteCompute = false;
   private boolean shouldRePonder = false;
-  private boolean isLoaded = false;
+  private volatile boolean isLoaded = false;
   private boolean silentProgress = false;
   private volatile boolean requestDispatchFailed = false;
   private volatile boolean requestDispatchComplete = false;
@@ -385,9 +387,8 @@ public class AnalysisEngine {
             this.javaSSH.login(this.engineCommand, this.userName, this.password).booleanValue();
       }
       if (loginStatus) {
-        this.inputStream = new BufferedReader(new InputStreamReader(this.javaSSH.getStdout()));
-        this.outputStream = new BufferedOutputStream(this.javaSSH.getStdin());
-        this.errorStream = new BufferedReader(new InputStreamReader(this.javaSSH.getSterr()));
+        initializeStreams(
+            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
         javaSSHClosed = false;
         isLoaded = true;
       } else {
@@ -459,16 +460,10 @@ public class AnalysisEngine {
       }
       initializeStreams();
     }
-    EngineStartupDiagnostics.Attempt readerAttempt = startupDiagnosticAttempt;
-    BufferedReader readerInput = inputStream;
-    BufferedReader readerError = errorStream;
-    executor = Executors.newSingleThreadScheduledExecutor();
-    executor.execute(() -> read(readerAttempt, readerInput));
-    executorErr = Executors.newSingleThreadScheduledExecutor();
-    executorErr.execute(() -> readError(readerAttempt, readerError));
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
         this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
+    readerResources.start();
   }
 
   private void showErrMsg(String errMsg) {
@@ -546,20 +541,191 @@ public class AnalysisEngine {
   }
 
   private void initializeStreams(InputStream stdout, OutputStream stdin, InputStream stderr) {
-    inputStream = new BufferedReader(new InputStreamReader(stdout));
-    outputStream = new BufferedOutputStream(stdin);
-    errorStream = new BufferedReader(new InputStreamReader(stderr));
+    ReaderResources resources =
+        new ReaderResources(
+            process,
+            useJavaSSH ? javaSSH : null,
+            useRemoteCompute ? remoteTransport : null,
+            startupDiagnosticAttempt,
+            stdout,
+            stdin,
+            stderr);
+    readerResources = resources;
+    outputStream = resources.stdin;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      ACTIVE_READER_RESOURCES.add(resources);
+    }
   }
 
-  private void readError() {
-    readError(startupDiagnosticAttempt, errorStream);
+  /**
+   * Stops owned readers after application task cancellation and waits asynchronously for cleanup,
+   * including workers already detached from the frame by cancellation or replacement.
+   */
+  public static CompletableFuture<Void> shutdownAllResources() {
+    List<ReaderResources> resources;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      resources = new ArrayList<>(ACTIVE_READER_RESOURCES);
+    }
+    for (ReaderResources pending : resources) pending.closeForExit();
+    return CompletableFuture.allOf(
+        resources.stream().map(pending -> pending.closed).toArray(CompletableFuture<?>[]::new));
   }
 
-  private void readError(EngineStartupDiagnostics.Attempt attempt, BufferedReader readerError) {
+  /** Owns the pipes and readers of one launch, including cleanup after a stale reader exits. */
+  private final class ReaderResources {
+    private final Process process;
+    private final AnalysisEngineSSHController ssh;
+    private final EngineTransport transport;
+    private final EngineStartupDiagnostics.Attempt attempt;
+    private final BufferedReader stdout;
+    private final BufferedOutputStream stdin;
+    private final BufferedReader stderr;
+    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService executorErr = Executors.newSingleThreadExecutor();
+    private final CompletableFuture<Void> closed = new CompletableFuture<>();
+    private Thread cleanup;
+
+    private ReaderResources(
+        Process process,
+        AnalysisEngineSSHController ssh,
+        EngineTransport transport,
+        EngineStartupDiagnostics.Attempt attempt,
+        InputStream stdout,
+        OutputStream stdin,
+        InputStream stderr) {
+      this.process = process;
+      this.ssh = ssh;
+      this.transport = transport;
+      this.attempt = attempt;
+      this.stdout = new BufferedReader(new InputStreamReader(stdout));
+      this.stdin = new BufferedOutputStream(stdin);
+      this.stderr = new BufferedReader(new InputStreamReader(stderr));
+    }
+
+    private synchronized void start() {
+      if (cleanup != null) return;
+      CountDownLatch started = new CountDownLatch(1);
+      try {
+        executor.execute(() -> runReader(started, () -> read(this)));
+        executorErr.execute(() -> runReader(started, () -> readError(this)));
+      } finally {
+        // Neither EOF nor cancellation can leave a reader submitted to a closed executor.
+        started.countDown();
+      }
+    }
+
+    private void runReader(CountDownLatch started, Runnable reader) {
+      try {
+        started.await();
+        reader.run();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        close(false);
+      }
+    }
+
+    private synchronized void close(boolean preserveStartupTail) {
+      // Do not interrupt or await the reader that may itself be completing an analysis.
+      executor.shutdown();
+      executorErr.shutdown();
+      // A failure callback may close us again. Keep the first bounded drain policy intact.
+      if (cleanup != null) return;
+      cleanup = new Thread(() -> finishCleanup(preserveStartupTail), "analysis-engine-cleanup");
+      cleanup.setDaemon(true);
+      cleanup.start();
+    }
+
+    private void closeForExit() {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
+      close(false);
+    }
+
+    private void finishCleanup(boolean preserveStartupTail) {
+      try {
+        closeResources(preserveStartupTail);
+        // destroyForcibly requests termination; application exit must also observe its completion.
+        if (process != null) process.waitFor();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        closed.completeExceptionally(interrupted);
+        return;
+      } catch (RuntimeException | Error failure) {
+        closed.completeExceptionally(failure);
+        throw failure;
+      }
+      // Keep failures tracked so a later exit cannot mistake failed cleanup for completion.
+      synchronized (ACTIVE_READER_RESOURCES) {
+        ACTIVE_READER_RESOURCES.remove(this);
+      }
+      closed.complete(null);
+    }
+
+    private void closeResources(boolean preserveStartupTail) {
+      try {
+        if (preserveStartupTail && process != null && attempt != null && attempt.collectingOutput()) {
+          long budget =
+              TimeUnit.MILLISECONDS.toNanos(
+                  EngineStartupDiagnostics.Policy.production().deadlineMillis());
+          long deadline = System.nanoTime() + budget;
+          // Startup failures may close stdout before writing their final stderr and exit status.
+          if (process.waitFor(budget, TimeUnit.NANOSECONDS)) {
+            executorErr.awaitTermination(
+                Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+          }
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      } finally {
+        try {
+          closeBackend(process, ssh, transport, attempt);
+        } finally {
+          // Reader.close and the stdin flush can wait for I/O locks. Keep them off the EDT
+          // and outside the AnalysisEngine monitor used by response parsing and handback.
+          closeStream(stdin);
+          closeStream(stdout);
+          closeStream(stderr);
+        }
+      }
+    }
+  }
+
+  private static void closeStream(Closeable stream) {
+    try {
+      stream.close();
+    } catch (IOException failure) {
+      failure.printStackTrace();
+    }
+  }
+
+  private static void closeBackend(
+      Process process,
+      AnalysisEngineSSHController ssh,
+      EngineTransport transport,
+      EngineStartupDiagnostics.Attempt attempt) {
+    if (attempt != null) attempt.beforeTermination();
+    if (process != null && process.isAlive()) process.destroyForcibly();
+    if (ssh != null) ssh.close();
+    if (transport != null) transport.close();
+  }
+
+  private void closeReaderResources() {
+    ReaderResources resources = readerResources;
+    if (resources != null) {
+      resources.close(false);
+    } else {
+      // A failed connection may have a transport but no reader tasks yet.
+      closeBackend(process, javaSSH, remoteTransport, startupDiagnosticAttempt);
+    }
+  }
+
+  private void readError(ReaderResources resources) {
+    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
     String line = "";
     Throwable error = null;
     try {
-      while ((line = readerError.readLine()) != null) {
+      while ((line = resources.stderr.readLine()) != null) {
         if (attempt != null) {
           attempt.output("stderr", line);
         }
@@ -576,6 +742,8 @@ public class AnalysisEngine {
       if (attempt != null) {
         attempt.streamEnded("stderr", error == null ? null : error.toString());
       }
+      // Stderr EOF alone does not end the stdout protocol or the engine process.
+      resources.executorErr.shutdown();
     }
   }
 
@@ -583,15 +751,12 @@ public class AnalysisEngine {
     Lizzie.gtpConsole.addErrorLine(line + "\n");
   }
 
-  private void read() {
-    read(startupDiagnosticAttempt, inputStream);
-  }
-
-  private void read(EngineStartupDiagnostics.Attempt attempt, BufferedReader readerInput) {
+  private void read(ReaderResources resources) {
+    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
     Throwable error = null;
     try {
       String line = "";
-      while ((line = readerInput.readLine()) != null) {
+      while ((line = resources.stdout.readLine()) != null) {
         if (attempt != null) {
           attempt.output("stdout", line);
           if (attempt != startupDiagnosticAttempt) continue;
@@ -602,19 +767,24 @@ public class AnalysisEngine {
           ex.printStackTrace();
         }
       }
-      if (this.useJavaSSH) javaSSHClosed = true;
-      if (this.useRemoteCompute && remoteTransport != null) remoteTransport.close();
       System.out.println("Flash analyze process ended.");
     } catch (IOException e) {
       error = e;
     } finally {
-      if (attempt != null) {
-        attempt.streamEnded("stdout", error == null ? null : error.toString());
+      try {
+        if (attempt != null) {
+          attempt.streamEnded("stdout", error == null ? null : error.toString());
+        }
+        readerEnded(resources, error);
+      } finally {
+        resources.close(readerResources == resources && !isNormalEnd);
       }
     }
-    if (attempt != startupDiagnosticAttempt) return;
-    if (this.useJavaSSH) javaSSHClosed = true;
-    isLoaded = false;
+  }
+
+  private void readerEnded(ReaderResources resources, Throwable error) {
+    if (readerResources != resources) return;
+    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
     if (!isNormalEnd) {
       if (attempt != null) {
         attempt.fail(
@@ -623,12 +793,19 @@ public class AnalysisEngine {
                 ? error.toString()
                 : resourceBundle.getString("Leelaz.engineEndUnormalHint"));
       }
+    }
+    // Claim EOF cleanup before publishing failure: callers can immediately normalQuit() again.
+    resources.close(!isNormalEnd);
+    requestShutdown();
+    if (this.useJavaSSH) javaSSHClosed = true;
+    isLoaded = false;
+    if (!isNormalEnd) {
       showErrMsg(resourceBundle.getString("Leelaz.engineEndUnormalHint"), null, attempt);
     }
-    process = null;
-    shutdown();
+    AnalysisResourceCoordinator.processStopped(this, purpose, resources.process);
+    shutdownRemoteGtpSetupAckTimeoutExecutor();
+    releaseSharedForegroundLease();
     finishAbortedAnalysis();
-    return;
   }
 
   private void parseLine(String line) {
@@ -1230,7 +1407,9 @@ public class AnalysisEngine {
   public void normalQuit(Runnable afterRestore, Runnable afterRestoreFailure) {
     requestShutdown();
     isNormalEnd = true;
+    isLoaded = false;
     AnalysisResourceCoordinator.processStopped(this, purpose, process);
+    closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     if (sharedForegroundEngine != null) {
       requestDispatchFailed = true;
@@ -1240,18 +1419,6 @@ public class AnalysisEngine {
       if (!restorePending) {
         finishForegroundRestore(afterRestore, afterRestoreFailure);
       }
-    }
-    if (this.useJavaSSH) {
-      if (this.javaSSH != null) this.javaSSH.close();
-    } else if (this.useRemoteCompute) {
-      if (this.remoteTransport != null) this.remoteTransport.close();
-      if (executor != null) executor.shutdownNow();
-      if (executorErr != null) executorErr.shutdownNow();
-    } else if (this.process != null) {
-      if (startupDiagnosticAttempt != null) {
-        startupDiagnosticAttempt.beforeTermination();
-      }
-      this.process.destroyForcibly();
     }
     Lizzie.frame.requestProblemListRefresh();
   }
@@ -2632,20 +2799,12 @@ public class AnalysisEngine {
   }
 
   public void shutdown() {
-    // isShuttingdown = true;
     requestShutdown();
+    isLoaded = false;
+    AnalysisResourceCoordinator.processStopped(this, purpose, process);
+    closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     releaseSharedForegroundLease();
-    if (useJavaSSH) {
-      if (javaSSH != null) javaSSH.close();
-    } else if (useRemoteCompute) {
-      if (remoteTransport != null) remoteTransport.close();
-    } else if (process != null) {
-      if (startupDiagnosticAttempt != null) {
-        startupDiagnosticAttempt.beforeTermination();
-      }
-      process.destroy();
-    }
   }
 
   public boolean isRunning() {
