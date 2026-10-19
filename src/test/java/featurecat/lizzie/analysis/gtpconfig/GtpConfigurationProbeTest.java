@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis.gtpconfig;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -21,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.Reader;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
@@ -380,13 +382,13 @@ class GtpConfigurationProbeTest {
         "the real-process registry test requires an isolated raw zero-process baseline");
     Path schemaGate = tempDir.resolve("probe-registry-schema-gate");
     Path childPid = childPidPath(schemaGate);
-    GtpConfigurationProbe probe = new GtpConfigurationProbe();
+    AtomicReference<OwnedProbeChild> ownedChild = new AtomicReference<>();
+    GtpConfigurationProbe probe = capturingRealProbeChild(schemaGate, ownedChild);
     ExecutorService executor = Executors.newSingleThreadExecutor();
     CountDownLatch workerFinished = new CountDownLatch(1);
     AtomicBoolean workerStarted = new AtomicBoolean(false);
     AtomicReference<Throwable> workerFailure = new AtomicReference<>();
     Future<?> worker = null;
-    ProcessHandle child = null;
     try (WatchService gateWatcher = FileSystems.getDefault().newWatchService()) {
       tempDir.register(gateWatcher, StandardWatchEventKinds.ENTRY_CREATE);
       worker =
@@ -404,7 +406,9 @@ class GtpConfigurationProbeTest {
                 }
               });
       awaitSchemaGate(gateWatcher, schemaGate);
-      child = requireVerifiedGatedChild(childPid, schemaGate);
+      OwnedProbeChild capturedChild = ownedChild.get();
+      ProcessHandle child = requireVerifiedGatedChild(childPid, schemaGate, capturedChild);
+      assertGatedChildIdentityValidation(childPid, schemaGate, capturedChild);
 
       assertTrue(child.isAlive(), "the schema gate must hold the real probe child open");
       assertEquals(
@@ -432,7 +436,7 @@ class GtpConfigurationProbeTest {
           "processStopped/onExit must remove the child from the raw registry before test cleanup");
     } finally {
       cleanupRealProbeChild(
-          schemaGate, childPid, worker, workerStarted, workerFinished, child, executor);
+          schemaGate, childPid, worker, workerStarted, workerFinished, ownedChild, executor);
     }
 
     assertEquals(
@@ -444,24 +448,65 @@ class GtpConfigurationProbeTest {
         "the registry must be empty after the cancelled child has exited");
   }
 
+  private record OwnedProbeChild(ProcessHandle handle, Path schemaGate) {}
+
+  private static GtpConfigurationProbe capturingRealProbeChild(
+      Path schemaGate, AtomicReference<OwnedProbeChild> ownedChild)
+      throws ReflectiveOperationException {
+    GtpConfigurationProbe defaultProbe = new GtpConfigurationProbe();
+    Field factoryField = GtpConfigurationProbe.class.getDeclaredField("sessionFactory");
+    factoryField.setAccessible(true);
+    GtpConfigurationProbe.SessionFactory realFactory =
+        (GtpConfigurationProbe.SessionFactory) factoryField.get(defaultProbe);
+    String expectedCommand = fakeEngineCommand(schemaGate);
+    return new GtpConfigurationProbe(
+        (command, timeout) -> {
+          if (!expectedCommand.equals(command)) {
+            throw new IOException("The real probe must launch its expected unique schema gate");
+          }
+          GtpConfigurationProbe.Session session = realFactory.open(command, timeout);
+          try {
+            // Retain the real session's exact child without requiring optional OS arguments or
+            // agreement between independently cached JVM boot epochs. The production factory still
+            // owns process creation, registry publication, requests, cancellation and close.
+            Field processField = session.getClass().getDeclaredField("process");
+            processField.setAccessible(true);
+            Process process = (Process) processField.get(session);
+            ownedChild.set(new OwnedProbeChild(process.toHandle(), schemaGate.toAbsolutePath()));
+            return session;
+          } catch (ReflectiveOperationException failure) {
+            IOException captureFailure =
+                new IOException("Cannot capture the real probe child", failure);
+            closeAfterCaptureFailure(session, captureFailure);
+            throw captureFailure;
+          } catch (RuntimeException | Error failure) {
+            closeAfterCaptureFailure(session, failure);
+            throw failure;
+          }
+        });
+  }
+
+  private static void closeAfterCaptureFailure(
+      GtpConfigurationProbe.Session session, Throwable failure) {
+    try {
+      session.close();
+    } catch (RuntimeException | Error cleanupFailure) {
+      if (cleanupFailure != failure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+    }
+  }
+
   private static void cleanupRealProbeChild(
       Path schemaGate,
       Path childPid,
       Future<?> worker,
       AtomicBoolean workerStarted,
       CountDownLatch workerFinished,
-      ProcessHandle capturedChild,
+      AtomicReference<OwnedProbeChild> ownedChild,
       ExecutorService executor)
       throws Exception {
     CleanupState cleanup = new CleanupState();
-    ProcessHandle exactChild = capturedChild;
-    if (exactChild == null) {
-      try {
-        exactChild = findVerifiedGatedChild(childPid, schemaGate);
-      } catch (Exception pidFailure) {
-        cleanup.record(pidFailure);
-      }
-    }
     cleanup.run(() -> Files.deleteIfExists(schemaGate));
     cleanup.run(
         () -> {
@@ -473,7 +518,9 @@ class GtpConfigurationProbeTest {
       cleanup.call(() -> workerFinished.await(2L, TimeUnit.SECONDS));
     }
 
-    ProcessHandle verifiedChild = exactChild;
+    // A failed or missing handshake must never turn a disk-supplied PID into cleanup authority.
+    OwnedProbeChild capturedChild = ownedChild.get();
+    ProcessHandle verifiedChild = capturedChild == null ? null : capturedChild.handle();
     if (verifiedChild != null && cleanup.call(verifiedChild::isAlive)) {
       cleanup.run(() -> verifiedChild.destroy());
       boolean childExited =
@@ -518,18 +565,63 @@ class GtpConfigurationProbeTest {
     cleanup.finish();
   }
 
-  private static ProcessHandle requireVerifiedGatedChild(Path childPid, Path schemaGate)
-      throws IOException {
-    ProcessHandle child = findVerifiedGatedChild(childPid, schemaGate);
+  private static ProcessHandle requireVerifiedGatedChild(
+      Path childPid, Path schemaGate, OwnedProbeChild ownedChild) throws IOException {
+    ProcessHandle child = findVerifiedGatedChild(childPid, schemaGate, ownedChild);
     if (child == null) {
       throw new AssertionError("the gated probe identity did not match its live child");
     }
     return child;
   }
 
-  private static ProcessHandle findVerifiedGatedChild(Path childPid, Path schemaGate)
-      throws IOException {
-    if (!Files.exists(schemaGate) || !Files.isRegularFile(childPid)) {
+  private static void assertGatedChildIdentityValidation(
+      Path childPid, Path schemaGate, OwnedProbeChild ownedChild) throws IOException {
+    ProcessHandle child = ownedChild.handle();
+    List<String> publishedIdentity = Files.readAllLines(childPid, StandardCharsets.UTF_8);
+    List<String> changedIdentity = new ArrayList<>(publishedIdentity);
+    try {
+      for (long skewSeconds : new long[] {-1L, 1L}) {
+        changedIdentity.set(
+            1, Instant.parse(publishedIdentity.get(1)).plusSeconds(skewSeconds).toString());
+        Files.write(childPid, changedIdentity, StandardCharsets.UTF_8);
+        assertEquals(
+            child,
+            requireVerifiedGatedChild(childPid, schemaGate, ownedChild),
+            "a child JVM's different boot epoch must not hide the exact live child");
+      }
+
+      changedIdentity.set(0, Long.toString(ProcessHandle.current().pid()));
+      Files.write(childPid, changedIdentity, StandardCharsets.UTF_8);
+      assertNull(
+          findVerifiedGatedChild(childPid, schemaGate, ownedChild),
+          "a matching identity file must not authorize an unrelated live PID");
+    } finally {
+      Files.write(childPid, publishedIdentity, StandardCharsets.UTF_8);
+    }
+
+    Path otherGate = schemaGate.resolveSibling(schemaGate.getFileName() + "-other");
+    Path otherPid = childPidPath(otherGate);
+    changedIdentity = new ArrayList<>(publishedIdentity);
+    changedIdentity.set(3, otherGate.toAbsolutePath().toString());
+    try {
+      Files.write(otherPid, changedIdentity, StandardCharsets.UTF_8);
+      Files.createFile(otherGate);
+      assertNull(
+          findVerifiedGatedChild(otherPid, otherGate, ownedChild),
+          "an owned child must match the unique gate supplied to its real session factory");
+      assertTrue(child.isAlive(), "identity rejection must leave the original child alone");
+    } finally {
+      Files.deleteIfExists(otherGate);
+      Files.deleteIfExists(otherPid);
+    }
+  }
+
+  private static ProcessHandle findVerifiedGatedChild(
+      Path childPid, Path schemaGate, OwnedProbeChild ownedChild) throws IOException {
+    if (ownedChild == null
+        || !ownedChild.schemaGate().equals(schemaGate.toAbsolutePath())
+        || !Files.exists(schemaGate)
+        || !Files.isRegularFile(childPid)) {
       return null;
     }
     List<String> identity = Files.readAllLines(childPid, StandardCharsets.UTF_8);
@@ -539,19 +631,13 @@ class GtpConfigurationProbeTest {
       return null;
     }
     long pid;
-    Instant expectedStart;
     try {
       pid = Long.parseLong(identity.get(0));
-      expectedStart = Instant.parse(identity.get(1));
-    } catch (RuntimeException invalidIdentity) {
+    } catch (NumberFormatException invalidIdentity) {
       return null;
     }
-    ProcessHandle child = ProcessHandle.of(pid).orElse(null);
-    return child != null
-            && child.isAlive()
-            && child.info().startInstant().filter(expectedStart::equals).isPresent()
-        ? child
-        : null;
+    ProcessHandle child = ownedChild.handle();
+    return child.pid() == pid && child.isAlive() ? child : null;
   }
 
   private static boolean awaitRawRegistryEmpty(long timeout, TimeUnit unit)
