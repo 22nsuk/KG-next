@@ -123,7 +123,16 @@ class AutomaticSaveSafetyTest {
     assertOverwriteConfirmation(JOptionPane.YES_OPTION);
   }
 
+  @Test
+  void failedConfirmedOverwriteKeepsTheCurrentPanel() throws Exception {
+    assertOverwriteConfirmation(JOptionPane.YES_OPTION, true);
+  }
+
   private void assertOverwriteConfirmation(int answer) throws Exception {
+    assertOverwriteConfirmation(answer, false);
+  }
+
+  private void assertOverwriteConfirmation(int answer, boolean failMetadata) throws Exception {
     assumeFalse(GraphicsEnvironment.isHeadless());
     Path sgf = slot(SaveKind.REPLACE, "sgf");
     Path preview = slot(SaveKind.REPLACE, "bmp");
@@ -134,6 +143,7 @@ class AutomaticSaveSafetyTest {
             new BufferedImage(7, 7, BufferedImage.TYPE_INT_RGB), "bmp", preview.toFile()));
     byte[] oldPreview = Files.readAllBytes(preview);
     String oldInMemoryMetadata = config.saveBoardConfig.toString();
+    if (failMetadata) blockMetadataDestination();
     config.showListPane = false;
     config.showVariationGraph = false;
     String expectedName = Lizzie.board.getHistory().getGameInfo().getSaveFileName();
@@ -211,11 +221,12 @@ class AutomaticSaveSafetyTest {
     assertTrue(answered.get(), "the actual save button must open the confirmation dialog");
     assertFalse(showingPreview.getBoolean(frame), "all decisions must release the preview guard");
     boolean confirmed = answer == JOptionPane.YES_OPTION;
-    assertEquals(confirmed, config.showListPane);
-    assertEquals(confirmed, config.showVariationGraph);
-    assertEquals(confirmed ? 1 : 0, frame.panelRefreshes);
-    assertEquals(confirmed ? 1 : 0, frame.previewCalls);
-    if (confirmed) {
+    boolean savedSuccessfully = confirmed && !failMetadata;
+    assertEquals(savedSuccessfully, config.showListPane);
+    assertEquals(savedSuccessfully, config.showVariationGraph);
+    assertEquals(savedSuccessfully ? 1 : 0, frame.panelRefreshes);
+    assertEquals(savedSuccessfully ? 1 : 0, frame.previewCalls);
+    if (savedSuccessfully) {
       assertTrue(Files.readString(sgf).contains(";W[dd]"));
       JSONObject saved = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
       assertEquals(expectedName, saved.getJSONArray("save-game-name").getString(0));
@@ -223,7 +234,12 @@ class AutomaticSaveSafetyTest {
       assertTrue(saved.similar(config.saveBoardConfig));
       assertEquals(8, ImageIO.read(preview.toFile()).getWidth());
     } else {
-      assertEquals(oldSgf, Files.readString(sgf));
+      if (confirmed) {
+        assertTrue(Files.readString(sgf).contains(";W[dd]"));
+        assertEquals(1, frame.editFailures);
+      } else {
+        assertEquals(oldSgf, Files.readString(sgf));
+      }
       assertEquals(oldMetadata, Files.readString(metadataFile()));
       assertEquals(oldInMemoryMetadata, config.saveBoardConfig.toString());
       assertArrayEquals(oldPreview, Files.readAllBytes(preview));
@@ -521,7 +537,7 @@ class AutomaticSaveSafetyTest {
     Files.move(saveDirectory, backup);
     Files.writeString(saveDirectory, "not a directory");
     try {
-      frame.addTempGame(2, "new record");
+      assertFalse(frame.addTempGame(2, "new record"));
       assertEquals(1, frame.editFailures);
       assertEquals(
           List.of(1), frame.getSaveGameList().stream().map(record -> record.index).toList());
@@ -539,7 +555,7 @@ class AutomaticSaveSafetyTest {
     seedTemporaryRecords(1, 2, 3);
     byte[] first = Files.readAllBytes(temporarySlot(1, "sgf"));
     frame.deleteTempGame(2);
-    frame.saveTempGame(3, "replaced third");
+    assertTrue(frame.saveTempGame(3, "replaced third"));
     frame.renameTempGame(3, "renamed third");
     assertTemporaryIndices(List.of(1, 3));
     assertEquals("renamed third", record(3).name);
@@ -558,7 +574,7 @@ class AutomaticSaveSafetyTest {
     Map<Path, byte[]> before = temporaryFiles();
     frame.deleteTempGame(3);
     frame.renameTempGame(3, "stale rename");
-    frame.saveTempGame(3, "stale overwrite");
+    assertFalse(frame.saveTempGame(3, "stale overwrite"));
     assertEquals(metadata, Files.readString(metadataFile()));
     assertFilesUnchanged(before);
     assertEquals("new fourth", record(4).name);
@@ -571,7 +587,7 @@ class AutomaticSaveSafetyTest {
     assertEquals(
         (long) Integer.MAX_VALUE + 1L, config.saveBoardConfig.getLong("save-game-next-index"));
     String metadata = Files.readString(metadataFile());
-    frame.addTempGame(1, "cannot allocate");
+    assertFalse(frame.addTempGame(1, "cannot allocate"));
     assertEquals(1, frame.editFailures);
     assertEquals(metadata, Files.readString(metadataFile()));
     assertTemporaryIndices(List.of());
@@ -781,7 +797,7 @@ class AutomaticSaveSafetyTest {
     Files.createDirectory(target);
     Files.writeString(target.resolve("keep"), "unreplaceable destination");
     Files.writeString(slot(kind, "bmp"), "old preview");
-    save(kind);
+    assertFalse(save(kind));
     assertSame(original, config.saveBoardConfig);
     assertEquals(oldMetadata, Files.readString(metadataFile()));
     assertEquals("old preview", Files.readString(slot(kind, "bmp")));
@@ -794,7 +810,7 @@ class AutomaticSaveSafetyTest {
   @EnumSource(SaveKind.class)
   void successfulSavePublishesCompleteSgfAndItsRecordInTheConfiguredDirectory(SaveKind kind)
       throws Exception {
-    save(kind);
+    assertTrue(save(kind));
     String saved = Files.readString(slot(kind, "sgf"));
     assertTrue(saved.contains(";B[aa]"));
     assertTrue(saved.contains(";W[bb]"));
@@ -825,7 +841,7 @@ class AutomaticSaveSafetyTest {
     Field filename = Config.class.getDeclaredField("saveBoardFilename");
     filename.setAccessible(true);
     filename.set(config, blocked.toString());
-    save(kind);
+    assertFalse(save(kind));
     assertSame(original, config.saveBoardConfig);
     assertEquals(oldMetadata, Files.readString(metadataFile()));
     assertEquals("keep", Files.readString(blocked.resolve("keep")));
@@ -834,7 +850,7 @@ class AutomaticSaveSafetyTest {
     assertNoStagingFiles();
     // A failed metadata attempt neither poisons the next save nor loses the recovered SGF.
     filename.set(config, metadataFile().toString());
-    save(kind);
+    assertTrue(save(kind));
     assertRecordPublished(kind);
   }
 
@@ -843,11 +859,81 @@ class AutomaticSaveSafetyTest {
   void unavailableOrUnencodablePreviewDoesNotHideTheSavedGame(int failureMode) throws Exception {
     frame.failureMode = failureMode;
     Files.writeString(slot(SaveKind.EXIT, "bmp"), "stale preview");
-    save(SaveKind.EXIT);
+    assertTrue(save(SaveKind.EXIT));
     assertRecordPublished(SaveKind.EXIT);
     assertTrue(Files.readString(slot(SaveKind.EXIT, "sgf")).contains(";W[dd]"));
     assertFalse(
         Files.exists(slot(SaveKind.EXIT, "bmp")), "do not show a stale board as the new record");
+    assertNoStagingFiles();
+  }
+
+  @ParameterizedTest
+  @EnumSource(SaveKind.class)
+  void eventThreadReceivesFailedAndSuccessfulSaveResults(SaveKind kind) throws Exception {
+    Field filename = blockMetadataDestination();
+    AtomicBoolean saved = new AtomicBoolean(true);
+    SwingUtilities.invokeAndWait(() -> saved.set(save(kind)));
+    assertFalse(saved.get());
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    filename.set(config, metadataFile().toString());
+
+    SwingUtilities.invokeAndWait(() -> saved.set(save(kind)));
+    assertTrue(saved.get());
+    JSONObject persisted = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
+    assertTrue(persisted.similar(config.saveBoardConfig));
+    assertNoStagingFiles();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void newRecordButtonsKeepTheCurrentPanelOnSaveFailureAndPermitRetry(boolean thumbnail)
+      throws Exception {
+    Field filename = blockMetadataDestination();
+    config.showListPane = false;
+    config.showVariationGraph = false;
+    AtomicReference<JButton> saveButton = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(
+        () -> {
+          JPanel panel = new JPanel();
+          try {
+            Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+            panelField.setAccessible(true);
+            panelField.set(frame, panel);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+          frame.addTempGameNew(2, 0, 0, true, true);
+          Arrays.stream(panel.getComponents())
+              .filter(JTextField.class::isInstance)
+              .map(JTextField.class::cast)
+              .findFirst()
+              .orElseThrow()
+              .setText("retry this record");
+          saveButton.set(
+              Arrays.stream(panel.getComponents())
+                  .filter(JButton.class::isInstance)
+                  .map(JButton.class::cast)
+                  .filter(button -> (button.getWidth() == 300) == thumbnail)
+                  .findFirst()
+                  .orElseThrow());
+          saveButton.get().doClick(0);
+        });
+    assertEquals(1, frame.editFailures);
+    assertEquals(0, frame.panelRefreshes);
+    assertFalse(config.showListPane);
+    assertFalse(config.showVariationGraph);
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertEquals(List.of(1), frame.getSaveGameList().stream().map(record -> record.index).toList());
+
+    filename.set(config, metadataFile().toString());
+    SwingUtilities.invokeAndWait(() -> saveButton.get().doClick(0));
+    assertEquals(1, frame.panelRefreshes);
+    assertTrue(config.showListPane);
+    assertTrue(config.showVariationGraph);
+    // The completed SGF from the failed manifest write remains recoverable in its own slot.
+    assertTemporaryIndices(List.of(1, 3));
+    assertEquals("retry this record", record(3).name);
+    assertTrue(Files.readString(temporarySlot(2, "sgf")).contains(";W[dd]"));
     assertNoStagingFiles();
   }
 
@@ -879,8 +965,8 @@ class AutomaticSaveSafetyTest {
       var automatic = workers.submit(() -> frame.saveAutoGame(1));
       assertThrows(TimeoutException.class, () -> automatic.get(100, TimeUnit.MILLISECONDS));
       frame.releasePreview.countDown();
-      temporary.get(5, TimeUnit.SECONDS);
-      automatic.get(5, TimeUnit.SECONDS);
+      assertTrue(temporary.get(5, TimeUnit.SECONDS));
+      assertTrue(automatic.get(5, TimeUnit.SECONDS));
       assertRecordPublished(SaveKind.ADD);
       assertRecordPublished(SaveKind.EXIT);
       assertEquals(2, frame.previewCalls);
@@ -899,7 +985,7 @@ class AutomaticSaveSafetyTest {
           worker.submit(
               () -> {
                 Thread.currentThread().interrupt();
-                frame.saveAutoGame(1);
+                assertTrue(frame.saveAutoGame(1));
                 return Thread.interrupted();
               });
       assertTrue(saved.get(5, TimeUnit.SECONDS));
@@ -911,21 +997,13 @@ class AutomaticSaveSafetyTest {
     }
   }
 
-  private void save(SaveKind kind) {
-    switch (kind) {
-      case EXIT:
-        frame.saveAutoGame(1);
-        break;
-      case PERIODIC:
-        frame.saveAutoGame(2);
-        break;
-      case REPLACE:
-        frame.saveTempGame(1, "새 기록");
-        break;
-      case ADD:
-        frame.addTempGame(2, "새 기록");
-        break;
-    }
+  private boolean save(SaveKind kind) {
+    return switch (kind) {
+      case EXIT -> frame.saveAutoGame(1);
+      case PERIODIC -> frame.saveAutoGame(2);
+      case REPLACE -> frame.saveTempGame(1, "새 기록");
+      case ADD -> frame.addTempGame(2, "새 기록");
+    };
   }
 
   private void assertRecordPublished(SaveKind kind) throws IOException {

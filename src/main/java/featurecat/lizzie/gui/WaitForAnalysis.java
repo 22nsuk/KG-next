@@ -67,8 +67,7 @@ public class WaitForAnalysis extends JDialog {
     btnCancel.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.isBatchAnalysisMode = false;
-            Lizzie.frame.destroyAnalysisEngine();
+            Lizzie.frame.stopFlashBatchAnalysis();
             setVisible(false);
           }
         });
@@ -128,10 +127,6 @@ public class WaitForAnalysis extends JDialog {
       setTitle(Lizzie.resourceBundle.getString("AnalysisEngine.analyzeComplete"));
       if (Lizzie.frame.isBatchAnalysisMode) {
         setVisible(false);
-        javax.swing.Timer batchTimer =
-            new javax.swing.Timer(300, e -> Lizzie.frame.flashAutoAnaSaveAndLoad());
-        batchTimer.setRepeats(false);
-        batchTimer.start();
       } else {
         javax.swing.Timer closeTimer = new javax.swing.Timer(1000, e -> setVisible(false));
         closeTimer.setRepeats(false);

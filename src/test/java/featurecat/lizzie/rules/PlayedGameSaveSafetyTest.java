@@ -22,6 +22,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
@@ -218,6 +219,7 @@ class PlayedGameSaveSafetyTest {
     byte[] original = "(;SZ[5]C[keep this SGF])".getBytes(StandardCharsets.UTF_8);
     Files.write(existing, original);
     CountDownLatch queuedTasksFinished = new CountDownLatch(16);
+    AtomicReference<CompletableFuture<Void>> rejectedSave = new AtomicReference<>();
     try (PausedTask paused = new PausedTask(worker)) {
       try {
         assertEquals(16, worker.getQueue().remainingCapacity());
@@ -225,13 +227,19 @@ class PlayedGameSaveSafetyTest {
         onEdt(
             () -> {
               frame.autoSavePlayedGame();
-              assertFalse(SgfSaveCoordinator.pendingSaves().isDone());
+              rejectedSave.set(SgfSaveCoordinator.pendingSaves());
+              assertFalse(rejectedSave.get().isDone());
               assertEquals(2, savedGames().size(), "rejected submission still has a reservation");
             });
         // Rejection completion is owned by the EDT and must not wait for the busy disk worker.
-        awaitPendingSaves();
+        ExecutionException rejection =
+            assertThrows(
+                ExecutionException.class,
+                () -> rejectedSave.get().get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertInstanceOf(RejectedExecutionException.class, rejection.getCause());
         assertFailureReported();
         assertInstanceOf(RejectedExecutionException.class, frame.failures.get(0).getCause());
+        assertSame(rejection.getCause(), frame.failures.get(0).getCause());
         assertEquals(List.of(existing), savedGames());
         assertArrayEquals(original, Files.readAllBytes(existing));
         assertActiveFileUnchanged();

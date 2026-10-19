@@ -265,6 +265,40 @@ public class LizzieFrame extends JFrame {
 
   private BatchAutoAnalysis batchAutoAnalysis;
   private BatchAutoAnalysis pendingManualAutoAnalysisBatch;
+  private PendingBatchAnalysisSave pendingBatchAnalysisSave;
+
+  private static final class PendingBatchAnalysisSave {
+    private final Board board = Lizzie.board;
+    private final BoardHistoryList history = board.getHistory();
+    private final BoardHistoryNode root = history.getStart();
+    private final ArrayList<File> files;
+    private final int index;
+    private final File source;
+    private final File workDirectory = Lizzie.config.getWorkDirectory();
+    private final String analyzedLabel = Lizzie.resourceBundle.getString("Leelaz.analyzed");
+    private final String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+    private boolean quickMode;
+    private final Runnable saved;
+
+    private PendingBatchAnalysisSave(LizzieFrame frame, Runnable saved) {
+      files = frame.Batchfiles;
+      index = frame.BatchAnaNum;
+      source = files.get(index);
+      quickMode = frame.isBatchAnalysisMode;
+      this.saved = saved;
+    }
+
+    private boolean isCurrent(LizzieFrame frame) {
+      return frame.isBatchAna
+          && frame.Batchfiles == files
+          && frame.BatchAnaNum == index
+          && index < files.size()
+          && source.equals(files.get(index))
+          && Lizzie.board == board
+          && board.getHistory() == history
+          && history.getStart() == root;
+    }
+  }
   public int[] suggestionclick = outOfBoundCoordinate;
   public int[] clickbadmove = outOfBoundCoordinate;
   public int[] mouseOverCoordinate = outOfBoundCoordinate;
@@ -1549,10 +1583,10 @@ public class LizzieFrame extends JFrame {
     }
 
     autoIntervalCom = Lizzie.config.analyzeUpdateIntervalCentisec * 5;
+    setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
     this.addWindowListener(
         new WindowAdapter() {
           public void windowClosing(WindowEvent e) {
-            stopHumanSlPreparation();
             Lizzie.shutdown();
           }
         });
@@ -4107,6 +4141,62 @@ public class LizzieFrame extends JFrame {
     quickAnalysisAdapter().invalidateStartup();
   }
 
+  /** Saves the current batch result before its owner advances or reports completion. Runs on EDT. */
+  void saveBatchAnalysisResult(Runnable saved) {
+    if (!isBatchAna || BatchAnaNum < 0 || BatchAnaNum >= Batchfiles.size()) return;
+    if (pendingBatchAnalysisSave != null && retryBatchAnalysisSave()) return;
+    pendingBatchAnalysisSave = new PendingBatchAnalysisSave(this, saved);
+    retryBatchAnalysisSave();
+  }
+
+  /** Returns true when a pending save handled the action, including a failed retry. */
+  boolean retryBatchAnalysisSave() {
+    PendingBatchAnalysisSave pending = pendingBatchAnalysisSave;
+    if (pending == null) return false;
+    if (!pending.isCurrent(this)) {
+      discardPendingBatchAnalysisSave();
+      return false;
+    }
+    try {
+      Path output =
+          BottomToolbar.resolveAutoAnalyzeOutput(
+              pending.source, pending.workDirectory, pending.analyzedLabel, pending.timestamp);
+      SGFParser.save(pending.board, output.toString());
+    } catch (IOException | RuntimeException failure) {
+      isBatchAnalysisMode = false;
+      if (analysisTable != null) {
+        analysisTable.resetAnalysisMode();
+      }
+      showBatchAnalysisSaveFailure(pending.source, failure);
+      return true;
+    }
+    discardPendingBatchAnalysisSave();
+    isBatchAnalysisMode = pending.quickMode;
+    pending.saved.run();
+    return true;
+  }
+
+  void discardPendingBatchAnalysisSave() {
+    pendingBatchAnalysisSave = null;
+    if (analysisTable != null) {
+      analysisTable.resetAnalysisMode();
+    }
+  }
+
+  boolean hasPendingBatchAnalysisSave() {
+    return pendingBatchAnalysisSave != null && pendingBatchAnalysisSave.isCurrent(this);
+  }
+
+  void showBatchAnalysisSaveFailure(File source, Exception failure) {
+    failure.printStackTrace();
+    Utils.showMsgNoModal(
+        Lizzie.resourceBundle.getString("BatchAnalysis.saveFailed")
+            + "\n"
+            + source.getAbsolutePath()
+            + "\n"
+            + failure.getLocalizedMessage());
+  }
+
   /**
    * Starts a foreground auto-analysis only after automatic curve analysis has fully released its
    * worker or shared foreground-engine lease.
@@ -4150,6 +4240,7 @@ public class LizzieFrame extends JFrame {
     }
     batchAutoAnalysis = null;
     if (Batchfiles != batch.files) return;
+    discardPendingBatchAnalysisSave();
     isBatchAna = false;
     Batchfiles = new ArrayList<>();
     BatchAnaNum = 0;
@@ -4158,6 +4249,8 @@ public class LizzieFrame extends JFrame {
   }
 
   private void failBatchKifuLoad(BoardHistoryNode root) {
+    FlashBatchLoad flashLoad = pendingFlashBatchLoad;
+    if (flashLoad != null && flashLoad.loadedRoot == root) pauseFlashBatchLoad(flashLoad);
     BatchAutoAnalysis batch = batchAutoAnalysis;
     if (batch == null || batch.root != root || !batch.loaded) return;
     if (pendingManualAutoAnalysisBatch == batch) {
@@ -4572,27 +4665,12 @@ public class LizzieFrame extends JFrame {
       }
       isBatchAna = true;
       BatchAnaNum = 0;
-      curFile = files[0];
+      discardPendingBatchAnalysisSave();
       Batchfiles = new ArrayList<File>();
       for (int i = 0; i < files.length; i++) {
         Batchfiles.add(files[i]);
       }
-      loadFile(files[0], false, true);
-      // toolbar.chkAnaAutoSave.setSelected(true);
-      // toolbar.chkAnaAutoSave.setEnabled(false);
-      // 打开分析界面
-      if (Lizzie.frame.analysisTable != null && Lizzie.frame.analysisTable.frame.isVisible()) {
-        Lizzie.frame.analysisTable.refreshTable();
-      }
-      // Lizzie.leelaz.komi(komi);
-      LizzieFrame.toolbar.chkAnaAutoSave.setSelected(true);
-      StartAnaDialog newgame = new StartAnaDialog(isFlashMode, Lizzie.frame);
-      newgame.setVisible(true);
-      if (newgame.isCancelled()) {
-        toolbar.resetAutoAna();
-        isBatchAna = false;
-        return;
-      }
+      openFlashBatchAnalysisSettings();
     }
     this.setAlwaysOnTop(Lizzie.config.mainsalwaysontop);
   }
@@ -5236,6 +5314,15 @@ public class LizzieFrame extends JFrame {
 
   private boolean loadFile(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad) {
+    return loadFile(file, fromTemp, showHint, afterSuccessfulLoad, null);
+  }
+
+  boolean loadFile(
+      File file,
+      boolean fromTemp,
+      boolean showHint,
+      Runnable afterSuccessfulLoad,
+      Runnable afterEngineReady) {
     if (EngineGamePresentation.current().startingOrPlaying()
         || isPlayingAgainstLeelaz
         || isAnaPlayingAgainstLeelaz) {
@@ -5243,7 +5330,7 @@ public class LizzieFrame extends JFrame {
       return false;
     }
     if (deferUntilHumanSlExit(
-        () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad))) {
+        () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady))) {
       return true;
     }
     boolean oriSound = Lizzie.config.playSound;
@@ -5306,8 +5393,12 @@ public class LizzieFrame extends JFrame {
     updateTitle();
     if (file.getPath().toLowerCase().endsWith(".gib")) {
       if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
-      startNewKifuAnalysisContextAfterSuccessfulLoad();
-      scheduleResumeAnalysisAfterLoad(0);
+      if (afterEngineReady != null) {
+        scheduleKifuEngineReadyAfterLoad(afterEngineReady);
+      } else {
+        startNewKifuAnalysisContextAfterSuccessfulLoad();
+        scheduleResumeAnalysisAfterLoad(0);
+      }
     } else {
       Board loadedBoard = Lizzie.board;
       BoardHistoryList loadedHistory = loadedBoard.getHistory();
@@ -5317,11 +5408,27 @@ public class LizzieFrame extends JFrame {
           () -> {
             if (Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
             if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
-            scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+            if (afterEngineReady != null) {
+              scheduleKifuEngineReadyAfterLoad(afterEngineReady);
+            } else {
+              scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+            }
           });
     }
     refresh();
     return true;
+  }
+
+  // A caller starting its own worker also becomes ready when no foreground engine needs syncing.
+  private record KifuLoadReadyAction(Runnable continuation) implements Runnable {
+    @Override
+    public void run() {
+      continuation.run();
+    }
+  }
+
+  private void scheduleKifuEngineReadyAfterLoad(Runnable afterEngineReady) {
+    scheduleEngineSyncAndResumeAfterKifuLoad(0, new KifuLoadReadyAction(afterEngineReady));
   }
 
   public void scheduleResumeAnalysisAfterLoad() {
@@ -5543,8 +5650,8 @@ public class LizzieFrame extends JFrame {
               public boolean isCurrent() {
                 return isCurrentKifuRulesRequest(
                         root, rulesTarget, primary, primaryGeneration, mirror)
-                    && exactEngineIncarnationsRemainCurrent(
-                        primary, primaryIncarnation, mirror, mirrorIncarnation);
+                    && kifuEngineIncarnationsRemainCurrent(
+                        primary, primaryIncarnation, mirror, mirrorIncarnation, action);
               }
 
               @Override
@@ -5666,10 +5773,12 @@ public class LizzieFrame extends JFrame {
                       () -> {
                         if (isCurrentKifuRulesContext(
                                 root, rulesTarget, primary, primaryGeneration, mirror)
-                            && exactEngineIncarnationsRemainCurrent(
-                                primary, primaryIncarnation, mirror, mirrorIncarnation)
-                            && synchronizedPosition != null
-                            && synchronizedPosition.matchesCurrentBoardAndPrimary()
+                            && kifuEngineIncarnationsRemainCurrent(
+                                primary, primaryIncarnation, mirror, mirrorIncarnation, action)
+                            && (synchronizedPosition != null
+                                ? synchronizedPosition.matchesCurrentBoardAndPrimary()
+                                : action instanceof KifuLoadReadyAction
+                                    && (primary == null || EngineManager.isEmpty))
                             && action != null) {
                           action.run();
                         }
@@ -5999,6 +6108,23 @@ public class LizzieFrame extends JFrame {
             : mirror.isCurrentEngineIncarnationToken(mirrorIncarnation));
   }
 
+  private static boolean kifuEngineIncarnationsRemainCurrent(
+      Leelaz primary,
+      Object primaryIncarnation,
+      Leelaz mirror,
+      Object mirrorIncarnation,
+      Runnable action) {
+    return exactEngineIncarnationsRemainCurrent(
+            primary, primaryIncarnation, mirror, mirrorIncarnation)
+        || (action instanceof KifuLoadReadyAction
+            && EngineManager.isEmpty
+            && primary != null
+            && primaryIncarnation == null
+            && primary.engineIncarnationToken() == null
+            && mirror == null
+            && mirrorIncarnation == null);
+  }
+
   private void offerContinueAfterRulesFailure(
       BoardHistoryNode root,
       BoardHistoryList.SessionRulesTarget rulesTarget,
@@ -6059,8 +6185,8 @@ public class LizzieFrame extends JFrame {
                 failure.failure().name());
     int choice = showImportedRulesFailurePrompt(message);
     if (!isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, mirror)
-        || !exactEngineIncarnationsRemainCurrent(
-            primary, primaryIncarnation, mirror, mirrorIncarnation)) return;
+        || !kifuEngineIncarnationsRemainCurrent(
+            primary, primaryIncarnation, mirror, mirrorIncarnation, action)) return;
     if (choice == JOptionPane.YES_OPTION) {
       pendingKifuRulesConsent = null;
       if (primary == null) {
@@ -15285,15 +15411,15 @@ public class LizzieFrame extends JFrame {
     return next;
   }
 
-  public void saveTempGame(int index, String name) {
-    runSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, false));
+  public boolean saveTempGame(int index, String name) {
+    return callSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, false));
   }
 
-  public void addTempGame(int index, String name) {
-    runSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, true));
+  public boolean addTempGame(int index, String name) {
+    return callSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, true));
   }
 
-  private void saveTemporaryGameOnEdt(int index, String name, boolean add) {
+  private boolean saveTemporaryGameOnEdt(int index, String name, boolean add) {
     ArrayList<TempGameData> data = getSaveGameList();
     TempGameData saved;
     if (add) {
@@ -15301,13 +15427,13 @@ public class LizzieFrame extends JFrame {
         index = allocateTemporaryGameIndex(index, data);
       } catch (IOException failure) {
         savedGameEditFailed(failure);
-        return;
+        return false;
       }
       saved = new TempGameData();
       saved.index = index;
     } else {
       saved = findTemporaryGame(data, index);
-      if (saved == null) return;
+      if (saved == null) return false;
     }
     saved.name = name;
     saved.time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
@@ -15316,25 +15442,25 @@ public class LizzieFrame extends JFrame {
         Lizzie.board.moveListToString(
             add ? Lizzie.board.getMoveList() : Lizzie.board.getmovelistForSaveLoad());
     if (add) data.add(saved);
-    saveTemporaryGame(index, data);
+    return saveTemporaryGame(index, data);
   }
 
-  private void saveTemporaryGame(int index, ArrayList<TempGameData> data) {
+  private boolean saveTemporaryGame(int index, ArrayList<TempGameData> data) {
     JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
     putTempGameList(candidate, data);
-    saveGameRecord(
+    return saveGameRecord(
         resolveSavedGameFile(false, index, "sgf"),
         resolveSavedGameFile(false, index, "bmp"),
         false,
         candidate);
   }
 
-  public void saveAutoGame(int index) {
-    runSavedGameAction(() -> saveAutoGameOnEdt(index));
+  public boolean saveAutoGame(int index) {
+    return callSavedGameAction(() -> saveAutoGameOnEdt(index));
   }
 
-  private void saveAutoGameOnEdt(int index) {
-    if (!autoSaveStartupPrepared || !recoverAutoSaveOnEdt()) return;
+  private boolean saveAutoGameOnEdt(int index) {
+    if (!autoSaveStartupPrepared || !recoverAutoSaveOnEdt()) return false;
     JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
     candidate.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
     candidate.put(
@@ -15345,25 +15471,31 @@ public class LizzieFrame extends JFrame {
         "save-auto-game-move-list" + index,
         Lizzie.board.moveListToString(Lizzie.board.getmovelistForSaveLoad()));
     if (index == 1) candidate.put("save-auto-game-index2", -1);
-    saveGameRecord(
+    return saveGameRecord(
         resolveAutoSaveFile(index, "sgf"), resolveAutoSaveFile(index, "bmp"), true, candidate);
   }
 
   private static void runSavedGameAction(Runnable action) {
+    callSavedGameAction(
+        () -> {
+          action.run();
+          return null;
+        });
+  }
+
+  private static <T> T callSavedGameAction(java.util.function.Supplier<T> action) {
     if (SwingUtilities.isEventDispatchThread()) {
-      action.run();
-      return;
+      return action.get();
     }
     // The periodic caller is a scheduler thread. Serialize it with UI saves/exports and
     // their raw flags; keep the synchronous contract required by shutdown's final save.
-    java.util.concurrent.FutureTask<Void> task = new java.util.concurrent.FutureTask<>(action, null);
+    java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(action::get);
     SwingUtilities.invokeLater(task);
     boolean interrupted = false;
     try {
       while (true) {
         try {
-          task.get();
-          return;
+          return task.get();
         } catch (InterruptedException failure) {
           interrupted = true;
         }
@@ -15375,7 +15507,8 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private void saveGameRecord(File sgfFile, File imageFile, boolean autoSave, JSONObject candidate) {
+  private boolean saveGameRecord(
+      File sgfFile, File imageFile, boolean autoSave, JSONObject candidate) {
     try {
       SGFParser.save(Lizzie.board, sgfFile.getPath(), autoSave);
       // Never advertise a failed SGF write or hide the previous crash-recovery slot.
@@ -15383,11 +15516,16 @@ public class LizzieFrame extends JFrame {
       // a later metadata failure leaves the complete new SGF available for manual recovery.
       Lizzie.config.saveTempBoard(candidate);
     } catch (IOException | RuntimeException failure) {
-      failure.printStackTrace();
-      return;
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Could not save game record: {}", sgfFile, failure);
+      if (!autoSave) {
+        savedGameEditFailed(new IOException("Could not save game record: " + sgfFile, failure));
+      }
+      return false;
     }
     // A thumbnail is optional. Its failure must not make the successfully saved SGF undiscoverable.
     saveGamePreview(imageFile);
+    return true;
   }
 
   private void saveGamePreview(File imageFile) {
@@ -15563,7 +15701,9 @@ public class LizzieFrame extends JFrame {
               return;
             }
             isShowingBigBoardPanel = false;
-            saveTempGame(index, Lizzie.board.getHistory().getGameInfo().getSaveFileName());
+            if (!saveTempGame(index, Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
+              return;
+            }
             Lizzie.config.showListPane = oriShowListPane;
             Lizzie.config.showVariationGraph = OriShowVariationGraph;
             showTempGamePanel();
@@ -15652,11 +15792,13 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
-            addTempGame(
+            if (!addTempGame(
                 index,
                 txtName.getText().length() > 0
                     ? txtName.getText()
-                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName());
+                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
+              return;
+            }
             Lizzie.config.showListPane = oriShowListPane;
             Lizzie.config.showVariationGraph = OriShowVariationGraph;
             showTempGamePanel();
@@ -15667,11 +15809,13 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
-            addTempGame(
+            if (!addTempGame(
                 index,
                 txtName.getText().length() > 0
                     ? txtName.getText()
-                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName());
+                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
+              return;
+            }
             Lizzie.config.showListPane = oriShowListPane;
             Lizzie.config.showVariationGraph = OriShowVariationGraph;
             showTempGamePanel();
@@ -15688,8 +15832,8 @@ public class LizzieFrame extends JFrame {
     tempGamePanel.add(boardImage);
   }
 
-  public void saveTempGame(ArrayList<TempGameData> tempGameList) {
-    runSavedGameAction(() -> persistTemporaryGameList(tempGameList));
+  public boolean saveTempGame(ArrayList<TempGameData> tempGameList) {
+    return callSavedGameAction(() -> persistTemporaryGameList(tempGameList));
   }
 
   private static void putTempGameList(JSONObject target, ArrayList<TempGameData> tempGameList) {
@@ -16824,7 +16968,9 @@ public class LizzieFrame extends JFrame {
   }
 
   public void onMainEnginePonder() {
-    if (manualAutoAnalysisStarting || automaticQuickAnalysisOwnsAnalysisResources()) {
+    if (manualAutoAnalysisStarting
+        || isBatchAnalysisMode
+        || automaticQuickAnalysisOwnsAnalysisResources()) {
       return;
     }
     releaseSecondaryAnalysisResourcesForForeground();
@@ -16858,67 +17004,207 @@ public class LizzieFrame extends JFrame {
     return decision;
   }
 
+  private FlashBatchLoad pendingFlashBatchLoad;
+  private volatile FlashBatchRequest flashBatchRequest;
+
+  private static final class FlashBatchLoad {
+    private final ArrayList<File> files;
+    private final int previousIndex;
+    private final int index;
+    private final File file;
+    private final BoardHistoryNode previousRoot;
+    private final boolean running;
+    private final Runnable ready;
+    private BoardHistoryNode loadedRoot;
+
+    private FlashBatchLoad(LizzieFrame frame, int index, Runnable ready) {
+      files = frame.Batchfiles;
+      previousIndex = frame.BatchAnaNum;
+      this.index = index;
+      file = files.get(index);
+      previousRoot = frame.currentHistoryRoot();
+      running = frame.isBatchAnalysisMode;
+      this.ready = ready;
+    }
+  }
+
+  private static final class FlashBatchRequest {
+    private final ArrayList<File> files;
+    private final int index;
+    private final File source;
+    private final BoardHistoryNode root;
+    private final int firstMove;
+    private final int lastMove;
+    private final boolean allBranches;
+
+    private FlashBatchRequest(
+        LizzieFrame frame, int firstMove, int lastMove, boolean allBranches) {
+      files = frame.Batchfiles;
+      index = frame.BatchAnaNum;
+      source = files.get(index);
+      root = frame.currentHistoryRoot();
+      this.firstMove = firstMove;
+      this.lastMove = lastMove;
+      this.allBranches = allBranches;
+    }
+  }
+
+  void openFlashBatchAnalysisSettings() {
+    if (retryBatchAnalysisSave() || rejectCompetingBatchAnalysis()) return;
+    if (Batchfiles == null || BatchAnaNum < 0 || BatchAnaNum >= Batchfiles.size()) return;
+    isBatchAna = true;
+    loadFlashBatchFile(
+        BatchAnaNum,
+        () -> {
+          toolbar.chkAnaAutoSave.setSelected(true);
+          StartAnaDialog dialog = new StartAnaDialog(true, this);
+          dialog.setVisible(true);
+          if (dialog.isCancelled()) {
+            toolbar.resetAutoAna();
+            isBatchAna = false;
+          }
+        });
+  }
+
+  void loadFlashBatchFile(int index, Runnable ready) {
+    if (!isBatchAna || Batchfiles == null || index < 0 || index >= Batchfiles.size()) return;
+    FlashBatchLoad load = new FlashBatchLoad(this, index, ready);
+    pendingFlashBatchLoad = load;
+    continueFlashBatchLoad(load);
+  }
+
+  private boolean ownsFlashBatchLoad(FlashBatchLoad load) {
+    return load != null
+        && pendingFlashBatchLoad == load
+        && isBatchAna
+        && (!load.running || isBatchAnalysisMode)
+        && Batchfiles == load.files
+        && BatchAnaNum == (load.loadedRoot == null ? load.previousIndex : load.index)
+        && load.index < Batchfiles.size()
+        && load.file.equals(Batchfiles.get(load.index));
+  }
+
+  private void continueFlashBatchLoad(FlashBatchLoad load) {
+    if (!ownsFlashBatchLoad(load) || currentHistoryRoot() != load.previousRoot) return;
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> continueFlashBatchLoad(load))
+        || deferUntilHumanSlExit(() -> continueFlashBatchLoad(load))) return;
+    boolean accepted =
+        loadFile(
+            load.file,
+            false,
+            true,
+            () -> {
+              if (!ownsFlashBatchLoad(load)) return;
+              load.loadedRoot = currentHistoryRoot();
+              BatchAnaNum = load.index;
+              curFile = load.file;
+              if (analysisTable != null) analysisTable.refreshTable();
+            },
+            () -> {
+              if (!ownsFlashBatchLoad(load) || currentHistoryRoot() != load.loadedRoot) return;
+              pendingFlashBatchLoad = null;
+              load.ready.run();
+            });
+    if (!accepted) pauseFlashBatchLoad(load);
+  }
+
+  private void pauseFlashBatchLoad(FlashBatchLoad load) {
+    if (!ownsFlashBatchLoad(load)) return;
+    pendingFlashBatchLoad = null;
+    flashBatchRequest = null;
+    isBatchAnalysisMode = false;
+    isBatchAna = false;
+    if (toolbar != null) toolbar.chkAnaAutoSave.setEnabled(true);
+    if (analysisTable != null) analysisTable.resetAnalysisMode();
+  }
+
+  void stopFlashBatchAnalysis() {
+    if (pendingBatchAnalysisSave != null && pendingBatchAnalysisSave.isCurrent(this)) {
+      // Keep the unsaved result available for retry without restarting a stopped batch.
+      pendingBatchAnalysisSave.quickMode = false;
+    }
+    pendingFlashBatchLoad = null;
+    flashBatchRequest = null;
+    isBatchAnalysisMode = false;
+    if (analysisEngine != null && analysisEngine.waitFrame != null) {
+      analysisEngine.waitFrame.setVisible(false);
+    }
+    destroyAnalysisEngine();
+    if (analysisTable != null) analysisTable.resetAnalysisMode();
+  }
+
+  private boolean ownsFlashBatchRequest(FlashBatchRequest request) {
+    return request != null
+        && request == flashBatchRequest
+        && isBatchAna
+        && request.files == Batchfiles
+        && request.index == BatchAnaNum
+        && request.index >= 0
+        && request.index < request.files.size()
+        && request.source.equals(request.files.get(request.index))
+        && request.root == currentHistoryRoot();
+  }
+
+  private boolean canContinueFlashBatchRequest(FlashBatchRequest request) {
+    return isBatchAnalysisMode && ownsFlashBatchRequest(request);
+  }
+
+  private void pauseFlashBatchRequest(FlashBatchRequest request, AnalysisEngine targetEngine) {
+    if (!ownsFlashBatchRequest(request) || analysisEngine != targetEngine) return;
+    flashBatchRequest = null;
+    isBatchAnalysisMode = false;
+    if (targetEngine.waitFrame != null) targetEngine.waitFrame.setVisible(false);
+    if (toolbar != null) toolbar.chkAnaAutoSave.setEnabled(true);
+    if (analysisTable != null) analysisTable.resetAnalysisMode();
+  }
+
   public void flashAnalyzeGameBatch(int firstMove, int lastMove, boolean isAllBranches) {
-    // TODO Auto-generated method stub
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(() -> flashAnalyzeGameBatch(firstMove, lastMove, isAllBranches));
+      return;
+    }
+    if (retryBatchAnalysisSave()) return;
+    if (!isBatchAna || Batchfiles == null || BatchAnaNum < 0 || BatchAnaNum >= Batchfiles.size()) {
+      return;
+    }
     Lizzie.config.analysisStartMove = firstMove;
     Lizzie.config.analysisEndMove = lastMove;
     isBatchAnalysisMode = true;
+    flashBatchRequest = new FlashBatchRequest(this, firstMove, lastMove, isAllBranches);
     if (analysisTable != null) {
       analysisTable.resetAnalysisMode();
     }
     flashAnalyzeGame(false, isAllBranches);
   }
 
-  public void flashAutoAnaSaveAndLoad() {
-    if (Lizzie.frame.Batchfiles.size() > (Lizzie.frame.BatchAnaNum)) {
-      if (Lizzie.leelaz.autoAnalysed) SGFParser.appendAiScoreBlunder();
-      String name = Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum).getName();
-      String path = Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum).getParent();
-      String df = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
-      String prefix = name.substring(name.lastIndexOf("."));
-      int num = prefix.length();
-      String fileOtherName = name.substring(0, name.length() - num);
-      String filename =
-          path
-              + File.separator
-              + fileOtherName
-              + "_"
-              + Lizzie.resourceBundle.getString("Leelaz.analyzed")
-              + "_"
-              + df
-              + ".sgf";
-      File autoSaveFile = new File(filename);
-      try {
-        SGFParser.save(Lizzie.board, autoSaveFile.getPath());
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
-      analysisEngine.waitFrame.setVisible(false);
-      if (Lizzie.frame.Batchfiles.size() > (Lizzie.frame.BatchAnaNum + 1)) {
-        double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
-        toolbar.loadAutoBatchFile();
-        Lizzie.leelaz.komi(komi);
-        flashAnalyzeGameBatch(
-            LizzieFrame.toolbar.firstMove,
-            LizzieFrame.toolbar.lastMove,
-            Lizzie.config.analysisRecentIsAllBranches);
-      } else {
-        isBatchAna = false;
-        isBatchAnalysisMode = false;
-        toolbar.chkAnaAutoSave.setEnabled(true);
-        //	isSaving = false;
-        Batchfiles = new ArrayList<File>();
-        BatchAnaNum = 0;
-        if (Lizzie.frame.analysisTable != null && Lizzie.frame.analysisTable.frame.isVisible()) {
-          Lizzie.frame.analysisTable.refreshTable();
-        }
-        Utils.showMsg(Lizzie.resourceBundle.getString("Leelaz.batchAutoAnalyzeComplete"));
-        if (Lizzie.config.analysisAutoQuit) {
-          analysisEngine.normalQuit();
-        }
-      }
-    }
+  private void flashAutoAnaSaveAndLoad(FlashBatchRequest request, AnalysisEngine completedEngine) {
+    if (!canContinueFlashBatchRequest(request) || analysisEngine != completedEngine) return;
+    if (completedEngine.waitFrame != null) completedEngine.waitFrame.setVisible(false);
+    if (Lizzie.leelaz != null && Lizzie.leelaz.autoAnalysed) SGFParser.appendAiScoreBlunder();
+    saveBatchAnalysisResult(
+        () -> {
+          if (!canContinueFlashBatchRequest(request)) return;
+          flashBatchRequest = null;
+          if (request.files.size() > request.index + 1) {
+            loadFlashBatchFile(
+                request.index + 1,
+                () -> flashAnalyzeGameBatch(request.firstMove, request.lastMove, request.allBranches));
+          } else {
+            isBatchAna = false;
+            isBatchAnalysisMode = false;
+            toolbar.chkAnaAutoSave.setEnabled(true);
+            Batchfiles = new ArrayList<>();
+            BatchAnaNum = 0;
+            if (analysisTable != null) {
+              analysisTable.resetAnalysisMode();
+              analysisTable.refreshTable();
+            }
+            Utils.showMsg(Lizzie.resourceBundle.getString("Leelaz.batchAutoAnalyzeComplete"));
+            if (Lizzie.config.analysisAutoQuit && analysisEngine == completedEngine) {
+              completedEngine.normalQuit();
+            }
+          }
+        });
   }
 
   public void flashAnalyzeGame(boolean isAllGame, boolean isAllBranches) {
@@ -16927,7 +17213,13 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (hasActiveAutomaticQuickAnalysis()) {
-      automaticQuickAnalysisTask.whenSettled(result -> flashAnalyzeGame(isAllGame, isAllBranches));
+      FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
+      automaticQuickAnalysisTask.whenSettled(
+          result -> {
+            if (batchRequest == null || canContinueFlashBatchRequest(batchRequest)) {
+              flashAnalyzeGame(isAllGame, isAllBranches);
+            }
+          });
       prepareForManualFlashAnalysis();
       return;
     }
@@ -17075,6 +17367,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private void startFlashAnalyzeGameWithNewEngine(boolean isAllGame, boolean isAllBranches) {
+    FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
     WaitForAnalysis waitFrame = createFlashAnalysisLoadingFrame();
     Thread starter =
         new Thread(
@@ -17084,7 +17377,8 @@ public class LizzieFrame extends JFrame {
                 newAnalysisEngine.waitFrame = waitFrame;
                 SwingUtilities.invokeLater(
                     () -> {
-                      if (isWholeGameAnalysisStartingOrRunning()) {
+                      if (isWholeGameAnalysisStartingOrRunning()
+                          || (batchRequest != null && !canContinueFlashBatchRequest(batchRequest))) {
                         if (waitFrame != null) waitFrame.setVisible(false);
                         newAnalysisEngine.clearRequestCallbacks();
                         newAnalysisEngine.normalQuit();
@@ -17093,6 +17387,9 @@ public class LizzieFrame extends JFrame {
                       analysisEngine = newAnalysisEngine;
                       if (!newAnalysisEngine.isLoaded()) {
                         if (waitFrame != null) waitFrame.setVisible(false);
+                        if (batchRequest != null) {
+                          pauseFlashBatchRequest(batchRequest, newAnalysisEngine);
+                        }
                         showFlashAnalysisReuseUnavailable(newAnalysisEngine);
                       } else {
                         startFlashAnalyzeRequestsInBackground(
@@ -17104,6 +17401,12 @@ public class LizzieFrame extends JFrame {
                 SwingUtilities.invokeLater(
                     () -> {
                       if (waitFrame != null) waitFrame.setVisible(false);
+                      if (batchRequest != null && !canContinueFlashBatchRequest(batchRequest)) return;
+                      if (batchRequest != null) {
+                        flashBatchRequest = null;
+                        isBatchAnalysisMode = false;
+                        if (analysisTable != null) analysisTable.resetAnalysisMode();
+                      }
                       Utils.showMsg(
                           Lizzie.resourceBundle.getString("Leelaz.engineFailed")
                               + ": "
@@ -17124,6 +17427,19 @@ public class LizzieFrame extends JFrame {
     if (isWholeGameAnalysisStartingOrRunning() || targetEngine != analysisEngine) {
       return;
     }
+    FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
+    if (batchRequest != null && !canContinueFlashBatchRequest(batchRequest)) return;
+    if (batchRequest != null) {
+      targetEngine.setCompletionCallback(
+          restore -> {
+            if (restore.permitsForegroundAnalysis()) {
+              flashAutoAnaSaveAndLoad(batchRequest, targetEngine);
+            } else {
+              pauseFlashBatchRequest(batchRequest, targetEngine);
+            }
+          });
+      targetEngine.setFailureCallback(restore -> pauseFlashBatchRequest(batchRequest, targetEngine));
+    }
     if (targetEngine.waitFrame == null) {
       targetEngine.waitFrame = createFlashAnalysisLoadingFrame();
       targetEngine.waitFrame.setVisible(true);
@@ -17131,7 +17447,9 @@ public class LizzieFrame extends JFrame {
     Thread requestSender =
         new Thread(
             () -> {
-              if (isWholeGameAnalysisStartingOrRunning() || targetEngine != analysisEngine) {
+              if (isWholeGameAnalysisStartingOrRunning()
+                  || targetEngine != analysisEngine
+                  || (batchRequest != null && !canContinueFlashBatchRequest(batchRequest))) {
                 return;
               }
               if (isAllBranches) targetEngine.startRequestAllBranches(true);

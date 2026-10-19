@@ -266,22 +266,30 @@ public class QuickAnalysisAcceptanceIT {
     assertFalse(Lizzie.frame.isManualAutoAnalysisStarting());
     Path flashFile = work.resolve("batch-flash.sgf");
     Files.writeString(flashFile, "(;FF[4]GM[1]SZ[19]KM[7.5]GN[flash];B[pd];W[dd])");
+    Path flashSecond = work.resolve("batch-flash-second.sgf");
+    Files.writeString(flashSecond, "(;FF[4]GM[1]SZ[19]KM[6.5]GN[flash-second];B[qp];W[dq])");
+    Path flashGib = work.resolve("batch-flash-gib.gib");
+    Files.writeString(
+        flashGib,
+        "\\[GAMEINFOMAIN=GONGJE:65,\\]\r\n"
+            + "\\[GAMEBLACKNAME=QuickBlack\\]\r\n"
+            + "\\[GAMEWHITENAME=QuickWhite\\]\r\n"
+            + "STO 0 1 1 3 3\nSTO 0 2 2 15 15\n");
     edt(() -> {
-      Lizzie.frame.Batchfiles = new java.util.ArrayList<>(List.of(flashFile.toFile()));
+      Lizzie.frame.Batchfiles = new java.util.ArrayList<>(
+          List.of(flashFile.toFile(), flashSecond.toFile(), flashGib.toFile()));
       Lizzie.frame.BatchAnaNum = 0;
       Lizzie.frame.isBatchAna = true;
-      assertTrue(Lizzie.frame.loadFile(flashFile.toFile(), false, true));
-    });
-    edt(() -> {});
-    await(() -> LizzieFrame.canGoAfterload, 30, "flash file engine alignment");
-    edt(() -> {
       Lizzie.config.batchAnalysisPlayouts = 2;
-      StartAnaDialog flash = new StartAnaDialog(true, Lizzie.frame);
-      flash.apply();
+      Lizzie.frame.openFlashBatchAnalysisSettings();
     });
+    await(() -> batchDialog() != null, 30, "flash settings after real load and engine alignment");
+    edt(() -> batchDialog().apply());
     await(() -> !Lizzie.frame.isBatchAna && !Lizzie.frame.isBatchAnalysisMode, 45,
         "flash batch completion");
     assertSavedBatchGame(work, "batch-flash", "GN[flash]", "B[pd]");
+    assertSavedBatchGame(work, "batch-flash-second", "GN[flash-second]", "KM[6.5]");
+    assertSavedBatchGame(work, "batch-flash-gib", "PB[QuickBlack]", "B[dd]");
     DesktopProbeProcess.phase(result, "flash-batch-complete");
   }
 

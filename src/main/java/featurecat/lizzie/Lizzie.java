@@ -1444,17 +1444,30 @@ public class Lizzie {
     java.util.concurrent.CompletableFuture<Void> pendingSaves =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
     if (!pendingSaves.isDone()) {
-      pendingSaves.thenRun(() -> SwingUtilities.invokeLater(() -> shutdown(exit)));
+      pendingSaves.whenComplete(
+          (ignored, failure) ->
+              SwingUtilities.invokeLater(
+                  () -> {
+                    if (failure != null) cancelShutdownAfterSaveFailure(failure);
+                    else shutdown(exit);
+                  }));
+      return;
+    }
+    boolean saved;
+    try {
+      pendingSaves.join();
+      saved = !config.autoSaveOnExit || frame.saveAutoGame(1);
+    } catch (RuntimeException failure) {
+      cancelShutdownAfterSaveFailure(failure);
+      return;
+    }
+    if (!saved) {
+      cancelShutdownAfterSaveFailure(null);
       return;
     }
     logShutdownRequested();
     java.util.concurrent.CompletableFuture<Void> strengthShutdown =
         frame.shutdownHumanSlPreparation();
-    try {
-      if (config.autoSaveOnExit) frame.saveAutoGame(1);
-    } catch (Exception e) {
-      APP.error("failed to auto-save on shutdown", e);
-    }
     if (Lizzie.config.uiConfig.optBoolean("autoload-last", false)) {
       Lizzie.config.uiConfig.put("last-engine", EngineManager.currentEngineNo);
     }
@@ -1529,6 +1542,11 @@ public class Lizzie {
               strengthShutdown, engineManager.cancelBenchmarks())
           .thenRun(() -> shutdownLoggingThenExit(exit));
     }
+  }
+
+  private static void cancelShutdownAfterSaveFailure(Throwable failure) {
+    APP.warn("Shutdown cancelled because saving game data failed", failure);
+    Utils.showMsg(resourceBundle.getString("Lizzie.shutdown.saveFailed"));
   }
 
   public static void shutdownLoggingThenExit(IntConsumer exit) {
