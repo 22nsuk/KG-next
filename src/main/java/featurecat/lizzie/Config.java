@@ -22,8 +22,10 @@ import java.awt.Toolkit;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
@@ -1383,45 +1385,10 @@ public class Config {
   public boolean isCtrlOpened = false;
   public int lastPaintingColor = 0;
 
-  private JSONObject loadAndMergeSaveBoardConfig(
-      JSONObject defaultCfg, String fileName, boolean needValidation) throws IOException {
-    File file = new File(fileName);
-    File dir = new File("save");
-    if (!dir.isDirectory()) dir.delete();
-    if (!dir.exists()) {
-      dir.mkdirs();
-    }
-    if (!file.canRead()) {
-      try {
-        writeConfig(defaultCfg, file);
-      } catch (JSONException e) {
-        failClosed("saveboard", e);
-      }
-    }
-    try {
-      JSONObject mergedcfg = readJsonObject(file.toPath());
-      int added = mergeDefaultKeys(mergedcfg, defaultCfg);
-      if (needValidation) checkEmptyBlunderThresholds(mergedcfg);
-      if (added > 0) {
-        writeConfig(mergedcfg, file);
-      }
-      logConfig("load", "saveboard", "success", added, null);
-      return mergedcfg;
-    } catch (JSONException e) {
-      logConfig("load", "saveboard", "recovered", 0, e);
-      try {
-        writeConfig(defaultCfg, file);
-      } catch (JSONException es) {
-        failClosed("saveboard", es);
-      }
-      return defaultCfg;
-    }
-  }
-
   private static Reader openUtf8JsonReader(File file) throws IOException {
     PushbackReader reader =
         new PushbackReader(
-            new InputStreamReader(new FileInputStream(file), StandardCharsets.UTF_8), 1);
+            new InputStreamReader(Files.newInputStream(file.toPath()), StandardCharsets.UTF_8), 1);
     try {
       int first = reader.read();
       if (first != -1 && first != '\uFEFF') {
@@ -1436,7 +1403,17 @@ public class Config {
 
   private static JSONObject readJsonObject(Path file) throws IOException {
     try (Reader reader = openUtf8JsonReader(file.toFile())) {
+      return readJsonObject(reader);
+    }
+  }
+
+  private static JSONObject readJsonObject(Reader reader) throws IOException {
+    try {
       return new JSONObject(new JSONTokener(reader));
+    } catch (JSONException error) {
+      // JSONTokener wraps stream failures as syntax errors. They must not authorize a reset.
+      if (error.getCause() instanceof IOException readError) throw readError;
+      throw error;
     }
   }
 
@@ -1447,16 +1424,17 @@ public class Config {
   private JSONObject loadAndMergeConfig(
       JSONObject defaultCfg, String fileName, boolean needValidation) throws IOException {
     File file = new File(fileName);
-    boolean created = !file.canRead();
+    Path path = file.toPath();
+    boolean created = false;
     String source = configSourceKind(fileName);
-    if (created) {
+    if (Files.notExists(path, LinkOption.NOFOLLOW_LINKS)) {
       try {
-        writeConfig(defaultCfg, file);
+        created = createDefaultConfigIfAbsent(defaultCfg, path);
       } catch (JSONException e) {
         failClosed(source, e);
       }
     }
-    JSONObject mergedcfg = readJsonObject(file.toPath());
+    JSONObject mergedcfg = readJsonObject(path);
     int added = mergeDefaultKeys(mergedcfg, defaultCfg);
     if (needValidation) checkEmptyBlunderThresholds(mergedcfg);
     if (added > 0) {
@@ -1466,23 +1444,35 @@ public class Config {
     return mergedcfg;
   }
 
-  private JSONObject loadAndMergeConfigdef(
-      JSONObject defaultCfg, String fileName, boolean needValidation) throws IOException {
-    File file = new File(fileName);
-    String source = configSourceKind(fileName);
+  private static boolean createDefaultConfigIfAbsent(JSONObject defaults, Path target)
+      throws IOException {
+    String contents = defaults.toString(2);
+    Path parent = target.toAbsolutePath().getParent();
+    Files.createDirectories(parent);
+    Path temporary = Files.createTempFile(parent, "." + target.getFileName(), ".tmp");
     try {
-      writeConfig(defaultCfg, file);
-    } catch (JSONException e) {
-      failClosed(source, e);
+      Files.writeString(temporary, contents, StandardCharsets.UTF_8);
+      try {
+        // Copying without replacement preserves a concurrently created file and the private
+        // temporary file's permissions. An atomic move may replace an existing target on Unix.
+        Files.copy(temporary, target);
+        return true;
+      } catch (FileAlreadyExistsException existing) {
+        return false;
+      }
+    } finally {
+      Files.deleteIfExists(temporary);
     }
-    JSONObject mergedcfg = readJsonObject(file.toPath());
-    int added = mergeDefaultKeys(mergedcfg, defaultCfg);
-    if (needValidation) checkEmptyBlunderThresholds(mergedcfg);
-    if (added > 0) {
-      writeConfig(mergedcfg, file);
-    }
-    logConfig("load", source + "/rebuilt-default", "success", added, null);
-    return mergedcfg;
+  }
+
+  private JSONObject recoverConfigDefaults(
+      JSONObject defaults, String fileName, boolean writeDefaults, JSONException error)
+      throws IOException {
+    File file = new File(fileName);
+    backupUnreadableConfig(file);
+    if (writeDefaults) writeConfig(defaults, file);
+    logConfig("load", configSourceKind(fileName), "recovered", 0, error);
+    return defaults;
   }
 
   /**
@@ -1633,22 +1623,24 @@ public class Config {
     JSONObject saveBoardConf = createSaveBoardConfig();
     try {
       this.persisted = loadAndMergeConfig(persistConfig, persistFilename, false);
-    } catch (Exception e) {
-      logConfig("load", "persist", "recovered", 0, e);
-      this.persisted = persistConfig;
+    } catch (JSONException e) {
+      this.persisted = recoverConfigDefaults(persistConfig, persistFilename, false, e);
     }
     // Main properties
     try {
       this.config = loadAndMergeConfig(defaultConfig, configFilename, true);
     } catch (JSONException e) {
-      logConfig("load", "config", "unreadable", 0, e);
-      backupUnreadableConfig(new File(configFilename));
-      this.config = loadAndMergeConfigdef(defaultConfig, configFilename, true);
+      this.config = recoverConfigDefaults(defaultConfig, configFilename, true, e);
+      checkEmptyBlunderThresholds(this.config);
     }
     applyBundledKataGoDefaultsAndPersist();
     // Persisted properties
 
-    this.saveBoard = loadAndMergeSaveBoardConfig(saveBoardConf, saveBoardFilename, false);
+    try {
+      this.saveBoard = loadAndMergeConfig(saveBoardConf, saveBoardFilename, false);
+    } catch (JSONException e) {
+      this.saveBoard = recoverConfigDefaults(saveBoardConf, saveBoardFilename, true, e);
+    }
 
     firstTimeFactor = persisted.optBoolean("first-time-factor", true);
     leelazConfig = config.getJSONObject("leelaz");
@@ -2424,25 +2416,26 @@ public class Config {
     return added;
   }
 
-  private static void backupUnreadableConfig(File configFile) {
-    if (configFile == null || !configFile.isFile()) {
-      return;
-    }
+  private static void backupUnreadableConfig(File configFile) throws IOException {
     Path source = configFile.toPath().toAbsolutePath().normalize();
     Path parent = source.getParent();
-    if (parent == null) {
-      return;
+    if (parent == null || !Files.isRegularFile(source)) {
+      throw new IOException("Cannot back up configuration file: " + source);
     }
     String fileName = configFile.getName() + ".unreadable-backup";
-    Path backup = parent.resolve(fileName);
-    for (int suffix = 1; Files.exists(backup); suffix++) {
-      backup = parent.resolve(fileName + "." + suffix);
-    }
-    try {
-      Files.copy(source, backup);
-      logConfig("backup", "config", "success", 0, null);
-    } catch (IOException backupError) {
-      logConfig("backup", "config", "failed", 0, backupError);
+    String kind = configSourceKind(configFile.getPath());
+    for (int suffix = 0; ; suffix++) {
+      Path backup = parent.resolve(fileName + (suffix == 0 ? "" : "." + suffix));
+      try {
+        Files.copy(source, backup);
+        logConfig("backup", kind, "success", 0, null);
+        return;
+      } catch (FileAlreadyExistsException existing) {
+        // Preserve earlier backups, including entries created by another process.
+      } catch (IOException backupError) {
+        logConfig("backup", kind, "failed", 0, backupError);
+        throw backupError;
+      }
     }
   }
 

@@ -137,6 +137,13 @@ class ConfigBootstrapTest {
     assertTrue(rebuilt.has("leelaz"));
     assertFalse(rebuilt.getJSONObject("ui").has("future-ui-key"));
     assertTrue(config.uiConfig.has("show-status"));
+    assertTrue(config.persisted.getBoolean("checked-empty-blunder-thresholds"));
+    assertEquals(
+        List.of(-24, -12, -6, -3, -1, 3, 100),
+        config.uiConfig.getJSONArray("blunder-winrate-thresholds").toList());
+    assertEquals(
+        List.of(0, 230, 230),
+        config.uiConfig.getJSONArray("blunder-node-colors").getJSONArray(6).toList());
     JSONObject writtenPersist = Config.readJsonObjectForTests(persistFile(workDir));
     JSONObject writtenSave = Config.readJsonObjectForTests(saveFile(workDir));
     assertEquals(
@@ -160,6 +167,9 @@ class ConfigBootstrapTest {
     assertTrue(config.persisted.has("ui-persist"));
     assertSame(config.persisted.getJSONObject("ui-persist"), config.persistedUi);
     assertEquals(payload, Files.readString(persistFile(workDir), StandardCharsets.UTF_8));
+    assertEquals(
+        payload,
+        Files.readString(workDir.resolve("persist.unreadable-backup"), StandardCharsets.UTF_8));
     JSONObject writtenConfig = Config.readJsonObjectForTests(configFile(workDir));
     JSONObject writtenSave = Config.readJsonObjectForTests(saveFile(workDir));
     assertEquals(USER_UI_MARKER, writtenConfig.getJSONObject("ui").getString("future-ui-key"));
@@ -183,6 +193,10 @@ class ConfigBootstrapTest {
     assertTrue(rebuiltSave.has("save"));
     assertTrue(config.saveBoardConfig.getBoolean("save-config"));
     assertFalse(rebuiltSave.getJSONObject("save").has("future-save-key"));
+    assertEquals(
+        payload,
+        Files.readString(
+            workDir.resolve("save").resolve("save.unreadable-backup"), StandardCharsets.UTF_8));
     JSONObject writtenConfig = Config.readJsonObjectForTests(configFile(workDir));
     JSONObject writtenPersist = Config.readJsonObjectForTests(persistFile(workDir));
     assertEquals(USER_UI_MARKER, writtenConfig.getJSONObject("ui").getString("future-ui-key"));
@@ -226,11 +240,7 @@ class ConfigBootstrapTest {
   }
 
   private Path isolatedWorkDir(String name) throws IOException {
-    Path workDir = Files.createDirectories(tempDir.resolve(name));
-    // Production WorkDirectoryResolver creates workDir/save for explicit work dirs.
-    // loadAndMergeSaveBoardConfig mkdirs CWD "save", not the override work dir.
-    Files.createDirectories(workDir.resolve("save"));
-    return workDir;
+    return Files.createDirectories(tempDir.resolve(name));
   }
 
   private void assertWorkDirIsIsolated(Path workDir, Config config) {
