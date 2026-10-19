@@ -57,6 +57,15 @@ DESKTOP_REQUIRED_TESTS = (
          f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]")
         for invocation in range(1, 5)
     ),
+    *tuple(
+        ("featurecat.lizzie.gui.HumanSlStrengthDialogTest", method)
+        for method in (
+            "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
+            "explicitSupplementReturnsFrozenAnalysisResult",
+            "cancelEscapeAndCloseRetireLateManualCompletion",
+            "changedGameRejectsLateManualResult",
+        )
+    ),
     ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
     ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
     ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
@@ -638,7 +647,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest",
+                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest",
                     "test",
                 ),
                 group="desktop",
