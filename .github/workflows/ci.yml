@@ -204,7 +204,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
       - name: Run Linux desktop smoke verification
-        timeout-minutes: 10
+        # Allow three full desktop passes plus build and window-manager cleanup.
+        timeout-minutes: 12
         env:
           LANG: C.UTF-8
           LC_ALL: C.UTF-8
