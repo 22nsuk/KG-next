@@ -40,6 +40,7 @@ import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
@@ -75,6 +76,7 @@ public class AnalysisEngine {
   private static final long REMOTE_GTP_ANALYZE_STALL_TIMEOUT_MILLIS = 8000L;
   private static final long REMOTE_GTP_SETUP_ACK_TIMEOUT_MILLIS = 8000L;
   private static final String CURRENT_FOREGROUND_RULES = "__current_foreground_rules__";
+  private static final Set<ReaderResources> ACTIVE_READER_RESOURCES = new LinkedHashSet<>();
   public Process process;
   public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
@@ -550,6 +552,23 @@ public class AnalysisEngine {
             stderr);
     readerResources = resources;
     outputStream = resources.stdin;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      ACTIVE_READER_RESOURCES.add(resources);
+    }
+  }
+
+  /**
+   * Stops owned readers after application task cancellation and waits asynchronously for cleanup,
+   * including workers already detached from the frame by cancellation or replacement.
+   */
+  public static CompletableFuture<Void> shutdownAllResources() {
+    List<ReaderResources> resources;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      resources = new ArrayList<>(ACTIVE_READER_RESOURCES);
+    }
+    for (ReaderResources pending : resources) pending.closeForExit();
+    return CompletableFuture.allOf(
+        resources.stream().map(pending -> pending.closed).toArray(CompletableFuture<?>[]::new));
   }
 
   /** Owns the pipes and readers of one launch, including cleanup after a stale reader exits. */
@@ -563,6 +582,7 @@ public class AnalysisEngine {
     private final BufferedReader stderr;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ExecutorService executorErr = Executors.newSingleThreadExecutor();
+    private final CompletableFuture<Void> closed = new CompletableFuture<>();
     private Thread cleanup;
 
     private ReaderResources(
@@ -610,9 +630,36 @@ public class AnalysisEngine {
       executorErr.shutdown();
       // A failure callback may close us again. Keep the first bounded drain policy intact.
       if (cleanup != null) return;
-      cleanup = new Thread(() -> closeResources(preserveStartupTail), "analysis-engine-cleanup");
+      cleanup = new Thread(() -> finishCleanup(preserveStartupTail), "analysis-engine-cleanup");
       cleanup.setDaemon(true);
       cleanup.start();
+    }
+
+    private void closeForExit() {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
+      close(false);
+    }
+
+    private void finishCleanup(boolean preserveStartupTail) {
+      try {
+        closeResources(preserveStartupTail);
+        // destroyForcibly requests termination; application exit must also observe its completion.
+        if (process != null) process.waitFor();
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        closed.completeExceptionally(interrupted);
+        return;
+      } catch (RuntimeException | Error failure) {
+        closed.completeExceptionally(failure);
+        throw failure;
+      }
+      // Keep failures tracked so a later exit cannot mistake failed cleanup for completion.
+      synchronized (ACTIVE_READER_RESOURCES) {
+        ACTIVE_READER_RESOURCES.remove(this);
+      }
+      closed.complete(null);
     }
 
     private void closeResources(boolean preserveStartupTail) {

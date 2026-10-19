@@ -6,12 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -20,6 +23,7 @@ import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -29,8 +33,144 @@ import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LizzieShutdownTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void exitWaitsForAnalysisCleanupWithoutBlockingEdt(boolean alreadyDetached) throws Exception {
+    try (Harness harness = Harness.open();
+        GatedAnalysisProcess process = new GatedAnalysisProcess()) {
+      AnalysisEngine analysis = allocate(AnalysisEngine.class);
+      analysis.process = process;
+      Method initialize = AnalysisEngine.class.getDeclaredMethod("initializeStreams");
+      initialize.setAccessible(true);
+      initialize.invoke(analysis);
+      harness.frame.analysisEngine = analysis;
+      if (alreadyDetached) {
+        analysis.normalQuit();
+        harness.frame.analysisEngine = null;
+        // Exercise the shutdown path without an EngineManager as well.
+        Lizzie.engineManager = null;
+      }
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      FutureTask<Void> shutdown =
+          new FutureTask<>(
+              () -> {
+                Lizzie.shutdown(exited::complete);
+                return null;
+              });
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        SwingUtilities.invokeLater(shutdown);
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "shutdown blocked the EDT");
+        shutdown.get(5, TimeUnit.SECONDS);
+        assertTrue(process.destroyEntered.await(5, TimeUnit.SECONDS));
+        assertTrue(process.isAlive(), "the child must still be running behind the cleanup gate");
+        assertFalse(exited.isDone(), "JVM exit ran before the analysis process was terminated");
+
+        process.allowDestroy.countDown();
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertFalse(process.isAlive(), "JVM exit ran while the analysis child was alive");
+      } finally {
+        process.allowDestroy.countDown();
+        Field resourcesField = AnalysisEngine.class.getDeclaredField("readerResources");
+        resourcesField.setAccessible(true);
+        Object resources = resourcesField.get(analysis);
+        Field cleanupField = resources.getClass().getDeclaredField("cleanup");
+        cleanupField.setAccessible(true);
+        Thread cleanup = (Thread) cleanupField.get(resources);
+        if (cleanup != null) {
+          cleanup.join(TimeUnit.SECONDS.toMillis(5));
+          assertFalse(cleanup.isAlive(), "cleanup did not finish after releasing the gate");
+        }
+      }
+    }
+  }
+
+  /** The child deliberately keeps working after stdin EOF, like a draining analysis engine. */
+  public static final class AnalysisChild {
+    public static void main(String[] args) throws Exception {
+      new CountDownLatch(1).await();
+    }
+  }
+
+  private static final class GatedAnalysisProcess extends Process implements AutoCloseable {
+    private final Process child;
+    private final CountDownLatch destroyEntered = new CountDownLatch(1);
+    private final CountDownLatch allowDestroy = new CountDownLatch(1);
+
+    private GatedAnalysisProcess() throws IOException {
+      child =
+          new ProcessBuilder(
+                  Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+                  "-cp",
+                  System.getProperty("java.class.path"),
+                  AnalysisChild.class.getName())
+              .start();
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return child.getOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return child.getInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return child.getErrorStream();
+    }
+
+    @Override
+    public int waitFor() throws InterruptedException {
+      return child.waitFor();
+    }
+
+    @Override
+    public int exitValue() {
+      return child.exitValue();
+    }
+
+    @Override
+    public boolean isAlive() {
+      return child.isAlive();
+    }
+
+    @Override
+    public void destroy() {
+      destroyForcibly();
+    }
+
+    @Override
+    public Process destroyForcibly() {
+      destroyEntered.countDown();
+      try {
+        if (!allowDestroy.await(10, TimeUnit.SECONDS)) {
+          throw new AssertionError("analysis cleanup gate was not released");
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(interrupted);
+      }
+      child.destroyForcibly();
+      return this;
+    }
+
+    @Override
+    public void close() throws InterruptedException {
+      allowDestroy.countDown();
+      child.destroyForcibly();
+      assertTrue(child.waitFor(5, TimeUnit.SECONDS), "test child cleanup timed out");
+    }
+  }
+
   @Test
   void forceKillAllowsAnAlreadyMissingPrimaryEngine() throws Exception {
     try (Harness harness = Harness.open()) {
@@ -265,6 +405,9 @@ class LizzieShutdownTest {
 
     @Override
     public void shutdownClockHelper() {}
+
+    @Override
+    public void requestProblemListRefresh() {}
   }
 
   private static final class RecordingLeelaz extends Leelaz {
