@@ -6130,7 +6130,7 @@ public class KataGoAutoSetupDialog extends JDialog {
     if (info == null) {
       return "";
     }
-    String displayName = KataGoAutoSetupHelper.resolveWeightDisplayName(info.modelName);
+    String displayName = KataGoAutoSetupHelper.resolveRemoteWeightDisplayName(info);
     return displayName == null || displayName.trim().isEmpty() ? info.modelName : displayName;
   }
 

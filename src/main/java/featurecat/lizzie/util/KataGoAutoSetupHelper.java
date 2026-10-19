@@ -15,6 +15,7 @@ import java.io.InputStreamReader;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -27,6 +28,9 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.LocalDate;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -42,6 +46,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.zip.GZIPInputStream;
 import org.jdesktop.swingx.util.OS;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 public final class KataGoAutoSetupHelper {
@@ -60,6 +65,16 @@ public final class KataGoAutoSetupHelper {
           + "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
   private static final String NETWORKS_URL = "https://katagotraining.org/networks/";
   private static final String NETWORKS_URL_PROPERTY = "lizzie.katago.networks.url";
+  private static final String OFFICIAL_STRONGEST_URL =
+      "https://katagotraining.org/api/networks/get_strongest/";
+  private static final String OFFICIAL_STRONGEST_URL_PROPERTY = "lizzie.katago.strongest.url";
+  private static final String OFFICIAL_MODEL_URL_PREFIX =
+      "https://media.katagotraining.org/uploaded/networks/models/kata1/";
+  // Group 1 marks a Transformer network; group 2 is its block count.
+  private static final Pattern OFFICIAL_STRONGEST_NAME_PATTERN =
+      Pattern.compile("kata1-(tf\\d+-)?b(\\d+)c\\d+[A-Za-z0-9]*(?:-[A-Za-z0-9]+)+");
+  private static final Pattern WEIGHT_BLOCK_COUNT_PATTERN =
+      Pattern.compile("(?:^|-)b(\\d+)c\\d+", Pattern.CASE_INSENSITIVE);
   private static final Pattern STRONGEST_PATTERN =
       Pattern.compile(
           "Strongest confidently-rated network:</span>\\s*<a href=\"([^\"]+)\">([^<]+)</a>",
@@ -263,7 +278,9 @@ public final class KataGoAutoSetupHelper {
     NONE,
     LIGHTWEIGHT,
     BALANCED,
-    STRONGEST
+    STRONGEST,
+    /** A Transformer network outside the three catalog tiers, such as the official strongest. */
+    UNTIERED
   }
 
   public static final class LocalKataGoDiscoveryResult {
@@ -527,6 +544,7 @@ public final class KataGoAutoSetupHelper {
     public final long sizeBytes;
     public final String minimumKataGoVersion;
     public final TransformerTier transformerTier;
+    public final boolean officialStrongest;
 
     RemoteWeightInfo(
         String typeLabel,
@@ -562,6 +580,34 @@ public final class KataGoAutoSetupHelper {
         long sizeBytes,
         String minimumKataGoVersion,
         TransformerTier transformerTier) {
+      this(
+          typeLabel,
+          modelName,
+          downloadUrl,
+          uploadedAt,
+          eloRating,
+          recommended,
+          latest,
+          sha256,
+          sizeBytes,
+          minimumKataGoVersion,
+          transformerTier,
+          false);
+    }
+
+    private RemoteWeightInfo(
+        String typeLabel,
+        String modelName,
+        String downloadUrl,
+        String uploadedAt,
+        String eloRating,
+        boolean recommended,
+        boolean latest,
+        String sha256,
+        long sizeBytes,
+        String minimumKataGoVersion,
+        TransformerTier transformerTier,
+        boolean officialStrongest) {
       this.typeLabel = typeLabel;
       this.modelName = modelName;
       this.downloadUrl = downloadUrl;
@@ -573,6 +619,39 @@ public final class KataGoAutoSetupHelper {
       this.sizeBytes = sizeBytes;
       this.minimumKataGoVersion = minimumKataGoVersion == null ? "" : minimumKataGoVersion.trim();
       this.transformerTier = transformerTier == null ? TransformerTier.NONE : transformerTier;
+      this.officialStrongest = officialStrongest;
+    }
+
+    private RemoteWeightInfo withOnlineRating(String rating, boolean onlineLatest) {
+      return new RemoteWeightInfo(
+          typeLabel,
+          modelName,
+          downloadUrl,
+          uploadedAt,
+          rating,
+          recommended,
+          onlineLatest,
+          sha256,
+          sizeBytes,
+          minimumKataGoVersion,
+          transformerTier,
+          officialStrongest);
+    }
+
+    private RemoteWeightInfo asOfficialStrongest() {
+      return new RemoteWeightInfo(
+          typeLabel,
+          modelName,
+          downloadUrl,
+          uploadedAt,
+          eloRating,
+          recommended,
+          latest,
+          sha256,
+          sizeBytes,
+          minimumKataGoVersion,
+          transformerTier,
+          true);
     }
 
     public String fileName() {
@@ -1176,33 +1255,37 @@ public final class KataGoAutoSetupHelper {
   public static List<RemoteWeightInfo> fetchOfficialWeights() throws IOException {
     List<RemoteWeightInfo> weights = new ArrayList<>(officialTransformerWeights());
     try {
-      for (RemoteWeightInfo info : parseOfficialWeights(httpGet(officialNetworksUrl()))) {
-        int pinnedIndex = -1;
-        for (int i = 0; i < weights.size(); i++) {
-          if (weights.get(i).fileName().equals(info.fileName())) {
-            pinnedIndex = i;
+      weights =
+          withOfficialStrongest(
+              weights,
+              parseOfficialStrongest(httpGet(officialStrongestUrl(), "application/json", false)));
+    } catch (IOException e) {
+      // The pinned catalog rows remain the offline and invalid-response fallback.
+    }
+    try {
+      List<RemoteWeightInfo> table =
+          parseOfficialWeightTable(
+              httpGet(
+                  officialNetworksUrl(),
+                  "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"));
+      // Keep trusted integrity metadata while refreshing each pinned row's online rating, even
+      // when its family is not among the selected table choices.
+      for (int i = 0; i < weights.size(); i++) {
+        RemoteWeightInfo pinned = weights.get(i);
+        for (RemoteWeightInfo info : table) {
+          if (pinned.fileName().equals(info.fileName())) {
+            weights.set(i, pinned.withOnlineRating(info.eloRating, info.latest));
             break;
           }
         }
-        if (pinnedIndex < 0) {
+      }
+      for (RemoteWeightInfo info : selectOfficialWeightChoices(table)) {
+        boolean listed = false;
+        for (RemoteWeightInfo row : weights) {
+          listed |= row.fileName().equals(info.fileName());
+        }
+        if (!listed) {
           weights.add(info);
-        } else {
-          // Keep trusted integrity metadata while refreshing the online rating.
-          RemoteWeightInfo pinned = weights.get(pinnedIndex);
-          weights.set(
-              pinnedIndex,
-              new RemoteWeightInfo(
-                  pinned.typeLabel,
-                  pinned.modelName,
-                  pinned.downloadUrl,
-                  pinned.uploadedAt,
-                  info.eloRating,
-                  pinned.recommended,
-                  info.latest,
-                  pinned.sha256,
-                  pinned.sizeBytes,
-                  pinned.minimumKataGoVersion,
-                  pinned.transformerTier));
         }
       }
     } catch (IOException e) {
@@ -1211,6 +1294,108 @@ public final class KataGoAutoSetupHelper {
       }
     }
     return weights;
+  }
+
+  private static String officialStrongestUrl() {
+    return System.getProperty(OFFICIAL_STRONGEST_URL_PROPERTY, OFFICIAL_STRONGEST_URL).trim();
+  }
+
+  /**
+   * Parses katagotraining's strongest-network API. Only kata1 networks whose download URL is the
+   * official model path and whose size and SHA-256 are present are accepted; see ADR 0002.
+   */
+  static RemoteWeightInfo parseOfficialStrongest(String body) throws IOException {
+    JSONObject json;
+    try {
+      json = new JSONObject(body == null ? "" : body);
+    } catch (JSONException e) {
+      throw new IOException("Invalid official strongest network response", e);
+    }
+    String name = json.optString("name", "").trim();
+    Matcher nameMatcher = OFFICIAL_STRONGEST_NAME_PATTERN.matcher(name);
+    if (!nameMatcher.matches()) {
+      throw new IOException("Unsupported official strongest network: " + name);
+    }
+    String downloadUrl = json.optString("model_file", "").trim();
+    if (!downloadUrl.equals(OFFICIAL_MODEL_URL_PREFIX + name + ".bin.gz")) {
+      throw new IOException("Untrusted official strongest download URL: " + downloadUrl);
+    }
+    long sizeBytes;
+    Object rawSize = json.opt("model_file_bytes");
+    try {
+      if (!(rawSize instanceof Number)) {
+        throw new NumberFormatException("Expected a JSON number");
+      }
+      sizeBytes = new BigDecimal(rawSize.toString()).longValueExact();
+    } catch (NumberFormatException | ArithmeticException e) {
+      throw new IOException("Invalid official strongest network size: " + name, e);
+    }
+    Object rawSha256 = json.opt("model_file_sha256");
+    String sha256 =
+        rawSha256 instanceof String ? ((String) rawSha256).trim().toLowerCase(Locale.ROOT) : "";
+    if (sizeBytes <= 0L || !sha256.matches("[0-9a-f]{64}")) {
+      throw new IOException("Official strongest network lacks integrity metadata: " + name);
+    }
+    String createdAt = json.optString("created_at", "").trim();
+    String publishedAt;
+    try {
+      publishedAt =
+          (createdAt.contains("T")
+                  ? OffsetDateTime.parse(createdAt).toLocalDate()
+                  : LocalDate.parse(createdAt))
+              .toString();
+    } catch (DateTimeParseException e) {
+      throw new IOException("Invalid official strongest network creation date: " + name, e);
+    }
+    boolean transformer = nameMatcher.group(1) != null;
+    return new RemoteWeightInfo(
+        resource("AutoSetup.officialStrongestBadge", "Official strongest"),
+        name,
+        downloadUrl,
+        publishedAt,
+        "",
+        false,
+        false,
+        sha256,
+        sizeBytes,
+        transformer ? TRANSFORMER_MINIMUM_KATAGO_VERSION : "",
+        transformer ? TransformerTier.UNTIERED : TransformerTier.NONE,
+        true);
+  }
+
+  /** Marks the matching catalog row, or puts the official strongest row first. */
+  static List<RemoteWeightInfo> withOfficialStrongest(
+      List<RemoteWeightInfo> catalogRows, RemoteWeightInfo strongest) {
+    List<RemoteWeightInfo> rows = new ArrayList<>(catalogRows);
+    for (int i = 0; i < rows.size(); i++) {
+      if (rows.get(i).fileName().equals(strongest.fileName())) {
+        // Same file: keep the catalog's pinned integrity metadata and identity.
+        rows.set(i, rows.get(i).asOfficialStrongest());
+        return rows;
+      }
+    }
+    rows.add(0, strongest);
+    return rows;
+  }
+
+  /** Display name for an online catalog row. */
+  public static String resolveRemoteWeightDisplayName(RemoteWeightInfo info) {
+    if (info == null) {
+      return "";
+    }
+    if (!info.officialStrongest) {
+      return toWeightDisplayName(info.modelName);
+    }
+    List<String> parts = new ArrayList<>();
+    parts.add(resource("AutoSetup.officialStrongestBadge", "Official strongest"));
+    Matcher blocks = WEIGHT_BLOCK_COUNT_PATTERN.matcher(stripWeightFileExtension(info.modelName));
+    if (blocks.find()) {
+      parts.add("B" + blocks.group(1));
+    }
+    if (info.uploadedAt != null && info.uploadedAt.length() >= 10) {
+      parts.add(info.uploadedAt.substring(0, 10));
+    }
+    return String.join(" · ", parts);
   }
 
   private static String officialNetworksUrl() {
@@ -2305,6 +2490,14 @@ public final class KataGoAutoSetupHelper {
   }
 
   static List<RemoteWeightInfo> parseOfficialWeights(String html) throws IOException {
+    List<RemoteWeightInfo> weights = selectOfficialWeightChoices(parseOfficialWeightTable(html));
+    if (weights.isEmpty()) {
+      throw new IOException("Unable to parse KataGo official weights.");
+    }
+    return weights;
+  }
+
+  private static List<RemoteWeightInfo> parseOfficialWeightTable(String html) throws IOException {
     Matcher strongestMatcher = STRONGEST_PATTERN.matcher(html);
     String strongestUrl = "";
     String strongestName = "";
@@ -2361,26 +2554,26 @@ public final class KataGoAutoSetupHelper {
     if (!foundTable) {
       throw new IOException("Unable to parse KataGo weight table.");
     }
-    List<RemoteWeightInfo> weights = selectOfficialWeightChoices(parsedWeights);
-    if (weights.isEmpty()) {
-      throw new IOException("Unable to parse KataGo official weights.");
-    }
-    return weights;
+    return parsedWeights;
   }
 
-  private static String httpGet(String url) throws IOException {
+  private static String httpGet(String url, String accept) throws IOException {
+    return httpGet(url, accept, true);
+  }
+
+  private static String httpGet(String url, String accept, boolean followRedirects)
+      throws IOException {
     HttpURLConnection conn = null;
     try {
       conn = (HttpURLConnection) NetworkProxy.openConnection(URI.create(url).toURL());
-      conn.setInstanceFollowRedirects(true);
+      conn.setInstanceFollowRedirects(followRedirects);
       conn.setRequestMethod("GET");
       conn.setConnectTimeout(15000);
       conn.setReadTimeout(30000);
       conn.setRequestProperty("User-Agent", USER_AGENT);
-      conn.setRequestProperty(
-          "Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+      conn.setRequestProperty("Accept", accept);
       int code = conn.getResponseCode();
-      if (code < 200 || code >= 400) {
+      if (code < 200 || code >= (followRedirects ? 400 : 300)) {
         throw new IOException("HTTP " + code + " from " + url);
       }
       try (BufferedReader reader =

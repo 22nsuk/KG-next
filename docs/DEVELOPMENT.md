@@ -160,6 +160,18 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `FunctionSearchInputTest.chineseInputChain`
 - `FunctionSearchInputTest.englishInputChain`
 - `TeacherDialogRequestOwnershipTest` 的全部解说请求、修正、取消和 SGF 保存场景
+- `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
+- `HumanSlStrengthDialogTest` 的手动选择、设置重启保留、显式补充、取消和换谱结果隔离场景
+
+官方最强模型用例通过本地 HTTP 服务返回受控元数据，点击生产窗口的刷新按钮并等待真实异步回调。
+它覆盖新增模型和命中已固定模型两种显示，验证当前模型、推荐卡片及配置文件不变；不下载或运行模型。
+韩文窗口截图保存在 `target/desktop-smoke/probes/official-strongest/`。
+
+HumanSL40 用例在独立子 JVM 中打开实际应用。受控 policy worker 只替代计算，仍经过生产准备队列、
+进度窗口和 EDT 完成处理；它验证选择模型不启动计算、后台默认关闭、设置保存与重启，以及
+取消、Escape、关闭、换谱和自动刷新时保留当前统计页。韩文截图保存在
+`target/desktop-smoke/probes/humansl40-*/`。真实 CPU policy 补充与离线缓存验证的显式入口见
+[HumanSL40 cookbook](cookbook/humansl40-strength.md)；合成输入和受控 worker 均不证明实际棋力精度。
 
 解说用例运行真实 `TeacherDialog` 和 API-key 客户端，以本地 HTTP/SSE 服务代替收费模型。
 它们验证冻结证据、一次有界修正、光标导航后的原节点保存、后续问题的原始上下文，以及
@@ -210,14 +222,18 @@ Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘
 验证成功但 coverage artifact 缺失仍失败。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
-`ci-required` 是唯一汇总门禁，要求原有七项和 `engine-process` matrix 全部成功，拒绝失败、取消、
+`ci-required` 是 `ci.yml` 的汇总检查，要求原有七项和 `engine-process` matrix 全部成功，拒绝失败、取消、
 跳过、缺失或未知结果。发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
-main 分支保护要求 GitHub Actions 来源的 `ci-required`。回退 workflow 时必须保留
-可运行且真实验证七项执行结果的 `ci-required`；不能直接回退到缺少该检查的版本。
-如需调整 required checks，由维护者协调保护设置与 workflow，始终保留有效合并门禁。
+该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
+不会自动启用分支保护。fork 的设置需要单独确认，不能从上游仓库的保护状态或检查名称推断。
 
-本地预检用于在推送前尽早发现问题，不能代替受保护分支上的干净 Windows 和
+建议维护者为 main 将 GitHub Actions 来源的 `ci-required` 配置为必需检查，并在合并前确认
+实际生效的 required checks。回退 workflow 时必须保留可运行且真实验证七项和 `engine-process`
+matrix 执行结果的 `ci-required`；不能直接回退到缺少该检查的版本。调整 required checks 时，
+由维护者协调仓库保护设置与 workflow。
+
+本地预检用于在推送前尽早发现问题，不能代替 GitHub Actions 上的干净 Windows 和
 Ubuntu runner，也不能代替 macOS 签名、公证与多平台发布资产审计。
 
 如果你改了打包、引擎路径、首次启动流程、野狐抓谱流程，建议再做对应平台的手工验证。

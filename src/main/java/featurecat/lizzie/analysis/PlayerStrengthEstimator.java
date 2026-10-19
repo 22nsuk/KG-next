@@ -129,10 +129,12 @@ public final class PlayerStrengthEstimator {
 
   private PlayerStrengthEstimator() {}
 
-  private static volatile StrengthModel activeModel = StrengthModel.XGBOOST20TUN;
+  // Model constructors call this class's helpers; avoid eager nested-class initialization.
+  private static volatile StrengthModel activeModel;
 
   public static StrengthModel activeModel() {
-    return activeModel;
+    StrengthModel selected = activeModel;
+    return selected == null ? StrengthModel.XGBOOST20TUN : selected;
   }
 
   public static void setActiveModel(StrengthModel model) {
@@ -143,6 +145,7 @@ public final class PlayerStrengthEstimator {
     List<StrengthModel> models = new ArrayList<>();
     models.add(StrengthModel.XGBOOST20TUN);
     models.add(StrengthModel.XGBOOST20TUN_PREVIOUS);
+    models.add(StrengthModel.HUMANSL40);
     models.addAll(StrengthModel.importedModels());
     List<StrengthModel> available = new ArrayList<>();
     for (StrengthModel model : models) {
@@ -196,6 +199,18 @@ public final class PlayerStrengthEstimator {
     SideReport whiteReport = white.toReport(selectedModel);
     SideReport overallReport = Accumulator.merge(black, white).toReport(selectedModel);
     return new Report(blackReport, whiteReport, overallReport, selectedModel);
+  }
+
+  static Report humanSlReport(List<HumanSlStrength40.Move> moves) {
+    Accumulator black = new Accumulator(), white = new Accumulator();
+    for (HumanSlStrength40.Move move : moves) {
+      (move.color.equals("B") ? black : white).add(new Sample(move));
+    }
+    return new Report(
+        black.toReport(StrengthModel.HUMANSL40),
+        white.toReport(StrengthModel.HUMANSL40),
+        Accumulator.merge(black, white).toReport(StrengthModel.HUMANSL40),
+        StrengthModel.HUMANSL40);
   }
 
   private static Sample sample(BoardData previous, BoardData current) {
@@ -527,6 +542,17 @@ public final class PlayerStrengthEstimator {
             XGBoostStrengthModel.Features.defaultXGBoost20TunFeatureIndices(),
             XGBoostStrengthModel.xgboost20TunSigma());
 
+    public static final StrengthModel HUMANSL40 =
+        new StrengthModel(
+            "bundled:humansl40",
+            "HumanSL 40",
+            HumanSlStrength40.RESOURCE,
+            null,
+            null,
+            null,
+            new int[40],
+            Double.NaN);
+
     private final String id;
     private final String displayName;
     private final String boosterResourcePath;
@@ -563,6 +589,10 @@ public final class PlayerStrengthEstimator {
 
     public String displayName() {
       return displayName;
+    }
+
+    public boolean isHumanSl40() {
+      return "bundled:humansl40".equals(id);
     }
 
     Path boosterPath() {
@@ -1158,11 +1188,11 @@ public final class PlayerStrengthEstimator {
     }
 
     public String qualityScoreText() {
-      return String.format(Locale.US, "%.0f", qualityScore);
+      return Double.isFinite(qualityScore) ? String.format(Locale.US, "%.0f", qualityScore) : "-";
     }
 
     public String rankValueText() {
-      return String.format(Locale.US, "%.1f", rankValue);
+      return Double.isFinite(rankValue) ? String.format(Locale.US, "%.1f", rankValue) : "-";
     }
 
     public String predictionSigmaText() {
@@ -1207,7 +1237,19 @@ public final class PlayerStrengthEstimator {
     }
 
     public String difficultyText() {
-      return String.format(Locale.US, "%.0f", averageDifficulty);
+      return Double.isFinite(averageDifficulty)
+          ? String.format(Locale.US, "%.0f", averageDifficulty)
+          : "-";
+    }
+
+    public String humanSlCoverageText() {
+      double coverage =
+          samples.stream()
+              .filter(s -> s.humanSlMove != null)
+              .mapToDouble(s -> s.humanSlMove.human[2][2])
+              .average()
+              .orElse(Double.NaN);
+      return Double.isFinite(coverage) ? String.format(Locale.US, "%.1f%%", 100 * coverage) : "-";
     }
 
     public int moveRankCount(MoveRankDefinition.Rank rank) {
@@ -1254,6 +1296,24 @@ public final class PlayerStrengthEstimator {
     public final double scoreEquivalentLoss;
     public final double complexity;
     public final double adjustedWeight;
+    private final HumanSlStrength40.Move humanSlMove;
+
+    private Sample(HumanSlStrength40.Move human) {
+      this.color = human.color.equals("B") ? Stone.BLACK : Stone.WHITE;
+      this.moveNumber = human.number;
+      this.coordinate = human.coordinate;
+      this.winrateLoss = human.winrateLoss;
+      this.scoreLoss = Optional.of(human.loss);
+      this.firstChoice = human.rank == 0;
+      this.aiRank = human.rank;
+      this.category = categorize(human.loss);
+      this.moveRankCategory =
+          categorizeMoveRank(new LossEstimate(human.winrateLoss, this.scoreLoss));
+      this.scoreEquivalentLoss = human.loss;
+      this.complexity = human.complexity;
+      this.adjustedWeight = adjustedWeight(human.complexity, human.loss);
+      this.humanSlMove = human;
+    }
 
     private Sample(
         Stone color,
@@ -1280,6 +1340,7 @@ public final class PlayerStrengthEstimator {
       this.scoreEquivalentLoss = scoreEquivalentLoss;
       this.complexity = complexity;
       this.adjustedWeight = adjustedWeight;
+      this.humanSlMove = null;
     }
   }
 
@@ -1307,7 +1368,7 @@ public final class PlayerStrengthEstimator {
             0,
             0,
             selectedModel,
-            0.0,
+            selectedModel.isHumanSl40() ? Double.NaN : 0.0,
             Double.NaN,
             0.0,
             0.0,
@@ -1441,34 +1502,50 @@ public final class PlayerStrengthEstimator {
       double middlegameGoodMoveRate = phaseGoodMoveRate(middlegameSamples, goodMoveRate);
       double endgameGoodMoveRate = phaseGoodMoveRate(endgameSamples, goodMoveRate);
       RankPrediction prediction =
-          rankPrediction(
-              selectedModel,
-              weightedPointLoss,
-              averageScoreEquivalentLoss,
-              medianPointLossForModel,
-              p75ScoreEquivalentLoss,
-              p90ScoreEquivalentLoss,
-              p95ScoreEquivalentLoss,
-              max(scoreEquivalentLosses),
-              lossStddev,
-              openingWeightedLoss,
-              middlegameWeightedLoss,
-              endgameWeightedLoss,
-              firstChoiceRate,
-              top3Rate,
-              top5Rate,
-              averageAiRank,
-              excellentRate,
-              goodMoveRate,
-              inaccuracyRate,
-              mistakeRate,
-              blunderRate,
-              matchRate,
-              openingGoodMoveRate,
-              middlegameGoodMoveRate,
-              endgameGoodMoveRate,
-              averageDifficulty);
+          selectedModel.isHumanSl40()
+              ? new RankPrediction(
+                  samples.stream().allMatch(s -> s.humanSlMove != null)
+                      ? HumanSlStrength40.predict(samples.stream().map(s -> s.humanSlMove).toList())
+                      : Double.NaN,
+                  Double.NaN)
+              : rankPrediction(
+                  selectedModel,
+                  weightedPointLoss,
+                  averageScoreEquivalentLoss,
+                  medianPointLossForModel,
+                  p75ScoreEquivalentLoss,
+                  p90ScoreEquivalentLoss,
+                  p95ScoreEquivalentLoss,
+                  max(scoreEquivalentLosses),
+                  lossStddev,
+                  openingWeightedLoss,
+                  middlegameWeightedLoss,
+                  endgameWeightedLoss,
+                  firstChoiceRate,
+                  top3Rate,
+                  top5Rate,
+                  averageAiRank,
+                  excellentRate,
+                  goodMoveRate,
+                  inaccuracyRate,
+                  mistakeRate,
+                  blunderRate,
+                  matchRate,
+                  openingGoodMoveRate,
+                  middlegameGoodMoveRate,
+                  endgameGoodMoveRate,
+                  averageDifficulty);
       double qualityScore = rankValueToQualityScore(prediction.rankValue);
+      if (selectedModel.isHumanSl40()) {
+        averageDifficulty =
+            samples.stream()
+                    .filter(s -> s.humanSlMove != null)
+                    .mapToDouble(s -> s.humanSlMove.human[2][1])
+                    .filter(Double::isFinite)
+                    .average()
+                    .orElse(Double.NaN)
+                * 100.0;
+      }
 
       return new SideReport(
           sampleCount,
@@ -1491,19 +1568,23 @@ public final class PlayerStrengthEstimator {
           mistakeRate,
           blunderRate,
           averageDifficulty,
-          strengthBand(
-              sampleCount,
-              qualityScore,
-              weightedPointLoss,
-              averageScoreEquivalentLoss,
-              medianPointLossForModel,
-              p90ScoreEquivalentLoss,
-              firstChoiceRate,
-              goodMoveRate,
-              mistakeRate,
-              matchRate,
-              averageDifficulty),
-          confidence(sampleCount, scoreSampleCount),
+          selectedModel.isHumanSl40()
+              ? (Double.isFinite(prediction.rankValue)
+                  ? STRENGTH_BANDS[levelFromRankValue(prediction.rankValue)]
+                  : "-")
+              : strengthBand(
+                  sampleCount,
+                  qualityScore,
+                  weightedPointLoss,
+                  averageScoreEquivalentLoss,
+                  medianPointLossForModel,
+                  p90ScoreEquivalentLoss,
+                  firstChoiceRate,
+                  goodMoveRate,
+                  mistakeRate,
+                  matchRate,
+                  averageDifficulty),
+          selectedModel.isHumanSl40() ? Confidence.LOW : confidence(sampleCount, scoreSampleCount),
           new ArrayList<>(samples));
     }
 
