@@ -170,8 +170,8 @@ class AutomaticSaveRecoveryTest {
 
   @Test
   void savesBeforeStartupSelectionCannotOverwriteEitherSlot() throws Exception {
-    frame.saveAutoGame(2);
-    frame.saveAutoGame(1);
+    assertFalse(frame.saveAutoGame(2));
+    assertFalse(frame.saveAutoGame(1));
     assertEquals(OLD, Files.readString(slot(1, "sgf")));
     assertEquals(NEW, Files.readString(slot(2, "sgf")));
     assertEquals(originalMetadata, Files.readString(metadataFile()));
@@ -190,8 +190,8 @@ class AutomaticSaveRecoveryTest {
           }
         });
     frame.restoreStartupGame(new String[0]);
-    frame.saveAutoGame(2);
-    frame.saveAutoGame(1);
+    assertFalse(frame.saveAutoGame(2));
+    assertFalse(frame.saveAutoGame(1));
     assertNull(frame.loadedFile);
     assertEquals(OLD, Files.readString(slot(1, "sgf")));
     assertEquals(NEW, Files.readString(slot(2, "sgf")));
@@ -209,7 +209,7 @@ class AutomaticSaveRecoveryTest {
           }
         });
     assertRecovered();
-    frame.saveAutoGame(1);
+    assertTrue(frame.saveAutoGame(1));
     assertTrue(Files.readString(slot(1, "sgf")).contains("NEW_PERIODIC"));
   }
 
@@ -231,8 +231,8 @@ class AutomaticSaveRecoveryTest {
     Files.writeString(slot(2, "sgf"), invalid);
     config.autoResume = false;
     frame.restoreStartupGame(new String[0]);
-    frame.saveAutoGame(2);
-    frame.saveAutoGame(1);
+    assertFalse(frame.saveAutoGame(2));
+    assertFalse(frame.saveAutoGame(1));
     assertEquals(OLD, Files.readString(slot(1, "sgf")));
     assertEquals(invalid, Files.readString(slot(2, "sgf")));
     assertEquals(originalMetadata, Files.readString(metadataFile()));
@@ -245,8 +245,8 @@ class AutomaticSaveRecoveryTest {
     Path blocker = slot(2, "sgf").resolve("keep");
     Files.writeString(blocker, "do not delete");
     frame.restoreStartupGame(new String[0]);
-    frame.saveAutoGame(2);
-    frame.saveAutoGame(1);
+    assertFalse(frame.saveAutoGame(2));
+    assertFalse(frame.saveAutoGame(1));
     assertEquals("do not delete", Files.readString(blocker));
     assertEquals(OLD, Files.readString(slot(1, "sgf")));
     assertEquals(originalMetadata, Files.readString(metadataFile()));
@@ -278,8 +278,8 @@ class AutomaticSaveRecoveryTest {
     assertEquals(NEW, frame.loadedSgf);
     assertPendingRecord();
     setCurrentBoard();
-    frame.saveAutoGame(2);
-    frame.saveAutoGame(1);
+    assertFalse(frame.saveAutoGame(2));
+    assertFalse(frame.saveAutoGame(1));
     assertEquals("do not delete", Files.readString(blocker));
     assertEquals(NEW, Files.readString(slot(2, "sgf")));
     assertEquals(originalMetadata, Files.readString(metadataFile()));

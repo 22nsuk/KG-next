@@ -72,6 +72,7 @@ public class AnalysisTable {
     stopStart.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
+            if (Lizzie.frame.retryBatchAnalysisSave()) return;
             if (Lizzie.config.isAutoAna || Lizzie.frame.isManualAutoAnalysisStarting()) {
               LizzieFrame.toolbar.stopAutoAna(true, true);
             } else {
@@ -88,16 +89,10 @@ public class AnalysisTable {
     stopStartAnalysisMode.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            if (Lizzie.frame.isBatchAnalysisMode && Lizzie.frame.analysisEngine != null) {
-              Lizzie.frame.analysisEngine.waitFrame.setVisible(false);
-              Lizzie.frame.destroyAnalysisEngine();
-              Lizzie.frame.isBatchAnalysisMode = false;
+            if (Lizzie.frame.isBatchAnalysisMode) {
+              Lizzie.frame.stopFlashBatchAnalysis();
             } else {
-              if (Lizzie.frame.rejectCompetingBatchAnalysis()) return;
-              verifyCurrentKifu();
-              Lizzie.frame.isBatchAna = true;
-              StartAnaDialog newgame = new StartAnaDialog(true, Lizzie.frame);
-              newgame.setVisible(true);
+              Lizzie.frame.openFlashBatchAnalysisSettings();
             }
           }
         });
@@ -148,6 +143,7 @@ public class AnalysisTable {
             Lizzie.frame.isBatchAna = false;
             Lizzie.frame.BatchAnaNum = 0;
             Lizzie.frame.Batchfiles = new ArrayList<File>();
+            Lizzie.frame.discardPendingBatchAnalysisSave();
             Lizzie.frame.analysisTable.refreshTable();
           }
         });
@@ -244,18 +240,6 @@ public class AnalysisTable {
     resetAnalysisMode();
   }
 
-  protected void verifyCurrentKifu() {
-    if (Lizzie.frame.deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        this::verifyCurrentKifu)) {
-      return;
-    }
-    // TODO Auto-generated method stub
-    String firstFileName = Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum).getName();
-    if (!LizzieFrame.fileNameTitle.equals(firstFileName)) {
-      Lizzie.frame.loadFile(Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum), false, false);
-    }
-  }
-
   public void refreshTable() {
     // table.updateUI();
     table.revalidate();
@@ -263,7 +247,11 @@ public class AnalysisTable {
   }
 
   public void resetAnalysisMode() {
-    // TODO Auto-generated method stub
+    stopStart.setText(
+        resourceBundle.getString(
+            Lizzie.frame.hasPendingBatchAnalysisSave()
+                ? "BatchAnalysis.retrySave"
+                : "AnalysisTable.stopStart"));
     if (Lizzie.frame.isBatchAnalysisMode) {
       stopGo.setEnabled(false);
       stopStart.setEnabled(false);

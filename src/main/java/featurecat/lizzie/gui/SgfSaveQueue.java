@@ -2,6 +2,8 @@ package featurecat.lizzie.gui;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.function.BooleanSupplier;
@@ -17,7 +19,7 @@ final class SgfSaveQueue {
   private final Executor worker;
   private final Executor owner;
   private final Writer writer;
-  private CompletableFuture<Void> pending = CompletableFuture.completedFuture(null);
+  private final Set<CompletableFuture<Void>> inFlight = new HashSet<>();
 
   SgfSaveQueue(Executor worker, Executor owner, Writer writer) {
     this.worker = worker;
@@ -32,7 +34,7 @@ final class SgfSaveQueue {
       Runnable success,
       Consumer<Throwable> failure) {
     CompletableFuture<Void> completion = new CompletableFuture<>();
-    pending = CompletableFuture.allOf(pending, completion).handle((ignored, error) -> null);
+    inFlight.add(completion);
     Runnable write =
         () -> {
           Throwable error = null;
@@ -61,17 +63,22 @@ final class SgfSaveQueue {
     try {
       if (error != null) {
         failure.accept(error);
-        completion.completeExceptionally(error);
       } else {
         if (stillCurrent.getAsBoolean()) success.run();
-        completion.complete(null);
       }
     } catch (RuntimeException callbackFailure) {
-      completion.completeExceptionally(callbackFailure);
+      error = callbackFailure;
     }
+    synchronized (this) {
+      inFlight.remove(completion);
+    }
+    if (error != null) completion.completeExceptionally(error);
+    else completion.complete(null);
   }
 
   synchronized CompletableFuture<Void> pending() {
-    return pending;
+    // Each shutdown request owns a snapshot of the writes it actually waits for. A failure
+    // rejects that barrier, but already reported failures do not poison future requests.
+    return CompletableFuture.allOf(inFlight.toArray(new CompletableFuture<?>[0]));
   }
 }

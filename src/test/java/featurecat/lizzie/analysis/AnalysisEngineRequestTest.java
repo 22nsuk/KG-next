@@ -611,6 +611,7 @@ class AnalysisEngineRequestTest {
     try (TestEnvironment env = TestEnvironment.open()) {
       boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      Lizzie.frame.analysisEngine = engine;
       setField(AnalysisEngine.class, engine, "silentProgress", true);
       DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
       TrackingWaitForAnalysis waitFrame = allocate(TrackingWaitForAnalysis.class);
@@ -922,6 +923,7 @@ class AnalysisEngineRequestTest {
       Lizzie.frame.isBatchAnalysisMode = true;
       AtomicInteger successfulContinuations = new AtomicInteger();
       AnalysisEngine engine = new AnalysisEngine(false);
+      Lizzie.frame.analysisEngine = engine;
       setField(AnalysisEngine.class, engine, "silentProgress", true);
       engine.setCompletionCallback(restore -> successfulContinuations.incrementAndGet());
 
@@ -953,6 +955,7 @@ class AnalysisEngineRequestTest {
       Lizzie.frame.isBatchAnalysisMode = true;
       AtomicInteger successfulContinuations = new AtomicInteger();
       AnalysisEngine engine = new AnalysisEngine(false);
+      Lizzie.frame.analysisEngine = engine;
       setField(AnalysisEngine.class, engine, "silentProgress", true);
       engine.setCompletionCallback(restore -> successfulContinuations.incrementAndGet());
 
@@ -1943,12 +1946,86 @@ class AnalysisEngineRequestTest {
       frame.isBatchAnalysisMode = true;
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
       engine.failSends = true;
+      AtomicInteger completions = new AtomicInteger();
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
 
       engine.startRequest(1, -1, false);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(0, frame.flashAutoAnaSaveAndLoadCalls);
+      assertEquals(0, completions.get());
       assertEquals(0, engine.pendingRequestCount());
       assertFalse(engine.isAnalysisInProgress());
+    }
+  }
+
+  @Test
+  void emptyBatchRequestCompletesThroughItsCallbackOnTheEdt() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+      Lizzie.frame.isBatchAna = true;
+      Lizzie.frame.isBatchAnalysisMode = true;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger completions = new AtomicInteger();
+      engine.setCompletionCallback(
+          restore -> {
+            assertTrue(javax.swing.SwingUtilities.isEventDispatchThread());
+            assertEquals(ForegroundRestoreResult.NOT_REQUIRED, restore);
+            completions.incrementAndGet();
+          });
+
+      engine.startRequest(-1, -1, false);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(1, completions.get());
+      assertTrue(engine.sentCommands.isEmpty());
+      assertFalse(engine.hasRequestLifecycleInProgress());
+      assertNull(engine.completionCallback());
+    }
+  }
+
+  @Test
+  void replacedWorkersFailureDoesNotStopTheCurrentBatch() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      boardWithHistory(history);
+      TrackingAnalysisEngine oldEngine = TrackingAnalysisEngine.create();
+      oldEngine.failSends = true;
+      TrackingAnalysisEngine replacement = TrackingAnalysisEngine.create();
+      Lizzie.frame.analysisEngine = replacement;
+      Lizzie.frame.isBatchAnalysisMode = true;
+
+      oldEngine.startRequest(1, -1, false);
+
+      assertTrue(Lizzie.frame.isBatchAnalysisMode);
+      assertSame(replacement, Lizzie.frame.analysisEngine);
+      assertFalse(oldEngine.hasRequestLifecycleInProgress());
+    }
+  }
+
+  @Test
+  void emptyBatchRequestWaitsForForegroundRestoreBeforeCompleting() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+      Lizzie.frame.isBatchAna = true;
+      Lizzie.frame.isBatchAnalysisMode = true;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      DeferredRestoreLeelaz foreground = new DeferredRestoreLeelaz();
+      setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
+      setField(AnalysisEngine.class, engine, "sharedForegroundLease", foregroundLease(foreground));
+      List<ForegroundRestoreResult> completions = new CopyOnWriteArrayList<>();
+      engine.setCompletionCallback(completions::add);
+
+      engine.startRequestAllBranches(false);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertTrue(completions.isEmpty());
+      assertTrue(engine.hasRequestLifecycleInProgress());
+
+      foreground.completeRestore();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(List.of(ForegroundRestoreResult.SUCCEEDED), completions);
+      assertFalse(engine.hasRequestLifecycleInProgress());
     }
   }
 
@@ -2263,6 +2340,7 @@ class AnalysisEngineRequestTest {
               2));
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      Lizzie.frame.analysisEngine = engine;
       setField(AnalysisEngine.class, engine, "useRemoteCompute", true);
       Lizzie.frame.isBatchAnalysisMode = true;
       AtomicInteger successfulContinuations = new AtomicInteger();
@@ -3485,7 +3563,6 @@ class AnalysisEngineRequestTest {
   }
 
   private static final class TrackingLizzieFrame extends LizzieFrame {
-    private int flashAutoAnaSaveAndLoadCalls;
     private int foregroundReservationConflictCount;
     private int contributionStarts;
     private int contributeBenchmarkConflictCount;
@@ -3495,11 +3572,6 @@ class AnalysisEngineRequestTest {
 
     @Override
     public void requestProblemListRefresh() {}
-
-    @Override
-    public void flashAutoAnaSaveAndLoad() {
-      flashAutoAnaSaveAndLoadCalls++;
-    }
 
     @Override
     public void clearKataEstimate() {}

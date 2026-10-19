@@ -8,6 +8,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -109,6 +110,66 @@ class SgfSaveQueueTest {
     owner.remove().run();
     assertEquals(List.of("first", "edited"), effects);
     assertTrue(pending.isDone());
+  }
+
+  @Test
+  void shutdownBarrierRetainsFailuresUntilAllCapturedUiCompletionsFinish() {
+    ArrayDeque<Runnable> worker = new ArrayDeque<>();
+    ArrayDeque<Runnable> owner = new ArrayDeque<>();
+    AtomicInteger failures = new AtomicInteger();
+    AtomicInteger successes = new AtomicInteger();
+    SgfSaveQueue queue =
+        new SgfSaveQueue(
+            worker::add,
+            owner::add,
+            (path, snapshot) -> {
+              if (snapshot.equals("failed")) throw new IOException("disk full");
+            });
+    queue.submit(
+        Path.of("failed.sgf"),
+        "failed",
+        () -> true,
+        () -> fail("failed save must not succeed"),
+        error -> failures.incrementAndGet());
+    queue.submit(
+        Path.of("saved.sgf"),
+        "saved",
+        () -> true,
+        successes::incrementAndGet,
+        error -> fail(error));
+    var pending = queue.pending();
+
+    worker.remove().run();
+    worker.remove().run();
+    owner.remove().run();
+    assertFalse(pending.isDone(), "The later captured save still needs its UI completion");
+    owner.remove().run();
+
+    CompletionException failure = assertThrows(CompletionException.class, pending::join);
+    assertEquals("disk full", failure.getCause().getMessage());
+    assertEquals(1, failures.get());
+    assertEquals(1, successes.get());
+    assertDoesNotThrow(() -> queue.pending().join(), "Already reported failures must not be sticky");
+  }
+
+  @Test
+  void finishedFailureIsRemovedBeforeAShutdownContinuationCanRetry() {
+    ArrayDeque<Runnable> worker = new ArrayDeque<>();
+    SgfSaveQueue queue =
+        new SgfSaveQueue(
+            worker::add,
+            Runnable::run,
+            (path, snapshot) -> {
+              throw new IOException("disk full");
+            });
+    queue.submit(Path.of("failed.sgf"), "snapshot", () -> true, () -> fail("success"), error -> {});
+    var pending = queue.pending();
+    var nextBarrier = pending.handle((ignored, failure) -> queue.pending());
+
+    worker.remove().run();
+
+    assertThrows(CompletionException.class, pending::join);
+    assertDoesNotThrow(() -> nextBarrier.join().join());
   }
 
   @Test

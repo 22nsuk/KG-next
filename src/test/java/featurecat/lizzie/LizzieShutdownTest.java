@@ -2,18 +2,33 @@ package featurecat.lizzie;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
+import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class LizzieShutdownTest {
   @Test
@@ -25,7 +40,7 @@ class LizzieShutdownTest {
   }
 
   @Test
-  void autosaveRuntimeFailureStillPersistsConfigKillsEnginesAndExits() throws Exception {
+  void autosaveRuntimeFailureCancelsShutdownBeforeStoppingAnyResources() throws Exception {
     try (Harness harness = Harness.open()) {
       harness.frame.autoSaveFailure = new IllegalStateException("autosave failed");
       harness.config.autoSaveOnExit = true;
@@ -34,8 +49,92 @@ class LizzieShutdownTest {
       Lizzie.shutdown(exitCode::set);
 
       assertEquals(1, harness.frame.autoSaveCalls);
-      assertTrue(harness.config.persistCalled, "UI persist must run after autosave failure");
-      assertTrue(harness.config.saveCalled, "config save must run after autosave failure");
+      assertFalse(harness.config.persistCalled);
+      assertFalse(harness.config.saveCalled);
+      assertEquals(0, harness.frame.strengthShutdownCalls);
+      assertEquals(0, harness.engine.forceQuitCount);
+      assertEquals(-1, exitCode.get());
+    }
+  }
+
+  @Test
+  void failedAutosaveCancelsShutdownAndSuccessfulRetryCanExit() throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.frame.autoSaveResult = false;
+      AtomicInteger exitCode = new AtomicInteger(-1);
+
+      Lizzie.shutdown(exitCode::set);
+
+      assertEquals(1, harness.frame.autoSaveCalls);
+      assertFalse(harness.config.persistCalled);
+      assertFalse(harness.config.saveCalled);
+      assertEquals(0, harness.frame.strengthShutdownCalls);
+      assertEquals(0, harness.engine.forceQuitCount);
+      assertEquals(-1, exitCode.get());
+
+      harness.frame.autoSaveResult = true;
+      Lizzie.shutdown(exitCode::set);
+
+      assertEquals(2, harness.frame.autoSaveCalls);
+      assertTrue(harness.config.persistCalled);
+      assertTrue(harness.config.saveCalled);
+      assertEquals(1, harness.frame.strengthShutdownCalls);
+      assertEquals(1, harness.engine.forceQuitCount);
+      assertEquals(0, exitCode.get());
+    }
+  }
+
+  @Test
+  void queuedSaveFailureCancelsThisExitAndDoesNotPoisonTheNextExit(@TempDir Path directory)
+      throws Exception {
+    try (Harness harness = Harness.open()) {
+      Path blocked = Files.createDirectory(directory.resolve("blocked.sgf"));
+      Files.writeString(blocked.resolve("keep"), "not a replaceable SGF");
+      AtomicInteger exitCode = new AtomicInteger(-1);
+      AtomicReference<CompletableFuture<Void>> save = new AtomicReference<>();
+      Field queueField = SgfSaveCoordinator.class.getDeclaredField("SAVES");
+      queueField.setAccessible(true);
+      Object queue = queueField.get(null);
+      Method submit =
+          queue.getClass().getDeclaredMethod(
+              "submit", Path.class, String.class, BooleanSupplier.class, Runnable.class,
+              Consumer.class);
+      submit.setAccessible(true);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            try {
+              @SuppressWarnings("unchecked")
+              CompletableFuture<Void> submitted =
+                  (CompletableFuture<Void>)
+                      submit.invoke(
+                          queue, blocked, "(;SZ[5];B[aa])", (BooleanSupplier) () -> true,
+                          (Runnable) () -> {}, (Consumer<Throwable>) failure -> {});
+              save.set(submitted);
+            } catch (ReflectiveOperationException failure) {
+              throw new AssertionError(failure);
+            }
+            // The real queue's UI completion cannot run until this EDT action returns.
+            Lizzie.shutdown(exitCode::set);
+            assertEquals(0, harness.frame.autoSaveCalls);
+            assertEquals(0, harness.frame.strengthShutdownCalls);
+            assertEquals(-1, exitCode.get());
+          });
+      assertThrows(ExecutionException.class, () -> save.get().get(5, TimeUnit.SECONDS));
+      // Drain the shutdown continuation queued by the owner's completion, including the
+      // race where this thread observes future completion before that continuation is queued.
+      CountDownLatch drained = new CountDownLatch(1);
+      SwingUtilities.invokeAndWait(() -> SwingUtilities.invokeLater(drained::countDown));
+      assertTrue(drained.await(5, TimeUnit.SECONDS));
+
+      assertEquals(0, harness.frame.autoSaveCalls);
+      assertEquals(0, harness.frame.strengthShutdownCalls);
+      assertFalse(harness.config.persistCalled);
+      assertFalse(harness.config.saveCalled);
+      assertEquals(0, harness.engine.forceQuitCount);
+      assertEquals(-1, exitCode.get());
+
+      Lizzie.shutdown(exitCode::set);
+      assertEquals(1, harness.frame.autoSaveCalls);
       assertEquals(1, harness.engine.forceQuitCount);
       assertEquals(0, exitCode.get());
     }
@@ -91,6 +190,7 @@ class LizzieShutdownTest {
       config.autoSaveOnExit = true;
       config.uiConfig = new JSONObject();
       RecordingFrame frame = allocate(RecordingFrame.class);
+      frame.autoSaveResult = true;
       RecordingLeelaz engine = new RecordingLeelaz();
       EngineManager engineManager =
           new EngineManager(new ArrayList<>(java.util.List.of(engine)));
@@ -141,14 +241,23 @@ class LizzieShutdownTest {
 
   private static final class RecordingFrame extends LizzieFrame {
     int autoSaveCalls;
+    int strengthShutdownCalls;
+    boolean autoSaveResult;
     RuntimeException autoSaveFailure;
 
     @Override
-    public void saveAutoGame(int index) {
+    public boolean saveAutoGame(int index) {
       autoSaveCalls++;
       if (autoSaveFailure != null) {
         throw autoSaveFailure;
       }
+      return autoSaveResult;
+    }
+
+    @Override
+    public CompletableFuture<Void> shutdownHumanSlPreparation() {
+      strengthShutdownCalls++;
+      return CompletableFuture.completedFuture(null);
     }
 
     @Override

@@ -1299,6 +1299,7 @@ public class AnalysisEngine {
 
   private void startRequestAllBranchesNow(boolean showProgressDialog) {
     prepareRequestState(showProgressDialog);
+    captureCurrentGameIdentity();
     BoardHistoryNode node = Lizzie.board.getHistory().getStart();
     Stack<BoardHistoryNode> stack = new Stack<>();
     stack.push(node);
@@ -1327,6 +1328,7 @@ public class AnalysisEngine {
 
   private void startRequestNow(int startMove, int endMove, boolean showProgressDialog) {
     prepareRequestState(showProgressDialog);
+    captureCurrentGameIdentity();
     int targetVisits = targetAnalysisVisitsForCurrentRequest(showProgressDialog);
     if (useRemoteCompute) {
       enqueueRemoteGtpMainlineRequests(
@@ -1351,9 +1353,7 @@ public class AnalysisEngine {
 
 
   private void finishSuccessfulEmptyRequestIfNeeded() {
-    if (!requestDispatchFailed
-        && analyzeMap.isEmpty()
-        && !Lizzie.frame.isBatchAnalysisMode) {
+    if (!requestDispatchFailed && analyzeMap.isEmpty()) {
       finishSuccessfulEmptyRequest();
     }
   }
@@ -1650,8 +1650,6 @@ public class AnalysisEngine {
         waitFrame.setLocationRelativeTo(Lizzie.frame != null ? Lizzie.frame : null);
         if (!waitFrame.isVisible()) waitFrame.setVisible(true);
       }
-    } else if (Lizzie.frame.isBatchAnalysisMode) {
-      Lizzie.frame.flashAutoAnaSaveAndLoad();
     }
   }
 
@@ -1698,7 +1696,9 @@ public class AnalysisEngine {
     boolean restorePending =
         releaseSharedForegroundLease(finishRestore, finishRestoreFailure);
     resumeForegroundAnalysisIfRequested();
-    if (Lizzie.frame.isBatchAnalysisMode) Lizzie.frame.isBatchAnalysisMode = false;
+    if (Lizzie.frame.analysisEngine == this && Lizzie.frame.isBatchAnalysisMode) {
+      Lizzie.frame.isBatchAnalysisMode = false;
+    }
     if (waitFrame != null || showProgressDialog) {
       javax.swing.SwingUtilities.invokeLater(
           () -> {

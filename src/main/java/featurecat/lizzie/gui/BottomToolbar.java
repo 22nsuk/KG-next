@@ -2902,38 +2902,19 @@ public class BottomToolbar extends JPanel {
         finishBatchAutoAnalysis(completed);
         return;
       }
-      String name = Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum).getName();
-      String path = Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum).getParent();
-      String df = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
-      String prefix = name.substring(name.lastIndexOf("."));
-      int num = prefix.length();
-      String fileOtherName = name.substring(0, name.length() - num);
-      String filename =
-          path
-              + File.separator
-              + fileOtherName
-              + "_"
-              + resourceBundle.getString("Leelaz.analyzed")
-              + "_"
-              + df
-              + ".sgf";
-      File autoSaveFile = new File(filename);
-      try {
-        SGFParser.save(Lizzie.board, autoSaveFile.getPath());
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
+      if (Lizzie.config.analyzeAllBranch && threadAnalyzeAllNode != null) {
+        threadAnalyzeAllNode.interrupt();
       }
-      if (shouldContinueBatchAutoAnalysis(
-          completed, Lizzie.frame.Batchfiles.size(), Lizzie.frame.BatchAnaNum)) {
-        LizzieFrame.BatchAutoAnalysis batch = autoAnalysisBatch;
-        if (Lizzie.config.analyzeAllBranch)
-          if (threadAnalyzeAllNode != null) threadAnalyzeAllNode.interrupt();
-        Lizzie.frame.loadNextBatchAutoAnalysis(batch, () -> startAutoAna(batch));
-      } else {
-        finishBatchAutoAnalysis(completed);
-        return;
-      }
+      Lizzie.frame.saveBatchAnalysisResult(
+          () -> {
+            if (shouldContinueBatchAutoAnalysis(
+                completed, Lizzie.frame.Batchfiles.size(), Lizzie.frame.BatchAnaNum)) {
+              LizzieFrame.BatchAutoAnalysis batch = autoAnalysisBatch;
+              Lizzie.frame.loadNextBatchAutoAnalysis(batch, () -> startAutoAna(batch));
+            } else {
+              finishBatchAutoAnalysis(completed);
+            }
+          });
     }
   }
 
@@ -3003,31 +2984,6 @@ public class BottomToolbar extends JPanel {
       msg = new Message();
       msg.setMessageNoModal(resourceBundle.getString(batchAutoAnalyzeStatusKey(completed)));
     }
-  }
-
-  public void loadAutoBatchFile() {
-    if (Lizzie.frame.deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        this::loadAutoBatchFile)) {
-      return;
-    }
-    Lizzie.frame.BatchAnaNum = Lizzie.frame.BatchAnaNum + 1;
-    try {
-      if (Lizzie.frame.analysisTable != null && Lizzie.frame.analysisTable.frame.isVisible()) {
-        Lizzie.frame.analysisTable.refreshTable();
-      }
-    } catch (Exception ex) {
-    }
-    Lizzie.frame.loadFile(Lizzie.frame.Batchfiles.get(Lizzie.frame.BatchAnaNum), false, true);
-    try {
-      LizzieFrame.toolbar.firstMove =
-          Integer.parseInt(LizzieFrame.toolbar.txtFirstAnaMove.getText());
-    } catch (Exception ex) {
-    }
-    try {
-      LizzieFrame.toolbar.lastMove = Integer.parseInt(LizzieFrame.toolbar.txtLastAnaMove.getText());
-    } catch (Exception ex) {
-    }
-    // startAutoAna = true;
   }
 
   public void setGenmove() {
@@ -3900,6 +3856,11 @@ public class BottomToolbar extends JPanel {
   }
 
   public void startAutoAna() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::startAutoAna);
+      return;
+    }
+    if (Lizzie.frame.retryBatchAnalysisSave()) return;
     startAutoAna(null);
   }
 

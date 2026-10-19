@@ -194,7 +194,7 @@ public final class SgfSaveCoordinator {
     Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.saveFileFailed"));
   }
 
-  /** Shutdown must let accepted writes and their UI completion finish before persisting/exiting. */
+  /** Await current writes and their UI completion, retaining any failure in that request set. */
   public static CompletableFuture<Void> pendingSaves() {
     return SAVES.pending();
   }
