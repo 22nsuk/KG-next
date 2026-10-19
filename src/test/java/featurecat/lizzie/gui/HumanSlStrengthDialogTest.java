@@ -23,17 +23,20 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
 import javax.imageio.ImageIO;
 import javax.swing.AbstractButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JDialog;
+import javax.swing.JOptionPane;
 import javax.swing.KeyStroke;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
@@ -61,6 +64,24 @@ public final class HumanSlStrengthDialogTest {
       throws Exception {
     DesktopProbeProcess.requireDisplay();
     assertTrue(Files.readString(probe("download", List.of())).contains("custom-selection-preserved=2"));
+  }
+
+  @Test
+  void assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    assertTrue(Files.readString(probe("discovery", List.of())).contains("responsive-discovery=3"));
+  }
+
+  @Test
+  void decliningOrClosingDownloadConsentPreservesHumanSelection() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    assertTrue(Files.readString(probe("consent", List.of())).contains("declined-cases=4"));
+  }
+
+  @Test
+  void downloadFailureAndCancellationPreserveHumanSelection() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    assertTrue(Files.readString(probe("acquisition-failure", List.of())).contains("failed-or-cancelled=3"));
   }
 
   @Test
@@ -113,6 +134,9 @@ public final class HumanSlStrengthDialogTest {
         case "reopen" -> reopenPreference();
         case "complete" -> manualComplete(work, result);
         case "download" -> manualInstallAndReuse(work);
+        case "discovery" -> slowDiscovery(work);
+        case "consent" -> declineConsent(work);
+        case "acquisition-failure" -> acquisitionFailure(work);
         case "cancel" -> manualCancel(work, result);
         case "change" -> manualGameChange(work, result);
         default -> throw new IllegalArgumentException("Unknown scenario " + scenario);
@@ -247,14 +271,20 @@ public final class HumanSlStrengthDialogTest {
           HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(officialBytes)));
       System.setProperty("lizzie.humansl.model.size", Integer.toString(officialBytes.length));
       onEdt(() -> KataGoAutoSetupHelper.rememberHumanSlModel(custom));
+      configureEngine(work);
       Path installed =
           work.resolve("human-sl-models").resolve(KataGoAutoSetupHelper.HUMAN_SL_MODEL_FILE_NAME);
       assertFalse(Files.exists(installed));
       for (int attempt = 0; attempt < 2; attempt++) {
         try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
-          // Both visits exercise the dialog's acquisition branch: download first, then reuse.
-          var pending = beginManual(manual, null);
+          var pending = beginManual(manual, HumanSlStrengthPreparation::discoverAssets);
+          if (attempt == 0) {
+            awaitEdt(() -> confirmationDialog() != null);
+            assertEquals(0, requests.get(), "A download must wait for explicit consent");
+            onEdt(() -> answerConsent(JOptionPane.YES_OPTION));
+          }
           manual.awaitStarted();
+          assertNull(onEdtValue(HumanSlStrengthDialogTest::confirmationDialog));
           assertArrayEquals(officialBytes, Files.readAllBytes(installed));
           assertEquals(
               1, requests.get(), "A verified installed model must be reused without a download");
@@ -310,6 +340,179 @@ public final class HumanSlStrengthDialogTest {
     return "retired=3\nlate-completion-rejected=true";
   }
 
+  private static String slowDiscovery(Path work) throws Exception {
+    Path engine = configureEngine(work);
+    for (String outcome : List.of("complete", "cancel", "error")) {
+      CountDownLatch started = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      CountDownLatch finished = new CountDownLatch(1);
+      try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
+        var pending = beginManual(manual, () -> {
+          assertFalse(SwingUtilities.isEventDispatchThread());
+          started.countDown();
+          try {
+            if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("Discovery was not released");
+            if (outcome.equals("error")) throw new IllegalStateException("late asset read failure");
+            return new HumanSlStrengthPreparation.Assets(engine, outcome.equals("complete") ? engine : null);
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(interrupted);
+          } finally {
+            finished.countDown();
+          }
+        });
+        assertTrue(started.await(5, TimeUnit.SECONDS));
+        var dialog = onEdtValue(HumanSlStrengthDialogTest::progressDialog);
+        // This EDT round trip must complete while the slow directory/hash operation is blocked.
+        onEdt(() -> {
+          assertNotNull(progressDialog());
+          assertTrue(find(progressDialog(), javax.swing.JProgressBar.class, bar -> true).isIndeterminate());
+          assertNull(confirmationDialog());
+          if (!outcome.equals("complete")) progressDialog().dispose();
+        });
+        if (!outcome.equals("complete")) {
+          awaitEdt(pending.returned()::get);
+          assertNull(pending.result().get());
+        }
+        release.countDown();
+        assertTrue(finished.await(5, TimeUnit.SECONDS));
+        if (outcome.equals("complete")) {
+          manual.awaitStarted();
+          manual.complete();
+          manual.awaitClosed();
+          awaitEdt(pending.returned()::get);
+          assertNotNull(pending.result().get());
+        } else {
+          dialog.completion().get(5, TimeUnit.SECONDS);
+          assertFalse(manual.preparation().hasWork());
+        }
+        onEdt(() -> {
+          assertNull(progressDialog());
+          assertNull(confirmationDialog());
+          assertNull(errorDialog());
+        });
+      } finally {
+        release.countDown();
+      }
+    }
+    return "responsive-discovery=3";
+  }
+
+  private static String declineConsent(Path work) throws Exception {
+    configureEngine(work);
+    Path custom = Files.write(work.resolve("custom-human.bin.gz"), new byte[2 * 1024 * 1024]);
+    AtomicInteger requests = new AtomicInteger();
+    HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+    server.createContext("/model", exchange -> {
+      requests.incrementAndGet();
+      exchange.sendResponseHeaders(500, -1);
+      exchange.close();
+    });
+    server.start();
+    try {
+      System.setProperty("lizzie.humansl.model.url", "http://127.0.0.1:" + server.getAddress().getPort() + "/model");
+      for (boolean selected : new boolean[] {true, false}) {
+        onEdt(() -> {
+          if (selected) KataGoAutoSetupHelper.rememberHumanSlModel(custom);
+          else Lizzie.config.uiConfig.remove("katago-human-sl-model-path");
+        });
+        String before = onEdtValue(() -> Lizzie.config.uiConfig.optString("katago-human-sl-model-path", ""));
+        for (int answer : new int[] {JOptionPane.NO_OPTION, JOptionPane.CLOSED_OPTION}) {
+          var pending = new Pending(new AtomicBoolean(), new AtomicReference<>());
+          SwingUtilities.invokeLater(() -> {
+            pending.result().set(HumanSlStrengthDialog.prepare(Lizzie.frame));
+            pending.returned().set(true);
+          });
+          awaitEdt(() -> confirmationDialog() != null);
+          onEdt(() -> answerConsent(answer));
+          awaitEdt(pending.returned()::get);
+          assertNull(pending.result().get());
+          assertEquals(before, onEdtValue(() -> Lizzie.config.uiConfig.optString("katago-human-sl-model-path", "")));
+          assertEquals(0, requests.get());
+          assertFalse(Files.exists(work.resolve("human-sl-models")));
+          onEdt(() -> { assertNull(progressDialog()); assertNull(errorDialog()); });
+        }
+      }
+    } finally {
+      server.stop(0);
+    }
+    return "declined-cases=4";
+  }
+
+  private static String acquisitionFailure(Path work) throws Exception {
+    configureEngine(work);
+    Path custom = Files.write(work.resolve("custom-human.bin.gz"), new byte[2 * 1024 * 1024]);
+    onEdt(() -> KataGoAutoSetupHelper.rememberHumanSlModel(custom));
+    byte[] official = new byte[32768];
+    java.util.Arrays.fill(official, (byte) 7);
+    System.setProperty("lizzie.humansl.model.sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(official)));
+    System.setProperty("lizzie.humansl.model.size", Integer.toString(official.length));
+    Path target = work.resolve("human-sl-models").resolve(KataGoAutoSetupHelper.HUMAN_SL_MODEL_FILE_NAME);
+    for (String outcome : List.of("http", "checksum", "cancel")) {
+      CountDownLatch responseStarted = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      CountDownLatch responseFinished = new CountDownLatch(1);
+      HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+      server.createContext("/model", exchange -> {
+        try {
+          if (outcome.equals("http")) {
+            exchange.sendResponseHeaders(500, -1);
+          } else {
+            exchange.sendResponseHeaders(200, official.length);
+            try (var body = exchange.getResponseBody()) {
+              if (outcome.equals("cancel")) {
+                body.write(official, 0, 1024);
+                body.flush();
+                responseStarted.countDown();
+                if (!release.await(5, TimeUnit.SECONDS)) throw new AssertionError("Download response was not released");
+                body.write(official, 1024, official.length - 1024);
+              } else body.write(new byte[official.length]);
+            }
+          }
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+        } catch (java.io.IOException disconnected) {
+          if (!outcome.equals("cancel")) throw disconnected;
+        } finally {
+          exchange.close();
+          responseFinished.countDown();
+        }
+      });
+      server.start();
+      try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
+        System.setProperty("lizzie.humansl.model.url", "http://127.0.0.1:" + server.getAddress().getPort() + "/model");
+        var pending = beginManual(manual, HumanSlStrengthPreparation::discoverAssets);
+        var dialog = onEdtValue(HumanSlStrengthDialogTest::progressDialog);
+        awaitEdt(() -> confirmationDialog() != null);
+        onEdt(() -> answerConsent(JOptionPane.YES_OPTION));
+        if (outcome.equals("cancel")) {
+          assertTrue(responseStarted.await(5, TimeUnit.SECONDS));
+          // Close must return even while the server keeps the download body open.
+          onEdt(() -> progressDialog().dispose());
+          awaitEdt(pending.returned()::get);
+          release.countDown();
+        } else {
+          awaitEdt(() -> errorDialog() != null);
+          onEdt(() -> errorDialog().dispose());
+          awaitEdt(pending.returned()::get);
+        }
+        assertTrue(responseFinished.await(5, TimeUnit.SECONDS));
+        dialog.completion().get(5, TimeUnit.SECONDS);
+        awaitEdt(() -> !Files.exists(target.resolveSibling(target.getFileName() + ".part")));
+        assertFalse(Files.exists(target));
+        assertNull(pending.result().get());
+        assertFalse(manual.preparation().hasWork());
+        assertEquals(custom.toString(), onEdtValue(() -> Lizzie.config.uiConfig.getString("katago-human-sl-model-path")));
+        assertArrayEquals(new byte[2 * 1024 * 1024], Files.readAllBytes(custom));
+        onEdt(() -> { assertNull(progressDialog()); assertNull(confirmationDialog()); assertNull(errorDialog()); });
+      } finally {
+        release.countDown();
+        server.stop(0);
+      }
+    }
+    return "failed-or-cancelled=3";
+  }
+
   private static String manualGameChange(Path work, Path result) throws Exception {
     try (var manual = new HumanSlStrengthGuiFixture.Manual()) {
       var pending = beginManual(work, manual);
@@ -331,14 +534,17 @@ public final class HumanSlStrengthDialogTest {
 
   private static Pending beginManual(Path work, HumanSlStrengthGuiFixture.Manual manual) throws Exception {
     Path installed = Files.writeString(work.resolve("controlled-human-model"), "controlled worker; no engine inference");
-    return beginManual(manual, installed);
+    Path engine = configureEngine(work);
+    return beginManual(manual, () -> new HumanSlStrengthPreparation.Assets(engine, installed));
   }
 
-  private static Pending beginManual(HumanSlStrengthGuiFixture.Manual manual, Path installed) throws Exception {
+  private static Pending beginManual(
+      HumanSlStrengthGuiFixture.Manual manual,
+      Supplier<HumanSlStrengthPreparation.Assets> discoverAssets) throws Exception {
     var captured = onEdtValue(HumanSlStrengthReuseSession::preparationSnapshot);
     var pending = new Pending(new AtomicBoolean(), new AtomicReference<>());
     SwingUtilities.invokeLater(() -> {
-      pending.result().set(HumanSlStrengthDialog.prepare(Lizzie.frame, captured, installed, manual.preparation()));
+      pending.result().set(HumanSlStrengthDialog.prepare(Lizzie.frame, captured, discoverAssets, manual.preparation()));
       pending.returned().set(true);
     });
     awaitEdt(() -> progressDialog() != null);
@@ -369,8 +575,31 @@ public final class HumanSlStrengthDialogTest {
   private static JDialog errorDialog() {
     for (Window window : Window.getWindows())
       if (window instanceof JDialog dialog && dialog.isVisible()
-          && dialog.getOwner() instanceof HumanSlStrengthDialog) return dialog;
+          && dialog.getOwner() instanceof HumanSlStrengthDialog
+          && find(dialog, JOptionPane.class, pane -> pane.getMessageType() == JOptionPane.ERROR_MESSAGE) != null) return dialog;
     return null;
+  }
+
+  private static JDialog confirmationDialog() {
+    for (Window window : Window.getWindows())
+      if (window instanceof JDialog dialog && dialog.isVisible()
+          && dialog.getOwner() instanceof HumanSlStrengthDialog
+          && find(dialog, JOptionPane.class, pane -> pane.getOptionType() == JOptionPane.YES_NO_OPTION) != null) return dialog;
+    return null;
+  }
+
+  private static void answerConsent(int answer) {
+    JDialog prompt = confirmationDialog();
+    assertNotNull(prompt);
+    if (answer == JOptionPane.CLOSED_OPTION)
+      prompt.dispatchEvent(new WindowEvent(prompt, WindowEvent.WINDOW_CLOSING));
+    else find(prompt, JOptionPane.class, pane -> true).setValue(answer);
+  }
+
+  private static Path configureEngine(Path work) throws Exception {
+    Path engine = Files.writeString(work.resolve("katago"), "controlled fixture; no engine inference");
+    onEdt(() -> Lizzie.config.analysisEngineCommand = "\"" + engine + "\"");
+    return engine;
   }
 
   private static <T> T find(Component root, Class<T> type, java.util.function.Predicate<T> predicate) {

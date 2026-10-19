@@ -64,6 +64,9 @@ DESKTOP_REQUIRED_TESTS = (
             "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
             "explicitSupplementReturnsFrozenAnalysisResult",
             "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
+            "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
+            "decliningOrClosingDownloadConsentPreservesHumanSelection",
+            "downloadFailureAndCancellationPreserveHumanSelection",
             "cancelEscapeAndCloseRetireLateManualCompletion",
             "changedGameRejectsLateManualResult",
         )
