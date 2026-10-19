@@ -146,7 +146,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,HumanSlStrengthDialogTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -180,6 +180,15 @@ class RunLocalCiTest(unittest.TestCase):
                     ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
                      f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]")
                     for invocation in range(1, 5)
+                ),
+                *tuple(
+                    ("featurecat.lizzie.gui.HumanSlStrengthDialogTest", method)
+                    for method in (
+                        "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
+                        "explicitSupplementReturnsFrozenAnalysisResult",
+                        "cancelEscapeAndCloseRetireLateManualCompletion",
+                        "changedGameRejectsLateManualResult",
+                    )
                 ),
                 ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
                 ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),

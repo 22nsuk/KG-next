@@ -1448,6 +1448,8 @@ public class Lizzie {
       return;
     }
     logShutdownRequested();
+    java.util.concurrent.CompletableFuture<Void> strengthShutdown =
+        frame.shutdownHumanSlPreparation();
     try {
       if (config.autoSaveOnExit) frame.saveAutoGame(1);
     } catch (Exception e) {
@@ -1521,9 +1523,11 @@ public class Lizzie {
       }
     }
     if (engineManager == null) {
-      shutdownLoggingThenExit(exit);
+      strengthShutdown.thenRun(() -> shutdownLoggingThenExit(exit));
     } else {
-      engineManager.cancelBenchmarks().thenRun(() -> shutdownLoggingThenExit(exit));
+      java.util.concurrent.CompletableFuture.allOf(
+              strengthShutdown, engineManager.cancelBenchmarks())
+          .thenRun(() -> shutdownLoggingThenExit(exit));
     }
   }
 

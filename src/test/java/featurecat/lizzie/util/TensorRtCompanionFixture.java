@@ -113,6 +113,13 @@ public final class TensorRtCompanionFixture {
     Files.writeString(engineDir.resolve(ENGINE_MANIFEST), text);
   }
 
+  /** Installs a valid companion update without changing the TensorRT executable. */
+  public void updateHumanSlCompanion(String contents) throws IOException {
+    Files.writeString(companion, contents);
+    KataGoRuntimeHelper.setHumanSlCompanionSha256ForTests(sha256(companion));
+    writeManifest(true);
+  }
+
   /** The AI Coach analysis command for this TensorRT engine, with every path quoted. */
   public String humanSlCommand(Path humanModel) {
     return quote(tensorRtEngine)

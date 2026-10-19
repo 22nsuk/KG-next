@@ -13,6 +13,7 @@ import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -27,6 +28,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,10 +38,72 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 class HumanSlAnalysisRunnerTest {
   private static final int BOARD_SIZE = 3;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
+
+  @TempDir Path launchDirectory;
+
+  @Test
+  void bundledPolicySupplementPreservesFourSingleThreadedPositions() throws Exception {
+    Properties effective =
+        bundledPolicyConfiguration(HumanSlAnalysisRunner.LaunchProfile.POLICY_SUPPLEMENT);
+    assertEquals("4", effective.getProperty("numAnalysisThreads"));
+    assertEquals("1", effective.getProperty("numSearchThreadsPerAnalysisThread"));
+    assertEquals("32", effective.getProperty("nnMaxBatchSize"));
+  }
+
+  @Test
+  void bundledDefaultStillUsesSingleEightThreadedPosition() throws Exception {
+    Properties effective = bundledPolicyConfiguration(null);
+    assertEquals("1", effective.getProperty("numAnalysisThreads"));
+    assertEquals("8", effective.getProperty("numSearchThreadsPerAnalysisThread"));
+    assertEquals("8", effective.getProperty("nnMaxBatchSize"));
+  }
+
+  private Properties bundledPolicyConfiguration(HumanSlAnalysisRunner.LaunchProfile profile)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = ConfigTestHelper.createForTests(launchDirectory);
+      Path engine = launchDirectory.resolve("engines/katago/linux-x64-eigen/katago");
+      Files.createDirectories(engine.getParent());
+      Files.write(engine, new byte[0]);
+      Path human = launchDirectory.resolve("human.bin.gz");
+      String command = HumanSlStrengthReuseSession.policyCommand(engine, human, launchDirectory);
+      List<String> parts = HumanSlAnalysisRunner.buildHumanSlCommand(command, human);
+      java.util.concurrent.atomic.AtomicReference<List<String>> launched =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      HumanSlAnalysisRunner.ProcessStarter starter =
+          builder -> {
+            launched.set(List.copyOf(builder.command()));
+            throw new IOException("controlled launch stop");
+          };
+      try (HumanSlAnalysisRunner runner =
+          profile == null
+              ? new HumanSlAnalysisRunner(parts, starter)
+              : new HumanSlAnalysisRunner(parts, starter, profile)) {
+        assertFalse(runner.start());
+        assertTrue(launched.get() != null, runner.getUnavailableReason());
+      }
+      List<String> launch = launched.get();
+      Properties effective = new Properties();
+      try (var reader =
+          Files.newBufferedReader(Path.of(launch.get(launch.indexOf("-config") + 1)))) {
+        effective.load(reader);
+      }
+      effective.putAll(KataGoCommandSpec.parse(launch).effectiveOverrides());
+      assertTrue(effective.containsKey("homeDataDir"), "Bundled runtime setup must be retained");
+      assertEquals("", effective.getProperty("numSearchThreads"));
+      assertEquals("20", effective.getProperty("nnCacheSizePowerOfTwo"));
+      assertTrue(effective.getProperty("logDir").endsWith("engine-logs"));
+      assertEquals(engine.toAbsolutePath().toString(), launch.get(0));
+      assertEquals(
+          human.toAbsolutePath().toString(), launch.get(launch.indexOf("-human-model") + 1));
+      return effective;
+    }
+  }
 
   @Test
   void closeWaitsUntilTheCompanionProcessHasActuallyExited() throws Exception {
