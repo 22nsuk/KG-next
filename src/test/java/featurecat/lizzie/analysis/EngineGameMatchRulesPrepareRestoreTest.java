@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -16,6 +17,7 @@ import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameParsedStart;
 import featurecat.lizzie.enginegame.EngineGamePresentation;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.enginegame.EngineGameTransaction;
 import featurecat.lizzie.enginegame.GameActivity;
 import featurecat.lizzie.enginegame.GameOutcome;
 import featurecat.lizzie.enginegame.MatchRulesSnapshot;
@@ -301,19 +303,36 @@ class EngineGameMatchRulesPrepareRestoreTest {
                 .build());
     assertInstanceOf(Acceptance.Accepted.class, Lizzie.engineGame.accept(spec, observer));
     awaitPlaying();
+    EngineGameTransaction firstGame = Lizzie.engineGame.transaction();
+    EngineManager.EngineGameOwnerTransaction firstOwner =
+        (EngineManager.EngineGameOwnerTransaction) firstGame.lifecycle().ownerToken();
     Path outputRoot = Path.of("EngineGames");
     boolean outputRootExisted = Files.exists(outputRoot);
     Path batchOutput = outputRoot.resolve(Lizzie.engineGame.outputBatchName());
     assertFalse(Files.exists(batchOutput), "test must not claim existing game output");
     try {
       assertEquals(1, prompts.get());
-      Lizzie.engineGame.complete(
-          new GameOutcome.DoublePass(),
-          Lizzie.engineGame.transaction().lifecycle().ownerToken(),
-          0);
-      assertTrue(Lizzie.engineGame.onOwnerRetired());
-      awaitPlaying();
+      assertTrue(Lizzie.engineGame.complete(new GameOutcome.DoublePass(), firstOwner, 0));
+      // Saving and retirement own successor admission. A manual retirement callback can race
+      // the pending-save gate and must not bypass the real finalization path.
+      awaitPlayingAfter(firstGame);
+      SwingUtilities.invokeAndWait(() -> {});
+      EngineGameTransaction secondGame = Lizzie.engineGame.transaction();
+      assertNotSame(firstGame, secondGame);
+      assertEquals(1, firstGame.plan().gameOrdinal());
+      assertEquals(2, secondGame.plan().gameOrdinal());
+      assertEquals(firstGame.plan().whiteIndex(), secondGame.plan().blackIndex());
+      assertEquals(firstGame.plan().blackIndex(), secondGame.plan().whiteIndex());
+      assertTrue(firstOwner.retirementFinishedForTest());
+      assertFalse(manager.hasPendingEngineGameSave());
+      assertTrue(black.searches.get() > 0);
+      assertTrue(white.searches.get() > 0);
       assertEquals(1, prompts.get());
+      try (var files = Files.list(batchOutput)) {
+        List<Path> outputs = files.toList();
+        assertEquals(1, outputs.stream().filter(path -> path.toString().endsWith(".sgf")).count());
+        assertEquals(1, outputs.stream().filter(path -> path.toString().endsWith(".txt")).count());
+      }
       Lizzie.engineGame.stop();
       awaitRestored();
     } finally {
@@ -377,10 +396,15 @@ class EngineGameMatchRulesPrepareRestoreTest {
   }
 
   private void awaitPlaying() {
+    awaitPlayingAfter(null);
+  }
+
+  private void awaitPlayingAfter(EngineGameTransaction previousGame) {
     long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
     while (System.nanoTime() < deadline) {
       if (Lizzie.engineGame.current() instanceof EngineGameSnapshot.BatchActive active
-          && active.activity() instanceof GameActivity.Playing) {
+          && active.activity() instanceof GameActivity.Playing
+          && (previousGame == null || Lizzie.engineGame.transaction() != previousGame)) {
         return;
       }
       if (!observer.failures.isEmpty()) {
@@ -443,7 +467,8 @@ class EngineGameMatchRulesPrepareRestoreTest {
     private final List<Thread> startupWorkers = new CopyOnWriteArrayList<>();
 
     private void awaitStartupWorkers() throws InterruptedException {
-      for (Thread worker : startupWorkers) {
+      for (int index = 0; index < startupWorkers.size(); index++) {
+        Thread worker = startupWorkers.get(index);
         worker.join(TimeUnit.SECONDS.toMillis(8));
         assertFalse(worker.isAlive(), () -> "startup worker did not finish: " + worker.getName());
       }
@@ -478,12 +503,9 @@ class EngineGameMatchRulesPrepareRestoreTest {
 
     @Override
     protected Thread createEngineGameRetirementContinuationWorker(Runnable task, String name) {
-      return new Thread(task, name) {
-        @Override
-        public synchronized void start() {
-          // Tests drive onOwnerRetired explicitly after restore.
-        }
-      };
+      Thread worker = super.createEngineGameRetirementContinuationWorker(task, name);
+      startupWorkers.add(worker);
+      return worker;
     }
   }
 
