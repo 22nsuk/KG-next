@@ -10297,18 +10297,36 @@ public class Menu extends JMenuBar {
     SwingUtilities.invokeLater(this::applyDoubleMenuGameStatus);
   }
 
+  private void resizeGamePauseButton() {
+    Insets insets = doubleMenuPauseGame.getInsets();
+    int width =
+        doubleMenuPauseGame.getFontMetrics(doubleMenuPauseGame.getFont())
+                .stringWidth(doubleMenuPauseGame.getText())
+            + insets.left
+            + insets.right;
+    Dimension size = doubleMenuPauseGame.getPreferredSize();
+    if (size.width == width) return;
+    doubleMenuPauseGame.setPreferredSize(new Dimension(width, size.height));
+    if (Lizzie.frame.topPanel != null) {
+      Lizzie.frame.topPanel.revalidate();
+      Lizzie.frame.reSetLoc();
+    }
+  }
+
   private void applyDoubleMenuGameStatus() {
             EngineGameSnapshot snapshot = EngineGamePresentation.current();
             if (!Lizzie.frame.isAnaPlayingAgainstLeelaz
                 && !Lizzie.frame.isPlayingAgainstLeelaz
-                && !snapshot.playing()) doubleMenuPauseGame.setEnabled(false);
+                && !snapshot.playing()
+                && !snapshot.saveFailed()) doubleMenuPauseGame.setEnabled(false);
             else {
               doubleMenuPauseGame.setEnabled(true);
             }
-            if ((Lizzie.frame.isAnaPlayingAgainstLeelaz
-                    || Lizzie.frame.isPlayingAgainstLeelaz
-                    || snapshot.playing())
-                && Lizzie.leelaz.isLoaded()) {
+            if (!(snapshot instanceof EngineGameSnapshot.Idle)
+                || ((Lizzie.frame.isAnaPlayingAgainstLeelaz
+                        || Lizzie.frame.isPlayingAgainstLeelaz)
+                    && Lizzie.leelaz != null
+                    && Lizzie.leelaz.isLoaded())) {
               if (Lizzie.config.showDoubleMenu) {
                 doubleMenuStopGame.setVisible(true);
                 doubleMenuNewGame.setVisible(false);
@@ -10327,13 +10345,20 @@ public class Menu extends JMenuBar {
                 doubleMenuPauseGame.setText(resourceBundle.getString("Menu.continueGameBtn"));
               else doubleMenuPauseGame.setText(resourceBundle.getString("Menu.pauseGameBtn"));
             } else doubleMenuResign.setVisible(false);
-            if (snapshot.playing()) {
+            if (snapshot.saveFailed()) {
+              doubleMenuPauseGame.setText(resourceBundle.getString("EngineGameInfo.retrySave"));
+              engineMenu.setIcon(ready2);
+            } else if (snapshot.playing()) {
               if (snapshot.paused())
                 doubleMenuPauseGame.setText(resourceBundle.getString("Menu.continueGameBtn"));
               else doubleMenuPauseGame.setText(resourceBundle.getString("Menu.pauseGameBtn"));
               if (snapshot.paused()) engineMenu.setIcon(ready2);
               else engineMenu.setIcon(Playing2);
+            } else if (!Lizzie.frame.isAnaPlayingAgainstLeelaz
+                && !Lizzie.frame.isPlayingAgainstLeelaz) {
+              doubleMenuPauseGame.setText(resourceBundle.getString("Menu.pauseGameBtn"));
             }
+    resizeGamePauseButton();
   }
 
   public void refreshDoubleMoveInfoStatus() {

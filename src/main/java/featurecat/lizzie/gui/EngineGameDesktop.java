@@ -30,6 +30,10 @@ public final class EngineGameDesktop {
 
   static void togglePause(EngineGameControl control) {
     EngineGameSnapshot snapshot = Lizzie.engineGame.current();
+    if (snapshot.saveFailed()) {
+      control.retrySave();
+      return;
+    }
     if (!(snapshot instanceof EngineGameSnapshot.BatchActive active)
         || !(active.activity() instanceof GameActivity.Playing playing)) {
       return;

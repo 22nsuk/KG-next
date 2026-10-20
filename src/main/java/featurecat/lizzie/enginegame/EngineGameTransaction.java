@@ -1,12 +1,22 @@
 package featurecat.lizzie.enginegame;
 
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardHistoryList;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Authoritative product identity for one engine-game transaction. */
 public final class EngineGameTransaction {
+  public record CompletedPosition(Board board, BoardHistoryList history, long revision) {
+    public CompletedPosition {
+      board = Objects.requireNonNull(board, "board");
+      history = Objects.requireNonNull(history, "history");
+    }
+  }
+
   private final EngineGamePlan plan;
   private final AtomicBoolean completed = new AtomicBoolean();
+  private volatile CompletedPosition completedPosition;
   private volatile LifecycleBinding lifecycle;
   private volatile ParticipantBinding blackBinding;
   private volatile ParticipantBinding whiteBinding;
@@ -20,6 +30,15 @@ public final class EngineGameTransaction {
 
   public EngineGamePlan plan() {
     return plan;
+  }
+
+  public CompletedPosition completedPosition() {
+    return completedPosition;
+  }
+
+  /** Called only by the successful completion claimant while holding the module lock. */
+  void captureCompletedPosition(Board board, BoardHistoryList history, long revision) {
+    completedPosition = new CompletedPosition(board, history, revision);
   }
 
   public LifecycleBinding lifecycle() {

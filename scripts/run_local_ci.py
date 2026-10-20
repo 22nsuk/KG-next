@@ -27,6 +27,7 @@ JAVA_REQUIRED_TESTS = (
 )
 DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.SavedGameLoadDesktopTest", "failedSavedListOpensPreserveCurrentGameAndAllowRetry"),
+    ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
     ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
     *tuple(
         ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest", method)
@@ -652,7 +653,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest",
+                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest",
                     "test",
                 ),
                 group="desktop",

@@ -238,6 +238,7 @@ public class BottomToolbar extends JPanel {
   JButton start;
   JPanel autoPlayPanel;
   JPanel enginePkPanel;
+  private int engineGameSettingsStart = 110;
   private Thread threadAnalyzeAllNode;
   private Thread threadAnalyzeDiffNode;
   private boolean autoAnalysisStartPending;
@@ -693,7 +694,9 @@ public class BottomToolbar extends JPanel {
 
     List<DetailPanelSlot> slots = new ArrayList<>();
     slots.add(new DetailPanelSlot(anaPanel, 400, anaPanelOrder));
-    slots.add(new DetailPanelSlot(enginePkPanel, 600, enginePkOrder));
+    slots.add(
+        new DetailPanelSlot(
+            enginePkPanel, Math.max(600, enginePkPanel.getPreferredSize().width), enginePkOrder));
     slots.add(new DetailPanelSlot(autoPlayPanel, 495, autoPlayOrder));
     slots.sort((a, b) -> Integer.compare(a.order, b.order));
 
@@ -4130,7 +4133,7 @@ public class BottomToolbar extends JPanel {
   public void enableDisabelForEngineGame(boolean enable) {
     if (!enable) btnStartPk.setText(text("BottomToolbar.detail.stop", "终止"));
     else btnStartPk.setText(text("BottomToolbar.detail.start", "开始"));
-    btnEnginePkStop.setText(text("BottomToolbar.detail.pause", "暂停"));
+    setEngineGamePauseText(text("BottomToolbar.detail.pause", "暂停"));
     txtenginePkTime.setEnabled(enable);
     txtenginePkTimeWhite.setEnabled(enable);
     txtenginePkPlayputsWhite.setEnabled(enable);
@@ -4154,6 +4157,56 @@ public class BottomToolbar extends JPanel {
     txtenginePkTimeWhite.setEnabled(enable);
 
     setGenmove();
+  }
+
+  public void setEngineGamePauseText(String value) {
+    btnEnginePkStop.setText(value);
+    if (enginePkPanel == null) return;
+    int x = 8;
+    boolean changed = false;
+    for (JButton button : List.of(btnStartPk, btnEnginePkConfig, btnEnginePkStop)) {
+      Insets insets = button.getInsets();
+      int width =
+          Math.max(
+              35,
+              button.getFontMetrics(button.getFont()).stringWidth(button.getText())
+                  + insets.left
+                  + insets.right);
+      if (button.getX() != x || button.getWidth() != width) {
+        button.setBounds(x, 22, width, 20);
+        changed = true;
+      }
+      x += width + 2;
+    }
+    changed |= moveEngineGameSettingsTo(x);
+    int width = 600;
+    for (Component component : enginePkPanel.getComponents()) {
+      width = Math.max(width, component.getX() + component.getWidth() + 2);
+    }
+    Dimension preferred = new Dimension(width, DETAIL_PANEL_HEIGHT);
+    if (!preferred.equals(enginePkPanel.getPreferredSize())) {
+      enginePkPanel.setPreferredSize(preferred);
+      changed = true;
+    }
+    if (changed && Lizzie.frame != null) Lizzie.frame.reSetLoc();
+  }
+
+  private boolean moveEngineGameSettingsTo(int x) {
+    int previousX = engineGameSettingsStart;
+    int shift = x - previousX;
+    if (shift == 0) return false;
+    // The detail row uses absolute positions. Move its settings together when action labels grow.
+    for (Component component : enginePkPanel.getComponents()) {
+      if (component != btnStartPk
+          && component != btnEnginePkConfig
+          && component != btnEnginePkStop
+          && component.getY() >= 22
+          && component.getX() >= previousX) {
+        component.setLocation(component.getX() + shift, component.getY());
+      }
+    }
+    engineGameSettingsStart = x;
+    return true;
   }
 
   public boolean startEngineGame() {
@@ -4576,6 +4629,7 @@ public class BottomToolbar extends JPanel {
   //  }
 
   public void resetEnginePk() {
+    moveEngineGameSettingsTo(110);
     enginePkPanel.add(chkenginePkPlayouts);
     enginePkPanel.add(txtenginePkPlayputs);
     txtenginePkPlayputs.setBounds(445, 2, 50, 18);
@@ -4615,6 +4669,7 @@ public class BottomToolbar extends JPanel {
 
     chkenginePkContinue.setBounds(545, 23, 20, 18);
     enginePkPanel.add(chkenginePkContinue);
+    setEngineGamePauseText(btnEnginePkStop.getText());
   }
 
   private void setButtonVisiable() {

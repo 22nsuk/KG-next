@@ -16,6 +16,7 @@ public record EngineGameChromeTransition(Kind kind, EngineGameSnapshot snapshot)
     RESUMED,
     KOMI_CHANGED,
     BETWEEN_GAMES,
+    SAVE_FAILED,
     START_FAILED,
     USER_STOPPED,
     BATCH_ENDED,

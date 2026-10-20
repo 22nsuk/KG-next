@@ -17,4 +17,10 @@ public sealed interface GameActivity {
   }
 
   record BetweenGames() implements GameActivity {}
+
+  record SaveFailed(EngineGameView view) implements GameActivity {
+    public SaveFailed {
+      view = Objects.requireNonNull(view, "view");
+    }
+  }
 }

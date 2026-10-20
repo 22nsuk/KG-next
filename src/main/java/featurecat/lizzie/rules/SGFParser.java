@@ -407,9 +407,13 @@ public class SGFParser {
   }
 
   public static int[] convertSgfPosToCoord(String pos) {
+    return convertSgfPosToCoord(pos, Board.boardWidth, Board.boardHeight);
+  }
+
+  private static int[] convertSgfPosToCoord(String pos, int boardWidth, int boardHeight) {
     if (pos.length() < 2) return null;
     if (isPassPos(pos)) return null;
-    if (Board.boardHeight >= 52 || Board.boardWidth >= 52) {
+    if (boardHeight >= 52 || boardWidth >= 52) {
       String[] params = pos.trim().split("_");
       if (params.length == 2) {
         try {
@@ -1097,6 +1101,104 @@ public class SGFParser {
     return isEngineGameHistory(Lizzie.board);
   }
 
+  private static boolean isCurrentSaveHistory(Board board, BoardHistoryList history) {
+    return board != null && board == Lizzie.board && board.getHistory() == history;
+  }
+
+  /** Serialization decisions belong to the captured history, not to a newly opened game. */
+  private record SaveContext(
+      Board board,
+      BoardHistoryList sourceHistory,
+      boolean engineGameHistory,
+      boolean pkBoard,
+      boolean gameBoard,
+      boolean blackToPlay,
+      double komi,
+      String dataType,
+      int boardWidth,
+      int boardHeight) {
+    static SaveContext current() {
+      Board board = Lizzie.board;
+      BoardHistoryList history = board.getHistory();
+      return capture(board, history, history);
+    }
+
+    static SaveContext capture(
+        Board board, BoardHistoryList sourceHistory, BoardHistoryList snapshot) {
+      boolean current = isCurrentSaveHistory(board, sourceHistory);
+      GameInfo info = snapshot.getGameInfo();
+      EngineGameRecordContext engineContext = engineGameContext(info);
+      boolean engineGame = info != null && info.hasEngineGameHistory();
+      String savedType = snapshot.getStart().getData().getProperty("DZ");
+      boolean pk =
+          current
+              ? board.isPkBoard
+              : "Y".equalsIgnoreCase(savedType)
+                  || "KB".equalsIgnoreCase(savedType)
+                  || "KW".equalsIgnoreCase(savedType);
+      String dataType;
+      if (engineGame || pk) {
+        EngineGameParticipantDescriptor white =
+            engineContext == null ? null : engineContext.white();
+        EngineGameParticipantDescriptor black =
+            engineContext == null ? null : engineContext.black();
+        boolean whiteKata =
+            engineContext != null
+                ? white != null && (white.katago() || white.sai())
+                : current ? board.isPkBoardKataW : "KW".equalsIgnoreCase(savedType);
+        boolean blackKata =
+            engineContext != null
+                ? black != null && (black.katago() || black.sai())
+                : current ? board.isPkBoardKataB : "KB".equalsIgnoreCase(savedType);
+        dataType = whiteKata ? "KW" : blackKata ? "KB" : "Y";
+      } else {
+        boolean kata =
+            current
+                ? (Lizzie.leelaz != null && Lizzie.leelaz.isKatago) || board.isKataBoard
+                : "G".equalsIgnoreCase(savedType);
+        dataType = kata ? "G" : "";
+      }
+      int[] boardSize = resolveHistoryBoardSize(snapshot);
+      return new SaveContext(
+          board, sourceHistory, engineGame, pk, current && board.isGameBoard,
+          snapshot.isBlacksTurn(), info.getKomi(), dataType, boardSize[0], boardSize[1]);
+    }
+
+    SaveContext withBoardSize(int[] boardSize) {
+      return new SaveContext(
+          board, sourceHistory, engineGameHistory, pkBoard, gameBoard,
+          blackToPlay, komi, dataType, boardSize[0], boardSize[1]);
+    }
+
+    boolean ownsCurrentHistory() {
+      return isCurrentSaveHistory(board, sourceHistory);
+    }
+
+    double komiFor(BoardData data) {
+      return data.komi == -999 ? komi : data.komi;
+    }
+
+    String asCoord(int index) {
+      return asCoord(new int[] {index / boardHeight, index % boardHeight});
+    }
+
+    String asCoord(int[] coord) {
+      return SGFParser.asCoord(coord, boardWidth, boardHeight);
+    }
+
+    int[] parseCoord(String value) {
+      return convertSgfPosToCoord(value, boardWidth, boardHeight);
+    }
+
+    boolean isOnBoard(int[] coord) {
+      return coord[0] >= 0 && coord[0] < boardWidth && coord[1] >= 0 && coord[1] < boardHeight;
+    }
+
+    void clearLoadingAfterSerializationFailure() {
+      if (ownsCurrentHistory()) board.isLoadingFile = false;
+    }
+  }
+
   private static EngineGameRecordContext engineGameContext(GameInfo info) {
     if (info == null) {
       return null;
@@ -1110,21 +1212,26 @@ public class SGFParser {
     return info.engineGameRecordContext();
   }
 
-  private static void maybeCaptureEngineGameSaveSnapshot(Board board) {
-    GameInfo info = gameInfoForSave(board);
+  private static void maybeCaptureEngineGameSaveSnapshot(
+      Board board, BoardHistoryList sourceHistory) {
+    GameInfo info = sourceHistory.getGameInfo();
     if (info == null || info.engineGameRecord() != null || info.engineGameRecordContext() == null) {
       return;
     }
-    if (board == Lizzie.board && Lizzie.engineGame != null) {
+    if (isCurrentSaveHistory(board, sourceHistory) && Lizzie.engineGame != null) {
       Lizzie.engineGame.captureSaveSnapshot();
     }
   }
 
   public static void appendGameTimeAndPlayouts() {
-    if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
+    appendGameTimeAndPlayouts(Lizzie.board == null ? null : Lizzie.board.getHistory());
+  }
+
+  /** Appends completed-game totals to the supplied history, even after another game is opened. */
+  public static void appendGameTimeAndPlayouts(BoardHistoryList history) {
+    if (history == null) {
       return;
     }
-    BoardHistoryList history = Lizzie.board.getHistory();
     GameInfo info = history.getGameInfo();
     BoardHistoryNode node = history.getStart();
     long blackPlayouts;
@@ -1320,16 +1427,29 @@ public class SGFParser {
 
   public static void save(Board board, String filename, boolean isAutoSave) throws IOException {
     String snapshot;
-    try (StringWriter writer = new StringWriter()) {
-      // Automatic/temporary saves need the same detached tree as manual saves. Finish
-      // serialization before opening any file, so a failed capture cannot truncate the old SGF.
-      saveToStream(board, writer, false, isAutoSave, false, false, true);
-      snapshot = writer.toString();
+    try {
+      snapshot = captureSave(board, isAutoSave);
     } catch (IOException | RuntimeException failure) {
       SgfObservation.record("save", "failed", filename, failure);
       throw failure;
     }
     AtomicSgfFileWriter.write(Path.of(filename), snapshot);
+  }
+
+  /** Freezes an ordinary save so a failed file write can retry without rereading the live game. */
+  public static String captureSave(Board board, boolean isAutoSave) throws IOException {
+    return captureSave(board, board.getHistory(), isAutoSave);
+  }
+
+  /** Freezes the exact source history without installing it as the board's current history. */
+  public static String captureSave(
+      Board board, BoardHistoryList sourceHistory, boolean isAutoSave) throws IOException {
+    try (StringWriter writer = new StringWriter()) {
+      // Automatic/temporary saves need the same detached tree as manual saves. Finish
+      // serialization before opening any file, so a failed capture cannot truncate the old SGF.
+      saveToStream(board, sourceHistory, writer, false, isAutoSave, false, false, true);
+      return writer.toString();
+    }
   }
 
   private static void saveToStream(
@@ -1357,260 +1477,235 @@ public class SGFParser {
       boolean stripRootMetadata,
       boolean captureSnapshot)
       throws IOException {
-    maybeCaptureEngineGameSaveSnapshot(board);
-    BoardHistoryList sourceHistory = board.getHistory();
+    saveToStream(
+        board, board.getHistory(), writer, forUpload, fromAutoSave,
+        mainTrunkOnly, stripRootMetadata, captureSnapshot);
+  }
+
+  private static void saveToStream(
+      Board board,
+      BoardHistoryList sourceHistory,
+      Writer writer,
+      boolean forUpload,
+      boolean fromAutoSave,
+      boolean mainTrunkOnly,
+      boolean stripRootMetadata,
+      boolean captureSnapshot)
+      throws IOException {
+    maybeCaptureEngineGameSaveSnapshot(board, sourceHistory);
     if (captureSnapshot
         && !LizzieFrame.isSavingRaw
-        && sourceHistory.getGameInfo().hasEngineGameHistory()) {
+        && sourceHistory.getGameInfo().hasEngineGameHistory()
+        && sourceHistory.getGameInfo().engineGameRecord() == null
+        && isCurrentSaveHistory(board, sourceHistory)) {
       // Preserve save-time analysis comments before detaching; do not call back into the live
       // game while holding the structural monitor or after the payload has already been copied.
       board.updateWinrate();
     }
     BoardHistoryList history =
         captureSnapshot ? captureSaveHistory(sourceHistory) : sourceHistory.shallowCopy();
-    int[] historyBoardSize = resolveHistoryBoardSize(history);
-    int historyBoardWidth = historyBoardSize[0];
-    int historyBoardHeight = historyBoardSize[1];
-    String boardSizeTag = formatBoardSizeTag(historyBoardWidth, historyBoardHeight);
-    ParseBoardContext boardContext = captureParseBoardContext();
-    boolean switchedBoardContext =
-        boardContext.boardWidth != historyBoardWidth
-            || boardContext.boardHeight != historyBoardHeight;
-    try {
-      if (switchedBoardContext) {
-        applyParseBoardContext(historyBoardWidth, historyBoardHeight);
-      }
+    SaveContext saveContext = SaveContext.capture(board, sourceHistory, history);
+    String boardSizeTag = formatBoardSizeTag(saveContext.boardWidth(), saveContext.boardHeight());
 
-      // collect game info
-      GameInfo gameInfo = history.getGameInfo();
-      EngineGameRecordContext engineContext = engineGameContext(gameInfo);
-      boolean engineGameHistory = gameInfo != null && gameInfo.hasEngineGameHistory();
-      String playerB = gameInfo.getPlayerBlack();
-      String playerW = gameInfo.getPlayerWhite();
-      String result = gameInfo.getResult();
-      Double komi = gameInfo.getKomi();
-      Integer handicap = gameInfo.getHandicap();
-      String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
+    // collect game info
+    GameInfo gameInfo = history.getGameInfo();
+    EngineGameRecordContext engineContext = engineGameContext(gameInfo);
+    boolean engineGameHistory = gameInfo != null && gameInfo.hasEngineGameHistory();
+    String playerB = gameInfo.getPlayerBlack();
+    String playerW = gameInfo.getPlayerWhite();
+    String result = gameInfo.getResult();
+    Double komi = gameInfo.getKomi();
+    Integer handicap = gameInfo.getHandicap();
+    String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
 
-      // add SGF header
-      StringBuilder builder = new StringBuilder("(;");
-      StringBuilder generalProps = new StringBuilder("");
-      if (handicap != 0) generalProps.append(String.format(Locale.ENGLISH, "HA[%s]", handicap));
-      if (LizzieFrame.isSavingRaw) {
-        generalProps.append(
-            String.format(
-                "KM[%s]PW[%s]PB[%s]DT[%s]RE[%s]SZ[%s]CA[UTF-8]",
-                komi, playerW, playerB, date, result, boardSizeTag));
+    // add SGF header
+    StringBuilder builder = new StringBuilder("(;");
+    StringBuilder generalProps = new StringBuilder("");
+    if (handicap != 0) generalProps.append(String.format(Locale.ENGLISH, "HA[%s]", handicap));
+    if (LizzieFrame.isSavingRaw) {
+      generalProps.append(
+          String.format(
+              "KM[%s]PW[%s]PB[%s]DT[%s]RE[%s]SZ[%s]CA[UTF-8]",
+              komi, playerW, playerB, date, result, boardSizeTag));
+    } else {
+      if (engineGameHistory) {
+        if (!captureSnapshot && saveContext.ownsCurrentHistory()) board.updateWinrate();
+        appendTime(gameInfo, history);
+        appendMatchRulesComment(history, gameInfo, engineContext);
       } else {
-        if (engineGameHistory) {
-          if (!captureSnapshot) Lizzie.board.updateWinrate();
-          appendTime(gameInfo, history);
-          appendMatchRulesComment(history, gameInfo, engineContext);
-        } else {
-          if (Lizzie.leelaz != null && Lizzie.leelaz.isKatago && !fromAutoSave) {
-            String rules = rulesLabel(Lizzie.leelaz.rulesSummary);
-            if (!rules.isEmpty()) {
-              if (history.getStart().getData().comment.equals(""))
-                history.getStart().getData().comment +=
-                    Lizzie.resourceBundle.getString("SGFParse.rules") + rules;
-              else if (!history
-                  .getStart()
-                  .getData()
-                  .comment
-                  .contains(Lizzie.resourceBundle.getString("SGFParse.rules")))
-                history.getStart().getData().comment =
-                    Lizzie.resourceBundle.getString("SGFParse.rules")
-                        + rules
-                        + "\n\n"
-                        + history.getStart().getData().comment;
-              else {
-                String oldComment = history.getStart().getData().comment;
-                int leftIndex =
-                    oldComment.indexOf(
-                        "\n",
-                        oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")));
-                history.getStart().getData().comment =
-                    oldComment.substring(
-                            0,
-                            oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")))
-                        + Lizzie.resourceBundle.getString("SGFParse.rules")
-                        + rules
-                        + (leftIndex > 0 ? oldComment.substring(leftIndex) : "");
-              }
-            }
-          }
-        }
-
-        if (engineGameHistory || Lizzie.board.isPkBoard) {
-          EngineGameParticipantDescriptor white =
-              engineContext == null ? null : engineContext.white();
-          EngineGameParticipantDescriptor black =
-              engineContext == null ? null : engineContext.black();
-          if ((white != null && (white.katago() || white.sai())) || Lizzie.board.isPkBoardKataW)
-            generalProps.append(
-                String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KW]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                    komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
-          else if ((black != null && (black.katago() || black.sai()))
-              || Lizzie.board.isPkBoardKataB)
-            generalProps.append(
-                String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[KB]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                    komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
-          else
-            generalProps.append(
-                String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[Y]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                    komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
-        } else {
-          if ((Lizzie.leelaz != null && Lizzie.leelaz.isKatago) || Lizzie.board.isKataBoard)
-            generalProps.append(
-                String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]DZ[G]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                    komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
-          else
-            generalProps.append(
-                String.format(
-                    "KM[%s]PW[%s]PB[%s]DT[%s]AP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                    komi, playerW, playerB, date, Lizzie.nextVersion, result, boardSizeTag));
-        }
-      }
-      // To append the winrate to the comment of sgf we might need to update the
-      // Winrate
-      // if (Lizzie.config.appendWinrateToComment) {
-      // Lizzie.board.updateWinrate();
-      // }
-
-      // move to the first move
-      Map<BoardHistoryNode, BoardHistoryNode> selectedBranch = new IdentityHashMap<>();
-      if (mainTrunkOnly) {
-        BoardHistoryNode selected = history.getCurrentHistoryNode();
-        while (selected.previous().isPresent()) {
-          BoardHistoryNode parent = selected.previous().get();
-          selectedBranch.put(parent, selected);
-          selected = parent;
-        }
-      }
-      history.toStart();
-
-      // Game properties
-      BoardData rootData = history.getData().clone();
-      rootData.addProperties(generalProps.toString());
-      if (gameInfo.getDate() == null) {
-        rootData.getProperties().remove("DT");
-      }
-      if (rootData.isSnapshotNode()) {
-        builder.append(materializedRootSnapshotProperties(rootData, history.getStones()));
-      } else {
-        builder.append(rootData.propertiesString());
-        if (handicap != 0) {
-          builder.append("AB");
-          Stone[] stones = history.getStones();
-          for (int i = 0; i < stones.length; i++) {
-            Stone stone = stones[i];
-            if (stone.isBlack()) {
-              // i = x * Board.BOARD_SIZE + y;
-              builder.append(String.format(Locale.ENGLISH, "[%s]", asCoord(i)));
-            }
-          }
-        } else {
-          // Process the AW/AB stone
-          Stone[] stones = history.getStones();
-          StringBuilder abStone = new StringBuilder();
-          StringBuilder awStone = new StringBuilder();
-          for (int i = 0; i < stones.length; i++) {
-            Stone stone = stones[i];
-            if (stone.isBlack() || stone.isWhite()) {
-              if (stone.isBlack()) {
-                abStone.append(String.format(Locale.ENGLISH, "[%s]", asCoord(i)));
-              } else {
-                awStone.append(String.format(Locale.ENGLISH, "[%s]", asCoord(i)));
-              }
-            }
-          }
-          if (abStone.length() > 0) {
-            builder.append("AB").append(abStone);
-          }
-          if (awStone.length() > 0) {
-            builder.append("AW").append(awStone);
-          }
-        }
-      }
-
-      // The AW/AB Comment
-      if (!stripRootMetadata && !history.getData().comment.isEmpty()) {
-        String coment = history.getData().comment;
-        if (forUpload) {
-          coment =
-              removeWinrateComment(
-                  history.getData().isKataData, history.getData().isSaiData, coment);
-        }
-        builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(coment)));
-      }
-      BoardHistoryNode curNode = history.getCurrentHistoryNode();
-      if (!stripRootMetadata) {
-        try {
-          if (hasPrimaryAnalysisPayload(curNode.getData()))
-            builder.append(String.format(Locale.ENGLISH, "LZOP[%s]", formatNodeData(curNode)));
-          if (hasSecondaryAnalysisPayload(curNode.getData()))
-            builder.append(String.format(Locale.ENGLISH, "LZOP2[%s]", formatNodeData2(curNode)));
-          if (!engineGameHistory && !Lizzie.board.isPkBoard) {
-            BoardData data = curNode.getData();
-            if (Lizzie.board.isGameBoard) {
-              if (data.getPlayouts() > 0 && curNode.next().isPresent())
-                curNode.next().get().getData().comment = formatCommentForGame(curNode);
-              else if (curNode.next().isPresent()) curNode.next().get().getData().comment = "";
-            }
-          }
-        } catch (Exception e) {
-          Lizzie.board.isLoadingFile = false;
-        }
-      }
-      // replay moves, and convert them to tags.
-      // * format: ";B[xy]" or ";W[xy]"
-      // * with 'xy' = coordinates ; or 'tt' for pass.
-
-      // Write variation tree
-      BoardHistoryNode makerBeg = new BoardHistoryNode(null);
-      BoardHistoryNode makerEnd = new BoardHistoryNode(null);
-      BoardHistoryNode rootNode = history.getStart();
-      Stack<BoardHistoryNode> stack = new Stack<>();
-      stack.push(curNode);
-      while (!stack.isEmpty()) {
-        BoardHistoryNode cur = stack.pop();
-        if (cur == makerBeg) {
-          builder.append("(");
-          continue;
-        }
-        if (cur == makerEnd) {
-          builder.append(")");
-          continue;
-        }
-        if (cur != rootNode) {
-          builder = generateNode(board, cur, forUpload, builder);
-        }
-        if (mainTrunkOnly) {
-          BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
-          if (next != null) stack.push(next);
-        } else {
-          boolean hasBrothers = (cur.numberOfChildren() > 1);
-          if (cur.numberOfChildren() >= 1) {
-            for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
-              if (hasBrothers) stack.push(makerEnd);
-              stack.push(cur.getVariations().get(i));
-              if (hasBrothers) stack.push(makerBeg);
+        if (saveContext.ownsCurrentHistory()
+            && Lizzie.leelaz != null && Lizzie.leelaz.isKatago && !fromAutoSave) {
+          String rules = rulesLabel(Lizzie.leelaz.rulesSummary);
+          if (!rules.isEmpty()) {
+            if (history.getStart().getData().comment.equals(""))
+              history.getStart().getData().comment +=
+                  Lizzie.resourceBundle.getString("SGFParse.rules") + rules;
+            else if (!history
+                .getStart()
+                .getData()
+                .comment
+                .contains(Lizzie.resourceBundle.getString("SGFParse.rules")))
+              history.getStart().getData().comment =
+                  Lizzie.resourceBundle.getString("SGFParse.rules")
+                      + rules
+                      + "\n\n"
+                      + history.getStart().getData().comment;
+            else {
+              String oldComment = history.getStart().getData().comment;
+              int leftIndex =
+                  oldComment.indexOf(
+                      "\n",
+                      oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")));
+              history.getStart().getData().comment =
+                  oldComment.substring(
+                          0,
+                          oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")))
+                      + Lizzie.resourceBundle.getString("SGFParse.rules")
+                      + rules
+                      + (leftIndex > 0 ? oldComment.substring(leftIndex) : "");
             }
           }
         }
       }
-      // close file
-      builder.append(')');
-      writer.append(builder.toString());
-    } finally {
-      if (switchedBoardContext) {
-        restoreParseBoardContext(boardContext);
+
+      generalProps.append(
+          String.format(
+              "KM[%s]PW[%s]PB[%s]DT[%s]%sAP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+              komi, playerW, playerB, date,
+              saveContext.dataType().isEmpty() ? "" : "DZ[" + saveContext.dataType() + "]",
+              Lizzie.nextVersion, result, boardSizeTag));
+    }
+    // To append the winrate to the comment of sgf we might need to update the
+    // Winrate
+    // if (Lizzie.config.appendWinrateToComment) {
+    // Lizzie.board.updateWinrate();
+    // }
+
+    // move to the first move
+    Map<BoardHistoryNode, BoardHistoryNode> selectedBranch = new IdentityHashMap<>();
+    if (mainTrunkOnly) {
+      BoardHistoryNode selected = history.getCurrentHistoryNode();
+      while (selected.previous().isPresent()) {
+        BoardHistoryNode parent = selected.previous().get();
+        selectedBranch.put(parent, selected);
+        selected = parent;
       }
     }
+    history.toStart();
+
+    // Game properties
+    BoardData rootData = history.getData().clone();
+    rootData.addProperties(generalProps.toString());
+    if (gameInfo.getDate() == null) {
+      rootData.getProperties().remove("DT");
+    }
+    if (rootData.isSnapshotNode()) {
+      builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
+    } else {
+      builder.append(rootData.propertiesString());
+      if (handicap != 0) {
+        builder.append("AB");
+        Stone[] stones = history.getStones();
+        for (int i = 0; i < stones.length; i++) {
+          Stone stone = stones[i];
+          if (stone.isBlack()) {
+            // i = x * Board.BOARD_SIZE + y;
+            builder.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+          }
+        }
+      } else {
+        // Process the AW/AB stone
+        Stone[] stones = history.getStones();
+        StringBuilder abStone = new StringBuilder();
+        StringBuilder awStone = new StringBuilder();
+        for (int i = 0; i < stones.length; i++) {
+          Stone stone = stones[i];
+          if (stone.isBlack() || stone.isWhite()) {
+            if (stone.isBlack()) {
+              abStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+            } else {
+              awStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+            }
+          }
+        }
+        if (abStone.length() > 0) {
+          builder.append("AB").append(abStone);
+        }
+        if (awStone.length() > 0) {
+          builder.append("AW").append(awStone);
+        }
+      }
+    }
+
+    // The AW/AB Comment
+    if (!stripRootMetadata && !history.getData().comment.isEmpty()) {
+      String coment = history.getData().comment;
+      if (forUpload) {
+        coment =
+            removeWinrateComment(
+                history.getData().isKataData, history.getData().isSaiData, coment);
+      }
+      builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(coment)));
+    }
+    BoardHistoryNode curNode = history.getCurrentHistoryNode();
+    if (!stripRootMetadata) {
+      try {
+        if (hasPrimaryAnalysisPayload(curNode.getData()))
+          builder.append(String.format(Locale.ENGLISH, "LZOP[%s]", formatNodeData(curNode)));
+        if (hasSecondaryAnalysisPayload(curNode.getData()))
+          builder.append(String.format(Locale.ENGLISH, "LZOP2[%s]", formatNodeData2(curNode)));
+        if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
+          BoardData data = curNode.getData();
+          if (saveContext.gameBoard()) {
+            if (data.getPlayouts() > 0 && curNode.next().isPresent())
+              curNode.next().get().getData().comment = formatCommentForGame(curNode, saveContext);
+            else if (curNode.next().isPresent()) curNode.next().get().getData().comment = "";
+          }
+        }
+      } catch (Exception e) {
+        saveContext.clearLoadingAfterSerializationFailure();
+      }
+    }
+    // replay moves, and convert them to tags.
+    // * format: ";B[xy]" or ";W[xy]"
+    // * with 'xy' = coordinates ; or 'tt' for pass.
+
+    // Write variation tree
+    BoardHistoryNode makerBeg = new BoardHistoryNode(null);
+    BoardHistoryNode makerEnd = new BoardHistoryNode(null);
+    BoardHistoryNode rootNode = history.getStart();
+    Stack<BoardHistoryNode> stack = new Stack<>();
+    stack.push(curNode);
+    while (!stack.isEmpty()) {
+      BoardHistoryNode cur = stack.pop();
+      if (cur == makerBeg) {
+        builder.append("(");
+        continue;
+      }
+      if (cur == makerEnd) {
+        builder.append(")");
+        continue;
+      }
+      if (cur != rootNode) {
+        builder = generateNode(saveContext, cur, forUpload, builder);
+      }
+      if (mainTrunkOnly) {
+        BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
+        if (next != null) stack.push(next);
+      } else {
+        boolean hasBrothers = (cur.numberOfChildren() > 1);
+        if (cur.numberOfChildren() >= 1) {
+          for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
+            if (hasBrothers) stack.push(makerEnd);
+            stack.push(cur.getVariations().get(i));
+            if (hasBrothers) stack.push(makerBeg);
+          }
+        }
+      }
+    }
+    // close file
+    builder.append(')');
+    writer.append(builder.toString());
   }
 
   /** Generate node with variations */
@@ -1700,24 +1795,29 @@ public class SGFParser {
   private static StringBuilder generateNode(
       Board board, BoardHistoryNode node, boolean forUpload, StringBuilder builder)
       throws IOException {
-    int[] nodeBoardSize = resolveNodeBoardSize(node);
-    ParseBoardContext boardContext = captureParseBoardContext();
-    boolean switchedBoardContext =
-        boardContext.boardWidth != nodeBoardSize[0] || boardContext.boardHeight != nodeBoardSize[1];
-    try {
-      if (switchedBoardContext) {
-        applyParseBoardContext(nodeBoardSize[0], nodeBoardSize[1]);
-      }
-      return generateNodeWithBoardContext(board, node, forUpload, builder);
-    } finally {
-      if (switchedBoardContext) {
-        restoreParseBoardContext(boardContext);
-      }
+    if (node == null) return builder;
+    Board sourceBoard = board == null ? Lizzie.board : board;
+    BoardHistoryList history = sourceBoard == null ? null : sourceBoard.getHistory();
+    int[] boardSize = resolveNodeBoardSize(node);
+    SaveContext saveContext;
+    if (history != null) {
+      saveContext = SaveContext.capture(sourceBoard, history, history).withBoardSize(boardSize);
+    } else {
+      // The legacy node exporter also accepts detached nodes without an installed live history.
+      BoardData data = node.getData();
+      saveContext =
+          new SaveContext(
+              sourceBoard, null, false,
+              sourceBoard != null && sourceBoard.isPkBoard,
+              sourceBoard != null && sourceBoard.isGameBoard,
+              data.blackToPlay, data.komi == -999 ? GameInfo.DEFAULT_KOMI : data.komi,
+              "", boardSize[0], boardSize[1]);
     }
+    return generateNode(saveContext, node, forUpload, builder);
   }
 
-  private static StringBuilder generateNodeWithBoardContext(
-      Board board, BoardHistoryNode node, boolean forUpload, StringBuilder builder)
+  private static StringBuilder generateNode(
+      SaveContext saveContext, BoardHistoryNode node, boolean forUpload, StringBuilder builder)
       throws IOException {
     if (node == null) {
       return builder;
@@ -1725,14 +1825,14 @@ public class SGFParser {
     BoardData data = node.getData();
     if (data.isSnapshotNode() && node.previous().isPresent()) {
       builder.append(";");
-      builder.append(materializedSetupProperties(node));
-      appendSerializedComment(builder, node, forUpload, true);
+      builder.append(materializedSetupProperties(node, saveContext));
+      appendSerializedComment(builder, node, forUpload, true, saveContext);
       return builder;
     }
     if (shouldSerializeSetupSnapshot(data)) {
       builder.append(";");
       builder.append(data.propertiesString());
-      appendSerializedComment(builder, node, forUpload, true);
+      appendSerializedComment(builder, node, forUpload, true, saveContext);
       return builder;
     }
     if (!data.isHistoryActionNode()) {
@@ -1749,7 +1849,7 @@ public class SGFParser {
       if (data.dummy) {
         builder.append("DD[true]");
       } else {
-        String sgfMove = data.isPassNode() ? passPos() : asCoord(data.lastMove.get());
+        String sgfMove = data.isPassNode() ? passPos() : saveContext.asCoord(data.lastMove.get());
         builder.append(String.format("%s[%s]", stone, sgfMove));
       }
 
@@ -1760,7 +1860,7 @@ public class SGFParser {
         builder.append(String.format(Locale.ENGLISH, "FIT[%s]", getMatchValue(node)));
       }
 
-      appendSerializedComment(builder, node, forUpload, true);
+      appendSerializedComment(builder, node, forUpload, true, saveContext);
     }
     return builder;
   }
@@ -1775,9 +1875,11 @@ public class SGFParser {
         || properties.containsKey("AE");
   }
 
-  private static String materializedRootSnapshotProperties(BoardData rootData, Stone[] stones) {
+  private static String materializedRootSnapshotProperties(
+      BoardData rootData, Stone[] stones, SaveContext saveContext) {
     Map<String, String> properties = new LinkedHashMap<String, String>();
-    Map<String, String> rootSetup = collectCurrentRootSetup(stones, rootData.blackToPlay);
+    Map<String, String> rootSetup =
+        collectCurrentRootSetup(stones, rootData.blackToPlay, saveContext);
     boolean setupInserted = false;
     for (Map.Entry<String, String> entry : rootData.getProperties().entrySet()) {
       String key = entry.getKey();
@@ -1796,14 +1898,15 @@ public class SGFParser {
     return propertiesString(properties);
   }
 
-  private static Map<String, String> collectCurrentRootSetup(Stone[] stones, boolean blackToPlay) {
+  private static Map<String, String> collectCurrentRootSetup(
+      Stone[] stones, boolean blackToPlay, SaveContext saveContext) {
     Map<String, String> setup = new LinkedHashMap<String, String>();
     for (int index = 0; index < stones.length; index++) {
       Stone stone = stones[index];
       if (stone.isBlack()) {
-        addSetupProperty(setup, "AB", asCoord(index));
+        addSetupProperty(setup, "AB", saveContext.asCoord(index));
       } else if (stone.isWhite()) {
-        addSetupProperty(setup, "AW", asCoord(index));
+        addSetupProperty(setup, "AW", saveContext.asCoord(index));
       }
     }
     addProperty(setup, "PL", blackToPlay ? "B" : "W");
@@ -1814,11 +1917,11 @@ public class SGFParser {
     return "AB".equals(key) || "AW".equals(key) || "AE".equals(key) || "PL".equals(key);
   }
 
-  private static String materializedSetupProperties(BoardHistoryNode node) {
+  private static String materializedSetupProperties(BoardHistoryNode node, SaveContext saveContext) {
     Map<String, String> properties = new LinkedHashMap<String, String>();
     BoardData data = node.getData();
     addProperty(properties, "PL", data.blackToPlay ? "B" : "W");
-    appendSetupStoneDelta(properties, node);
+    appendSetupStoneDelta(properties, node, saveContext);
     data.getProperties()
         .forEach(
             (key, value) -> {
@@ -1826,7 +1929,7 @@ public class SGFParser {
                 return;
               }
               if (isSetupStoneProperty(key)) {
-                addSemanticallyMatchingSetupValues(properties, node, key, value);
+                addSemanticallyMatchingSetupValues(properties, node, key, value, saveContext);
                 return;
               }
               addProperty(properties, key, value);
@@ -1834,7 +1937,8 @@ public class SGFParser {
     return propertiesString(properties);
   }
 
-  private static void appendSetupStoneDelta(Map<String, String> properties, BoardHistoryNode node) {
+  private static void appendSetupStoneDelta(
+      Map<String, String> properties, BoardHistoryNode node, SaveContext saveContext) {
     Stone[] currentStones = node.getData().stones;
     Stone[] previousStones = node.previous().get().getData().stones;
     for (int index = 0; index < currentStones.length; index++) {
@@ -1844,18 +1948,19 @@ public class SGFParser {
         continue;
       }
       if (!previousStone.isEmpty()) {
-        addSetupProperty(properties, "AE", asCoord(index));
+        addSetupProperty(properties, "AE", saveContext.asCoord(index));
       }
       if (currentStone.isBlack()) {
-        addSetupProperty(properties, "AB", asCoord(index));
+        addSetupProperty(properties, "AB", saveContext.asCoord(index));
       } else if (currentStone.isWhite()) {
-        addSetupProperty(properties, "AW", asCoord(index));
+        addSetupProperty(properties, "AW", saveContext.asCoord(index));
       }
     }
   }
 
   private static void addSemanticallyMatchingSetupValues(
-      Map<String, String> properties, BoardHistoryNode node, String key, String rawValues) {
+      Map<String, String> properties, BoardHistoryNode node, String key, String rawValues,
+      SaveContext saveContext) {
     if (rawValues == null || rawValues.isEmpty()) {
       return;
     }
@@ -1865,9 +1970,9 @@ public class SGFParser {
     String[] values = rawValues.split(",");
     for (String value : values) {
       String normalizedValue = value.trim();
-      int[] coord = convertSgfPosToCoord(normalizedValue);
+      int[] coord = saveContext.parseCoord(normalizedValue);
       if (!matchesMaterializedSetupSemantics(
-          key, coord, currentStones, previousStones, keepExplicitRemovedStoneMetadata)) {
+          key, coord, currentStones, previousStones, keepExplicitRemovedStoneMetadata, saveContext)) {
         continue;
       }
       addSetupProperty(properties, key, normalizedValue);
@@ -1879,11 +1984,12 @@ public class SGFParser {
       int[] coord,
       Stone[] currentStones,
       Stone[] previousStones,
-      boolean keepExplicitRemovedStoneMetadata) {
-    if (coord == null || !isOnBoard(coord)) {
+      boolean keepExplicitRemovedStoneMetadata,
+      SaveContext saveContext) {
+    if (coord == null || !saveContext.isOnBoard(coord)) {
       return false;
     }
-    int index = Board.getIndex(coord[0], coord[1]);
+    int index = coord[0] * saveContext.boardHeight() + coord[1];
     Stone currentStone = currentStones[index];
     Stone previousStone = previousStones[index];
     if ("AB".equals(key)) {
@@ -1899,13 +2005,6 @@ public class SGFParser {
       return true;
     }
     return keepExplicitRemovedStoneMetadata;
-  }
-
-  private static boolean isOnBoard(int[] coord) {
-    return coord[0] >= 0
-        && coord[0] < Board.boardWidth
-        && coord[1] >= 0
-        && coord[1] < Board.boardHeight;
   }
 
   private static void addSetupProperty(Map<String, String> properties, String key, String value) {
@@ -1938,24 +2037,26 @@ public class SGFParser {
   }
 
   private static void appendSerializedComment(
-      StringBuilder builder, BoardHistoryNode node, boolean forUpload, boolean includeAnalysisData)
+      StringBuilder builder, BoardHistoryNode node, boolean forUpload, boolean includeAnalysisData,
+      SaveContext saveContext)
       throws IOException {
     if (!LizzieFrame.isSavingRaw) {
-      appendStandardSerializedComment(builder, node, forUpload, includeAnalysisData);
+      appendStandardSerializedComment(builder, node, forUpload, includeAnalysisData, saveContext);
       return;
     }
     if (LizzieFrame.isSavingRawComment) {
-      appendRawSerializedComment(builder, node, forUpload);
+      appendRawSerializedComment(builder, node, forUpload, saveContext);
     }
   }
 
   private static void appendStandardSerializedComment(
-      StringBuilder builder, BoardHistoryNode node, boolean forUpload, boolean includeAnalysisData)
+      StringBuilder builder, BoardHistoryNode node, boolean forUpload, boolean includeAnalysisData,
+      SaveContext saveContext)
       throws IOException {
-    prepareCommentForSave(node);
-    String curComment = getSerializedComment(node);
-    if (shouldFormatSnapshotCommentForSave(node)) {
-      curComment = formatSnapshotCommentForExport(node);
+    prepareCommentForSave(node, saveContext);
+    String curComment = getSerializedComment(node, saveContext);
+    if (shouldFormatSnapshotCommentForSave(node, saveContext)) {
+      curComment = formatSnapshotCommentForExport(node, saveContext);
     }
     if (forUpload) {
       curComment =
@@ -1965,85 +2066,91 @@ public class SGFParser {
       builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(curComment)));
     }
     if (includeAnalysisData) {
-      appendSerializedAnalysis(builder, node);
+      appendSerializedAnalysis(builder, node, saveContext);
     }
   }
 
-  private static void prepareCommentForSave(BoardHistoryNode node) throws IOException {
+  private static void prepareCommentForSave(BoardHistoryNode node, SaveContext saveContext)
+      throws IOException {
     BoardData data = node.getData();
     if (Lizzie.config.appendWinrateToComment) {
-      if (!isEngineGameHistory() && !Lizzie.board.isPkBoard) {
-        if (Lizzie.board.isGameBoard) {
-          updateGameComment(node, data);
+      if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
+        if (saveContext.gameBoard()) {
+          updateGameComment(node, data, saveContext);
         } else {
           if (data.isSnapshotNode()) {
             return;
           }
-          if (data.getPlayouts() > 0) data.comment = formatComment(node);
+          if (data.getPlayouts() > 0) data.comment = formatComment(node, saveContext);
           if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
-            data.comment = formatComment2(node);
+            data.comment = formatComment2(node, saveContext);
           }
         }
       }
       return;
     }
-    if (!isEngineGameHistory() && !Lizzie.board.isPkBoard && Lizzie.board.isGameBoard) {
-      updateGameComment(node, data);
+    if (!saveContext.engineGameHistory() && !saveContext.pkBoard() && saveContext.gameBoard()) {
+      updateGameComment(node, data, saveContext);
     }
   }
 
-  private static void updateGameComment(BoardHistoryNode node, BoardData data) throws IOException {
+  private static void updateGameComment(
+      BoardHistoryNode node, BoardData data, SaveContext saveContext) throws IOException {
     if (data.getPlayouts() > 0 && node.next().isPresent()) {
-      node.next().get().getData().comment = formatCommentForGame(node);
+      node.next().get().getData().comment = formatCommentForGame(node, saveContext);
     } else if (node.next().isPresent()) {
       node.next().get().getData().comment = "";
     }
   }
 
-  private static String getSerializedComment(BoardHistoryNode node) throws IOException {
-    if (!isEngineGameHistory() || !node.previous().isPresent()) {
+  private static String getSerializedComment(BoardHistoryNode node, SaveContext saveContext)
+      throws IOException {
+    if (!saveContext.engineGameHistory() || !node.previous().isPresent()) {
       return node.getData().comment;
     }
     if (node.getData().isSnapshotNode()) {
       return node.getData().comment;
     }
     if (!node.previous().get().previous().isPresent()) {
-      return formatCommentPk(node.previous().get());
+      return formatCommentPk(node.previous().get(), saveContext);
     }
     return node.previous().get().getData().comment;
   }
 
-  private static boolean shouldFormatSnapshotCommentForSave(BoardHistoryNode node) {
+  private static boolean shouldFormatSnapshotCommentForSave(
+      BoardHistoryNode node, SaveContext saveContext) {
     return Lizzie.config.appendWinrateToComment
         && node.getData().isSnapshotNode()
-        && !isEngineGameHistory()
-        && !Lizzie.board.isPkBoard
-        && !Lizzie.board.isGameBoard;
+        && !saveContext.engineGameHistory()
+        && !saveContext.pkBoard()
+        && !saveContext.gameBoard();
   }
 
-  private static String formatSnapshotCommentForExport(BoardHistoryNode node) throws IOException {
+  private static String formatSnapshotCommentForExport(
+      BoardHistoryNode node, SaveContext saveContext) throws IOException {
     BoardData data = node.getData();
     String curComment = data.comment;
     if (data.getPlayouts() > 0) {
-      curComment = formatComment(node);
+      curComment = formatComment(node, saveContext);
     }
     if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
-      curComment = formatComment2(node);
+      curComment = formatComment2(node, saveContext);
     }
     return curComment;
   }
 
   private static void appendRawSerializedComment(
-      StringBuilder builder, BoardHistoryNode node, boolean forUpload) throws IOException {
+      StringBuilder builder, BoardHistoryNode node, boolean forUpload, SaveContext saveContext)
+      throws IOException {
     BoardData data = node.getData();
     String curComment = data.comment;
-    if (!isEngineGameHistory() && !Lizzie.board.isPkBoard) {
+    if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
       if (data.isSnapshotNode()) {
-        curComment = formatSnapshotCommentForExport(node);
+        curComment = formatSnapshotCommentForExport(node, saveContext);
       } else {
-        if (data.getPlayouts() > 0) data.comment = formatComment(node);
+        if (data.getPlayouts() > 0) data.comment = formatComment(node, saveContext);
         if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
-          data.comment = formatComment2(node);
+          data.comment = formatComment2(node, saveContext);
         }
         curComment = data.comment;
       }
@@ -2057,7 +2164,8 @@ public class SGFParser {
     }
   }
 
-  private static void appendSerializedAnalysis(StringBuilder builder, BoardHistoryNode node)
+  private static void appendSerializedAnalysis(
+      StringBuilder builder, BoardHistoryNode node, SaveContext saveContext)
       throws IOException {
     try {
       if (hasPrimaryAnalysisPayload(node.getData())) {
@@ -2067,7 +2175,7 @@ public class SGFParser {
         builder.append(String.format(Locale.ENGLISH, "LZ2[%s]", formatNodeData2(node)));
       }
     } catch (Exception e) {
-      Lizzie.board.isLoadingFile = false;
+      saveContext.clearLoadingAfterSerializationFailure();
     }
   }
 
@@ -2174,6 +2282,10 @@ public class SGFParser {
    * Difference>) (<Weight name> / <Playouts>)
    */
   public static String formatComment(BoardHistoryNode node) {
+    return formatComment(node, SaveContext.current());
+  }
+
+  private static String formatComment(BoardHistoryNode node, SaveContext saveContext) {
     //    if (node.getData().commented) return node.getData().comment;
     //    node.getData().commented = true;
     BoardData data = node.getData();
@@ -2233,7 +2345,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = -data.scoreMean - node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && Lizzie.board.getHistory().isBlacksTurn())
+          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2243,10 +2355,10 @@ public class SGFParser {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             // else score = -score;
           } else {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             //   else score = -score;
           }
           if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
@@ -2275,15 +2387,15 @@ public class SGFParser {
                 diffScore,
                 engine,
                 playouts,
-                String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             // else score = -score;
           } else {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             //   else score = -score;
           }
           if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
@@ -2318,11 +2430,11 @@ public class SGFParser {
                 engine,
                 playouts,
                 data.pda != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", data.getKomi())
+                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
                         + " "
                         + Lizzie.resourceBundle.getString("SGFParse.pda")
                         + data.pda
-                    : String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       }
     } else {
       String wf =
@@ -2344,7 +2456,7 @@ public class SGFParser {
               lastMoveDiff,
               engine,
               playouts,
-              String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+              String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
     if (!data.comment.isEmpty()) {
@@ -2360,6 +2472,10 @@ public class SGFParser {
   }
 
   private static String formatCommentForGame(BoardHistoryNode node) {
+    return formatCommentForGame(node, SaveContext.current());
+  }
+
+  private static String formatCommentForGame(BoardHistoryNode node, SaveContext saveContext) {
     //    if (node.getData().commented) return node.getData().comment;
     //    node.getData().commented = true;
 
@@ -2421,7 +2537,7 @@ public class SGFParser {
       if (node.previous().isPresent()) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = -data.scoreMean - node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && Lizzie.board.getHistory().isBlacksTurn())
+          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
             diff = -diff;
           // if (!blackWinrate) diff = -diff;
           diffScore =
@@ -2441,10 +2557,10 @@ public class SGFParser {
         double score = data.scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             // else score = -score;
           } else {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             //   else score = -score;
           }
         }
@@ -2472,15 +2588,15 @@ public class SGFParser {
                 diffScore,
                 engine,
                 playouts,
-                String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             // else score = -score;
           } else {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             //   else score = -score;
           }
         }
@@ -2513,11 +2629,11 @@ public class SGFParser {
                 engine,
                 playouts,
                 data.pda != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", data.getKomi())
+                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
                         + " "
                         + Lizzie.resourceBundle.getString("SGFParse.pda")
                         + data.pda
-                    : String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       }
     } else {
       String wf =
@@ -2539,13 +2655,17 @@ public class SGFParser {
               lastMoveDiff,
               engine,
               playouts,
-              String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+              String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
     return nc;
   }
 
   public static String formatCommentPk(BoardHistoryNode node) {
-    if (!isEngineGameHistory() && !node.previous().isPresent()) return "";
+    return formatCommentPk(node, SaveContext.current());
+  }
+
+  private static String formatCommentPk(BoardHistoryNode node, SaveContext saveContext) {
+    if (!saveContext.engineGameHistory() && !node.previous().isPresent()) return "";
     BoardData data = node.getData();
     String engine = node.getData().engineName;
     engine = engine.replaceAll(" ", "");
@@ -2581,10 +2701,10 @@ public class SGFParser {
         double score = data.scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             // else score = -score;
           } else {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             //   else score = -score;
           }
         }
@@ -2612,15 +2732,15 @@ public class SGFParser {
                 diffScore,
                 engine,
                 playouts,
-                String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             // else score = -score;
           } else {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             //   else score = -score;
           }
         }
@@ -2652,7 +2772,7 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", scoreStdev),
                 engine,
                 playouts,
-                String.format(Locale.ENGLISH, "%.1f", data.getKomi())
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
                     + getPdaWrnString(data.pda, data.wrn));
       }
     } else {
@@ -2675,10 +2795,10 @@ public class SGFParser {
               lastMoveDiff,
               engine,
               playouts,
-              String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+              String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    if (!data.comment.isEmpty() && !isEngineGameHistory()) {
+    if (!data.comment.isEmpty() && !saveContext.engineGameHistory()) {
       String wp = winrateCommentRegex(data.isKataData, data.isSaiData);
       // if (Lizzie.leelaz.isKatago) wp = wp + "\n.*";
       if (data.comment.matches("(?s).*" + wp + "(?s).*")) {
@@ -2697,7 +2817,7 @@ public class SGFParser {
     return line;
   }
 
-  private static String formatComment2(BoardHistoryNode node) {
+  private static String formatComment2(BoardHistoryNode node, SaveContext saveContext) {
     //    if (node.getData().commented2) return node.getData().comment;
     //    node.getData().commented2 = true;
     BoardData data = node.getData();
@@ -2709,7 +2829,7 @@ public class SGFParser {
     boolean validLastWinrate = lastNode.isPresent();
 
     double lastWR = validLastWinrate ? lastNode.get().getWinrate2() : 50;
-    if (isEngineGameHistory() && node.moveNumberOfNode() > 2) {
+    if (saveContext.engineGameHistory() && node.moveNumberOfNode() > 2) {
       lastWR = 100 - lastWR;
     }
     boolean validWinrate = (data.getPlayouts2() > 0);
@@ -2746,7 +2866,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = data.scoreMean + node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && Lizzie.board.getHistory().isBlacksTurn())
+          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2756,10 +2876,10 @@ public class SGFParser {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             // else score = -score;
           } else {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             //   else score = -score;
           }
           if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
@@ -2788,15 +2908,15 @@ public class SGFParser {
                 diffScore,
                 engine,
                 playouts,
-                String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
           if (data.blackToPlay) {
-            score = score - Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score - saveContext.komi();
             // else score = -score;
           } else {
-            score = score + Lizzie.board.getHistory().getGameInfo().getKomi();
+            score = score + saveContext.komi();
             //   else score = -score;
           }
           if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
@@ -2830,11 +2950,11 @@ public class SGFParser {
                 engine,
                 playouts,
                 data.pda2 != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", data.getKomi())
+                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
                         + " "
                         + Lizzie.resourceBundle.getString("SGFParse.pda")
                         + data.pda2
-                    : String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       }
     } else {
       String wf =
@@ -2856,7 +2976,7 @@ public class SGFParser {
               lastMoveDiff,
               engine,
               playouts,
-              String.format(Locale.ENGLISH, "%.1f", data.getKomi()));
+              String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
     if (!data.comment.isEmpty()) {
@@ -4670,12 +4790,6 @@ public class SGFParser {
     return history.getCurrentHistoryNode().numberOfChildren() - 1;
   }
 
-  private static String asCoord(int i) {
-    int[] cor = Board.getCoord(i);
-
-    return asCoord(cor);
-  }
-
   private static boolean isAnalysisTag(String tag) {
     return "LZ".equals(tag) || "LZOP".equals(tag) || "LZ2".equals(tag) || "LZOP2".equals(tag);
   }
@@ -5064,7 +5178,11 @@ public class SGFParser {
   }
 
   public static String asCoord(int[] c) {
-    if (Board.boardHeight >= 52 || Board.boardWidth >= 52) {
+    return asCoord(c, Board.boardWidth, Board.boardHeight);
+  }
+
+  private static String asCoord(int[] c, int boardWidth, int boardHeight) {
+    if (boardHeight >= 52 || boardWidth >= 52) {
       return c[0] + "_" + c[1];
     } else {
       char x = alphabet.charAt(c[0]);

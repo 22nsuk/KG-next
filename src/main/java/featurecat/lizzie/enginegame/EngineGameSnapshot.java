@@ -25,6 +25,11 @@ public sealed interface EngineGameSnapshot {
         && active.activity() instanceof GameActivity.BetweenGames;
   }
 
+  default boolean saveFailed() {
+    return this instanceof BatchActive active
+        && active.activity() instanceof GameActivity.SaveFailed;
+  }
+
   default boolean startingOrPlaying() {
     return starting() || playing();
   }
@@ -47,6 +52,9 @@ public sealed interface EngineGameSnapshot {
       }
       if (active.activity() instanceof GameActivity.Starting starting) {
         return starting.view();
+      }
+      if (active.activity() instanceof GameActivity.SaveFailed failed) {
+        return failed.view();
       }
     }
     return null;

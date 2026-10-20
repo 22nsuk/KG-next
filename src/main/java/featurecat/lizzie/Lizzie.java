@@ -1442,6 +1442,20 @@ public class Lizzie {
   }
 
   static void shutdown(IntConsumer exit) {
+    try {
+      EngineManager manager = engineManager;
+      if (manager != null && manager.hasPendingEngineGameSave()) {
+        // Preserve the finished game's snapshot while cancelling any successor before retrying.
+        engineGame.stop();
+        if (!manager.retryEngineGameSave()) {
+          cancelShutdownAfterSaveFailure(null);
+          return;
+        }
+      }
+    } catch (RuntimeException failure) {
+      cancelShutdownAfterSaveFailure(failure);
+      return;
+    }
     java.util.concurrent.CompletableFuture<Void> pendingSaves =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
     if (!pendingSaves.isDone()) {
@@ -1463,6 +1477,10 @@ public class Lizzie {
       return;
     }
     if (!saved) {
+      cancelShutdownAfterSaveFailure(null);
+      return;
+    }
+    if (!engineGame.claimShutdownAfterSaves()) {
       cancelShutdownAfterSaveFailure(null);
       return;
     }
