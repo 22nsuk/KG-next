@@ -28,6 +28,8 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javax.swing.JComponent;
 import javax.swing.SwingUtilities;
@@ -216,19 +218,7 @@ class SetKataRulesWindowTest {
       dialog.editor.rdoNoHandicapKomi.setSelected(true);
       dialog.editor.rdoSimpleKo.setSelected(true);
       dialog.editor.rdoNoSuicide.setSelected(true);
-      SwingUtilities.invokeAndWait(
-          () -> {
-            for (java.awt.Component component : dialog.getContentPane().getComponents()) {
-              if (component instanceof JFontButton button
-                  && button
-                      .getText()
-                      .equals(Lizzie.resourceBundle.getString("SetKataRules.btnApply"))) {
-                button.doClick();
-                return;
-              }
-            }
-            throw new AssertionError("Confirm button missing");
-          });
+      clickApply(dialog);
       assertTrue(dialog.isVisible(), "Keep the editor open until the engine confirms");
       JSONObject saved =
           new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())))
@@ -243,14 +233,93 @@ class SetKataRulesWindowTest {
       int readbackId = commandIdFor(fixture.output.toString(), "kata-get-rules");
       dispatch(fixture.engine, "=" + readbackId + " " + JAPANESE);
       awaitConfirmedReadback(dialog);
-      Thread.sleep(100L);
+      awaitHidden(dialog);
+      awaitSessionRulesRevision(history, original.revision() + 1L);
 
-      BoardHistoryList.SessionRulesTarget published = history.captureSessionRules();
+      BoardHistoryList.SessionRulesTarget published;
+      synchronized (dialog) {
+        // Publication and frame synchronization must both finish before fixture restoration.
+        published = history.captureSessionRules();
+      }
       assertEquals(original.revision() + 1L, published.revision());
       assertTrue(dialog.getRules());
       assertEquals(original.revision() + 1L, history.captureSessionRules().revision());
       assertFalse(dialog.isVisible(), "Successful confirmation must close the editor");
       closeDialog(dialog);
+    }
+  }
+
+  @Test
+  void confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot() throws Exception {
+    assumeFalse(GraphicsEnvironment.isHeadless());
+    try (Fixture fixture = Fixture.ordinary()) {
+      PollObservingRulesDialog dialog = new PollObservingRulesDialog(fixture.engine);
+      SwingUtilities.invokeAndWait(() -> dialog.setVisible(true));
+      int queryId = commandIdFor(fixture.output.toString(), "kata-get-rules");
+      dispatch(fixture.engine, "=" + queryId + " " + CHINESE);
+      awaitConfirmedReadback(dialog);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            dialog.editor.rdoTerritory.setSelected(true);
+            dialog.editor.rdoSeKiTax.setSelected(true);
+            dialog.editor.rdoNoHandicapKomi.setSelected(true);
+            dialog.editor.rdoSimpleKo.setSelected(true);
+            dialog.editor.rdoNoSuicide.setSelected(true);
+          });
+      clickApply(dialog);
+      dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-set-rules"));
+      int readbackId = commandIdFor(fixture.output.toString(), "kata-get-rules");
+      Leelaz.EngineRulesOperation operation = fixture.engine.engineRulesOperation();
+      dialog.operationToObserve = operation;
+
+      // Override refresh itself: gating its queued EDT body would no longer hold the reader
+      // between publishing CONFIRMED and completing the operation after EDT refresh dispatch.
+      GatedRefreshFrame frame = allocate(GatedRefreshFrame.class);
+      frame.refreshEntered = new CountDownLatch(1);
+      frame.releaseRefresh = new CountDownLatch(1);
+      frame.manualRulesSynchronized = new CountDownLatch(1);
+      Lizzie.frame = frame;
+      FutureTask<Void> readback =
+          new FutureTask<>(
+              () -> {
+                dispatch(fixture.engine, "=" + readbackId + " " + JAPANESE);
+                return null;
+              });
+      Thread reader = new Thread(readback, "set-kata-rules-delayed-completion");
+      reader.setDaemon(true);
+      try {
+        reader.start();
+        assertTrue(frame.refreshEntered.await(5, TimeUnit.SECONDS));
+        assertSame(reader, frame.refreshThread);
+        assertFalse(frame.refreshOnEventThread, "The gate must hold the engine reader, not the EDT");
+        assertTrue(operation.snapshot().isConfirmed());
+        assertFalse(operation.isDone());
+        assertNull(operation.result());
+        assertTrue(
+            dialog.incompleteConfirmationPolled.await(5, TimeUnit.SECONDS),
+            "The status watcher must observe CONFIRMED before completion");
+        // The observation is emitted after the watcher posts any status callback, so this
+        // barrier also runs a premature getRules() before releasing the reader in the old code.
+        SwingUtilities.invokeAndWait(
+            () -> assertTrue(dialog.isVisible(), "Do not close before the operation completes"));
+        assertFalse(operation.isDone());
+        assertNull(operation.result());
+      } finally {
+        frame.releaseRefresh.countDown();
+        reader.join(5_000L);
+        if (reader.isAlive()) {
+          reader.interrupt();
+          reader.join(5_000L);
+        }
+        assertFalse(reader.isAlive(), "The rules readback worker must finish before fixture cleanup");
+      }
+      readback.get(5, TimeUnit.SECONDS);
+      assertTrue(operation.isDone());
+      assertTrue(operation.result().isConfirmed());
+      assertTrue(
+          frame.manualRulesSynchronized.await(5, TimeUnit.SECONDS),
+          "Manual rules publication must finish before fixture cleanup");
+      awaitHidden(dialog);
     }
   }
 
@@ -455,6 +524,107 @@ class SetKataRulesWindowTest {
     Field field = SetKataRules.class.getDeclaredField("composed");
     field.setAccessible(true);
     return (KataGoRules) field.get(dialog);
+  }
+
+  private static void clickApply(SetKataRules dialog) throws Exception {
+    SwingUtilities.invokeAndWait(
+        () -> {
+          for (java.awt.Component component : dialog.getContentPane().getComponents()) {
+            if (component instanceof JFontButton button
+                && button
+                    .getText()
+                    .equals(Lizzie.resourceBundle.getString("SetKataRules.btnApply"))) {
+              button.doClick();
+              return;
+            }
+          }
+          throw new AssertionError("Confirm button missing");
+        });
+  }
+
+  @SuppressWarnings("unchecked")
+  private static <T> T allocate(Class<T> type) throws Exception {
+    Field field = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+    field.setAccessible(true);
+    return (T) ((sun.misc.Unsafe) field.get(null)).allocateInstance(type);
+  }
+
+  private static final class PollObservingRulesDialog extends SetKataRules {
+    final CountDownLatch incompleteConfirmationPolled = new CountDownLatch(1);
+    volatile Leelaz.EngineRulesOperation operationToObserve;
+
+    PollObservingRulesDialog(Leelaz engine) {
+      super(engine);
+    }
+
+    @Override
+    void afterEngineRulesStatusPolledForTest(
+        Leelaz.EngineRulesOperation operation, EngineRulesResult snapshot) {
+      if (operation == operationToObserve && snapshot.isConfirmed() && !operation.isDone()) {
+        incompleteConfirmationPolled.countDown();
+      }
+    }
+  }
+
+  /** Holds the real rules completion boundary without executing any frame UI work. */
+  private static final class GatedRefreshFrame extends LizzieFrame {
+    // Explicitly installed after allocation because the frame constructor is not run.
+    CountDownLatch refreshEntered;
+    CountDownLatch releaseRefresh;
+    CountDownLatch manualRulesSynchronized;
+    volatile Thread refreshThread;
+    volatile boolean refreshOnEventThread;
+
+    @Override
+    public void refresh() {
+      refreshThread = Thread.currentThread();
+      refreshOnEventThread = SwingUtilities.isEventDispatchThread();
+      refreshEntered.countDown();
+      try {
+        if (!releaseRefresh.await(30, TimeUnit.SECONDS)) {
+          throw new AssertionError("Rules readback refresh gate was not released");
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError("Rules readback refresh gate was interrupted", interrupted);
+      }
+    }
+
+    @Override
+    public void retireImportedRulesForManualSelection(
+        BoardHistoryList history, BoardHistoryList.SessionRulesTarget target) {}
+
+    @Override
+    public void synchronizeManualRulesAfterSelection(
+        BoardHistoryList history,
+        BoardHistoryList.SessionRulesTarget target,
+        BoardHistoryList.ManualRulesIntent manualIntent,
+        Leelaz primary,
+        long primaryGeneration) {
+      manualRulesSynchronized.countDown();
+    }
+  }
+
+  private static void awaitHidden(SetKataRules dialog) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < deadline) {
+      boolean[] hidden = new boolean[1];
+      SwingUtilities.invokeAndWait(() -> hidden[0] = !dialog.isVisible());
+      if (hidden[0]) {
+        return;
+      }
+      Thread.sleep(20L);
+    }
+    throw new AssertionError("Completion after the confirmed snapshot must close the editor");
+  }
+
+  private static void awaitSessionRulesRevision(BoardHistoryList history, long revision)
+      throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+    while (history.captureSessionRules().revision() != revision && System.nanoTime() < deadline) {
+      Thread.sleep(20L);
+    }
+    assertEquals(revision, history.captureSessionRules().revision());
   }
 
   private static void awaitConfirmedReadback(SetKataRules dialog) throws Exception {

@@ -26,6 +26,8 @@ All notable maintenance updates to this fork are documented here.
 
 ### Inherited upstream changes
 
+- Run frame refreshes requested by engine threads on the Swing event thread, coalescing queued bursts while keeping event-thread refreshes synchronous (#633).
+- Wait for the rules operation to complete before consuming its settled status, so the rules editor closes after a matching confirmation even when the confirmed snapshot arrives first (#642).
 - Let the Beta channel compare signed GitHub stable and test releases, select the highest valid version without downgrading or falling back to an older package, and retain a non-blocking warning when one candidate cannot be checked; preserve Stable source selection (#578).
 - Show complete suggestion rows within the existing panel, tightening safe cell padding only when it fits one more row; align settled scrolling to row boundaries and preserve browsing position through resizing without changing fonts, candidates, or board sizes (#579).
 - Keep live suggestion values and ordering current while retaining row density and browsing position; clamp the scroll range when candidates shrink or clear, including refreshes during resizing and panel collapse (#579).
