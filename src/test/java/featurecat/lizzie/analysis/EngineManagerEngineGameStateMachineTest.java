@@ -1233,6 +1233,11 @@ class EngineManagerEngineGameStateMachineTest {
     assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
     assertTrue(black.isInputCommand);
     black.isInputCommand = false;
+    SwingUtilities.invokeAndWait(() -> {});
+    assertTrue(Lizzie.config.chkKataEnginePDA);
+    assertEquals("1.75", Lizzie.config.txtKataEnginePDA);
+    assertTrue(Lizzie.config.chkKataEngineWRN);
+    assertEquals("0.5", Lizzie.config.txtKataEngineWRN);
   }
 
   @Test
@@ -6236,6 +6241,11 @@ class EngineManagerEngineGameStateMachineTest {
 
   private static final class SilentMenu extends Menu {
     private SilentMenu() {}
+
+    @Override
+    public void setPdaAndWrn(double pda, double wrn) {
+      // This fixture has no widgets; LizzieFrame still publishes the real config values.
+    }
 
     @Override
     public void toggleEngineMenuStatus(boolean isPondering, boolean isThinking) {}

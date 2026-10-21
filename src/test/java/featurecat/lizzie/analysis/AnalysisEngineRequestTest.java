@@ -3876,6 +3876,8 @@ class AnalysisEngineRequestTest {
     @Override
     public void close() throws Exception {
       closeExclusiveSessionForTest(Lizzie.leelaz);
+      // Engine completion can queue a frame refresh; keep its globals alive through the EDT pass.
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
       Board.boardWidth = previousBoardWidth;
       Board.boardHeight = previousBoardHeight;
       Zobrist.init();
