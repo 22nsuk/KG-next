@@ -43,8 +43,21 @@ public class SwingEngineGameChrome implements EngineGameChrome {
         if (!Lizzie.engineGame.current().playing()) applyIdle(toolbar, menu);
       }
       case BETWEEN_GAMES -> {
-        if (menu != null) {
-          menu.toggleDoubleMenuGameStatus();
+        if (Lizzie.engineGame.current().betweenGames()) {
+          setPauseButtonText(toolbar, false);
+          if (toolbar != null && toolbar.btnEnginePkStop != null) {
+            toolbar.btnEnginePkStop.setEnabled(false);
+          }
+          if (menu != null) {
+            menu.toggleDoubleMenuGameStatus();
+          }
+        }
+      }
+      case SAVE_FAILED -> {
+        // A queued failure event must not replace the controls of a successful retry or a
+        // successor that has already started.
+        if (Lizzie.engineGame.current().saveFailed()) {
+          applySaveFailed(toolbar, menu);
         }
       }
       case START_FAILED, USER_STOPPED, BATCH_ENDED, LATER_GAME_FAILED -> applyIdle(toolbar, menu);
@@ -100,6 +113,22 @@ public class SwingEngineGameChrome implements EngineGameChrome {
     }
   }
 
+  private static void applySaveFailed(BottomToolbar toolbar, Menu menu) {
+    if (toolbar != null) {
+      toolbar.enableDisabelForEngineGame(false);
+      if (toolbar.btnEnginePkStop != null) {
+        toolbar.setEngineGamePauseText(text("EngineGameInfo.retrySave", "Retry save"));
+        toolbar.btnEnginePkStop.setEnabled(true);
+      }
+    }
+    if (Menu.engineMenu != null) {
+      Menu.engineMenu.setText(text("EngineGameInfo.saveFailed", "Game save failed"));
+    }
+    if (menu != null) {
+      menu.toggleDoubleMenuGameStatus();
+    }
+  }
+
   private static void restoreEngineMenuTitle() {
     if (EngineManager.isEmpty || Lizzie.leelaz == null) {
       Menu.engineMenu.setText(text("Menu.noEngine", "无引擎"));
@@ -120,8 +149,9 @@ public class SwingEngineGameChrome implements EngineGameChrome {
     if (toolbar == null || toolbar.btnEnginePkStop == null) {
       return;
     }
-    toolbar.btnEnginePkStop.setText(
+    toolbar.setEngineGamePauseText(
         paused ? text("BottomToolbar.detail.continue", "继续") : text("BottomToolbar.detail.pause", "暂停"));
+    toolbar.btnEnginePkStop.setEnabled(true);
   }
 
   private static String text(String key, String fallback) {

@@ -10,6 +10,8 @@ public interface EngineGameControl {
 
   void resume();
 
+  void retrySave();
+
   boolean reviseKomi(double komi);
 
   void reviseBatchLimit(int gameCount);

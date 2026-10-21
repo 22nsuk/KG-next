@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -13,6 +14,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.enginegame.Acceptance;
+import featurecat.lizzie.enginegame.BatchSummary;
 import featurecat.lizzie.enginegame.EngineGameBatchSpec;
 import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameChrome;
@@ -49,10 +51,21 @@ import featurecat.lizzie.gui.SgfWinLossList;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.IntConsumer;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -61,8 +74,12 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGameModuleContractTest {
+  @TempDir Path directory;
   private static final EngineParticipantIdentity FIRST =
       new EngineParticipantIdentity("black-cmd", "");
   private static final EngineParticipantIdentity SECOND =
@@ -80,6 +97,7 @@ class EngineGameModuleContractTest {
   private GtpConsolePane previousGtpConsole;
   private boolean previousEmpty;
   private int previousEngineNo;
+  private boolean previousSavingRaw;
 
   private OccupancyLeelaz black;
   private OccupancyLeelaz white;
@@ -101,6 +119,7 @@ class EngineGameModuleContractTest {
     previousGtpConsole = Lizzie.gtpConsole;
     previousEmpty = EngineManager.isEmpty;
     previousEngineNo = EngineManager.currentEngineNo;
+    previousSavingRaw = LizzieFrame.isSavingRaw;
 
     EngineManager.resetEngineGameTransactionStateForTest();
     Config config = allocate(Config.class);
@@ -152,6 +171,7 @@ class EngineGameModuleContractTest {
     Menu.engineMenu = previousEngineMenu;
     Lizzie.board = previousBoard;
     LizzieFrame.winrateGraph = previousWinrateGraph;
+    LizzieFrame.isSavingRaw = previousSavingRaw;
     Lizzie.gtpConsole = previousGtpConsole;
     SwingUtilities.invokeAndWait(() -> {});
   }
@@ -407,6 +427,481 @@ class EngineGameModuleContractTest {
   }
 
   @Test
+  void failedBatchSaveKeepsCompletedGameUntilRetryStartsOneSuccessor() throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 2, false);
+    Object owner = transaction.lifecycle().ownerToken();
+    BoardHistoryList history = Lizzie.board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    BoardHistoryNode position = history.getCurrentHistoryNode();
+    Files.writeString(manager.outputDirectory, "blocked output");
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    BatchSummary completed = Lizzie.engineGame.lastSummary();
+    assertEquals(1, completed.secondWins());
+    assertEquals(1100, completed.firstTotalTimeMs());
+    assertEquals(2200, completed.secondTotalTimeMs());
+    assertEquals(41, completed.firstTotalVisits());
+    assertEquals(73, completed.secondTotalVisits());
+    assertEquals(0, manager.successorStarts, "failed persistence must prevent the next game");
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertSame(history, Lizzie.board.getHistory());
+    assertSame(root, history.getStart());
+    assertSame(position, history.getCurrentHistoryNode());
+    assertEquals(2, history.getMoveNumber());
+    assertTrue(root.getData().comment.contains("completed original"));
+    assertEquals(41, position.getData().getPlayouts());
+    assertEquals(1, manager.saveFailures.size());
+    assertTrue(manager.saveSuccesses.isEmpty());
+    assertEquals("blocked output", Files.readString(manager.outputDirectory));
+
+    EngineGameSnapshot failed = Lizzie.engineGame.current();
+    Object staleOwner = new Object();
+    assertFalse(Lizzie.engineGame.onSaveFailed(staleOwner));
+    assertFalse(Lizzie.engineGame.onSaveSucceeded(staleOwner));
+    assertTrue(Lizzie.engineGame.onOwnerRetired(staleOwner));
+    assertTrue(Lizzie.engineGame.onOwnerRetired(owner));
+    assertSame(failed, Lizzie.engineGame.current());
+    assertSame(transaction, Lizzie.engineGame.transaction());
+    assertFalse(Lizzie.engineGame.complete(new GameOutcome.DoublePass(), owner, 0));
+    assertFalse(retrySave());
+    assertEquals(0, manager.successorStarts);
+    assertEquals(2, manager.saveFailures.size());
+    assertTotals(completed);
+
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(1, manager.successorStarts);
+    assertEquals(2, manager.lastSuccessorPlan.gameOrdinal());
+    assertTotals(completed);
+    List<Path> games = savedFiles(".sgf");
+    assertEquals(1, games.size());
+    assertCompletedSgf(games.get(0));
+    assertEquals(1, savedFiles(".txt").size());
+    assertTrue(retrySave());
+    assertEquals(1, manager.successorStarts, "a settled retry must not start another game");
+    assertFalse(Lizzie.engineGame.complete(new GameOutcome.DoublePass(), owner, 0));
+    assertTotals(completed);
+  }
+
+  @Test
+  void successfulFallbackSaveAdvancesWithoutEnteringRetryState() throws Exception {
+    playWithRealSave(true, 2, false);
+    Files.createDirectory(manager.outputDirectory);
+    Path blockedNamedDirectory = manager.outputDirectory.resolve("named-batch");
+    Files.writeString(blockedNamedDirectory, "preserved unrelated file");
+    Path fallbackDirectory =
+        manager.outputDirectory.resolve(Lizzie.engineGame.outputTimestamp());
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertFalse(Lizzie.engineGame.current().saveFailed());
+    assertEquals(1, manager.successorStarts);
+    assertTrue(manager.saveFailures.isEmpty());
+    assertEquals("preserved unrelated file", Files.readString(blockedNamedDirectory));
+    List<Path> games = savedFiles(".sgf");
+    assertEquals(1, games.size());
+    assertCompletedSgf(games.get(0));
+    assertEquals(fallbackDirectory, games.get(0).getParent());
+    List<Path> reports = savedFiles(".txt");
+    assertEquals(1, reports.size());
+    assertEquals(fallbackDirectory, reports.get(0).getParent());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void singleOrFinalGameReportsSaveFailureAndFinishesOnlyAfterRetry(boolean batch)
+      throws Exception {
+    playWithRealSave(batch, 1, false);
+    BoardHistoryList history = Lizzie.board.getHistory();
+    Files.writeString(manager.outputDirectory, "blocked output");
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    BatchSummary completed = Lizzie.engineGame.lastSummary();
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertSame(history, Lizzie.board.getHistory());
+    assertEquals(0, manager.successorStarts);
+    assertEquals(1, manager.saveFailures.size());
+    assertTrue(manager.saveSuccesses.isEmpty());
+
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertEquals(0, manager.successorStarts);
+    assertEquals(1, manager.saveSuccesses.size());
+    assertTotals(completed);
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+    assertEquals(batch ? 1 : 0, savedFiles(".txt").size());
+  }
+
+  @Test
+  void stoppingFailedBatchKeepsSaveRetryButNeverStartsTheSuccessor() throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 2, false);
+    Files.writeString(manager.outputDirectory, "blocked output");
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    BatchSummary completed = Lizzie.engineGame.lastSummary();
+
+    SwingUtilities.invokeAndWait(() -> Lizzie.engineGame.stop());
+
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertFalse(Lizzie.engineGame.successorPending());
+    assertSame(transaction, Lizzie.engineGame.transaction());
+    Acceptance acceptance = Lizzie.engineGame.accept(genmoveSpec(), observer);
+    assertInstanceOf(Acceptance.Rejected.class, acceptance);
+    assertInstanceOf(
+        Rejection.OccupiedLifecycle.class, ((Acceptance.Rejected) acceptance).reason());
+    assertSame(transaction, Lizzie.engineGame.transaction());
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(0, manager.successorStarts);
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertTotals(completed);
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+  }
+
+  @Test
+  void stopAtSavedSuccessorAdmissionPreventsOrphanEngineOwner() throws Exception {
+    EngineGameTransaction completed = playWithRealSave(true, 2, false);
+    BoardHistoryList history = Lizzie.board.getHistory();
+    BoardHistoryNode position = history.getCurrentHistoryNode();
+    int clearCalls = ((SilentBoard) Lizzie.board).engineGameClearCalls;
+    assertSame(
+        completed.lifecycle().ownerToken(), EngineManager.activeEngineGameTransactionForTest());
+    manager.stopBeforeSuccessorAdmission = true;
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertEquals(1, manager.successorStarts, "the successor reached manager admission once");
+    assertInstanceOf(GameActivity.Starting.class, activity(manager.successorSnapshotBeforeStop));
+    assertInstanceOf(EngineGameSnapshot.Idle.class, manager.successorSnapshotAfterStop);
+    assertNull(manager.successorOwnerBeforeAdmission);
+    assertEquals(Boolean.FALSE, manager.stoppedSuccessorAccepted);
+    assertNull(manager.successorOwnerAfterAdmission);
+    assertNull(EngineManager.activeEngineGameTransactionForTest());
+    assertTrue(manager.stoppedSuccessorWorkers.isEmpty(), manager.stoppedSuccessorWorkers.toString());
+    assertSame(history, Lizzie.board.getHistory());
+    assertSame(position, history.getCurrentHistoryNode());
+    assertEquals(2, history.getMoveNumber());
+    assertEquals(clearCalls, ((SilentBoard) Lizzie.board).engineGameClearCalls);
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertNull(Lizzie.engineGame.transaction());
+    assertFalse(Lizzie.engineGame.successorPending());
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertTrue(manager.saveFailures.isEmpty());
+    assertEquals(1, manager.saveSuccesses.size());
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+    assertEquals(1, savedFiles(".txt").size());
+  }
+
+  @Test
+  void completedSourceBeforePendingSurvivesHistoryReplacementAndRetry() throws Exception {
+    EngineGameTransaction completed = playWithRealSave(true, 2, false);
+    Board originalBoard = Lizzie.board;
+    BoardHistoryList original = originalBoard.getHistory();
+    long originalRevision = originalBoard.getContextRevision();
+    BoardHistoryList replacement =
+        SGFParser.parseSgf(
+            "(;SZ[19]RE[B+3.5]C[replacement unchanged];B[cc]C[replacement move];W[dd])",
+            true);
+    replacement.setHead(replacement.getEnd());
+    BoardHistoryNode replacementRoot = replacement.getStart();
+    BoardHistoryNode replacementMove = replacementRoot.next().orElseThrow();
+    BoardHistoryNode replacementPosition = replacement.getCurrentHistoryNode();
+    Runnable assertReplacementUnchanged =
+        () -> {
+          assertSame(replacement, Lizzie.board.getHistory());
+          assertSame(replacementRoot, replacement.getStart());
+          assertSame(replacementMove, replacementRoot.next().orElseThrow());
+          assertSame(replacementPosition, replacement.getCurrentHistoryNode());
+          assertEquals("B+3.5", replacement.getGameInfo().getResult());
+          assertEquals("B+3.5", ((SilentFrame) Lizzie.frame).lastResult);
+          assertEquals("replacement unchanged", replacementRoot.getData().comment);
+          assertEquals("replacement move", replacementMove.getData().comment);
+          assertEquals("", replacementPosition.getData().comment);
+          assertArrayEquals(new int[] {2, 2}, replacementMove.getData().lastMove.orElseThrow());
+          assertArrayEquals(new int[] {3, 3}, replacementPosition.getData().lastMove.orElseThrow());
+          assertEquals(2, replacement.getMoveNumber());
+          assertNull(replacement.getGameInfo().engineGameRecord());
+          assertNull(replacement.getGameInfo().engineGameRecordContext());
+        };
+    manager.afterStopComment =
+        () -> {
+          assertTrue(completed.alreadyCompleted());
+          assertNotNull(original.getGameInfo().engineGameRecord());
+          assertFalse(manager.hasPendingEngineGameSave());
+          assertSame(originalBoard, completed.completedPosition().board());
+          assertSame(original, completed.completedPosition().history());
+          assertEquals(originalRevision, completed.completedPosition().revision());
+          assertSame(original, Lizzie.board.getHistory());
+          Lizzie.board.setHistory(replacement);
+          Lizzie.frame.setResult("B+3.5");
+        };
+    Files.writeString(manager.outputDirectory, "blocked output");
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertNull(manager.afterStopComment, "the replacement must happen before Pending is installed");
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertEquals(0, manager.successorStarts);
+    assertEquals(1, manager.saveFailures.size());
+    assertReplacementUnchanged.run();
+    BatchSummary summary = Lizzie.engineGame.lastSummary();
+    EngineGameRecord record = original.getGameInfo().engineGameRecord();
+    assertNotNull(record);
+
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(0, manager.successorStarts);
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertReplacementUnchanged.run();
+    assertSame(record, original.getGameInfo().engineGameRecord());
+    assertTotals(summary);
+    List<Path> games = savedFiles(".sgf");
+    assertEquals(1, games.size());
+    assertCompletedSgf(games.get(0));
+    String sgf = Files.readString(games.get(0));
+    assertFalse(sgf.contains("replacement unchanged"), sgf);
+    assertFalse(sgf.contains(";B[cc]"), sgf);
+    assertFalse(sgf.contains("RE[B+3.5]"), sgf);
+    assertEquals(1, savedFiles(".txt").size());
+  }
+
+  @Test
+  void saveFinalizationDoesNotCompeteWithExistingRetirementContinuation() throws Exception {
+    EngineGameTransaction completed = playWithRealSave(true, 1, false);
+    EngineManager.EngineGameOwnerTransaction owner =
+        (EngineManager.EngineGameOwnerTransaction) completed.lifecycle().ownerToken();
+    AtomicInteger externalContinuations = new AtomicInteger();
+    AtomicInteger schedulingFailures = new AtomicInteger();
+    manager.afterStopComment =
+        () -> {
+          assertTrue(completed.alreadyCompleted());
+          assertFalse(manager.hasPendingEngineGameSave());
+          try {
+            var register =
+                EngineManager.class.getDeclaredMethod(
+                    "runAfterEngineGameTransactionRetirement",
+                    EngineManager.EngineGameOwnerTransaction.class,
+                    Runnable.class,
+                    Runnable.class);
+            register.setAccessible(true);
+            register.invoke(
+                null,
+                owner,
+                (Runnable) externalContinuations::incrementAndGet,
+                (Runnable) schedulingFailures::incrementAndGet);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        };
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertNull(manager.afterStopComment);
+    assertEquals(1, externalContinuations.get());
+    assertEquals(0, schedulingFailures.get());
+    assertTrue(owner.retirementFinishedForTest());
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertEquals(0, manager.successorStarts);
+    assertTrue(manager.saveFailures.isEmpty());
+    assertEquals(1, manager.saveSuccesses.size());
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+    assertEquals(1, savedFiles(".txt").size());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void shutdownCannotExitBeforePendingPublicationOrDuringSaveAttempt(boolean attemptStarted)
+      throws Exception {
+    EngineGameTransaction completed = playWithRealSave(true, 2, false);
+    BoardHistoryList history = Lizzie.board.getHistory();
+    Lizzie.config.autoSaveOnExit = false;
+    Files.writeString(manager.outputDirectory, "blocked output");
+    EngineGameChromeTransition.Kind gatedStage =
+        attemptStarted
+            ? EngineGameChromeTransition.Kind.SAVE_FAILED
+            : EngineGameChromeTransition.Kind.BETWEEN_GAMES;
+    AtomicBoolean gateClaimed = new AtomicBoolean();
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    Lizzie.engineGame.replaceChromeForTest(
+        transition -> {
+          if (transition.kind() == gatedStage && gateClaimed.compareAndSet(false, true)) {
+            entered.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "shutdown gate was not released");
+            } catch (InterruptedException interrupted) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(interrupted);
+            }
+          }
+        });
+    FutureTask<Void> completion =
+        new FutureTask<>(
+            () -> {
+              completeCurrent(new GameOutcome.Resign(EngineGameSide.BLACK));
+              return null;
+            });
+    Thread completionWorker = new Thread(completion, "test-engine-game-completion");
+    AtomicInteger exits = new AtomicInteger();
+    completionWorker.start();
+    try {
+      assertTrue(entered.await(5, TimeUnit.SECONDS), "completion did not reach the save boundary");
+      assertEquals(attemptStarted, manager.hasPendingEngineGameSave());
+      assertTrue(completed.alreadyCompleted());
+      assertNotNull(history.getGameInfo().engineGameRecord());
+
+      requestShutdown(exits);
+
+      assertEquals(0, exits.get());
+      assertEquals(0, ((SilentFrame) Lizzie.frame).shutdownCleanupCalls);
+      assertSame(completed, Lizzie.engineGame.transaction());
+      assertFalse(Lizzie.engineGame.successorPending());
+      assertSame(history, Lizzie.board.getHistory());
+    } finally {
+      release.countDown();
+      completion.get(5, TimeUnit.SECONDS);
+      completionWorker.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(completionWorker.isAlive(), "completion worker did not settle after the gate");
+    }
+    SwingUtilities.invokeAndWait(() -> {});
+
+    assertEquals(0, exits.get());
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertEquals(0, manager.successorStarts);
+    assertSame(history, Lizzie.board.getHistory());
+    BatchSummary summary = Lizzie.engineGame.lastSummary();
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertEquals(0, exits.get());
+    assertEquals(0, ((SilentFrame) Lizzie.frame).shutdownCleanupCalls);
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(0, manager.successorStarts);
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertTotals(summary);
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+    assertEquals(1, savedFiles(".txt").size());
+  }
+
+  @Test
+  void retryAfterHistoryReplacementWritesFrozenGameWithoutTouchingReplacement()
+      throws Exception {
+    playWithRealSave(true, 2, false);
+    Files.writeString(manager.outputDirectory, "blocked output");
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    BatchSummary completed = Lizzie.engineGame.lastSummary();
+    BoardHistoryList original = Lizzie.board.getHistory();
+    original.getStart().getData().comment = "edited after failure";
+    BoardHistoryList replacement = SGFParser.parseSgf("(;SZ[19]C[replacement game];B[cc])", true);
+    Lizzie.board.setHistory(replacement);
+
+    Files.delete(manager.outputDirectory);
+    Files.createDirectory(manager.outputDirectory);
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(0, manager.successorStarts);
+    assertSame(replacement, Lizzie.board.getHistory());
+    assertEquals("replacement game", replacement.getStart().getData().comment);
+    assertTotals(completed);
+    List<Path> games = savedFiles(".sgf");
+    assertEquals(1, games.size());
+    assertCompletedSgf(games.get(0));
+    String sgf = Files.readString(games.get(0));
+    assertFalse(sgf.contains("edited after failure"), sgf);
+    assertFalse(sgf.contains("replacement game"), sgf);
+    assertFalse(sgf.contains(";B[cc]"), sgf);
+  }
+
+  @Test
+  void textRetryDoesNotRewriteCommittedSgfOrRecomputeCompletedStatistics() throws Exception {
+    playWithRealSave(true, 2, false);
+    String reportName =
+        Lizzie.resourceBundle.getString("Leelaz.result")
+            + Lizzie.engineGame.outputTimestamp()
+            + ".txt";
+    Path primaryText = manager.outputDirectory.resolve("named-batch").resolve(reportName);
+    Path fallbackText =
+        manager.outputDirectory.resolve(Lizzie.engineGame.outputTimestamp()).resolve(reportName);
+    Files.createDirectories(primaryText);
+    Files.createDirectories(fallbackText);
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertEquals(0, manager.successorStarts);
+    BatchSummary completed = Lizzie.engineGame.lastSummary();
+    List<Path> games = savedFiles(".sgf");
+    assertEquals(1, games.size());
+    Path sgf = games.get(0);
+    String originalSgf = Files.readString(sgf);
+    FileTime committedTime = FileTime.fromMillis(1_000L);
+    Files.setLastModifiedTime(sgf, committedTime);
+    black.pkMoveTimeGame = 999_999;
+    white.pkMoveTimeGame = 999_999;
+    Files.delete(primaryText);
+    Files.delete(fallbackText);
+
+    assertTrue(retrySave());
+
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertEquals(1, manager.successorStarts);
+    assertEquals(committedTime, Files.getLastModifiedTime(sgf));
+    assertEquals(originalSgf, Files.readString(sgf));
+    assertTotals(completed);
+    List<Path> reports = savedFiles(".txt");
+    assertEquals(1, reports.size());
+    String report = Files.readString(reports.get(0));
+    assertTrue(report.contains("0:1"), report);
+    assertFalse(report.contains("999.999"), report);
+  }
+
+  @Test
+  void optionalImageFailureDoesNotTurnCommittedGameIntoFailedSave() throws Exception {
+    playWithRealSave(true, 2, true);
+    ((SilentFrame) Lizzie.frame).imageFailure = new IllegalStateException("controlled PNG failure");
+
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+    assertEquals(1, ((SilentFrame) Lizzie.frame).imageAttempts);
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertFalse(Lizzie.engineGame.current().saveFailed());
+    assertEquals(1, manager.successorStarts);
+    assertTrue(manager.saveFailures.isEmpty());
+    assertEquals(1, savedFiles(".sgf").size());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+    assertEquals(1, savedFiles(".txt").size());
+  }
+
+  @Test
   void exchangeColorsAndScoreAttributionAcrossGames() {
     playAccepted(genmoveBatchSpec(2, true));
     assertEquals(FIRST, Lizzie.engineGame.transaction().plan().black());
@@ -425,6 +920,9 @@ class EngineGameModuleContractTest {
     assertEquals(2, Lizzie.engineGame.lastSummary().secondWins());
     assertEquals(1, Lizzie.engineGame.lastSummary().secondWinAsBlack());
     assertEquals(1, Lizzie.engineGame.lastSummary().secondWinAsWhite());
+    assertInstanceOf(GameActivity.BetweenGames.class, activity(Lizzie.engineGame.current()));
+    assertFalse(Lizzie.engineGame.successorPending());
+    Lizzie.engineGame.onOwnerRetired();
     assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
   }
 
@@ -500,7 +998,7 @@ class EngineGameModuleContractTest {
     playAccepted(genmoveBatchSpec(3, false));
     Lizzie.engineGame.reviseBatchLimit(1);
     completeCurrent(new GameOutcome.DoublePass());
-    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertInstanceOf(GameActivity.BetweenGames.class, activity(Lizzie.engineGame.current()));
     assertFalse(Lizzie.engineGame.successorPending());
     Lizzie.engineGame.onOwnerRetired();
     assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
@@ -513,7 +1011,7 @@ class EngineGameModuleContractTest {
     completeCurrent(new GameOutcome.DoublePass());
     assertInstanceOf(GameActivity.BetweenGames.class, activity(Lizzie.engineGame.current()));
     Lizzie.engineGame.reviseBatchLimit(1);
-    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertInstanceOf(GameActivity.BetweenGames.class, activity(Lizzie.engineGame.current()));
     assertFalse(Lizzie.engineGame.successorPending());
     Lizzie.engineGame.onOwnerRetired();
     assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
@@ -748,6 +1246,9 @@ class EngineGameModuleContractTest {
     assertEquals(0, EngineGamePresentation.whiteWins(exchanged));
 
     completeCurrent(new GameOutcome.Resign(EngineGameSide.WHITE));
+    assertInstanceOf(GameActivity.BetweenGames.class, activity(Lizzie.engineGame.current()));
+    assertFalse(Lizzie.engineGame.current().startingOrPlaying());
+    Lizzie.engineGame.onOwnerRetired();
     assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
     assertFalse(Lizzie.engineGame.current().startingOrPlaying());
   }
@@ -827,6 +1328,9 @@ class EngineGameModuleContractTest {
     try {
       playAccepted(genmoveSpec());
       completeCurrent(new GameOutcome.DoublePass());
+      assertEquals(EngineGameChromeTransition.Kind.BETWEEN_GAMES, chrome.lastKind());
+      assertInstanceOf(GameActivity.BetweenGames.class, activity(chrome.lastSnapshot()));
+      Lizzie.engineGame.onOwnerRetired();
       assertEquals(EngineGameChromeTransition.Kind.BATCH_ENDED, chrome.lastKind());
       assertInstanceOf(EngineGameSnapshot.Idle.class, chrome.lastSnapshot());
     } finally {
@@ -1090,6 +1594,107 @@ class EngineGameModuleContractTest {
     return ((EngineGameSnapshot.BatchActive) snapshot).activity();
   }
 
+  private EngineGameTransaction playWithRealSave(boolean batch, int games, boolean image)
+      throws Exception {
+    manager.outputDirectory = directory.resolve("EngineGames");
+    manager.manualActivation = true;
+    manager.runWorkersInline = true;
+    manager.runRetirementContinuations = true;
+    LizzieFrame.isSavingRaw = false;
+    Lizzie.board.startStonelist = new ArrayList<>();
+    Lizzie.board.movelistwr = new ArrayList<>();
+    BoardHistoryList history =
+        SGFParser.parseSgf("(;SZ[19]C[completed original];B[aa]C[move annotation];W[bb])", true);
+    history.setHead(history.getEnd());
+    history.getStart().next().orElseThrow().getData().setPlayouts(73);
+    history.getEnd().getData().setPlayouts(41);
+    Lizzie.board.setHistory(history);
+    black.oriEnginename = "BlackEngine";
+    white.oriEnginename = "WhiteEngine";
+    black.currentEnginename = "BlackEngine";
+    white.currentEnginename = "WhiteEngine";
+    EngineGameBatchSpec spec =
+        EngineGameBatchSpecFactory.from(
+            EngineGameParsedStart.builder()
+                .first(FIRST)
+                .second(SECOND)
+                .genmove(true)
+                .timeLimitEnabled(true)
+                .firstTimeSeconds(2)
+                .secondTimeSeconds(2)
+                .batch(batch)
+                .batchLimit(games)
+                .batchName("named-batch")
+                .autosave(true)
+                .saveWinrateImage(image)
+                .build());
+    assertInstanceOf(Acceptance.Accepted.class, Lizzie.engineGame.accept(spec, observer));
+    EngineGameTransaction transaction = Lizzie.engineGame.transaction();
+    activateOwner(transaction);
+    Lizzie.engineGame.onOwnerPlaying();
+    black.pkMoveTimeGame = 1100;
+    white.pkMoveTimeGame = 2200;
+    return transaction;
+  }
+
+  private void completeForSave(GameOutcome outcome) throws Exception {
+    SwingUtilities.invokeAndWait(() -> completeCurrent(outcome));
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
+  private boolean retrySave() throws Exception {
+    boolean[] result = new boolean[1];
+    SwingUtilities.invokeAndWait(() -> result[0] = manager.retryEngineGameSave());
+    SwingUtilities.invokeAndWait(() -> {});
+    return result[0];
+  }
+
+  private static void requestShutdown(AtomicInteger exits) throws Exception {
+    var shutdown = Lizzie.class.getDeclaredMethod("shutdown", IntConsumer.class);
+    shutdown.setAccessible(true);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            shutdown.invoke(null, (IntConsumer) status -> exits.incrementAndGet());
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+  }
+
+  private List<Path> savedFiles(String suffix) throws IOException {
+    try (var files = Files.walk(manager.outputDirectory)) {
+      List<Path> saved =
+          files.filter(Files::isRegularFile)
+              .filter(path -> path.getFileName().toString().endsWith(suffix))
+              .sorted()
+              .toList();
+      for (Path path : saved) assertTrue(path.startsWith(directory));
+      return saved;
+    }
+  }
+
+  private static void assertCompletedSgf(Path path) throws IOException {
+    String sgf = Files.readString(path);
+    assertTrue(sgf.contains("completed original"), sgf);
+    assertTrue(sgf.contains("move annotation"), sgf);
+    assertTrue(sgf.contains(";B[aa]"), sgf);
+    assertTrue(sgf.contains(";W[bb]"), sgf);
+    assertNotNull(SGFParser.parseSgf(sgf, true));
+  }
+
+  private void assertTotals(BatchSummary expected) {
+    BatchSummary actual = Lizzie.engineGame.lastSummary();
+    assertEquals(expected.firstWins(), actual.firstWins());
+    assertEquals(expected.secondWins(), actual.secondWins());
+    assertEquals(expected.doublePassGames(), actual.doublePassGames());
+    assertEquals(expected.maxMoveGames(), actual.maxMoveGames());
+    assertEquals(expected.firstTotalTimeMs(), actual.firstTotalTimeMs());
+    assertEquals(expected.secondTotalTimeMs(), actual.secondTotalTimeMs());
+    assertEquals(expected.firstTotalVisits(), actual.firstTotalVisits());
+    assertEquals(expected.secondTotalVisits(), actual.secondTotalVisits());
+  }
+
   private void playAccepted(EngineGameBatchSpec spec) {
     assertInstanceOf(Acceptance.Accepted.class, Lizzie.engineGame.accept(spec, observer));
     Lizzie.engineGame.onOwnerPlaying();
@@ -1288,6 +1893,20 @@ class EngineGameModuleContractTest {
     private boolean manualActivation;
     private boolean failNextNonFirstStart;
     private EngineGamePlan lastSuccessorPlan;
+    private boolean runRetirementContinuations;
+    private int successorStarts;
+    private boolean stopBeforeSuccessorAdmission;
+    private boolean observingStoppedSuccessor;
+    private Boolean stoppedSuccessorAccepted;
+    private EngineGameSnapshot successorSnapshotBeforeStop;
+    private EngineGameSnapshot successorSnapshotAfterStop;
+    private EngineGameOwnerTransaction successorOwnerBeforeAdmission;
+    private EngineGameOwnerTransaction successorOwnerAfterAdmission;
+    private final List<String> stoppedSuccessorWorkers = new ArrayList<>();
+    private Runnable afterStopComment;
+    private Path outputDirectory;
+    private final List<Path> saveFailures = new ArrayList<>();
+    private final List<String> saveSuccesses = new ArrayList<>();
 
     private CountingLeaseEngineManager(List<Leelaz> engines) {
       super(engines);
@@ -1295,11 +1914,47 @@ class EngineGameModuleContractTest {
 
     @Override
     public boolean startEngineGame(EngineGamePlan plan, boolean firstGame) {
+      if (!firstGame) {
+        successorStarts++;
+        lastSuccessorPlan = plan;
+        if (stopBeforeSuccessorAdmission) {
+          stopBeforeSuccessorAdmission = false;
+          successorSnapshotBeforeStop = Lizzie.engineGame.current();
+          Lizzie.engineGame.stop();
+          successorSnapshotAfterStop = Lizzie.engineGame.current();
+          successorOwnerBeforeAdmission = EngineManager.activeEngineGameTransactionForTest();
+          boolean inline = runWorkersInline;
+          runWorkersInline = false;
+          observingStoppedSuccessor = true;
+          try {
+            // Exercise the real admission after Stop removed this successor's product.
+            stoppedSuccessorAccepted = super.startEngineGame(plan, false);
+            successorOwnerAfterAdmission = EngineManager.activeEngineGameTransactionForTest();
+            return stoppedSuccessorAccepted;
+          } finally {
+            observingStoppedSuccessor = false;
+            runWorkersInline = inline;
+          }
+        }
+      }
       if (manualActivation) {
-        return EngineManager.beginEngineGameTransaction(this, plan, null, firstGame) != null;
+        EngineGameOwnerTransaction owner =
+            EngineManager.beginEngineGameTransaction(this, plan, null, firstGame);
+        if (owner != null && outputDirectory != null) {
+          // Manual engine activation skips startup I/O, not the real captured output identity.
+          try {
+            var capture =
+                EngineManager.class.getDeclaredMethod(
+                    "captureEngineGameOutputIdentity", EngineGameOwnerTransaction.class);
+            capture.setAccessible(true);
+            capture.invoke(this, owner);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        }
+        return owner != null;
       }
       if (!firstGame) {
-        lastSuccessorPlan = plan;
         if (failNextNonFirstStart) {
           failNextNonFirstStart = false;
           return false;
@@ -1320,7 +1975,31 @@ class EngineGameModuleContractTest {
     }
 
     @Override
+    protected void appendEngineGameStopComment(boolean forceEngineGame) {
+      super.appendEngineGameStopComment(forceEngineGame);
+      Runnable hook = afterStopComment;
+      afterStopComment = null;
+      if (hook != null) hook.run();
+    }
+
+    @Override
+    protected Path engineGameOutputDirectory() {
+      return outputDirectory == null ? super.engineGameOutputDirectory() : outputDirectory;
+    }
+
+    @Override
+    protected void showEngineGameSaveFailure(Path target, Exception failure) {
+      saveFailures.add(target);
+    }
+
+    @Override
+    protected void showEngineGameSaveSuccess(String message) {
+      saveSuccesses.add(message);
+    }
+
+    @Override
     protected Thread createEngineGameWorker(Runnable task, String name) {
+      if (observingStoppedSuccessor) stoppedSuccessorWorkers.add(name);
       if (!runWorkersInline || isEngineGameDeadlineWatcher(name)) {
         return super.createEngineGameWorker(task, name);
       }
@@ -1337,7 +2016,9 @@ class EngineGameModuleContractTest {
       return new Thread(task, name) {
         @Override
         public synchronized void start() {
-          // Contract tests drive onOwnerRetired explicitly.
+          // Ordinary contract tests drive onOwnerRetired explicitly. Save integration cases run
+          // the real completion so an unscheduled worker cannot masquerade as a persistence gate.
+          if (runRetirementContinuations) run();
         }
       };
     }
@@ -1399,6 +2080,23 @@ class EngineGameModuleContractTest {
   }
 
   private static final class SilentFrame extends LizzieFrame {
+    private RuntimeException imageFailure;
+    private int imageAttempts;
+    private int shutdownCleanupCalls;
+    private String lastResult;
+
+    @Override
+    public CompletableFuture<Void> shutdownHumanSlPreparation() {
+      shutdownCleanupCalls++;
+      throw new AssertionError("shutdown reached cleanup before the completed game was saved");
+    }
+
+    @Override
+    public void saveImage(int x, int y, int width, int height, String path) {
+      imageAttempts++;
+      if (imageFailure != null) throw imageFailure;
+    }
+
     @Override
     public boolean isDisplayable() {
       return true;
@@ -1416,7 +2114,9 @@ class EngineGameModuleContractTest {
     public void removeInput(boolean shouldRemove) {}
 
     @Override
-    public void setResult(String result) {}
+    public void setResult(String result) {
+      lastResult = result;
+    }
 
     @Override
     public void resetTitle() {}
@@ -1469,8 +2169,12 @@ class EngineGameModuleContractTest {
 
 
   private static final class SilentBoard extends Board {
+    private int engineGameClearCalls;
+
     @Override
-    public void clear(boolean isEngineGame) {}
+    public void clear(boolean isEngineGame) {
+      if (isEngineGame) engineGameClearCalls++;
+    }
   }
 
   private static final class SilentGtpConsole extends GtpConsolePane {

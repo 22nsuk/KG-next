@@ -6,10 +6,13 @@ import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.enginegame.BatchSummary;
 import featurecat.lizzie.enginegame.EngineGameKomiState;
+import featurecat.lizzie.enginegame.EngineGameModule;
 import featurecat.lizzie.enginegame.EngineGamePlan;
 import featurecat.lizzie.enginegame.EngineGamePlayMode;
 import featurecat.lizzie.enginegame.EngineGameSide;
 import featurecat.lizzie.enginegame.EngineGameSideLimits;
+import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.enginegame.EngineGameTransaction;
 import featurecat.lizzie.enginegame.EngineGameTimeModes;
 import featurecat.lizzie.enginegame.EngineParticipantIdentity;
 import featurecat.lizzie.enginegame.LifecycleBinding;
@@ -34,14 +37,15 @@ import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.AtomicSgfFileWriter;
+import featurecat.lizzie.util.AtomicTextFileWriter;
 import featurecat.lizzie.util.Utils;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -52,6 +56,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ForkJoinPool;
@@ -176,6 +181,68 @@ public class EngineManager {
   private static long engineGameTransactionSequence;
   private static EngineGameOwnerTransaction activeEngineGameTransaction;
   private static EngineGameOwnerTransaction retiringEngineGameTransaction;
+  private volatile PendingEngineGameSave pendingEngineGameSave;
+
+  /** The terminal owner's files and continuation survive IO failure, but never own engine leases. */
+  private static final class PendingEngineGameSave {
+    final EngineGameStopClaim stopClaim;
+    final EngineGameModule module;
+    final Board board;
+    final BoardHistoryList history;
+    final long boardRevision;
+    final Path directory;
+    final String batchName;
+    final String batchTimestamp;
+    final String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+    final boolean required;
+    final boolean saveImage;
+    final String sgfName;
+    final String summaryName;
+    final String summaryText;
+    final String completionMessage;
+    final AtomicBoolean attempting = new AtomicBoolean();
+    final AtomicBoolean continuationScheduled = new AtomicBoolean();
+    String sgf;
+    Path sgfPath;
+    Path summaryPath;
+    Path lastTarget;
+    volatile boolean saved;
+
+    PendingEngineGameSave(
+        EngineManager manager, EngineGameStopClaim stopClaim, int resignIndex, BatchSummary summary) {
+      this.stopClaim = stopClaim;
+      module = Lizzie.engineGame;
+      EngineGameOwnerTransaction owner = stopClaim.transaction;
+      EngineGameTransaction.CompletedPosition completed =
+          owner.product == null ? null : owner.product.completedPosition();
+      board = completed == null ? Lizzie.board : completed.board();
+      history = completed == null ? board.getHistory() : completed.history();
+      boardRevision = completed == null ? board.getContextRevision() : completed.revision();
+      EngineGamePlan plan = stopClaim.plan;
+      directory = manager.engineGameOutputDirectory();
+      lastTarget = directory;
+      batchName = owner.batchGameName == null ? "" : owner.batchGameName;
+      batchTimestamp = owner.timestamp == null ? "" : owner.timestamp;
+      required = plan.batch() || plan.output().autosave();
+      saveImage = plan.output().saveWinrateImage();
+      sgfName = required ? manager.engineGameSgfName(this, resignIndex) : null;
+      summaryName = manager.resourceBundle.getString("Leelaz.result") + batchTimestamp + ".txt";
+      summaryText = plan.batch() ? manager.captureEngineGameSummary(owner, summary) : null;
+      completionMessage = manager.engineGameCompletionMessage(plan, resignIndex, summary);
+    }
+
+    boolean ownsCurrentHistory() {
+      return Lizzie.board == board
+          && board.getHistory() == history
+          && board.getContextRevision() == boardRevision;
+    }
+
+    boolean ownsCurrentProduct() {
+      return Lizzie.engineGame == module
+          && module != null
+          && module.transaction() == stopClaim.transaction.product;
+    }
+  }
 
   /**
    * A failed participant is recovered only after its game transaction has fully retired. While this
@@ -250,6 +317,7 @@ public class EngineManager {
     private final AtomicBoolean rollbackFinished = new AtomicBoolean();
     private final AtomicBoolean retirementCompletionClaimed = new AtomicBoolean();
     private final AtomicBoolean retirementFinished = new AtomicBoolean();
+    private final CompletableFuture<Void> retirementCompleted = new CompletableFuture<>();
     private Runnable foregroundHandback;
     private volatile InitialEngineStartupSynchronization foregroundSynchronization;
     private final AtomicReference<EngineGameRetirementContinuation> retirementContinuation =
@@ -1398,7 +1466,7 @@ public class EngineManager {
   }
 
   public boolean startEngineGame(EngineGamePlan plan, boolean firstGame) {
-    if (plan == null) {
+    if (plan == null || Lizzie.engineGame == null) {
       return false;
     }
     int engineBlack = plan.blackIndex();
@@ -1423,7 +1491,7 @@ public class EngineManager {
       return false;
     }
     EngineGameOwnerTransaction gameTransaction =
-        startNewEngineGame(firstGame, plan, null, true);
+        startNewEngineGame(firstGame, plan, null, Lizzie.engineGame);
     if (gameTransaction == null || !isCurrentEngineGameTransaction(gameTransaction)) {
       return false;
     }
@@ -1654,29 +1722,204 @@ public class EngineManager {
     return filename;
   }
 
-  private void saveEngineGameFile(int resignIndex) {
-    EngineGameOwnerTransaction saveTxn;
-    synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      saveTxn =
-          activeEngineGameTransaction != null
-              ? activeEngineGameTransaction
-              : retiringEngineGameTransaction;
-    }
-    EngineGamePlan plan = saveTxn == null ? null : saveTxn.plan;
-    if (plan == null) {
-      return;
-    }
-    String batchGameName = saveTxn.batchGameName == null ? "" : saveTxn.batchGameName;
-    String timestamp = saveTxn.timestamp == null ? "" : saveTxn.timestamp;
-    File file = new File("");
-    String courseFile = "";
+  Path engineGameOutputDirectory() {
+    return Path.of("EngineGames").toAbsolutePath().normalize();
+  }
+
+  public boolean hasPendingEngineGameSave() {
+    return pendingEngineGameSave != null;
+  }
+
+  /** Retries only captured files. Completion, comments, and batch statistics are never replayed. */
+  public boolean retryEngineGameSave() {
+    PendingEngineGameSave save = pendingEngineGameSave;
+    if (save == null) return true;
+    if (!save.attempting.compareAndSet(false, true)) return false;
     try {
-      courseFile = file.getCanonicalPath();
-    } catch (IOException e) {
-      e.printStackTrace();
+      if (!save.saved) {
+        try {
+          if (save.required && save.sgf == null) {
+            save.sgf = SGFParser.captureSave(save.board, save.history, false);
+          }
+          if (save.required && save.sgfPath == null) {
+            save.sgfPath = writeEngineGameOutput(save, save.sgfName, save.sgf, true);
+            saveEngineGameImage(save);
+          }
+          if (save.summaryText != null && save.summaryPath == null) {
+            save.summaryPath =
+                writeEngineGameOutput(save, save.summaryName, save.summaryText, false);
+          }
+        } catch (IOException | RuntimeException failure) {
+          if (save.ownsCurrentProduct()) save.module.onSaveFailed(save.stopClaim.transaction);
+          presentEngineGameSaveFailure(save, failure);
+          return false;
+        }
+        save.saved = true;
+        if (save.ownsCurrentProduct()) save.module.onSaveSucceeded(save.stopClaim.transaction);
+      }
+      completeEngineGameSaveAfterRetirement(save);
+      return true;
+    } finally {
+      save.attempting.set(false);
+    }
+  }
+
+  private Path writeEngineGameOutput(
+      PendingEngineGameSave save, String filename, String text, boolean sgf) throws IOException {
+    String primaryFolder = save.stopClaim.plan.batch() ? save.batchName : "";
+    String fallbackFolder = save.stopClaim.plan.batch() ? save.batchTimestamp : "";
+    try {
+      return writeEngineGameOutput(save, primaryFolder, filename, text, sgf);
+    } catch (IOException | RuntimeException primaryFailure) {
+      if (primaryFolder.equals(fallbackFolder)) throw primaryFailure;
+      try {
+        return writeEngineGameOutput(save, fallbackFolder, filename, text, sgf);
+      } catch (IOException | RuntimeException fallbackFailure) {
+        fallbackFailure.addSuppressed(primaryFailure);
+        throw fallbackFailure;
+      }
+    }
+  }
+
+  private Path writeEngineGameOutput(
+      PendingEngineGameSave save, String folder, String filename, String text, boolean sgf)
+      throws IOException {
+    Path destination = Path.of(save.directory.toString(), folder, filename);
+    save.lastTarget = destination;
+    Files.createDirectories(destination.getParent());
+    if (sgf) AtomicSgfFileWriter.write(destination, text);
+    else AtomicTextFileWriter.write(destination, text);
+    return destination;
+  }
+
+  private void saveEngineGameImage(PendingEngineGameSave save) {
+    if (!save.saveImage || !save.ownsCurrentHistory() || Lizzie.frame == null) return;
+    try {
+      Path image =
+          save.sgfPath.resolveSibling(save.sgfPath.getFileName().toString().replaceFirst("\\.sgf$", ".png"));
+      Lizzie.frame.saveImage(
+          Lizzie.frame.statx,
+          Lizzie.frame.staty,
+          (int) (Lizzie.frame.grw * 1.03),
+          Lizzie.frame.grh + Lizzie.frame.stath,
+          image.toString());
+    } catch (RuntimeException failure) {
+      // A best-effort graph image must not turn an already committed SGF into a failed save.
+      ENGINE_LOG.warn("Engine-game graph image could not be saved", failure);
+    }
+  }
+
+  private void presentEngineGameSaveFailure(PendingEngineGameSave save, Exception failure) {
+    Runnable present =
+        () -> {
+          if (pendingEngineGameSave != save || save.saved) return;
+          if (save.ownsCurrentHistory() && Lizzie.frame != null) {
+            Lizzie.frame.addInput(true);
+            changeEngIcoForEndPk();
+          }
+          showEngineGameSaveFailure(save.lastTarget, failure);
+        };
+    if (SwingUtilities.isEventDispatchThread()) present.run();
+    else SwingUtilities.invokeLater(present);
+  }
+
+  void showEngineGameSaveFailure(Path target, Exception failure) {
+    ENGINE_LOG.warn("Completed engine game could not be saved to {}", target, failure);
+    Utils.showMsgNoModal(
+        resourceBundle.getString("EngineGameInfo.saveFailedDetail")
+            + "\n" + target + "\n" + failure.getLocalizedMessage());
+  }
+
+  void showEngineGameSaveSuccess(String message) {
+    Utils.showMsgNoModal(message);
+  }
+
+  private void completeEngineGameSaveAfterRetirement(PendingEngineGameSave save) {
+    if (!save.continuationScheduled.compareAndSet(false, true)) return;
+    // Saving must not compete with catalog refresh for the owner's single cleanup continuation.
+    save.stopClaim.transaction.retirementCompleted.thenRun(
+        () -> SwingUtilities.invokeLater(() -> finishSavedEngineGame(save)));
+  }
+
+  private void finishSavedEngineGame(PendingEngineGameSave save) {
+    EngineGameInactiveUiToken finishedGameUi = inactiveUiToken(save.stopClaim);
+    ENGINE_GAME_UI_MUTATION_LOCK.lock();
+    try {
+      if (pendingEngineGameSave != save || !save.saved) return;
+      pendingEngineGameSave = null;
+      if (Lizzie.engineManager != this || !save.ownsCurrentProduct()) return;
+      if (!save.ownsCurrentHistory()) save.module.stop();
+    } finally {
+      ENGINE_GAME_UI_MUTATION_LOCK.unlock();
     }
 
-    String sf = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+    // Owner admission acquires the analysis-output lock before the UI lock. Do not invert that
+    // order by retaining the UI lock while starting a successor.
+    if (!save.module.onOwnerRetired(save.stopClaim.transaction)) {
+      restoreUiAfterEngineGameStartAbort(finishedGameUi, null);
+      return;
+    }
+
+    ENGINE_GAME_UI_MUTATION_LOCK.lock();
+    try {
+      if (Lizzie.engineManager != this
+          || Lizzie.engineGame != save.module
+          || !(save.module.current() instanceof EngineGameSnapshot.Idle)) return;
+      synchronized (ENGINE_SELECTION_STATE_LOCK) {
+        if (!isCurrentEngineGameInactiveUiTokenLocked(finishedGameUi)) return;
+      }
+      if (save.ownsCurrentHistory()) {
+        LizzieFrame.toolbar.enableDisabelForEngineGame(true);
+        Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+        Lizzie.frame.addInput(true);
+        changeEngIcoForEndPk();
+      }
+      String message = save.completionMessage;
+      if (save.sgfPath != null) {
+        message += "," + resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
+            + save.sgfPath;
+      }
+      if (save.summaryPath != null) message += "\n" + save.summaryPath;
+      showEngineGameSaveSuccess(message);
+    } finally {
+      ENGINE_GAME_UI_MUTATION_LOCK.unlock();
+    }
+  }
+
+  private String engineGameCompletionMessage(
+      EngineGamePlan plan, int resignIndex, BatchSummary summary) {
+    if (plan.batch()) {
+      String other = "";
+      if (summary.doublePassGames() > 0) {
+        other = resourceBundle.getString("EngineGameInfo.doublePassGame") + summary.doublePassGames();
+      }
+      if (summary.maxMoveGames() > 0) {
+        other += (other.isEmpty() ? "" : " ")
+            + resourceBundle.getString("EngineGameInfo.outOfMoveGame") + summary.maxMoveGames();
+      }
+      return resourceBundle.getString("EngineGameInfo.batchGameEndAndScore")
+          + engineList.get(plan.firstIndex()).oriEnginename + "   "
+          + summary.firstWins() + ":" + summary.secondWins() + "   "
+          + engineList.get(plan.secondIndex()).oriEnginename
+          + (other.isEmpty() ? "" : " ") + other;
+    }
+    String message = resourceBundle.getString("EngineGameInfo.gameFinished");
+    Leelaz resigning = exactCatalogEngine(resignIndex);
+    if (resigning != null && resigning.outOfMoveNum) {
+      return message + resourceBundle.getString("EngineGameInfo.finishedByMoves");
+    }
+    if (resigning != null && resigning.doublePass) {
+      return message + resourceBundle.getString("EngineGameInfo.finishedByDoublePass");
+    }
+    boolean blackResigned = resignIndex == plan.blackIndex();
+    return message + resourceBundle.getString(blackResigned ? "GameInfoDialog.white" : "GameInfoDialog.black")
+        + "(" + engineList.get(blackResigned ? plan.whiteIndex() : plan.blackIndex()).oriEnginename
+        + ")" + resourceBundle.getString("EngineGameInfo.finishedWin");
+  }
+
+  private String engineGameSgfName(PendingEngineGameSave save, int resignIndex) {
+    EngineGamePlan plan = save.stopClaim.plan;
+    String sf = save.timestamp;
 
     String df = "";
     if (plan.batch()) {
@@ -1704,12 +1947,14 @@ public class EngineManager {
     // 添加结果
     if (engineList.get(resignIndex).doublePass) {
       df += resourceBundle.getString("EngineManager.doublePassFileName"); // "_双pass对局";
-    } else if (Lizzie.board.getHistory().getMoveNumber() > plan.resolvedMaxMoves()) {
+    } else if (save.history.getMoveNumber() > plan.resolvedMaxMoves()) {
       df += resourceBundle.getString("EngineManager.outOfMoveFileName"); // "_超手数对局";
     } else {
       if (resignIndex == plan.whiteIndex()) {
-        GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
-        gameInfo.setResult(resourceBundle.getString("Leelaz.blackWin"));
+        GameInfo gameInfo = save.history.getGameInfo();
+        String result = resourceBundle.getString("Leelaz.blackWin");
+        if (save.ownsCurrentHistory()) gameInfo.setResult(result);
+        else gameInfo.setResultNoUI(result);
         df =
             df
                 + "_"
@@ -1719,8 +1964,10 @@ public class EngineManager {
                 + ")"
                 + resourceBundle.getString("Leelaz.win");
       } else {
-        GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
-        gameInfo.setResult(resourceBundle.getString("Leelaz.whiteWin"));
+        GameInfo gameInfo = save.history.getGameInfo();
+        String result = resourceBundle.getString("Leelaz.whiteWin");
+        if (save.ownsCurrentHistory()) gameInfo.setResult(result);
+        else gameInfo.setResultNoUI(result);
         df =
             df
                 + "_"
@@ -1733,357 +1980,173 @@ public class EngineManager {
     }
     df = df + "_" + sf;
     // 增加如果已命名,则保存在命名的文件夹下
-    df = formateSaveString(df);
+    return formateSaveString(df) + ".sgf";
 
-    File autoSaveFile;
-    File autoSaveFile2 = null;
-    if (plan.batch()) {
-      autoSaveFile =
-          new File(
-              courseFile
-                  + File.separator
-                  + "EngineGames"
-                  + File.separator
-                  + batchGameName
-                  + File.separator
-                  + df
-                  + ".sgf");
-      autoSaveFile2 =
-          new File(
-              courseFile
-                  + File.separator
-                  + "EngineGames"
-                  + File.separator
-                  + timestamp
-                  + File.separator
-                  + df
-                  + ".sgf");
-    } else {
-      autoSaveFile =
-          new File(courseFile + File.separator + "EngineGames" + File.separator + df + ".sgf");
-      autoSaveFile2 =
-          new File(courseFile + File.separator + "EngineGames" + File.separator + df + ".sgf");
-    }
-
-    File fileParent = autoSaveFile.getParentFile();
-    if (!fileParent.exists()) {
-      fileParent.mkdirs();
-    }
-    try {
-      SGFParser.save(Lizzie.board, autoSaveFile.getPath());
-      if (LizzieFrame.toolbar.enginePkSaveWinrate) {
-        String autoSavePng;
-        if (plan.batch()) {
-          autoSavePng =
-              courseFile
-                  + File.separator
-                  + "EngineGames"
-                  + File.separator
-                  + batchGameName
-                  + File.separator
-                  + df
-                  + ".png";
-
-        } else {
-          autoSavePng = courseFile + File.separator + "EngineGames" + File.separator + df + ".png";
-        }
-        Lizzie.frame.saveImage(
-            Lizzie.frame.statx,
-            Lizzie.frame.staty,
-            (int) (Lizzie.frame.grw * 1.03),
-            Lizzie.frame.grh + Lizzie.frame.stath,
-            autoSavePng);
-      }
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      if (plan.batch()) {
-        try {
-          File fileParent2 = autoSaveFile2.getParentFile();
-          if (!fileParent2.exists()) {
-            fileParent2.mkdirs();
-          }
-          SGFParser.save(Lizzie.board, autoSaveFile2.getPath());
-
-          if (LizzieFrame.toolbar.enginePkSaveWinrate) {
-
-            String autoSavePng2 = null;
-            if (plan.batch()) {
-              autoSavePng2 =
-                  courseFile
-                      + File.separator
-                      + "EngineGames"
-                      + File.separator
-                      + timestamp
-                      + File.separator
-                      + df
-                      + ".png";
-            } else {
-              autoSavePng2 =
-                  courseFile + File.separator + "EngineGames" + File.separator + df + ".png";
-            }
-            Lizzie.frame.saveImage(
-                Lizzie.frame.statx,
-                Lizzie.frame.staty,
-                (int) (Lizzie.frame.grw * 1.03),
-                Lizzie.frame.grh + Lizzie.frame.stath,
-                autoSavePng2);
-          }
-        } catch (IOException e1) {
-          // TODO Auto-generated catch block
-          e1.printStackTrace();
-        }
-      }
-      e.printStackTrace();
-    }
   }
 
-  private void writeToFile(
-      File file,
-      String settingAll,
-      String settingB,
-      String settingW,
-      String resultB,
-      String resultW,
-      String resultOther)
-      throws IOException {
-    BatchSummary summary = Lizzie.engineGame == null ? null : Lizzie.engineGame.lastSummary();
-    EngineGamePlan plan;
-    synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      EngineGameOwnerTransaction txn =
-          activeEngineGameTransaction != null
-              ? activeEngineGameTransaction
-              : retiringEngineGameTransaction;
-      plan = txn == null ? null : txn.plan;
-    }
+  private String captureEngineGameSummary(
+      EngineGameOwnerTransaction saveTxn, BatchSummary summary) {
+    EngineGamePlan plan = saveTxn.plan;
+    String settingAll = saveTxn.settingAll;
+    String settingB = saveTxn.settingFirst;
+    String settingW = saveTxn.settingSecond;
+    String resultB = saveTxn.resultFirst;
+    String resultW = saveTxn.resultSecond;
+    String resultOther = saveTxn.resultOther;
     double games = summary == null ? 0.0 : summary.gameOrdinal();
     int firstWins = summary == null ? 0 : summary.firstWins();
     int secondWins = summary == null ? 0 : summary.secondWins();
-    try (FileOutputStream writerStream = new FileOutputStream(file);
-        BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(writerStream, "UTF-8"))) {
-      double wr =
-          (firstWins + secondWins) == 0
-              ? 0.0
-              : (double) firstWins / (double) (firstWins + secondWins);
+    StringBuilder writer = new StringBuilder();
+    double wr =
+        (firstWins + secondWins) == 0
+            ? 0.0
+            : (double) firstWins / (double) (firstWins + secondWins);
 
-      double elo = Math.log10(1.0 / wr - 1.0) * 400;
-      double zxwr = (wr + 1.0 / (2.0 * games)) / (1.0 + 1.0 / games);
-      double zxwrc =
-          1.0
-              * Math.sqrt(wr * (1.0 - wr) / games + 1.0 / ((2.0 * games) * (2.0 * games)))
-              / (1.0 + 1.0 / games);
-      double zxwr2 = (wr + 4.0 / (2.0 * games)) / (1.0 + 4.0 / games);
-      double zxwrc2 =
-          2.0
-              * Math.sqrt(wr * (1.0 - wr) / games + 4.0 / ((2.0 * games) * (2.0 * games)))
-              / (1.0 + 4.0 / games);
-      double zxwr3 = (wr + 9.0 / (2.0 * games)) / (1.0 + 9.0 / games);
-      double zxwrc3 =
-          3.0
-              * Math.sqrt(wr * (1.0 - wr) / games + 9.0 / ((2.0 * games) * (2.0 * games)))
-              / (1.0 + 9.0 / games);
-      double elo2 = Math.log10(1.0 / ((zxwr2 > 0.5 ? zxwr2 + zxwrc2 : zxwr2 - zxwrc2)) - 1.0) * 400;
+    double elo = Math.log10(1.0 / wr - 1.0) * 400;
+    double zxwr = (wr + 1.0 / (2.0 * games)) / (1.0 + 1.0 / games);
+    double zxwrc =
+        1.0
+            * Math.sqrt(wr * (1.0 - wr) / games + 1.0 / ((2.0 * games) * (2.0 * games)))
+            / (1.0 + 1.0 / games);
+    double zxwr2 = (wr + 4.0 / (2.0 * games)) / (1.0 + 4.0 / games);
+    double zxwrc2 =
+        2.0
+            * Math.sqrt(wr * (1.0 - wr) / games + 4.0 / ((2.0 * games) * (2.0 * games)))
+            / (1.0 + 4.0 / games);
+    double zxwr3 = (wr + 9.0 / (2.0 * games)) / (1.0 + 9.0 / games);
+    double zxwrc3 =
+        3.0
+            * Math.sqrt(wr * (1.0 - wr) / games + 9.0 / ((2.0 * games) * (2.0 * games)))
+            / (1.0 + 9.0 / games);
+    double elo2 = Math.log10(1.0 / ((zxwr2 > 0.5 ? zxwr2 + zxwrc2 : zxwr2 - zxwrc2)) - 1.0) * 400;
 
-      writer.write(
-          settingAll
-              + resourceBundle.getString("EngineGameInfo.backgroundPonder")
-              + (Lizzie.config.enginePkPonder
-                  ? resourceBundle.getString("EngineGameInfo.yes")
-                  : resourceBundle.getString("EngineGameInfo.no")));
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(settingB);
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(settingW);
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(
-          resourceBundle.getString("EngineGameInfo.totalGameResults")
-              + (int) games
-              + resourceBundle.getString("EngineGameInfo.gameScore")
-              + firstWins
-              + ":"
-              + secondWins
-              + resourceBundle.getString("EngineGameInfo.gameWinrate")
-              + String.format(Locale.ENGLISH, "%.2f", wr * 100)
-              + "%");
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(resultB);
-      writer.write("\r\n");
-      writer.write(resultW);
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(resourceBundle.getString("EngineGameInfo.timeVisitsTips"));
-      writer.write("\r\n");
-      writer.write("\r\n");
-      writer.write(resultOther);
-      writer.write("\r\n");
-      writer.write("\r\n");
-      if (firstWins == 0)
-        writer.write(
-            resourceBundle.getString("EngineGameInfo.secondEngineElo")
-                + resourceBundle.getString("EngineGameInfo.elo100Wr"));
-      else {
-        writer.write(
-            resourceBundle.getString("EngineGameInfo.secondEngineElo")
-                + (elo > 0 ? "+" : "")
-                + String.format(Locale.ENGLISH, "%.2f", elo)
-                + " ± "
-                + (zxwr2 + zxwrc2 < 1 && zxwr2 + zxwrc2 > 0
-                    ? String.format(Locale.ENGLISH, "%.2f", Math.abs(elo2 - elo))
-                    : ""));
-        if (games < 50)
-          writer.write("?(" + resourceBundle.getString("EngineGameInfo.notEnoughGames") + ")");
+    writer.append(
+        settingAll
+            + resourceBundle.getString("EngineGameInfo.backgroundPonder")
+            + (Lizzie.config.enginePkPonder
+                ? resourceBundle.getString("EngineGameInfo.yes")
+                : resourceBundle.getString("EngineGameInfo.no")));
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(settingB);
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(settingW);
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(
+        resourceBundle.getString("EngineGameInfo.totalGameResults")
+            + (int) games
+            + resourceBundle.getString("EngineGameInfo.gameScore")
+            + firstWins
+            + ":"
+            + secondWins
+            + resourceBundle.getString("EngineGameInfo.gameWinrate")
+            + String.format(Locale.ENGLISH, "%.2f", wr * 100)
+            + "%");
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(resultB);
+    writer.append("\r\n");
+    writer.append(resultW);
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(resourceBundle.getString("EngineGameInfo.timeVisitsTips"));
+    writer.append("\r\n");
+    writer.append("\r\n");
+    writer.append(resultOther);
+    writer.append("\r\n");
+    writer.append("\r\n");
+    if (firstWins == 0)
+      writer.append(
+          resourceBundle.getString("EngineGameInfo.secondEngineElo")
+              + resourceBundle.getString("EngineGameInfo.elo100Wr"));
+    else {
+      writer.append(
+          resourceBundle.getString("EngineGameInfo.secondEngineElo")
+              + (elo > 0 ? "+" : "")
+              + String.format(Locale.ENGLISH, "%.2f", elo)
+              + " ± "
+              + (zxwr2 + zxwrc2 < 1 && zxwr2 + zxwrc2 > 0
+                  ? String.format(Locale.ENGLISH, "%.2f", Math.abs(elo2 - elo))
+                  : ""));
+      if (games < 50)
+        writer.append("?(" + resourceBundle.getString("EngineGameInfo.notEnoughGames") + ")");
+    }
+    writer.append("\r\n");
+    writer.append(
+        resourceBundle.getString("EngineGameInfo.oneStdev")
+            + String.format(Locale.ENGLISH, "%.2f", zxwr * 100)
+            + "% ± "
+            + String.format(Locale.ENGLISH, "%.2f", zxwrc * 100)
+            + "%");
+    writer.append("\r\n");
+    writer.append(
+        resourceBundle.getString("EngineGameInfo.twoStdev")
+            + String.format(Locale.ENGLISH, "%.2f", zxwr2 * 100)
+            + "% ± "
+            + String.format(Locale.ENGLISH, "%.2f", zxwrc2 * 100)
+            + "%");
+    writer.append("\r\n");
+    writer.append(
+        resourceBundle.getString("EngineGameInfo.threeStdev")
+            + String.format(Locale.ENGLISH, "%.2f", zxwr3 * 100)
+            + "% ± "
+            + String.format(Locale.ENGLISH, "%.2f", zxwrc3 * 100)
+            + "%");
+    writer.append("\r\n");
+
+    Lizzie.frame.hasEnginePkTitile = true;
+    Lizzie.frame.enginePkTitile =
+        firstWins
+            + ":"
+            + secondWins
+            + " "
+            + engineList.get(plan == null ? 0 : plan.firstIndex()).oriEnginename
+            + " VS "
+            + engineList.get(plan == null ? 1 : plan.secondIndex()).oriEnginename
+            + resourceBundle.getString("EngineGameInfo.titleWinRate")
+            + String.format(Locale.ENGLISH, "%.1f", wr * 100)
+            + "%"
+            + " 2σ "
+            + String.format(Locale.ENGLISH, "%.2f", zxwr2 * 100)
+            + "%±"
+            + String.format(Locale.ENGLISH, "%.2f", zxwrc2 * 100)
+            + "%";
+
+    if (Lizzie.config.chkEngineSgfStart) {
+      writer.append("\r\n");
+      writer.append(
+          resourceBundle.getString("EngineGameInfo.sgfStartNumber")
+              + Lizzie.frame.enginePKSgfString.size());
+      writer.append("\r\n");
+      for (SgfWinLossList wl : Lizzie.frame.enginePkSgfWinLoss) {
+        writer.append(
+            resourceBundle.getString("EngineGameInfo.sgfStartOpen")
+                + (Lizzie.config.isChinese ? "" : " ")
+                + wl.SgfNumber
+                + ":\n"
+                + resourceBundle.getString("EngineGameInfo.engine1")
+                + ": "
+                + resourceBundle.getString("EngineGameInfo.allWins")
+                + wl.engineOneWins
+                + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
+                + wl.engineOneWinsAsBlack
+                + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
+                + wl.engineOneWinsAsWhite
+                + "   "
+                + resourceBundle.getString("EngineGameInfo.engine2")
+                + ": "
+                + resourceBundle.getString("EngineGameInfo.allWins")
+                + wl.engineTwoWins
+                + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
+                + wl.engineTwoWinsAsBlack
+                + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
+                + wl.engineTwoWinsAsWhite);
+        writer.append("\r\n");
       }
-      writer.write("\r\n");
-      writer.write(
-          resourceBundle.getString("EngineGameInfo.oneStdev")
-              + String.format(Locale.ENGLISH, "%.2f", zxwr * 100)
-              + "% ± "
-              + String.format(Locale.ENGLISH, "%.2f", zxwrc * 100)
-              + "%");
-      writer.write("\r\n");
-      writer.write(
-          resourceBundle.getString("EngineGameInfo.twoStdev")
-              + String.format(Locale.ENGLISH, "%.2f", zxwr2 * 100)
-              + "% ± "
-              + String.format(Locale.ENGLISH, "%.2f", zxwrc2 * 100)
-              + "%");
-      writer.write("\r\n");
-      writer.write(
-          resourceBundle.getString("EngineGameInfo.threeStdev")
-              + String.format(Locale.ENGLISH, "%.2f", zxwr3 * 100)
-              + "% ± "
-              + String.format(Locale.ENGLISH, "%.2f", zxwrc3 * 100)
-              + "%");
-      writer.write("\r\n");
-
-      Lizzie.frame.hasEnginePkTitile = true;
-      Lizzie.frame.enginePkTitile =
-          firstWins
-              + ":"
-              + secondWins
-              + " "
-              + engineList.get(plan == null ? 0 : plan.firstIndex()).oriEnginename
-              + " VS "
-              + engineList.get(plan == null ? 1 : plan.secondIndex()).oriEnginename
-              + resourceBundle.getString("EngineGameInfo.titleWinRate")
-              + String.format(Locale.ENGLISH, "%.1f", wr * 100)
-              + "%"
-              + " 2σ "
-              + String.format(Locale.ENGLISH, "%.2f", zxwr2 * 100)
-              + "%±"
-              + String.format(Locale.ENGLISH, "%.2f", zxwrc2 * 100)
-              + "%";
-
-      if (Lizzie.config.chkEngineSgfStart) {
-        writer.write("\r\n");
-        writer.write(
-            resourceBundle.getString("EngineGameInfo.sgfStartNumber")
-                + Lizzie.frame.enginePKSgfString.size());
-        writer.write("\r\n");
-        for (SgfWinLossList wl : Lizzie.frame.enginePkSgfWinLoss) {
-          writer.write(
-              resourceBundle.getString("EngineGameInfo.sgfStartOpen")
-                  + (Lizzie.config.isChinese ? "" : " ")
-                  + wl.SgfNumber
-                  + ":\n"
-                  + resourceBundle.getString("EngineGameInfo.engine1")
-                  + ": "
-                  + resourceBundle.getString("EngineGameInfo.allWins")
-                  + wl.engineOneWins
-                  + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
-                  + wl.engineOneWinsAsBlack
-                  + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
-                  + wl.engineOneWinsAsWhite
-                  + "   "
-                  + resourceBundle.getString("EngineGameInfo.engine2")
-                  + ": "
-                  + resourceBundle.getString("EngineGameInfo.allWins")
-                  + wl.engineTwoWins
-                  + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
-                  + wl.engineTwoWinsAsBlack
-                  + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
-                  + wl.engineTwoWinsAsWhite);
-          writer.write("\r\n");
-        }
-      }
-      writer.flush();
     }
-  }
-
-  private void savePkTxt(
-      String settingB,
-      String settingW,
-      String settingAll,
-      String resultB,
-      String resultW,
-      String resultOther) {
-    EngineGameOwnerTransaction saveTxn;
-    synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      saveTxn =
-          activeEngineGameTransaction != null
-              ? activeEngineGameTransaction
-              : retiringEngineGameTransaction;
-    }
-    String batchGameName =
-        saveTxn == null || saveTxn.batchGameName == null ? "" : saveTxn.batchGameName;
-    String timestamp = saveTxn == null || saveTxn.timestamp == null ? "" : saveTxn.timestamp;
-    File file = new File("");
-    String courseFile = "";
-    try {
-      courseFile = file.getCanonicalPath();
-    } catch (IOException e) {
-      e.printStackTrace();
-    }
-    File autoSaveFile;
-    File autoSaveFile2 = null;
-    autoSaveFile =
-        new File(
-            courseFile
-                + File.separator
-                + "EngineGames"
-                + File.separator
-                + batchGameName
-                + File.separator
-                + resourceBundle.getString("Leelaz.result")
-                + timestamp
-                + ".txt");
-    autoSaveFile2 =
-        new File(
-            courseFile
-                + File.separator
-                + "EngineGames"
-                + File.separator
-                + timestamp
-                + File.separator
-                + resourceBundle.getString("Leelaz.result")
-                + timestamp
-                + ".txt");
-
-    File fileParent = autoSaveFile.getParentFile();
-    if (!fileParent.exists()) {
-      fileParent.mkdirs();
-    }
-    try {
-      writeToFile(autoSaveFile, settingAll, settingB, settingW, resultB, resultW, resultOther);
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-
-      try {
-        File fileParent2 = autoSaveFile2.getParentFile();
-        if (!fileParent2.exists()) {
-          fileParent2.mkdirs();
-        }
-        writeToFile(autoSaveFile2, settingAll, settingB, settingW, resultB, resultW, resultOther);
-
-      } catch (IOException e1) {
-        // TODO Auto-generated catch block
-        e1.printStackTrace();
-      }
-      e.printStackTrace();
-    }
+    return writer.toString();
   }
 
   public void stopEngineGame(int resgnEngineIndex, boolean mannul) {
@@ -2151,12 +2214,21 @@ public class EngineManager {
       }
       // Retirement has already cleared the legacy game booleans. Pass the terminal owner's exact
       // captured state to the parser instead of temporarily republishing a global saving flag.
-      appendEngineGameStopComment(stopClaim.wasActive);
+      EngineGameTransaction.CompletedPosition completed =
+          stoppedTransaction == null || stoppedTransaction.product == null
+              ? null : stoppedTransaction.product.completedPosition();
+      if (completed == null
+          || (Lizzie.board == completed.board()
+              && completed.board().getHistory() == completed.history()
+              && completed.board().getContextRevision() == completed.revision())) {
+        appendEngineGameStopComment(stopClaim.wasActive);
+      }
       if (!stopClaim.wasActive) {
         if (stoppedTransaction != null) {
           if (!mannul
               && Lizzie.engineGame != null
-              && Lizzie.engineGame.successorPending()) {
+              && stoppedTransaction.product != null
+              && stoppedTransaction.product.alreadyCompleted()) {
             scheduleProductSuccessorAfterRetirement(stoppedTransaction, stopClaim);
           } else {
             finishEngineGameTransactionRetirement(stoppedTransaction, true);
@@ -2167,201 +2239,115 @@ public class EngineManager {
         return;
       }
 
-    stopCountDown();
-    LizzieFrame.menu.toggleDoubleMenuGameStatus();
-    Lizzie.frame.hasEnginePkTitile = true;
-    Lizzie.frame.enginePkTitile = "";
-    if (mannul) {
-      markEngineGameParticipantsStopped(stoppedTransaction, plan);
-      changeEngIcoForEndPk();
-      LizzieFrame.toolbar.enableDisabelForEngineGame(true);
-      Lizzie.frame.addInput(true);
-      if (plan != null && plan.batch() && plan.gameOrdinal() > 1) {
-        File file = new File("");
-        String courseFile = "";
-        try {
-          courseFile = file.getCanonicalPath();
-        } catch (IOException e) {
-          e.printStackTrace();
+      stopCountDown();
+      LizzieFrame.menu.toggleDoubleMenuGameStatus();
+      Lizzie.frame.hasEnginePkTitile = true;
+      Lizzie.frame.enginePkTitile = "";
+      if (mannul) {
+        markEngineGameParticipantsStopped(stoppedTransaction, plan);
+        changeEngIcoForEndPk();
+        LizzieFrame.toolbar.enableDisabelForEngineGame(true);
+        Lizzie.frame.addInput(true);
+        if (plan != null && plan.batch() && plan.gameOrdinal() > 1) {
+          File file = new File("");
+          String courseFile = "";
+          try {
+            courseFile = file.getCanonicalPath();
+          } catch (IOException e) {
+            e.printStackTrace();
+          }
+          String passandMove = "";
+          if (doublePassGames > 0)
+            passandMove =
+                resourceBundle.getString("EngineGameInfo.doublePassGame") + doublePassGames;
+          if (maxMoveGames > 0)
+            passandMove +=
+                (passandMove.equals("") ? "" : " ")
+                    + resourceBundle.getString("EngineGameInfo.outOfMoveGame")
+                    + maxMoveGames;
+          Utils.showMsgNoModal(
+              (resourceBundle.getString("EngineGameInfo.batchGameEndAndScore")
+                  + engineList.get(plan.firstIndex()).oriEnginename
+                  + "   "
+                  + firstWins
+                  + ":"
+                  + secondWins
+                  + "   "
+                  + engineList.get(plan.secondIndex()).oriEnginename
+                  + (passandMove.equals("") ? "" : " ")
+                  + passandMove
+                  + ","
+                  + resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
+                  + courseFile
+                  + File.separator
+                  + "EngineGames"));
         }
-        String passandMove = "";
-        if (doublePassGames > 0)
-          passandMove =
-              resourceBundle.getString("EngineGameInfo.doublePassGame") + doublePassGames;
-        if (maxMoveGames > 0)
-          passandMove +=
-              (passandMove.equals("") ? "" : " ")
-                  + resourceBundle.getString("EngineGameInfo.outOfMoveGame")
-                  + maxMoveGames;
-        Utils.showMsgNoModal(
-            (resourceBundle.getString("EngineGameInfo.batchGameEndAndScore")
-                + engineList.get(plan.firstIndex()).oriEnginename
-                + "   "
-                + firstWins
-                + ":"
-                + secondWins
-                + "   "
-                + engineList.get(plan.secondIndex()).oriEnginename
-                + (passandMove.equals("") ? "" : " ")
-                + passandMove
-                + ","
-                + resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
-                + courseFile
-                + File.separator
-                + "EngineGames"));
-      }
-      return;
-    }
-    SGFParser.appendGameTimeAndPlayouts();
-    if ((plan != null && plan.batch()) || LizzieFrame.toolbar.AutosavePk) {
-      saveEngineGameFile(resgnEngineIndex);
-    }
-    if (plan != null && plan.batch() && stoppedTransaction != null) {
-      stoppedTransaction.resultFirst =
-          resourceBundle.getString("EngineGameInfo.engine1")
-              + "("
-              + engineList.get(plan.firstIndex()).oriEnginename
-              + "):\n"
-              + resourceBundle.getString("EngineGameInfo.allWins")
-              + ": "
-              + firstWins;
-      stoppedTransaction.resultFirst +=
-          " "
-              + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
-              + ": "
-              + firstWinAsBlack
-              + " "
-              + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
-              + ": "
-              + firstWinAsWhite;
-      stoppedTransaction.resultFirst +=
-          resourceBundle.getString("EngineGameInfo.totalTime")
-              + firstTotalTimeMs / (float) 1000
-              + resourceBundle.getString("SGFParse.seconds");
-      stoppedTransaction.resultFirst +=
-          resourceBundle.getString("EngineGameInfo.result.totalVisits") + firstTotalVisits;
-
-      stoppedTransaction.resultSecond =
-          resourceBundle.getString("EngineGameInfo.engine2")
-              + "("
-              + engineList.get(plan.secondIndex()).oriEnginename
-              + "):\n"
-              + resourceBundle.getString("EngineGameInfo.allWins")
-              + ": "
-              + secondWins;
-      stoppedTransaction.resultSecond +=
-          " "
-              + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
-              + ": "
-              + secondWinAsBlack
-              + " "
-              + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
-              + ": "
-              + secondWinAsWhite;
-      stoppedTransaction.resultSecond +=
-          resourceBundle.getString("EngineGameInfo.totalTime")
-              + secondTotalTimeMs / (float) 1000
-              + resourceBundle.getString("SGFParse.seconds");
-      stoppedTransaction.resultSecond +=
-          resourceBundle.getString("EngineGameInfo.result.totalVisits") + secondTotalVisits;
-
-      stoppedTransaction.resultOther =
-          resourceBundle.getString("EngineGameInfo.doublePassGame") + doublePassGames;
-      stoppedTransaction.resultOther +=
-          " " + resourceBundle.getString("EngineGameInfo.outOfMoveGame") + maxMoveGames;
-      stoppedTransaction.settingAll = formatEngineGameSettingAll(plan);
-      savePkTxt(
-          stoppedTransaction.settingFirst,
-          stoppedTransaction.settingSecond,
-          stoppedTransaction.settingAll,
-          stoppedTransaction.resultFirst,
-          stoppedTransaction.resultSecond,
-          stoppedTransaction.resultOther);
-
-      if (Lizzie.engineGame != null && Lizzie.engineGame.successorPending()) {
-        scheduleProductSuccessorAfterRetirement(stoppedTransaction, stopClaim);
         return;
       }
-    }
-    LizzieFrame.toolbar.enableDisabelForEngineGame(true);
-    Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-    File file = new File("");
-    String courseFile = "";
-    try {
-      courseFile = file.getCanonicalPath();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
-    // showmsg 多局
-    if (plan != null && plan.batch()) {
-      String passandMove = "";
-      if (doublePassGames > 0)
-        passandMove =
-            passandMove
-                + resourceBundle.getString("EngineGameInfo.doublePassGame")
-                + doublePassGames;
-      if (maxMoveGames > 0)
-        passandMove =
-            passandMove
-                + (passandMove.equals("") ? "" : " ")
-                + resourceBundle.getString("EngineGameInfo.outOfMoveGame")
-                + maxMoveGames;
-      Utils.showMsgNoModal(
-          (resourceBundle.getString("EngineGameInfo.batchGameEndAndScore")
-              + engineList.get(plan.firstIndex()).oriEnginename
-              + "   "
-              + firstWins
-              + ":"
-              + secondWins
-              + "   "
-              + engineList.get(plan.secondIndex()).oriEnginename
-              + (passandMove.equals("") ? "" : " ")
-              + passandMove
-              + ","
-              + resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
-              + courseFile
-              + File.separator
-              + "EngineGames"));
-    } else if (plan != null) {
-      String jg = resourceBundle.getString("EngineGameInfo.gameFinished");
-      if (engineList.get(resgnEngineIndex).outOfMoveNum)
-        jg = jg + resourceBundle.getString("EngineGameInfo.finishedByMoves");
-      else {
-        if (engineList.get(resgnEngineIndex).doublePass) {
-          jg = jg + resourceBundle.getString("EngineGameInfo.finishedByDoublePass");
-        } else if (resgnEngineIndex == plan.blackIndex()) {
-          jg =
-              jg
-                  + resourceBundle.getString("GameInfoDialog.white")
-                  + "("
-                  + engineList.get(plan.whiteIndex()).oriEnginename
-                  + ")"
-                  + resourceBundle.getString("EngineGameInfo.finishedWin");
-        } else {
-          jg =
-              jg
-                  + resourceBundle.getString("GameInfoDialog.black")
-                  + "("
-                  + engineList.get(plan.blackIndex()).oriEnginename
-                  + ")"
-                  + resourceBundle.getString("EngineGameInfo.finishedWin");
-        }
+      SGFParser.appendGameTimeAndPlayouts(
+          completed == null ? Lizzie.board.getHistory() : completed.history());
+      if (plan != null && plan.batch() && stoppedTransaction != null) {
+        stoppedTransaction.resultFirst =
+            resourceBundle.getString("EngineGameInfo.engine1")
+                + "("
+                + engineList.get(plan.firstIndex()).oriEnginename
+                + "):\n"
+                + resourceBundle.getString("EngineGameInfo.allWins")
+                + ": "
+                + firstWins;
+        stoppedTransaction.resultFirst +=
+            " "
+                + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
+                + ": "
+                + firstWinAsBlack
+                + " "
+                + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
+                + ": "
+                + firstWinAsWhite;
+        stoppedTransaction.resultFirst +=
+            resourceBundle.getString("EngineGameInfo.totalTime")
+                + firstTotalTimeMs / (float) 1000
+                + resourceBundle.getString("SGFParse.seconds");
+        stoppedTransaction.resultFirst +=
+            resourceBundle.getString("EngineGameInfo.result.totalVisits") + firstTotalVisits;
+
+        stoppedTransaction.resultSecond =
+            resourceBundle.getString("EngineGameInfo.engine2")
+                + "("
+                + engineList.get(plan.secondIndex()).oriEnginename
+                + "):\n"
+                + resourceBundle.getString("EngineGameInfo.allWins")
+                + ": "
+                + secondWins;
+        stoppedTransaction.resultSecond +=
+            " "
+                + resourceBundle.getString("EngineGameInfo.sgfStartBlackWin")
+                + ": "
+                + secondWinAsBlack
+                + " "
+                + resourceBundle.getString("EngineGameInfo.sgfStartWhiteWin")
+                + ": "
+                + secondWinAsWhite;
+        stoppedTransaction.resultSecond +=
+            resourceBundle.getString("EngineGameInfo.totalTime")
+                + secondTotalTimeMs / (float) 1000
+                + resourceBundle.getString("SGFParse.seconds");
+        stoppedTransaction.resultSecond +=
+            resourceBundle.getString("EngineGameInfo.result.totalVisits") + secondTotalVisits;
+
+        stoppedTransaction.resultOther =
+            resourceBundle.getString("EngineGameInfo.doublePassGame") + doublePassGames;
+        stoppedTransaction.resultOther +=
+            " " + resourceBundle.getString("EngineGameInfo.outOfMoveGame") + maxMoveGames;
+        stoppedTransaction.settingAll = formatEngineGameSettingAll(plan);
       }
-      if (LizzieFrame.toolbar.AutosavePk) {
-        jg =
-            jg
-                + ","
-                + resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
-                + courseFile
-                + File.separator
-                + "EngineGames";
-      }
-      Utils.showMsgNoModal(jg);
-    }
-    markEngineGameParticipantsStopped(stoppedTransaction, plan);
-    Lizzie.frame.addInput(true);
-    changeEngIcoForEndPk();
+
+      if (stoppedTransaction == null || plan == null) return;
+      PendingEngineGameSave save =
+          new PendingEngineGameSave(this, stopClaim, resgnEngineIndex, summary);
+      pendingEngineGameSave = save;
+      markEngineGameParticipantsStopped(stoppedTransaction, plan);
+      retryEngineGameSave();
     } catch (RuntimeException | Error stopFailure) {
       restoreOnFailure = true;
       if (stoppedTransaction != null) {
@@ -2428,14 +2414,14 @@ public class EngineManager {
     if (plan == null && Lizzie.engineGame != null) {
       plan = Lizzie.engineGame.firstPlan();
     }
-    startNewEngineGame(firstTime, plan, expectedInactiveEpoch, false);
+    startNewEngineGame(firstTime, plan, expectedInactiveEpoch, null);
   }
 
   private EngineGameOwnerTransaction startNewEngineGame(
       boolean firstTime,
       EngineGamePlan gameAtStart,
       Long expectedInactiveEpoch,
-      boolean publishGameInfo) {
+      EngineGameModule productModule) {
     if (rejectForegroundEngineStartDuringSetup(true)) return null;
     EngineGameOwnerTransaction gameTransaction;
     Leelaz currentForegroundEngine = Lizzie.leelaz;
@@ -2464,14 +2450,14 @@ public class EngineManager {
               retainedForegroundLifecycleOwner,
               gameAtStart,
               expectedInactiveEpoch,
-              publishGameInfo);
+              productModule);
     } else {
       gameTransaction =
           beginEngineGameTransaction(
               this,
               gameAtStart,
               expectedInactiveEpoch,
-              publishGameInfo,
+              productModule,
               currentForegroundEngine,
               currentForegroundGeneration,
               null);
@@ -2801,7 +2787,7 @@ public class EngineManager {
     runAfterEngineGameTransactionRetirement(
         stoppedTransaction,
         () -> {
-          if (Lizzie.engineGame == null || !Lizzie.engineGame.onOwnerRetired()) {
+          if (Lizzie.engineGame == null || !Lizzie.engineGame.onOwnerRetired(stoppedTransaction)) {
             restoreUiAfterEngineGameStartAbort(failedNextGameUi, null);
           }
         },
@@ -2856,7 +2842,7 @@ public class EngineManager {
       Object retainedForegroundLifecycleOwner,
       EngineGamePlan plan,
       Long expectedInactiveEpoch,
-      boolean publishGameInfo) {
+      EngineGameModule productModule) {
     EngineGameOwnerTransaction transaction = null;
     Throwable primaryFailure = null;
     try {
@@ -2865,7 +2851,7 @@ public class EngineManager {
               this,
               plan,
               expectedInactiveEpoch,
-              publishGameInfo,
+              productModule,
               foregroundEngine,
               foregroundGeneration,
               retainedForegroundLifecycleOwner);
@@ -7394,6 +7380,7 @@ public class EngineManager {
     }
     for (EngineManager manager : managersWithInstanceRecovery) {
       manager.failedRollbackRecovery.set(null);
+      manager.pendingEngineGameSave = null;
     }
     if (recoveryBatch != null && recoveryBatch.current != null) {
       Thread worker = recoveryBatch.current.worker;
@@ -7421,7 +7408,7 @@ public class EngineManager {
         manager,
         plan,
         expectedInactiveEpoch,
-        publishGameInfo,
+        null,
         expectedPrimary,
         expectedPrimaryGeneration,
         null);
@@ -7431,7 +7418,7 @@ public class EngineManager {
       EngineManager manager,
       EngineGamePlan plan,
       Long expectedInactiveEpoch,
-      boolean publishGameInfo,
+      EngineGameModule productModule,
       Leelaz expectedPrimary,
       long expectedPrimaryGeneration,
       Object retainedForegroundLifecycleOwner) {
@@ -7454,6 +7441,7 @@ public class EngineManager {
               || activeEngineGameTransaction != null
               || retiringEngineGameTransaction != null
               || activeEngineGameRecoveryBatch != null
+              || manager.pendingEngineGameSave != null
               || manager.failedRollbackRecovery.get() != null) {
             return null;
           }
@@ -7486,7 +7474,7 @@ public class EngineManager {
               new EngineGameOwnerTransaction(
                   manager,
                   plan,
-                  ++engineGameTransactionSequence,
+                  engineGameTransactionSequence + 1,
                   blackIndex,
                   blackEngine,
                   whiteIndex,
@@ -7495,9 +7483,16 @@ public class EngineManager {
                   expectedPrimaryGeneration,
                   retainedForegroundLifecycleOwner,
                   deadlineNanos);
-          attachEngineGameBindings(transaction);
-          activeEngineGameTransaction = transaction;
-          isEmpty = false;
+          if (productModule != null) {
+            if (Lizzie.engineGame != productModule
+                || !productModule.publishOwnerIfStarting(
+                    plan, product -> publishEngineGameOwner(transaction, product))) return null;
+          } else {
+            EngineGameTransaction product =
+                Lizzie.engineGame == null ? null : Lizzie.engineGame.transaction();
+            if (product != null && product.plan() != plan) product = null;
+            publishEngineGameOwner(transaction, product);
+          }
           return transaction;
         }
       } finally {
@@ -7508,16 +7503,17 @@ public class EngineManager {
     }
   }
 
-  private static void attachEngineGameBindings(EngineGameOwnerTransaction owner) {
+  private static void publishEngineGameOwner(
+      EngineGameOwnerTransaction owner, EngineGameTransaction product) {
+    attachEngineGameBindings(owner, product);
+    engineGameTransactionSequence = owner.epoch;
+    activeEngineGameTransaction = owner;
+    isEmpty = false;
+  }
+
+  private static void attachEngineGameBindings(
+      EngineGameOwnerTransaction owner, EngineGameTransaction product) {
     EngineGamePlan plan = owner.plan;
-    featurecat.lizzie.enginegame.EngineGameTransaction product =
-        Lizzie.engineGame == null ? null : Lizzie.engineGame.transaction();
-    if (product != null
-        && product.plan() != null
-        && (product.plan().blackIndex() != owner.blackIndex
-            || product.plan().whiteIndex() != owner.whiteIndex)) {
-      product = null;
-    }
     EngineGamePlayMode playMode = plan.playMode();
     EngineGameSideLimits blackLimits = plan.blackLimits();
     EngineGameSideLimits whiteLimits = plan.whiteLimits();
@@ -8864,6 +8860,7 @@ public class EngineManager {
       // operation.
       transaction.retirementFinished.set(true);
       dispatchEngineGameRetirementContinuation(transaction);
+      transaction.retirementCompleted.complete(null);
     }
   }
 
@@ -8907,6 +8904,7 @@ public class EngineManager {
     }
     if (finished) {
       dispatchEngineGameRetirementContinuation(recoveryBatch.transaction);
+      recoveryBatch.transaction.retirementCompleted.complete(null);
       return;
     }
 

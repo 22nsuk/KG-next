@@ -8,6 +8,8 @@ import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.DesktopTimeControl;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.Utils;
@@ -16,6 +18,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Objects;
 import java.util.Random;
+import java.util.function.Consumer;
 
 /**
  * Owns product batch admission, GamePlan, product transaction identity, BatchState statistics,
@@ -27,6 +30,8 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   private EngineGameBatchState batch;
   private EngineGamePlan plan;
   private EngineGameTransaction transaction;
+  private EngineGameTransaction savedProduct;
+  private boolean shutdownCommitted;
   private StartObserver observer;
   private boolean observerCompleted;
   private boolean pendingSuccessor;
@@ -58,7 +63,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       return new Acceptance.Rejected(new Rejection.InvalidParticipantCombination());
     }
     synchronized (lock) {
-      if (!(snapshot instanceof EngineGameSnapshot.Idle)) {
+      if (shutdownCommitted || !(snapshot instanceof EngineGameSnapshot.Idle)) {
         return new Acceptance.Rejected(new Rejection.OccupiedLifecycle());
       }
     }
@@ -66,12 +71,13 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     EngineGamePlan acceptedPlan = createPlan(acceptedBatch);
     EngineGameTransaction acceptedTransaction = new EngineGameTransaction(acceptedPlan);
     synchronized (lock) {
-      if (!(snapshot instanceof EngineGameSnapshot.Idle)) {
+      if (shutdownCommitted || !(snapshot instanceof EngineGameSnapshot.Idle)) {
         return new Acceptance.Rejected(new Rejection.OccupiedLifecycle());
       }
       this.batch = acceptedBatch;
       this.plan = acceptedPlan;
       this.transaction = acceptedTransaction;
+      this.savedProduct = null;
       this.observer = observer;
       this.observerCompleted = false;
       this.pendingSuccessor = false;
@@ -104,7 +110,8 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   public void stop() {
     StartObserver pending = null;
     boolean starting;
-    boolean betweenGames;
+    boolean completed;
+    EngineGameChromeTransition.Kind chromeKind;
     EngineManager manager;
     synchronized (lock) {
       if (snapshot instanceof EngineGameSnapshot.Idle) {
@@ -113,9 +120,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       starting =
           snapshot instanceof EngineGameSnapshot.BatchActive active
               && active.activity() instanceof GameActivity.Starting;
-      betweenGames =
-          snapshot instanceof EngineGameSnapshot.BatchActive active
-              && active.activity() instanceof GameActivity.BetweenGames;
+      completed = snapshot.betweenGames() || snapshot.saveFailed();
       if (starting && observer != null && !observerCompleted) {
         pending = observer;
         observerCompleted = true;
@@ -123,20 +128,29 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       }
       pendingSuccessor = false;
       komiState = null;
-      if (batch != null && batch.completedGames() > 0) {
-        plan = null;
-        transaction = null;
+      if (completed) {
+        // Stopping the batch cancels continuation, not the completed game's pending save.
+        chromeKind =
+            snapshot.saveFailed()
+                ? EngineGameChromeTransition.Kind.SAVE_FAILED
+                : EngineGameChromeTransition.Kind.BETWEEN_GAMES;
       } else {
-        clearAcceptedLocked();
+        if (batch != null && batch.completedGames() > 0) {
+          plan = null;
+          transaction = null;
+        } else {
+          clearAcceptedLocked();
+        }
+        publishLocked(new EngineGameSnapshot.Idle());
+        chromeKind = EngineGameChromeTransition.Kind.USER_STOPPED;
       }
-      publishLocked(new EngineGameSnapshot.Idle());
       manager = Lizzie.engineManager;
     }
     if (pending != null) {
       pending.startFailed(new StartFailure.CancelledByUser());
     }
-    publishChrome(EngineGameChromeTransition.Kind.USER_STOPPED);
-    if (betweenGames) {
+    publishChrome(chromeKind);
+    if (completed) {
       return;
     }
     if (manager != null) {
@@ -199,6 +213,19 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   }
 
   @Override
+  public void retrySave() {
+    synchronized (lock) {
+      if (!snapshot.saveFailed()) {
+        return;
+      }
+    }
+    EngineManager manager = Lizzie.engineManager;
+    if (manager != null) {
+      manager.retryEngineGameSave();
+    }
+  }
+
+  @Override
   public boolean reviseKomi(double value) {
     EngineGameTransaction captured;
     synchronized (lock) {
@@ -233,7 +260,6 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
 
   @Override
   public void reviseBatchLimit(int gameCount) {
-    EngineGameChromeTransition.Kind chromeKind = null;
     synchronized (lock) {
       if (batch == null || !(snapshot instanceof EngineGameSnapshot.BatchActive)) {
         return;
@@ -241,19 +267,12 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       batch.setBatchLimit(gameCount);
       EngineGameSnapshot.BatchActive active = (EngineGameSnapshot.BatchActive) snapshot;
       if (pendingSuccessor
-          && active.activity() instanceof GameActivity.BetweenGames
+          && (active.activity() instanceof GameActivity.BetweenGames
+              || active.activity() instanceof GameActivity.SaveFailed)
           && !batch.shouldCreateSuccessor()) {
         pendingSuccessor = false;
-        plan = null;
-        transaction = null;
-        publishLocked(new EngineGameSnapshot.Idle());
-        chromeKind = EngineGameChromeTransition.Kind.BATCH_ENDED;
-      } else {
-        publishLocked(new EngineGameSnapshot.BatchActive(batch.summary(), active.activity()));
       }
-    }
-    if (chromeKind != null) {
-      publishChrome(chromeKind);
+      publishLocked(new EngineGameSnapshot.BatchActive(batch.summary(), active.activity()));
     }
   }
 
@@ -279,6 +298,26 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   public boolean successorPending() {
     synchronized (lock) {
       return pendingSuccessor;
+    }
+  }
+
+  /**
+   * Commits resource shutdown only after every accepted completion has confirmed its file save.
+   * This shares completion's lock so shutdown cannot pass through the gap before a pending save is
+   * installed. No engine resources are stopped here.
+   */
+  public boolean claimShutdownAfterSaves() {
+    synchronized (lock) {
+      pendingSuccessor = false;
+      boolean completed =
+          snapshot.betweenGames()
+              || snapshot.saveFailed()
+              || (transaction != null && transaction.alreadyCompleted());
+      if (completed && (transaction == null || savedProduct != transaction)) {
+        return false;
+      }
+      shutdownCommitted = true;
+      return true;
     }
   }
 
@@ -338,6 +377,9 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     EngineGameTransaction product;
     EngineGameChromeTransition.Kind chromeKind = null;
     synchronized (lock) {
+      if (shutdownCommitted) {
+        return false;
+      }
       product = transaction;
       if (product != null) {
         if (ownerToken != null
@@ -348,21 +390,23 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
         if (!product.claimComplete()) {
           return false;
         }
+        savedProduct = null;
+        Board completedBoard = Lizzie.board;
+        BoardHistoryList completedHistory =
+            completedBoard == null ? null : completedBoard.getHistory();
+        if (completedHistory != null) {
+          product.captureCompletedPosition(
+              completedBoard, completedHistory, completedBoard.getContextRevision());
+        }
         recordCompletionLocked(outcome, product);
         komiState = null;
-        if (batch != null && batch.shouldCreateSuccessor()) {
-          pendingSuccessor = true;
-          publishLocked(
-              new EngineGameSnapshot.BatchActive(
-                  batch.summary(), new GameActivity.BetweenGames()));
-          chromeKind = EngineGameChromeTransition.Kind.BETWEEN_GAMES;
-        } else {
-          pendingSuccessor = false;
-          plan = null;
-          transaction = null;
-          publishLocked(new EngineGameSnapshot.Idle());
-          chromeKind = EngineGameChromeTransition.Kind.BATCH_ENDED;
-        }
+        pendingSuccessor = batch != null && batch.shouldCreateSuccessor();
+        // Even the final game retains its exact completed owner until saving and retirement
+        // finish. A new batch must not replace an unsaved completed game.
+        publishLocked(
+            new EngineGameSnapshot.BatchActive(
+                batch.summary(), new GameActivity.BetweenGames()));
+        chromeKind = EngineGameChromeTransition.Kind.BETWEEN_GAMES;
       }
     }
     if (product != null) {
@@ -385,26 +429,101 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     return (product != null && product.alreadyCompleted()) || stopped;
   }
 
+  /** Publishes only the exact current startup owner; the callback must only bind and publish it. */
+  public boolean publishOwnerIfStarting(
+      EngineGamePlan expectedPlan, Consumer<EngineGameTransaction> publishOwner) {
+    synchronized (lock) {
+      if (shutdownCommitted
+          || !snapshot.starting()
+          || transaction == null
+          || transaction.plan() != expectedPlan
+          || transaction.alreadyCompleted()
+          || transaction.lifecycle() != null) return false;
+      publishOwner.accept(transaction);
+      return true;
+    }
+  }
+
+  /** Compatibility entry point for callers that already hold the current product identity. */
+  public boolean onOwnerRetired() {
+    EngineGameTransaction expectedProduct;
+    synchronized (lock) {
+      expectedProduct = transaction;
+    }
+    return retireCompletedProduct(expectedProduct);
+  }
+
   /**
-   * Called after the exact owner retirement callback. Creates the next GamePlan only then.
+   * Called after saving and the exact owner retirement callback. Stale owners and failed saves
+   * cannot consume a pending successor.
    *
    * @return false when a pending successor failed to start
    */
-  public boolean onOwnerRetired() {
+  public boolean onOwnerRetired(Object expectedOwnerToken) {
+    EngineGameTransaction expectedProduct;
+    synchronized (lock) {
+      expectedProduct = completedOwnerLocked(expectedOwnerToken);
+    }
+    return retireCompletedProduct(expectedProduct);
+  }
+
+  public boolean onSaveFailed(Object ownerToken) {
+    synchronized (lock) {
+      if (completedOwnerLocked(ownerToken) == null) {
+        return false;
+      }
+      savedProduct = null;
+      publishLocked(
+          new EngineGameSnapshot.BatchActive(
+              batch.summary(), new GameActivity.SaveFailed(plan.view())));
+    }
+    publishChrome(EngineGameChromeTransition.Kind.SAVE_FAILED);
+    return true;
+  }
+
+  public boolean onSaveSucceeded(Object ownerToken) {
+    synchronized (lock) {
+      if (completedOwnerLocked(ownerToken) == null) {
+        return false;
+      }
+      savedProduct = transaction;
+      publishLocked(
+          new EngineGameSnapshot.BatchActive(batch.summary(), new GameActivity.BetweenGames()));
+    }
+    publishChrome(EngineGameChromeTransition.Kind.BETWEEN_GAMES);
+    return true;
+  }
+
+  private EngineGameTransaction completedOwnerLocked(Object ownerToken) {
+    return ownerToken != null
+            && transaction != null
+            && transaction.alreadyCompleted()
+            && transaction.lifecycle() != null
+            && transaction.lifecycle().sameOwner(ownerToken)
+            && batch != null
+            && plan != null
+            && (snapshot.betweenGames() || snapshot.saveFailed())
+        ? transaction
+        : null;
+  }
+
+  private boolean retireCompletedProduct(EngineGameTransaction expectedProduct) {
     EngineGamePlan nextPlan = null;
+    EngineGameTransaction nextProduct = null;
     EngineGameChromeTransition.Kind chromeKind = null;
     synchronized (lock) {
-      boolean betweenGames =
-          snapshot instanceof EngineGameSnapshot.BatchActive active
-              && active.activity() instanceof GameActivity.BetweenGames;
-      if (!pendingSuccessor || batch == null || !betweenGames) {
-        pendingSuccessor = false;
+      if (expectedProduct == null
+          || transaction != expectedProduct
+          || !expectedProduct.alreadyCompleted()
+          || batch == null
+          || !snapshot.betweenGames()) {
         return true;
       }
-      if (!batch.shouldCreateSuccessor()) {
+      if (!pendingSuccessor || !batch.shouldCreateSuccessor()) {
         pendingSuccessor = false;
         plan = null;
         transaction = null;
+        savedProduct = null;
         publishLocked(new EngineGameSnapshot.Idle());
         chromeKind = EngineGameChromeTransition.Kind.BATCH_ENDED;
       } else {
@@ -412,6 +531,8 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
         batch.beginSuccessor();
         plan = createPlan(batch);
         transaction = new EngineGameTransaction(plan);
+        savedProduct = null;
+        nextProduct = transaction;
         nextPlan = plan;
         publishLocked(
             new EngineGameSnapshot.BatchActive(
@@ -426,6 +547,9 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     boolean started = manager != null && manager.startEngineGame(nextPlan, false);
     if (!started) {
       synchronized (lock) {
+        if (transaction != nextProduct) {
+          return true;
+        }
         plan = null;
         transaction = null;
         publishLocked(new EngineGameSnapshot.Idle());
@@ -447,7 +571,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   public void onOwnerPlaying() {
     StartObserver pending = null;
     synchronized (lock) {
-      if (batch == null || plan == null) {
+      if (shutdownCommitted || batch == null || plan == null) {
         return;
       }
       attachRecordContextToCurrentHistoryLocked();
@@ -520,6 +644,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       observerCompleted = false;
       lastSummary = null;
       lastCompletion = null;
+      shutdownCommitted = false;
       chrome = SwingEngineGameChrome.INSTANCE;
       matchRulesConsent = featurecat.lizzie.gui.SwingMatchRulesConsent.INSTANCE;
       matchRulesSnapshot = null;
@@ -547,7 +672,9 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     }
     EngineGamePlan current = product.plan();
     boolean firstPlayedBlack = current.firstIndex() == current.blackIndex();
-    long[] visits = sideVisits();
+    EngineGameTransaction.CompletedPosition position = product.completedPosition();
+    BoardHistoryList completedHistory = position == null ? null : position.history();
+    long[] visits = sideVisits(completedHistory);
     long firstVisits = firstPlayedBlack ? visits[0] : visits[1];
     long secondVisits = firstPlayedBlack ? visits[1] : visits[0];
     lastCompletion =
@@ -562,7 +689,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
             secondVisits);
     batch.apply(lastCompletion);
     lastSummary = batch.summary();
-    freezeRecordOnCurrentHistoryLocked(lastCompletion);
+    freezeRecordOnHistoryLocked(lastCompletion, completedHistory);
   }
 
   private void clearAcceptedLocked() {
@@ -571,6 +698,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     batch = null;
     plan = null;
     transaction = null;
+    savedProduct = null;
   }
 
   private void publishLocked(EngineGameSnapshot next) {
@@ -745,13 +873,14 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     info.attachEngineGameRecordContext(contextFromPlan(plan));
   }
 
-  private void freezeRecordOnCurrentHistoryLocked(EngineGameCompletionFacts facts) {
+  private void freezeRecordOnHistoryLocked(
+      EngineGameCompletionFacts facts, BoardHistoryList history) {
     if (matchRulesSnapshot != null
         && (matchRulesSnapshot.phase() == MatchRulesSnapshot.Phase.PLAYING
             || matchRulesSnapshot.phase() == MatchRulesSnapshot.Phase.COMPLETED)) {
       matchRulesSnapshot = matchRulesSnapshot.completed();
     }
-    GameInfo info = currentGameInfo();
+    GameInfo info = history == null ? null : history.getGameInfo();
     if (info == null || facts == null) {
       return;
     }
@@ -853,12 +982,17 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
   }
 
   private static long[] sideVisits() {
+    Board board = Lizzie.board;
+    return sideVisits(board == null ? null : board.getHistory());
+  }
+
+  private static long[] sideVisits(BoardHistoryList history) {
     long blackPlayouts = 0;
     long whitePlayouts = 0;
-    if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
+    if (history == null) {
       return new long[] {0L, 0L};
     }
-    BoardHistoryNode node = Lizzie.board.getHistory().getStart();
+    BoardHistoryNode node = history.getStart();
     if (node == null) {
       return new long[] {0L, 0L};
     }
@@ -938,7 +1072,8 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     synchronized (lock) {
       pendingSuccessor = false;
       if (snapshot instanceof EngineGameSnapshot.BatchActive active
-          && active.activity() instanceof GameActivity.BetweenGames) {
+          && active.activity() instanceof GameActivity.BetweenGames
+          && (transaction == null || !transaction.alreadyCompleted())) {
         plan = null;
         transaction = null;
         publishLocked(new EngineGameSnapshot.Idle());

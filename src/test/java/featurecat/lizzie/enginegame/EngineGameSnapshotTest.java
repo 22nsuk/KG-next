@@ -21,6 +21,7 @@ class EngineGameSnapshotTest {
     assertFalse(idle.starting());
     assertFalse(idle.playing());
     assertFalse(idle.betweenGames());
+    assertFalse(idle.saveFailed());
     assertFalse(idle.startingOrPlaying());
     assertFalse(idle.paused());
     assertFalse(idle.playingGenmove());
@@ -73,6 +74,21 @@ class EngineGameSnapshotTest {
     assertFalse(between.paused());
     assertFalse(between.playingGenmove());
     assertNull(between.view());
+  }
+
+  @Test
+  void failedSaveKeepsCompletedGameViewWithoutClaimingRunningOrPausedEngines() {
+    EngineGameView completed = view(true, EngineGamePlayMode.GENMOVE);
+    EngineGameSnapshot failed =
+        new EngineGameSnapshot.BatchActive(summary(), new GameActivity.SaveFailed(completed));
+
+    assertTrue(failed.saveFailed());
+    assertFalse(failed.betweenGames());
+    assertFalse(failed.startingOrPlaying());
+    assertFalse(failed.playingGenmove());
+    assertFalse(failed.paused());
+    assertEquals(completed, failed.view());
+    assertEquals(SECOND, failed.view().black());
   }
 
   private static EngineGameView view(boolean exchanged, EngineGamePlayMode mode) {
