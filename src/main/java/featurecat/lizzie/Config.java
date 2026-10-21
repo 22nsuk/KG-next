@@ -245,7 +245,6 @@ public class Config {
   public boolean badMoves = false;
   public boolean autoPlay = true;
   public boolean deleteMove = true;
-  public boolean share = false;
   public boolean flashAnalyze = false;
   public boolean enableLizzieCache = true;
   public boolean showQuickLinks = false;
@@ -1995,7 +1994,6 @@ public class Config {
     autoPlay = uiConfig.optBoolean("autoPlay", true);
     showQuickLinks = uiConfig.optBoolean("show-quick-links", false);
     liveButton = uiConfig.optBoolean("liveButton", true);
-    // share = uiConfig.optBoolean("share", true);
     flashAnalyze =
         uiConfig.optBoolean("flash-analyze", showDoubleMenu && showTopToolBar ? false : true);
     badMoves = uiConfig.optBoolean("badMoves", showDoubleMenu && showTopToolBar ? false : true);

@@ -3,7 +3,6 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
-import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.EngineObservation;
 import java.util.*;
 
@@ -885,7 +884,6 @@ public class BoardData {
     int i = 0;
     for (MoveData move : bestMoves) {
       i++;
-      if (LizzieFrame.isShareing && i > 10) break;
       // eg: info move R5 visits 38 winrate 5404 pv R5 Q5 R6 S4 Q10 C3 D3 C4 C6 C5 D5
       sb.append("move ").append(move.coordinate);
       sb.append(" visits ").append(move.playouts);
@@ -912,10 +910,7 @@ public class BoardData {
 
   public String bestMovesToString2() {
     StringBuilder sb = new StringBuilder();
-    int i = 0;
     for (MoveData move : bestMoves2) {
-      i++;
-      if (LizzieFrame.isShareing && i > 10) break;
       // eg: info move R5 visits 38 winrate 5404 pv R5 Q5 R6 S4 Q10 C3 D3 C4 C6 C5 D5
       sb.append("move ").append(move.coordinate);
       sb.append(" visits ").append(move.playouts);

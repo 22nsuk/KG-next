@@ -4092,91 +4092,6 @@ public class Menu extends JMenuBar {
           }
         });
 
-    final JFontMenu shareKifu = new JFontMenu(resourceBundle.getString("Menu.share"));
-    shareKifu.setFont(baseMenuFont);
-    shareKifu.setForeground(MorandiPalette.MENU_ITEM_TEXT);
-    // shareKifu.setFont(headFont);
-    // this.add(shareKifu);
-
-    final JFontMenuItem shareCurrentSgf =
-        new JFontMenuItem(resourceBundle.getString("Menu.shareCurrentSgf")); // ("分享当前棋谱(Ctrl+E)");
-    shareKifu.add(shareCurrentSgf);
-
-    shareCurrentSgf.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.shareSGF();
-          }
-        });
-
-    final JFontMenuItem shareBatchSgf =
-        new JFontMenuItem(resourceBundle.getString("Menu.shareBatchSgf")); // ("批量分享");
-    shareKifu.add(shareBatchSgf);
-
-    shareBatchSgf.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.batchShareSGF();
-          }
-        });
-
-    final JFontMenuItem shareEdit =
-        new JFontMenuItem(resourceBundle.getString("Menu.shareEdit")); // ("查询(修改)已分享棋谱信息");
-    shareKifu.add(shareEdit);
-
-    shareEdit.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.openPrivateKifuSearch();
-          }
-        });
-
-    final JFontMenuItem shareHistoryLoacl =
-        new JFontMenuItem(resourceBundle.getString("Menu.shareHistoryLoacl")); // ("历史记录(本地)");
-    shareKifu.add(shareHistoryLoacl);
-
-    shareHistoryLoacl.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            File file = new File("");
-            String courseFile = "";
-            try {
-              courseFile = file.getCanonicalPath();
-            } catch (IOException se) {
-              // TODO Auto-generated catch block
-            }
-            try {
-              File linkHistory = new File(courseFile + "\\" + "shareLinks.txt");
-              if (!linkHistory.exists()) {
-                Message msg = new Message();
-                msg.setMessage(
-                    resourceBundle.getString(
-                        "Menu.shareHistoryLoaclHintEmpty")); // ("历史记录为空");//shareHistoryLoaclHintEmpty
-                // msg.setVisible(true);
-                return;
-              }
-              Desktop.getDesktop().open(linkHistory);
-            } catch (IOException e1) {
-              // TODO Auto-generated catch block
-              Message msg = new Message();
-              msg.setMessage(
-                  resourceBundle.getString(
-                      "Menu.shareHistoryLoaclHintOpenFailed")); // ("打开失败");//shareHistoryLoaclHintOpenFailed
-            }
-          }
-        });
-
-    final JFontMenuItem shareSearch =
-        new JFontMenuItem(resourceBundle.getString("Menu.shareSearch")); // ("公开棋谱查询");
-    shareKifu.add(shareSearch);
-
-    shareSearch.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.openPublicKifuSearch();
-          }
-        });
-
     final JFontMenu live = new JFontMenu(resourceBundle.getString("Menu.sync"));
     live.setFont(baseMenuFont);
     live.setForeground(MorandiPalette.MENU_ITEM_TEXT);
@@ -4907,18 +4822,6 @@ public class Menu extends JMenuBar {
           }
         });
 
-    final JFontCheckBoxMenuItem shareButton =
-        new JFontCheckBoxMenuItem(resourceBundle.getString("BottomToolbar.share")); // ("分享");
-    // customToolbarItem.add(shareButton);
-    shareButton.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.config.share = !Lizzie.config.share;
-            Lizzie.config.uiConfig.put("share", Lizzie.config.share);
-            LizzieFrame.toolbar.reSetButtonLocation();
-          }
-        });
-
     final JFontCheckBoxMenuItem kataEstimateButton =
         new JFontCheckBoxMenuItem(
             resourceBundle.getString("BottomToolbar.kataEstimate")); // "Kata形势");
@@ -5156,8 +5059,6 @@ public class Menu extends JMenuBar {
         new MenuListener() {
 
           public void menuSelected(MenuEvent e) {
-            if (Lizzie.config.share) shareButton.setState(true);
-            else shareButton.setState(false);
             if (Lizzie.config.liveButton) liveButton.setState(true);
             else liveButton.setState(false);
             if (Lizzie.config.kataEstimate) kataEstimateButton.setState(true);

@@ -72,8 +72,6 @@ public class Loggin extends JDialog {
                           resourceBundle.getString("loggin.logginInfo"),
                           JOptionPane.DEFAULT_OPTION);
                       // null, "登录成功", "登录信息", JOptionPane.DEFAULT_OPTION);
-                      if (!editPrivate)
-                        Lizzie.frame.shareFrame.txtUploader.setText(txtUser.getText());
                       Lizzie.config.uploadUser = txtUser.getText();
                       Lizzie.config.uploadPassWd = new String(passwordField.getPassword());
                       Lizzie.config.uiConfig.put("up-load-user", Lizzie.config.uploadUser);
@@ -92,8 +90,6 @@ public class Loggin extends JDialog {
                           resourceBundle.getString("loggin.logginInfo"),
                           JOptionPane.DEFAULT_OPTION);
                       //  null, "注册并登录成功", "登录信息", JOptionPane.DEFAULT_OPTION);
-                      if (!editPrivate)
-                        Lizzie.frame.shareFrame.txtUploader.setText(txtUser.getText());
                       Lizzie.config.uploadUser = txtUser.getText();
                       Lizzie.config.uploadPassWd = new String(passwordField.getPassword());
                       Lizzie.config.uiConfig.put("up-load-user", Lizzie.config.uploadUser);

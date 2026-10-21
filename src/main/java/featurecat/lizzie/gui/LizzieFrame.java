@@ -572,10 +572,6 @@ public class LizzieFrame extends JFrame {
   String weightText2 = "";
   public static boolean isSavingRaw = false;
   public static boolean isSavingRawComment = false;
-  public static boolean isShareing = false;
-  //  private long shareTime = -1;
-  public ShareFrame shareFrame;
-  public BatchShareFrame batchShareFrame;
   SetKataRules setkatarules;
   public PublicKifuSearch search;
 
@@ -13315,16 +13311,6 @@ public class LizzieFrame extends JFrame {
   public void openPublicKifuSearch() {
     search = new PublicKifuSearch();
     search.setVisible(true);
-  }
-
-  public void shareSGF() {
-    //    shareFrame = new ShareFrame();
-    //    shareFrame.setVisible(true);
-  }
-
-  public void batchShareSGF() {
-    //    batchShareFrame = new BatchShareFrame();
-    //    batchShareFrame.setVisible(true);
   }
 
   public void setLzSaiEngine() {

@@ -106,7 +106,6 @@ public class SetShareLabel extends JDialog {
 
               Lizzie.config.shareLabel5 = textField_4.getText();
               Lizzie.config.uiConfig.put("share-label-5", Lizzie.config.shareLabel5);
-              Lizzie.frame.shareFrame.setShareLabelCombox();
               setVisible(false);
             }
           });

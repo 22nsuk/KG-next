@@ -310,7 +310,6 @@
     - `src/main/java/featurecat/lizzie/gui/SocketLoggin.java`
     - `src/main/java/featurecat/lizzie/gui/SocketGetFile.java`
     - `src/main/java/featurecat/lizzie/gui/SocketKifuSearch.java`
-    - `src/main/java/featurecat/lizzie/gui/SocketUpfile.java`
     - `src/main/java/featurecat/lizzie/gui/SocketEditFile.java`
     - local server sockets/listeners
   - If identifying local server sockets becomes noisy, skip the raw socket assertion and rely on the spec's explicit v1 exception list.
