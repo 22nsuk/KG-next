@@ -55,6 +55,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -253,13 +254,115 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
+  void engineThreadRefreshesCoalescePerFrameWhileEdtCallsRemainImmediate() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      RefreshRecordingFrame first = recordingRefreshFrame();
+      RefreshRecordingFrame second = recordingRefreshFrame();
+      List<String> redrawFlags =
+          List.of("redrawWinratePaneOnly", "redrawBoardSurfacesOnly", "redrawVariationTreeOnly");
+      for (String flag : redrawFlags) setField(first, flag, true);
+      CountDownLatch eventThreadHeld = new CountDownLatch(1);
+      CountDownLatch releaseEventThread = new CountDownLatch(1);
+      FutureTask<Void> eventTask =
+          new FutureTask<>(
+              () -> {
+                eventThreadHeld.countDown();
+                assertTrue(awaitRefreshGate(releaseEventThread), "test must release the EDT");
+                first.refresh();
+                assertEquals(
+                    1, first.appendCalls.get(), "EDT refresh must run even with a pending request");
+                assertEquals(0, second.appendCalls.get());
+                return null;
+              });
+      var reader = java.util.concurrent.Executors.newSingleThreadExecutor();
+      try {
+        SwingUtilities.invokeLater(eventTask);
+        assertTrue(eventThreadHeld.await(5, TimeUnit.SECONDS));
+        reader
+            .submit(
+                () -> {
+                  for (int index = 0; index < 25; index++) {
+                    first.refresh();
+                    second.refresh();
+                  }
+                })
+            .get(5, TimeUnit.SECONDS);
+        assertEquals(0, first.appendCalls.get(), "reader must return without running the body");
+        assertEquals(0, second.appendCalls.get());
+        for (String flag : redrawFlags) {
+          assertEquals(true, getField(first, flag), "redraw state must stay untouched off the EDT");
+        }
+      } finally {
+        releaseEventThread.countDown();
+        reader.shutdownNow();
+        try {
+          assertTrue(reader.awaitTermination(5, TimeUnit.SECONDS), "reader must terminate");
+        } finally {
+          drainEdt();
+        }
+      }
+      eventTask.get(5, TimeUnit.SECONDS);
+      assertEquals(2, first.appendCalls.get(), "one immediate EDT pass and one queued burst");
+      assertEquals(1, second.appendCalls.get(), "each frame must retain its own queued refresh");
+      assertEquals(0, first.offEventThreadAppends.get());
+      assertEquals(0, second.offEventThreadAppends.get());
+      for (String flag : redrawFlags) assertEquals(false, getField(first, flag));
+    }
+  }
+
+  @Test
+  void engineThreadRefreshRequestedDuringEdtPassRunsInOneLaterPass() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      RefreshRecordingFrame frame = recordingRefreshFrame();
+      CountDownLatch firstPassStarted = new CountDownLatch(1);
+      CountDownLatch releaseFirstPass = new CountDownLatch(1);
+      AtomicBoolean firstPassReleased = new AtomicBoolean();
+      frame.onAppend =
+          count -> {
+            if (count == 1) {
+              firstPassStarted.countDown();
+              firstPassReleased.set(awaitRefreshGate(releaseFirstPass));
+            }
+          };
+      var reader = java.util.concurrent.Executors.newSingleThreadExecutor();
+      try {
+        reader
+            .submit(
+                () -> {
+                  frame.refresh();
+                })
+            .get(5, TimeUnit.SECONDS);
+        assertTrue(firstPassStarted.await(5, TimeUnit.SECONDS));
+        reader
+            .submit(
+                () -> {
+                  for (int index = 0; index < 25; index++) frame.refresh();
+                })
+            .get(5, TimeUnit.SECONDS);
+        assertEquals(1, frame.appendCalls.get(), "reader must not enter the running EDT pass");
+      } finally {
+        releaseFirstPass.countDown();
+        reader.shutdownNow();
+        try {
+          assertTrue(reader.awaitTermination(5, TimeUnit.SECONDS), "reader must terminate");
+        } finally {
+          drainEdt();
+        }
+      }
+      assertTrue(firstPassReleased.get(), "test must release the first refresh");
+      assertEquals(2, frame.appendCalls.get(), "requests during a pass must retain one follow-up");
+      assertEquals(0, frame.offEventThreadAppends.get());
+    }
+  }
+
+  @Test
   void commentSetAndRefreshDoNotTreatAMissingEngineAsLoading() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       EmptyEngineUiFrame frame = prepareEmptyEngineUiFrame();
 
       assertDoesNotThrow(() -> invokeSetComment(frame, false));
       assertDoesNotThrow(() -> frame.appendComment());
-      assertDoesNotThrow(() -> frame.refresh());
+      assertDoesNotThrow(() -> SwingUtilities.invokeAndWait(frame::refresh));
 
       String comment = String.valueOf(getField(frame, "cachedComment"));
       assertEquals("", comment);
@@ -3819,6 +3922,41 @@ class LizzieFrameRegressionTest {
     Board board = allocate(Board.class);
     board.setHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
     Lizzie.board = board;
+  }
+
+  private static RefreshRecordingFrame recordingRefreshFrame() throws Exception {
+    RefreshRecordingFrame frame = allocate(RefreshRecordingFrame.class);
+    frame.appendCalls = new AtomicInteger();
+    frame.offEventThreadAppends = new AtomicInteger();
+    return frame;
+  }
+
+  private static boolean awaitRefreshGate(CountDownLatch release) {
+    try {
+      return release.await(20, TimeUnit.SECONDS);
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      return false;
+    }
+  }
+
+  private static final class RefreshRecordingFrame extends LizzieFrame {
+    private AtomicInteger appendCalls;
+    private AtomicInteger offEventThreadAppends;
+    private Consumer<Integer> onAppend;
+
+    @Override
+    public void appendComment() {
+      int count = appendCalls.incrementAndGet();
+      if (!SwingUtilities.isEventDispatchThread()) offEventThreadAppends.incrementAndGet();
+      if (onAppend != null) onAppend.accept(count);
+    }
+
+    @Override
+    public void requestProblemListRefresh() {}
+
+    @Override
+    public void repaint() {}
   }
 
   private static final class EmptyEngineUiFrame extends LizzieFrame {

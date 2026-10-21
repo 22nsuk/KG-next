@@ -76,6 +76,8 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
     ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
     ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
+    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmSavesStartupRulesAndClosesAfterMatchingReadback"),
+    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),

@@ -160,6 +160,9 @@ class EngineGameModuleContractTest {
   void restoreFixture() throws Exception {
     Lizzie.engineGame.replaceChromeForTest(null);
     EngineManager.resetEngineGameTransactionStateForTest();
+    // startEngineGame queues Menu's preparation update before returning. Let that real callback
+    // finish while this fixture's config, frame, and menu still belong together.
+    SwingUtilities.invokeAndWait(() -> {});
     Lizzie.engineManager = previousManager;
     EngineManager.isEmpty = previousEmpty;
     EngineManager.currentEngineNo = previousEngineNo;
@@ -173,7 +176,6 @@ class EngineGameModuleContractTest {
     LizzieFrame.winrateGraph = previousWinrateGraph;
     LizzieFrame.isSavingRaw = previousSavingRaw;
     Lizzie.gtpConsole = previousGtpConsole;
-    SwingUtilities.invokeAndWait(() -> {});
   }
 
   @Test

@@ -509,7 +509,11 @@ public class SetKataRules extends JDialog {
                 }
                 EngineRulesResult snapshot = operation.snapshot();
                 EngineRulesResult.Status status = snapshot.status();
-                if (status != lastStatus || snapshot.generation() != lastResultGeneration) {
+                // A settled snapshot is published before the operation completes. Until then
+                // result() is null; consuming this status would lose the confirmation forever.
+                boolean completionPending = snapshot.isSettled() && !operation.isDone();
+                if (!completionPending
+                    && (status != lastStatus || snapshot.generation() != lastResultGeneration)) {
                   lastStatus = status;
                   lastResultGeneration = snapshot.generation();
                   boolean confirmed = snapshot.isConfirmed();
@@ -532,6 +536,9 @@ public class SetKataRules extends JDialog {
                         }
                       });
                 }
+                if (generation == statusWatchGeneration) {
+                  afterEngineRulesStatusPolledForTest(operation, snapshot);
+                }
                 try {
                   Thread.sleep(50L);
                 } catch (InterruptedException interrupted) {
@@ -544,6 +551,9 @@ public class SetKataRules extends JDialog {
     thread.setDaemon(true);
     thread.start();
   }
+
+  void afterEngineRulesStatusPolledForTest(
+      Leelaz.EngineRulesOperation operation, EngineRulesResult snapshot) {}
 
   static boolean rejectEngineGameInteraction() {
     if (!EngineManager.occupiesEngineGameAdmission()) return false;
