@@ -230,14 +230,24 @@ class TeacherDialogRequestOwnershipTest {
 
   @Test
   void oversizedCommentPreservesSgfAndAllowsAnotherRequest() throws Exception {
-    respondWith("Verified commentary. ".repeat(5_001), "D4 remains available.");
+    assertOversizedReplyPreservesSgfAndAllowsRetry(5_001, "too large");
+  }
+
+  @Test
+  void oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest() throws Exception {
+    assertOversizedReplyPreservesSgfAndAllowsRetry(7_000, "size limit");
+  }
+
+  private void assertOversizedReplyPreservesSgfAndAllowsRetry(int repetitions, String expectedError)
+      throws Exception {
+    respondWith("Verified commentary. ".repeat(repetitions), "D4 remains available.");
     openDialog();
     onEdt(() -> view.explainNext().doClick());
     awaitIdle();
     onEdt(
         () -> {
           assertEquals("user note", root.get().getData().comment);
-          assertTrue(view.status().getText().contains("too large"), view.status().getText());
+          assertTrue(view.status().getText().contains(expectedError), view.status().getText());
           assertTrue(view.explainNext().isEnabled());
           assertFalse(view.output().getText().contains("Verified commentary."));
           view.explainNext().doClick();
@@ -521,17 +531,26 @@ class TeacherDialogRequestOwnershipTest {
   }
 
   private static void respond(HttpExchange exchange, int status, String answer) throws IOException {
-    JSONObject payload =
-        status == 200
-            ? new JSONObject()
+    StringBuilder body = new StringBuilder();
+    if (status == 200) {
+      // Keep the SGF-size test on the completed-comment path: providers stream normal-size
+      // deltas, while the transport's independent cumulative limit has its own UI case.
+      for (int offset = 0; offset < answer.length(); offset += 4_096) {
+        String chunk = answer.substring(offset, Math.min(answer.length(), offset + 4_096));
+        JSONObject payload =
+            new JSONObject()
                 .put(
                     "choices",
-                    List.of(
-                        new JSONObject().put("delta", new JSONObject().put("content", answer))))
-            : new JSONObject().put("error", new JSONObject().put("message", answer));
-    String body = status == 200 ? "data: " + payload + "\n\ndata: [DONE]\n\n" : payload.toString();
-    byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-    exchange.getResponseHeaders()
+                    List.of(new JSONObject().put("delta", new JSONObject().put("content", chunk))));
+        body.append("data: ").append(payload).append("\n\n");
+      }
+      body.append("data: [DONE]\n\n");
+    } else {
+      body.append(new JSONObject().put("error", new JSONObject().put("message", answer)));
+    }
+    byte[] bytes = body.toString().getBytes(StandardCharsets.UTF_8);
+    exchange
+        .getResponseHeaders()
         .set("Content-Type", status == 200 ? "text/event-stream" : "application/json");
     exchange.sendResponseHeaders(status, bytes.length);
     try (OutputStream out = exchange.getResponseBody()) {

@@ -39,6 +39,7 @@ DESKTOP_REQUIRED_TESTS = (
             "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
             "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
             "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
+            "oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest",
             "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
             "disposalDropsAnAnswerAlreadyQueuedOnEdt",
             "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
