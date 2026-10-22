@@ -1,0 +1,56 @@
+name: Publish hash-verified share Yike result
+on:
+  push:
+    branches: [codex/publish-share-yike-result-20261022]
+    paths: [.github/workflows/recover-share-yike-transport.yml]
+permissions:
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: c7510ad0576e4b76c6e94767b4bb367cbd56de94
+          path: transport
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          ref: 625ee3b960971e8378be721ad88f6b3018b65c41
+          path: product
+      - name: Recover exact reviewed data and verify resulting tree
+        working-directory: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 625ee3b960971e8378be721ad88f6b3018b65c41
+          python3 - <<'PY'
+          import base64, gzip, hashlib, json, pathlib, re, subprocess
+          text = pathlib.Path('../transport/.github/workflows/publish-share-yike-result.yml').read_text()
+          payload = re.search(r'PRODUCT_PAYLOAD: ([^\s]+)', text)[1]
+          assert hashlib.sha256(payload.encode()).hexdigest() == '921e209ef2a94af106007a59fb8364a0f8237fd0c04f888cd60e963e4f4725d2'
+          repairs = [[1681,1682,'7',''],[2091,2093,'Mx','0'],[2124,2125,'j',''],[2134,2135,'E',''],[2163,2166,'L/f',''],[3354,3354,'','w'],[3647,3647,'','pt'],[3685,3686,'W',''],[5549,5549,'','MH']]
+          for start, end, old, new in reversed(repairs):
+              assert payload[start:end] == old
+              payload = payload[:start] + new + payload[end:]
+          assert hashlib.sha256(payload.encode()).hexdigest() == 'c3302e9ec22e5d023ca6efa272ebf052fcdd01b5c8270f9562954f8b3a634066'
+          data = json.loads(gzip.decompress(base64.b64decode(payload, validate=True)))
+          subprocess.run(['git','apply','--index','--whitespace=error'], input=data['patch'].encode(), check=True)
+          subprocess.run(['git','rm','--',*data['deleted']], check=True)
+          keys = set(data['remove_keys'])
+          for name in data['locales']:
+              path = pathlib.Path(name)
+              text = path.read_text(encoding='utf-8')
+              path.write_text(''.join(line for line in text.splitlines(keepends=True) if line.split('=',1)[0] not in keys), encoding='utf-8')
+          subprocess.run(['git','add','--',*data['locales']], check=True)
+          tree = subprocess.check_output(['git','write-tree'], text=True).strip()
+          assert tree == '09ee55854bbe999c6dff94d0a410ff0aba1b97f5', tree
+          print('Verified product tree:', tree)
+          PY
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(security): retire sharing service and validate Yike query origins' -m 'Reuse PR #56 cleanup, remove remaining service clients and settings, and port upstream #631 origin checks without changing JCEF. Add configuration preservation and real-handler regressions.'
+          git push --force-with-lease=refs/heads/codex/remove-share-service-validate-yike-origin: origin HEAD:refs/heads/codex/remove-share-service-validate-yike-origin
+          git rev-parse HEAD
