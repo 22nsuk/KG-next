@@ -622,6 +622,8 @@ public class LizzieFrame extends JFrame {
   private boolean reopenWholeGameAnalysisAfterHandoff;
   private WholeGameAnalysisResultView wholeGameAnalysisResultView;
   private FlashAnalysisRequest pendingFlashAnalysisAfterSettings;
+  private FlashAnalysisRequest pendingFlashAnalysisAfterRestore;
+  private boolean flashAnalysisWaitingForRestore;
   private boolean manualAutoAnalysisStarting;
   private long manualAutoAnalysisStartGeneration;
   private Runnable pendingManualAutoAnalysisReady;
@@ -12955,6 +12957,7 @@ public class LizzieFrame extends JFrame {
 
   private boolean canStartYikeCurveCompletion() {
     return Lizzie.leelaz != null
+        && !flashAnalysisWaitingForRestore
         && !EngineManager.isEmpty
         && !EngineGamePresentation.current().startingOrPlaying()
         && !isPlayingAgainstLeelaz
@@ -16488,6 +16491,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void destroyAnalysisEngine() {
+    pendingFlashAnalysisAfterRestore = null;
     if (wholeGameAnalysisSession != null && wholeGameAnalysisSession.isActive()) {
       wholeGameAnalysisSession.cancel();
       return;
@@ -16756,7 +16760,8 @@ public class LizzieFrame extends JFrame {
   }
 
   private boolean isWholeGameAnalysisConflict(boolean ownsOrdinaryBatch) {
-    return Lizzie.config.isAutoAna
+    return flashAnalysisWaitingForRestore
+        || Lizzie.config.isAutoAna
         || (isBatchAna && !ownsOrdinaryBatch)
         || isBatchAnalysisMode
         || EngineGamePresentation.current().startingOrPlaying()
@@ -17143,6 +17148,7 @@ public class LizzieFrame extends JFrame {
       SwingUtilities.invokeLater(() -> flashAnalyzeGameBatch(firstMove, lastMove, isAllBranches));
       return;
     }
+    if (flashAnalysisWaitingForRestore) return;
     if (retryBatchAnalysisSave()) return;
     if (!isBatchAna || Batchfiles == null || BatchAnaNum < 0 || BatchAnaNum >= Batchfiles.size()) {
       return;
@@ -17192,6 +17198,7 @@ public class LizzieFrame extends JFrame {
       SwingUtilities.invokeLater(() -> flashAnalyzeGame(isAllGame, isAllBranches));
       return;
     }
+    if (flashAnalysisWaitingForRestore) return;
     if (hasActiveAutomaticQuickAnalysis()) {
       FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
       automaticQuickAnalysisTask.whenSettled(
@@ -17209,6 +17216,7 @@ public class LizzieFrame extends JFrame {
     }
     cancelPendingManualAutoAnalysisForExclusiveTask();
     prepareForManualFlashAnalysis();
+    if (deferManualFlashUntilFallbackRestored(isAllGame, isAllBranches)) return;
     releaseDedicatedLightweightQuickAnalysisEngine();
     if (!Lizzie.config.analysisReuseCurrentEngine
         && !isAnalysisEngineReusable(analysisEngine)
@@ -17224,6 +17232,44 @@ public class LizzieFrame extends JFrame {
     } else {
       startFlashAnalyzeRequestsInBackground(analysisEngine, isAllGame, isAllBranches);
     }
+  }
+
+  private boolean deferManualFlashUntilFallbackRestored(boolean isAllGame, boolean isAllBranches) {
+    if (analysisEngine == null || !analysisEngine.usesMissingAnalysisEngineFallback()) return false;
+    FlashAnalysisRequest request = new FlashAnalysisRequest(isAllGame, isAllBranches);
+    FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
+    BoardHistoryNode root = currentHistoryRoot();
+    Leelaz primary = Lizzie.leelaz;
+    Object incarnation = primary == null ? null : primary.engineIncarnationToken();
+    pendingFlashAnalysisAfterRestore = request;
+    flashAnalysisWaitingForRestore = true;
+    // Yike owns its worker directly, without an AutomaticQuickAnalysisTask. Its fallback is
+    // automatic-only: stop admission and wait for physical handback before creating a manual one.
+    releaseAutomaticQuickAnalysis(
+        AutomaticQuickAnalysisTask.CancelReason.MANUAL_FLASH,
+        restore -> {
+          flashAnalysisWaitingForRestore = false;
+          if (pendingFlashAnalysisAfterRestore != request) return;
+          pendingFlashAnalysisAfterRestore = null;
+          if (root != currentHistoryRoot()
+              || primary != Lizzie.leelaz
+              || (primary != null && incarnation != primary.engineIncarnationToken())
+              || analysisEngine != null
+              || (batchRequest != null && !canContinueFlashBatchRequest(batchRequest))) return;
+          if (!restore.permitsForegroundAnalysis()) {
+            if (batchRequest != null) {
+              flashBatchRequest = null;
+              isBatchAnalysisMode = false;
+              if (toolbar != null) toolbar.chkAnaAutoSave.setEnabled(true);
+              if (analysisTable != null) analysisTable.resetAnalysisMode();
+            }
+            showForegroundUnrestoredPrompt(
+                Lizzie.resourceBundle.getString("AnalysisEngine.foregroundRestoreFailed"));
+            return;
+          }
+          flashAnalyzeGame(request.isAllGame, request.isAllBranches);
+        });
+    return true;
   }
 
   private File resolveAutoSaveFile(int index, String extension) {
@@ -17353,7 +17399,7 @@ public class LizzieFrame extends JFrame {
         new Thread(
             () -> {
               try {
-                AnalysisEngine newAnalysisEngine = new AnalysisEngine(false);
+                AnalysisEngine newAnalysisEngine = createFlashAnalysisEngine();
                 newAnalysisEngine.waitFrame = waitFrame;
                 SwingUtilities.invokeLater(
                     () -> {
@@ -17400,6 +17446,10 @@ public class LizzieFrame extends JFrame {
     if (waitFrame != null) {
       waitFrame.setVisible(true);
     }
+  }
+
+  AnalysisEngine createFlashAnalysisEngine() throws IOException {
+    return new AnalysisEngine(false);
   }
 
   private void startFlashAnalyzeRequestsInBackground(
@@ -17556,7 +17606,7 @@ public class LizzieFrame extends JFrame {
         && Lizzie.engineStartupStatus.snapshot().state != EngineStartupStatus.State.READY;
   }
 
-  private WaitForAnalysis createFlashAnalysisLoadingFrame() {
+  WaitForAnalysis createFlashAnalysisLoadingFrame() {
     WaitForAnalysis loadingFrame = new WaitForAnalysis();
     loadingFrame.setLoadingProgress();
     loadingFrame.setLocationRelativeTo(this);
@@ -21676,6 +21726,7 @@ public class LizzieFrame extends JFrame {
   private boolean resumeForegroundAnalysisForCurrentPosition(boolean positionAlreadyConfirmed) {
     if (userAnalysisPaused
         || manualAutoAnalysisStarting
+        || flashAnalysisWaitingForRestore
         || isWholeGameAnalysisStartingOrRunning()
         || Lizzie.leelaz == null
         || EngineManager.isEmpty) {
@@ -21771,6 +21822,7 @@ public class LizzieFrame extends JFrame {
       finished.accept(ForegroundRestoreResult.NOT_REQUIRED);
       return;
     }
+    engine.requestShutdown();
     analysisEngine = null;
     engine.clearRequestCallbacks();
     Thread release =
@@ -21803,6 +21855,7 @@ public class LizzieFrame extends JFrame {
   }
 
   void prepareForManualFlashAnalysis() {
+    cancelYikeLiveCurveCompletion();
     cancelAutomaticQuickAnalysis(AutomaticQuickAnalysisTask.CancelReason.MANUAL_FLASH);
     stopQuickAnalysisWarmupTimer();
     quickAnalysisAdapter().invalidateStartup();
@@ -21934,6 +21987,7 @@ public class LizzieFrame extends JFrame {
     return Lizzie.config != null
         && !userAnalysisPaused
         && !manualAutoAnalysisStarting
+        && !flashAnalysisWaitingForRestore
         && !Lizzie.config.isAutoAna
         && (!requiresAutoAnalyze || Lizzie.config.autoQuickAnalyzeOnLoad)
         && !isWholeGameAnalysisStartingOrRunning()
@@ -22063,6 +22117,7 @@ public class LizzieFrame extends JFrame {
     return Lizzie.config != null
         && Lizzie.config.autoQuickAnalyzeOnLoad
         && !manualAutoAnalysisStarting
+        && !flashAnalysisWaitingForRestore
         && !Lizzie.config.isAutoAna
         && !isWholeGameAnalysisStartingOrRunning()
         && !isBatchAna
@@ -22134,6 +22189,7 @@ public class LizzieFrame extends JFrame {
   private boolean canResumeAnalysisAfterSync() {
     return !isUserAnalysisPaused()
         && !manualAutoAnalysisStarting
+        && !flashAnalysisWaitingForRestore
         && !isWholeGameAnalysisStartingOrRunning()
         && Lizzie.leelaz != null
         && !EngineManager.isEmpty
@@ -22147,6 +22203,7 @@ public class LizzieFrame extends JFrame {
     }
     if (!Lizzie.config.autoQuickAnalyzeOnLoad
         || manualAutoAnalysisStarting
+        || flashAnalysisWaitingForRestore
         || Lizzie.config.isAutoAna
         || isBatchAna
         || isEnginePKSgfStart
