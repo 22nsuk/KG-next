@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.condition.OS.WINDOWS;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -35,10 +36,14 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.jdesktop.swingx.util.OS;
 import org.json.JSONObject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 class AnalysisEngineCommandHelperTest {
@@ -66,6 +71,75 @@ class AnalysisEngineCommandHelperTest {
     assertFalse(
         AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
         "a directory is an invalid executable, not a missing one");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"katago", "katago.v1", "katago.exe"})
+  void exeSuffixPreventsMissingClassificationOnlyOnWindows(String name) throws Exception {
+    Path executable = Files.createDirectories(tempDir.resolve("engine dir.v1")).resolve(name);
+    String command = quote(executable) + " analysis -model custom.bin.gz";
+    assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+
+    Path suffixedExecutable = executable.resolveSibling(name + ".exe");
+    Files.createFile(suffixedExecutable);
+    assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+
+    Files.delete(suffixedExecutable);
+    Files.createDirectory(suffixedExecutable);
+    assertEquals(
+        !OS.isWindows(),
+        AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+        "an unusable .exe candidate must retain its startup error on Windows");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"katago", "katago.v1", "katago.exe"})
+  @EnabledOnOs(WINDOWS)
+  void windowsProcessLaunchAndMissingCheckAgreeOnImplicitExe(String name) throws Exception {
+    Path executable = Files.createDirectories(tempDir.resolve("native engine dir")).resolve(name);
+    Files.copy(
+        Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"),
+        executable.resolveSibling(name + ".exe"));
+    assertTrue(Files.notExists(executable));
+    String command = quote(executable) + " /d /c exit 0";
+    CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(Utils.splitCommand(command));
+    Process process =
+        new ProcessBuilder(launch.getCommandParts())
+            .directory(launch.getWorkingDirectory())
+            .redirectErrorStream(true)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .start();
+    try {
+      assertTrue(process.waitFor(10, TimeUnit.SECONDS), "Windows launch probe timed out");
+      assertEquals(0, process.exitValue());
+      assertFalse(
+          AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+          "a command that ProcessBuilder can launch must not trigger the missing-engine fallback");
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        assertTrue(process.waitFor(5, TimeUnit.SECONDS), "Windows launch probe survived cleanup");
+      }
+    }
+  }
+
+  @Test
+  void implicitExeSuffixUsesTheResolvedLaunchDirectory() throws Exception {
+    String previousDirectory = System.getProperty("user.dir");
+    try {
+      System.setProperty("user.dir", tempDir.toString());
+      Path model = Files.createFile(tempDir.resolve("model.bin.gz"));
+      Path executable = tempDir.resolve("quick engine").resolve("katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      String command = "\"./quick engine/katago\" analysis -model " + quote(model);
+      assertEquals(
+          tempDir.toFile(),
+          CommandLaunchHelper.prepare(Utils.splitCommand(command)).getWorkingDirectory());
+      assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    } finally {
+      System.setProperty("user.dir", previousDirectory);
+    }
   }
 
   @Test

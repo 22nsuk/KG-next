@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.MissingResourceException;
+import org.jdesktop.swingx.util.OS;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -307,7 +308,10 @@ public final class AnalysisEngineCommandHelper {
       // Without an explicit launch directory, relative paths use the native cwd, just like
       // ProcessBuilder. The app may have changed user.dir for writable data without changing cwd.
       // Unknown accessibility, a directory or an unusable existing file is not a missing file.
-      return Files.notExists(executable);
+      // Windows ProcessBuilder also tries the path with .exe appended, including dotted names.
+      // Both candidates must be definitely absent before changing the selected analysis engine.
+      return Files.notExists(executable)
+          && (!OS.isWindows() || Files.notExists(Path.of(executable + ".exe")));
     } catch (InvalidPathException invalid) {
       return false;
     }

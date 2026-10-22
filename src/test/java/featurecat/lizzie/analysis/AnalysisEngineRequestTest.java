@@ -52,6 +52,7 @@ import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -549,6 +550,23 @@ class AnalysisEngineRequestTest {
       assertTrue(Lizzie.config.uiConfig.getBoolean("analysis-engine-command-customized"));
       assertFalse(Lizzie.config.analysisReuseCurrentEngine);
       engine.shutdown();
+    }
+  }
+
+  @Test
+  void existingExeSuffixPreservesSeparateAutomaticAnalysisOnWindows(@TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = reusableForegroundEngine(true);
+      Lizzie.config.leelazConfig = new JSONObject();
+      Path executable = folder.resolve("custom analysis engine.v1");
+      Files.createFile(executable.resolveSibling(executable.getFileName() + ".exe"));
+      String command = "\"" + executable + "\" analysis -model custom.bin.gz -config custom.cfg";
+      Lizzie.config.analysisEngineCommand = command;
+
+      assertEquals(!OS.isWindows(), AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      assertEquals(command, Lizzie.config.analysisEngineCommand);
+      assertFalse(Lizzie.config.analysisReuseCurrentEngine);
     }
   }
 
