@@ -26,6 +26,8 @@ All notable maintenance updates to this fork are documented here.
 
 ### Inherited upstream changes
 
+- Remove the retired lizzieyzy.cn sharing clients, login/search dialogs, hidden upload controls and offline search entries (#630). Remove only their legacy account, labels and search-window settings on successful configuration reads using atomic replacement; preserve local SGF saving and unrelated online sources.
+- Accept Yike bridge queries only from the actual main frame of a Yike window on an HTTP(S) yikeweiqi.com domain; reject other sources before acknowledging or dispatching their payloads (#631, origin check only; no JCEF upgrade).
 - Run frame refreshes requested by engine threads on the Swing event thread, coalescing queued bursts while keeping event-thread refreshes synchronous (#633).
 - Wait for the rules operation to complete before consuming its settled status, so the rules editor closes after a matching confirmation even when the confirmed snapshot arrives first (#642).
 - Let the Beta channel compare signed GitHub stable and test releases, select the highest valid version without downgrading or falling back to an older package, and retain a non-blocking warning when one candidate cannot be checked; preserve Stable source selection (#578).

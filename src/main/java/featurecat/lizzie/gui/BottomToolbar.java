@@ -93,7 +93,6 @@ public class BottomToolbar extends JPanel {
   JButton batchOpen;
   JButton refresh;
   JPopupMenu yike;
-  JPopupMenu sharePopup;
   JPopupMenu autoAnalyzePopup;
   JButton tryPlay;
   JButton analyzeList;
@@ -102,11 +101,9 @@ public class BottomToolbar extends JPanel {
   JButton coords;
   JButton liveButton;
   // ActionListener liveButtonListener;
-  //  ActionListener shareListener;
   JButton badMoves;
   JButton autoPlay;
   JButton deleteMove;
-  JButton share;
   JButton remoteComputeButton;
   JButton downloadWeightButton;
   JButton moreActionsButton;
@@ -359,9 +356,6 @@ public class BottomToolbar extends JPanel {
     }
     if (yike != null) {
       AppleStyleSupport.installPopupStyle(yike);
-    }
-    if (sharePopup != null) {
-      AppleStyleSupport.installPopupStyle(sharePopup);
     }
     if (autoAnalyzePopup != null) {
       AppleStyleSupport.installPopupStyle(autoAnalyzePopup);
@@ -739,7 +733,6 @@ public class BottomToolbar extends JPanel {
     AppleStyleSupport.markDanger(deleteMove);
     badMoves =
         new JFontButton(Lizzie.resourceBundle.getString("BottomToolbar.badMoves")); // ("超级鹰眼");
-    share = new JFontButton(Lizzie.resourceBundle.getString("BottomToolbar.share")); // ("分享");
     remoteComputeButton = new JFontButton(Lizzie.resourceBundle.getString("Menu.remoteCompute"));
     AppleStyleSupport.markPrimary(remoteComputeButton);
     downloadWeightButton =
@@ -856,7 +849,6 @@ public class BottomToolbar extends JPanel {
     else leftMove.setBounds(0, 0, 20, 26);
     buttonPane.add(remoteComputeButton);
     buttonPane.add(downloadWeightButton);
-    buttonPane.add(share);
     buttonPane.add(liveButton);
     buttonPane.add(deleteMove);
     buttonPane.add(badMoves);
@@ -913,7 +905,6 @@ public class BottomToolbar extends JPanel {
     moveRank.setFocusable(false);
     coords.setFocusable(false);
     liveButton.setFocusable(false);
-    share.setFocusable(false);
     remoteComputeButton.setFocusable(false);
     downloadWeightButton.setFocusable(false);
     rightMove.setFocusable(false);
@@ -923,7 +914,6 @@ public class BottomToolbar extends JPanel {
     autoPlay.setFocusable(false);
     moreActionsButton.setFocusable(false);
 
-    share.setMargin(new Insets(0, 0, 0, 0));
     deleteMove.setMargin(new Insets(0, 0, 0, 0));
     autoPlay.setMargin(new Insets(0, 0, 0, 0));
     badMoves.setMargin(new Insets(0, 0, 0, 0));
@@ -972,7 +962,6 @@ public class BottomToolbar extends JPanel {
     setButtonSize(downloadWeightButton, false);
     setButtonSize(deleteMove, true);
     setButtonSize(badMoves, false);
-    setButtonSize(share, true);
     setButtonSize(liveButton, true);
     setButtonSize(kataEstimate, false);
     setButtonSize(batchOpen, false);
@@ -1097,90 +1086,6 @@ public class BottomToolbar extends JPanel {
             }
           }
         });
-
-    sharePopup = new JPopupMenu();
-    JFontMenuItem shareCurSgf =
-        new JFontMenuItem(
-            Lizzie.resourceBundle.getString("BottomToolbar.shareCurSgf")); // ("分享当前棋谱");
-    shareCurSgf.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.shareSGF();
-          }
-        });
-
-    JFontMenuItem shareBatchSgf =
-        new JFontMenuItem(
-            Lizzie.resourceBundle.getString("BottomToolbar.shareBatchSgf")); // ("分享当前棋谱");
-    shareBatchSgf.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.batchShareSGF();
-          }
-        });
-
-    //    JMenuItem shareHistory =
-    //        new JMenuItem(
-    //            Lizzie.resourceBundle.getString("BottomToolbar.shareHistory")); // ("历史记录(本地)");
-    //    shareHistory.addActionListener(
-    //        new ActionListener() {
-    //          public void actionPerformed(ActionEvent e) {
-    //            File file = new File("");
-    //            String courseFile = "";
-    //            try {
-    //              courseFile = file.getCanonicalPath();
-    //            } catch (IOException se) {
-    //              // TODO Auto-generated catch block
-    //            }
-    //            try {
-    //              File linkHistory = new File(courseFile + File.separator + "shareLinks.txt"); //
-    // 创建文件对象
-    //              if (!linkHistory.exists()) {
-    //                Utils.showMsg(
-    //                    Lizzie.resourceBundle.getString("BottomToolbar.linkHistoryHint")); // );
-    //                //                Message msg = new Message();
-    //                //                msg.setMessage("历史记录为空");
-    //                //                msg.setVisible(true);
-    //                return;
-    //              }
-    //              Desktop.getDesktop().open(linkHistory); // 启动已在本机桌面上注册的关联应用程序，打开文件文件file。
-    //            } catch (IOException e1) {
-    //              // TODO Auto-generated catch block
-    //              Utils.showMsg(Lizzie.resourceBundle.getString("BottomToolbar.linkHistoryFail"));
-    // // );
-    //              //   Message msg = new Message();
-    //              //              msg.setMessage("打开失败");
-    //              //              msg.setVisible(true);
-    //            }
-    //          }
-    //        });
-
-    JFontMenuItem editHistoryRemote =
-        new JFontMenuItem(
-            Lizzie.resourceBundle.getString(
-                "BottomToolbar.editHistoryRemote")); // ("查询(修改)已分享棋谱信息");
-    editHistoryRemote.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.openPrivateKifuSearch();
-          }
-        });
-
-    JFontMenuItem shareHistoryRemote =
-        new JFontMenuItem(
-            Lizzie.resourceBundle.getString("BottomToolbar.shareHistoryRemote")); // ("公开棋谱查询");
-    shareHistoryRemote.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.frame.openPublicKifuSearch();
-          }
-        });
-
-    sharePopup.add(shareCurSgf);
-    sharePopup.add(shareBatchSgf);
-    sharePopup.add(editHistoryRemote);
-    sharePopup.add(shareHistoryRemote);
-    // sharePopup.add(shareHistory);
 
     yike = new JPopupMenu();
     JFontMenuItem yikeLive =
@@ -1456,13 +1361,6 @@ public class BottomToolbar extends JPanel {
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
             yike.show(buttonPane, yike.getX(), yike.getY() - yike.getHeight());
-          }
-        });
-
-    share.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            sharePopup.show(buttonPane, share.getX(), share.getY() - sharePopup.getHeight());
           }
         });
 
@@ -4677,8 +4575,6 @@ public class BottomToolbar extends JPanel {
     downloadWeightButton.setVisible(true);
     if (Lizzie.config.liveButton) liveButton.setVisible(true);
     else liveButton.setVisible(false);
-    if (Lizzie.config.share) share.setVisible(true);
-    else share.setVisible(false);
     if (Lizzie.config.kataEstimate) kataEstimate.setVisible(true);
     else kataEstimate.setVisible(false);
     if (Lizzie.config.batchOpen) batchOpen.setVisible(true);
@@ -4846,9 +4742,6 @@ public class BottomToolbar extends JPanel {
     }
     if (liveButton.isVisible()) {
       length = length + liveButton.getWidth() - (Config.isScaled ? 0 : 1);
-    }
-    if (share.isVisible()) {
-      length = length + share.getWidth() - (Config.isScaled ? 0 : 1);
     }
     if (kataEstimate.isVisible()) {
       length = length + kataEstimate.getWidth() - (Config.isScaled ? 0 : 1);
@@ -5050,10 +4943,6 @@ public class BottomToolbar extends JPanel {
       w = w - (kataEstimate.getWidth() - (Config.isScaled ? 0 : 1));
       kataEstimate.setLocation(w, 0);
     }
-    if (share.isVisible()) {
-      w = w - (share.getWidth() - (Config.isScaled ? 0 : 1));
-      share.setLocation(w, 0);
-    }
     if (liveButton.isVisible()) {
       w = w - (liveButton.getWidth() - (Config.isScaled ? 0 : 1));
       liveButton.setLocation(w, 0);
@@ -5082,10 +4971,6 @@ public class BottomToolbar extends JPanel {
     if (liveButton.isVisible()) {
       liveButton.setLocation(w, 0);
       w = w + liveButton.getWidth() - (Config.isScaled ? 0 : 1);
-    }
-    if (share.isVisible()) {
-      share.setLocation(w, 0);
-      w = w + share.getWidth() - (Config.isScaled ? 0 : 1);
     }
     if (kataEstimate.isVisible()) {
       kataEstimate.setLocation(w, 0);
@@ -5234,7 +5119,6 @@ public class BottomToolbar extends JPanel {
             analyzeList,
             badMoves,
             refresh,
-            share,
             liveButton);
     List<Component> centerComponents =
         visibleComponents(
@@ -5261,7 +5145,6 @@ public class BottomToolbar extends JPanel {
       hideButtons(
           remoteComputeButton,
           downloadWeightButton,
-          share,
           liveButton,
           deleteMove,
           badMoves,
@@ -5369,8 +5252,6 @@ public class BottomToolbar extends JPanel {
     autoAnalyzePopup.setVisible(false);
     yike.setVisible(true);
     yike.setVisible(false);
-    sharePopup.setVisible(true);
-    sharePopup.setVisible(false);
   }
 
   //  public void setFontSize(int fontSize) {

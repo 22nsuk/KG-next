@@ -328,13 +328,13 @@ public class Input implements MouseListener, KeyListener, MouseWheelListener, Mo
     //  int a = e.getKeyCode();
     switch (e.getKeyCode()) {
       case VK_E:
-        if (controlIsPressed(e)) {
-          Lizzie.frame.shareSGF();
-        } else if (e.isAltDown()) {
-          Lizzie.frame.startEngineGameDialog();
-        } else if (e.isShiftDown()) {
-          Lizzie.frame.openTsumego();
-        } else Lizzie.frame.toggleGtpConsole();
+        if (!controlIsPressed(e)) {
+          if (e.isAltDown()) {
+            Lizzie.frame.startEngineGameDialog();
+          } else if (e.isShiftDown()) {
+            Lizzie.frame.openTsumego();
+          } else Lizzie.frame.toggleGtpConsole();
+        }
         break;
       case VK_RIGHT:
         // if (isinsertmode) {
@@ -677,9 +677,7 @@ public class Input implements MouseListener, KeyListener, MouseWheelListener, Mo
         break;
 
       case VK_B:
-        if (e.isAltDown()) {
-          Lizzie.frame.shareSGF();
-        } else {
+        if (!e.isAltDown()) {
           if (e.isControlDown()) {
             if (e.isShiftDown()) {
               Lizzie.frame.openWholeGameDeepAnalysis();

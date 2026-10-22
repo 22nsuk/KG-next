@@ -205,8 +205,6 @@ final class FunctionSearchController implements KeyEventDispatcher {
       case "game.komi" -> owner.editGameKomi();
       case "engine.rules" -> owner.setRulesAtEditor();
       case "game.ai-coach" -> owner.handleAiCoachToolbarAction();
-      case "share.private-history" -> owner.openPrivateKifuSearch();
-      case "share.public-history" -> owner.openPublicKifuSearch();
       default -> {
         if (entry.targetType() == FunctionCatalog.TargetType.SETTING
             || entry.targetType() == FunctionCatalog.TargetType.NAVIGATION) {
