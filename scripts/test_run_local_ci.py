@@ -164,6 +164,7 @@ class RunLocalCiTest(unittest.TestCase):
                         "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
                         "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
                         "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
+                        "oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest",
                         "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
                         "disposalDropsAnAnswerAlreadyQueuedOnEdt",
                         "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",

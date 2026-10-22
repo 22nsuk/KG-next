@@ -87,6 +87,33 @@ does not expose rejected drafts. Interrupted streams fail without a correction r
 consistency and overly certain wording remain nonblocking notes; these checks do not establish
 the truth of every natural-language claim.
 
+Commentary transport has a five-minute deadline per `stream()` call, covering header wait,
+body reads, and the single Chat Completions to Responses fallback allowed on HTTP 404/405.
+After headers, 60 seconds without received body bytes fails the request. Partial lines and
+SSE heartbeat bytes refresh that idle timer, but cannot extend the total deadline. Java's
+[`ofInputStream()` handler](https://docs.oracle.com/en/java/javase/17/docs/api/java.net.http/java/net/http/HttpResponse.BodyHandlers.html#ofInputStream())
+can return before the body is complete, so the request timeout alone is insufficient.
+
+Each call also limits received body data to 8 MiB, each line to 65,536 UTF-16 code units,
+each SSE event envelope to 262,144 units (all nonempty fields/comments plus one normalized
+separator per line, reset by a blank line), and accumulated explanation text to 131,072 units.
+Limits are checked before unbounded line growth or publishing excess text. HTTP error bodies
+use the same deadlines and retain only the existing 4,096-byte diagnostic excerpt, with secrets
+redacted. Terminal-event validation, endpoint fallback rules and grounding remain unchanged.
+
+Timeouts and size overruns close the response and fail without an automatic transport retry or
+grounded correction; they do not mark the user cancellation token. Explicit cancellation also
+aborts a pending header request. Every exit removes that call's deadline task and resource
+ownership, so a manual retry or the existing single grounding correction gets a fresh budget.
+The correction is a separate call (at most two five-minute calls for one grounded explanation).
+Only a completed, verified explanation reaches the dialog's SGF/follow-up persistence path.
+These limits cover commentary responses; model-list requests retain their separate behavior.
+
+`TeacherLlmStreamLimitsTest` uses local HTTP servers with shortened limits to cover idle and
+absolute timeouts, error bodies, both endpoints, Unicode, exact size boundaries, cancellation,
+replacement and grounding. `TeacherResponseBudgetTest` controls future/body handoffs to verify
+late-response cleanup and completion-versus-deadline races without relying on network timing.
+
 The required `desktop` group runs every `TeacherDialogRequestOwnershipTest` case against a
 local HTTP/SSE server through the real API-key client and Swing dialog. It covers original-node
 SGF storage after cursor navigation, frozen follow-up context, correction, cancellation, game
