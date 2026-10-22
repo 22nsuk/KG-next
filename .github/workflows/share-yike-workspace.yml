@@ -1,0 +1,52 @@
+name: Share Yike isolated workspace
+on:
+  push:
+    branches: [codex/verify-share-yike-workspace]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: c1815a0270c0f654624058cbef879890c8546fd9
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Fetch fixed comparison inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/share-yike-inputs"
+          git fetch --no-tags --depth=1 origin 625ee3b960971e8378be721ad88f6b3018b65c41
+          git fetch --no-tags --depth=1 https://github.com/wimi321/lizzieyzy-next.git 6823757b4c47eac311e70c3765bf613a4c02564c d2fee550ef8c53957411111bed0d948f8274c44c fc77a5417189e36e48eb809566230dd2b58f0dc0 7721d4013fd71511c31db1a1aafb3261c3019873
+          git diff 6823757b4c47eac311e70c3765bf613a4c02564c d2fee550ef8c53957411111bed0d948f8274c44c > "$RUNNER_TEMP/share-yike-inputs/upstream-630.patch"
+          git diff fc77a5417189e36e48eb809566230dd2b58f0dc0 7721d4013fd71511c31db1a1aafb3261c3019873 > "$RUNNER_TEMP/share-yike-inputs/upstream-631.patch"
+          git diff c1815a0270c0f654624058cbef879890c8546fd9 625ee3b960971e8378be721ad88f6b3018b65c41 > "$RUNNER_TEMP/share-yike-inputs/fork-56.patch"
+          tar --exclude='./target' -czf "$RUNNER_TEMP/share-yike-inputs/source.tar.gz" .
+      - name: Verify baseline and populate public Maven dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn -B -ntp -Dfmt.skip=true -Djava.awt.headless=true verify 2>&1 | tee "$RUNNER_TEMP/share-yike-inputs/baseline-verify.log"
+      - name: Archive build inputs without credentials
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -C "$HOME/.m2" -czf "$RUNNER_TEMP/share-yike-inputs/maven-repository.tar.gz" repository
+          MAVEN_HOME_REAL="$(dirname "$(dirname "$(readlink -f "$(command -v mvn)")")")"
+          tar -C "$MAVEN_HOME_REAL" -czf "$RUNNER_TEMP/share-yike-inputs/maven-tool.tar.gz" .
+          find "$RUNNER_TEMP/share-yike-inputs" -maxdepth 1 -type f -exec sha256sum {} \;
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: share-yike-source-and-build-inputs
+          path: ${{ runner.temp }}/share-yike-inputs/
+          retention-days: 2
+          compression-level: 0
