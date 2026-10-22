@@ -6068,271 +6068,7 @@ public class Menu extends JMenuBar {
     // more.setBounds(Lizzie.config.isFrameFontSmall()?80:(Lizzie.config.isFrameFontMiddle()?86:92),
     // -1, 20, 20);
 
-    chkWRN = new JFontCheckBox();
-    chkWRN.setToolTipText(resourceBundle.getString("Menu.chkWRN.toolTopText"));
-    chkWRN.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-            if (chkWRN.isSelected()) {
-              txtWRN.setEnabled(true);
-              double wrn = 0;
-              try {
-                wrn = Double.parseDouble(txtWRN.getText());
-              } catch (NumberFormatException s) {
-                // TODO Auto-generated catch block
-              }
-              Lizzie.config.txtKataEngineWRN = String.valueOf(wrn);
-              EngineGameSnapshot snapshot = EngineGamePresentation.current();
-              final double wrnCommand = wrn;
-              if (snapshot.playing()) {
-                EngineGamePresentation.sendToParticipants(
-                    snapshot,
-                    engine ->
-                        engine.sendCommand(
-                            "kata-set-param analysisWideRootNoise " + wrnCommand));
-              } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            } else {
-              txtWRN.setEnabled(false);
-              if (txtWRN.getBackground() == Color.RED) {
-                txtWRN.setText("");
-                txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-              }
-              EngineGameSnapshot snapshot = EngineGamePresentation.current();
-              if (snapshot.playing()) {
-                EngineGamePresentation.sendToParticipants(
-                    snapshot,
-                    engine ->
-                        engine.sendCommand("kata-set-param analysisWideRootNoise 0"));
-              } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise 0");
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            }
-            Lizzie.config.chkKataEngineWRN = chkWRN.isSelected();
-          }
-        });
-    // chkWRN.setSelected(Lizzie.config.autoLoadKataEngineWRN);
-    lblWRN = new JFontLabel(resourceBundle.getString("Menu.lblWRN")); // ("分析广度拓展");
-    txtWRN = new JFontTextField();
-    txtWRN.setToolTipText(resourceBundle.getString("Menu.chkWRN.toolTopText"));
-    txtWRN.setDocument(new DoubleDocument());
-    txtWRN.setEnabled(false);
-    // if (!Lizzie.config.autoLoadKataEngineWRN) txtWRN.setEnabled(false);
-    // txtWRN.setText(Lizzie.config.txtKataEngineWRN ));
-
-    Document dt3 = txtWRN.getDocument();
-    dt3.addDocumentListener(
-        new DocumentListener() {
-          public void insertUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn < 0 || wrn > 2)
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEngineWRN = String.valueOf(wrn);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double wrnCommand = wrn;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot,
-                  engine ->
-                      engine.sendCommand(
-                          "kata-set-param analysisWideRootNoise " + wrnCommand));
-            } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
-            Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-wrn", Lizzie.config.txtKataEngineWRN);
-          }
-
-          public void removeUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn < 0 || wrn > 2)
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEngineWRN = String.valueOf(wrn);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double wrnCommand = wrn;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot,
-                  engine ->
-                      engine.sendCommand(
-                          "kata-set-param analysisWideRootNoise " + wrnCommand));
-            } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
-            Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-wrn", Lizzie.config.txtKataEngineWRN);
-          }
-
-          public void changedUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn < 0 || wrn > 2)
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEngineWRN = String.valueOf(wrn);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double wrnCommand = wrn;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot,
-                  engine ->
-                      engine.sendCommand(
-                          "kata-set-param analysisWideRootNoise " + wrnCommand));
-            } else Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
-            Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-wrn", Lizzie.config.txtKataEngineWRN);
-          }
-        });
-
-    chkPDA = new JFontCheckBox();
-    chkPDA.setToolTipText(resourceBundle.getString("Menu.chkPDA.toolTopText"));
-    chkPDA.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            // Lizzie.board.clearbestmovesafter(Lizzie.board.getHistory().getStart());
-            if (chkPDA.isSelected()) {
-              txtGfPDA.setEnabled(true);
-              double pda = 0;
-              try {
-                pda = Double.parseDouble(txtGfPDA.getText());
-              } catch (NumberFormatException s) {
-                // TODO Auto-generated catch block
-              }
-              Lizzie.config.txtKataEnginePDA = String.valueOf(pda);
-              EngineGameSnapshot snapshot = EngineGamePresentation.current();
-              final double pdaCommand = pda;
-              if (snapshot.playing()) {
-                EngineGamePresentation.sendToParticipants(
-                    snapshot, engine -> engine.setPda(String.valueOf(pdaCommand)));
-              } else Lizzie.leelaz.setPda(String.valueOf(pda));
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-              Lizzie.config.uiConfig.put("txt-kata-engine-pda", Lizzie.config.txtKataEnginePDA);
-
-            } else {
-              txtGfPDA.setEnabled(false);
-              if (txtGfPDA.getBackground() == Color.RED) {
-                txtGfPDA.setText("");
-                txtGfPDA.setBackground(AppleStyleSupport.validFieldBackground());
-              }
-              EngineGameSnapshot snapshot = EngineGamePresentation.current();
-              if (snapshot.playing()) {
-                EngineGamePresentation.sendToParticipants(
-                    snapshot, engine -> engine.setPda("0"));
-              } else Lizzie.leelaz.setPda("0");
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            }
-            Lizzie.config.chkKataEnginePDA = chkPDA.isSelected();
-          }
-        });
-
-    lblGfPDA = new JFontLabel(resourceBundle.getString("Menu.lblPDA"));
-    txtGfPDA = new JFontTextField();
-    txtGfPDA.setEnabled(false);
-    txtGfPDA.setToolTipText(resourceBundle.getString("Menu.chkPDA.toolTopText"));
-    txtGfPDA.setDocument(new KomiDocument(false));
-
-    Document dt4 = txtGfPDA.getDocument();
-    dt4.addDocumentListener(
-        new DocumentListener() {
-          public void insertUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtGfPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtGfPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtGfPDA.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEnginePDA = String.valueOf(pda);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double pdaCommand = pda;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot, engine -> engine.setPda(String.valueOf(pdaCommand)));
-            } else Lizzie.leelaz.setPda(String.valueOf(pda));
-            //  Lizzie.board.clearbestmovesafter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-pda", Lizzie.config.txtKataEnginePDA);
-          }
-
-          public void removeUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtGfPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtGfPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtGfPDA.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEnginePDA = String.valueOf(pda);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double pdaCommand = pda;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot, engine -> engine.setPda(String.valueOf(pdaCommand)));
-            } else Lizzie.leelaz.setPda(String.valueOf(pda));
-            //   Lizzie.board.clearbestmovesafter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-pda", Lizzie.config.txtKataEnginePDA);
-          }
-
-          public void changedUpdate(DocumentEvent e) {
-            if (ShouldIgnoreDtChange) return;
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtGfPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtGfPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtGfPDA.setBackground(AppleStyleSupport.validFieldBackground());
-            Lizzie.config.txtKataEnginePDA = String.valueOf(pda);
-            EngineGameSnapshot snapshot = EngineGamePresentation.current();
-            final double pdaCommand = pda;
-            if (snapshot.startingOrPlaying()) {
-              EngineGamePresentation.sendToParticipants(
-                  snapshot, engine -> engine.setPda(String.valueOf(pdaCommand)));
-            } else Lizzie.leelaz.setPda(String.valueOf(pda));
-            //  Lizzie.board.clearbestmovesafter(Lizzie.board.getHistory().getStart());
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            Lizzie.config.uiConfig.put("txt-kata-engine-pda", Lizzie.config.txtKataEnginePDA);
-          }
-        });
+    initializeKataAnalysisFields();
 
     showPda(false);
     //  updateMenuStatus();
@@ -7007,6 +6743,88 @@ public class Menu extends JMenuBar {
       Lizzie.frame.refresh();
       Lizzie.frame.repaint();
     }
+  }
+
+  private void initializeKataAnalysisFields() {
+    chkWRN = new JFontCheckBox();
+    chkWRN.setToolTipText(resourceBundle.getString("Menu.chkWRN.toolTopText"));
+    lblWRN = new JFontLabel(resourceBundle.getString("Menu.lblWRN"));
+    txtWRN = new JFontTextField();
+    txtWRN.setToolTipText(resourceBundle.getString("Menu.chkWRN.toolTopText"));
+    txtWRN.setEnabled(false);
+    bindKataAnalysisField(KataAnalysisParameter.WRN, txtWRN, chkWRN);
+
+    chkPDA = new JFontCheckBox();
+    chkPDA.setToolTipText(resourceBundle.getString("Menu.chkPDA.toolTopText"));
+    lblGfPDA = new JFontLabel(resourceBundle.getString("Menu.lblPDA"));
+    txtGfPDA = new JFontTextField();
+    txtGfPDA.setToolTipText(resourceBundle.getString("Menu.chkPDA.toolTopText"));
+    txtGfPDA.setEnabled(false);
+    bindKataAnalysisField(KataAnalysisParameter.PDA, txtGfPDA, chkPDA);
+  }
+
+  private void bindKataAnalysisField(
+      KataAnalysisParameter parameter, JFontTextField field, JFontCheckBox enabled) {
+    // Keep incomplete drafts in the editor; the application boundary below owns validation.
+    field.getDocument().addDocumentListener(new DocumentListener() {
+      public void insertUpdate(DocumentEvent event) {
+        updateKataAnalysisField(parameter, false);
+      }
+
+      public void removeUpdate(DocumentEvent event) {
+        updateKataAnalysisField(parameter, false);
+      }
+
+      public void changedUpdate(DocumentEvent event) {
+        updateKataAnalysisField(parameter, false);
+      }
+    });
+    enabled.addActionListener(event -> updateKataAnalysisField(parameter, true));
+  }
+
+  private void updateKataAnalysisField(KataAnalysisParameter parameter, boolean checkboxChanged) {
+    if (ShouldIgnoreDtChange) return;
+    boolean wrn = parameter == KataAnalysisParameter.WRN;
+    JFontTextField field = wrn ? txtWRN : txtGfPDA;
+    JFontCheckBox enabled = wrn ? chkWRN : chkPDA;
+    boolean wasEnabled = wrn ? Lizzie.config.chkKataEngineWRN : Lizzie.config.chkKataEnginePDA;
+    java.util.OptionalDouble parsed = parameter.parse(field.getText());
+    field.setBackground(parsed.isPresent()
+        ? AppleStyleSupport.validFieldBackground() : AppleStyleSupport.errorFieldBackground());
+    if (parsed.isEmpty()) {
+      if (checkboxChanged) {
+        enabled.setSelected(wasEnabled);
+        // Even an invalid disabled value must remain repairable without applying a default.
+        field.setEnabled(true);
+      }
+      return;
+    }
+    boolean use = enabled.isSelected();
+    if (checkboxChanged) field.setEnabled(use);
+    else if (!use) return;
+
+    // Config holds the last applied value; field.getText() is only an editing draft.
+    double value = use ? parsed.getAsDouble() : 0;
+    EngineGameSnapshot snapshot = EngineGamePresentation.current();
+    java.util.function.Consumer<Leelaz> command = wrn
+        ? engine -> engine.sendCommand("kata-set-param analysisWideRootNoise " + value)
+        : engine -> engine.setPda(String.valueOf(value));
+    if (snapshot.startingOrPlaying()) {
+      EngineGamePresentation.sendToParticipants(snapshot, command);
+    } else {
+      command.accept(Lizzie.leelaz);
+    }
+    if (wrn) {
+      Lizzie.config.chkKataEngineWRN = use;
+      if (use) Lizzie.config.txtKataEngineWRN = String.valueOf(value);
+      Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+    } else {
+      Lizzie.config.chkKataEnginePDA = use;
+      if (use) Lizzie.config.txtKataEnginePDA = String.valueOf(value);
+    }
+    if (use) Lizzie.config.uiConfig.put(parameter.configKey, String.valueOf(value));
+    Lizzie.config.uiConfig.put(wrn ? "chk-kata-engine-wrn" : "chk-kata-engine-pda", use);
+    if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
   }
 
   private void dtTxtPlayOutsLimitUpdate() {
@@ -9820,26 +9638,8 @@ public class Menu extends JMenuBar {
   }
 
   public void setPdaAndWrn(double pda, double wrn) {
-    ShouldIgnoreDtChange = true;
-    if (pda == 0) {
-      chkPDA.setSelected(false);
-      txtGfPDA.setText("0");
-      txtGfPDA.setEnabled(false);
-    } else {
-      chkPDA.setSelected(true);
-      txtGfPDA.setText(String.valueOf(pda));
-      txtGfPDA.setEnabled(true);
-    }
-    if (wrn == 0) {
-      chkWRN.setSelected(false);
-      txtWRN.setText("0");
-      txtWRN.setEnabled(false);
-    } else {
-      chkWRN.setSelected(true);
-      txtWRN.setText(String.valueOf(wrn));
-      txtWRN.setEnabled(true);
-    }
-    ShouldIgnoreDtChange = false;
+    setUseGfPda(pda != 0, String.valueOf(pda));
+    setUseWrn(wrn != 0, String.valueOf(wrn));
   }
 
   public void setPdaAndWrnByEngineForDouble() {
@@ -11005,27 +10805,27 @@ public class Menu extends JMenuBar {
     blackwhite.setIcon(iconbh);
   }
 
-  public void setWrnText(double wrn) {
-    // TODO Auto-generated method stub
+  private void setKataAnalysisText(
+      JFontTextField field, KataAnalysisParameter parameter, String text) {
+    boolean previousIgnore = ShouldIgnoreDtChange;
     ShouldIgnoreDtChange = true;
-    txtWRN.setText(String.valueOf(wrn));
-    ShouldIgnoreDtChange = false;
+    try {
+      field.setText(text);
+      field.setBackground(parameter.parse(text).isPresent()
+          ? AppleStyleSupport.validFieldBackground() : AppleStyleSupport.errorFieldBackground());
+    } finally {
+      ShouldIgnoreDtChange = previousIgnore;
+    }
   }
 
   public void setUseWrn(boolean use, String wrn) {
-    // TODO Auto-generated method stub
-    ShouldIgnoreDtChange = true;
-    txtWRN.setText(String.valueOf(wrn));
-    ShouldIgnoreDtChange = false;
+    setKataAnalysisText(txtWRN, KataAnalysisParameter.WRN, wrn);
     chkWRN.setSelected(use);
     txtWRN.setEnabled(use);
   }
 
   public void setUseGfPda(boolean use, String pda) {
-    // TODO Auto-generated method stub
-    ShouldIgnoreDtChange = true;
-    txtGfPDA.setText(String.valueOf(pda));
-    ShouldIgnoreDtChange = false;
+    setKataAnalysisText(txtGfPDA, KataAnalysisParameter.PDA, pda);
     chkPDA.setSelected(use);
     txtGfPDA.setEnabled(use);
   }
