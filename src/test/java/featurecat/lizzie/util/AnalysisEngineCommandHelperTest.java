@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.condition.OS.WINDOWS;
 
@@ -14,6 +15,7 @@ import ch.qos.logback.core.read.ListAppender;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.SyncDiagnosticsExportSnapshot;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.logging.DiagnosticBundleExporter;
@@ -28,6 +30,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -192,6 +195,41 @@ class AnalysisEngineCommandHelperTest {
     Path engineDirectory = Files.createTempDirectory(nativeDirectory, "only-in-native-");
     Path executable = Files.createFile(engineDirectory.resolve("katago"));
     String relativeExecutable = nativeDirectory.relativize(executable).toString();
+    runWorkingDirectoryProbe(
+        nativeDirectory,
+        NativeWorkingDirectoryProbe.class,
+        changedUserDirectory.toString(),
+        relativeExecutable);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"-model", "-config"})
+  void relativeExecutableWithExternalPathsMatchesNativeLaunch(String option) throws Exception {
+    String name = "katago";
+    Path nativeDirectory = Files.createDirectories(tempDir.resolve("native cwd"));
+    Path changedUserDirectory = Files.createDirectories(tempDir.resolve("writable user dir"));
+    Path externalFile =
+        Files.createFile(
+            Files.createDirectories(tempDir.resolve("external data")).resolve("data.bin"));
+    Path engineDirectory = Files.createTempDirectory(nativeDirectory, "native engines-");
+    Path executable = engineDirectory.resolve(name + (OS.isWindows() ? ".exe" : ""));
+    if (OS.isWindows()) {
+      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), executable);
+    } else {
+      Files.writeString(executable, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+      Files.setPosixFilePermissions(executable, PosixFilePermissions.fromString("rwx------"));
+    }
+    runWorkingDirectoryProbe(
+        nativeDirectory,
+        ExternalWorkingDirectoryProbe.class,
+        changedUserDirectory.toString(),
+        nativeDirectory.relativize(engineDirectory.resolve(name)).toString(),
+        externalFile.toString(),
+        option);
+  }
+
+  private void runWorkingDirectoryProbe(Path nativeDirectory, Class<?> probe, String... args)
+      throws Exception {
     Path java = Path.of(System.getProperty("java.home"), "bin",
         System.getProperty("os.name", "").startsWith("Windows") ? "java.exe" : "java");
     List<String> classPath = new ArrayList<>();
@@ -199,10 +237,16 @@ class AnalysisEngineCommandHelperTest {
         System.getProperty("java.class.path", "")).split(File.pathSeparator)) {
       classPath.add(Path.of(entry).toAbsolutePath().toString());
     }
-    Path output = tempDir.resolve("native-cwd-probe.log");
-    Process process = new ProcessBuilder(java.toString(), "-Djava.awt.headless=true", "-cp",
-        String.join(File.pathSeparator, classPath), NativeWorkingDirectoryProbe.class.getName(),
-        changedUserDirectory.toString(), relativeExecutable)
+    List<String> command =
+        new ArrayList<>(List.of(
+            java.toString(), "-Djava.awt.headless=true",
+            "-Duser.language=en", "-Duser.country=US",
+            "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+            "-Dlizzie.work.dir=" + tempDir.resolve("probe-work"), "-cp",
+            String.join(File.pathSeparator, classPath), probe.getName()));
+    command.addAll(List.of(args));
+    Path output = tempDir.resolve(probe.getSimpleName() + ".log");
+    Process process = new ProcessBuilder(command)
         .directory(nativeDirectory.toFile())
         .redirectErrorStream(true)
         .redirectOutput(output.toFile())
@@ -229,6 +273,63 @@ class AnalysisEngineCommandHelperTest {
           "the command must exercise ProcessBuilder's inherited native cwd");
       assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
           "a valid relative executable must not fall back after the writable data directory changes");
+    }
+  }
+
+  public static final class ExternalWorkingDirectoryProbe {
+    public static void main(String[] args) throws Exception {
+      Path relativeExecutable = Path.of(args[1]);
+      Path externalFile = Path.of(args[2]);
+      Path installedExecutable =
+          OS.isWindows() ? Path.of(relativeExecutable + ".exe") : relativeExecutable;
+      assertTrue(Files.isRegularFile(installedExecutable), "fixture must exist in the native cwd");
+      withUserDirAndConfig(Path.of(args[0]), () -> {
+        String command =
+            quote(relativeExecutable) + " /d /c exit 0 " + args[3] + " " + quote(externalFile);
+        CommandLaunchHelper.LaunchSpec launch =
+            CommandLaunchHelper.prepare(Utils.splitCommand(command));
+        assertEquals(externalFile.getParent().toFile(), launch.getWorkingDirectory());
+        assertEquals(relativeExecutable.toString(), launch.getCommandParts().get(0));
+        ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts())
+            .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        CommandLaunchHelper.configureProcessBuilder(builder, launch);
+        if (OS.isWindows()) {
+          Process process = builder.start();
+          try {
+            assertTrue(process.waitFor(10, TimeUnit.SECONDS), "native executable probe timed out");
+            assertEquals(0, process.exitValue());
+          } finally {
+            if (process.isAlive()) {
+              process.destroyForcibly();
+              assertTrue(process.waitFor(5, TimeUnit.SECONDS), "native executable survived cleanup");
+            }
+          }
+        } else {
+          assertThrows(
+              IOException.class,
+              builder::start,
+              "POSIX resolves the relative executable after entering the child working directory");
+        }
+        assertEquals(
+            !OS.isWindows(),
+            AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+            "missing classification must respect the platform's executable lookup directory");
+        Lizzie.config.analysisEngineCommand = command;
+        assertEquals(!OS.isWindows(), AnalysisEngine.shouldFallbackToPrimaryForeground(false));
+        assertEquals(command, Lizzie.config.analysisEngineCommand);
+        assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+
+        String missingCommand = quote(relativeExecutable.resolveSibling("absent-engine"))
+            + " analysis " + args[3] + " " + quote(externalFile);
+        CommandLaunchHelper.LaunchSpec missingLaunch =
+            CommandLaunchHelper.prepare(Utils.splitCommand(missingCommand));
+        ProcessBuilder missingBuilder = new ProcessBuilder(missingLaunch.getCommandParts());
+        CommandLaunchHelper.configureProcessBuilder(missingBuilder, missingLaunch);
+        assertThrows(IOException.class, missingBuilder::start);
+        assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(missingCommand));
+        Lizzie.config.analysisEngineCommand = missingCommand;
+        assertTrue(AnalysisEngine.shouldFallbackToPrimaryForeground(false));
+      });
     }
   }
 

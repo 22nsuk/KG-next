@@ -303,18 +303,24 @@ public final class AnalysisEngineCommandHelper {
       CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(parts);
       Path executable = Path.of(launch.getCommandParts().get(0));
       if (!executable.isAbsolute() && launch.getWorkingDirectory() != null) {
+        // Windows can resolve relative executables in the caller's native cwd even when an
+        // absolute model/config option selects another directory for the child process.
+        if (OS.isWindows() && !isDefinitelyMissingExecutable(executable)) return false;
         executable = launch.getWorkingDirectory().toPath().resolve(executable);
       }
       // Without an explicit launch directory, relative paths use the native cwd, just like
       // ProcessBuilder. The app may have changed user.dir for writable data without changing cwd.
-      // Unknown accessibility, a directory or an unusable existing file is not a missing file.
-      // Windows ProcessBuilder also tries the path with .exe appended, including dotted names.
-      // Both candidates must be definitely absent before changing the selected analysis engine.
-      return Files.notExists(executable)
-          && (!OS.isWindows() || Files.notExists(Path.of(executable + ".exe")));
+      return isDefinitelyMissingExecutable(executable);
     } catch (InvalidPathException invalid) {
       return false;
     }
+  }
+
+  private static boolean isDefinitelyMissingExecutable(Path executable) {
+    // Unknown accessibility, a directory or an unusable existing file must retain its error.
+    // Windows also accepts implicit .exe candidates; require both paths to be definitely absent.
+    return Files.notExists(executable)
+        && (!OS.isWindows() || Files.notExists(Path.of(executable + ".exe")));
   }
 
   public static boolean isAnalysisCommandCustomized(
