@@ -34,6 +34,7 @@ public final class TeacherLlmClient implements CommentaryClient {
   private final URI apiBase;
   private final String apiKey;
   private final String model;
+  private final TeacherResponseBudget.Limits responseLimits;
 
   public TeacherLlmClient(String baseUrl, String apiKey, String model) throws IOException {
     this(
@@ -49,10 +50,20 @@ public final class TeacherLlmClient implements CommentaryClient {
   }
 
   TeacherLlmClient(HttpClient httpClient, String baseUrl, String apiKey, String model) {
+    this(httpClient, baseUrl, apiKey, model, TeacherResponseBudget.Limits.DEFAULT);
+  }
+
+  TeacherLlmClient(
+      HttpClient httpClient,
+      String baseUrl,
+      String apiKey,
+      String model,
+      TeacherResponseBudget.Limits responseLimits) {
     this.httpClient = httpClient;
     this.apiBase = normalizeApiBase(baseUrl);
     this.apiKey = requireApiKey(apiKey);
     this.model = TeacherSettings.validateModel(model);
+    this.responseLimits = responseLimits;
   }
 
   public List<String> listModels() throws IOException, InterruptedException {
@@ -95,37 +106,42 @@ public final class TeacherLlmClient implements CommentaryClient {
     Cancellation requestCancellation = cancellation == null ? new Cancellation() : cancellation;
     Consumer<String> receiver = onText == null ? ignored -> {} : onText;
 
-    HttpResponse<InputStream> chatResponse =
-        sendStreaming(endpoint("chat/completions"), chatCompletionsBody(safeMessages));
-    if (chatResponse.statusCode() / 100 == 2) {
-      return parseChatCompletions(chatResponse.body(), requestCancellation, receiver);
-    }
-    if (chatResponse.statusCode() != 404 && chatResponse.statusCode() != 405) {
-      throw httpFailure(chatResponse.statusCode(), readErrorBody(chatResponse.body()));
-    }
-    chatResponse.body().close();
+    try (TeacherResponseBudget budget =
+        new TeacherResponseBudget(responseLimits, requestCancellation)) {
+      TeacherResponseBudget.Response chatResponse =
+          sendStreaming(endpoint("chat/completions"), chatCompletionsBody(safeMessages), budget);
+      if (chatResponse.statusCode() / 100 == 2) {
+        return parseChatCompletions(chatResponse.body(), budget, receiver);
+      }
+      if (chatResponse.statusCode() != 404 && chatResponse.statusCode() != 405) {
+        throw httpFailure(chatResponse.statusCode(), readErrorBody(chatResponse.body()));
+      }
+      chatResponse.body().close();
 
-    // Some OpenAI-compatible providers expose only the Responses API. Retry only after the
-    // original endpoint explicitly reports that it is unavailable, avoiding an extra paid ping.
-    HttpResponse<InputStream> responsesResponse =
-        sendStreaming(endpoint("responses"), responsesBody(safeMessages));
-    if (responsesResponse.statusCode() / 100 != 2) {
-      throw httpFailure(responsesResponse.statusCode(), readErrorBody(responsesResponse.body()));
+      // Only an unavailable endpoint permits fallback. It shares the original call's deadline;
+      // cancellation, timeout, oversized and incomplete replies never trigger another paid request.
+      budget.check();
+      TeacherResponseBudget.Response responsesResponse =
+          sendStreaming(endpoint("responses"), responsesBody(safeMessages), budget);
+      if (responsesResponse.statusCode() / 100 != 2) {
+        throw httpFailure(responsesResponse.statusCode(), readErrorBody(responsesResponse.body()));
+      }
+      return parseResponses(responsesResponse.body(), budget, receiver);
     }
-    return parseResponses(responsesResponse.body(), requestCancellation, receiver);
   }
 
-  private HttpResponse<InputStream> sendStreaming(URI endpoint, JSONObject body)
+  private TeacherResponseBudget.Response sendStreaming(
+      URI endpoint, JSONObject body, TeacherResponseBudget budget)
       throws IOException, InterruptedException {
     long started = System.nanoTime();
     HttpRequest request =
-        requestBuilder(endpoint, Duration.ofMinutes(5))
+        requestBuilder(endpoint, responseLimits.totalTimeout())
             .header("Accept", "text/event-stream")
             .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
             .build();
-    HttpResponse<InputStream> response;
+    TeacherResponseBudget.Response response;
     try {
-      response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+      response = budget.send(httpClient, request);
     } catch (IOException failure) {
       observe(request, 0, started, "failed");
       throw failure;
@@ -179,10 +195,11 @@ public final class TeacherLlmClient implements CommentaryClient {
   }
 
   private String parseChatCompletions(
-      InputStream input, Cancellation cancelled, Consumer<String> receiver) throws IOException {
+      InputStream input, TeacherResponseBudget budget, Consumer<String> receiver)
+      throws IOException {
     return parseSse(
         input,
-        cancelled,
+        budget,
         receiver,
         false,
         event -> {
@@ -197,10 +214,11 @@ public final class TeacherLlmClient implements CommentaryClient {
   }
 
   private String parseResponses(
-      InputStream input, Cancellation cancelled, Consumer<String> receiver) throws IOException {
+      InputStream input, TeacherResponseBudget budget, Consumer<String> receiver)
+      throws IOException {
     return parseSse(
         input,
-        cancelled,
+        budget,
         receiver,
         true,
         event -> {
@@ -215,22 +233,20 @@ public final class TeacherLlmClient implements CommentaryClient {
 
   private String parseSse(
       InputStream input,
-      Cancellation cancelled,
+      TeacherResponseBudget budget,
       Consumer<String> receiver,
       boolean responses,
       EventTextExtractor extractor)
       throws IOException {
     StringBuilder complete = new StringBuilder();
     boolean finished = false;
-    cancelled.attach(input);
     try (InputStream source = input;
         BufferedReader reader =
             new BufferedReader(new InputStreamReader(source, StandardCharsets.UTF_8))) {
+      SseLines lines = new SseLines(reader);
       String line;
-      while ((line = reader.readLine()) != null) {
-        if (cancelled.isCancelled() || Thread.currentThread().isInterrupted()) {
-          throw new CancellationException("AI commentary request was cancelled.");
-        }
+      while ((line = lines.readLine()) != null) {
+        budget.check();
         if (!line.startsWith("data:")) {
           continue;
         }
@@ -279,6 +295,10 @@ public final class TeacherLlmClient implements CommentaryClient {
         }
         String text = extractor.extract(event);
         if (!text.isEmpty()) {
+          if (text.length() > responseLimits.textCharacters() - complete.length()) {
+            throw TeacherResponseBudget.tooLarge();
+          }
+          budget.check();
           complete.append(text);
           receiver.accept(text);
         }
@@ -286,16 +306,57 @@ public final class TeacherLlmClient implements CommentaryClient {
           break;
         }
       }
-    } finally {
-      cancelled.detach(input);
     }
-    if (cancelled.isCancelled() || Thread.currentThread().isInterrupted()) {
-      throw new CancellationException("AI commentary request was cancelled.");
-    }
+    budget.check();
     if (!finished) {
       throw incompleteStream();
     }
     return complete.toString();
+  }
+
+  /** Bounds allocation before a newline arrives, including ignored SSE fields and comments. */
+  private final class SseLines {
+    private final BufferedReader reader;
+    private boolean skipLf;
+    private int eventCharacters;
+
+    SseLines(BufferedReader reader) {
+      this.reader = reader;
+    }
+
+    String readLine() throws IOException {
+      StringBuilder line = new StringBuilder();
+      int next;
+      while ((next = reader.read()) != -1) {
+        if (skipLf) {
+          skipLf = false;
+          if (next == '\n') {
+            continue;
+          }
+        }
+        if (next == '\r' || next == '\n') {
+          skipLf = next == '\r';
+          break;
+        }
+        if (line.length() == responseLimits.lineCharacters()) {
+          throw TeacherResponseBudget.tooLarge();
+        }
+        line.append((char) next);
+      }
+      if (next == -1 && line.length() == 0) {
+        return null;
+      }
+      if (line.length() == 0) {
+        eventCharacters = 0;
+      } else {
+        // Count each field and one normalized line separator, not just extracted JSON/text.
+        if (line.length() >= responseLimits.eventCharacters() - eventCharacters) {
+          throw TeacherResponseBudget.tooLarge();
+        }
+        eventCharacters += line.length() + 1;
+      }
+      return line.toString();
+    }
   }
 
   private static IOException incompleteStream() {
@@ -416,19 +477,19 @@ public final class TeacherLlmClient implements CommentaryClient {
     }
   }
 
-  /** Cancellation token that closes the active response stream to unblock a pending read. */
+  /** Cancellation token shared by endpoint fallback and the optional grounded correction. */
   public static final class Cancellation {
     private final AtomicBoolean cancelled = new AtomicBoolean(false);
-    private volatile InputStream activeStream;
+    private Runnable activeRequest;
 
     public void cancel() {
       cancelled.set(true);
-      InputStream stream = activeStream;
-      if (stream != null) {
-        try {
-          stream.close();
-        } catch (IOException ignored) {
-        }
+      Runnable action;
+      synchronized (this) {
+        action = activeRequest;
+      }
+      if (action != null) {
+        action.run();
       }
     }
 
@@ -436,17 +497,24 @@ public final class TeacherLlmClient implements CommentaryClient {
       return cancelled.get();
     }
 
-    private void attach(InputStream stream) throws IOException {
-      activeStream = stream;
+    void attach(Runnable action) {
+      synchronized (this) {
+        activeRequest = action;
+      }
       if (cancelled.get()) {
-        stream.close();
-        throw new CancellationException("AI commentary request was cancelled.");
+        action.run();
       }
     }
 
-    private void detach(InputStream stream) {
-      if (activeStream == stream) {
-        activeStream = null;
+    synchronized void detach(Runnable action) {
+      if (activeRequest == action) {
+        activeRequest = null;
+      }
+    }
+
+    void check() {
+      if (cancelled.get() || Thread.currentThread().isInterrupted()) {
+        throw new CancellationException("AI commentary request was cancelled.");
       }
     }
   }

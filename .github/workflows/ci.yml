@@ -111,7 +111,7 @@ jobs:
           path: target/site/jacoco
           if-no-files-found: error
 
-  # Keep the full verification on Java 21; execute only the changed web boundaries on Java 17.
+  # Keep full verification on Java 21; cover web and commentary HTTP boundaries on Java 17.
   java17-web:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -124,10 +124,10 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: maven
-      - name: Verify web message and HTTP boundaries on Java 17
+      - name: Verify web message and commentary HTTP boundaries on Java 17
         run: >-
           mvn -B -Djava.awt.headless=true
-          -Dtest=WebBoardHttpServerLifecycleTest,WebTrialMessageLifecycleTest
+          -Dtest=WebBoardHttpServerLifecycleTest,WebTrialMessageLifecycleTest,TeacherLlmClientTest,TeacherLlmStreamLimitsTest,TeacherResponseBudgetTest,GroundedCommentaryClientTest,TeacherRequestControllerTest
           test
       - name: Upload Java 17 test reports
         if: always()
