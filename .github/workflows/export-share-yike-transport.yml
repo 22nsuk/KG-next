@@ -1,0 +1,22 @@
+name: Export share Yike transport evidence
+on:
+  push:
+    branches: [codex/publish-share-yike-result-20261022]
+    paths: [.github/workflows/export-share-yike-transport.yml]
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: c7510ad0576e4b76c6e94767b4bb367cbd56de94
+          persist-credentials: false
+      - uses: actions/upload-artifact@v4
+        with:
+          name: share-yike-transport-evidence
+          path: .github/workflows/publish-share-yike-result.yml
+          include-hidden-files: true
+          retention-days: 1
