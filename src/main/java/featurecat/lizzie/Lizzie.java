@@ -1471,13 +1471,6 @@ public class Lizzie {
       cancelShutdownAfterSaveFailure(null);
       return;
     }
-    if (!engineGame.claimShutdownAfterSaves()) {
-      cancelShutdownAfterSaveFailure(null);
-      return;
-    }
-    logShutdownRequested();
-    java.util.concurrent.CompletableFuture<Void> strengthShutdown =
-        frame.shutdownHumanSlPreparation();
     if (Lizzie.config.uiConfig.optBoolean("autoload-last", false)) {
       Lizzie.config.uiConfig.put("last-engine", EngineManager.currentEngineNo);
     }
@@ -1486,8 +1479,9 @@ public class Lizzie {
     } else Lizzie.config.uiConfig.put("is-ctrl-opened", false);
     try {
       config.persist();
-    } catch (Exception e) {
-      Utils.showMsgModal(
+    } catch (IOException | RuntimeException e) {
+      APP.error("Shutdown cancelled because persisting UI state failed", e);
+      Utils.showMsg(
           "<html>"
               + resourceBundle.getString("Lizzie.save.error")
               + e.getLocalizedMessage()
@@ -1495,12 +1489,13 @@ public class Lizzie {
               + resourceBundle.getString("Lizzie.save.path")
               + config.getPersistFilePath()
               + "</html>");
-      APP.error("failed to persist UI state", e);
+      return;
     }
     try {
       config.save();
-    } catch (Exception e) {
-      Utils.showMsgModal(
+    } catch (IOException | RuntimeException e) {
+      APP.error("Shutdown cancelled because saving config failed", e);
+      Utils.showMsg(
           "<html>"
               + resourceBundle.getString("Lizzie.save.error")
               + e.getLocalizedMessage()
@@ -1508,8 +1503,17 @@ public class Lizzie {
               + resourceBundle.getString("Lizzie.save.path")
               + config.getConfigFilePath()
               + "</html>");
-      APP.error("failed to save config on shutdown", e);
+      return;
     }
+    // Settings must remain retryable before committing shutdown or stopping any resources.
+    // Recheck game completion here as it may have arrived while the settings were being saved.
+    if (!engineGame.claimShutdownAfterSaves()) {
+      cancelShutdownAfterSaveFailure(null);
+      return;
+    }
+    logShutdownRequested();
+    java.util.concurrent.CompletableFuture<Void> strengthShutdown =
+        frame.shutdownHumanSlPreparation();
     try {
       frame.closeContributeEngine();
     } catch (Exception e) {
