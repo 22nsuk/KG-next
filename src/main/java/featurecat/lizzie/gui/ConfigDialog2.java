@@ -4827,11 +4827,17 @@ public class ConfigDialog2 extends JDialog {
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
             if (!saveConfig()) return;
+            try {
+              Lizzie.config.resetBlunderColor();
+            } catch (IOException error) {
+              showSaveFailure(error);
+              return;
+            }
+            Lizzie.config.readThemeVaule(false);
             LizzieFrame.menu.refreshDoubleMoveInfoStatus();
             LizzieFrame.menu.refreshLimitStatus(false);
             Lizzie.frame.resetCommentComponent();
             applyChange();
-            Lizzie.config.resetBlunderColor();
             setVisible(false);
             Lizzie.frame.openConfigDialog2(1);
           }
@@ -6190,7 +6196,7 @@ public class ConfigDialog2 extends JDialog {
     }
   }
 
-  private void writeThemeValues() {
+  private void writeThemeValues() throws IOException {
     if (cmbThemes.getSelectedIndex() <= 0) {
       // Default
       writeDefaultTheme();
@@ -6223,8 +6229,6 @@ public class ConfigDialog2 extends JDialog {
             "scorediff-in-variation-tree-factor",
             Utils.parseTextToDouble(txtPercentScoreDiff, 50.0) / 100.0);
 
-        applyFontSelections(theme.uiFontName(), theme.fontName(), theme.winrateFontName());
-
         theme.config.put("background-image", txtBackgroundPath.getText().trim());
         theme.config.put("board-image", txtBoardPath.getText().trim());
         theme.config.put("black-stone-image", txtBlackStonePath.getText().trim());
@@ -6235,8 +6239,7 @@ public class ConfigDialog2 extends JDialog {
         theme.config.put("blunder-bar-color", Theme.color2Array(lblBlunderBarColor.getColor()));
         theme.config.put(
             "scoremean-line-color", Theme.color2Array(lblScoreMeanLineColor.getColor()));
-        Lizzie.config.stoneIndicatorType = getStoneIndicatorType();
-        theme.config.put("stone-indicator-type", Lizzie.config.stoneIndicatorType);
+        theme.config.put("stone-indicator-type", getStoneIndicatorType());
         theme.config.put("show-comment-node-color", chkShowCommentNodeColor.isSelected());
         theme.config.put("comment-node-color", Theme.color2Array(lblCommentNodeColor.getColor()));
         theme.config.put(
@@ -6244,9 +6247,6 @@ public class ConfigDialog2 extends JDialog {
         theme.config.put("comment-font-color", Theme.color2Array(lblCommentFontColor.getColor()));
         theme.config.put("best-move-color", Theme.color2Array(lblBestMoveColor.getColor()));
         theme.config.put("comment-font-size", txtFieldIntValue(txtCommentFontSize));
-        if (txtFieldIntValue(txtBackgroundFilter) != Lizzie.frame.filter20.getRadius()) {
-          Lizzie.frame.testFilter(txtFieldIntValue(txtBackgroundFilter));
-        }
         theme.config.put("background-filter", txtFieldIntValue(txtBackgroundFilter));
         theme.config.put(
             "blunder-winrate-thresholds",
@@ -6255,6 +6255,9 @@ public class ConfigDialog2 extends JDialog {
             "blunder-node-colors",
             ((BlunderNodeTableModel) tblBlunderNodes.getModel()).getColorArray());
         theme.save();
+        if (txtFieldIntValue(txtBackgroundFilter) != Lizzie.frame.filter20.getRadius()) {
+          Lizzie.frame.testFilter(txtFieldIntValue(txtBackgroundFilter));
+        }
       }
     }
   }
@@ -6809,20 +6812,33 @@ public class ConfigDialog2 extends JDialog {
           "show-scoremean-in-suggestion", Lizzie.config.showScoremeanInSuggestion);
       // Lizzie.config.uiConfig.put("gtp-console-style", tpGtpConsoleStyle.getText());
       if (cmbThemes != null) {
-        Lizzie.config.uiConfig.put("theme", cmbThemes.getSelectedItem());
         writeThemeValues();
+        Lizzie.config.uiConfig.put("theme", cmbThemes.getSelectedItem());
         Lizzie.config.readThemeVaule(false);
       }
       Lizzie.config.save();
     } catch (IOException e) {
-      if (LOG.isErrorEnabled()) {
-        LOG.error("config operation={} source={} outcome={}", "save", "dialog", "failed", e);
-      }
+      showSaveFailure(e);
       return false;
     }
     LizzieFrame.menu.updateFastLinks();
     if (Lizzie.frame != null) Lizzie.frame.repaint();
     return true;
+  }
+
+  private void showSaveFailure(IOException error) {
+    LOG.error("config operation={} source={} outcome={}", "save", "dialog", "failed", error);
+    String message =
+        resourceBundle.getString("LizzieConfig.saveFailed") + "\n\n" + error.getLocalizedMessage();
+    String escaped =
+        message
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace("\r\n", "\n")
+            .replace("\n", "<br>");
+    String html = "<html><div style='width: 420px'>" + escaped + "</div></html>";
+    Utils.showMsg(html);
   }
 
   public void switchTab(int index) {

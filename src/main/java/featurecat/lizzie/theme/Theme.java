@@ -3,6 +3,7 @@ package featurecat.lizzie.theme;
 import static java.io.File.separator;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.util.AtomicTextFileWriter;
 import featurecat.lizzie.util.Utils;
 import java.awt.Color;
 import java.awt.Graphics2D;
@@ -10,13 +11,12 @@ import java.awt.RenderingHints;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStreamWriter;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -614,31 +614,23 @@ public class Theme {
     return image;
   }
 
-  public void save() {
+  public void save() throws IOException {
+    Path target = new File(this.path + this.configFile).toPath().toAbsolutePath();
     try {
-      File file = new File(this.path + this.configFile);
-      File parent = file.getParentFile();
-      if (parent != null && !parent.exists()) {
-        parent.mkdirs();
-      }
-      if (!file.exists()) {
-        file.createNewFile();
-      }
-
-      try (FileOutputStream fp = new FileOutputStream(file);
-          OutputStreamWriter writer = new OutputStreamWriter(fp)) {
-        Iterator<String> keys = config.keys();
-        while (keys.hasNext()) {
-          String key = keys.next();
-          Object value = config.get(key);
-          if (value == null || (value instanceof String && ((String) value).trim().isEmpty())) {
-            keys.remove();
-          }
+      JSONObject savedConfig = new JSONObject();
+      for (String key : config.keySet()) {
+        Object value = config.get(key);
+        if (value != null && !(value instanceof String && ((String) value).trim().isEmpty())) {
+          savedConfig.put(key, value);
         }
-        writer.write(config.toString(2));
       }
-    } catch (IOException e) {
-      e.printStackTrace();
+      // Capture the complete document before touching disk or pruning the editable settings.
+      String contents = savedConfig.toString(2);
+      Files.createDirectories(target.getParent());
+      AtomicTextFileWriter.write(target, contents);
+      config = savedConfig;
+    } catch (IOException | JSONException e) {
+      throw new IOException("Failed to save theme file " + target + "\n" + e, e);
     }
   }
 

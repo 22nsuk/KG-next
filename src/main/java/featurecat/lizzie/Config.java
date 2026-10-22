@@ -1542,7 +1542,7 @@ public class Config {
     return modified;
   }
 
-  public void resetBlunderColor() {
+  public void resetBlunderColor() throws IOException {
     Theme theme = new Theme();
     if (theme.getTheme(uiConfig)) {
       theme.config.put("blunder-winrate-thresholds", new JSONArray("[-24,-12,-6,-3,-1,3,100]"));
@@ -1553,18 +1553,14 @@ public class Config {
                   + " 0],[0,210,210]]"));
       theme.save();
     } else {
-      uiConfig.put("blunder-winrate-thresholds", new JSONArray("[-24,-12,-6,-3,-1,3,100]"));
-      uiConfig.put(
+      JSONObject candidateUi = new JSONObject(uiConfig.toString());
+      candidateUi.put("blunder-winrate-thresholds", new JSONArray("[-24,-12,-6,-3,-1,3,100]"));
+      candidateUi.put(
           "blunder-node-colors",
           new JSONArray(
               "[[155, 25, 150],[208, 16, 19],[200, 140, 50],[180, 180, 0],[140, 202, 34],[0, 220,"
                   + " 0],[0,210,210]]"));
-      try {
-        save();
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        logConfig("save", "config", "failed", 0, e);
-      }
+      saveConfigSections(candidateUi, leelazConfig);
     }
   }
 

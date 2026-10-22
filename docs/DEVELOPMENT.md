@@ -175,6 +175,11 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
 - `HumanSlStrengthDialogTest` 的手动选择、设置重启保留、显式补充、取消和换谱结果隔离场景
 - `SavedGameLoadDesktopTest` 的保存列表按钮、缩略图和放大预览打开失败保留当前棋谱、原位置与注释，并在修复同一文件后成功重试的场景
+- `ThemeSaveDesktopTest` 的主题保存与颜色重置失败保留窗口、编辑值和原文件，并在恢复写入权限后成功重试的场景
+
+主题用例使用真实设置按钮、错误对话框和目录写入权限。颜色重置在第一次编辑保存成功后禁写目录，
+验证第二次真实主题写入失败不会关闭或重建设置窗口。韩文失败与重试截图保存在
+`target/desktop-smoke/probes/theme-*/`；以 root 运行时也须使用上述 `setpriv` 前缀。
 
 保存列表用例在独立子 JVM 中运行实际应用，使用真实 SGF 文件、有效缩略图及生产错误对话框。
 它覆盖缺失和无效 SGF，确认失败后列表仍可操作，成功后才恢复保存位置并关闭列表。
