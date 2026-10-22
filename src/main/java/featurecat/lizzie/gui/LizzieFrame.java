@@ -21453,14 +21453,10 @@ public class LizzieFrame extends JFrame {
   }
 
   public void clearWRNforGame(boolean isGenmove) {
-    // TODO Auto-generated method stub
     if (isGenmove) {
-      try {
-        WRNValueBeforeGenmove = Double.parseDouble(menu.txtWRN.getText());
-      } catch (NumberFormatException e) {
-        WRNValueBeforeGenmove = 0;
-      }
-      WRNSelectedBeforeGenmove = menu.chkWRN.isSelected();
+      WRNSelectedBeforeGenmove = Lizzie.config.chkKataEngineWRN;
+      WRNValueBeforeGenmove = WRNSelectedBeforeGenmove
+          ? KataAnalysisParameter.WRN.parse(Lizzie.config.txtKataEngineWRN).orElse(0) : 0;
       menu.chkWRN.setSelected(false);
       menu.txtWRN.setEnabled(false);
       menu.chkWRN.setEnabled(false);
@@ -21491,25 +21487,19 @@ public class LizzieFrame extends JFrame {
   }
 
   public void restoreWRN(boolean isGenmove) {
-    // TODO Auto-generated method stub
     if (isGenmove) {
       menu.chkWRN.setEnabled(true);
-      menu.txtWRN.setEnabled(true);
+      menu.txtWRN.setEnabled(WRNSelectedBeforeGenmove);
       menu.chkWRN.setSelected(WRNSelectedBeforeGenmove);
-      menu.setWrnText(WRNValueBeforeGenmove);
       Lizzie.config.chkKataEngineWRN = WRNSelectedBeforeGenmove;
       Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + WRNValueBeforeGenmove);
     } else if (WRNStatusBeforeGame) {
-      try {
-        double wrn = Double.parseDouble(LizzieFrame.menu.txtWRN.getText());
-        if (Lizzie.leelaz.isKatago) {
-          Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
-          Lizzie.leelaz.wrn = wrn;
-        }
-        menu.setWrnText(wrn);
-        Lizzie.config.txtKataEngineWRN = String.valueOf(wrn);
-      } catch (NumberFormatException e) {
-        return;
+      java.util.OptionalDouble applied = KataAnalysisParameter.WRN.parse(Lizzie.config.txtKataEngineWRN);
+      if (applied.isEmpty()) return;
+      double wrn = applied.getAsDouble();
+      if (Lizzie.leelaz.isKatago) {
+        Lizzie.leelaz.sendCommand("kata-set-param analysisWideRootNoise " + wrn);
+        Lizzie.leelaz.wrn = wrn;
       }
       menu.chkWRN.setSelected(true);
       menu.txtWRN.setEnabled(true);
