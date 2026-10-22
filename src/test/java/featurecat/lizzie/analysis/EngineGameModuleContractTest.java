@@ -122,7 +122,7 @@ class EngineGameModuleContractTest {
     previousSavingRaw = LizzieFrame.isSavingRaw;
 
     EngineManager.resetEngineGameTransactionStateForTest();
-    Config config = allocate(Config.class);
+    Config config = allocate(InMemoryConfig.class);
     config.uiConfig = new JSONObject();
     config.leelazConfig = new JSONObject();
     config.newEngineGameHandicap = 0;
@@ -2079,6 +2079,17 @@ class EngineGameModuleContractTest {
     public String getEngineName(int index) {
       return oriEngineCommand == null || oriEngineCommand.isEmpty() ? "engine" : oriEngineCommand;
     }
+  }
+
+  /** Settings writes succeed so shutdown reaches the real engine-game SGF save boundary. */
+  private static final class InMemoryConfig extends Config {
+    private InMemoryConfig() throws IOException {}
+
+    @Override
+    public void persist() {}
+
+    @Override
+    public void save() {}
   }
 
   private static final class SilentFrame extends LizzieFrame {

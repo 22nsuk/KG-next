@@ -49,6 +49,7 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class LizzieShutdownTest {
@@ -241,6 +242,89 @@ class LizzieShutdownTest {
       assertEquals(1, harness.frame.strengthShutdownCalls);
       assertEquals(1, harness.engine.forceQuitCount);
       assertEquals(0, exitCode.get());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, false", "true, true", "false, false", "false, true"})
+  void failedSettingsSavePreservesAppAndSuccessfulRetryCanExit(
+      boolean failPersist, boolean runtimeFailure) throws Exception {
+    try (Harness harness = Harness.open()) {
+      EngineGameTransaction product = harness.startProduct();
+      harness.config.uiConfig.put("shutdown-test-setting", "edited but not saved");
+      harness.config.failPersist = failPersist;
+      harness.config.failSave = !failPersist;
+      harness.config.failWithRuntimeException = runtimeFailure;
+      AtomicInteger exitCode = new AtomicInteger(-1);
+
+      Lizzie.shutdown(exitCode::set);
+
+      assertTrue(harness.config.persistCalled);
+      assertEquals(!failPersist, harness.config.saveCalled);
+      assertSame(harness.config, Lizzie.config);
+      assertEquals("edited but not saved", Lizzie.config.uiConfig.getString("shutdown-test-setting"));
+      assertSame(product, Lizzie.engineGame.transaction());
+      assertTrue(Lizzie.engineGame.current().playing());
+      assertFalse(product.alreadyCompleted());
+      assertEquals(0, harness.frame.strengthShutdownCalls);
+      assertEquals(0, harness.engine.forceQuitCount);
+      assertEquals(-1, exitCode.get());
+
+      harness.config.failPersist = false;
+      harness.config.failSave = false;
+      harness.config.persistCalled = false;
+      harness.config.saveCalled = false;
+      Lizzie.shutdown(exitCode::set);
+
+      assertTrue(harness.config.persistCalled);
+      assertTrue(harness.config.saveCalled);
+      assertEquals("edited but not saved", Lizzie.config.uiConfig.getString("shutdown-test-setting"));
+      assertEquals(1, harness.frame.strengthShutdownCalls);
+      assertEquals(1, harness.engine.forceQuitCount);
+      assertEquals(0, exitCode.get());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedSettingsSaveDoesNotFenceRunningGameCompletion(boolean failPersist) throws Exception {
+    try (Harness harness = Harness.open()) {
+      EngineGameTransaction product = harness.startProduct();
+      harness.config.failPersist = failPersist;
+      harness.config.failSave = !failPersist;
+      AtomicInteger exitCode = new AtomicInteger(-1);
+
+      Lizzie.shutdown(exitCode::set);
+
+      assertEquals(-1, exitCode.get());
+      assertTrue(
+          Lizzie.engineGame.complete(
+              new GameOutcome.DoublePass(), product.lifecycle().ownerToken(), 0));
+      assertTrue(product.alreadyCompleted());
+      assertEquals(1, Lizzie.engineGame.lastSummary().doublePassGames());
+    }
+  }
+
+  @Test
+  void gameCompletingDuringSettingsSaveStillRequiresItsSaveBeforeShutdown() throws Exception {
+    try (Harness harness = Harness.open()) {
+      EngineGameTransaction product = harness.startProduct();
+      harness.config.onSave =
+          () ->
+              assertTrue(
+                  Lizzie.engineGame.complete(
+                      new GameOutcome.DoublePass(), product.lifecycle().ownerToken(), 0));
+      AtomicInteger exitCode = new AtomicInteger(-1);
+
+      Lizzie.shutdown(exitCode::set);
+
+      assertTrue(harness.config.persistCalled);
+      assertTrue(harness.config.saveCalled);
+      assertTrue(product.alreadyCompleted());
+      assertEquals(1, Lizzie.engineGame.lastSummary().doublePassGames());
+      assertEquals(0, harness.frame.strengthShutdownCalls);
+      assertEquals(0, harness.engine.forceQuitCount);
+      assertEquals(-1, exitCode.get());
     }
   }
 
@@ -547,15 +631,38 @@ class LizzieShutdownTest {
 
     boolean persistCalled;
     boolean saveCalled;
+    boolean failPersist;
+    boolean failSave;
+    boolean failWithRuntimeException;
+    Runnable onSave;
 
     @Override
-    public void persist() {
-      persistCalled = true;
+    public String getPersistFilePath() {
+      return "persist";
     }
 
     @Override
-    public void save() {
+    public String getConfigFilePath() {
+      return "config.txt";
+    }
+
+    @Override
+    public void persist() throws IOException {
+      persistCalled = true;
+      failIfRequested(failPersist);
+    }
+
+    @Override
+    public void save() throws IOException {
       saveCalled = true;
+      failIfRequested(failSave);
+      if (onSave != null) onSave.run();
+    }
+
+    private void failIfRequested(boolean fail) throws IOException {
+      if (!fail) return;
+      if (failWithRuntimeException) throw new IllegalStateException("settings capture failed");
+      throw new IOException("settings write failed");
     }
   }
 
