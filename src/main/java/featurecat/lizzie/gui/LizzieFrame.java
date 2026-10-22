@@ -573,7 +573,6 @@ public class LizzieFrame extends JFrame {
   public static boolean isSavingRaw = false;
   public static boolean isSavingRawComment = false;
   SetKataRules setkatarules;
-  public PublicKifuSearch search;
 
   public boolean isEnginePKSgfStart = false;
   public int enginePKSgfNum = 0;
@@ -13308,11 +13307,6 @@ public class LizzieFrame extends JFrame {
     timer.start();
   }
 
-  public void openPublicKifuSearch() {
-    search = new PublicKifuSearch();
-    search.setVisible(true);
-  }
-
   public void setLzSaiEngine() {
     if (EngineManager.isEmpty || !Lizzie.leelaz.isLoaded()) {
       Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.setParamNoEngineHint"));
@@ -15113,23 +15107,6 @@ public class LizzieFrame extends JFrame {
         }
       }
       super.paintComponent(g);
-    }
-  }
-
-  public void openPrivateKifuSearch() {
-    if (!Lizzie.config.uploadUser.equals("") && !Lizzie.config.uploadPassWd.equals("")) {
-      SocketLoggin login = new SocketLoggin();
-      String result = login.SocketLoggin(Lizzie.config.uploadUser, Lizzie.config.uploadPassWd);
-      if (result.startsWith("success")) {
-        PrivateKifuSearch search = new PrivateKifuSearch();
-        search.setVisible(true);
-      } else {
-        Loggin loggin = new Loggin(null, true);
-        loggin.setVisible(true);
-      }
-    } else {
-      Loggin loggin = new Loggin(null, true);
-      loggin.setVisible(true);
     }
   }
 

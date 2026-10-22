@@ -435,15 +435,6 @@ public class Lizzie {
         LocaleFontSupport.resolveConfiguredFontName(
             config.fontName, appLocale, Config.sysDefaultFontName);
     Utils.loadFonts(config.uiFontName, config.fontName, config.winrateFontName);
-    config.shareLabel1 =
-        config.uiConfig.optString(
-            "share-label-1", resourceBundle.getString("ShareFrame.shareLabel1"));
-    config.shareLabel2 =
-        config.uiConfig.optString(
-            "share-label-2", resourceBundle.getString("ShareFrame.shareLabel2"));
-    config.shareLabel3 =
-        config.uiConfig.optString(
-            "share-label-3", resourceBundle.getString("ShareFrame.shareLabel3"));
     setLookAndFeel();
     Locale.setDefault(Locale.ENGLISH);
     boolean noConfiguredEngine = !hasConfiguredEngine();

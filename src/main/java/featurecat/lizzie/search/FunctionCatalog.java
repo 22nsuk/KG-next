@@ -302,18 +302,6 @@ public final class FunctionCatalog {
               TargetType.WINDOW,
               "FunctionSearch.path.bottomToolbar"),
           toolbarEntry(
-              "share.private-history",
-              "BottomToolbar.editHistoryRemote",
-              "FunctionSearch.category.file",
-              TargetType.WINDOW,
-              "FunctionSearch.path.bottomToolbar"),
-          toolbarEntry(
-              "share.public-history",
-              "BottomToolbar.shareHistoryRemote",
-              "FunctionSearch.category.file",
-              TargetType.WINDOW,
-              "FunctionSearch.path.bottomToolbar"),
-          toolbarEntry(
               "sync.exit-web-trial",
               "Menu.webBoardForceExitTrial",
               "FunctionSearch.category.sync",

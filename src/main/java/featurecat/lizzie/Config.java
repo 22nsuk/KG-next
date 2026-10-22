@@ -932,15 +932,6 @@ public class Config {
   public int suggestionColorRatio = 2;
   public boolean showBestMovesGraph = false;
   public boolean showBestMovesList = true;
-  public String uploadUser = "";
-  public String uploadPassWd = "";
-
-  public String shareLabel1 = "";
-  public String shareLabel2 = "";
-  public String shareLabel3 = "";
-  public String shareLabel4 = "";
-  public String shareLabel5 = "";
-  public boolean sharePublic = true;
 
   // public boolean autoCheckVersion = true;
   public String autoCheckDate = "";
@@ -1434,9 +1425,10 @@ public class Config {
       }
     }
     JSONObject mergedcfg = readJsonObject(path);
+    boolean removedRetiredShareSettings = removeRetiredShareSettings(mergedcfg, fileName);
     int added = mergeDefaultKeys(mergedcfg, defaultCfg);
     if (needValidation) checkEmptyBlunderThresholds(mergedcfg);
-    if (added > 0) {
+    if (added > 0 || removedRetiredShareSettings) {
       writeConfig(mergedcfg, file);
     }
     logConfig("load", created ? source + "/created-default" : source, "success", added, null);
@@ -2027,11 +2019,6 @@ public class Config {
     suggestionColorRatio = uiConfig.optInt("suggestion-color-ratio", 2);
     showBestMovesGraph = uiConfig.optBoolean("show-bestmoves-graph", false);
     showBestMovesList = uiConfig.optBoolean("show-bestmoves-list", true);
-    uploadUser = uiConfig.optString("up-load-user", "");
-    uploadPassWd = uiConfig.optString("up-load-passwd", "");
-    shareLabel4 = uiConfig.optString("share-label-4", "");
-    shareLabel5 = uiConfig.optString("share-label-5", "");
-    sharePublic = uiConfig.optBoolean("share-public", true);
     // autoCheckVersion = uiConfig.optBoolean("auto-check-version", true);
     autoCheckDate = uiConfig.optString("auto-check-date", "");
     //  ignoreVersion = uiConfig.optInt("ignore-version", 0);
@@ -3291,16 +3278,6 @@ public class Config {
       persistedUi.put("ctrl-position", ctrlPos);
     }
 
-    if (Lizzie.frame.search != null) {
-      JSONArray searchPos = new JSONArray();
-
-      searchPos.put(Lizzie.frame.search.getX());
-      searchPos.put(Lizzie.frame.search.getY());
-      searchPos.put(Lizzie.frame.search.getWidth());
-      searchPos.put(Lizzie.frame.search.getHeight());
-
-      persistedUi.put("public-kifu-search", searchPos);
-    }
     if (Lizzie.frame.moveListFrame != null) {
       JSONArray badmoveslistPos = new JSONArray();
 
@@ -4037,6 +4014,37 @@ public class Config {
 
   public boolean isNormalMode() {
     return extraMode == ExtraMode.Normal;
+  }
+
+  /** Remove only retired sharing settings after the source JSON has been read successfully. */
+  private boolean removeRetiredShareSettings(JSONObject root, String fileName) {
+    boolean changed = false;
+    JSONObject ui = fileName.equals(configFilename) ? root.optJSONObject("ui") : null;
+    if (ui != null) {
+      for (String key :
+          List.of(
+              "up-load-user",
+              "up-load-passwd",
+              "share-label-1",
+              "share-label-2",
+              "share-label-3",
+              "share-label-4",
+              "share-label-5",
+              "share-public",
+              "share")) {
+        if (ui.has(key)) {
+          ui.remove(key);
+          changed = true;
+        }
+      }
+    }
+    JSONObject persistedUi =
+        fileName.equals(persistFilename) ? root.optJSONObject("ui-persist") : null;
+    if (persistedUi != null && persistedUi.has("public-kifu-search")) {
+      persistedUi.remove("public-kifu-search");
+      changed = true;
+    }
+    return changed;
   }
 
   void migrateLegacyConsoleLogging() {

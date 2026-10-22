@@ -306,13 +306,8 @@
   - Do not perform real network requests.
 
 - [ ] Add an optional raw socket inventory assertion if it is cheap.
-  - If scanning `new Socket(`, allow only:
-    - `src/main/java/featurecat/lizzie/gui/SocketLoggin.java`
-    - `src/main/java/featurecat/lizzie/gui/SocketGetFile.java`
-    - `src/main/java/featurecat/lizzie/gui/SocketKifuSearch.java`
-    - `src/main/java/featurecat/lizzie/gui/SocketEditFile.java`
-    - local server sockets/listeners
-  - If identifying local server sockets becomes noisy, skip the raw socket assertion and rely on the spec's explicit v1 exception list.
+  - The retired remote share/search socket clients have been removed. If scanning `new Socket(`, allow local server sockets/listeners only.
+  - If identifying local server sockets becomes noisy, keep this optional assertion out of the HTTP proxy guard.
 
 - [ ] Verify inventory guard.
   - Run:

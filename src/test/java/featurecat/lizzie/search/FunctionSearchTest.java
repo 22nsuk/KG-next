@@ -25,6 +25,15 @@ class FunctionSearchTest {
           "weak");
 
   @Test
+  void retiredSharingIsAbsentWhileLocalFilesAndOtherOnlineSourcesRemain() {
+    List<String> ids = FunctionCatalog.entries().stream().map(FunctionCatalog.Entry::id).toList();
+    assertTrue(ids.stream().noneMatch(id -> id.startsWith("share.")));
+    assertTrue(ids.contains("files.save-as"));
+    assertTrue(ids.contains("files.recent"));
+    assertTrue(ids.contains("sync.board"));
+  }
+
+  @Test
   void catalogAndPathsCannotBeModifiedByConsumers() {
     List<FunctionCatalog.Entry> entries = FunctionCatalog.entries();
     assertThrows(UnsupportedOperationException.class, () -> entries.add(entries.get(0)));

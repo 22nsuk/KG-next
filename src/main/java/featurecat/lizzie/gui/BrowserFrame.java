@@ -143,50 +143,7 @@ public class BrowserFrame extends JFrame {
     client_ = cefApp_.createClient();
 
     // (3) Create a simple message router to receive messages from CEF.
-    CefMessageRouter msgRouter =
-        CefMessageRouter.create(
-            new CefMessageRouterHandlerAdapter() {
-              @Override
-              public boolean onQuery(
-                  CefBrowser browser,
-                  CefFrame frame,
-                  long queryId,
-                  String request,
-                  boolean persistent,
-                  CefQueryCallback callback) {
-                if (request != null && request.startsWith("yikeUnite:")) {
-                  // 立即回调，绝不在 CEF UI 线程里做解析/Swing/IO，否则消息队列堵了会拖死整个进程
-                  if (callback != null) callback.success("");
-                  final String payload = request.substring("yikeUnite:".length());
-                  YikeQueryWorker.submit(
-                      () -> {
-                        try {
-                          if (LizzieFrame.onlineDialog != null) {
-                            LizzieFrame.onlineDialog.handleYikeUniteSgf(payload);
-                          }
-                        } catch (Throwable ignored) {
-                        }
-                      });
-                  return true;
-                }
-                if (request != null && request.startsWith("yikeGeometry:")) {
-                  if (callback != null) callback.success("");
-                  final String payload = request.substring("yikeGeometry:".length());
-                  rememberYikeGeometryPageUrl(payload);
-                  YikeQueryWorker.submit(
-                      () -> {
-                        try {
-                          if (LizzieFrame.onlineDialog != null) {
-                            LizzieFrame.onlineDialog.handleYikeGeometryProbe(payload);
-                          }
-                        } catch (Throwable ignored) {
-                        }
-                      });
-                  return true;
-                }
-                return false;
-              }
-            });
+    CefMessageRouter msgRouter = CefMessageRouter.create(createMessageRouterHandler());
     client_.addMessageRouter(msgRouter);
 
     client_.addLoadHandler(
@@ -873,6 +830,79 @@ public class BrowserFrame extends JFrame {
       boolean isYike, boolean yikeBrowserSyncEnabled, String url) {
     return shouldAutoStartYikeSync(isYike, yikeBrowserSyncEnabled)
         && YikeUrlParser.parse(url).isPresent();
+  }
+
+  CefMessageRouterHandlerAdapter createMessageRouterHandler() {
+    return new CefMessageRouterHandlerAdapter() {
+      @Override
+      public boolean onQuery(
+          CefBrowser browser,
+          CefFrame frame,
+          long queryId,
+          String request,
+          boolean persistent,
+          CefQueryCallback callback) {
+        if (isYikeQuery(request)
+            && !isTrustedYikeQuerySource(
+                isYike, frame != null && frame.isMain(), frame == null ? null : frame.getURL())) {
+          YikeSyncDebugLog.log("BrowserFrame rejected cefQuery from an untrusted frame");
+          if (callback != null) callback.failure(403, "untrusted frame");
+          return true;
+        }
+        if (request != null && request.startsWith("yikeUnite:")) {
+          // 立即回调，绝不在 CEF UI 线程里做解析/Swing/IO，否则消息队列堵了会拖死整个进程
+          if (callback != null) callback.success("");
+          final String payload = request.substring("yikeUnite:".length());
+          YikeQueryWorker.submit(
+              () -> {
+                try {
+                  if (LizzieFrame.onlineDialog != null) {
+                    LizzieFrame.onlineDialog.handleYikeUniteSgf(payload);
+                  }
+                } catch (Throwable ignored) {
+                }
+              });
+          return true;
+        }
+        if (request != null && request.startsWith("yikeGeometry:")) {
+          if (callback != null) callback.success("");
+          final String payload = request.substring("yikeGeometry:".length());
+          rememberYikeGeometryPageUrl(payload);
+          YikeQueryWorker.submit(
+              () -> {
+                try {
+                  if (LizzieFrame.onlineDialog != null) {
+                    LizzieFrame.onlineDialog.handleYikeGeometryProbe(payload);
+                  }
+                } catch (Throwable ignored) {
+                }
+              });
+          return true;
+        }
+        return false;
+      }
+    };
+  }
+
+  static boolean isYikeQuery(String request) {
+    return request != null
+        && (request.startsWith("yikeUnite:") || request.startsWith("yikeGeometry:"));
+  }
+
+  /** Trust only the actual main frame of a Yike window, never a URL supplied in its payload. */
+  static boolean isTrustedYikeQuerySource(boolean isYike, boolean mainFrame, String frameUrl) {
+    if (!isYike || !mainFrame || frameUrl == null || frameUrl.isBlank()) return false;
+    try {
+      java.net.URI uri = new java.net.URI(frameUrl);
+      String scheme = uri.getScheme();
+      String host = uri.getHost();
+      if (scheme == null || host == null) return false;
+      String normalizedHost = host.toLowerCase(Locale.ROOT);
+      return ("https".equalsIgnoreCase(scheme) || "http".equalsIgnoreCase(scheme))
+          && ("yikeweiqi.com".equals(normalizedHost) || normalizedHost.endsWith(".yikeweiqi.com"));
+    } catch (java.net.URISyntaxException invalidUrl) {
+      return false;
+    }
   }
 
   static boolean shouldKeepYikeListenerEnabledOnPage(boolean isYike, String currentUrl) {

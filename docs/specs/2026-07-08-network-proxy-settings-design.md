@@ -25,7 +25,7 @@ Some paths currently call plain `openConnection()`, while others explicitly use 
 - Do not promise control over external browser windows opened through `Desktop.browse(...)`.
 - Do not promise control over external engine processes in the first version.
 - Do not include proxy authentication, PAC parsing, per-host bypass rules, or SOCKS in the first version.
-- Do not route raw `java.net.Socket` protocols in the first version. The legacy share/search socket classes (`SocketLoggin`, `SocketGetFile`, `SocketKifuSearch`, and `SocketEditFile`) should remain direct until SOCKS or a protocol-specific replacement is designed.
+- Do not route local server sockets/listeners through the HTTP proxy. The former remote share/search socket clients have been removed with the retired sharing service.
 - Do not replace existing download, update, or remote-compute business logic with a new HTTP framework.
 
 ## User Settings
