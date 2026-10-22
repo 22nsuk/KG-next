@@ -146,11 +146,13 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest",
             steps[0].command,
         )
         self.assertEqual(
             (
+                ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedThemeSavePreservesFilesAndAllowsRetry"),
+                ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedColorResetKeepsDialogOpenAndAllowsRetry"),
                 ("featurecat.lizzie.gui.SavedGameLoadDesktopTest", "failedSavedListOpensPreserveCurrentGameAndAllowRetry"),
                 ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
                 ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
