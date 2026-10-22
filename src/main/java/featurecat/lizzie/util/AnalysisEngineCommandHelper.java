@@ -2,11 +2,13 @@ package featurecat.lizzie.util;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.logging.LogCategories;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.ArrayList;
@@ -276,6 +278,39 @@ public final class AnalysisEngineCommandHelper {
       copyTemplate(analysisConfig);
     }
     return analysisConfig;
+  }
+
+  /**
+   * Reports only a definitely absent, directly launched local executable. PATH commands and
+   * launcher-managed paths (including SSH) must keep their normal startup diagnostics.
+   */
+  public static boolean isMissingLocalExecutable(String command) {
+    if (command == null
+        || command.isBlank()
+        || RemoteComputeConfig.isRemoteComputeEngineCommand(command)) {
+      return false;
+    }
+    List<String> parts = Utils.splitCommand(command);
+    if (parts.isEmpty()) return false;
+    String program = parts.get(0);
+    if ((program.indexOf('/') < 0 && program.indexOf('\\') < 0)
+        || program.contains("://")
+        || CommandLaunchHelper.isIndirectLauncher(program)) {
+      return false;
+    }
+    try {
+      CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(parts);
+      Path executable = Path.of(launch.getCommandParts().get(0));
+      if (!executable.isAbsolute() && launch.getWorkingDirectory() != null) {
+        executable = launch.getWorkingDirectory().toPath().resolve(executable);
+      }
+      // Without an explicit launch directory, relative paths use the native cwd, just like
+      // ProcessBuilder. The app may have changed user.dir for writable data without changing cwd.
+      // Unknown accessibility, a directory or an unusable existing file is not a missing file.
+      return Files.notExists(executable);
+    } catch (InvalidPathException invalid) {
+      return false;
+    }
   }
 
   public static boolean isAnalysisCommandCustomized(

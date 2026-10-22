@@ -13,6 +13,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlans;
+import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.HumanSlGameController;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -33,6 +34,8 @@ import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -53,6 +56,10 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisEngineRequestTest {
   private static final int BOARD_SIZE = 3;
@@ -515,6 +522,140 @@ class AnalysisEngineRequestTest {
       assertTrue(engine.isLoaded());
       assertNull(engine.process);
       assertTrue(engine.matchesCurrentAnalysisBackend());
+    }
+  }
+
+  @Test
+  void automaticQuickAnalysisRecoversMissingLocalExecutableWithoutChangingSettings(
+      @TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = reusableForegroundEngine(true);
+      Lizzie.config.leelazConfig = new JSONObject();
+      String command = "\"" + folder.resolve("missing-katago") + "\" analysis -model custom.bin.gz";
+      Lizzie.config.analysisEngineCommand = command;
+      Lizzie.config.uiConfig =
+          new JSONObject().put("analysis-engine-command-customized", true);
+
+      AnalysisEngine engine = AnalysisEngine.createAutomaticQuickAnalysis();
+
+      assertTrue(engine.isLoaded());
+      assertTrue(engine.usesSharedForegroundEngine());
+      assertTrue(engine.usesAutomaticPrimaryForegroundReuse());
+      assertTrue(engine.usesMissingAnalysisEngineFallback());
+      assertSame(Lizzie.leelaz, getField(AnalysisEngine.class, engine, "sharedForegroundEngine"));
+      assertNull(engine.process, "the missing executable must never be launched");
+      assertNull(engine.startupDiagnosticAttempt());
+      assertEquals(command, Lizzie.config.analysisEngineCommand);
+      assertTrue(Lizzie.config.uiConfig.getBoolean("analysis-engine-command-customized"));
+      assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+      engine.shutdown();
+    }
+  }
+
+  @Test
+  void missingExecutableFallbackDoesNotOverrideSshLightweightOrPathCommands(@TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = reusableForegroundEngine(true);
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\"" + folder.resolve("missing-katago") + "\" analysis";
+      assertTrue(AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      assertFalse(AnalysisEngine.automaticallyReusesPrimaryForeground(true));
+      Lizzie.config.leelazConfig.put(
+          "analysis-engine-ssh-info", new JSONObject().put("useJavaSSH", true));
+      assertFalse(AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      Lizzie.config.leelazConfig.remove("analysis-engine-ssh-info");
+      Lizzie.config.analysisEngineCommand = "katago analysis -model custom.bin.gz";
+      assertFalse(AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      Lizzie.config.analysisEngineCommand = RemoteComputeConfig.COMMAND_ZHIZI;
+      assertFalse(AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      Lizzie.config.analysisEngineCommand =
+          "\"" + Files.createFile(folder.resolve("katago")) + "\" analysis";
+      assertFalse(AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void separateLightweightCommandKeepsItsOwnStartupFailure(
+      boolean executableExists, @TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = reusableForegroundEngine(true);
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\"" + folder.resolve("missing-default") + "\" analysis";
+      Path lightweight = folder.resolve("lightweight-katago");
+      if (executableExists) Files.createFile(lightweight);
+      var constructor =
+          AnalysisEngine.class.getDeclaredConstructor(
+              boolean.class,
+              AnalysisEngine.Workload.class,
+              int.class,
+              AnalysisResourceCoordinator.Purpose.class,
+              boolean.class,
+              String.class);
+      constructor.setAccessible(true);
+      AnalysisEngine engine =
+          constructor.newInstance(
+              true,
+              AnalysisEngine.Workload.STANDARD,
+              -1,
+              AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS,
+              false,
+              "\"" + lightweight + "\" analysis -model lightweight.bin.gz");
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertFalse(engine.isLoaded());
+      assertFalse(engine.usesSharedForegroundEngine());
+      assertFalse(engine.usesMissingAnalysisEngineFallback());
+      assertTrue(engine.usesDedicatedLightweightQuickModel());
+      assertEquals(
+          lightweight.toString(),
+          ((List<?>) getField(AnalysisEngine.class, engine, "commands")).get(0));
+      assertEquals(
+          "process-create", engine.startupDiagnosticAttempt().snapshot().toJson().getString("phase"));
+      engine.shutdown();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void manualAndPersistentPreloadKeepTheConfiguredExecutableFailure(
+      boolean preload, @TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = reusableForegroundEngine(true);
+      Lizzie.config.leelazConfig = new JSONObject();
+      String command = "\"" + folder.resolve("missing-katago") + "\" analysis -model custom.bin.gz";
+      Lizzie.config.analysisEngineCommand = command;
+      class DiagnosticEngine extends AnalysisEngine {
+        String message;
+
+        DiagnosticEngine() throws IOException {
+          super(preload);
+        }
+
+        @Override
+        public DiagnosticActionResult tryToDignostic(
+            String message,
+            KataGoRuntimeHelper.TensorRtRepairContext context,
+            EngineStartupDiagnostics.Attempt attempt) {
+          this.message = message;
+          return DiagnosticActionResult.ofRepairChoice(true);
+        }
+      }
+      DiagnosticEngine engine = new DiagnosticEngine();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertFalse(engine.isLoaded());
+      assertFalse(engine.usesSharedForegroundEngine());
+      assertFalse(engine.usesMissingAnalysisEngineFallback());
+      assertEquals(
+          "process-create", engine.startupDiagnosticAttempt().snapshot().toJson().getString("phase"));
+      if (preload) assertNull(engine.message);
+      else
+        assertTrue(
+            engine.message.contains("missing-katago"), "manual failure must reach its diagnostic");
+      assertEquals(command, Lizzie.config.analysisEngineCommand);
+      engine.shutdown();
     }
   }
 
@@ -1477,40 +1618,55 @@ class AnalysisEngineRequestTest {
     }
   }
 
-  @Test
-  void silentProgressRefreshesGraphWithoutTriggeringFullBoardRefresh() throws Exception {
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+  void progressRefreshesGraphWithAndWithoutWindow(boolean remote, boolean showProgressWindow)
+      throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
-      history.add(
-          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
-      history.add(
-          moveNode(
-              stones(placement(0, 0, Stone.BLACK), placement(1, 1, Stone.WHITE)),
-              new int[] {1, 1},
-              Stone.WHITE,
-              true,
-              2));
+      for (int move = 1; move <= 17; move++) {
+        boolean black = move % 2 == 1;
+        history.add(passNode(emptyStones(), black ? Stone.BLACK : Stone.WHITE, !black, move));
+      }
       boardWithHistory(history);
       SilentProgressTrackingFrame frame = allocate(SilentProgressTrackingFrame.class);
       Lizzie.frame = frame;
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "useRemoteCompute", remote);
+      TrackingWaitForAnalysis window = allocate(TrackingWaitForAnalysis.class);
+      if (showProgressWindow) engine.waitFrame = window;
 
-      assertEquals(2, engine.startRequestMissingMainline(false));
-      engine.parseResult(analysisResult(1, 200, 62.0));
+      assertEquals(17, engine.startRequestMissingMainline(showProgressWindow));
+      for (int completed = 1; completed <= 17; completed++) {
+        if (remote) {
+          completeRemoteGtpSearch(engine, 200, 62.0, 1.5);
+        } else {
+          engine.parseResult(analysisResult(completed, 200, 62.0));
+        }
 
-      assertEquals(1, frame.silentProgressRefreshCalls);
-      assertEquals(
-          0,
-          frame.fullRefreshCalls,
-          "an intermediate silent result must not rebuild the full board render surface.");
+        int expectedRefreshes = completed <= 12 ? completed : completed < 16 ? 12 : completed - 3;
+        assertEquals(
+            expectedRefreshes,
+            frame.silentProgressRefreshCalls,
+            "graph refreshes are throttled during analysis and include the final result.");
+        if (showProgressWindow) {
+          assertEquals(completed, window.currentMove, "the progress window counts every result.");
+          assertEquals(17, window.totalMoves);
+        }
+        assertEquals(
+            completed == 17 ? 1 : 0,
+            frame.fullRefreshCalls,
+            "intermediate results must not rebuild the full board render surface.");
+      }
+      assertFalse(engine.isAnalysisInProgress());
       waitForMovelistRefreshThreads();
     }
   }
 
   @Test
-  void silentProgressAlwaysRefreshesTheFinalResultBetweenThrottleIntervals() throws Exception {
+  void graphProgressAlwaysRefreshesTheFinalResultBetweenThrottleIntervals() throws Exception {
     Method method =
-        AnalysisEngine.class.getDeclaredMethod("shouldRefreshSilentProgress", int.class, int.class);
+        AnalysisEngine.class.getDeclaredMethod("shouldRefreshProgressGraph", int.class, int.class);
     method.setAccessible(true);
 
     assertTrue((boolean) method.invoke(null, 13, 13));
@@ -4058,6 +4214,14 @@ class AnalysisEngineRequestTest {
       visibilityCalls++;
       lastVisible = visible;
     }
+
+    @Override
+    public boolean isVisible() {
+      return lastVisible;
+    }
+
+    @Override
+    public void setLocationRelativeTo(java.awt.Component component) {}
   }
 
   private static final class TrackingAnalysisEngine extends AnalysisEngine {

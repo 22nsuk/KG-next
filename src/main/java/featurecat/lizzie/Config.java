@@ -655,12 +655,17 @@ public class Config {
     Path previousData = portableData ? previousRoot.getParent().resolve("user-data") : null;
     Path currentData = portableData ? currentRoot.getParent().resolve("user-data") : null;
     for (int i = 0; i < parts.size(); i++) {
-      if (i != 0
-          && !"-model".equals(parts.get(i - 1))
-          && !"-config".equals(parts.get(i - 1))) continue;
+      String pathToken = parts.get(i);
+      String optionPrefix = "";
+      if (i != 0 && !isBundledPathOption(parts.get(i - 1))) {
+        int equals = pathToken.indexOf('=');
+        if (equals < 0 || !isBundledPathOption(pathToken.substring(0, equals))) continue;
+        optionPrefix = pathToken.substring(0, equals + 1);
+        pathToken = pathToken.substring(equals + 1);
+      }
       Path original;
       try {
-        original = Path.of(parts.get(i));
+        original = Path.of(pathToken);
       } catch (InvalidPathException invalidPath) {
         continue;
       }
@@ -674,11 +679,44 @@ public class Config {
       } else {
         continue;
       }
-      // Generated paths are quoted. A missing destination never licenses replacing the user's
-      // chosen model/config with a different default, even when the old package has been removed.
+      // A missing destination never licenses replacing the user's chosen model/config with a
+      // different default. Replace this token only; other options may contain the same path.
       if (Files.isRegularFile(relocated)) {
-        command = command.replace('"' + parts.get(i) + '"', quotePath(relocated));
+        command = replaceCommandToken(command, i, optionPrefix + quotePath(relocated));
       }
+    }
+    return command;
+  }
+
+  private static boolean isBundledPathOption(String option) {
+    return "-model".equals(option) || "--model".equals(option)
+        || "-config".equals(option) || "--config".equals(option);
+  }
+
+  // Match the space and quote rules of Utils.splitCommand while preserving all untouched text.
+  private static String replaceCommandToken(String command, int tokenIndex, String replacement) {
+    int token = 0;
+    int start = 0;
+    while (start < command.length()) {
+      while (start < command.length() && command.charAt(start) == ' ') start++;
+      if (start == command.length()) break;
+      int end = start;
+      char quote = 0;
+      while (end < command.length()) {
+        char ch = command.charAt(end);
+        if (quote != 0) {
+          if (ch == quote) quote = 0;
+        } else if (ch == '\'' || ch == '"') {
+          quote = ch;
+        } else if (ch == ' ') {
+          break;
+        }
+        end++;
+      }
+      if (token++ == tokenIndex) {
+        return command.substring(0, start) + replacement + command.substring(end);
+      }
+      start = end;
     }
     return command;
   }
@@ -779,6 +817,12 @@ public class Config {
                 ? bundledConfig.analysisCommand
                 : rebindManagedBundledCommand(analysisCommand, bundledConfig.appRoot));
         ui.put("analysis-engine-command-customized", false);
+      } else if (!analysisCommandUsesJavaSsh(leelaz)
+          && isBundledKataGoCommand(analysisCommand)
+          && AnalysisEngineCommandHelper.isMissingLocalExecutable(analysisCommand)) {
+        // Only repair paths in the missing bundle; custom model choices and flags stay the user's.
+        ui.put("analysis-engine-command",
+            rebindManagedBundledCommand(analysisCommand, bundledConfig.appRoot));
       }
       if (bundledConfig.transformerDefault) {
         ui.put(DEFAULT_TRANSFORMER_MIGRATION_KEY, true);

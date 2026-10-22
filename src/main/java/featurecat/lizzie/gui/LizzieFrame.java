@@ -21971,12 +21971,17 @@ public class LizzieFrame extends JFrame {
   }
 
   private QuickAnalysisWarmupAction currentQuickAnalysisWarmupAction(boolean requiresAutoAnalyze) {
+    boolean missingEngineFallback =
+        requiresAutoAnalyze
+            && AnalysisEngine.shouldFallbackToPrimaryForeground(false)
+            && KataGoAutoSetupHelper.resolveQuickAnalysisEngineCommand().isEmpty();
     boolean dependsOnPrimary =
         quickAnalysisDependsOnPrimary(
             isCurrentPrimaryEngineRemote(),
             isCurrentPrimaryEngineBundledOpenCl(),
             isCurrentPrimaryEngineBundledNvidia(),
-            Lizzie.config != null && Lizzie.config.analysisReuseCurrentEngine);
+            missingEngineFallback
+                || (Lizzie.config != null && Lizzie.config.analysisReuseCurrentEngine));
     boolean primaryLoaded =
         !dependsOnPrimary || (Lizzie.leelaz != null && Lizzie.leelaz.isLoaded());
     boolean primaryFailed =

@@ -31,6 +31,7 @@ import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
 import featurecat.lizzie.teacher.CommentDisplayRenderer;
 import featurecat.lizzie.teacher.TeacherCommentCodec;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.Font;
@@ -49,9 +50,12 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
@@ -679,6 +683,105 @@ class LizzieFrameRegressionTest {
         LizzieFrame.QuickAnalysisWarmupAction.WAIT_FOR_PRIMARY,
         LizzieFrame.decideQuickAnalysisWarmup(true, false, true, false, true),
         "a loaded primary must not start quick analysis before the new record is synchronized");
+  }
+
+  @Test
+  void missingLocalEngineWaitsForFallbackPrimaryOnlyForAutomaticAnalysis(@TempDir Path root)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\"" + root.resolve("gone-katago") + "\" analysis";
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      Leelaz primary = new Leelaz("katago gtp");
+      Lizzie.leelaz = primary;
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      Lizzie.frame = frame;
+      Method warmup =
+          LizzieFrame.class.getDeclaredMethod("currentQuickAnalysisWarmupAction", boolean.class);
+      warmup.setAccessible(true);
+
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.WAIT, frame.automaticQuickAnalysisReadiness());
+      assertEquals(
+          LizzieFrame.QuickAnalysisWarmupAction.START,
+          warmup.invoke(frame, false),
+          "Persistent preload does not borrow the automatic fallback");
+
+      primary.isLoaded = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY, frame.automaticQuickAnalysisReadiness());
+
+      primary.isLoaded = false;
+      primary.isDownWithError = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.STOP, frame.automaticQuickAnalysisReadiness());
+      assertEquals(
+          LizzieFrame.QuickAnalysisWarmupAction.START,
+          warmup.invoke(frame, false),
+          "The unrelated primary failure cannot block configured persistent preload");
+    }
+  }
+
+  @Test
+  void installedLightweightOverrideDoesNotWaitForAMissingConfiguredEngineFallback(@TempDir Path root)
+      throws Exception {
+    String shaProperty = "lizzie.quick-analysis.model.sha256";
+    String sizeProperty = "lizzie.quick-analysis.model.size";
+    String previousSha = System.getProperty(shaProperty);
+    String previousSize = System.getProperty(sizeProperty);
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Path engine =
+          root.resolve("separate-engine")
+              .resolve(System.getProperty("os.name", "").startsWith("Windows") ? "katago.exe" : "katago");
+      Files.createDirectories(engine.getParent());
+      Files.writeString(engine, "fixture engine");
+      Path gtp = Files.writeString(engine.resolveSibling("gtp.cfg"), "");
+      Path analysis = Files.writeString(engine.resolveSibling("analysis.cfg"), "");
+      Path primaryModel = Files.writeString(root.resolve("primary.bin.gz"), "fixture main model");
+      Path quickModel =
+          Files.writeString(
+              root.resolve(KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME),
+              "fixture lightweight model");
+      System.setProperty(
+          shaProperty,
+          HexFormat.of()
+              .formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(quickModel))));
+      System.setProperty(sizeProperty, Long.toString(Files.size(quickModel)));
+      Lizzie.config = ConfigTestHelper.createForTests(root);
+      Lizzie.config.config = new JSONObject();
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.uiConfig =
+          new JSONObject()
+              .put("katago-auto-setup-engine-path", engine.toString())
+              .put("katago-auto-setup-gtp-config-path", gtp.toString())
+              .put("katago-auto-setup-analysis-config-path", analysis.toString())
+              .put("katago-auto-setup-weight-path", primaryModel.toString())
+              .put("katago-quick-analysis-model-path", quickModel.toString());
+      Lizzie.config.autoQuickAnalyzeOnLoad = true;
+      Lizzie.config.quickAnalysisLightweightModelEnabled = true;
+      Lizzie.config.analysisEngineCommand = "\"" + root.resolve("gone-katago") + "\" analysis";
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      Leelaz primary = new Leelaz("katago gtp");
+      Lizzie.leelaz = primary;
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      Lizzie.frame = frame;
+
+      String quickCommand = KataGoAutoSetupHelper.resolveQuickAnalysisEngineCommand().orElseThrow();
+      assertTrue(quickCommand.contains(quickModel.toString()));
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY, frame.automaticQuickAnalysisReadiness());
+      primary.isDownWithError = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY,
+          frame.automaticQuickAnalysisReadiness(),
+          "An installed separate quick engine does not depend on the failed primary");
+    } finally {
+      if (previousSha == null) System.clearProperty(shaProperty);
+      else System.setProperty(shaProperty, previousSha);
+      if (previousSize == null) System.clearProperty(sizeProperty);
+      else System.setProperty(sizeProperty, previousSize);
+    }
   }
 
   @Test

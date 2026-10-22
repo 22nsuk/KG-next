@@ -10,12 +10,14 @@ import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.RemoteEngineData;
 import featurecat.lizzie.gui.WaitForAnalysis;
 import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
+import featurecat.lizzie.util.AnalysisEngineCommandHelper;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
@@ -53,8 +55,12 @@ import java.util.function.Consumer;
 import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class AnalysisEngine {
+  private static final Logger LOG = LoggerFactory.getLogger(LogCategories.ENGINE);
+
   public enum Workload {
     STANDARD,
     WHOLE_GAME
@@ -173,6 +179,7 @@ public class AnalysisEngine {
   private long remoteGtpLastCompletionActivityMillis;
   private Leelaz sharedForegroundEngine;
   private boolean automaticPrimaryForegroundReuse;
+  private final boolean missingAnalysisEngineFallback;
   private String automaticPrimaryForegroundCommand;
   private boolean sharedForegroundLeaseStarting;
   private boolean sharedForegroundLeaseActive;
@@ -234,9 +241,13 @@ public class AnalysisEngine {
     this.persistentPreload = persistentPreload;
     boolean lightweightQuickModelRequested =
         commandOverride != null && !commandOverride.trim().isEmpty();
-    automaticPrimaryForegroundReuse =
+    this.missingAnalysisEngineFallback =
         this.purpose == AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS
-            && automaticallyReusesPrimaryForeground(lightweightQuickModelRequested);
+            && shouldFallbackToPrimaryForeground(lightweightQuickModelRequested);
+    automaticPrimaryForegroundReuse =
+        missingAnalysisEngineFallback
+            || (this.purpose == AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS
+                && automaticallyReusesPrimaryBackend(lightweightQuickModelRequested));
     this.dedicatedLightweightQuickModel =
         this.purpose == AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS
             && !automaticPrimaryForegroundReuse
@@ -255,6 +266,11 @@ public class AnalysisEngine {
               ? Leelaz.ExclusiveGtpLeaseAvailability.NO_FOREGROUND_ENGINE
               : sharedForegroundEngine.previewForegroundAnalysisLeaseAvailability();
       isLoaded = foregroundLeaseAvailability == Leelaz.ExclusiveGtpLeaseAvailability.AVAILABLE;
+      if (missingAnalysisEngineFallback && isLoaded) {
+        LOG.warn(
+            "Automatic quick analysis uses the current engine because the configured local"
+                + " analysis executable is missing");
+      }
       isNormalEnd = false;
       engineCommand = "";
       return;
@@ -295,6 +311,26 @@ public class AnalysisEngine {
 
   /** Shared by admission and construction, including remote-only profiles without a local command. */
   public static boolean automaticallyReusesPrimaryForeground(boolean lightweightQuickModelRequested) {
+    return shouldFallbackToPrimaryForeground(lightweightQuickModelRequested)
+        || automaticallyReusesPrimaryBackend(lightweightQuickModelRequested);
+  }
+
+  /** Only automatic requests may use this fallback; explicit lightweight commands stay separate. */
+  public static boolean shouldFallbackToPrimaryForeground(boolean lightweightQuickModelRequested) {
+    if (Lizzie.config == null
+        || Lizzie.config.analysisReuseCurrentEngine
+        || lightweightQuickModelRequested) {
+      return false;
+    }
+    JSONObject ssh =
+        Lizzie.config.leelazConfig == null
+            ? null
+            : Lizzie.config.leelazConfig.optJSONObject("analysis-engine-ssh-info");
+    return (ssh == null || !ssh.optBoolean("useJavaSSH", false))
+        && AnalysisEngineCommandHelper.isMissingLocalExecutable(Lizzie.config.analysisEngineCommand);
+  }
+
+  private static boolean automaticallyReusesPrimaryBackend(boolean lightweightQuickModelRequested) {
     String command = Lizzie.leelaz == null ? null : Lizzie.leelaz.engineCommand();
     return shouldAutomaticallyReusePrimaryForeground(
         AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS,
@@ -872,12 +908,7 @@ public class AnalysisEngine {
     }
     notifyProgress();
     Lizzie.frame.requestProblemListRefresh();
-    if (waitFrame != null) {
-      waitFrame.setProgress(resultCount, analyzeMap.size());
-    } else if (silentProgress && shouldRefreshSilentProgress(resultCount, analyzeMap.size())) {
-      Lizzie.board.setMovelistAll();
-      Lizzie.frame.refreshSilentAnalysisProgress();
-    }
+    showProgress(true);
     if (canFinalizeCurrentRequest() && responseCount == analyzeMap.size()) setResult();
   }
 
@@ -1189,12 +1220,7 @@ public class AnalysisEngine {
     }
     notifyProgress();
     Lizzie.frame.requestProblemListRefresh();
-    if (waitFrame != null && (sharedForegroundEngine == null || resultCount < analyzeMap.size())) {
-      waitFrame.setProgress(resultCount, analyzeMap.size());
-    } else if (silentProgress && shouldRefreshSilentProgress(resultCount, analyzeMap.size())) {
-      Lizzie.board.setMovelistAll();
-      Lizzie.frame.refreshSilentAnalysisProgress();
-    }
+    showProgress(sharedForegroundEngine == null || resultCount < analyzeMap.size());
     return true;
   }
 
@@ -1307,7 +1333,18 @@ public class AnalysisEngine {
     }
   }
 
-  private static boolean shouldRefreshSilentProgress(int resultCount, int totalCount) {
+  /** Keeps the graph live even when a progress window is present or awaiting engine handback. */
+  private void showProgress(boolean updateWindow) {
+    if (waitFrame != null && updateWindow) {
+      waitFrame.setProgress(resultCount, analyzeMap.size());
+    }
+    if (shouldRefreshProgressGraph(resultCount, analyzeMap.size())) {
+      Lizzie.board.setMovelistAll();
+      Lizzie.frame.refreshSilentAnalysisProgress();
+    }
+  }
+
+  private static boolean shouldRefreshProgressGraph(int resultCount, int totalCount) {
     if (resultCount <= 0) {
       return false;
     }
@@ -2771,6 +2808,11 @@ public class AnalysisEngine {
 
   public boolean usesAutomaticPrimaryForegroundReuse() {
     return automaticPrimaryForegroundReuse;
+  }
+
+  /** This worker cannot be transferred to user-started analysis, which must diagnose its command. */
+  public boolean usesMissingAnalysisEngineFallback() {
+    return missingAnalysisEngineFallback;
   }
 
   public AnalysisResourceCoordinator.Purpose purpose() {

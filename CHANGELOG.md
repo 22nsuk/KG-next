@@ -26,6 +26,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### Inherited upstream changes
 
+- Repair missing bundled analysis executables while preserving custom model/config choices and options; restrict missing-file foreground fallback to automatic quick analysis, preserve manual diagnostics and separate lightweight/remote engines, and refresh live graphs with or without a progress window (#652).
 - Remove the retired lizzieyzy.cn sharing clients, login/search dialogs, hidden upload controls and offline search entries (#630). Remove only their legacy account, labels and search-window settings on successful configuration reads using atomic replacement; preserve local SGF saving and unrelated online sources.
 - Accept Yike bridge queries only from the actual main frame of a Yike window on an HTTP(S) yikeweiqi.com domain; reject other sources before acknowledging or dispatching their payloads (#631, origin check only; no JCEF upgrade).
 - Run frame refreshes requested by engine threads on the Swing event thread, coalescing queued bursts while keeping event-thread refreshes synchronous (#633).

@@ -190,6 +190,12 @@ final class AutomaticQuickAnalysisEngineAdapter implements AutomaticQuickAnalysi
       failWaiting();
       return;
     }
+    if (waiting.isEmpty() && warmed.usesMissingAnalysisEngineFallback()) {
+      // An automatic-only fallback cannot become an idle preload for later manual analysis.
+      preloadRequested = false;
+      closeUnclaimed(warmed);
+      return;
+    }
     if (frame.isAnalysisEngineReusable(frame.analysisEngine)) {
       if (frame.analysisEngine != warmed) closeUnclaimed(warmed);
       handoff(frame.analysisEngine);
@@ -348,7 +354,11 @@ final class AutomaticQuickAnalysisEngineAdapter implements AutomaticQuickAnalysi
         return;
       }
       released = true;
-      if (transfer || (requestFinished && !requestFailed && !engine.isAutomaticBackgroundTask())) {
+      // A missing configured engine is recoverable only for automatic analysis. Manual flash
+      // analysis must start that configured engine and expose its failure after the handback.
+      boolean transferWorker = transfer && !engine.usesMissingAnalysisEngineFallback();
+      if (transferWorker
+          || (requestFinished && !requestFailed && !engine.isAutomaticBackgroundTask())) {
         background(
             "automatic-quick-analysis-return",
             () -> {

@@ -32,6 +32,8 @@ import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class AutomaticQuickAnalysisEngineAdapterTest {
   private static final String STARTUP = "quick-analysis-engine-preloader";
@@ -336,6 +338,43 @@ class AutomaticQuickAnalysisEngineAdapterTest {
   }
 
   @Test
+  void missingEngineFallbackIsNotRetainedAsAnIdlePreloadAfterItsClientCancels() throws Exception {
+    PhysicalWorker fallback = worker();
+    fallback.shared = true;
+    fallback.missingEngineFallback = true;
+    Client cancelled = new Client();
+    onEdt(
+        () -> {
+          cancelled.acquire();
+          adapter.preload();
+          cancelled.registration.cancel();
+        });
+    executor.run(STARTUP);
+    onEdt(
+        () -> {
+          assertFalse(cancelled.delivered);
+          assertNull(adapter.ownedEngine());
+          assertNull(Lizzie.frame.analysisEngine, "An idle fallback must not serve manual analysis");
+          assertTrue(executor.has(UNCLAIMED_CLOSE));
+          assertFalse(executor.has(STARTUP));
+        });
+    executor.run(UNCLAIMED_CLOSE);
+
+    PhysicalWorker successor = worker();
+    Client nextAutomatic = new Client();
+    onEdt(nextAutomatic::acquire);
+    executor.run(STARTUP);
+    onEdt(
+        () -> {
+          assertFalse(fallback.live);
+          assertTrue(fallback.dispatchedNodes.isEmpty());
+          assertSame(successor, adapter.ownedEngine());
+          assertTrue(
+              successor.automatic, "The discarded preload cannot change the next request's purpose");
+        });
+  }
+
+  @Test
   void transferSuppressesQueuedAutomaticDispatchWithoutStoppingManualReuse() throws Exception {
     PhysicalWorker worker = worker();
     Client automatic = new Client();
@@ -376,6 +415,46 @@ class AutomaticQuickAnalysisEngineAdapterTest {
           assertSame(worker, Lizzie.frame.analysisEngine);
           assertFalse(executor.has(CLOSE));
           assertFalse(automatic.use.inProgress());
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(value = ForegroundRestoreResult.class, names = {"SUCCEEDED", "FAILED"})
+  void missingEngineFallbackCannotTransferToManualAnalysisAndAwaitsHandback(
+      ForegroundRestoreResult restore) throws Exception {
+    PhysicalWorker worker = worker();
+    worker.shared = true;
+    worker.missingEngineFallback = true;
+    Client automatic = new Client();
+    onEdt(automatic::acquire);
+    executor.run(STARTUP);
+    onEdt(automatic::request);
+    executor.run(REQUEST);
+    Consumer<ForegroundRestoreResult> staleCompletion = worker.completion;
+    onEdt(
+        () -> {
+          assertTrue(automatic.use.requiresForegroundRestore());
+          automatic.release(true);
+          assertNull(Lizzie.frame.analysisEngine, "Manual analysis must create its configured worker");
+          assertTrue(automatic.releases.isEmpty());
+          assertFalse(executor.has(RETURN));
+        });
+    executor.run(CLOSE);
+    onEdt(
+        () ->
+            assertTrue(automatic.releases.isEmpty(), "Manual analysis must await physical handback"));
+    staleCompletion.accept(ForegroundRestoreResult.SUCCEEDED);
+    worker.finishClose(restore);
+    flushEdt();
+    onEdt(
+        () -> {
+          assertEquals(List.of(restore), automatic.releases);
+          assertTrue(automatic.results.isEmpty(), "A late automatic result cannot claim the handoff");
+          assertFalse(worker.live);
+          assertTrue(worker.admissionClosed);
+          assertNull(adapter.ownedEngine());
+          assertNull(Lizzie.frame.analysisEngine);
+          assertSame(environment.browsingNode, Lizzie.board.getHistory().getCurrentHistoryNode());
         });
   }
 
@@ -510,6 +589,7 @@ class AutomaticQuickAnalysisEngineAdapterTest {
     private boolean live;
     private boolean automatic;
     private boolean shared;
+    private boolean missingEngineFallback;
     private boolean lifecycle;
     private boolean manualRequest;
     private boolean admissionClosed;
@@ -545,6 +625,11 @@ class AutomaticQuickAnalysisEngineAdapterTest {
     @Override
     public boolean usesSharedForegroundEngine() {
       return shared;
+    }
+
+    @Override
+    public boolean usesMissingAnalysisEngineFallback() {
+      return missingEngineFallback;
     }
 
     @Override
