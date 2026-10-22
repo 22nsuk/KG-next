@@ -13098,7 +13098,8 @@ public class LizzieFrame extends JFrame {
   private void releaseCompletedYikeCurveEngine(AnalysisEngine targetEngine) {
     if (targetEngine == null
         || !targetEngine.isAutomaticBackgroundTask()
-        || targetEngine.usesSharedForegroundEngine()
+        || (targetEngine.usesSharedForegroundEngine()
+            && !targetEngine.usesMissingAnalysisEngineFallback())
         || targetEngine.hasRequestLifecycleInProgress()) {
       return;
     }
