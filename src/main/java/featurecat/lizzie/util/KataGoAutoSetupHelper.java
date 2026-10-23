@@ -3922,6 +3922,9 @@ public final class KataGoAutoSetupHelper {
       verifyDownloadedWeight(path, quickAnalysisDownloadInfo());
       rememberQuickAnalysisValidation(normalized, size, modified, expectedSha, true);
       return true;
+    } catch (DownloadCancelledException e) {
+      // An interrupted inspection says nothing about the file's integrity; allow a later retry.
+      return false;
     } catch (IOException e) {
       try {
         Path normalized = path.toAbsolutePath().normalize();

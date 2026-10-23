@@ -38,6 +38,7 @@ import java.util.zip.GZIPOutputStream;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -2061,6 +2062,51 @@ public class KataGoAutoSetupHelperTest {
                     assertFalse(Lizzie.config.quickAnalysisLightweightModelEnabled);
                   }));
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,true", "true,true", "false,false", "true,false"})
+  void cancelledQuickAnalysisValidationIsRetriedWithoutChangingModel(
+      boolean configuredPath, boolean validChecksum, @TempDir Path root) throws Exception {
+    byte[] modelBytes = gzipFixtureBytes();
+    Path model =
+        writeModel(
+            root.resolve(configuredPath ? "custom-models" : "quick-analysis-models")
+                .resolve(KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME),
+            modelBytes);
+    var modified = Files.getLastModifiedTime(model);
+    withQuickAnalysisDownloadProperties(
+        "http://127.0.0.1/not-used/" + KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME,
+        validChecksum ? sha256(modelBytes) : "0".repeat(64),
+        modelBytes.length,
+        () ->
+            withUserDirAndConfig(
+                root,
+                () -> {
+                  if (configuredPath) {
+                    Lizzie.config.uiConfig.put("katago-quick-analysis-model-path", model.toString());
+                  }
+                  var snapshot = KataGoAutoSetupHelper.inspectLocalSetup();
+                  try {
+                    Thread.currentThread().interrupt();
+                    assertFalse(
+                        KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot).isInstalled());
+                    assertTrue(Thread.currentThread().isInterrupted());
+                  } finally {
+                    Thread.interrupted();
+                  }
+
+                  // Retry with the same path, contents and mtime: cancellation must not cache false.
+                  var status = KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot);
+                  assertEquals(validChecksum, status.isInstalled());
+                  if (validChecksum) {
+                    assertEquals(model.toAbsolutePath().normalize(), status.modelPath);
+                    KataGoAutoSetupHelper.setQuickAnalysisModelEnabled(true);
+                    assertTrue(KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot).isEnabled());
+                  }
+                  assertArrayEquals(modelBytes, Files.readAllBytes(model));
+                  assertEquals(modified, Files.getLastModifiedTime(model));
+                }));
   }
 
   @Test
