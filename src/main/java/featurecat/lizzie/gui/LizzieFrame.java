@@ -17199,24 +17199,13 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (flashAnalysisWaitingForRestore) return;
-    if (hasActiveAutomaticQuickAnalysis()) {
-      FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
-      automaticQuickAnalysisTask.whenSettled(
-          result -> {
-            if (batchRequest == null || canContinueFlashBatchRequest(batchRequest)) {
-              flashAnalyzeGame(isAllGame, isAllBranches);
-            }
-          });
-      prepareForManualFlashAnalysis();
-      return;
-    }
     if (isWholeGameAnalysisStartingOrRunning()) {
       Utils.showMsg(Lizzie.resourceBundle.getString("WholeGameAnalysis.conflict.analysis"));
       return;
     }
     cancelPendingManualAutoAnalysisForExclusiveTask();
+    if (deferManualFlashUntilAutomaticAnalysisSettled(isAllGame, isAllBranches)) return;
     prepareForManualFlashAnalysis();
-    if (deferManualFlashUntilFallbackRestored(isAllGame, isAllBranches)) return;
     releaseDedicatedLightweightQuickAnalysisEngine();
     if (!Lizzie.config.analysisReuseCurrentEngine
         && !isAnalysisEngineReusable(analysisEngine)
@@ -17234,8 +17223,24 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private boolean deferManualFlashUntilFallbackRestored(boolean isAllGame, boolean isAllBranches) {
-    if (analysisEngine == null || !analysisEngine.usesMissingAnalysisEngineFallback()) return false;
+  private boolean deferManualFlashUntilAutomaticAnalysisSettled(
+      boolean isAllGame, boolean isAllBranches) {
+    AutomaticQuickAnalysisTask task = automaticQuickAnalysisTask;
+    AnalysisEngine currentEngine = analysisEngine;
+    boolean independentManualEngine =
+        isAnalysisEngineReusable(currentEngine)
+            && !currentEngine.isAutomaticBackgroundTask()
+            && !currentEngine.usesSharedForegroundEngine();
+    boolean managed =
+        task != null
+            && (task.isActive()
+                || (task.requiresForegroundRestore() && !independentManualEngine));
+    if (!managed
+        && (currentEngine == null || !currentEngine.usesMissingAnalysisEngineFallback())) return false;
+    AnalysisEngine transferredEngine =
+        managed && currentEngine != null && !currentEngine.usesMissingAnalysisEngineFallback()
+            ? currentEngine
+            : null;
     FlashAnalysisRequest request = new FlashAnalysisRequest(isAllGame, isAllBranches);
     FlashBatchRequest batchRequest = isBatchAnalysisMode ? flashBatchRequest : null;
     BoardHistoryNode root = currentHistoryRoot();
@@ -17243,10 +17248,7 @@ public class LizzieFrame extends JFrame {
     Object incarnation = primary == null ? null : primary.engineIncarnationToken();
     pendingFlashAnalysisAfterRestore = request;
     flashAnalysisWaitingForRestore = true;
-    // Yike owns its worker directly, without an AutomaticQuickAnalysisTask. Its fallback is
-    // automatic-only: stop admission and wait for physical handback before creating a manual one.
-    releaseAutomaticQuickAnalysis(
-        AutomaticQuickAnalysisTask.CancelReason.MANUAL_FLASH,
+    Consumer<ForegroundRestoreResult> finished =
         restore -> {
           flashAnalysisWaitingForRestore = false;
           if (pendingFlashAnalysisAfterRestore != request) return;
@@ -17254,7 +17256,7 @@ public class LizzieFrame extends JFrame {
           if (root != currentHistoryRoot()
               || primary != Lizzie.leelaz
               || (primary != null && incarnation != primary.engineIncarnationToken())
-              || analysisEngine != null
+              || (analysisEngine != null && analysisEngine != transferredEngine)
               || (batchRequest != null && !canContinueFlashBatchRequest(batchRequest))) return;
           if (!restore.permitsForegroundAnalysis()) {
             if (batchRequest != null) {
@@ -17268,7 +17270,16 @@ public class LizzieFrame extends JFrame {
             return;
           }
           flashAnalyzeGame(request.isAllGame, request.isAllBranches);
-        });
+        };
+    // Cancellation clears task.active before physical handback. Hold the same admission guard
+    // for managed tasks and Yike's directly owned fallback, including an already-pending restore.
+    prepareForManualFlashAnalysis();
+    if (managed) {
+      // whenSettled also delivers a synchronous transfer that completed during preparation.
+      task.whenSettled(result -> finished.accept(result.restore()));
+    } else {
+      releaseAutomaticQuickAnalysis(AutomaticQuickAnalysisTask.CancelReason.MANUAL_FLASH, finished);
+    }
     return true;
   }
 
