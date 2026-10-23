@@ -280,9 +280,12 @@ public class ContributionLocalClearDesktopTest {
     return false;
   }
 
-  private static void await(BooleanSupplier condition) throws Exception {
+  static void await(BooleanSupplier condition) throws Exception {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(15);
-    while (!condition.getAsBoolean() && System.nanoTime() < deadline) Thread.sleep(20);
-    assertTrue(condition.getAsBoolean(), "Timed out waiting for controlled process state");
+    do {
+      if (condition.getAsBoolean()) return;
+      Thread.sleep(20);
+    } while (System.nanoTime() < deadline);
+    fail("Timed out waiting for controlled process state");
   }
 }
