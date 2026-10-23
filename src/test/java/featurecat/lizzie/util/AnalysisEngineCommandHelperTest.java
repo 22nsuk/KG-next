@@ -3,7 +3,10 @@ package featurecat.lizzie.util;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.condition.OS.WINDOWS;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
@@ -12,6 +15,7 @@ import ch.qos.logback.core.read.ListAppender;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.SyncDiagnosticsExportSnapshot;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.logging.DiagnosticBundleExporter;
@@ -21,21 +25,28 @@ import featurecat.lizzie.logging.LoggingLimits;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
+import org.jdesktop.swingx.util.OS;
 import org.json.JSONObject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 class AnalysisEngineCommandHelperTest {
@@ -46,6 +57,299 @@ class AnalysisEngineCommandHelperTest {
     Class.forName(KataGoAutoSetupHelper.class.getName());
     Class.forName(KataGoRuntimeHelper.class.getName());
     Class.forName(Lizzie.class.getName());
+  }
+
+  @Test
+  void missingExecutableRequiresAnAbsentDirectLocalPath() throws Exception {
+    Path executable = tempDir.resolve("local engine").resolve("katago.exe");
+    String command = quote(executable) + " analysis -model missing-model.bin.gz";
+    assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    Files.createDirectories(executable.getParent());
+    Files.createFile(executable);
+    assertFalse(
+        AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+        "an existing file with missing models or execute permission must keep its startup error");
+    Files.delete(executable);
+    Files.createDirectory(executable);
+    assertFalse(
+        AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+        "a directory is an invalid executable, not a missing one");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"katago", "katago.v1", "katago.exe"})
+  void exeSuffixPreventsMissingClassificationOnlyOnWindows(String name) throws Exception {
+    Path executable = Files.createDirectories(tempDir.resolve("engine dir.v1")).resolve(name);
+    String command = quote(executable) + " analysis -model custom.bin.gz";
+    assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+
+    Path suffixedExecutable = executable.resolveSibling(name + ".exe");
+    Files.createFile(suffixedExecutable);
+    assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+
+    Files.delete(suffixedExecutable);
+    Files.createDirectory(suffixedExecutable);
+    assertEquals(
+        !OS.isWindows(),
+        AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+        "an unusable .exe candidate must retain its startup error on Windows");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"katago", "katago.v1", "katago.exe"})
+  @EnabledOnOs(WINDOWS)
+  void windowsProcessLaunchAndMissingCheckAgreeOnImplicitExe(String name) throws Exception {
+    Path executable = Files.createDirectories(tempDir.resolve("native engine dir")).resolve(name);
+    Files.copy(
+        Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"),
+        executable.resolveSibling(name + ".exe"));
+    assertTrue(Files.notExists(executable));
+    String command = quote(executable) + " /d /c exit 0";
+    CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(Utils.splitCommand(command));
+    Process process =
+        new ProcessBuilder(launch.getCommandParts())
+            .directory(launch.getWorkingDirectory())
+            .redirectErrorStream(true)
+            .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+            .start();
+    try {
+      assertTrue(process.waitFor(10, TimeUnit.SECONDS), "Windows launch probe timed out");
+      assertEquals(0, process.exitValue());
+      assertFalse(
+          AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+          "a command that ProcessBuilder can launch must not trigger the missing-engine fallback");
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        assertTrue(process.waitFor(5, TimeUnit.SECONDS), "Windows launch probe survived cleanup");
+      }
+    }
+  }
+
+  @Test
+  void implicitExeSuffixUsesTheResolvedLaunchDirectory() throws Exception {
+    String previousDirectory = System.getProperty("user.dir");
+    try {
+      System.setProperty("user.dir", tempDir.toString());
+      Path model = Files.createFile(tempDir.resolve("model.bin.gz"));
+      Path executable = tempDir.resolve("quick engine").resolve("katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      String command = "\"./quick engine/katago\" analysis -model " + quote(model);
+      assertEquals(
+          tempDir.toFile(),
+          CommandLaunchHelper.prepare(Utils.splitCommand(command)).getWorkingDirectory());
+      assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    } finally {
+      System.setProperty("user.dir", previousDirectory);
+    }
+  }
+
+  @Test
+  void pathCommandsRemoteCommandsAndIndirectLaunchersAreNotMissingLocalEngines() {
+    for (String command :
+        List.of(
+            "",
+            "   ",
+            "katago analysis -model missing-model.bin.gz",
+            "katago.exe analysis",
+            "remote-compute://zhizi",
+            "ssh://example.invalid/katago",
+            "ssh example.invalid /missing/katago analysis",
+            quote(tempDir.resolve("ssh")) + " example.invalid /missing/katago analysis",
+            quote(tempDir.resolve("plink.exe")) + " example.invalid /missing/katago analysis",
+            quote(tempDir.resolve("wsl.exe")) + " /missing/katago analysis",
+            quote(tempDir.resolve("docker")) + " exec engine /missing/katago analysis",
+            quote(tempDir.resolve("engine-wrapper.sh")) + " analysis",
+            quote(tempDir.resolve("engine-wrapper.cmd")) + " analysis",
+            quote(tempDir.resolve("python3")) + " engine.py",
+            "\"" + tempDir + "/bad\0path\" analysis")) {
+      assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(command), command);
+    }
+    assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(null));
+  }
+
+  @Test
+  void relativeMissingExecutableUsesTheLaunchWorkingDirectory() throws Exception {
+    String previousDirectory = System.getProperty("user.dir");
+    try {
+      System.setProperty("user.dir", tempDir.toString());
+      Path model = Files.createFile(tempDir.resolve("model.bin.gz"));
+      String relativeEngine = "./only-in-" + tempDir.getFileName() + "/katago";
+      String command = relativeEngine + " analysis -model " + quote(model);
+      assertEquals(tempDir.toFile(),
+          CommandLaunchHelper.prepare(Utils.splitCommand(command)).getWorkingDirectory());
+      assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+      Files.createDirectories(tempDir.resolve(relativeEngine).getParent());
+      Files.createFile(tempDir.resolve(relativeEngine));
+      assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    } finally {
+      System.setProperty("user.dir", previousDirectory);
+    }
+  }
+
+  @Test
+  void relativeExecutableWithoutLaunchDirectoryUsesNativeCwdAfterUserDirChanges() throws Exception {
+    Path nativeDirectory = Files.createDirectories(tempDir.resolve("native cwd"));
+    Path changedUserDirectory = Files.createDirectories(tempDir.resolve("changed user dir"));
+    Path engineDirectory = Files.createTempDirectory(nativeDirectory, "only-in-native-");
+    Path executable = Files.createFile(engineDirectory.resolve("katago"));
+    String relativeExecutable = nativeDirectory.relativize(executable).toString();
+    runWorkingDirectoryProbe(
+        nativeDirectory,
+        NativeWorkingDirectoryProbe.class,
+        changedUserDirectory.toString(),
+        relativeExecutable);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"-model", "-config"})
+  void relativeExecutableWithExternalPathsMatchesNativeLaunch(String option) throws Exception {
+    String name = "katago";
+    Path nativeDirectory = Files.createDirectories(tempDir.resolve("native cwd"));
+    Path changedUserDirectory = Files.createDirectories(tempDir.resolve("writable user dir"));
+    Path externalFile =
+        Files.createFile(
+            Files.createDirectories(tempDir.resolve("external data")).resolve("data.bin"));
+    Path engineDirectory = Files.createTempDirectory(nativeDirectory, "native engines-");
+    Path executable = engineDirectory.resolve(name + (OS.isWindows() ? ".exe" : ""));
+    if (OS.isWindows()) {
+      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), executable);
+    } else {
+      Files.writeString(executable, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
+      Files.setPosixFilePermissions(executable, PosixFilePermissions.fromString("rwx------"));
+    }
+    runWorkingDirectoryProbe(
+        nativeDirectory,
+        ExternalWorkingDirectoryProbe.class,
+        changedUserDirectory.toString(),
+        nativeDirectory.relativize(engineDirectory.resolve(name)).toString(),
+        externalFile.toString(),
+        option);
+  }
+
+  private void runWorkingDirectoryProbe(Path nativeDirectory, Class<?> probe, String... args)
+      throws Exception {
+    Path java = Path.of(System.getProperty("java.home"), "bin",
+        System.getProperty("os.name", "").startsWith("Windows") ? "java.exe" : "java");
+    List<String> classPath = new ArrayList<>();
+    for (String entry : System.getProperty("surefire.test.class.path",
+        System.getProperty("java.class.path", "")).split(File.pathSeparator)) {
+      classPath.add(Path.of(entry).toAbsolutePath().toString());
+    }
+    List<String> command =
+        new ArrayList<>(List.of(
+            java.toString(), "-Djava.awt.headless=true",
+            "-Duser.language=en", "-Duser.country=US",
+            "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8",
+            "-Dlizzie.work.dir=" + tempDir.resolve("probe-work"), "-cp",
+            String.join(File.pathSeparator, classPath), probe.getName()));
+    command.addAll(List.of(args));
+    Path output = tempDir.resolve(probe.getSimpleName() + ".log");
+    Process process = new ProcessBuilder(command)
+        .directory(nativeDirectory.toFile())
+        .redirectErrorStream(true)
+        .redirectOutput(output.toFile())
+        .start();
+    try {
+      assertTrue(process.waitFor(30, TimeUnit.SECONDS), "native cwd probe timed out");
+      assertEquals(0, process.exitValue(), Files.readString(output, StandardCharsets.UTF_8));
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        assertTrue(process.waitFor(5, TimeUnit.SECONDS), "native cwd probe survived cleanup");
+      }
+    }
+  }
+
+  public static final class NativeWorkingDirectoryProbe {
+    public static void main(String[] args) {
+      Path executable = Path.of(args[1]);
+      assertTrue(Files.isRegularFile(executable), "fixture must exist in the child JVM's native cwd");
+      System.setProperty("user.dir", args[0]);
+      assertTrue(Files.notExists(Path.of(args[0]).resolve(executable)));
+      String command = quote(executable) + " analysis";
+      assertNull(CommandLaunchHelper.prepare(Utils.splitCommand(command)).getWorkingDirectory(),
+          "the command must exercise ProcessBuilder's inherited native cwd");
+      assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+          "a valid relative executable must not fall back after the writable data directory changes");
+    }
+  }
+
+  public static final class ExternalWorkingDirectoryProbe {
+    public static void main(String[] args) throws Exception {
+      Path relativeExecutable = Path.of(args[1]);
+      Path externalFile = Path.of(args[2]);
+      Path installedExecutable =
+          OS.isWindows() ? Path.of(relativeExecutable + ".exe") : relativeExecutable;
+      assertTrue(Files.isRegularFile(installedExecutable), "fixture must exist in the native cwd");
+      withUserDirAndConfig(Path.of(args[0]), () -> {
+        String command =
+            quote(relativeExecutable) + " /d /c exit 0 " + args[3] + " " + quote(externalFile);
+        CommandLaunchHelper.LaunchSpec launch =
+            CommandLaunchHelper.prepare(Utils.splitCommand(command));
+        assertEquals(externalFile.getParent().toFile(), launch.getWorkingDirectory());
+        assertEquals(relativeExecutable.toString(), launch.getCommandParts().get(0));
+        ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts())
+            .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        CommandLaunchHelper.configureProcessBuilder(builder, launch);
+        if (OS.isWindows()) {
+          Process process = builder.start();
+          try {
+            assertTrue(process.waitFor(10, TimeUnit.SECONDS), "native executable probe timed out");
+            assertEquals(0, process.exitValue());
+          } finally {
+            if (process.isAlive()) {
+              process.destroyForcibly();
+              assertTrue(process.waitFor(5, TimeUnit.SECONDS), "native executable survived cleanup");
+            }
+          }
+        } else {
+          assertThrows(
+              IOException.class,
+              builder::start,
+              "POSIX resolves the relative executable after entering the child working directory");
+        }
+        assertEquals(
+            !OS.isWindows(),
+            AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
+            "missing classification must respect the platform's executable lookup directory");
+        Lizzie.config.analysisEngineCommand = command;
+        assertEquals(!OS.isWindows(), AnalysisEngine.shouldFallbackToPrimaryForeground(false));
+        assertEquals(command, Lizzie.config.analysisEngineCommand);
+        assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+
+        String missingCommand = quote(relativeExecutable.resolveSibling("absent-engine"))
+            + " analysis " + args[3] + " " + quote(externalFile);
+        CommandLaunchHelper.LaunchSpec missingLaunch =
+            CommandLaunchHelper.prepare(Utils.splitCommand(missingCommand));
+        ProcessBuilder missingBuilder = new ProcessBuilder(missingLaunch.getCommandParts());
+        CommandLaunchHelper.configureProcessBuilder(missingBuilder, missingLaunch);
+        assertThrows(IOException.class, missingBuilder::start);
+        assertTrue(AnalysisEngineCommandHelper.isMissingLocalExecutable(missingCommand));
+        Lizzie.config.analysisEngineCommand = missingCommand;
+        assertTrue(AnalysisEngine.shouldFallbackToPrimaryForeground(false));
+      });
+    }
+  }
+
+  @Test
+  void relativeExecutableFoundBesideTheApplicationIsNotMistakenForMissing() throws Exception {
+    Path classes =
+        Path.of(CommandLaunchHelper.class.getProtectionDomain().getCodeSource().getLocation().toURI());
+    Path directory = Files.createTempDirectory(classes, "quick-analysis-engine-");
+    Path executable = Files.createFile(directory.resolve("katago"));
+    String previousDirectory = System.getProperty("user.dir");
+    try {
+      System.setProperty("user.dir", tempDir.toString());
+      String command = quote(classes.relativize(executable)) + " analysis";
+      assertFalse(Files.exists(tempDir.resolve(classes.relativize(executable))));
+      assertFalse(AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    } finally {
+      System.setProperty("user.dir", previousDirectory);
+      Files.delete(executable);
+      Files.delete(directory);
+    }
   }
 
   @Test

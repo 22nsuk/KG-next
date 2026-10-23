@@ -14,6 +14,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.AutomaticQuickAnalysisTask;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.ForegroundRestoreResult;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveRankDefinition;
@@ -31,6 +32,8 @@ import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
 import featurecat.lizzie.teacher.CommentDisplayRenderer;
 import featurecat.lizzie.teacher.TeacherCommentCodec;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
 import java.awt.Canvas;
 import java.awt.Color;
 import java.awt.Font;
@@ -49,10 +52,15 @@ import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
@@ -72,6 +80,7 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class LizzieFrameRegressionTest {
@@ -682,6 +691,105 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
+  void missingLocalEngineWaitsForFallbackPrimaryOnlyForAutomaticAnalysis(@TempDir Path root)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.analysisEngineCommand = "\"" + root.resolve("gone-katago") + "\" analysis";
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      Leelaz primary = new Leelaz("katago gtp");
+      Lizzie.leelaz = primary;
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      Lizzie.frame = frame;
+      Method warmup =
+          LizzieFrame.class.getDeclaredMethod("currentQuickAnalysisWarmupAction", boolean.class);
+      warmup.setAccessible(true);
+
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.WAIT, frame.automaticQuickAnalysisReadiness());
+      assertEquals(
+          LizzieFrame.QuickAnalysisWarmupAction.START,
+          warmup.invoke(frame, false),
+          "Persistent preload does not borrow the automatic fallback");
+
+      primary.isLoaded = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY, frame.automaticQuickAnalysisReadiness());
+
+      primary.isLoaded = false;
+      primary.isDownWithError = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.STOP, frame.automaticQuickAnalysisReadiness());
+      assertEquals(
+          LizzieFrame.QuickAnalysisWarmupAction.START,
+          warmup.invoke(frame, false),
+          "The unrelated primary failure cannot block configured persistent preload");
+    }
+  }
+
+  @Test
+  void installedLightweightOverrideDoesNotWaitForAMissingConfiguredEngineFallback(@TempDir Path root)
+      throws Exception {
+    String shaProperty = "lizzie.quick-analysis.model.sha256";
+    String sizeProperty = "lizzie.quick-analysis.model.size";
+    String previousSha = System.getProperty(shaProperty);
+    String previousSize = System.getProperty(sizeProperty);
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Path engine =
+          root.resolve("separate-engine")
+              .resolve(System.getProperty("os.name", "").startsWith("Windows") ? "katago.exe" : "katago");
+      Files.createDirectories(engine.getParent());
+      Files.writeString(engine, "fixture engine");
+      Path gtp = Files.writeString(engine.resolveSibling("gtp.cfg"), "");
+      Path analysis = Files.writeString(engine.resolveSibling("analysis.cfg"), "");
+      Path primaryModel = Files.writeString(root.resolve("primary.bin.gz"), "fixture main model");
+      Path quickModel =
+          Files.writeString(
+              root.resolve(KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME),
+              "fixture lightweight model");
+      System.setProperty(
+          shaProperty,
+          HexFormat.of()
+              .formatHex(MessageDigest.getInstance("SHA-256").digest(Files.readAllBytes(quickModel))));
+      System.setProperty(sizeProperty, Long.toString(Files.size(quickModel)));
+      Lizzie.config = ConfigTestHelper.createForTests(root);
+      Lizzie.config.config = new JSONObject();
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.uiConfig =
+          new JSONObject()
+              .put("katago-auto-setup-engine-path", engine.toString())
+              .put("katago-auto-setup-gtp-config-path", gtp.toString())
+              .put("katago-auto-setup-analysis-config-path", analysis.toString())
+              .put("katago-auto-setup-weight-path", primaryModel.toString())
+              .put("katago-quick-analysis-model-path", quickModel.toString());
+      Lizzie.config.autoQuickAnalyzeOnLoad = true;
+      Lizzie.config.quickAnalysisLightweightModelEnabled = true;
+      Lizzie.config.analysisEngineCommand = "\"" + root.resolve("gone-katago") + "\" analysis";
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      Leelaz primary = new Leelaz("katago gtp");
+      Lizzie.leelaz = primary;
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      Lizzie.frame = frame;
+
+      String quickCommand = KataGoAutoSetupHelper.resolveQuickAnalysisEngineCommand().orElseThrow();
+      assertTrue(quickCommand.contains(quickModel.toString()));
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY, frame.automaticQuickAnalysisReadiness());
+      primary.isDownWithError = true;
+      assertEquals(
+          AutomaticQuickAnalysisTask.Readiness.READY,
+          frame.automaticQuickAnalysisReadiness(),
+          "An installed separate quick engine does not depend on the failed primary");
+    } finally {
+      if (previousSha == null) System.clearProperty(shaProperty);
+      else System.setProperty(shaProperty, previousSha);
+      if (previousSize == null) System.clearProperty(sizeProperty);
+      else System.setProperty(sizeProperty, previousSize);
+    }
+  }
+
+  @Test
   void rulesDialogRequiresAFullyStartedEngine() throws Exception {
     assertFalse(LizzieFrame.isRulesEngineReady(null));
     Leelaz engine = new Leelaz("");
@@ -1202,8 +1310,10 @@ class LizzieFrameRegressionTest {
     }
   }
 
-  @Test
-  void userFlashAnalysisCancelsPendingManualAutoAnalysisStart() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void userFlashAnalysisCancelsPendingManualAutoAnalysisStart(boolean sharesForeground)
+      throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       Lizzie.config = configWithAutoQuickAnalyze();
       Lizzie.config.analysisReuseCurrentEngine = true;
@@ -1227,14 +1337,17 @@ class LizzieFrameRegressionTest {
 
       ResourceTrackingAnalysisEngine userTask = allocate(ResourceTrackingAnalysisEngine.class);
       userTask.reusable = true;
+      userTask.shared = sharesForeground;
       userTask.waitFrame = allocate(WaitForAnalysis.class);
       frame.analysisEngine = userTask;
       SwingUtilities.invokeAndWait(() -> frame.flashAnalyzeGame(false, false));
 
-      assertTrue(userTask.awaitManualRequestStarted());
+      joinAnalysisThread("flash-analysis-request-sender");
+      assertEquals(!sharesForeground, userTask.isAnalysisInProgress());
       automaticEngine.completeExit();
       drainEdt();
 
+      assertTrue(userTask.awaitManualRequestStarted());
       assertEquals(0, starts.get());
       assertEquals(LizzieFrame.ManualAutoAnalysisStartFailure.CANCELLED, failure.get());
       assertFalse(frame.isManualAutoAnalysisStarting());
@@ -2525,6 +2638,389 @@ class LizzieFrameRegressionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false"})
+  void completedYikeCurveKeepsOnlyExplicitSharedEnginesForManualAnalysis(
+      boolean explicitReuse, boolean failed, @TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, explicitReuse);
+      String configuredCommand = Lizzie.config.analysisEngineCommand;
+      try {
+        assertTrue(worker.usesSharedForegroundEngine());
+        assertEquals(!explicitReuse, worker.usesMissingAnalysisEngineFallback());
+        assertTrue(frame.isAnalysisEngineReusable(worker));
+
+        invokeFinishYikeCurveCompletion(
+            frame, worker, 23L, Lizzie.board.getHistory().getStart(), failed);
+        SwingUtilities.invokeAndWait(frame::prepareForManualFlashAnalysis);
+
+        assertEquals(!explicitReuse, worker.isNormalEnd);
+        if (explicitReuse) {
+          assertSame(worker, frame.analysisEngine, "explicit shared-engine reuse must stay available");
+        } else {
+          assertNull(frame.analysisEngine, "an automatic-only fallback must not serve manual analysis");
+        }
+        Method needsNew = LizzieFrame.class.getDeclaredMethod("needsNewFlashAnalysisEngine");
+        needsNew.setAccessible(true);
+        assertEquals(!explicitReuse, needsNew.invoke(frame));
+        assertEquals(configuredCommand, Lizzie.config.analysisEngineCommand);
+        assertEquals(explicitReuse, Lizzie.config.analysisReuseCurrentEngine);
+      } finally {
+        worker.shutdown();
+      }
+    }
+  }
+
+  @Test
+  void staleYikeFallbackCompletionReleasesOnlyItsOwnWorker(@TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, false);
+      ResourceTrackingAnalysisEngine replacement = allocate(ResourceTrackingAnalysisEngine.class);
+      replacement.reusable = true;
+      frame.analysisEngine = replacement;
+      try {
+        invokeFinishYikeCurveCompletion(
+            frame, worker, 22L, Lizzie.board.getHistory().getStart(), false);
+
+        assertTrue(worker.isNormalEnd);
+        assertSame(replacement, frame.analysisEngine);
+        assertEquals(0, replacement.normalQuitCount);
+      } finally {
+        worker.shutdown();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false, true", "true, false, false", "true, false, true", "true, true, true"})
+  void manualFlashWaitsForAutomaticFallbackBeforeStartingRequests(
+      boolean managed, boolean alreadyCancelled, boolean repeat, @TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      YikeManualFlashFrame frame = allocate(YikeManualFlashFrame.class);
+      DeferredYikeForegroundLeelaz foreground = allocate(DeferredYikeForegroundLeelaz.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, false, foreground);
+      String configuredCommand = Lizzie.config.analysisEngineCommand;
+      Map<String, Runnable> background = null;
+      try {
+        background = startAutomaticCurveRequest(frame, worker, managed);
+        assertTrue(worker.usesMissingAnalysisEngineFallback());
+        @SuppressWarnings("unchecked")
+        Consumer<ForegroundRestoreResult> lateCompletion =
+            (Consumer<ForegroundRestoreResult>)
+                getDeclaredField(AnalysisEngine.class, worker, "completionCallback");
+        worker.waitFrame = allocate(YikeTestWaitForAnalysis.class);
+
+        if (alreadyCancelled) {
+          AutomaticQuickAnalysisTask task =
+              (AutomaticQuickAnalysisTask) getField(frame, "automaticQuickAnalysisTask");
+          SwingUtilities.invokeAndWait(
+              () -> task.cancel(AutomaticQuickAnalysisTask.CancelReason.USER_PAUSE));
+          finishAutomaticFallbackClose(background);
+          assertFalse(task.isActive());
+          assertTrue(task.requiresForegroundRestore());
+        }
+
+        SwingUtilities.invokeAndWait(
+            () -> {
+              frame.scheduleYikeLiveCurveCompletion("pending-yike");
+              frame.flashAnalyzeGame(true, false);
+            });
+        finishAutomaticFallbackClose(background);
+        if (repeat) SwingUtilities.invokeAndWait(() -> frame.flashAnalyzeGame(false, true));
+        joinAnalysisThread("flash-analysis-request-sender");
+        joinAnalysisThread("flash-analysis-engine-starter");
+        drainEdt();
+
+        assertEquals(0, frame.manualCreations, "manual creation must wait for foreground restore");
+        assertTrue(
+            (boolean) getDeclaredField(AnalysisEngine.class, worker, "shutdownRequested"),
+            "manual entry must close automatic-only request admission immediately");
+        assertTrue(
+            (boolean) getDeclaredField(AnalysisEngine.class, worker, "silentProgress"),
+            "the Yike fallback must never receive a visible manual request");
+        assertFalse(((javax.swing.Timer) getField(frame, "yikeCurveCompletionTimer")).isRunning());
+        assertTrue(worker.isNormalEnd);
+        assertTrue(worker.hasRequestLifecycleInProgress(), "physical handback is still pending");
+        assertNull(frame.analysisEngine);
+        SwingUtilities.invokeAndWait(() -> lateCompletion.accept(ForegroundRestoreResult.SUCCEEDED));
+        assertEquals(0, frame.manualCreations, "a queued Yike callback cannot bypass handback");
+
+        foreground.finishRestore(true);
+        drainEdt();
+        joinAnalysisThread("flash-analysis-engine-starter");
+        drainEdt();
+
+        assertEquals(1, frame.manualCreations, "repeated clicks must not start multiple workers");
+        DiagnosticManualAnalysisEngine manual = frame.manualEngine;
+        assertSame(manual, frame.analysisEngine);
+        assertFalse(manual.isLoaded());
+        assertFalse(manual.usesMissingAnalysisEngineFallback());
+        assertFalse(manual.usesSharedForegroundEngine());
+        assertEquals(
+            "process-create", manual.startupDiagnosticAttempt().snapshot().toJson().getString("phase"));
+        assertTrue(manual.diagnosticMessage.contains("missing-katago"));
+        assertEquals(configuredCommand, Lizzie.config.analysisEngineCommand);
+        assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+        assertTrue(Lizzie.config.analysisRecentIsPartGame);
+        assertFalse(Lizzie.config.analysisRecentIsAllBranches);
+        assertFalse((boolean) getField(frame, "flashAnalysisWaitingForRestore"));
+        SwingUtilities.invokeAndWait(() -> lateCompletion.accept(ForegroundRestoreResult.SUCCEEDED));
+        assertSame(manual, frame.analysisEngine);
+      } finally {
+        frame.destroyAnalysisEngine();
+        finishAutomaticFallbackClose(background);
+        worker.clearRequestCallbacks();
+        worker.shutdown();
+        foreground.finishRestore(true);
+        drainEdt();
+        joinAnalysisThread("flash-analysis-engine-starter");
+        drainEdt();
+        frame.destroyAnalysisEngine();
+      }
+    }
+  }
+
+  @Test
+  void runningYikeKeepsExplicitForegroundReuseForManualFlash(@TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      DeferredYikeForegroundLeelaz foreground = allocate(DeferredYikeForegroundLeelaz.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, true, foreground);
+      try {
+        startRunningYikeCurveRequest(frame, worker);
+        worker.waitFrame = allocate(YikeTestWaitForAnalysis.class);
+        SwingUtilities.invokeAndWait(() -> frame.flashAnalyzeGame(true, false));
+        joinAnalysisThread("flash-analysis-request-sender");
+
+        assertSame(worker, frame.analysisEngine);
+        assertFalse(worker.isNormalEnd);
+        assertFalse(worker.usesMissingAnalysisEngineFallback());
+        assertFalse((boolean) getDeclaredField(AnalysisEngine.class, worker, "silentProgress"));
+        assertTrue(Lizzie.config.analysisReuseCurrentEngine);
+      } finally {
+        worker.clearRequestCallbacks();
+        worker.shutdown();
+        foreground.finishRestore(true);
+        drainEdt();
+      }
+    }
+  }
+
+  @Test
+  void lateYikeStartupCannotReplaceManualFlashWorker(@TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      YikeManualFlashFrame frame = allocate(YikeManualFlashFrame.class);
+      AnalysisEngine delayedWorker = createYikeCurveWorker(frame, folder, false);
+      frame.analysisEngine = null;
+      frame.delayedYikeWorker = delayedWorker;
+      frame.yikeStartupEntered = new CountDownLatch(1);
+      frame.yikeStartupReleased = new CountDownLatch(1);
+      try {
+        Method start =
+            LizzieFrame.class.getDeclaredMethod(
+                "startYikeCurveCompletionWithNewEngine",
+                String.class,
+                long.class,
+                BoardHistoryNode.class);
+        start.setAccessible(true);
+        SwingUtilities.invokeAndWait(
+            () ->
+                invokeReflectiveResult(
+                    start, frame, "test-yike", 23L, Lizzie.board.getHistory().getStart()));
+        assertTrue(frame.yikeStartupEntered.await(2, TimeUnit.SECONDS));
+        SwingUtilities.invokeAndWait(() -> frame.flashAnalyzeGame(true, false));
+        joinAnalysisThread("flash-analysis-engine-starter");
+        drainEdt();
+        assertSame(frame.manualEngine, frame.analysisEngine);
+
+        frame.yikeStartupReleased.countDown();
+        joinAnalysisThread("yike-curve-analysis-engine-starter");
+        drainEdt();
+
+        assertTrue(delayedWorker.isNormalEnd);
+        assertSame(frame.manualEngine, frame.analysisEngine);
+        assertEquals(1, frame.manualCreations);
+      } finally {
+        frame.yikeStartupReleased.countDown();
+        joinAnalysisThread("yike-curve-analysis-engine-starter");
+        drainEdt();
+        delayedWorker.shutdown();
+        frame.destroyAnalysisEngine();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+  void failedAutomaticForegroundRestoreDoesNotStartManualFlash(
+      boolean managed, boolean batch, @TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      YikeManualFlashFrame frame = allocate(YikeManualFlashFrame.class);
+      DeferredYikeForegroundLeelaz foreground = allocate(DeferredYikeForegroundLeelaz.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, false, foreground);
+      Map<String, Runnable> background = null;
+      try {
+        background = startAutomaticCurveRequest(frame, worker, managed);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              if (batch) {
+                frame.isBatchAna = true;
+                frame.Batchfiles = new ArrayList<>(List.of(folder.resolve("batch.sgf").toFile()));
+                frame.flashAnalyzeGameBatch(1, 5, false);
+                frame.flashAnalyzeGameBatch(2, 3, true);
+              } else {
+                frame.flashAnalyzeGame(true, false);
+              }
+            });
+        finishAutomaticFallbackClose(background);
+
+        foreground.finishRestore(false);
+        drainEdt();
+
+        assertEquals(0, frame.manualCreations);
+        assertNull(frame.analysisEngine);
+        assertEquals(1, frame.restoreFailurePrompts);
+        assertFalse(frame.isBatchAnalysisMode);
+        assertFalse((boolean) getField(frame, "flashAnalysisWaitingForRestore"));
+      } finally {
+        frame.destroyAnalysisEngine();
+        finishAutomaticFallbackClose(background);
+        worker.shutdown();
+        foreground.finishRestore(true);
+        drainEdt();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "false, game", "false, primary", "false, replacement", "false, cancel", "false, batch_cancel",
+    "true, game", "true, primary", "true, replacement", "true, cancel", "true, batch_cancel"
+  })
+  void staleAutomaticHandoffDoesNotStartManualFlash(
+      boolean managed, String change, @TempDir Path folder) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      YikeManualFlashFrame frame = allocate(YikeManualFlashFrame.class);
+      DeferredYikeForegroundLeelaz foreground = allocate(DeferredYikeForegroundLeelaz.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, false, foreground);
+      ResourceTrackingAnalysisEngine replacement = allocate(ResourceTrackingAnalysisEngine.class);
+      Map<String, Runnable> background = null;
+      try {
+        background = startAutomaticCurveRequest(frame, worker, managed);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              if (change.equals("batch_cancel")) {
+                frame.isBatchAna = true;
+                frame.Batchfiles = new ArrayList<>(List.of(folder.resolve("batch.sgf").toFile()));
+                frame.flashAnalyzeGameBatch(1, 5, false);
+              } else {
+                frame.flashAnalyzeGame(true, false);
+              }
+            });
+        finishAutomaticFallbackClose(background);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              try {
+                switch (change) {
+                  case "game" -> Lizzie.board = boardWith(historyWithUnanalyzedMove());
+                  case "primary" -> Lizzie.leelaz = allocate(YikeForegroundLeelaz.class);
+                  case "replacement" -> frame.analysisEngine = replacement;
+                  case "cancel" -> frame.destroyAnalysisEngine();
+                  case "batch_cancel" -> frame.stopFlashBatchAnalysis();
+                  default -> throw new AssertionError(change);
+                }
+              } catch (Exception failure) {
+                throw new AssertionError(failure);
+              }
+            });
+        foreground.finishRestore(true);
+        drainEdt();
+
+        assertEquals(0, frame.manualCreations);
+        assertEquals(0, frame.restoreFailurePrompts);
+        assertFalse((boolean) getField(frame, "flashAnalysisWaitingForRestore"));
+        assertFalse(frame.isBatchAnalysisMode);
+        if (change.equals("replacement")) {
+          assertSame(replacement, frame.analysisEngine);
+          assertEquals(0, replacement.normalQuitCount);
+        }
+      } finally {
+        frame.destroyAnalysisEngine();
+        finishAutomaticFallbackClose(background);
+        worker.shutdown();
+        foreground.finishRestore(true);
+        drainEdt();
+      }
+    }
+  }
+
+  @Test
+  void manualFlashWaitsForAutomaticWorkerTransferBeforeReusingIt(@TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      YikeManualFlashFrame frame = allocate(YikeManualFlashFrame.class);
+      DeferredYikeForegroundLeelaz foreground = allocate(DeferredYikeForegroundLeelaz.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, true, foreground);
+      try {
+        Map<String, Runnable> background = startAutomaticCurveRequest(frame, worker, true);
+        worker.waitFrame = allocate(YikeTestWaitForAnalysis.class);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              frame.flashAnalyzeGame(true, false);
+              frame.flashAnalyzeGame(true, false);
+            });
+        joinAnalysisThread("flash-analysis-request-sender");
+        assertTrue((boolean) getDeclaredField(AnalysisEngine.class, worker, "silentProgress"));
+        assertEquals(0, frame.manualCreations);
+
+        runAutomaticBackgroundAction(background, "automatic-quick-analysis-return");
+        joinAnalysisThread("flash-analysis-request-sender");
+
+        assertSame(worker, frame.analysisEngine);
+        assertFalse(worker.isNormalEnd);
+        assertFalse((boolean) getDeclaredField(AnalysisEngine.class, worker, "silentProgress"));
+        assertFalse((boolean) getField(frame, "flashAnalysisWaitingForRestore"));
+        assertEquals(0, frame.manualCreations, "a permitted transfer must keep the existing worker");
+      } finally {
+        worker.clearRequestCallbacks();
+        worker.shutdown();
+        foreground.finishRestore(true);
+        drainEdt();
+      }
+    }
+  }
+
+  @Test
+  void yikeFallbackCompletionWaitsForForegroundRestoreBeforeRelease(@TempDir Path folder)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      PolicyFrame frame = allocate(PolicyFrame.class);
+      AnalysisEngine worker = createYikeCurveWorker(frame, folder, false);
+      try {
+        setDeclaredField(AnalysisEngine.class, worker, "sharedForegroundRestoreInProgress", true);
+        Method release =
+            LizzieFrame.class.getDeclaredMethod("releaseCompletedYikeCurveEngine", AnalysisEngine.class);
+        release.setAccessible(true);
+        SwingUtilities.invokeAndWait(() -> invokeReflectiveResult(release, frame, worker));
+        assertSame(worker, frame.analysisEngine);
+        assertFalse(worker.isNormalEnd, "the foreground engine still belongs to the pending restore");
+
+        setDeclaredField(AnalysisEngine.class, worker, "sharedForegroundRestoreInProgress", false);
+        invokeFinishYikeCurveCompletion(
+            frame, worker, 23L, Lizzie.board.getHistory().getStart(), false);
+        assertNull(frame.analysisEngine);
+        assertTrue(worker.isNormalEnd);
+      } finally {
+        setDeclaredField(AnalysisEngine.class, worker, "sharedForegroundRestoreInProgress", false);
+        worker.shutdown();
+      }
+    }
+  }
+
   @Test
   void postLoadAnalysisResumeIgnoresStaleOlderLoadTask() throws Exception {
     TestEnvironment env = TestEnvironment.open();
@@ -3641,6 +4137,12 @@ class LizzieFrameRegressionTest {
 
   private static void invokeFinishYikeCurveCompletion(
       LizzieFrame frame, long generation, BoardHistoryNode root, boolean failed) throws Exception {
+    invokeFinishYikeCurveCompletion(frame, null, generation, root, failed);
+  }
+
+  private static void invokeFinishYikeCurveCompletion(
+      LizzieFrame frame, AnalysisEngine engine, long generation, BoardHistoryNode root, boolean failed)
+      throws Exception {
     Method method =
         LizzieFrame.class.getDeclaredMethod(
             "finishYikeCurveCompletion",
@@ -3656,12 +4158,111 @@ class LizzieFrameRegressionTest {
             invokeReflectiveResult(
                 method,
                 frame,
-                null,
+                engine,
                 "test-status",
                 generation,
                 root,
                 failed,
                 new AtomicBoolean(false)));
+  }
+
+  private static AnalysisEngine createYikeCurveWorker(
+      LizzieFrame frame, Path folder, boolean explicitReuse) throws Exception {
+    return createYikeCurveWorker(frame, folder, explicitReuse, allocate(YikeForegroundLeelaz.class));
+  }
+
+  private static AnalysisEngine createYikeCurveWorker(
+      LizzieFrame frame, Path folder, boolean explicitReuse, Leelaz foreground) throws Exception {
+    Lizzie.config = configWithAutoQuickAnalyze();
+    Lizzie.config.analysisReuseCurrentEngine = explicitReuse;
+    Lizzie.config.analysisEngineCommand = "\"" + folder.resolve("missing-katago") + "\" analysis";
+    Lizzie.config.leelazConfig = new JSONObject();
+    Lizzie.board = boardWith(historyWithTargetVisitAnalyzedMove());
+    Lizzie.leelaz = foreground;
+    Lizzie.frame = frame;
+    setField(frame, "yikeCurveCompletionGeneration", 23L);
+    setField(frame, "userAnalysisPaused", true);
+    AnalysisEngine worker = frame.createYikeCurveAnalysisEngine();
+    frame.analysisEngine = worker;
+    return worker;
+  }
+
+  private static void startRunningYikeCurveRequest(LizzieFrame frame, AnalysisEngine worker)
+      throws Exception {
+    Lizzie.board = boardWith(historyWithUnanalyzedMove());
+    Method start =
+        LizzieFrame.class.getDeclaredMethod(
+            "startYikeCurveCompletionRequests", AnalysisEngine.class, String.class);
+    start.setAccessible(true);
+    SwingUtilities.invokeAndWait(() -> invokeReflectiveResult(start, frame, worker, "test-yike"));
+    joinAnalysisThread("yike-curve-analysis-request");
+    assertTrue(worker.hasRequestLifecycleInProgress(), "Yike must own a pending foreground lease");
+    assertTrue((boolean) getDeclaredField(AnalysisEngine.class, worker, "silentProgress"));
+  }
+
+  private static Map<String, Runnable> startAutomaticCurveRequest(
+      LizzieFrame frame, AnalysisEngine worker, boolean managed) throws Exception {
+    if (!managed) {
+      startRunningYikeCurveRequest(frame, worker);
+      return null;
+    }
+    Lizzie.board = boardWith(historyWithUnanalyzedMove());
+    setField(frame, "userAnalysisPaused", false);
+    frame.analysisEngine = null;
+    Map<String, Runnable> background = new LinkedHashMap<>();
+    AutomaticQuickAnalysisEngineAdapter adapter =
+        new AutomaticQuickAnalysisEngineAdapter(
+            frame,
+            persistent -> worker,
+            background::put,
+            new AutomaticQuickAnalysisEngineAdapter.Timing() {
+              @Override
+              public AutomaticQuickAnalysisTask.Cancellable schedule(int delay, Runnable action) {
+                return () -> {};
+              }
+
+              @Override
+              public long nowMillis() {
+                return 0L;
+              }
+            });
+    setField(frame, "automaticQuickAnalysisAdapter", adapter);
+    Method start = LizzieFrame.class.getDeclaredMethod("startAutomaticQuickAnalysis", boolean.class);
+    start.setAccessible(true);
+    SwingUtilities.invokeAndWait(() -> invokeReflectiveResult(start, frame, false));
+    runAutomaticBackgroundAction(background, "quick-analysis-engine-preloader");
+    runAutomaticBackgroundAction(background, "loaded-game-quick-analysis-request");
+    AutomaticQuickAnalysisTask task =
+        (AutomaticQuickAnalysisTask) getField(frame, "automaticQuickAnalysisTask");
+    assertTrue(task.isActive());
+    assertTrue(worker.hasRequestLifecycleInProgress());
+    return background;
+  }
+
+  private static void runAutomaticBackgroundAction(Map<String, Runnable> background, String name)
+      throws Exception {
+    Runnable action = background.remove(name);
+    assertNotNull(action, "missing background action: " + name);
+    action.run();
+    drainEdt();
+  }
+
+  private static void finishAutomaticFallbackClose(Map<String, Runnable> background)
+      throws Exception {
+    if (background == null) {
+      joinAnalysisThread("automatic-quick-analysis-idle-close");
+    } else if (background.containsKey("automatic-quick-analysis-close")) {
+      runAutomaticBackgroundAction(background, "automatic-quick-analysis-close");
+    }
+  }
+
+  private static void joinAnalysisThread(String name) throws InterruptedException {
+    for (Thread thread : Thread.getAllStackTraces().keySet()) {
+      if (thread.getName().equals(name)) {
+        thread.join(3000);
+        assertFalse(thread.isAlive(), name + " must finish");
+      }
+    }
   }
 
   private static boolean invokeDeferKifuOpen(LizzieFrame frame, Runnable continuation)
@@ -3916,6 +4517,13 @@ class LizzieFrameRegressionTest {
     Field field = owner.getDeclaredField(name);
     field.setAccessible(true);
     field.set(target, value);
+  }
+
+  private static Object getDeclaredField(Class<?> owner, Object target, String name)
+      throws Exception {
+    Field field = owner.getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(target);
   }
 
   private static void installEmptyBoard() throws Exception {
@@ -4725,6 +5333,148 @@ class LizzieFrameRegressionTest {
     @Override
     public boolean isLoaded() {
       return loaded;
+    }
+  }
+
+  private static class YikeForegroundLeelaz extends TrackingLeelaz {
+    private YikeForegroundLeelaz() throws java.io.IOException {
+      super();
+    }
+
+    @Override
+    public String engineCommand() {
+      return "katago gtp";
+    }
+
+    @Override
+    public ExclusiveGtpLeaseAvailability previewForegroundAnalysisLeaseAvailability() {
+      // Supply an available foreground engine without opening an external engine process.
+      return ExclusiveGtpLeaseAvailability.AVAILABLE;
+    }
+  }
+
+  /** Holds the GTP admission/restore callbacks while the real AnalysisEngine owns the request. */
+  private static final class DeferredYikeForegroundLeelaz extends YikeForegroundLeelaz {
+    private volatile Runnable restored;
+    private volatile Runnable restoreFailed;
+
+    private DeferredYikeForegroundLeelaz() throws java.io.IOException {
+      super();
+    }
+
+    @Override
+    public ForegroundAnalysisLeaseAcquisition acquireForegroundAnalysisLease(
+        Consumer<String> lines,
+        Consumer<ForegroundAnalysisLease> ready,
+        Consumer<ForegroundAnalysisLease> closed,
+        boolean reportFailure) {
+      try {
+        var leaseConstructor = ForegroundAnalysisLease.class.getDeclaredConstructor(Leelaz.class);
+        leaseConstructor.setAccessible(true);
+        ForegroundAnalysisLease lease = leaseConstructor.newInstance(this);
+        var acquisitionConstructor =
+            ForegroundAnalysisLeaseAcquisition.class.getDeclaredConstructor(
+                ExclusiveGtpLeaseAvailability.class,
+                ForegroundAnalysisLease.class,
+                ForegroundAnalysisLease.class);
+        acquisitionConstructor.setAccessible(true);
+        return acquisitionConstructor.newInstance(
+            ExclusiveGtpLeaseAvailability.AVAILABLE, lease, lease);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    @Override
+    public boolean endForegroundAnalysisLease(Object owner, Runnable success, Runnable failure) {
+      restored = success;
+      restoreFailed = failure;
+      return true;
+    }
+
+    private void finishRestore(boolean success) {
+      Runnable finish = success ? restored : restoreFailed;
+      restored = null;
+      restoreFailed = null;
+      if (finish != null) finish.run();
+    }
+  }
+
+  private static final class YikeTestWaitForAnalysis extends WaitForAnalysis {
+    @Override
+    public void setVisible(boolean visible) {}
+
+    @Override
+    public void setProgress(int current, int total) {}
+
+    @Override
+    public void setLocationRelativeTo(java.awt.Component component) {}
+
+    @Override
+    public boolean isVisible() {
+      return true;
+    }
+  }
+
+  private static final class YikeManualFlashFrame extends PolicyFrame {
+    private int manualCreations;
+    private DiagnosticManualAnalysisEngine manualEngine;
+    private int restoreFailurePrompts;
+    private AnalysisEngine delayedYikeWorker;
+    private CountDownLatch yikeStartupEntered;
+    private CountDownLatch yikeStartupReleased;
+
+    @Override
+    AnalysisEngine createYikeCurveAnalysisEngine() throws java.io.IOException {
+      if (delayedYikeWorker == null) return super.createYikeCurveAnalysisEngine();
+      yikeStartupEntered.countDown();
+      try {
+        if (!yikeStartupReleased.await(5, TimeUnit.SECONDS)) {
+          throw new AssertionError("Yike startup was not released");
+        }
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(failure);
+      }
+      return delayedYikeWorker;
+    }
+
+    @Override
+    AnalysisEngine createFlashAnalysisEngine() throws java.io.IOException {
+      manualCreations++;
+      manualEngine = new DiagnosticManualAnalysisEngine();
+      return manualEngine;
+    }
+
+    @Override
+    WaitForAnalysis createFlashAnalysisLoadingFrame() {
+      try {
+        return allocate(YikeTestWaitForAnalysis.class);
+      } catch (Exception failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    @Override
+    void showForegroundUnrestoredPrompt(String message) {
+      restoreFailurePrompts++;
+    }
+  }
+
+  private static final class DiagnosticManualAnalysisEngine extends AnalysisEngine {
+    private String diagnosticMessage;
+
+    private DiagnosticManualAnalysisEngine() throws java.io.IOException {
+      super(false);
+    }
+
+    @Override
+    public EngineFailedMessage.DiagnosticActionResult tryToDignostic(
+        String message,
+        KataGoRuntimeHelper.TensorRtRepairContext context,
+        EngineStartupDiagnostics.Attempt attempt) {
+      diagnosticMessage = message;
+      return EngineFailedMessage.DiagnosticActionResult.ofRepairChoice(true);
     }
   }
 

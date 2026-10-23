@@ -18,6 +18,7 @@ import java.util.zip.GZIPOutputStream;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -846,6 +847,148 @@ public class ConfigBundledKataGoDefaultsTest {
     assertTrue(ui.getBoolean("analysis-engine-command-customized"));
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void customizedAnalysisRepairsOnlyGoneBundleAndPersistsChoice(
+      boolean oldExecutablePresent, @TempDir Path root) throws Exception {
+    Path currentRoot = Files.createDirectories(root.resolve("current package"));
+    Path previousRoot = Files.createDirectories(root.resolve("previous package"));
+    createBundledKataGoAssets(currentRoot);
+    createBundledKataGoAssets(previousRoot);
+    Path previousModel = previousRoot.resolve("weights/custom.bin.gz");
+    Path currentModel = currentRoot.resolve("weights/custom.bin.gz");
+    Path previousConfig = previousRoot.resolve("engines/katago/configs/custom.cfg");
+    Path currentConfig = currentRoot.resolve("engines/katago/configs/custom.cfg");
+    for (Path path : List.of(previousModel, currentModel, previousConfig, currentConfig)) {
+      Files.writeString(path, "custom");
+    }
+    String options = " -override-config 'numSearchThreads=4,maxVisits=64' -log-file "
+        + quote(previousConfig);
+    String previousCommand = quote(bundledExecutable(previousRoot)) + " analysis -model "
+        + quote(previousModel) + " -config " + quote(previousConfig) + options;
+    if (!oldExecutablePresent) Files.delete(bundledExecutable(previousRoot));
+    Config config = customAnalysisConfig(currentRoot, previousCommand, false);
+
+    withUserDir(currentRoot, () -> applyBundledKataGoDefaultsAndPersist(config));
+
+    String expected = oldExecutablePresent ? previousCommand
+        : quote(bundledExecutable(currentRoot)) + " analysis -model "
+            + quote(currentModel) + " -config " + quote(currentConfig) + options;
+    JSONObject stored = new JSONObject(Files.readString(currentRoot.resolve("config.txt")));
+    assertEquals(expected, stored.getJSONObject("ui").getString("analysis-engine-command"));
+    assertTrue(stored.getJSONObject("ui").getBoolean("analysis-engine-command-customized"));
+    config.config = stored;
+    assertFalse(withUserDirResult(currentRoot, () -> applyBundledKataGoDefaults(config)),
+        "a second startup must leave the repaired custom selection unchanged");
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"single-quoted", "bare", "long-options", "equals-options"})
+  void customizedAnalysisRelocationPreservesQuoteAndOptionSemantics(
+      String syntax, @TempDir Path root) throws Exception {
+    Path currentRoot = Files.createDirectories(root.resolve("current package"));
+    // No files are created at this nonexistent absolute source; its components contain no spaces.
+    Path previousRoot = root.getRoot().resolve("kg-gone-bundle-" + root.getFileName());
+    createBundledKataGoAssets(currentRoot);
+    String previousCommand = bundledAnalysisCommand(previousRoot);
+    String expected = bundledAnalysisCommand(currentRoot);
+    if ("single-quoted".equals(syntax)) {
+      previousCommand = previousCommand.replace('"', '\'');
+    } else if ("bare".equals(syntax)) {
+      previousCommand = previousCommand.replace("\"", "");
+    } else if ("long-options".equals(syntax)) {
+      previousCommand = previousCommand.replace("-model ", "--model ")
+          .replace("-config ", "--config ");
+      expected = expected.replace("-model ", "--model ").replace("-config ", "--config ");
+    } else {
+      previousCommand = previousCommand.replace("-model ", "--model=")
+          .replace("-config ", "-config=");
+      expected = expected.replace("-model ", "--model=").replace("-config ", "-config=");
+    }
+    String options = "  -override-config   'numSearchThreads=4,maxVisits=64'";
+    Config config = customAnalysisConfig(currentRoot, previousCommand + options, false);
+
+    withUserDir(currentRoot, () -> applyBundledKataGoDefaults(config));
+
+    assertEquals(expected + options,
+        config.config.getJSONObject("ui").getString("analysis-engine-command"));
+    assertTrue(config.config.getJSONObject("ui").getBoolean("analysis-engine-command-customized"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void customizedMissingBundlePreservesExternalOrUnavailableModelAndConfig(
+      boolean external, @TempDir Path root) throws Exception {
+    Path currentRoot = Files.createDirectories(root.resolve("current"));
+    Path previousRoot = root.resolve("gone");
+    createBundledKataGoAssets(currentRoot);
+    Path model = external ? root.resolve("external/model.bin.gz")
+        : previousRoot.resolve("weights/custom-missing.bin.gz");
+    Path customConfig = external ? root.resolve("external/analysis.cfg")
+        : previousRoot.resolve("engines/katago/configs/custom-missing.cfg");
+    if (external) {
+      Files.createDirectories(model.getParent());
+      Files.writeString(model, "custom model");
+      Files.writeString(customConfig, "custom config");
+    }
+    String arguments = " analysis -model " + quote(model) + " -config " + quote(customConfig)
+        + " -override-config maxVisits=64";
+    Config config = customAnalysisConfig(
+        currentRoot, quote(bundledExecutable(previousRoot)) + arguments, false);
+
+    withUserDir(currentRoot, () -> applyBundledKataGoDefaults(config));
+
+    assertEquals(quote(bundledExecutable(currentRoot)) + arguments,
+        config.config.getJSONObject("ui").getString("analysis-engine-command"),
+        "an unavailable custom asset must not be replaced with the bundle's default model/config");
+  }
+
+  @Test
+  void customizedPortableAnalysisRelocatesItsDownloadedModel(@TempDir Path root) throws Exception {
+    Path currentPackage = Files.createDirectories(root.resolve("current"));
+    Files.writeString(currentPackage.resolve(".lizzie-portable"), "");
+    Path currentRoot = Files.createDirectories(currentPackage.resolve("app"));
+    Path previousPackage = root.resolve("gone");
+    Path previousRoot = previousPackage.resolve("app");
+    createBundledKataGoAssets(currentRoot);
+    Path previousModel = previousPackage.resolve("user-data/weights/light.bin.gz");
+    Path currentModel = currentPackage.resolve("user-data/weights/light.bin.gz");
+    Files.createDirectories(currentModel.getParent());
+    Files.writeString(currentModel, "chosen lightweight model");
+    String previousCommand = bundledAnalysisCommand(previousRoot)
+        .replace(quote(previousRoot.resolve("weights/default.bin.gz")), quote(previousModel));
+    Config config = customAnalysisConfig(currentRoot, previousCommand, false);
+
+    withUserDir(currentRoot, () -> applyBundledKataGoDefaults(config));
+
+    assertEquals(bundledAnalysisCommand(currentRoot)
+            .replace(quote(currentRoot.resolve("weights/default.bin.gz")), quote(currentModel)),
+        config.config.getJSONObject("ui").getString("analysis-engine-command"));
+    assertTrue(config.config.getJSONObject("ui").getBoolean("analysis-engine-command-customized"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"path", "ssh", "remote", "external", "java-ssh"})
+  void customizedAnalysisDoesNotRelocatePathLookupOrRemoteOrExternalCommands(
+      String kind, @TempDir Path root) throws Exception {
+    Path currentRoot = Files.createDirectories(root.resolve("current"));
+    createBundledKataGoAssets(currentRoot);
+    String missingBundle = bundledAnalysisCommand(root.resolve("gone"));
+    String command = switch (kind) {
+      case "path" -> "katago analysis -model model.bin.gz";
+      case "ssh" -> "ssh user@host " + missingBundle;
+      case "remote" -> RemoteComputeConfig.COMMAND_ZHIZI;
+      case "external" -> quote(root.resolve("external/katago")) + " analysis";
+      default -> missingBundle;
+    };
+    Config config = customAnalysisConfig(currentRoot, command, "java-ssh".equals(kind));
+
+    withUserDir(currentRoot, () -> applyBundledKataGoDefaults(config));
+
+    assertEquals(command, config.config.getJSONObject("ui").getString("analysis-engine-command"));
+    assertTrue(config.config.getJSONObject("ui").getBoolean("analysis-engine-command-customized"));
+  }
+
   @Test
   void sshRemoteAndJavaSshCommandsAreNotReboundToCurrentPackage() throws Exception {
     Path currentRoot = Files.createTempDirectory("lizzie-copied-remote-engines");
@@ -1645,6 +1788,25 @@ public class ConfigBundledKataGoDefaultsTest {
         + quote(root.resolve("weights").resolve("default.bin.gz"))
         + " -config "
         + quote(root.resolve("engines").resolve("katago").resolve("configs").resolve("gtp.cfg"));
+  }
+
+  private static Config customAnalysisConfig(Path root, String command, boolean javaSsh)
+      throws Exception {
+    Files.writeString(root.resolve("config.txt"), "{}");
+    Config config = ConfigTestHelper.createForTests(root);
+    JSONObject ui = new JSONObject()
+        .put("first-time-load", false)
+        .put("autoload-empty", true)
+        .put("analysis-engine-command", command)
+        .put("analysis-engine-command-customized", true);
+    JSONObject leelaz = new JSONObject()
+        .put("engine-settings-list", new JSONArray().put(new JSONObject()
+            .put("name", "KataGo Bundled")
+            .put("command", bundledGtpCommand(root))
+            .put("isDefault", true)))
+        .put("analysis-engine-ssh-info", new JSONObject().put("useJavaSSH", javaSsh));
+    config.config = new JSONObject().put("ui", ui).put("leelaz", leelaz);
+    return config;
   }
 
   private static String bundledAnalysisCommand(Path root) {

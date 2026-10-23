@@ -18,7 +18,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 class ConfigManagedProfilePreservationTest {
   @TempDir Path temp;
@@ -177,8 +176,9 @@ class ConfigManagedProfilePreservationTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"manual", "ssh-bundled", "ssh-java"})
-  void relocationLeavesCustomAndJavaSshAnalysisCommandsIndependent(String kind)
+  @CsvSource({"manual,false", "manual,true", "ssh-bundled,false", "ssh-bundled,true",
+      "ssh-java,false", "ssh-java,true"})
+  void relocationRepairsOnlyMissingLocalCustomAnalysisAcrossRestarts(String kind, boolean movePackage)
       throws Exception {
     Path previousPackage = temp.resolve("analysis previous");
     Path currentPackage = temp.resolve("analysis current");
@@ -190,6 +190,12 @@ class ConfigManagedProfilePreservationTest {
     withConfig(previousApp, previousWork, () -> {
       String original = "ssh-java".equals(kind)
           ? "java -jar remote/analysis.jar" : Lizzie.config.analysisEngineCommand;
+      if (!javaSsh) {
+        original = analysisCommand(executable(previousApp),
+            touch(previousWork.resolve("weights/my quick model.bin.gz")),
+            touch(previousWork.resolve("engines/my quick analysis.cfg")))
+            + " -override-config numSearchThreads=4,maxVisits=64";
+      }
       Lizzie.config.uiConfig.put("analysis-engine-command", original)
           .put("analysis-engine-command-customized", !javaSsh);
       if (javaSsh) {
@@ -197,14 +203,17 @@ class ConfigManagedProfilePreservationTest {
             new JSONObject().put("useJavaSSH", true).put("ip", "analysis.example.test"));
       }
       Lizzie.config.save();
-      copyTree(previousPackage, currentPackage);
+      if (movePackage) Files.move(previousPackage, currentPackage);
+      else copyTree(previousPackage, currentPackage);
       System.setProperty("user.dir", currentApp.toString());
+      String expected = movePackage && !javaSsh
+          ? original.replace(previousPackage.toString(), currentPackage.toString()) : original;
       for (int restart = 0; restart < 2; restart++) {
         Lizzie.config = ConfigTestHelper.createBootstrapped(currentWork);
-        assertEquals(original, Lizzie.config.analysisEngineCommand);
+        assertEquals(expected, Lizzie.config.analysisEngineCommand);
         Utils.applyMaintainedDefaultSettings();
-        assertEquals(original, Lizzie.config.uiConfig.getString("analysis-engine-command"));
-        assertEquals(original, Lizzie.config.analysisEngineCommand);
+        assertEquals(expected, Lizzie.config.uiConfig.getString("analysis-engine-command"));
+        assertEquals(expected, Lizzie.config.analysisEngineCommand);
         assertEquals(!javaSsh, Lizzie.config.analysisEngineCommandCustomized);
         if (javaSsh) {
           JSONObject sshInfo = Lizzie.config.leelazConfig.getJSONObject("analysis-engine-ssh-info");

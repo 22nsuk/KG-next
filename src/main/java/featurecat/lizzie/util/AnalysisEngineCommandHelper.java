@@ -2,17 +2,20 @@ package featurecat.lizzie.util;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.logging.LogCategories;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.MissingResourceException;
+import org.jdesktop.swingx.util.OS;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -276,6 +279,48 @@ public final class AnalysisEngineCommandHelper {
       copyTemplate(analysisConfig);
     }
     return analysisConfig;
+  }
+
+  /**
+   * Reports only a definitely absent, directly launched local executable. PATH commands and
+   * launcher-managed paths (including SSH) must keep their normal startup diagnostics.
+   */
+  public static boolean isMissingLocalExecutable(String command) {
+    if (command == null
+        || command.isBlank()
+        || RemoteComputeConfig.isRemoteComputeEngineCommand(command)) {
+      return false;
+    }
+    List<String> parts = Utils.splitCommand(command);
+    if (parts.isEmpty()) return false;
+    String program = parts.get(0);
+    if ((program.indexOf('/') < 0 && program.indexOf('\\') < 0)
+        || program.contains("://")
+        || CommandLaunchHelper.isIndirectLauncher(program)) {
+      return false;
+    }
+    try {
+      CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(parts);
+      Path executable = Path.of(launch.getCommandParts().get(0));
+      if (!executable.isAbsolute() && launch.getWorkingDirectory() != null) {
+        // Windows can resolve relative executables in the caller's native cwd even when an
+        // absolute model/config option selects another directory for the child process.
+        if (OS.isWindows() && !isDefinitelyMissingExecutable(executable)) return false;
+        executable = launch.getWorkingDirectory().toPath().resolve(executable);
+      }
+      // Without an explicit launch directory, relative paths use the native cwd, just like
+      // ProcessBuilder. The app may have changed user.dir for writable data without changing cwd.
+      return isDefinitelyMissingExecutable(executable);
+    } catch (InvalidPathException invalid) {
+      return false;
+    }
+  }
+
+  private static boolean isDefinitelyMissingExecutable(Path executable) {
+    // Unknown accessibility, a directory or an unusable existing file must retain its error.
+    // Windows also accepts implicit .exe candidates; require both paths to be definitely absent.
+    return Files.notExists(executable)
+        && (!OS.isWindows() || Files.notExists(Path.of(executable + ".exe")));
   }
 
   public static boolean isAnalysisCommandCustomized(
