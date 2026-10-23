@@ -18361,10 +18361,6 @@ public class LizzieFrame extends JFrame {
     return String.format(Locale.US, "%.1f%%", value * 100.0);
   }
 
-  private static String playerStrengthScoreText(double value) {
-    return String.format(Locale.US, "%.1f", value);
-  }
-
   private static int playerStrengthMaxMove(PlayerStrengthEstimator.Report report) {
     int maxMove = 1;
     if (report == null) {
@@ -18400,110 +18396,6 @@ public class LizzieFrame extends JFrame {
       return 50;
     }
     return ((rawStep + 49) / 50) * 50;
-  }
-
-  private static List<PlayerStrengthSegment> playerStrengthPerformanceSegments(
-      PlayerStrengthEstimator.SideReport sideReport) {
-    List<PlayerStrengthEstimator.Sample> samples =
-        sideReport == null ? new ArrayList<>() : new ArrayList<>(sideReport.samples);
-    samples.sort(Comparator.comparingInt(sample -> sample.moveNumber));
-    if (samples.isEmpty()) {
-      return Collections.emptyList();
-    }
-
-    List<PlayerStrengthSegment> segments = new ArrayList<>();
-    int segmentSamples = playerStrengthAdaptiveSegmentSamples(sideReport);
-    int start = 0;
-    while (start < samples.size()) {
-      int end = Math.min(samples.size(), start + segmentSamples);
-      if (samples.size() - end > 0
-          && samples.size() - end < playerStrengthMinimumSegmentSamples(sideReport)) {
-        end = samples.size();
-      }
-      List<PlayerStrengthEstimator.Sample> segmentSamplesList = samples.subList(start, end);
-      int firstMove = segmentSamplesList.get(0).moveNumber;
-      int lastMove = segmentSamplesList.get(segmentSamplesList.size() - 1).moveNumber;
-      segments.add(
-          new PlayerStrengthSegment(
-              firstMove,
-              lastMove,
-              PlayerStrengthEstimator.summarizeSamples(segmentSamplesList, sideReport.model)));
-      start = end;
-    }
-    return segments;
-  }
-
-  private static int playerStrengthAdaptiveSegmentSamples(
-      PlayerStrengthEstimator.SideReport report) {
-    int sampleCount = Math.max(1, report == null ? 0 : report.sampleCount);
-    int minimum = playerStrengthMinimumSegmentSamples(report);
-    if (sampleCount <= minimum * 2) {
-      return sampleCount;
-    }
-    int targetSegments = Math.max(2, Math.min(9, (int) Math.round(Math.sqrt(sampleCount))));
-    return Math.max(minimum, (int) Math.ceil((double) sampleCount / targetSegments));
-  }
-
-  private static int playerStrengthMinimumSegmentSamples(
-      PlayerStrengthEstimator.SideReport report) {
-    if (report != null && report.model.isHumanSl40()) return 6;
-    int sampleCount = report == null ? 0 : report.sampleCount;
-    if (sampleCount < 16) {
-      return 3;
-    }
-    if (sampleCount < 40) {
-      return 4;
-    }
-    return 5;
-  }
-
-  private static int playerStrengthRankLevel(String strengthBand) {
-    if (strengthBand == null) {
-      return 0;
-    }
-    String band = strengthBand.trim();
-    if (band.contains("AI")) {
-      return 12;
-    }
-    if (band.contains("\u4e00\u7ebf\u804c\u4e1a")) {
-      return 11;
-    }
-    if (band.contains("\u804c\u4e1a")) {
-      return 10;
-    }
-    int dIndex = band.indexOf('d');
-    if (dIndex > 0) {
-      return Math.min(9, 4 + playerStrengthHighestNumberBeforeUnit(band.substring(0, dIndex)));
-    }
-    int kIndex = band.indexOf('k');
-    if (kIndex > 0) {
-      return 1;
-    }
-    return 0;
-  }
-
-  private static int playerStrengthHighestNumberBeforeUnit(String raw) {
-    int highest = 0;
-    for (String part : raw.split("-")) {
-      try {
-        highest = Math.max(highest, Integer.parseInt(part.trim()));
-      } catch (NumberFormatException ignored) {
-        // Keep parsing the remaining rank range.
-      }
-    }
-    return highest;
-  }
-
-  private static int playerStrengthLowestNumberBeforeUnit(String raw) {
-    int lowest = Integer.MAX_VALUE;
-    for (String part : raw.split("-")) {
-      try {
-        lowest = Math.min(lowest, Integer.parseInt(part.trim()));
-      } catch (NumberFormatException ignored) {
-        // Keep parsing the remaining rank range.
-      }
-    }
-    return lowest == Integer.MAX_VALUE ? 10 : lowest;
   }
 
   private static void playerStrengthDrawRoundedCard(
@@ -18706,19 +18598,6 @@ public class LizzieFrame extends JFrame {
     return rank == null
         ? PlayerStrengthDashboardRoot.MUTED_TEXT
         : rank.color(Lizzie.config != null && Lizzie.config.useMorandiColors);
-  }
-
-  private static final class PlayerStrengthSegment {
-    private final int firstMove;
-    private final int lastMove;
-    private final PlayerStrengthEstimator.SideReport report;
-
-    private PlayerStrengthSegment(
-        int firstMove, int lastMove, PlayerStrengthEstimator.SideReport report) {
-      this.firstMove = firstMove;
-      this.lastMove = lastMove;
-      this.report = report;
-    }
   }
 
   private static final class PlayerStrengthDashboardRoot extends JPanel {

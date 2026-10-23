@@ -1662,19 +1662,6 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
-  void playerStrengthRankReferenceKeepsKyuResultsInKyuBand() throws Exception {
-    Method rankLevel = LizzieFrame.class.getDeclaredMethod("playerStrengthRankLevel", String.class);
-    rankLevel.setAccessible(true);
-
-    assertEquals(1, rankLevel.invoke(null, "1-2k"));
-    assertEquals(1, rankLevel.invoke(null, "11-15k"));
-    assertEquals(5, rankLevel.invoke(null, "1d"));
-    assertEquals(7, rankLevel.invoke(null, "2-3d"));
-    assertEquals(8, rankLevel.invoke(null, "4d"));
-    assertEquals(10, rankLevel.invoke(null, "10d\u804c\u4e1a"));
-  }
-
-  @Test
   void playerStrengthHitMapExposesMoveTooltip() throws Exception {
     Class<?> panelClass =
         Class.forName("featurecat.lizzie.gui.LizzieFrame$PlayerStrengthMoveHitMapPanel");
