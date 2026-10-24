@@ -53,6 +53,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
@@ -979,6 +980,84 @@ public class KataGoRuntimeHelperTest {
           assertFalse(cuda12Marker.equals(cuda13Marker));
           assertFalse(cuda12.equals(cuda13));
           assertFalse(KataGoRuntimeHelper.hasMatchingCudaCompatibilityProbe(cuda13Marker, cuda12));
+        });
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"windows-nvidia", "windows-nvidia-cuda13", "windows-tensorrt"})
+  void historicalStaticZlibBuildRemainsUsableWithoutAuthorizingCurrentRelease(String assetId)
+      throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-historical-linkage");
+          SetupSnapshot original = createUnifiedNvidiaSnapshot(root);
+          Path engineDir = original.enginePath.getParent();
+          boolean cuda13 = assetId.equals("windows-nvidia-cuda13");
+          boolean tensorRt = assetId.equals("windows-tensorrt");
+          if (cuda13 || tensorRt) {
+            engineDir =
+                engineDir.resolveSibling(
+                    cuda13 ? "windows-x64-nvidia-cuda13" : "windows-x64-nvidia-tensorrt");
+          }
+          Path engine = touch(engineDir.resolve("katago.exe"));
+          Files.writeString(engine, "older engine binary");
+          Files.writeString(
+              engineDir.resolve("lizzieyzy-next-engine-backend.txt"),
+              tensorRt ? "nvidia-tensorrt\n" : "nvidia\n");
+          if (cuda13) touchRequiredCuda13_2Dlls(engineDir);
+          else touchRequiredCuda12_8Dlls(engineDir);
+          if (tensorRt) {
+            touch(engineDir.resolve("nvinfer_10.dll"));
+            touch(engineDir.resolve("nvonnxparser_10.dll"));
+            touch(engineDir.resolve("nvinfer_plugin_10.dll"));
+          }
+          Files.delete(engineDir.resolve("z.dll"));
+          KataGoAssetCatalog.Asset asset = KataGoAssetCatalog.get().asset(assetId);
+          String oldCommit = "1234567890abcdef1234567890abcdef12345678";
+          String manifest =
+              KataGoAssetCatalog.get()
+                  .engineManifestText(asset)
+                  .replace(
+                      "KataGo release: " + KataGoAssetCatalog.get().katagoReleaseTag(),
+                      "KataGo release: old-release")
+                  .replace("Asset SHA-256: " + asset.sha256(), "Asset SHA-256: " + "1".repeat(64))
+                  .replace(
+                      "Executable SHA-256: " + asset.executableSha256(),
+                      "Executable SHA-256: " + sha256(engine))
+                  .replace("Source commit: " + asset.sourceCommit(), "Source commit: " + oldCommit)
+                  .replace(
+                      "Engine release tag: " + asset.releaseTag(),
+                      "Engine release tag: kg-next-" + oldCommit.substring(0, 12));
+          Path manifestPath = engineDir.resolve("lizzieyzy-next-katago-engine-manifest.txt");
+          Files.writeString(manifestPath, manifest);
+          SetupSnapshot historical = original.withEnginePath(engine);
+          withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                assertTrue(KataGoRuntimeHelper.inspectNvidiaRuntime(engine, "").ready);
+                if (tensorRt) {
+                  var status = KataGoRuntimeHelper.inspectTensorRtInstall(historical);
+                  assertFalse(status.engineCurrent);
+                  assertFalse(status.installed);
+                  assertFalse(status.activatable);
+                  assertThrows(
+                      IOException.class,
+                      () -> KataGoRuntimeHelper.applyInstalledTensorRt(historical));
+                  Path companion =
+                      touch(
+                          engine.resolveSibling(KataGoRuntimeHelper.HUMAN_SL_CUDA_COMPANION_NAME));
+                  Files.writeString(
+                      manifestPath,
+                      "HumanSL companion: katago-human-sl-cuda.exe\nHumanSL companion SHA-256: "
+                          + EMPTY_FILE_SHA256
+                          + "\n",
+                      StandardOpenOption.APPEND);
+                  assertMissingDynamicZlib(companion);
+                }
+                Files.writeString(engine, "changed after manifest");
+                assertMissingDynamicZlib(engine);
+              });
         });
   }
 
@@ -2443,7 +2522,9 @@ public class KataGoRuntimeHelperTest {
                 assertEquals("KataGo TensorRT", tensorRtResult.engineName);
                 assertTrue(KataGoRuntimeHelper.canSwitchBackToCuda(snapshot));
 
-                SetupResult cudaResult = KataGoRuntimeHelper.applyBundledCudaProfile(snapshot);
+                SetupResult cudaResult =
+                    applyBundledCudaWithSupportedDriver(
+                        snapshot.withEnginePath(tensorRtResult.snapshot.enginePath));
 
                 assertEquals("KataGo Auto Setup", cudaResult.engineName);
                 assertEquals(
@@ -2463,6 +2544,181 @@ public class KataGoRuntimeHelperTest {
                                     && engine.commands.contains("windows-x64-nvidia")));
               });
         });
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true"})
+  void cudaReturnUsesInstalledVariantWithoutOverwritingTheOtherProfile(
+      boolean cuda13, boolean bothInstalled) throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-cuda-return-profiles");
+          SetupSnapshot tensorRt = createStandaloneTensorRtSnapshot(root);
+          Path engines = tensorRt.enginePath.getParent().getParent();
+          Path cuda =
+              touch(
+                  engines
+                      .resolve(cuda13 ? "windows-x64-nvidia-cuda13" : "windows-x64-nvidia")
+                      .resolve("katago.exe"));
+          if (cuda13) touchRequiredCuda13_2Dlls(cuda.getParent());
+          else touchRequiredCuda12_8Dlls(cuda.getParent());
+          Path other =
+              engines
+                  .resolve(cuda13 ? "windows-x64-nvidia" : "windows-x64-nvidia-cuda13")
+                  .resolve("katago.exe");
+          if (bothInstalled) {
+            touch(other);
+            touchRequiredCuda13_2Dlls(other.getParent());
+          }
+          withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                // Retain a separately configured variant, even when its files are currently absent.
+                EngineData otherProfile = new EngineData();
+                otherProfile.name = "Other CUDA profile";
+                otherProfile.commands = "\"" + other + "\" gtp -model other-model.bin.gz";
+                BundledKataGoProfile.claim(otherProfile);
+                Utils.saveEngineSettings(new ArrayList<>(List.of(otherProfile)));
+                String otherCommand = Utils.getEngineData().get(0).commands;
+                String otherType = Utils.getEngineData().get(0).managedProfileType;
+                KataGoRuntimeHelper.applyInstalledTensorRt(tensorRt);
+                String driverKey = "lizzie.opencl.nvidiaDriverVersion";
+                String previousDriver = System.getProperty(driverKey);
+                try {
+                  System.setProperty(driverKey, "610.74");
+                  if (cuda13) {
+                    // Fixture for a previously completed inference check; no GPU inference is
+                    // simulated.
+                    KataGoRuntimeHelper.rememberCudaCompatibilityProbe(
+                        KataGoRuntimeHelper.cudaCompatibilityProbeMarker(cuda),
+                        KataGoRuntimeHelper.buildCudaCompatibilityProbeSignature(
+                            cuda, tensorRt.activeWeightPath, tensorRt.gtpConfigPath, "610.74"));
+                  }
+                  SetupResult result = KataGoRuntimeHelper.applyBundledCudaProfile(tensorRt);
+                  assertEquals(cuda, result.snapshot.enginePath);
+                  assertEquals(tensorRt.activeWeightPath, result.snapshot.activeWeightPath);
+                  assertEquals(otherCommand, Utils.getEngineData().get(0).commands);
+                  assertEquals(otherType, Utils.getEngineData().get(0).managedProfileType);
+                  EngineData selected = Utils.getEngineData().get(result.engineIndex);
+                  assertTrue(selected.isDefault);
+                  assertEquals(cuda13, BundledKataGoProfile.isManagedCuda13(selected));
+                  assertFalse(KataGoRuntimeHelper.inspectTensorRtInstall(result.snapshot).active);
+                  // An already selected CUDA snapshot must not switch variants on the next
+                  // application.
+                  assertEquals(
+                      cuda, KataGoRuntimeHelper.withBundledCudaEngine(result.snapshot).enginePath);
+                } finally {
+                  restoreProperty(driverKey, previousDriver);
+                }
+              });
+        });
+  }
+
+  @Test
+  void cuda13ReturnRejectsOldDriverBeforeChangingProfiles() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-cuda-return-driver");
+          SetupSnapshot tensorRt = createStandaloneTensorRtSnapshot(root);
+          Path cuda =
+              touch(
+                  tensorRt.appRoot.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+          touchRequiredCuda13_2Dlls(cuda.getParent());
+          withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                KataGoRuntimeHelper.applyInstalledTensorRt(tensorRt);
+                String uiBefore = Lizzie.config.uiConfig.toString();
+                String enginesBefore = Lizzie.config.leelazConfig.toString();
+                assertThrows(
+                    IOException.class, () -> applyBundledCudaWithSupportedDriver(tensorRt));
+                assertEquals(uiBefore, Lizzie.config.uiConfig.toString());
+                assertEquals(enginesBefore, Lizzie.config.leelazConfig.toString());
+              });
+        });
+  }
+
+  @Test
+  void standaloneTensorRtPackageSwitchesBackUsingItsVerifiedCudaCompanion() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-standalone-trt-cuda-fallback");
+          SetupSnapshot snapshot = createStandaloneTensorRtSnapshot(root);
+          Path companion =
+              snapshot.enginePath.resolveSibling(KataGoRuntimeHelper.HUMAN_SL_CUDA_COMPANION_NAME);
+
+          withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                KataGoRuntimeHelper.applyInstalledTensorRt(snapshot);
+                assertTrue(KataGoRuntimeHelper.canSwitchBackToCuda(snapshot));
+
+                SetupResult result = applyBundledCudaWithSupportedDriver(snapshot);
+
+                assertEquals(companion, result.snapshot.enginePath);
+                assertFalse(KataGoRuntimeHelper.inspectTensorRtInstall(result.snapshot).active);
+                assertTrue(
+                    Utils.getEngineData().stream()
+                        .anyMatch(
+                            engine ->
+                                engine.isDefault
+                                    && companion.equals(
+                                        KataGoRuntimeHelper.resolveCommandExecutable(
+                                            Utils.splitCommand(engine.commands)))));
+                KataGoRuntimeHelper.TensorRtInstallStatus installed =
+                    KataGoRuntimeHelper.inspectTensorRtInstall(result.snapshot);
+                assertTrue(installed.activatable, "switching to CUDA keeps TensorRT installed");
+                SetupResult enabled = KataGoRuntimeHelper.applyInstalledTensorRt(result.snapshot);
+                assertEquals(snapshot.enginePath, enabled.snapshot.enginePath);
+                assertTrue(KataGoRuntimeHelper.inspectTensorRtInstall(enabled.snapshot).active);
+              });
+        });
+  }
+
+  @Test
+  void standaloneTensorRtFallbackRejectsAnUnverifiedCompanionAndNeverSelectsTensorRt()
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-standalone-trt-invalid-companion");
+    SetupSnapshot snapshot = createStandaloneTensorRtSnapshot(root);
+    Path engineDir = snapshot.enginePath.getParent();
+    Path companion = engineDir.resolve(KataGoRuntimeHelper.HUMAN_SL_CUDA_COMPANION_NAME);
+    Files.writeString(companion, "untrusted executable");
+    assertThrows(IOException.class, () -> KataGoRuntimeHelper.withBundledCudaEngine(snapshot));
+
+    Files.write(companion, new byte[0]);
+    writeCurrentTensorRtEngineManifestWithoutCompanion(engineDir);
+    assertThrows(IOException.class, () -> KataGoRuntimeHelper.withBundledCudaEngine(snapshot));
+
+    writeCurrentTensorRtEngineManifest(engineDir);
+    Files.writeString(snapshot.enginePath, "untrusted TensorRT executable");
+    assertThrows(IOException.class, () -> KataGoRuntimeHelper.withBundledCudaEngine(snapshot));
+  }
+
+  private static SetupSnapshot createStandaloneTensorRtSnapshot(Path root) throws Exception {
+    SetupSnapshot snapshot = createUnifiedNvidiaSnapshot(root);
+    Path engineDir = snapshot.enginePath.getParent().resolveSibling("windows-x64");
+    Files.move(snapshot.enginePath.getParent(), engineDir);
+    Files.writeString(engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
+    touchRequiredCuda12_8Dlls(engineDir);
+    touch(engineDir.resolve("nvinfer_10.dll"));
+    touch(engineDir.resolve("nvonnxparser_10.dll"));
+    touch(engineDir.resolve("nvinfer_plugin_10.dll"));
+    writeCurrentTensorRtEngineManifest(engineDir);
+    return snapshot.withEnginePath(engineDir.resolve("katago.exe"));
+  }
+
+  private static SetupResult applyBundledCudaWithSupportedDriver(SetupSnapshot snapshot)
+      throws Exception {
+    String previousDriver = System.getProperty("lizzie.opencl.nvidiaDriverVersion");
+    try {
+      System.setProperty("lizzie.opencl.nvidiaDriverVersion", "570.65");
+      return KataGoRuntimeHelper.applyBundledCudaProfile(snapshot);
+    } finally {
+      restoreProperty("lizzie.opencl.nvidiaDriverVersion", previousDriver);
+    }
   }
 
   @Test
