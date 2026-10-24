@@ -254,8 +254,15 @@ public class ContributeSshShutdownDesktopTest {
               });
           workers.execute(
               () -> {
-                try (var remoteOutput = output) {
-                  process.getInputStream().transferTo(remoteOutput);
+                try (var childOutput = process.getInputStream();
+                    var remoteOutput = output) {
+                  byte[] buffer = new byte[1024];
+                  int count;
+                  while ((count = childOutput.read(buffer)) != -1) {
+                    remoteOutput.write(buffer, 0, count);
+                    // MINA buffers short writes; deliver output while the child is still running.
+                    remoteOutput.flush();
+                  }
                 } catch (IOException closed) {
                   // The client may close its channel after sending forcequit.
                 } finally {
