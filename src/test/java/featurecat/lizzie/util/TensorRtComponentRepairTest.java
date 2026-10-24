@@ -298,6 +298,196 @@ public class TensorRtComponentRepairTest {
   }
 
   @Test
+  void upgradingAnEngineThatHoldsTheRuntimeKeepsTheRuntime() throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path tempRoot = Files.createTempDirectory("tensorrt-repair-runtime-beside-engine");
+          Path runtimeWorkDirectory = Files.createDirectories(tempRoot.resolve("runtime-root"));
+          SetupSnapshot snapshot = createDirectMlSnapshot(tempRoot);
+          RepairFixtures fixtures = createRepairFixtures(tempRoot);
+          // As in the full package: an older TensorRT engine with the NVIDIA runtime beside it.
+          Path engineDir = Files.createDirectories(tensorRtEngineDir(runtimeWorkDirectory));
+          Files.writeString(engineDir.resolve("katago.exe"), "older-katago");
+          Files.writeString(
+              engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
+          for (String dll : RUNTIME_DLLS) {
+            Files.writeString(engineDir.resolve(dll), "runtime");
+          }
+          Path runtimeManifest = engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+          Files.writeString(
+              runtimeManifest,
+              "Profile: cuda12.8-cudnn9-tensorrt\n- CUDA NVRTC: "
+                  + KataGoRuntimeHelper.CUDA_12_8_NVRTC_VERSION
+                  + " | fixture | sha256="
+                  + KataGoRuntimeHelper.CUDA_12_8_NVRTC_SHA256
+                  + "\n");
+          Path license =
+              engineDir.resolve("licenses").resolve("nvidia-runtime").resolve("TensorRT.txt");
+          Files.createDirectories(license.getParent());
+          Files.writeString(license, "license");
+
+          withRepairFixtures(
+              fixtures,
+              false,
+              () ->
+                  withConfig(
+                      runtimeWorkDirectory,
+                      () -> {
+                        seedDirectMlProfiles(snapshot);
+                        TensorRtInstallStatus before =
+                            KataGoRuntimeHelper.inspectTensorRtInstall(snapshot, rtx3060Allowed());
+                        assertFalse(before.engineCurrent);
+                        assertTrue(before.runtimeReady, "the runtime beside the engine counts");
+
+                        TensorRtInstallStatus repaired =
+                            KataGoRuntimeHelper.repairTensorRtComponents(
+                                snapshot, null, new DownloadSession());
+
+                        assertTrue(repaired.engineCurrent);
+                        assertTrue(repaired.runtimeReady, "no runtime download was needed");
+                        for (String dll : RUNTIME_DLLS) {
+                          assertEquals("runtime", Files.readString(engineDir.resolve(dll)), dll);
+                        }
+                        assertTrue(Files.isRegularFile(runtimeManifest), "runtime manifest kept");
+                        assertEquals("license", Files.readString(license));
+                        assertEquals(
+                            "fake-katago", Files.readString(engineDir.resolve("katago.exe")));
+                      }));
+        });
+  }
+
+  @Test
+  void failedRuntimeStagingCopyKeepsTheOldEngineAndAllRuntimeFiles() throws Exception {
+    assertPackagedRuntimeSurvivesFailedUpgrade("copy");
+  }
+
+  @Test
+  void failedEnginePromotionRestoresTheOldEngineAndAllRuntimeFiles() throws Exception {
+    assertPackagedRuntimeSurvivesFailedUpgrade("promotion");
+  }
+
+  @Test
+  void cancelledRuntimeStagingKeepsTheOldEngineAndAllRuntimeFiles() throws Exception {
+    assertPackagedRuntimeSurvivesFailedUpgrade("cancel");
+  }
+
+  private void assertPackagedRuntimeSurvivesFailedUpgrade(String failureMode) throws Exception {
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path tempRoot = Files.createTempDirectory("tensorrt-runtime-upgrade-rollback");
+          Path runtimeWorkDirectory = Files.createDirectories(tempRoot.resolve("runtime-root"));
+          SetupSnapshot snapshot = createDirectMlSnapshot(tempRoot);
+          RepairFixtures fixtures = createRepairFixtures(tempRoot);
+          Path engineDir = Files.createDirectories(tensorRtEngineDir(runtimeWorkDirectory));
+          Files.writeString(engineDir.resolve("katago.exe"), "last-known-good-engine");
+          Files.writeString(
+              engineDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia-tensorrt\n");
+          Files.writeString(
+              engineDir.resolve("lizzieyzy-next-katago-engine-manifest.txt"), "older-engine\n");
+          for (String dll : RUNTIME_DLLS) {
+            Files.writeString(engineDir.resolve(dll), "original-" + dll);
+          }
+          Path runtimeManifest = engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+          Files.writeString(
+              runtimeManifest,
+              "CUDA NVRTC: "
+                  + KataGoRuntimeHelper.CUDA_12_8_NVRTC_VERSION
+                  + "\nfixture\nSHA-256: "
+                  + KataGoRuntimeHelper.CUDA_12_8_NVRTC_SHA256
+                  + "\n");
+          String runtimeManifestBefore = Files.readString(runtimeManifest);
+          Path license = engineDir.resolve("licenses/nvidia-runtime/TensorRT.txt");
+          Files.createDirectories(license.getParent());
+          Files.writeString(license, "original-license");
+
+          withRepairFixtures(
+              fixtures,
+              false,
+              () ->
+                  withConfig(
+                      runtimeWorkDirectory,
+                      () -> {
+                        seedDirectMlProfiles(snapshot);
+                        String profilesBefore = profileFingerprint();
+                        AtomicInteger stagedEntries = new AtomicInteger();
+                        DownloadSession session = new DownloadSession();
+                        KataGoRuntimeHelper.setTensorRtDirectoryCopyForTests(
+                            (source, target) -> {
+                              copyFixtureTree(source, target);
+                              if (stagedEntries.incrementAndGet() == 2) {
+                                if (failureMode.equals("copy")) {
+                                  throw new IOException("injected runtime staging failure");
+                                }
+                                if (failureMode.equals("cancel")) session.cancel();
+                              }
+                            });
+                        KataGoRuntimeHelper.setTensorRtDirectoryMoveForTests(
+                            (source, target) -> {
+                              if (source.getFileName().toString().contains(".installing-")) {
+                                for (String dll : RUNTIME_DLLS) {
+                                  assertTrue(Files.isRegularFile(source.resolve(dll)), dll);
+                                }
+                                assertEquals(
+                                    "original-license",
+                                    Files.readString(
+                                        source.resolve(engineDir.relativize(license))));
+                                throw new IOException("injected engine promotion failure");
+                              }
+                              Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+                            });
+                        IOException failure =
+                            assertThrows(
+                                IOException.class,
+                                () ->
+                                    KataGoRuntimeHelper.repairTensorRtComponents(
+                                        snapshot, null, session));
+
+                        if (failureMode.equals("cancel")) {
+                          assertTrue(failure instanceof DownloadCancelledException);
+                        } else {
+                          assertEquals(
+                              failureMode.equals("promotion")
+                                  ? "injected engine promotion failure"
+                                  : "injected runtime staging failure",
+                              failure.getMessage());
+                        }
+                        assertTrue(stagedEntries.get() >= 2, "the failure follows partial staging");
+                        assertEquals(
+                            "last-known-good-engine",
+                            Files.readString(engineDir.resolve("katago.exe")));
+                        assertEquals(
+                            "older-engine\n",
+                            Files.readString(
+                                engineDir.resolve("lizzieyzy-next-katago-engine-manifest.txt")));
+                        for (String dll : RUNTIME_DLLS) {
+                          assertEquals("original-" + dll, Files.readString(engineDir.resolve(dll)));
+                        }
+                        assertEquals(runtimeManifestBefore, Files.readString(runtimeManifest));
+                        assertEquals("original-license", Files.readString(license));
+                        assertEquals(profilesBefore, profileFingerprint());
+                        try (var children = Files.list(engineDir.getParent())) {
+                          assertEquals(List.of(engineDir), children.toList(), "no partial install");
+                        }
+                      }));
+        });
+  }
+
+  private static void copyFixtureTree(Path source, Path target) throws IOException {
+    try (var paths = Files.walk(source)) {
+      for (Path entry : (Iterable<Path>) paths::iterator) {
+        Path destination = target.resolve(source.relativize(entry));
+        if (Files.isDirectory(entry)) {
+          Files.createDirectories(destination);
+        } else {
+          Files.copy(entry, destination, StandardCopyOption.REPLACE_EXISTING);
+        }
+      }
+    }
+  }
+
+  @Test
   void partialRuntimeStaysIncompleteUntilALaterRepairAndCompletedFilesAreReused()
       throws Exception {
     withOsName(
@@ -974,23 +1164,25 @@ public class TensorRtComponentRepairTest {
         Files.size(runtimeZip));
   }
 
+  private static final String[] RUNTIME_DLLS = {
+    "cudart64_12.dll",
+    "cublas64_12.dll",
+    "cublasLt64_12.dll",
+    "cudnn64_9.dll",
+    "nvJitLink64_12.dll",
+    "nvrtc64_120_0.dll",
+    "nvrtc-builtins64_128.dll",
+    "nvinfer_10.dll",
+    "nvonnxparser_10.dll",
+    "nvinfer_plugin_10.dll",
+    "z.dll"
+  };
+
   private static Path writeRuntimeFixtureZip(Path zipPath) throws IOException {
-    String[] dlls = {
-      "cudart64_12.dll",
-      "cublas64_12.dll",
-      "cublasLt64_12.dll",
-      "cudnn64_9.dll",
-      "nvJitLink64_12.dll",
-      "nvrtc64_120_0.dll",
-      "nvrtc-builtins64_128.dll",
-      "nvinfer_10.dll",
-      "nvonnxparser_10.dll",
-      "nvinfer_plugin_10.dll",
-      "z.dll"
-    };
+
     Files.createDirectories(zipPath.getParent());
     try (ZipOutputStream output = new ZipOutputStream(Files.newOutputStream(zipPath))) {
-      for (String dll : dlls) {
+      for (String dll : RUNTIME_DLLS) {
         output.putNextEntry(new ZipEntry(dll));
         output.closeEntry();
       }

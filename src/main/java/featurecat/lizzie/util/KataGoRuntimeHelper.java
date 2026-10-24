@@ -117,6 +117,8 @@ public final class KataGoRuntimeHelper {
   private static final String OPENCL_BACKEND = "opencl";
   private static final String ENGINE_BACKEND_MARKER_NAME = "lizzieyzy-next-engine-backend.txt";
   private static final String NVIDIA_RUNTIME_ROOT = "nvidia-runtime";
+  private static final String NVIDIA_RUNTIME_MANIFEST_NAME =
+      "lizzieyzy-next-nvidia-runtime-manifest.txt";
   private static final String NVIDIA_RUNTIME_DOWNLOAD_CACHE_DIR = "downloads";
   private static final String NVIDIA_RUNTIME_CACHE_DIR = "cache";
   private static final String NVIDIA_CUDA_CACHE_DIR = "cuda";
@@ -2725,9 +2727,16 @@ public final class KataGoRuntimeHelper {
   }
 
   public static SetupResult applyBundledCudaProfile(SetupSnapshot snapshot) throws IOException {
+    return applyBundledCudaProfile(snapshot, new DownloadSession());
+  }
+
+  public static SetupResult applyBundledCudaProfile(SetupSnapshot snapshot, DownloadSession session)
+      throws IOException {
+    session.throwIfCancelled();
     if (snapshot == null) {
       snapshot = KataGoAutoSetupHelper.inspectLocalSetup();
     }
+    snapshot = withBundledCudaEngine(snapshot);
     if (!snapshot.hasEngine()) {
       throw new IOException(
           resource("AutoSetup.missingEngine", "No local KataGo binary was found."));
@@ -2743,8 +2752,41 @@ public final class KataGoRuntimeHelper {
     if (isWindowsPlatform() && isNvidiaBundledPath(snapshot.enginePath)) {
       ensureBundledRuntimeReady(snapshot.enginePath, buildBenchmarkCommand(snapshot), null);
     }
+    // Last cancellation point: once persistence starts, deliver its result even after a late stop.
+    session.throwIfCancelled();
     return KataGoAutoSetupHelper.applyAutoSetup(
         snapshot.withActiveWeight(snapshot.activeWeightPath), true);
+  }
+
+  /** Keep CUDA profiles intact; replace an active TensorRT executable with installed CUDA. */
+  static SetupSnapshot withBundledCudaEngine(SetupSnapshot snapshot) throws IOException {
+    if (!isTensorRtBackend(resolveNvidiaBackend(snapshot.enginePath))) {
+      return snapshot;
+    }
+    // Prefer the installed CUDA profiles over the CUDA 12 companion, including CUDA 13 packages.
+    for (Path root : new Path[] {snapshot.appRoot, snapshot.workingDir}) {
+      for (Path base : root == null ? new Path[0] : new Path[] {root, root.resolve("app")}) {
+        Path engines = base.resolve("engines/katago");
+        for (String dir :
+            List.of(
+                "windows-x64",
+                NVIDIA_ENGINE_DIR,
+                NVIDIA_CUDA13_ENGINE_DIR,
+                NVIDIA50_CUDA_ENGINE_DIR)) {
+          Path candidate = engines.resolve(dir).resolve("katago.exe");
+          String backend = resolveNvidiaBackend(candidate);
+          if (Files.isRegularFile(candidate)
+              && (NVIDIA_BACKEND.equals(backend) || NVIDIA50_CUDA_BACKEND.equals(backend))) {
+            return snapshot.withEnginePath(candidate);
+          }
+        }
+      }
+    }
+    Path companion = packagedHumanSlCompanionPath(snapshot.enginePath);
+    if (isVerifiedPackagedHumanSlCompanion(companion)) {
+      return snapshot.withEnginePath(companion);
+    }
+    throw new IOException(resource("AutoSetup.missingEngine", "No local KataGo binary was found."));
   }
 
   private static TensorRtInstallStatus repairTensorRtComponentsLocked(
@@ -6255,7 +6297,7 @@ public final class KataGoRuntimeHelper {
         && NVIDIA_CUDA13_ENGINE_DIR.equalsIgnoreCase(engineDirectoryName.toString())) {
       return true;
     }
-    Path manifest = enginePath.getParent().resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+    Path manifest = enginePath.getParent().resolve(NVIDIA_RUNTIME_MANIFEST_NAME);
     if (!Files.isRegularFile(manifest)) {
       return false;
     }
@@ -6286,7 +6328,7 @@ public final class KataGoRuntimeHelper {
         || enginePath.getParent() == null) {
       return false;
     }
-    Path manifest = enginePath.getParent().resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+    Path manifest = enginePath.getParent().resolve(NVIDIA_RUNTIME_MANIFEST_NAME);
     if (!Files.isRegularFile(manifest)) {
       return false;
     }
@@ -6304,7 +6346,7 @@ public final class KataGoRuntimeHelper {
       return false;
     }
     Path engineDir = enginePath.getParent();
-    Path manifest = engineDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt");
+    Path manifest = engineDir.resolve(NVIDIA_RUNTIME_MANIFEST_NAME);
     if (Files.isRegularFile(manifest)) {
       try {
         String text = Files.readString(manifest, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
@@ -6327,8 +6369,7 @@ public final class KataGoRuntimeHelper {
       if (directory == null) {
         continue;
       }
-      for (String manifestName :
-          Arrays.asList("lizzieyzy-next-nvidia-runtime-manifest.txt", "manifest.txt")) {
+      for (String manifestName : Arrays.asList(NVIDIA_RUNTIME_MANIFEST_NAME, "manifest.txt")) {
         Path manifest = directory.resolve(manifestName);
         if (!Files.isRegularFile(manifest)) {
           continue;
@@ -6526,6 +6567,9 @@ public final class KataGoRuntimeHelper {
         && snapshot.enginePath != null
         && isTensorRtBackend(resolveNvidiaBackend(snapshot.enginePath))) {
       candidates.add(snapshot.enginePath);
+    }
+    if (snapshot != null && isVerifiedPackagedHumanSlCompanion(snapshot.enginePath)) {
+      candidates.add(snapshot.enginePath.resolveSibling("katago.exe"));
     }
     addTensorRtEngineCandidates(candidates, runtimeRoot);
     if (snapshot != null) {
@@ -6749,6 +6793,8 @@ public final class KataGoRuntimeHelper {
         if (!Files.isRegularFile(stagingDir.resolve("katago.exe"))) {
           throw new IOException("KataGo TensorRT package did not contain katago.exe");
         }
+        keepPackagedRuntime(targetEngineDir, stagingDir, session);
+        session.throwIfCancelled();
         revalidateDirectedTensorRtTargetAtMutationBoundary(context);
         if (Files.exists(targetEngineDir)) {
           try {
@@ -6784,6 +6830,31 @@ public final class KataGoRuntimeHelper {
     } catch (IOException e) {
       deleteRecursively(stagingDir);
       throw e;
+    }
+  }
+
+  /**
+   * Copy the colocated runtime before swapping so failure or cancellation preserves the old
+   * install.
+   */
+  private static void keepPackagedRuntime(
+      Path replacedDir, Path stagingDir, DownloadSession session) throws IOException {
+    if (!Files.isDirectory(replacedDir)) {
+      return;
+    }
+    try (java.nio.file.DirectoryStream<Path> entries = Files.newDirectoryStream(replacedDir)) {
+      for (Path entry : entries) {
+        session.throwIfCancelled();
+        String name = entry.getFileName().toString();
+        boolean runtime =
+            name.toLowerCase(Locale.ROOT).endsWith(".dll")
+                || name.equals(NVIDIA_RUNTIME_MANIFEST_NAME)
+                || name.equals("licenses");
+        Path target = stagingDir.resolve(name);
+        if (runtime && !Files.exists(target)) {
+          copyTensorRtDirectory(entry, target);
+        }
+      }
     }
   }
 
@@ -6945,7 +7016,7 @@ public final class KataGoRuntimeHelper {
   private static void writePinnedCuda12_8NvrtcRuntimeManifest(Path runtimeDir) throws IOException {
     Files.createDirectories(runtimeDir);
     Files.writeString(
-        runtimeDir.resolve("lizzieyzy-next-nvidia-runtime-manifest.txt"),
+        runtimeDir.resolve(NVIDIA_RUNTIME_MANIFEST_NAME),
         "CUDA NVRTC: "
             + CUDA_12_8_NVRTC_VERSION
             + "\nfixture\nSHA-256: "
@@ -7040,7 +7111,19 @@ public final class KataGoRuntimeHelper {
         usesCuda13_2Runtime(enginePath, backend)
             ? KATAGO_ASSETS.assets().get("windows-nvidia-cuda13")
             : assetForNvidiaBackend(backend);
-    return isProjectStaticZlibAsset(asset) && hasVerifiedEngineProvenance(enginePath, asset);
+    if (!isProjectStaticZlibAsset(asset)
+        || enginePath == null
+        || enginePath.getParent() == null
+        || !Files.isRegularFile(enginePath)) return false;
+    try {
+      return KataGoEngineManifest.describesProjectStaticZlibBuild(
+          KataGoEngineManifest.readStrict(
+              enginePath.getParent().resolve(TENSORRT_ENGINE_MANIFEST_NAME)),
+          asset,
+          sha256(enginePath));
+    } catch (IOException e) {
+      return false;
+    }
   }
 
   private static boolean isProjectStaticZlibAsset(KataGoAssetCatalog.Asset asset) {
@@ -7066,7 +7149,7 @@ public final class KataGoRuntimeHelper {
     }
     try {
       Map<String, String> manifest =
-          readStrictEngineManifest(engineDir.resolve(TENSORRT_ENGINE_MANIFEST_NAME));
+          KataGoEngineManifest.readStrict(engineDir.resolve(TENSORRT_ENGINE_MANIFEST_NAME));
       // TensorRT provenance validates the companion entry only when present; require it here.
       return manifest != null
           && HUMAN_SL_CUDA_COMPANION_NAME.equals(manifest.get("HumanSL companion"))
@@ -7096,7 +7179,7 @@ public final class KataGoRuntimeHelper {
       return false;
     }
     try {
-      Map<String, String> manifest = readStrictEngineManifest(manifestPath);
+      Map<String, String> manifest = KataGoEngineManifest.readStrict(manifestPath);
       String expectedExecutableSha256 = expectedKatagoExecutableSha256(asset);
       return manifest != null
           && "2".equals(manifest.get("Manifest schema"))
@@ -7134,55 +7217,6 @@ public final class KataGoRuntimeHelper {
     return companion == null
         || (HUMAN_SL_CUDA_COMPANION_NAME.equals(companion)
             && expectedHumanSlCompanionSha256().equals(manifest.get("HumanSL companion SHA-256")));
-  }
-
-  private static Map<String, String> readStrictEngineManifest(Path manifestPath)
-      throws IOException {
-    Map<String, String> values = new LinkedHashMap<>();
-    String[] lines =
-        Files.readString(manifestPath, StandardCharsets.UTF_8).replace("\r", "").split("\n", -1);
-    for (int index = 0; index < lines.length; index++) {
-      String line = lines[index];
-      if (line.isEmpty() && index == lines.length - 1) {
-        continue;
-      }
-      int separator = line.indexOf(": ");
-      if (separator <= 0 || separator == line.length() - 2) {
-        return null;
-      }
-      String key = line.substring(0, separator);
-      String value = line.substring(separator + 2);
-      if (!isAllowedEngineManifestKey(key) || values.putIfAbsent(key, value) != null) {
-        return null;
-      }
-    }
-    boolean hasCompanion = values.containsKey("HumanSL companion");
-    if (hasCompanion != values.containsKey("HumanSL companion SHA-256")) {
-      return null;
-    }
-    return values;
-  }
-
-  private static boolean isAllowedEngineManifestKey(String key) {
-    return switch (key) {
-      case "Manifest schema",
-          "KataGo release",
-          "Asset ID",
-          "Asset",
-          "Asset SHA-256",
-          "Executable SHA-256",
-          "Backend",
-          "Origin",
-          "Source commit",
-          "Source repository",
-          "Engine release repository",
-          "Engine release tag",
-          "Zlib linkage",
-          "HumanSL companion",
-          "HumanSL companion SHA-256" ->
-          true;
-      default -> false;
-    };
   }
 
   static String tensorRtEngineManifestText() {
