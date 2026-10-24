@@ -11,6 +11,11 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineCommandSink;
 import featurecat.lizzie.analysis.EngineFollowController;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.enginegame.EngineGameSnapshotFixtures;
+import featurecat.lizzie.gui.JFontTextField;
+import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
@@ -28,6 +33,8 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.swing.JCheckBox;
+import javax.swing.SwingUtilities;
 import org.java_websocket.WebSocket;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -127,22 +134,52 @@ class WebTrialSingleStreamExclusionTest {
     controller.setCurrentEngineNode(anchor);
     manager.setEngineFollowController(controller);
     manager.setMainlineTailSupplier(() -> anchor);
-    assertTrue(manager.enterTrial("trial-owner", anchor));
-    controller.awaitIdle();
+    try (BreadthControls controls = new BreadthControls(true)) {
+      assertFalse(engine.isPondering());
+      controls.assertEnabled(true);
+      assertTrue(manager.enterTrial("trial-owner", anchor));
+      controller.awaitIdle();
+      controls.assertEnabled(false);
 
-    manager.exitTrial("trial-owner");
-    assertTrue(sink.resyncStarted.await(1, TimeUnit.SECONDS));
+      manager.exitTrial("trial-owner");
+      assertTrue(sink.resyncStarted.await(1, TimeUnit.SECONDS));
+      try {
+        assertNull(manager.getTrialOwnerForTest());
+        assertTrue(controller.isTrialActive());
+        assertTrialExcludesEngineOwners();
+        controls.assertEnabled(false);
+      } finally {
+        sink.allowResync.countDown();
+      }
 
-    assertNull(manager.getTrialOwnerForTest());
-    assertTrue(controller.isTrialActive());
-    assertTrialExcludesEngineOwners();
+      controller.awaitIdle();
+      assertFalse(manager.isEngineOperationExcludedByTrial());
+      controls.assertEnabled(true);
+      assertFalse(engine.isPondering());
+      Leelaz.EngineModeReservation recovered = engine.beginEngineModeReservation();
+      assertNotNull(recovered);
+      recovered.close();
+    }
+  }
 
-    sink.allowResync.countDown();
-    controller.awaitIdle();
-    assertFalse(manager.isEngineOperationExcludedByTrial());
-    Leelaz.EngineModeReservation recovered = engine.beginEngineModeReservation();
-    assertNotNull(recovered);
-    recovered.close();
+  @Test
+  void trialWithoutControllerRestoresBreadthWhileAnalysisRemainsPaused() throws Exception {
+    for (boolean selected : new boolean[] {false, true}) {
+      try (BreadthControls controls = new BreadthControls(selected)) {
+        assertFalse(engine.isPondering());
+        controls.assertEnabled(true);
+        assertTrue(manager.enterTrial("trial-owner", anyNode()));
+        controls.assertEnabled(false);
+        String beforeExit = output.toString(StandardCharsets.UTF_8);
+
+        manager.exitTrial("trial-owner");
+
+        assertFalse(manager.isEngineOperationExcludedByTrial());
+        controls.assertEnabled(true);
+        assertFalse(engine.isPondering());
+        assertEquals(beforeExit, output.toString(StandardCharsets.UTF_8));
+      }
+    }
   }
 
   @Test
@@ -355,6 +392,54 @@ class WebTrialSingleStreamExclusionTest {
 
     @Override
     public void resyncFromCurrentHistory(BoardHistoryNode target) {}
+  }
+
+  private static final class BreadthControls implements AutoCloseable {
+    private final Menu previousMenu = LizzieFrame.menu;
+    private final LizzieFrame previousFrame = Lizzie.frame;
+    private final EngineGameSnapshot previousSnapshot = Lizzie.engineGame.current();
+    private final Menu menu;
+    private final JCheckBox checkbox;
+    private final boolean selected;
+
+    private BreadthControls(boolean selected) throws Exception {
+      this.selected = selected;
+      Field unsafeField = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+      unsafeField.setAccessible(true);
+      menu = (Menu) ((sun.misc.Unsafe) unsafeField.get(null)).allocateInstance(Menu.class);
+      Field checkboxField = Menu.class.getDeclaredField("chkWRN");
+      checkboxField.setAccessible(true);
+      checkbox = (JCheckBox) checkboxField.getType().getConstructor().newInstance();
+      checkbox.setSelected(selected);
+      checkboxField.set(menu, checkbox);
+      menu.txtWRN = new JFontTextField();
+      menu.txtWRN.setText("0.37");
+      SwingUtilities.invokeAndWait(() -> {
+        Lizzie.frame = null;
+        LizzieFrame.menu = menu;
+        EngineGameSnapshotFixtures.publishIdle();
+        menu.refreshBreadthAdmission();
+      });
+    }
+
+    private void assertEnabled(boolean expected) throws Exception {
+      SwingUtilities.invokeAndWait(() -> {
+        // Drain the production refresh request; never trigger the refresh from the assertion.
+        assertEquals(expected, checkbox.isEnabled());
+        assertEquals(expected && selected, menu.txtWRN.isEnabled());
+        assertEquals(selected, checkbox.isSelected());
+        assertEquals("0.37", menu.txtWRN.getText());
+      });
+    }
+
+    @Override
+    public void close() throws Exception {
+      SwingUtilities.invokeAndWait(() -> {
+        LizzieFrame.menu = previousMenu;
+        Lizzie.frame = previousFrame;
+        Lizzie.engineGame.publishSnapshotForTest(previousSnapshot);
+      });
+    }
   }
 
   private static final class BlockingEngineCommandSink extends NoOpEngineCommandSink {

@@ -712,6 +712,170 @@ class TrackingProductionCutoverTest {
   }
 
   @Test
+  void pausedAnalysisDoesNotAcceptAnEvaluationThatCouldNeverRun() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      environment.engine.pauseForAnalysisControl(() -> {});
+      environment.settleCommands();
+      assertFalse(environment.engine.isPondering());
+      assertFalse(environment.frame.canStartTrackingAnalysis());
+      assertEquals(
+          TrackingAnalysisController.AddResult.LEASE_UNAVAILABLE,
+          environment.frame.addTrackingPoint("A1"));
+      assertTrue(environment.frame.trackingDisplaySnapshot().selectedPoints().isEmpty());
+      environment.engine.ponder();
+      environment.settleCommands();
+      assertTrue(environment.frame.canStartTrackingAnalysis());
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+    }
+  }
+
+  @Test
+  void handingBackAfterWholeGameAnalysisKeepsAttentionOnTheUnchangedPosition() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      environment.sendOrdinaryInfo(payload(200, 40, 130, 0.50, 0.60));
+      String before = environment.commands();
+      assertTrue(environment.handBackForegroundAnalysis());
+      assertEquals(
+          java.util.Set.of("A1"), environment.frame.trackingDisplaySnapshot().selectedPoints());
+      assertEquals(
+          java.util.Set.of("A1"), environment.frame.trackingDisplaySnapshot().activePoints());
+      assertFalse(
+          environment.commands().substring(before.length()).contains("clear_board"),
+          environment.commands().substring(before.length()));
+      environment.sendOrdinaryInfo(payload(300, 70, 160, 0.52, 0.61));
+      assertEquals(70, candidate("A1").playouts);
+    }
+  }
+
+  @Test
+  void handingBackKeepsCompletedAttentionOnTheAcceptedReadBoardPosition() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.installStableReadBoard();
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      environment.sendOrdinaryInfo(payload(200, 120, 130, 0.50, 0.60));
+      environment.settleCommands();
+      assertTrue(environment.frame.trackingDisplaySnapshot().activePoints().isEmpty());
+      String before = environment.commands();
+
+      assertTrue(environment.handBackForegroundAnalysis());
+
+      assertEquals(before, environment.commands());
+      assertEquals(
+          java.util.Set.of("A1"), environment.frame.trackingDisplaySnapshot().selectedPoints());
+      assertTrue(environment.frame.trackingDisplaySnapshot().activePoints().isEmpty());
+      environment.sendOrdinaryInfo(payload(300, 150, 160, 0.52, 0.61));
+      assertEquals(150, candidate("A1").playouts);
+    }
+  }
+
+  @Test
+  void handingBackResynchronizesWhenTheTrackingContextChanged() throws Exception {
+    List<Runnable> mutations =
+        List.of(
+            () -> Lizzie.board.setHistory(new BoardHistoryList(BoardData.empty(2, 2))),
+            () -> Lizzie.config.currentKataGoRules = "japanese",
+            () -> Lizzie.board.getHistory().getGameInfo().setKomi(0.5),
+            () -> Lizzie.config.trackingAnalysisMaxVisits++);
+    for (Runnable mutation : mutations) {
+      try (TestEnvironment environment = TestEnvironment.open()) {
+        environment.startSupportedAnalysis();
+        assertEquals(
+            TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+        environment.settleCommands();
+        mutation.run();
+        String before = environment.commands();
+
+        assertTrue(environment.handBackForegroundAnalysis());
+
+        assertTrue(
+            environment.commands().substring(before.length()).contains("clear_board"),
+            environment.commands().substring(before.length()));
+        assertTrue(environment.frame.trackingDisplaySnapshot().selectedPoints().isEmpty());
+      }
+    }
+  }
+
+  @Test
+  void handingBackResynchronizesAfterTheReadBoardHelperIsDetached() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.installStableReadBoard();
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      environment.frame.readBoard = null;
+      String before = environment.commands();
+
+      assertTrue(environment.handBackForegroundAnalysis());
+
+      assertTrue(
+          environment.commands().substring(before.length()).contains("clear_board"),
+          environment.commands().substring(before.length()));
+      assertTrue(environment.frame.trackingDisplaySnapshot().selectedPoints().isEmpty());
+    }
+  }
+
+  @Test
+  void handingBackResynchronizesAfterTheEngineReaderIsReplaced() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      long incarnation = environment.engine.trackingStreamIncarnation();
+      Method replaceOutput =
+          Leelaz.class.getDeclaredMethod(
+              "installFreshCommandOutputForTest", java.io.OutputStream.class);
+      replaceOutput.setAccessible(true);
+      replaceOutput.invoke(environment.engine, environment.output);
+      environment.streaming = false;
+      environment.engine.commandLists.addAll(List.of("stop", "kata-analyze"));
+      setField(environment.engine, Leelaz.class, "endGetCommandList", true);
+      assertTrue(environment.engine.trackingStreamIncarnation() > incarnation);
+      String before = environment.commands();
+
+      assertTrue(environment.handBackForegroundAnalysis());
+
+      assertTrue(
+          environment.commands().substring(before.length()).contains("clear_board"),
+          environment.commands().substring(before.length()));
+      assertTrue(environment.frame.trackingDisplaySnapshot().selectedPoints().isEmpty());
+    }
+  }
+
+  @Test
+  void retiredEngineSearchCannotBePreservedBeforeTheControllerCallbackRuns() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      assertEquals(
+          TrackingAnalysisController.AddResult.ADDED, environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      TrackingAnalysisController controller = environment.frame.trackingAnalysisController();
+      Method keepsSearch =
+          LizzieFrame.class.getDeclaredMethod("isTrackingStillSearchingCurrentPosition");
+      keepsSearch.setAccessible(true);
+      synchronized (controller) {
+        // Retirement is posted to the controller asynchronously. Holding its monitor leaves the
+        // old points visible while the engine has already cleared and started another search.
+        environment.engine.sendCommand("clear_board");
+        environment.settleCommands();
+        environment.engine.sendCommand("kata-analyze B 10 rootInfo true");
+        environment.settleCommands();
+        assertEquals(java.util.Set.of("A1"), controller.snapshot().selectedPoints());
+        assertTrue(environment.engine.canStartMoveFocus());
+        assertEquals(Boolean.FALSE, keepsSearch.invoke(environment.frame));
+      }
+    }
+  }
+
+  @Test
   void clearingTheEngineTreeRetiresExplicitAdoptionEvenAtTheSameDisplayNode() throws Exception {
     try (TestEnvironment environment = TestEnvironment.open()) {
       environment.startSupportedAnalysis();
@@ -1138,6 +1302,29 @@ class TrackingProductionCutoverTest {
         Thread.sleep(1);
       }
       throw new AssertionError("Focus progress did not consume the accepted ordinary payload");
+    }
+
+    boolean handBackForegroundAnalysis() throws Exception {
+      Method handBack =
+          LizzieFrame.class.getDeclaredMethod(
+              "resumeForegroundAnalysisForCurrentPosition", boolean.class);
+      handBack.setAccessible(true);
+      // A resend may wait for replies, so keep the transport on this thread and bound the exchange.
+      java.util.concurrent.CompletableFuture<Object> handedBack =
+          java.util.concurrent.CompletableFuture.supplyAsync(
+              () -> {
+                try {
+                  return handBack.invoke(frame, false);
+                } catch (ReflectiveOperationException failure) {
+                  throw new IllegalStateException(failure);
+                }
+              });
+      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+      while (!handedBack.isDone() && System.nanoTime() < deadline) settleCommands();
+      assertTrue(handedBack.isDone(), "foreground hand-back did not finish: " + commands());
+      Object result = handedBack.get(1, java.util.concurrent.TimeUnit.SECONDS);
+      settleCommands();
+      return Boolean.TRUE.equals(result);
     }
 
     void acknowledgePositionCommands() throws Exception {

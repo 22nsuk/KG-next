@@ -189,7 +189,7 @@ jobs:
 
   desktop-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 17
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -206,8 +206,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
       - name: Run Linux desktop smoke verification
-        # Allow three full desktop passes plus build and window-manager cleanup.
-        timeout-minutes: 12
+        # Two runs measured ~5m40s for the build/first pass and ~3m30s for the second.
+        # Budget the third full pass and cleanup too; retain every test and per-test deadline.
+        timeout-minutes: 14
         env:
           LANG: C.UTF-8
           LC_ALL: C.UTF-8

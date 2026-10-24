@@ -18,11 +18,17 @@ import javax.swing.event.PopupMenuListener;
 import javax.swing.SwingUtilities;
 
 public class RightClickMenu extends JPopupMenu {
-  static String trackingUnavailableKey(Leelaz.MoveFocusCapability capability, boolean tooltip) {
+  static String trackingUnavailableKey(
+      Leelaz.MoveFocusCapability capability, boolean paused, boolean tooltip) {
     if (capability == Leelaz.MoveFocusCapability.UNSUPPORTED) {
       return tooltip
           ? "RightClickMenu.trackPoint.upgradeTooltip"
           : "RightClickMenu.trackPoint.upgradeRequired";
+    }
+    if (paused && capability == Leelaz.MoveFocusCapability.SUPPORTED) {
+      return tooltip
+          ? "RightClickMenu.trackPoint.pausedTooltip"
+          : "RightClickMenu.trackPoint.paused";
     }
     return tooltip
         ? "RightClickMenu.trackPoint.unavailableTooltip"
@@ -161,6 +167,8 @@ public class RightClickMenu extends JPopupMenu {
                 allow2.setVisible(false);
               }
               boolean canTrack = Lizzie.frame.canStartTrackingAnalysis();
+              Leelaz engine = Lizzie.leelaz;
+              boolean paused = !engine.isPondering();
               String coordName =
                   Board.convertCoordinatesToName(
                       RightClickMenu.coords[0], RightClickMenu.coords[1]);
@@ -172,12 +180,12 @@ public class RightClickMenu extends JPopupMenu {
                   resourceBundle.getString(
                       canTrack
                           ? "RightClickMenu.trackPoint"
-                          : trackingUnavailableKey(Lizzie.leelaz.moveFocusCapability(), false)));
+                          : trackingUnavailableKey(engine.moveFocusCapability(), paused, false)));
               trackPoint.setToolTipText(
                   resourceBundle.getString(
                       canTrack
                           ? "RightClickMenu.trackPoint.tooltip"
-                          : trackingUnavailableKey(Lizzie.leelaz.moveFocusCapability(), true)));
+                          : trackingUnavailableKey(engine.moveFocusCapability(), paused, true)));
               untrackPoint.setVisible(isTracked);
               clearAllTracked.setVisible(hasTracked);
             }

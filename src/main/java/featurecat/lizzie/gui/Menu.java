@@ -6788,6 +6788,12 @@ public class Menu extends JMenuBar {
     JFontTextField field = wrn ? txtWRN : txtGfPDA;
     JFontCheckBox enabled = wrn ? chkWRN : chkPDA;
     boolean wasEnabled = wrn ? Lizzie.config.chkKataEngineWRN : Lizzie.config.chkKataEnginePDA;
+    // A queued document/checkbox event must re-check ownership, even before the UI refresh runs.
+    if (wrn && !breadthAdmissionAvailable()) {
+      if (checkboxChanged) enabled.setSelected(wasEnabled);
+      refreshBreadthAdmission();
+      return;
+    }
     java.util.OptionalDouble parsed = parameter.parse(field.getText());
     field.setBackground(parsed.isPresent()
         ? AppleStyleSupport.validFieldBackground() : AppleStyleSupport.errorFieldBackground());
@@ -9637,6 +9643,47 @@ public class Menu extends JMenuBar {
     // Lizzie.frame.reSetLoc();
   }
 
+  /**
+   * Breadth is a user analysis setting: not while a web trial owns the engine, while the engine
+   * plays a genmove game or a game against the user, or while the current engine cannot take it.
+   */
+  private boolean breadthAdmissionAvailable() {
+    EngineGameSnapshot game = EngineGamePresentation.current();
+    LizzieFrame frame = Lizzie.frame;
+    Leelaz engine = Lizzie.leelaz;
+    return (Lizzie.webBoardManager == null
+            || !Lizzie.webBoardManager.isEngineOperationExcludedByTrial())
+        && !(game.startingOrPlaying() && game.view() != null && game.view().genmove())
+        && (frame == null || !frame.isPlayingAgainstLeelaz)
+        && engine != null
+        && engine.canSetAnalysisWideRootNoise();
+  }
+
+  /**
+   * Re-evaluates the breadth controls on the event thread. Engine code calls this at lifecycle
+   * points, possibly while holding engine locks, so the work is always deferred; it reads the
+   * current primary engine when it runs, so a request from a replaced engine cannot enable stale
+   * controls.
+   */
+  public static void requestBreadthAdmissionRefresh() {
+    SwingUtilities.invokeLater(
+        () -> {
+          Menu menu = LizzieFrame.menu;
+          if (menu != null) menu.refreshBreadthAdmission();
+        });
+  }
+
+  public void refreshBreadthAdmission() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::refreshBreadthAdmission);
+      return;
+    }
+    if (chkWRN == null || txtWRN == null) return;
+    boolean available = breadthAdmissionAvailable();
+    chkWRN.setEnabled(available);
+    txtWRN.setEnabled(available && chkWRN.isSelected());
+  }
+
   public void setPdaAndWrn(double pda, double wrn) {
     setUseGfPda(pda != 0, String.valueOf(pda));
     setUseWrn(wrn != 0, String.valueOf(wrn));
@@ -9700,6 +9747,7 @@ public class Menu extends JMenuBar {
       chkWRN.setVisible(false);
       txtWRN.setVisible(false);
     }
+    refreshBreadthAdmission();
     if (needRemoveS) sepForPdaWrn.setVisible(false);
     else sepForPdaWrn.setVisible(true);
   }
@@ -10756,6 +10804,7 @@ public class Menu extends JMenuBar {
     SwingUtilities.invokeLater(
         new Runnable() {
           public void run() {
+            refreshBreadthAdmission();
             if (engineMenu == null || EngineGamePresentation.current().playing()) return;
             if (isThinking) {
               engineMenu.setIcon(Playing2);
@@ -10821,7 +10870,7 @@ public class Menu extends JMenuBar {
   public void setUseWrn(boolean use, String wrn) {
     setKataAnalysisText(txtWRN, KataAnalysisParameter.WRN, wrn);
     chkWRN.setSelected(use);
-    txtWRN.setEnabled(use);
+    refreshBreadthAdmission();
   }
 
   public void setUseGfPda(boolean use, String pda) {

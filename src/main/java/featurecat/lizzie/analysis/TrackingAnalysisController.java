@@ -353,6 +353,17 @@ public final class TrackingAnalysisController {
 
   public DisplaySnapshot snapshot() { return snapshot; }
 
+  /**
+   * Whether attention still belongs to {@code current} in the engine's continuing search. Check the
+   * engine's immediate retirement state as its controller notification may still be in flight.
+   */
+  public synchronized boolean holdsSearchOf(Context current) {
+    return context != null
+        && !selectedPoints.isEmpty()
+        && context.matches(current)
+        && context.engine.holdsMoveFocusSearch(this, context);
+  }
+
   synchronized void onFocusAnalysis(Context source, List<MoveData> moves) {
     if (context != source) return;
     boolean completed = observeProgress(moves);

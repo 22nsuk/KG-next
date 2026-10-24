@@ -97,6 +97,52 @@ class ConsoleGenmoveRequestTest {
   }
 
   @Test
+  void manualGenmoveRefreshesBreadthOnStartAndFailedCompletion() throws Exception {
+    featurecat.lizzie.gui.Menu previousMenu = LizzieFrame.menu;
+    var previousEngineMenu = featurecat.lizzie.gui.Menu.engineMenu;
+    featurecat.lizzie.gui.Menu menu =
+        RulesLayerTestHarness.allocate(featurecat.lizzie.gui.Menu.class);
+    var checkbox = new featurecat.lizzie.gui.JFontCheckBox();
+    Field checkboxField = featurecat.lizzie.gui.Menu.class.getDeclaredField("chkWRN");
+    checkboxField.setAccessible(true);
+    checkboxField.set(menu, checkbox);
+    menu.txtWRN = new JFontTextField();
+    try {
+      engine.isKatago = true;
+      SwingUtilities.invokeAndWait(
+          () -> {
+            LizzieFrame.menu = menu;
+            featurecat.lizzie.gui.Menu.engineMenu = null;
+            checkbox.setSelected(true);
+            menu.txtWRN.setText("0.37");
+            menu.refreshBreadthAdmission();
+            assertTrue(checkbox.isEnabled());
+          });
+      int id = request(true, "b");
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertFalse(checkbox.isEnabled());
+            assertFalse(menu.txtWRN.isEnabled());
+          });
+      line("?" + id + " controlled rejection");
+      line("");
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertTrue(checkbox.isEnabled());
+            assertTrue(menu.txtWRN.isEnabled());
+            assertEquals("0.37", menu.txtWRN.getText());
+          });
+      idle();
+    } finally {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            LizzieFrame.menu = previousMenu;
+            featurecat.lizzie.gui.Menu.engineMenu = previousEngineMenu;
+          });
+    }
+  }
+
+  @Test
   void pendingImportedPositionRejectsConsoleGenmoveUntilAlignmentIsConfirmed() throws Exception {
     Board board = Lizzie.board;
     board.requireEngineAlignment();
