@@ -283,6 +283,50 @@ class MenuEngineSwitchUiStateTest {
     }
   }
 
+  @Test
+  void queuedBreadthRefreshUsesCurrentEngineAndPreservesUserValue() throws Exception {
+    Leelaz previous = Lizzie.leelaz;
+    Menu menu = allocate(Menu.class);
+    menu.chkWRN = new JFontCheckBox();
+    menu.chkWRN.setSelected(true);
+    menu.txtWRN = new JFontTextField();
+    menu.txtWRN.setText("0.37");
+    Leelaz ready =
+        new Leelaz("") {
+          @Override
+          public boolean canSetAnalysisWideRootNoise() {
+            return true;
+          }
+        };
+    try {
+      EngineGameSnapshotFixtures.publishIdle();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            Lizzie.setPrimaryEngine(ready);
+            Thread callback = new Thread(menu::refreshBreadthAdmission);
+            callback.start();
+            try {
+              callback.join(2000);
+            } catch (InterruptedException ex) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(ex);
+            }
+            assertFalse(callback.isAlive());
+            // The old ready notification is queued behind this replacement on the EDT.
+            Lizzie.setPrimaryEngine(null);
+          });
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertFalse(menu.chkWRN.isEnabled());
+            assertFalse(menu.txtWRN.isEnabled());
+            assertTrue(menu.chkWRN.isSelected());
+            assertEquals("0.37", menu.txtWRN.getText());
+          });
+    } finally {
+      Lizzie.setPrimaryEngine(previous);
+    }
+  }
+
   private static EngineManager.EngineSwitchUiSnapshot failedSnapshot(
       int previousIndex, int targetIndex) throws Exception {
     return snapshot(

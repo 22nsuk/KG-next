@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.util.Utils;
 import java.text.MessageFormat;
@@ -65,6 +66,7 @@ public class EngineFollowController {
         () -> {
           forceResync(mainlineTail);
           trialActive = false;
+          Menu.requestBreadthAdmissionRefresh();
         });
   }
 

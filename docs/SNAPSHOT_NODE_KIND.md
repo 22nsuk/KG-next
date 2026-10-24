@@ -131,6 +131,7 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 自动/直接 restart 的 exact 与 root 路线都经过同一个 owner board synchronization fence；owner 只能在 fence 成功后恢复 captured ponder，失败或不可用时不启动分析，并在既有 completion boundary 释放 reservation。
 - `Leelaz` 继续唯一拥有 ordinary command queue、response handler、timeout、late-response retirement、output-stream invalidation 与 engine arbitration；exact module 只通过窄 admission-aware seam 使用这些能力。
 - 普通 KataGo 启动的 PDA/WRN 回读由 `Leelaz` 持有独立轮次，绑定既有 numbered pending response 与 reader incarnation；规则 operation 的成功、失败和超时不结算参数轮次。startup-post 查询仍遵守原有实际写出／失败关闭边界。
+- WRN 只在普通 KataGo 已就绪且无独占任务、恢复或 genmove 时允许编辑；启动、切换、租约释放与控制台 genmove 结束均在 EDT 重验当前主引擎。禁用期间不覆盖用户草稿，延迟输入事件仍需通过准入与数值验证，才可修改设置、发送命令或清除分析。
 - PDA/WRN 仅在同一有效轮次两项有限数值均成功回读后，通过现有工具栏路径发布完整一对；回复次序不影响结果，合法零值不是空白。错误、格式错误、缺失或超时不以自动载入配置／默认零补齐成功。取消、替换及旧 timeout 不影响后继轮次；EDT 发布时复验原前台 generation、reader 与轮次，隔离启动不得更新全局显示。
 - 手动终止 genmove 对局后，空 numbered ACK 仍是非终态；迟到的合法 analyze `play` 只结清原 reader binding 的 pending handler，不追加应用的真实 `MOVE/PASS` 或比赛结果。缺失终态继续按既有五秒物理请求 watchdog 回收。
 - 已停止对局的前台引擎在物理请求退役后，由 `EngineManager` 异步冻结并执行当前应用盘面的 root/exact 恢复；退役屏障保留到既有稳定 board synchronization fence 完成。恢复命令仅获该 lifecycle owner 对原 binding 的写入授权，失败将原目标标为 unavailable，替换实例不受旧归还影响；手动停止不自动恢复 ponder。
@@ -147,10 +148,11 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - exact module 在任何 `clear_board`、Remote Compute restore 或其他 engine mutation 之前，为全部本地 target 完成 SGF 落盘、可读性检查与 process-incarnation 复验；任一 target 无安全路径或落盘失败时，清理本轮已创建文件并以 snapshot-preparation failure 终止，不能留下半恢复状态。
 - `Leelaz` 在最终 `ProcessBuilder` 配置（含 bundled runtime cwd override）完成后，把本地文件系统类别与显式 cwd 绑定到实际 reader/process incarnation；pre-start 捕获的 restore route 在执行时只采用新 admitted incarnation 的证据。落盘后 process rebind、退休或 admission 失效时，旧文件不能生成替换实例的 `loadsgf` 命令。
 - GTP 文件参数必须是非空 printable ASCII（字符 33–126）且不含 `#`。候选顺序固定为：安全的默认临时目录绝对路径；有最终 cwd 证据时该 cwd 下的唯一 ASCII 相对文件名；既有应用 runtime / Windows 共享目录约定下的安全绝对路径。相对参数保持相对，不能在 dispatch 时重新绝对化。
-- direct local engine 即使没有可信 cwd，仍可使用安全共享绝对路径；已知 SSH、WSL、Wine、container 或其他隔离文件系统 transport 不得使用 host `loadsgf`。仅当 frozen history 证明初始让子（HA 与实际黑子一致、无此前真实动作及冲突 setup/PL）且当前 admitted reader 完成 `set_free_handicap` 能力发现时，允许通过实际坐标的 in-band handicap 命令恢复，再重放真实 tail。空黑先根节点只清空，不提前应用后续让子。其他隔离 transport 的任意快照继续 fail-closed；Remote Compute 的任意快照保留既有 in-band 路径。
+- direct local engine 即使没有可信 cwd，仍可使用安全共享绝对路径；已知 SSH、WSL、Wine、container 或其他隔离文件系统 transport 不得使用 host `loadsgf`。仅当 frozen history 证明初始让子（HA 与实际黑子一致、无此前真实动作及冲突 setup/PL）且当前 admitted reader 完成 `set_free_handicap` 能力发现时，允许通过实际坐标的 in-band handicap 命令恢复，再重放真实 tail。空黑先根节点只清空，不提前应用后续让子。其他隔离 transport（含 `.bat`/脚本等间接启动器）的任意快照：当前 admitted reader 完成 `list_commands` 且声明 `set_position` 时，通过 in-band `boardsize`/`komi`/`set_position` 恢复静态锚点，再重放真实 tail，全程不生成 host 文件路径；未声明、尚未完成能力发现或仅旧 reader 声明时，在任何棋盘 mutation 前以 `SNAPSHOT_PREPARATION` fail-closed。`set_position` 默认黑方行棋，因此白方行棋且无真实 tail 的局面只允许交给分析与落子命令显式携带行棋方（`kata-analyze W …`、`genmove W`）的 reader，否则以 `UNSUPPORTED_REMOTE_POSITION` fail-closed。Remote Compute 保留既有 in-band 路径与白方无 tail 限制。双引擎的本地 `loadsgf` 侧与 in-band 侧分别执行；in-band 侧的 preclear 不查找临时 SGF 文件访问证据，任一侧缺少所需能力时两侧均不执行 preclear。
 - 双引擎 cwd 相同且安全绝对路径可用时共享同一物理文件；cwd 不同时可各自持有独立文件。所有本轮物理文件的删除边界覆盖全部 target 的 ACK/error/timeout/late-response retirement 以及真实 tail replay，首个 ACK 不能提前删除任一文件。
 - 安全路径选择只改变物理文件地址与 GTP 参数；SGF 语义仍由 frozen plan 唯一生成，必须保留 `SZ`、可用 `KM`、`PL`、`AB/AW` 与 rectangular / extended-coordinate 行为。
 - Board primary owner 在冻结目标时同时冻结锚点、让子来源与真实 tail；执行时才绑定 admission，不重新读取可变历史。独立初始让子 setup 无显式 PL 时默认白先，保持独立 SNAPSHOT、moveNumber=0；显式 PL 优先，空根节点不改为白先。所有 target 的 capability/路径 preflight 必须先于任何棋盘 mutation。
+- 非 Remote Compute 的任意 setup 通过 `set_position` 能力 preflight 时，把该 target 的 admitted reader 绑定到本轮恢复；之后 reader 替换或退休会使整轮 admission 失效，preclear、静态锚点与真实 tail 均不能改写替换实例。准备计划后、执行前已替换的 reader 必须重新完成自己的能力发现，不能沿用旧 reader 的声明。
 - `exact snapshot restore` 的 `loadsgf` 生命周期按固定顺序执行：
   1. `loadsgf` 临时 SGF 准备完成后，命令先入队再发出。
   2. 命令发出前，当前次 `loadsgf` 的 pending response handler 与 dispatch 归属绑定完成，并持续到退休或完成。
