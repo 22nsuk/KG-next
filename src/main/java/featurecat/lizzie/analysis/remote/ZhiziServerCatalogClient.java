@@ -1,8 +1,9 @@
 package featurecat.lizzie.analysis.remote;
 
-import ch.ethz.ssh2.ChannelCondition;
-import ch.ethz.ssh2.Connection;
-import ch.ethz.ssh2.Session;
+import featurecat.lizzie.analysis.ssh.SshAuthenticationException;
+import featurecat.lizzie.analysis.ssh.SshCommandSession;
+import featurecat.lizzie.analysis.ssh.SshCredential;
+import featurecat.lizzie.analysis.ssh.SshTarget;
 import featurecat.lizzie.util.NetworkProxy;
 import java.io.IOException;
 import java.io.InputStream;
@@ -122,33 +123,22 @@ final class ZhiziServerCatalogClient {
 
   private static String queryOverSsh(
       String host, int port, String username, String password, String command) throws IOException {
-    Connection connection = new Connection(host, port);
-    Session session = null;
-    try {
-      connection.connect(null, SSH_TIMEOUT_MILLIS, SSH_TIMEOUT_MILLIS);
-      if (!connection.authenticateWithPassword(username, password)) {
-        throw new IOException("iKataGo catalog authentication failed.");
-      }
-      session = connection.openSession();
-      session.execCommand(command);
-      int condition =
-          session.waitForCondition(
-              ChannelCondition.EOF | ChannelCondition.CLOSED, SSH_TIMEOUT_MILLIS);
-      if ((condition & ChannelCondition.TIMEOUT) != 0) {
+    SshTarget target = new SshTarget(host, port, username);
+    try (SshCommandSession session =
+        SshCommandSession.open(target, SshCredential.password(password), command)) {
+      session.stdin().close();
+      if (!session.awaitCompletion(Duration.ofMillis(SSH_TIMEOUT_MILLIS))) {
         throw new IOException("iKataGo catalog query timed out.");
       }
-      String stdout = readLimited(session.getStdout());
-      String stderr = readLimited(session.getStderr());
+      String stdout = readLimited(session.stdout());
+      String stderr = readLimited(session.stderr());
       if (stdout.isBlank()) {
         throw new IOException(
             stderr.isBlank() ? "iKataGo catalog response is empty." : stderr.trim());
       }
       return stdout;
-    } finally {
-      if (session != null) {
-        session.close();
-      }
-      connection.close();
+    } catch (SshAuthenticationException e) {
+      throw new IOException("iKataGo catalog authentication failed.", e);
     }
   }
 

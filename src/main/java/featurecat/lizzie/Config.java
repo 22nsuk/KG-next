@@ -16,6 +16,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.NetworkProxy;
 import featurecat.lizzie.util.Utils;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import java.awt.Color;
 import java.awt.Frame;
 import java.awt.Toolkit;
@@ -839,7 +840,7 @@ public class Config {
       bundledEngine.put("ip", "");
       bundledEngine.put("port", "");
       bundledEngine.put("userName", "");
-      bundledEngine.put("password", "");
+      SshEnginePasswords.writeTo(bundledEngine, "");
       bundledEngine.put("initialCommand", "");
     } else {
       putIfMissing(bundledEngine, "preload", false);
@@ -3694,8 +3695,10 @@ public class Config {
     JSONObject candidateRoot = new JSONObject(this.config.toString());
     candidateRoot.put("ui", new JSONObject(candidateUi.toString()));
     candidateRoot.put("leelaz", new JSONObject(candidateLeelaz.toString()));
-    try {
+    try (SshEnginePasswords.Prepared passwords =
+        SshEnginePasswords.prepareForSave(candidateRoot.getJSONObject("leelaz"))) {
       writeConfig(candidateRoot, new File(configFilename));
+      passwords.commit();
     } catch (IOException e) {
       logConfig("save", "sections", "failed", changed, e);
       throw e;

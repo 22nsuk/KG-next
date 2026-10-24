@@ -7,6 +7,7 @@ import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.LeelazEngineCommandSink;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import featurecat.lizzie.enginegame.EngineGameModule;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
 import featurecat.lizzie.gui.AppleStyleSupport;
@@ -368,6 +369,7 @@ public class Lizzie {
     logPersistedLoggingSettingsApplied();
     firstLaunchSession = config.isNewProfile() || config.firstTimeLoad;
     resourceBundle = AppLocale.loadBundle(config.useLanguage);
+    moveLegacySshPasswordsToCredentialStore();
     NetworkProxy.installSystemProxyPropertyFromSavedConfig();
     Utils.applyMaintainedDefaultSettings();
     // -Dsun.java2d.uiScale.enabled=false
@@ -482,6 +484,14 @@ public class Lizzie {
     scheduleAutoSetupSmokeProbe();
     scheduleYikeWebSmokeProbe();
     scheduleRemoteComputeSmokeProbe();
+  }
+
+  private static void moveLegacySshPasswordsToCredentialStore() {
+    try {
+      SshEnginePasswords.migrateLegacyPasswords(config);
+    } catch (IOException | RuntimeException failure) {
+      APP.warn("Unable to commit SSH credential migration; previous settings remain active", failure);
+    }
   }
 
   public static WorkDirectoryResolution bootstrapLogging() {

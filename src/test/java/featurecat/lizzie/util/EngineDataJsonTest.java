@@ -6,10 +6,36 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import featurecat.lizzie.gui.EngineData;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 class EngineDataJsonTest {
+  @Test
+  void keepsVaultReferencesSeparateFromTheLegacyPasswordField() {
+    EngineData source = new EngineData();
+    source.useJavaSSH = true;
+    source.password = "vault:existing-shared-reference";
+
+    JSONObject stored = Utils.engineDataToJson(source);
+    assertEquals("existing-shared-reference", stored.getString("passwordRef"));
+    assertEquals("", stored.getString("password"));
+    assertEquals(source.password, Utils.engineDataFromJson(stored, 0).password);
+
+    SshEnginePasswords.writeTo(stored, "");
+    assertFalse(stored.has("passwordRef"));
+    assertEquals("", Utils.engineDataFromJson(stored, 0).password);
+  }
+
+  @Test
+  void retainsLegacyPasswordUntilASettingsCommitMigratesIt() {
+    String legacy = Utils.doEncrypt("existing password");
+    EngineData source = Utils.engineDataFromJson(new JSONObject().put("password", legacy), 0);
+    JSONObject stored = Utils.engineDataToJson(source);
+    assertEquals(legacy, stored.getString("password"));
+    assertFalse(stored.has("passwordRef"));
+  }
+
   @Test
   void roundTripsClientOwnedGtpProfileDefensively() {
     EngineData source = new EngineData();

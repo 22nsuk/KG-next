@@ -1061,7 +1061,7 @@ public final class RemoteComputeConfig {
     return json == null ? new JSONObject() : json;
   }
 
-  private static CredentialStore credentialStore() {
+  static CredentialStore credentialStore() {
     CredentialStore override = credentialStoreOverride;
     if (override != null) {
       return override;

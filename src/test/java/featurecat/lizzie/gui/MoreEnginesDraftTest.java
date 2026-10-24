@@ -11,6 +11,9 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.remote.CredentialStore;
+import featurecat.lizzie.analysis.remote.SshCredentialTestStore;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import featurecat.lizzie.util.BundledKataGoProfile;
 import featurecat.lizzie.util.Utils;
 import java.awt.event.MouseEvent;
@@ -18,6 +21,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.List;
+import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +46,7 @@ class MoreEnginesDraftTest {
   private JTable previousTable;
   private boolean previousNeedUpdate;
   private TrackedMoreEngines editor;
+  private SshCredentialTestStore sshStore;
   private Thread.UncaughtExceptionHandler previousExceptionHandler;
   private final AtomicReference<Throwable> asynchronousFailure = new AtomicReference<>();
 
@@ -88,6 +94,7 @@ class MoreEnginesDraftTest {
   }
 
   private void restoreGlobals() {
+    if (sshStore != null) SshCredentialTestStore.reset();
     if (editor != null && editor.threadPolicyRefreshTimer != null) {
       editor.threadPolicyRefreshTimer.stop();
     }
@@ -96,6 +103,65 @@ class MoreEnginesDraftTest {
     Lizzie.engineManager = previousManager;
     MoreEngines.table = previousTable;
     MoreEngines.needUpdateEngine = previousNeedUpdate;
+  }
+
+  @Test
+  void cancellingPasswordEditsDoesNotTouchTheSavedSshCredential() throws Exception {
+    sshStore = new SshCredentialTestStore();
+    sshStore.install();
+    sshStore.write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "existing-shared", "previous password");
+    EngineData engine = sshEngine();
+    Utils.saveEngineSettings(new ArrayList<>(List.of(engine)));
+    Map<String, String> original = Map.copyOf(sshStore.values);
+
+    SwingUtilities.invokeAndWait(() -> {
+      clickRow(0);
+      editor.txtPassword.setText("uncommitted password");
+      editor.cancel.doClick();
+      assertEquals("vault:existing-shared", Utils.getEngineData().get(0).password);
+      assertEquals(original, sshStore.values);
+    });
+  }
+
+  @Test
+  void unrelatedSaveKeepsUnreadablePasswordReferenceAndSuccessfulReplacementIsStable() throws Exception {
+    sshStore = new SshCredentialTestStore();
+    sshStore.install();
+    sshStore.write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "existing-shared", "previous password");
+    Utils.saveEngineSettings(new ArrayList<>(List.of(sshEngine())));
+    sshStore.failReads = true;
+
+    SwingUtilities.invokeAndWait(() -> {
+      clickRow(0);
+      assertEquals("", new String(editor.txtPassword.getPassword()));
+      editor.txtName.setText("renamed remote");
+      editor.save.doClick();
+      assertEquals("vault:existing-shared", Utils.getEngineData().get(0).password);
+      sshStore.failReads = false;
+      editor.txtPassword.setText("replacement");
+      editor.save.doClick();
+      String saved = Utils.getEngineData().get(0).password;
+      assertTrue(saved.startsWith("vault:"));
+      assertFalse(saved.equals("vault:existing-shared"));
+      int writes = sshStore.writes;
+      editor.save.doClick();
+      assertEquals(writes, sshStore.writes);
+      assertEquals(saved, Utils.getEngineData().get(0).password);
+    });
+    assertEquals("previous password", SshEnginePasswords.reveal("vault:existing-shared"));
+    assertEquals("replacement", SshEnginePasswords.reveal(Utils.getEngineData().get(0).password));
+  }
+
+  private static EngineData sshEngine() {
+    EngineData engine = new EngineData();
+    engine.name = "remote";
+    engine.commands = "katago gtp";
+    engine.useJavaSSH = true;
+    engine.ip = "example.test";
+    engine.port = "22";
+    engine.userName = "user";
+    engine.password = "vault:existing-shared";
+    return engine;
   }
 
   @Test

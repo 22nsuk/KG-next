@@ -10,6 +10,10 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.remote.CredentialStore;
+import featurecat.lizzie.analysis.remote.SshCredentialTestStore;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
+import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -17,14 +21,99 @@ import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.JOptionPane;
 import javax.swing.JRadioButton;
 import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 class AnalysisSettingsSaveConfigTest {
+  @Test
+  void parentSaveCommitsRemotePasswordDraftOnceAndKeepsThePreviousReferenceUsable() throws Exception {
+    Config previousConfig = Lizzie.config;
+    LizzieFrame previousFrame = Lizzie.frame;
+    Path directory = Files.createTempDirectory("analysis-ssh-password-commit");
+    Config config = ConfigTestHelper.createForTests(directory);
+    initializeConfig(config);
+    config.analysisEngineCommand = "katago analysis";
+    SshCredentialTestStore store = new SshCredentialTestStore();
+    store.install();
+    store.write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "existing-shared", "previous password");
+    RemoteEngineData remote = new RemoteEngineData();
+    remote.useJavaSSH = true;
+    remote.password = SshEnginePasswords.display("vault:existing-shared").edited("replacement");
+    SilentAnalysisSettings settings = settingsWithRemoteDraft(remote);
+    try {
+      Lizzie.config = config;
+      Lizzie.frame = null;
+      assertEquals(1, store.writes, "the nested settings draft must not write to the vault");
+      SwingUtilities.invokeAndWait(() -> assertTrue(settings.saveConfig()));
+      assertTrue(remote.password.startsWith("vault:"));
+      assertEquals("replacement", SshEnginePasswords.reveal(remote.password));
+      assertEquals("previous password", SshEnginePasswords.reveal("vault:existing-shared"));
+      assertEquals(remote.password, Utils.getAnalysisEngineRemoteEngineData().password);
+      int writes = store.writes;
+      SwingUtilities.invokeAndWait(() -> assertTrue(settings.saveConfig()));
+      assertEquals(writes, store.writes);
+    } finally {
+      SshCredentialTestStore.reset();
+      Lizzie.config = previousConfig;
+      Lizzie.frame = previousFrame;
+    }
+  }
+
+  @Test
+  void failedParentSavePreservesRemotePasswordDraftAndOriginalVaultValue() throws Exception {
+    Config previousConfig = Lizzie.config;
+    LizzieFrame previousFrame = Lizzie.frame;
+    Path directory = Files.createTempDirectory("analysis-ssh-password-failure");
+    Config config = ConfigTestHelper.createForTests(directory);
+    initializeConfig(config);
+    config.analysisEngineCommand = "katago analysis";
+    SshCredentialTestStore store = new SshCredentialTestStore();
+    store.install();
+    store.write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "existing-shared", "previous password");
+    Map<String, String> existing = Map.copyOf(store.values);
+    RemoteEngineData remote = new RemoteEngineData();
+    remote.password = SshEnginePasswords.draft("replacement");
+    String draft = remote.password;
+    SilentAnalysisSettings settings = settingsWithRemoteDraft(remote);
+    Path configFile = Path.of(config.getConfigFilePath());
+    Files.delete(configFile);
+    Files.createDirectory(configFile);
+    JSONObject originalRoot = config.config;
+    try {
+      Lizzie.config = config;
+      Lizzie.frame = null;
+      SwingUtilities.invokeAndWait(() -> assertFalse(settings.saveConfig()));
+      assertSame(originalRoot, config.config);
+      assertEquals(draft, remote.password);
+      assertEquals(existing, store.values);
+    } finally {
+      SshCredentialTestStore.reset();
+      Lizzie.config = previousConfig;
+      Lizzie.frame = previousFrame;
+    }
+  }
+
+  private static SilentAnalysisSettings settingsWithRemoteDraft(RemoteEngineData remote) throws Exception {
+    SilentAnalysisSettings settings = allocate(SilentAnalysisSettings.class);
+    setField(AnalysisSettings.class, settings, "context", AnalysisSettings.Context.NORMAL);
+    setField(AnalysisSettings.class, settings, "engineCmd", new JFontTextArea("katago analysis"));
+    setField(AnalysisSettings.class, settings, "txtMaxVisits", new JTextField("20"));
+    for (String field : List.of("chkAutoExit", "chkPreLoad", "chkAlwaysOverride", "chkReuseCurrentEngine")) {
+      setField(AnalysisSettings.class, settings, field, selectedCheckBox(false));
+    }
+    setField(AnalysisSettings.class, settings, "chkUseJavaSSH", selectedCheckBox(true));
+    setField(AnalysisSettings.class, settings, "rdoUseCurrentRules", selectedRadio(false));
+    setField(AnalysisSettings.class, settings, "rdoUseSpecificRules", selectedRadio(true));
+    setField(AnalysisSettings.class, settings, "pendingRemoteEngineData", remote);
+    return settings;
+  }
+
 
   @Test
   void unchangedGeneratedCommandRemainsAutoManagedAfterSavingDedicatedMode() {

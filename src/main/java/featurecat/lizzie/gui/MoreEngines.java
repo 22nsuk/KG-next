@@ -5,6 +5,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationSchema;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
@@ -115,6 +116,7 @@ public class MoreEngines extends JPanel {
   JFontTextField txtPort;
   JFontTextField txtUserName;
   JPasswordField txtPassword;
+  private SshEnginePasswords.Display passwordDisplay = SshEnginePasswords.display("");
   JFontButton scanKeygen;
   String selectedEntryId = "";
   EngineThreadPolicy.Source selectedThreadSource = EngineThreadPolicy.Source.CFG;
@@ -352,6 +354,7 @@ public class MoreEngines extends JPanel {
     this.txtPort = new JFontTextField();
     this.txtUserName = new JFontTextField();
     this.txtPassword = new JPasswordField();
+    this.txtPassword.setToolTipText(SshEnginePasswords.storageHint());
     JFontLabel lblIp = new JFontLabel("IP");
     JFontLabel lblPort = new JFontLabel(this.resourceBundle.getString("MoreEngines.lblPort"));
     JFontLabel lblUserName =
@@ -359,6 +362,7 @@ public class MoreEngines extends JPanel {
     this.rdoKeyGen = new JFontRadioButton(this.resourceBundle.getString("MoreEngines.rdoKeygen"));
     this.rdoUsePassword =
         new JFontRadioButton(this.resourceBundle.getString("MoreEngines.lblPassword"));
+    this.rdoUsePassword.setToolTipText(SshEnginePasswords.storageHint());
     this.scanKeygen = new JFontButton(this.resourceBundle.getString("MoreEngines.scanKeygen"));
     this.scanKeygen.setMargin(new Insets(0, 0, 0, 0));
     this.scanKeygen.addActionListener(
@@ -712,7 +716,7 @@ public class MoreEngines extends JPanel {
             rdoKeyGen.setSelected(false);
             keyGenPath = "";
             txtUserName.setText("");
-            txtPassword.setText("");
+            showPassword("");
             scanKeygen.setToolTipText("");
             scanKeygen.setToolTipText("");
             curIndex = -1;
@@ -930,7 +934,7 @@ public class MoreEngines extends JPanel {
     if (!this.txtUserName.getText().equals(saved.userName)) return true;
     if (this.rdoKeyGen.isSelected() != saved.useKeyGen) return true;
     if (this.rdoKeyGen.isSelected()) return !this.keyGenPath.equals(saved.keyGenPath);
-    return !Utils.doEncrypt(new String(this.txtPassword.getPassword())).equals(saved.password);
+    return passwordDisplay.changed(new String(this.txtPassword.getPassword()));
   }
 
   private String currentInitialCommand() {
@@ -1219,6 +1223,7 @@ public class MoreEngines extends JPanel {
       this.txtKomi.setText((new StringBuilder(String.valueOf(engineData.komi))).toString());
       this.chkRemoteEngine.setSelected(engineData.useJavaSSH);
       if (engineData.useJavaSSH) {
+        showPassword(engineData.password);
         this.txtIP.setText(engineData.ip);
         this.txtPort.setText(engineData.port);
         this.rdoUsePassword.setSelected(!engineData.useKeyGen);
@@ -1228,8 +1233,6 @@ public class MoreEngines extends JPanel {
           this.keyGenPath = engineData.keyGenPath;
           this.scanKeygen.setToolTipText(this.keyGenPath);
           this.rdoKeyGen.setToolTipText(this.keyGenPath);
-        } else {
-          this.txtPassword.setText(Utils.doDecrypt(engineData.password));
         }
       } else {
         this.txtIP.setText("");
@@ -1238,7 +1241,7 @@ public class MoreEngines extends JPanel {
         this.rdoKeyGen.setSelected(false);
         this.keyGenPath = "";
         this.txtUserName.setText("");
-        this.txtPassword.setText("");
+        showPassword("");
         this.scanKeygen.setToolTipText("");
         this.scanKeygen.setToolTipText("");
       }
@@ -1264,7 +1267,7 @@ public class MoreEngines extends JPanel {
       this.rdoKeyGen.setSelected(false);
       this.keyGenPath = "";
       this.txtUserName.setText("");
-      this.txtPassword.setText("");
+      showPassword("");
       this.scanKeygen.setToolTipText("");
       this.scanKeygen.setToolTipText("");
     }
@@ -1292,6 +1295,12 @@ public class MoreEngines extends JPanel {
     updateThreadPolicyDetails();
     table.validate();
     table.updateUI();
+  }
+
+  private void showPassword(String stored) {
+    passwordDisplay = SshEnginePasswords.display(stored);
+    txtPassword.setText(passwordDisplay.text());
+    txtPassword.setToolTipText(SshEnginePasswords.displayHint(passwordDisplay));
   }
 
   private boolean saveCurrentEngineConfig() {
@@ -1345,7 +1354,11 @@ public class MoreEngines extends JPanel {
       engineDt.useKeyGen = this.rdoKeyGen.isSelected();
       engineDt.userName = this.txtUserName.getText();
       if (engineDt.useKeyGen) engineDt.keyGenPath = this.keyGenPath;
-      else engineDt.password = Utils.doEncrypt(new String(this.txtPassword.getPassword()));
+      else {
+        String entered = new String(this.txtPassword.getPassword());
+        engineDt.password = !passwordDisplay.changed(entered) && latest != null
+            ? latest.password : passwordDisplay.edited(entered);
+      }
     }
     if (engineDt.isDefault) {
       for (EngineData engine : engineData) engine.isDefault = false;
@@ -1363,6 +1376,10 @@ public class MoreEngines extends JPanel {
       engineDt = savedEntries.get(engineDt.index);
     }
     selectedEntryId = engineDt.id;
+    passwordDisplay = new SshEnginePasswords.Display(
+        engineDt.password, new String(txtPassword.getPassword()),
+        passwordDisplay.readable() || !passwordDisplay.stored().equals(engineDt.password));
+    txtPassword.setToolTipText(SshEnginePasswords.displayHint(passwordDisplay));
     curIndex = findEntryIndex(savedEntries, selectedEntryId);
     selectedThreadSource = EngineThreadPolicy.source(engineDt);
     threadPolicySourceChanged = false;

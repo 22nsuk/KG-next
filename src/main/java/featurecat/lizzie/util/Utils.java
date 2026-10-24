@@ -6,6 +6,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.CaptureTsumeGo;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.HtmlMessage;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -642,27 +643,29 @@ public class Utils {
       remoteData.port = remoteEngineInfo.optString("port", "");
       remoteData.userName = remoteEngineInfo.optString("userName", "");
       remoteData.useKeyGen = remoteEngineInfo.optBoolean("useKeyGen", false);
-      remoteData.password = remoteEngineInfo.optString("password", "");
+      remoteData.password = SshEnginePasswords.readFrom(remoteEngineInfo);
       remoteData.keyGenPath = remoteEngineInfo.optString("keyGenPath", "");
     }
     return remoteData;
   }
 
-  public static void saveContributeRemoteEngineData(RemoteEngineData remoteEngineData) {
+  public static synchronized void saveContributeRemoteEngineData(RemoteEngineData remoteEngineData) {
     JSONObject remoteEngineInfo = new JSONObject();
     remoteEngineInfo.put("useJavaSSH", remoteEngineData.useJavaSSH);
     remoteEngineInfo.put("ip", remoteEngineData.ip);
     remoteEngineInfo.put("port", remoteEngineData.port);
     remoteEngineInfo.put("userName", remoteEngineData.userName);
-    remoteEngineInfo.put("password", remoteEngineData.password);
+    SshEnginePasswords.writeTo(remoteEngineInfo, remoteEngineData.password);
     remoteEngineInfo.put("useKeyGen", remoteEngineData.useKeyGen);
     remoteEngineInfo.put("keyGenPath", remoteEngineData.keyGenPath);
-    Lizzie.config.leelazConfig.put("contribute-engine-ssh-info", remoteEngineInfo);
+    JSONObject candidate = new JSONObject(Lizzie.config.leelazConfig.toString());
+    candidate.put("contribute-engine-ssh-info", remoteEngineInfo);
     try {
-      Lizzie.config.save();
+      Lizzie.config.saveConfigSections(Lizzie.config.uiConfig, candidate);
     } catch (IOException e) {
-      e.printStackTrace();
+      throw new java.io.UncheckedIOException(e);
     }
+    remoteEngineData.password = getContributeRemoteEngineData().password;
   }
 
 
@@ -677,23 +680,21 @@ public class Utils {
       remoteData.port = remoteEngineInfo.optString("port", "");
       remoteData.userName = remoteEngineInfo.optString("userName", "");
       remoteData.useKeyGen = remoteEngineInfo.optBoolean("useKeyGen", false);
-      remoteData.password = remoteEngineInfo.optString("password", "");
+      remoteData.password = SshEnginePasswords.readFrom(remoteEngineInfo);
       remoteData.keyGenPath = remoteEngineInfo.optString("keyGenPath", "");
     }
     return remoteData;
   }
 
-  public static void saveAnalysisEngineRemoteEngineData(RemoteEngineData remoteEngineData) {
-    updateAnalysisEngineRemoteEngineData(remoteEngineData);
+  public static synchronized void saveAnalysisEngineRemoteEngineData(RemoteEngineData remoteEngineData) {
+    JSONObject candidate = new JSONObject(Lizzie.config.leelazConfig.toString());
+    updateAnalysisEngineRemoteEngineData(candidate, remoteEngineData);
     try {
-      Lizzie.config.save();
+      Lizzie.config.saveConfigSections(Lizzie.config.uiConfig, candidate);
     } catch (IOException e) {
-      e.printStackTrace();
+      throw new java.io.UncheckedIOException(e);
     }
-  }
-
-  public static void updateAnalysisEngineRemoteEngineData(RemoteEngineData remoteEngineData) {
-    updateAnalysisEngineRemoteEngineData(Lizzie.config.leelazConfig, remoteEngineData);
+    remoteEngineData.password = getAnalysisEngineRemoteEngineData().password;
   }
 
   public static void updateAnalysisEngineRemoteEngineData(
@@ -703,7 +704,7 @@ public class Utils {
     remoteEngineInfo.put("ip", remoteEngineData.ip);
     remoteEngineInfo.put("port", remoteEngineData.port);
     remoteEngineInfo.put("userName", remoteEngineData.userName);
-    remoteEngineInfo.put("password", remoteEngineData.password);
+    SshEnginePasswords.writeTo(remoteEngineInfo, remoteEngineData.password);
     remoteEngineInfo.put("useKeyGen", remoteEngineData.useKeyGen);
     remoteEngineInfo.put("keyGenPath", remoteEngineData.keyGenPath);
     targetLeelazConfig.put("analysis-engine-ssh-info", remoteEngineInfo);
@@ -795,6 +796,8 @@ public class Utils {
       entry.index = candidate.index;
       entry.isDefault = candidate.isDefault;
       entry.threadPolicy = candidate.threadPolicy;
+      entry.password = SshEnginePasswords.readFrom(
+          Lizzie.config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(i));
     }
   }
 
@@ -1201,7 +1204,7 @@ public class Utils {
     engineDt.ip = engineInfo.optString("ip", "");
     engineDt.port = engineInfo.optString("port", "");
     engineDt.userName = engineInfo.optString("userName", "");
-    engineDt.password = engineInfo.optString("password", "");
+    engineDt.password = SshEnginePasswords.readFrom(engineInfo);
     engineDt.initialCommand = engineInfo.optString("initialCommand", "");
     engineDt.gtpConfigurationProtocol =
         engineInfo.optString("gtpConfigurationProtocol", "");
@@ -1232,7 +1235,7 @@ public class Utils {
     engineInfo.put("ip", engineDt.ip);
     engineInfo.put("port", engineDt.port);
     engineInfo.put("userName", engineDt.userName);
-    engineInfo.put("password", engineDt.password);
+    SshEnginePasswords.writeTo(engineInfo, engineDt.password);
     engineInfo.put("useKeyGen", engineDt.useKeyGen);
     engineInfo.put("keyGenPath", engineDt.keyGenPath);
     engineInfo.put("initialCommand", engineDt.initialCommand);

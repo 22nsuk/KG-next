@@ -29,6 +29,8 @@ public final class PlatformCredentialStore {
   private static final String ZHIZI_KEYCHAIN_SERVICE_PREFIX = "cn.lizzieyzy.next.zhizi.";
   private static final String AI_COMMENTARY_KEYCHAIN_SERVICE =
       "cn.lizzieyzy.next.ai-commentary.api-key";
+  private static final String SSH_ENGINE_KEYCHAIN_SERVICE =
+      "cn.lizzieyzy.next.ssh-engine.password";
 
   private PlatformCredentialStore() {}
 
@@ -185,6 +187,7 @@ public final class PlatformCredentialStore {
     }
 
     private static String service(Kind kind) {
+      if (kind == Kind.SSH_ENGINE_PASSWORD) return SSH_ENGINE_KEYCHAIN_SERVICE;
       return kind == Kind.API_KEY
           ? AI_COMMENTARY_KEYCHAIN_SERVICE
           : ZHIZI_KEYCHAIN_SERVICE_PREFIX + kind.id();
@@ -245,6 +248,8 @@ public final class PlatformCredentialStore {
       command.add(
           kind == Kind.API_KEY
               ? "--label=KG-next AI Commentary API Key"
+              : kind == Kind.SSH_ENGINE_PASSWORD
+                  ? "--label=KG-next SSH Engine Password"
               : "--label=KG-next Zhizi " + kind.id());
       command.addAll(secretAttributes(kind, account));
       CommandResult result = run(command, secret + System.lineSeparator());
@@ -332,7 +337,8 @@ public final class PlatformCredentialStore {
       try {
         encrypted = Base64.getDecoder().decode(encoded);
         plaintext = protector.unprotect(encrypted);
-        return nonEmptySecret(new String(plaintext, StandardCharsets.UTF_8));
+        String secret = new String(plaintext, StandardCharsets.UTF_8);
+        return secret.isEmpty() ? Optional.empty() : Optional.of(secret);
       } catch (RuntimeException e) {
         throw CommandCredentialStore.failure("read");
       } finally {

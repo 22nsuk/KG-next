@@ -8,7 +8,8 @@ public interface CredentialStore {
   enum Kind {
     ACCOUNT_TOKEN("account-token"),
     PASSWORD("password"),
-    API_KEY("api-key");
+    API_KEY("api-key"),
+    SSH_ENGINE_PASSWORD("ssh-engine-password");
 
     private final String id;
 
