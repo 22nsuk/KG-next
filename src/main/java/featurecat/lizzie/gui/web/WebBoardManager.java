@@ -3,6 +3,7 @@ package featurecat.lizzie.gui.web;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineFollowController;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -784,6 +785,7 @@ public class WebBoardManager {
   }
 
   private void publishTrialState() {
+    Menu.requestBreadthAdmissionRefresh();
     trialEvents.publish(activeSession);
   }
 

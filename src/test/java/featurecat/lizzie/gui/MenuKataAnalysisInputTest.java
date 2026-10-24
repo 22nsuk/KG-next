@@ -230,6 +230,43 @@ class MenuKataAnalysisInputTest {
   }
 
   @Test
+  void unavailableEngineRejectsAlreadyQueuedValidDraftAndCheckboxEvent() throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          engine.breadthBlocked = true;
+          // Admission can change before the deferred enabled-state update reaches the EDT.
+          menu.txtWRN.setText("1.25");
+          menu.chkWRN.setSelected(false);
+          for (var listener : menu.chkWRN.getActionListeners()) {
+            listener.actionPerformed(new java.awt.event.ActionEvent(menu.chkWRN, 0, "queued"));
+          }
+          assertUnchanged(before);
+          assertTrue(menu.chkWRN.isSelected());
+          assertFalse(menu.chkWRN.isEnabled());
+          assertFalse(menu.txtWRN.isEnabled());
+          assertEquals("1.25", menu.txtWRN.getText());
+          engine.breadthBlocked = false;
+          menu.refreshBreadthAdmission();
+          assertTrue(menu.chkWRN.isEnabled());
+          assertTrue(menu.txtWRN.isEnabled());
+          assertUnchanged(before);
+        });
+  }
+
+  @Test
+  void humanGameRejectsValidBreadthWithoutClearingAnalysis() throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          Lizzie.frame.isPlayingAgainstLeelaz = true;
+          menu.txtWRN.setText("1.25");
+          assertUnchanged(before);
+          assertFalse(menu.chkWRN.isEnabled());
+        });
+  }
+
+  @Test
   void engineDisplayRefreshDoesNotApplyAndClearsObsoleteInputErrors() throws Exception {
     onEdt(
         () -> {
@@ -386,6 +423,12 @@ class MenuKataAnalysisInputTest {
   private static final class RecordingEngine extends Leelaz {
     List<String> commands;
     int ponders;
+    boolean breadthBlocked;
+
+    @Override
+    public boolean canSetAnalysisWideRootNoise() {
+      return !breadthBlocked;
+    }
 
     private RecordingEngine() throws Exception {
       super("");

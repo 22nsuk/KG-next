@@ -21622,7 +21622,9 @@ public class LizzieFrame extends JFrame {
         || EngineManager.isEmpty) {
       return false;
     }
-    if (!positionAlreadyConfirmed && !syncCurrentPositionToPrimaryEngineForAnalysis()) {
+    if (!positionAlreadyConfirmed
+        && !isTrackingStillSearchingCurrentPosition()
+        && !syncCurrentPositionToPrimaryEngineForAnalysis()) {
       return false;
     }
     if (!Lizzie.leelaz.isPondering()) {
@@ -21630,6 +21632,13 @@ public class LizzieFrame extends JFrame {
     }
     refresh();
     return true;
+  }
+
+  private boolean isTrackingStillSearchingCurrentPosition() {
+    TrackingAnalysisController controller = trackingAnalysisController;
+    return controller != null
+        && !controller.snapshot().selectedPoints().isEmpty()
+        && controller.holdsSearchOf(currentTrackingContext());
   }
 
   private boolean syncCurrentPositionToPrimaryEngineForAnalysis() {

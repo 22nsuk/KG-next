@@ -17,6 +17,7 @@ import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.JFontCheckBox;
 import featurecat.lizzie.gui.JFontLabel;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.Message;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.rules.Board;
@@ -719,6 +720,7 @@ public class Leelaz {
       AnalysisOutputOwnership outputOwner = binding.analysisOutputOwnership.get();
       return moveFocusCapabilityBinding == binding
           && moveFocusCapability == MoveFocusCapability.SUPPORTED
+          && isPondering
           && isEligibleLocalKataGoForReadBoardTracking()
           && confirmedReadBoardTrackingIncarnation() == binding.incarnation
           && ordinaryFocusBaseCommand != null
@@ -729,6 +731,16 @@ public class Leelaz {
           && Lizzie.frame != null && !Lizzie.frame.isPlayingAgainstLeelaz
           && !Lizzie.frame.isAnaPlayingAgainstLeelaz;
     }
+  }
+
+  boolean holdsMoveFocusSearch(
+      TrackingAnalysisController owner, TrackingAnalysisController.Context context) {
+    MoveFocusState state = moveFocusState;
+    return state != null
+        && state.owner == owner
+        && state.context == context
+        && state.current()
+        && isPondering;
   }
 
   List<MoveData> beginMoveFocus(TrackingAnalysisController owner,
@@ -12330,6 +12342,39 @@ public class Leelaz {
     }
   }
 
+  /**
+   * Whether the current reader advertised KataGo's {@code set_position}, which restores an
+   * arbitrary static position in-band when the engine cannot read host snapshot files.
+   */
+  final boolean supportsSetPositionSnapshotRestore(ExactSnapshotRestoreAdmission admission) {
+    requireExactSnapshotRestoreAdmission(admission);
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    if (binding.terminated) {
+      throw new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.ADMISSION_STALE,
+          "Exact snapshot restore engine process is no longer current.");
+    }
+    synchronized (engineArbitrationLock()) {
+      boolean supported =
+          endGetCommandList
+              && commandListBinding == binding
+              && commandLists.contains("set_position");
+      if (supported) {
+        if (this == admission.authority) admission.authorityInBandBinding = binding;
+        else admission.mirrorInBandBinding = binding;
+      }
+      return supported;
+    }
+  }
+
+  /**
+   * Whether analysis and move commands name the side to play ({@code kata-analyze W ...}), so a
+   * restored position does not need a move history to tell the engine whose turn it is.
+   */
+  final boolean namesSideToPlayInCommands() {
+    return canAddPlayer && !useRemoteCompute;
+  }
+
   void advertiseCommandsForTest(List<String> commands) {
     synchronized (engineArbitrationLock()) {
       ReaderStreamBinding binding = currentReaderStreamBinding();
@@ -12781,11 +12826,20 @@ public class Leelaz {
         false,
         null,
         true,
-        expectedBinding != null ? expectedBinding : expectedReadBoardGmaResponseBinding(admission));
+        expectedBinding != null
+            ? expectedBinding
+            : expectedExactSnapshotResponseBinding(admission));
   }
 
-  private ReaderStreamBinding expectedReadBoardGmaResponseBinding(
+  private ReaderStreamBinding expectedExactSnapshotResponseBinding(
       ExactSnapshotRestoreAdmission admission) {
+    if (admission != null) {
+      ReaderStreamBinding inBand =
+          this == admission.authority
+              ? admission.authorityInBandBinding
+              : admission.mirrorInBandBinding;
+      if (inBand != null) return inBand;
+    }
     if (admission == null || admission.owner != ExactSnapshotRestoreOwner.READ_BOARD_GMA) {
       return null;
     }
@@ -14827,6 +14881,7 @@ public class Leelaz {
     session.wasPondering = isPondering();
     session.readerBinding = readerStreamBinding;
     exclusiveGtpSession = session;
+    Menu.requestBreadthAdmissionRefresh();
     return session;
   }
 
@@ -14987,6 +15042,30 @@ public class Leelaz {
   }
 
   private ExclusiveGtpLeaseAvailability intrinsicExclusiveGtpLeaseAvailability() {
+    ExclusiveGtpLeaseAvailability ordinary = ordinaryKataGoAvailabilityLocked();
+    if (ordinary != ExclusiveGtpLeaseAvailability.AVAILABLE) {
+      return ordinary;
+    }
+    if (!endGetCommandList) {
+      return ExclusiveGtpLeaseAvailability.ENGINE_NOT_READY;
+    }
+    if (!commandLists.containsAll(FLASH_ANALYSIS_GTP_COMMANDS)) {
+      return ExclusiveGtpLeaseAvailability.MISSING_CAPABILITY;
+    }
+    if (Board.boardWidth != Board.boardHeight && !commandLists.contains("rectangular_boardsize")) {
+      return ExclusiveGtpLeaseAvailability.MISSING_CAPABILITY;
+    }
+    if (exclusiveGtpSession != null) {
+      return ExclusiveGtpLeaseAvailability.EXISTING_LEASE;
+    }
+    return ExclusiveGtpLeaseAvailability.AVAILABLE;
+  }
+
+  /**
+   * The checks every KataGo command needs, before any flash-analysis requirement: GTP capability,
+   * restored state, no ReadBoard GMA reservation, no lifecycle change, a running KataGo process.
+   */
+  private ExclusiveGtpLeaseAvailability ordinaryKataGoAvailabilityLocked() {
     if (!hasGtpCapability()) {
       return ExclusiveGtpLeaseAvailability.MISSING_CAPABILITY;
     }
@@ -15005,24 +15084,28 @@ public class Leelaz {
     if (!isKatago) {
       return ExclusiveGtpLeaseAvailability.NOT_KATAGO;
     }
-    if (!endGetCommandList) {
-      return ExclusiveGtpLeaseAvailability.ENGINE_NOT_READY;
-    }
-    if (!commandLists.containsAll(FLASH_ANALYSIS_GTP_COMMANDS)) {
-      return ExclusiveGtpLeaseAvailability.MISSING_CAPABILITY;
-    }
-    if (Board.boardWidth != Board.boardHeight && !commandLists.contains("rectangular_boardsize")) {
-      return ExclusiveGtpLeaseAvailability.MISSING_CAPABILITY;
-    }
-    if (exclusiveGtpSession != null) {
-      return ExclusiveGtpLeaseAvailability.EXISTING_LEASE;
-    }
     return ExclusiveGtpLeaseAvailability.AVAILABLE;
   }
 
   public ExclusiveGtpLeaseAvailability previewExclusiveGtpLeaseAvailability() {
     synchronized (engineArbitrationLock()) {
       return intrinsicExclusiveGtpLeaseAvailability();
+    }
+  }
+
+  /**
+   * Whether the toolbar breadth ({@code kata-set-param analysisWideRootNoise}) can be changed now.
+   * It goes through the ordinary command queue, so unlike the flash-analysis lease it does not need
+   * the flash-analysis command set; it does wait for exclusive work and restores to finish.
+   */
+  public boolean canSetAnalysisWideRootNoise() {
+    synchronized (engineArbitrationLock()) {
+      return ordinaryKataGoAvailabilityLocked() == ExclusiveGtpLeaseAvailability.AVAILABLE
+          && !isWebTrialEngineBusy()
+          && !isThinking
+          && !isInputCommand
+          && exclusiveGtpSession == null
+          && !foregroundRestoreInProgress;
     }
   }
 
@@ -15062,6 +15145,7 @@ public class Leelaz {
       exclusiveGtpSession = null;
       engineArbitrationLock().notifyAll();
     }
+    Menu.requestBreadthAdmissionRefresh();
     if (advanceOrdinaryQueue) {
       try {
         trySendCommandFromQueue();
@@ -15279,6 +15363,7 @@ public class Leelaz {
   }
 
   private void bumpExclusiveOccupancyPromptGenerationLocked() {
+    Menu.requestBreadthAdmissionRefresh();
     exclusiveOccupancyPromptGeneration.incrementAndGet();
   }
 
@@ -15315,6 +15400,7 @@ public class Leelaz {
       }
     }
     if (ended) {
+      Menu.requestBreadthAdmissionRefresh();
       trySendCommandFromQueue();
     }
   }
@@ -15582,6 +15668,14 @@ public class Leelaz {
         && admission.primaryEngineGeneration >= 0
         && Lizzie.capturePrimaryEngineGeneration(authority)
             != admission.primaryEngineGeneration) {
+      return false;
+    }
+    if ((admission.authorityInBandBinding != null
+            && (admission.authorityInBandBinding.terminated
+                || authority.currentEngineIncarnation() != admission.authorityInBandBinding))
+        || (admission.mirrorInBandBinding != null
+            && (admission.mirrorInBandBinding.terminated
+                || admission.mirror.currentEngineIncarnation() != admission.mirrorInBandBinding))) {
       return false;
     }
     synchronized (authority.engineArbitrationLock()) {
@@ -16497,6 +16591,7 @@ public class Leelaz {
   }
 
   private void finishForegroundRestoreLifecycleLocked() {
+    Menu.requestBreadthAdmissionRefresh();
     exclusiveGtpLifecycleTransition = false;
     exclusiveGtpLifecycleQueueGate = false;
     exclusiveGtpLifecycleOwner = null;
@@ -17392,6 +17487,9 @@ public class Leelaz {
     private final Object ownerIdentity;
     private final Object authorityIncarnation;
     private final Object mirrorIncarnation;
+    // Bound at capability preflight, so a later reader cannot inherit the advertised capability.
+    private volatile ReaderStreamBinding authorityInBandBinding;
+    private volatile ReaderStreamBinding mirrorInBandBinding;
     private final LifecycleCompletionClaim.BoardSyncCompletionLease boardSyncLease;
     private final long primaryEngineGeneration;
     private final AnalysisStateLineage authorityLineage;
@@ -18417,6 +18515,7 @@ public class Leelaz {
       if (!endpointsReleased.compareAndSet(false, true)) {
         return;
       }
+      Menu.requestBreadthAdmissionRefresh();
       List<Runnable> callbacks;
       synchronized (this) {
         callbacks = new ArrayList<>(afterEndpointRelease);

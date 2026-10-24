@@ -218,7 +218,10 @@ public final class ExactSnapshotEngineRestore {
             throw new Failure(FailureCategory.UNSUPPORTED_REMOTE_POSITION,
                 "Engine does not advertise set_free_handicap for exact handicap restore.");
           }
-          if (!target.useRemoteCompute && !plan.initialHandicap && !plan.emptyOrigin) {
+          if (!target.useRemoteCompute
+              && !plan.initialHandicap
+              && !plan.emptyOrigin
+              && !target.supportsSetPositionSnapshotRestore(plan.admission)) {
             throw new Failure(FailureCategory.SNAPSHOT_PREPARATION,
                 UNSUPPORTED_SNAPSHOT_TRANSPORT_DETAIL);
           }
@@ -236,7 +239,8 @@ public final class ExactSnapshotEngineRestore {
           localTargets.get(0).beforeExactSnapshotPreclearForTest();
         }
         if (plan.preclear) {
-          clearCapturedTargets(plan, lifecycle == null ? null : lifecycle.stagedSnapshot);
+          clearCapturedTargets(
+              plan, lifecycle == null ? null : lifecycle.stagedSnapshot, remoteTargets);
         }
         if (!remoteTargets.isEmpty()) {
           restoreRemoteSnapshotInBand(plan, remoteTargets);
@@ -280,10 +284,16 @@ public final class ExactSnapshotEngineRestore {
         || plan.snapshotData.blackToPlay || !plan.tail.isEmpty()) {
       return;
     }
-    throw new Failure(
-        FailureCategory.UNSUPPORTED_REMOTE_POSITION,
-        "Remote exact snapshot restore cannot represent a white-to-play position with an "
-            + "empty real tail.");
+    // set_position leaves Black to play. With no real tail, the next analysis or move command
+    // must name the intended side rather than relying on the engine's default turn.
+    for (Leelaz target : remoteTargets) {
+      if (!target.namesSideToPlayInCommands()) {
+        throw new Failure(
+            FailureCategory.UNSUPPORTED_REMOTE_POSITION,
+            "Remote exact snapshot restore cannot represent a white-to-play position with an "
+                + "empty real tail.");
+      }
+    }
   }
 
   private static void restoreRemoteSnapshotInBand(RestorePlan plan, List<Leelaz> remoteTargets) {
@@ -388,10 +398,11 @@ public final class ExactSnapshotEngineRestore {
     return Board.coordsAsName(x) + (boardHeight - y);
   }
 
-  private static void clearCapturedTargets(RestorePlan plan, StagedSnapshot stagedSnapshot) {
+  private static void clearCapturedTargets(
+      RestorePlan plan, StagedSnapshot stagedSnapshot, List<Leelaz> inBandTargets) {
     for (Leelaz targetEngine : plan.targetEngines) {
       Leelaz.SnapshotFileAccess fileAccess =
-          targetEngine.useRemoteCompute || stagedSnapshot == null
+          stagedSnapshot == null || inBandTargets.contains(targetEngine)
               ? null
               : stagedSnapshot.forEngine(targetEngine).fileAccess;
       sendCapturedRestoreCommand(plan, targetEngine, fileAccess, "clear_board", "preclear");
