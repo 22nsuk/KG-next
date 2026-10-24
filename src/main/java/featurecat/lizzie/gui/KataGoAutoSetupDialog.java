@@ -3323,9 +3323,7 @@ public class KataGoAutoSetupDialog extends JDialog {
     KataGoSetupRuntimeState runtime = runtimeState();
     String unavailableReason =
         snapshot != null
-            ? (runtime == null
-                ? text("AutoSetup.validationChecking")
-                : runtime.benchmarkUnavailableReason())
+            ? (runtime == null ? "" : runtime.benchmarkUnavailableReason())
             : targetEntry != null
                 ? featurecat.lizzie.util.EngineThreadPolicy.isRemoteManaged(
                         targetEntry.commands, targetEntry.useJavaSSH)
@@ -3370,6 +3368,9 @@ public class KataGoAutoSetupDialog extends JDialog {
       }
     }
     if (benchmarkResultIsHistorical) details.add(text("B11SpeedNotice.historicalResult"));
+    // Pending inspection is not evidence that a saved measurement is unavailable or invalid.
+    // Admission stays disabled until the runtime observation arrives, without hiding its history.
+    if (snapshot != null && runtime == null) details.add(text("AutoSetup.validationChecking"));
     if (!unavailableReason.isBlank()) details.add(unavailableReason);
     if (engineValidationResult != null && !engineValidationResult.isValid()) {
       details.add(lblEngineValidationValue.getText());
