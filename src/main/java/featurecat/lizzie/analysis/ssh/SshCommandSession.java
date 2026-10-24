@@ -21,11 +21,14 @@ import org.apache.sshd.client.config.hosts.HostConfigEntryResolver;
 import org.apache.sshd.client.future.AuthFuture;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.NamedFactory;
+import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.config.keys.KeyUtils;
 import org.apache.sshd.common.kex.BuiltinDHFactories;
 import org.apache.sshd.common.kex.KeyExchangeFactory;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.signature.Signature;
+import org.apache.sshd.common.util.io.IoUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -123,6 +126,7 @@ public final class SshCommandSession implements AutoCloseable {
         synchronized (this) {
           if (closed) throw new InterruptedIOException("SSH connection was cancelled.");
           channel = connected.createExecChannel(command);
+          forwardOutputEof(channel);
           opening = channel.open();
           commandStarting = true;
         }
@@ -163,6 +167,20 @@ public final class SshCommandSession implements AutoCloseable {
       }
       if (connecting != null) connecting.stop();
     }
+  }
+
+  private static void forwardOutputEof(ChannelExec channel) {
+    channel.addChannelListener(
+        new ChannelListener() {
+          @Override
+          public void channelStateChanged(Channel changed, String hint) {
+            if (changed.isEofSignalled()) {
+              // MINA's synchronous pipes otherwise wait for channel close after remote EOF.
+              // Close the writers so buffered output drains, keeping stdin open for forcequit.
+              IoUtils.closeQuietly(channel.getOut(), channel.getErr());
+            }
+          }
+        });
   }
 
   private static void authenticate(ClientSession session, SshKnownHosts.Check hostKeyCheck)

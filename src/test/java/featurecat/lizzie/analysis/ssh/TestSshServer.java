@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.apache.sshd.common.SshConstants;
+import org.apache.sshd.common.channel.ChannelOutputStream;
 import org.apache.sshd.common.kex.BuiltinDHFactories;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.common.signature.BuiltinSignatures;
@@ -23,10 +25,12 @@ import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.channel.ChannelSessionFactory;
 import org.apache.sshd.server.command.Command;
+import org.slf4j.LoggerFactory;
 
 /**
  * Loopback SSH server for tests. Commands answer a tiny GTP subset on stdin/stdout, except {@code
- * query-server}, which prints the configured catalog response and exits.
+ * query-server}, which prints the configured catalog response and exits, and {@code
+ * eof-output-wait-forcequit}, which ends its output while continuing to accept input.
  */
 public final class TestSshServer implements AutoCloseable {
   static {
@@ -227,6 +231,19 @@ public final class TestSshServer implements AutoCloseable {
         out.flush();
         exit.onExit(0);
         return;
+      }
+      if ("eof-output-wait-forcequit".equals(command)) {
+        // MINA's supplied stdout does not send SSH EOF when closed. End only the server's output
+        // direction so the client must still send forcequit through the live input channel.
+        try (OutputStream output =
+            new ChannelOutputStream(
+                channel,
+                channel.getRemoteWindow(),
+                LoggerFactory.getLogger(TestSshServer.class),
+                SshConstants.SSH_MSG_CHANNEL_DATA,
+                true)) {
+          output.write("output before EOF\n".repeat(200).getBytes(StandardCharsets.UTF_8));
+        }
       }
       worker = new Thread(this::answerGtp, "test-ssh-gtp");
       worker.setDaemon(true);

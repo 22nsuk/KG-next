@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
+import org.apache.sshd.common.SshConstants;
+import org.apache.sshd.common.channel.ChannelOutputStream;
 import org.apache.sshd.common.keyprovider.KeyPairProvider;
 import org.apache.sshd.server.ExitCallback;
 import org.apache.sshd.server.SshServer;
@@ -28,6 +30,7 @@ import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.command.Command;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /** Real GUI/SSH transport and children that deliberately survive stdin EOF, as KataGo does. */
 public class ContributeSshShutdownDesktopTest {
@@ -190,7 +193,6 @@ public class ContributeSshShutdownDesktopTest {
     private final class RemoteCommand implements Command {
       private final String command;
       private InputStream input;
-      private OutputStream output;
       private ExitCallback exit;
 
       private RemoteCommand(String command) {
@@ -204,7 +206,7 @@ public class ContributeSshShutdownDesktopTest {
 
       @Override
       public void setOutputStream(OutputStream output) {
-        this.output = output;
+        // start() supplies an EOF-on-close stream, independent of the child process lifetime.
       }
 
       @Override
@@ -255,7 +257,13 @@ public class ContributeSshShutdownDesktopTest {
           workers.execute(
               () -> {
                 try (var childOutput = process.getInputStream();
-                    var remoteOutput = output) {
+                    var remoteOutput =
+                        new ChannelOutputStream(
+                            channel,
+                            channel.getRemoteWindow(),
+                            LoggerFactory.getLogger(SshFixture.class),
+                            SshConstants.SSH_MSG_CHANNEL_DATA,
+                            true)) {
                   byte[] buffer = new byte[1024];
                   int count;
                   while ((count = childOutput.read(buffer)) != -1) {

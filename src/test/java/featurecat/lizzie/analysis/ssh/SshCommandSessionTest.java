@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis.ssh;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
@@ -231,6 +233,36 @@ class SshCommandSessionTest {
       session.stdin().close();
       assertTrue(session.awaitCompletion(Duration.ofSeconds(10)));
       assertEquals(catalog, new String(session.stdout().readAllBytes(), StandardCharsets.UTF_8));
+    }
+  }
+
+  @Test
+  void remoteEofPreservesBufferedOutputAndLeavesStdinOpen() throws Exception {
+    SshKnownHosts knownHosts = new SshKnownHosts(temp.resolve("known_hosts"));
+    try (TestSshServer server = TestSshServer.builder().password("secret").start();
+        SshCommandSession session =
+            SshCommandSession.open(
+                server.target("player"),
+                SshCredential.password("secret"),
+                "eof-output-wait-forcequit",
+                knownHosts)) {
+      assertTimeoutPreemptively(
+          Duration.ofSeconds(10),
+          () -> {
+            assertEquals(
+                "output before EOF\n".repeat(200),
+                new String(session.stdout().readAllBytes(), StandardCharsets.UTF_8));
+            assertEquals(
+                "started eof-output-wait-forcequit\n",
+                new String(session.stderr().readAllBytes(), StandardCharsets.UTF_8));
+          });
+      assertTrue(session.isOpen(), "Remote EOF must leave the input direction connected");
+      assertEquals(1L, server.forcequitReceived.getCount());
+      session.stdin().write("forcequit\n".getBytes(StandardCharsets.UTF_8));
+      session.stdin().flush();
+      assertTrue(server.forcequitReceived.await(10, TimeUnit.SECONDS));
+      assertEquals(List.of("forcequit"), server.inputCommands);
+      assertTrue(session.awaitCompletion(Duration.ofSeconds(10)));
     }
   }
 
