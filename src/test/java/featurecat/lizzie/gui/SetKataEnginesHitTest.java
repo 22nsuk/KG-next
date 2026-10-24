@@ -1,7 +1,7 @@
 package featurecat.lizzie.gui;
 
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -12,18 +12,19 @@ import featurecat.lizzie.analysis.Leelaz;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsEnvironment;
 import java.awt.Point;
-import java.lang.reflect.Field;
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.concurrent.TimeUnit;
 import java.util.Locale;
 import java.util.ResourceBundle;
-import javax.swing.JCheckBox;
+import java.util.concurrent.TimeUnit;
 import javax.swing.JButton;
+import javax.swing.JCheckBox;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -124,14 +125,29 @@ class SetKataEnginesHitTest {
       engineHook(engine, "processCommandResponseLineForTest", String.class,
           "=" + queryId + " 10");
       output.reset();
-      SwingUtilities.invokeAndWait(() -> {
-        assertEquals("12", field(dialogs[0], "txtThreads", JTextField.class).getText());
-        field(dialogs[0], "btnCancel", JButton.class).doClick();
-        dialogs[1] = new SetKataEngines();
-        dialogs[1].setVisible(true);
-        assertTrue(field(dialogs[1], "chkEditThreads", JCheckBox.class).isSelected());
-        assertEquals("10", field(dialogs[1], "txtThreads", JTextField.class).getText());
-      });
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertEquals("12", field(dialogs[0], "txtThreads", JTextField.class).getText());
+            JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+            field(dialogs[0], "chkEditWRN", JCheckBox.class).doClick();
+            field(dialogs[0], "txtWRN", JTextField.class).setText("1e");
+            field(dialogs[0], "btnApply", JButton.class).doClick();
+            assertEquals("1e", field(dialogs[0], "txtWRN", JTextField.class).getText());
+            assertEquals(
+                AppleStyleSupport.errorFieldBackground(),
+                field(dialogs[0], "txtWRN", JTextField.class).getBackground());
+            assertTrue(
+                field(dialogs[0], "btnApply", JButton.class).isEnabled(),
+                "invalid WRN must not begin the pending thread edit");
+            assertTrue(dialogs[0].isVisible());
+            assertEquals("", output.toString(StandardCharsets.UTF_8));
+            assertTrue(before.similar(Lizzie.config.uiConfig));
+            field(dialogs[0], "btnCancel", JButton.class).doClick();
+            dialogs[1] = new SetKataEngines();
+            dialogs[1].setVisible(true);
+            assertTrue(field(dialogs[1], "chkEditThreads", JCheckBox.class).isSelected());
+            assertEquals("10", field(dialogs[1], "txtThreads", JTextField.class).getText());
+          });
       assertEquals(Leelaz.RuntimeThreadOverrideState.ON,
           engine.captureRuntimeSearchThreads().overrideState());
       engineHook(engine, "processCommandResponseLineForTest", String.class,

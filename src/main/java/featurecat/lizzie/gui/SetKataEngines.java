@@ -14,14 +14,15 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.IOException;
 import java.text.MessageFormat;
-import java.util.concurrent.CompletionException;
+import java.util.OptionalDouble;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import javax.imageio.ImageIO;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
 import javax.swing.JEditorPane;
-import javax.swing.JTextPane;
 import javax.swing.JOptionPane;
+import javax.swing.JTextPane;
 import javax.swing.SwingUtilities;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
@@ -104,7 +105,6 @@ public class SetKataEngines extends JDialog {
     getContentPane().add(lblPDA);
 
     txtPDA = new JFontTextField();
-    txtPDA.setDocument(new KomiDocument(false));
     txtPDA.setBounds(
         Lizzie.config.isFrameFontSmall() ? 482 : (Lizzie.config.isFrameFontMiddle() ? 591 : 711),
         24,
@@ -112,51 +112,7 @@ public class SetKataEngines extends JDialog {
         24);
     getContentPane().add(txtPDA);
 
-    Document dt4 = txtPDA.getDocument();
-    dt4.addDocumentListener(
-        new DocumentListener() {
-          public void insertUpdate(DocumentEvent e) {
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtPDA.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-
-          public void removeUpdate(DocumentEvent e) {
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtPDA.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-
-          public void changedUpdate(DocumentEvent e) {
-            double pda = 0;
-            boolean error = false;
-            try {
-              pda = Double.parseDouble(txtPDA.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || pda > 3 || pda < -3) {
-              txtPDA.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtPDA.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-        });
+    bindAnalysisField(txtPDA, KataAnalysisParameter.PDA);
 
     JFontLabel lblAutoLoad =
         new JFontLabel(Lizzie.resourceBundle.getString("SetKataEngines.lblAutoLoad")); // ("自动加载");
@@ -236,7 +192,6 @@ public class SetKataEngines extends JDialog {
     getContentPane().add(chkAutoLoadWRN);
 
     txtWRN = new JFontTextField();
-    txtWRN.setDocument(new DoubleDocument());
     // txtWRN.setColumns(10);
     txtWRN.setBounds(
         Lizzie.config.isFrameFontSmall() ? 482 : (Lizzie.config.isFrameFontMiddle() ? 591 : 711),
@@ -245,51 +200,7 @@ public class SetKataEngines extends JDialog {
         24);
     getContentPane().add(txtWRN);
 
-    Document dt3 = txtWRN.getDocument();
-    dt3.addDocumentListener(
-        new DocumentListener() {
-          public void insertUpdate(DocumentEvent e) {
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn > 2 || wrn < 0) {
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-
-          public void removeUpdate(DocumentEvent e) {
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn > 2 || wrn < 0) {
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-
-          public void changedUpdate(DocumentEvent e) {
-            double wrn = 0;
-            boolean error = false;
-            try {
-              wrn = Double.parseDouble(txtWRN.getText());
-            } catch (NumberFormatException s) {
-              // TODO Auto-generated catch block
-              error = true;
-            }
-            if (error || wrn > 2 || wrn < 0) {
-              txtWRN.setBackground(AppleStyleSupport.errorFieldBackground());
-            } else txtWRN.setBackground(AppleStyleSupport.validFieldBackground());
-          }
-        });
+    bindAnalysisField(txtWRN, KataAnalysisParameter.WRN);
 
     lblRPT =
         new JFontLabel(
@@ -607,6 +518,8 @@ public class SetKataEngines extends JDialog {
 
   private void confirmSettings() {
     if (applyingThreads) return;
+    AnalysisSettings settings = captureAnalysisSettings();
+    if (settings == null) return;
     if (runtimeThreads != null && !runtimeThreads.isCurrent()) {
       showThreadError("SetKataEngines.threadStale");
       return;
@@ -621,9 +534,9 @@ public class SetKataEngines extends JDialog {
           showThreadError("SetKataEngines.threadRemoteRestoreUnsupported");
           return;
         }
-        restoreSource();
+        restoreSource(settings);
       } else {
-        applyExistingSettings(openingEngine, true);
+        applyExistingSettings(openingEngine, settings, true);
       }
       return;
     }
@@ -643,22 +556,29 @@ public class SetKataEngines extends JDialog {
     if (state == Leelaz.RuntimeThreadOverrideState.ON && !threadInputEdited
         && runtimeThreads.lastConfirmedValue() != null
         && threads == runtimeThreads.lastConfirmedValue()) {
-      applyExistingSettings(openingEngine, true);
+      applyExistingSettings(openingEngine, settings, true);
       return;
     }
     beginThreadOperation();
     int generation = threadQueryGeneration;
-    runtimeThreads.apply(threads).whenComplete((value, failure) ->
-        SwingUtilities.invokeLater(() -> {
-          endThreadOperation();
-          if (generation != threadQueryGeneration || !isVisible()) return;
-          if (failure != null || !runtimeThreads.isCurrent()) {
-            showThreadError(runtimeThreads.isCurrent()
-                ? "SetKataEngines.threadFailed" : "SetKataEngines.threadStale", failure);
-          } else {
-            applyExistingSettings(openingEngine, true);
-          }
-        }));
+    runtimeThreads
+        .apply(threads)
+        .whenComplete(
+            (value, failure) ->
+                SwingUtilities.invokeLater(
+                    () -> {
+                      endThreadOperation();
+                      if (generation != threadQueryGeneration || !isVisible()) return;
+                      if (failure != null || !runtimeThreads.isCurrent()) {
+                        showThreadError(
+                            runtimeThreads.isCurrent()
+                                ? "SetKataEngines.threadFailed"
+                                : "SetKataEngines.threadStale",
+                            failure);
+                      } else {
+                        applyExistingSettings(openingEngine, settings, true);
+                      }
+                    }));
   }
 
   private int previousCloseOperation;
@@ -678,7 +598,7 @@ public class SetKataEngines extends JDialog {
     btnCancel.setEnabled(true);
   }
 
-  private void restoreSource() {
+  private void restoreSource(AnalysisSettings settings) {
     Leelaz.RuntimeThreadSourceRestore restore;
     try {
       restore = runtimeThreads.prepareRestore();
@@ -709,37 +629,48 @@ public class SetKataEngines extends JDialog {
     beginThreadOperation();
     int generation = threadQueryGeneration;
     try {
-      restore.execute(successor -> {
-        CompletableFuture<Void> applied = new CompletableFuture<>();
-        SwingUtilities.invokeLater(() -> {
-          try {
-            if (generation != threadQueryGeneration || !isVisible()
-                || Lizzie.leelaz != openingEngine || !successor.isCurrent()) {
-              throw new IllegalStateException(
-                  Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
-            }
-            applyExistingSettings(openingEngine, false);
-            runtimeThreads = successor;
-            applied.complete(null);
-          } catch (Throwable failure) {
-            applied.completeExceptionally(failure);
-          }
-        });
-        return applied;
-      }).whenComplete((successor, failure) -> SwingUtilities.invokeLater(() -> {
-        endThreadOperation();
-        if (failure == null) {
-          if (isVisible()) setVisible(false);
-        } else {
-          updateThreadTooltip();
-          if (runtimeThreads != null
-              && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
-            chkEditThreads.setSelected(true);
-            txtThreads.setEnabled(true);
-          }
-          if (isVisible()) showThreadError("SetKataEngines.threadRestoreFailed", failure);
-        }
-      }));
+      restore
+          .execute(
+              successor -> {
+                CompletableFuture<Void> applied = new CompletableFuture<>();
+                SwingUtilities.invokeLater(
+                    () -> {
+                      try {
+                        if (generation != threadQueryGeneration
+                            || !isVisible()
+                            || Lizzie.leelaz != openingEngine
+                            || !successor.isCurrent()) {
+                          throw new IllegalStateException(
+                              Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
+                        }
+                        applyExistingSettings(openingEngine, settings, false);
+                        runtimeThreads = successor;
+                        applied.complete(null);
+                      } catch (Throwable failure) {
+                        applied.completeExceptionally(failure);
+                      }
+                    });
+                return applied;
+              })
+          .whenComplete(
+              (successor, failure) ->
+                  SwingUtilities.invokeLater(
+                      () -> {
+                        endThreadOperation();
+                        if (failure == null) {
+                          if (isVisible()) setVisible(false);
+                        } else {
+                          updateThreadTooltip();
+                          if (runtimeThreads != null
+                              && runtimeThreads.overrideState()
+                                  == Leelaz.RuntimeThreadOverrideState.ON) {
+                            chkEditThreads.setSelected(true);
+                            txtThreads.setEnabled(true);
+                          }
+                          if (isVisible())
+                            showThreadError("SetKataEngines.threadRestoreFailed", failure);
+                        }
+                      }));
     } catch (RuntimeException failure) {
       endThreadOperation();
       if (runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON) {
@@ -761,76 +692,120 @@ public class SetKataEngines extends JDialog {
     txtThreads.setToolTipText(Lizzie.resourceBundle.getString(key));
   }
 
-  private void applyExistingSettings(Leelaz engine, boolean resume) {
-    Lizzie.config.showWRNInMenu = chkWRNInMenu.isSelected();
-            Lizzie.config.uiConfig.put("show-wrn-in-menu", Lizzie.config.showWRNInMenu);
-
-            Lizzie.config.showPDAInMenu = chkPDAInMenu.isSelected();
-            Lizzie.config.uiConfig.put("show-pda-in-menu", Lizzie.config.showPDAInMenu);
-
-            if (!isPdaEngine) {
-              Lizzie.config.chkKataEnginePDA = chkEditPDA.isSelected();
-              Lizzie.config.autoLoadKataEnginePDA = chkAutoLoadPDA.isSelected();
-              Lizzie.config.txtKataEnginePDA = txtPDA.getText();
-              if (Lizzie.config.chkKataEnginePDA) {
-                engine.setPda(Lizzie.config.txtKataEnginePDA);
-                if (Lizzie.config.autoLoadKataEnginePDA) {
-                  Lizzie.config.autoLoadTxtKataEnginePDA = Lizzie.config.txtKataEnginePDA;
-                  Lizzie.config.uiConfig.put(
-                      "auto-load-txt-kata-engine-pda", Lizzie.config.autoLoadTxtKataEnginePDA);
-                }
-              } else engine.setPda("0");
-              LizzieFrame.menu.setUseGfPda(
-                  Lizzie.config.chkKataEnginePDA, Lizzie.config.txtKataEnginePDA);
-            }
-
-            //  if (!Lizzie.config.showWRNInMenu) {
-            Lizzie.config.chkKataEngineWRN = chkEditWRN.isSelected();
-            Lizzie.config.autoLoadKataEngineWRN = chkAutoLoadWRN.isSelected();
-            Lizzie.config.txtKataEngineWRN = txtWRN.getText();
-            if (Lizzie.config.chkKataEngineWRN) {
-              engine.sendCommand(
-                  "kata-set-param analysisWideRootNoise " + Lizzie.config.txtKataEngineWRN);
-              Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-              if (Lizzie.config.autoLoadKataEngineWRN) {
-                Lizzie.config.autoLoadTxtKataEngineWRN = Lizzie.config.txtKataEngineWRN;
-                Lizzie.config.uiConfig.put(
-                    "auto-load-txt-kata-engine-wrn", Lizzie.config.autoLoadTxtKataEngineWRN);
+  private static void bindAnalysisField(JFontTextField field, KataAnalysisParameter parameter) {
+    field
+        .getDocument()
+        .addDocumentListener(
+            new DocumentListener() {
+              public void insertUpdate(DocumentEvent event) {
+                refresh();
               }
 
-            } else engine.sendCommand("kata-set-param analysisWideRootNoise 0");
-            LizzieFrame.menu.setUseWrn(
-                Lizzie.config.chkKataEngineWRN, Lizzie.config.txtKataEngineWRN);
-            //  }
+              public void removeUpdate(DocumentEvent event) {
+                refresh();
+              }
 
-            //            Lizzie.config.chkKataEngineRPT = chkEditRPT.isSelected();
-            //            Lizzie.config.autoLoadKataEngineRPT = chkAutoRPT.isSelected();
-            //            Lizzie.config.txtKataEngineRPT = txtRPT.getText();
+              public void changedUpdate(DocumentEvent event) {
+                refresh();
+              }
 
-            //            if (Lizzie.config.chkKataEngineRPT)
-            //              Lizzie.leelaz.sendCommand(
-            //                  "kata-set-param rootPolicyTemperature " +
-            // Lizzie.config.txtKataEngineRPT);
-            //            else Lizzie.leelaz.sendCommand("kata-set-param rootPolicyTemperature
-            // 1.0");
-            Lizzie.config.uiConfig.put("chk-kata-engine-pda", Lizzie.config.chkKataEnginePDA);
-            Lizzie.config.uiConfig.put(
-                "autoload-kata-engine-pda", Lizzie.config.autoLoadKataEnginePDA);
-            Lizzie.config.uiConfig.put("txt-kata-engine-pda", Lizzie.config.txtKataEnginePDA);
+              private void refresh() {
+                field.setBackground(
+                    parameter.parse(field.getText()).isPresent()
+                        ? AppleStyleSupport.validFieldBackground()
+                        : AppleStyleSupport.errorFieldBackground());
+              }
+            });
+  }
 
-            //  Lizzie.config.uiConfig.put("chk-kata-engine-rpt", Lizzie.config.chkKataEngineRPT  );
-            //            Lizzie.config.uiConfig.put(
-            //                "autoload-kata-engine-rpt", Lizzie.config.autoLoadKataEngineRPT);
-            //            Lizzie.config.uiConfig.put("txt-kata-engine-rpt",
-            // Lizzie.config.txtKataEngineRPT);
+  private record ParameterSetting(boolean enabled, boolean autoLoad, String value) {}
 
-            Lizzie.config.uiConfig.put("chk-kata-engine-wrn", Lizzie.config.chkKataEngineWRN);
-            Lizzie.config.uiConfig.put(
-                "autoload-kata-engine-wrn", Lizzie.config.autoLoadKataEngineWRN);
-            Lizzie.config.uiConfig.put("txt-kata-engine-wrn", Lizzie.config.txtKataEngineWRN);
-            if (resume) setVisible(false);
-            LizzieFrame.menu.updateMenuStatusForEngine();
-            if (resume && engine.isPondering()) engine.ponder();
+  // One validated submission owns both the immediate and asynchronous apply paths.
+  // A null PDA setting means that this engine manages PDA outside this dialog.
+  private record AnalysisSettings(
+      boolean showWrn, boolean showPda, ParameterSetting wrn, ParameterSetting pda) {}
+
+  private AnalysisSettings captureAnalysisSettings() {
+    ParameterSetting wrn =
+        captureParameter(
+            KataAnalysisParameter.WRN,
+            txtWRN,
+            chkEditWRN,
+            chkAutoLoadWRN,
+            Lizzie.config.txtKataEngineWRN);
+    if (wrn == null) return null;
+    ParameterSetting pda = null;
+    if (!isPdaEngine) {
+      pda =
+          captureParameter(
+              KataAnalysisParameter.PDA,
+              txtPDA,
+              chkEditPDA,
+              chkAutoLoadPDA,
+              Lizzie.config.txtKataEnginePDA);
+      if (pda == null) return null;
+    }
+    return new AnalysisSettings(chkWRNInMenu.isSelected(), chkPDAInMenu.isSelected(), wrn, pda);
+  }
+
+  private ParameterSetting captureParameter(
+      KataAnalysisParameter parameter,
+      JFontTextField field,
+      JCheckBox enabled,
+      JCheckBox autoLoad,
+      String appliedValue) {
+    // Disabled values are not submitted; preserve the remembered value, including an unset default.
+    if (!enabled.isSelected()) return new ParameterSetting(false, false, appliedValue);
+    OptionalDouble parsed = parameter.parse(field.getText());
+    if (parsed.isEmpty()) {
+      field.setBackground(AppleStyleSupport.errorFieldBackground());
+      field.setEnabled(true);
+      field.requestFocusInWindow();
+      return null;
+    }
+    return new ParameterSetting(true, autoLoad.isSelected(), String.valueOf(parsed.getAsDouble()));
+  }
+
+  private void applyExistingSettings(Leelaz engine, AnalysisSettings settings, boolean resume) {
+    Lizzie.config.showWRNInMenu = settings.showWrn();
+    Lizzie.config.uiConfig.put("show-wrn-in-menu", settings.showWrn());
+
+    ParameterSetting pda = settings.pda();
+    if (pda != null) {
+      Lizzie.config.showPDAInMenu = settings.showPda();
+      Lizzie.config.uiConfig.put("show-pda-in-menu", settings.showPda());
+      Lizzie.config.chkKataEnginePDA = pda.enabled();
+      Lizzie.config.autoLoadKataEnginePDA = pda.autoLoad();
+      Lizzie.config.txtKataEnginePDA = pda.value();
+      engine.setPda(pda.enabled() ? pda.value() : "0");
+      if (pda.autoLoad()) {
+        Lizzie.config.autoLoadTxtKataEnginePDA = pda.value();
+        Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-pda", pda.value());
+      }
+      LizzieFrame.menu.setUseGfPda(pda.enabled(), pda.value());
+      Lizzie.config.uiConfig.put("chk-kata-engine-pda", pda.enabled());
+      Lizzie.config.uiConfig.put("autoload-kata-engine-pda", pda.autoLoad());
+      Lizzie.config.uiConfig.put("txt-kata-engine-pda", pda.value());
+    }
+
+    ParameterSetting wrn = settings.wrn();
+    Lizzie.config.chkKataEngineWRN = wrn.enabled();
+    Lizzie.config.autoLoadKataEngineWRN = wrn.autoLoad();
+    Lizzie.config.txtKataEngineWRN = wrn.value();
+    engine.sendCommand(
+        "kata-set-param analysisWideRootNoise " + (wrn.enabled() ? wrn.value() : "0"));
+    if (wrn.enabled()) Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+    if (wrn.autoLoad()) {
+      Lizzie.config.autoLoadTxtKataEngineWRN = wrn.value();
+      Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-wrn", wrn.value());
+    }
+    LizzieFrame.menu.setUseWrn(wrn.enabled(), wrn.value());
+    Lizzie.config.uiConfig.put("chk-kata-engine-wrn", wrn.enabled());
+    Lizzie.config.uiConfig.put("autoload-kata-engine-wrn", wrn.autoLoad());
+    Lizzie.config.uiConfig.put("txt-kata-engine-wrn", wrn.value());
+    if (resume) setVisible(false);
+    LizzieFrame.menu.updateMenuStatusForEngine();
+    if (resume && engine.isPondering()) engine.ponder();
   }
 
   @Override
