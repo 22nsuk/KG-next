@@ -2727,6 +2727,12 @@ public final class KataGoRuntimeHelper {
   }
 
   public static SetupResult applyBundledCudaProfile(SetupSnapshot snapshot) throws IOException {
+    return applyBundledCudaProfile(snapshot, new DownloadSession());
+  }
+
+  public static SetupResult applyBundledCudaProfile(SetupSnapshot snapshot, DownloadSession session)
+      throws IOException {
+    session.throwIfCancelled();
     if (snapshot == null) {
       snapshot = KataGoAutoSetupHelper.inspectLocalSetup();
     }
@@ -2746,6 +2752,8 @@ public final class KataGoRuntimeHelper {
     if (isWindowsPlatform() && isNvidiaBundledPath(snapshot.enginePath)) {
       ensureBundledRuntimeReady(snapshot.enginePath, buildBenchmarkCommand(snapshot), null);
     }
+    // Last cancellation point: once persistence starts, deliver its result even after a late stop.
+    session.throwIfCancelled();
     return KataGoAutoSetupHelper.applyAutoSetup(
         snapshot.withActiveWeight(snapshot.activeWeightPath), true);
   }

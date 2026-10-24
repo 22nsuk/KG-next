@@ -4317,23 +4317,64 @@ public class KataGoAutoSetupDialog extends JDialog {
       showBackgroundTaskAlreadyRunningNotice();
       return;
     }
-    if (snapshot == null) {
-      snapshot = KataGoAutoSetupHelper.inspectLocalSetup();
-    }
+    final SetupSnapshot selected = snapshot;
+    final DownloadSession session = new DownloadSession();
+    activeDownloadSession = session;
+    setStopAction("AutoSetup.stopCudaSwitch");
+    setBusy(true, text("AutoSetup.settingUp"), 0, -1);
+    cancelStateRefresh();
+    Thread worker =
+        new Thread(
+            () -> {
+              SetupResult result = null;
+              Exception failure = null;
+              try {
+                result = applyCudaProfile(selected, session);
+              } catch (IOException | RuntimeException e) {
+                failure = e;
+              }
+              final SetupResult completed = result;
+              final Exception error = failure;
+              SwingUtilities.invokeLater(
+                  () -> {
+                    // Keep the shared busy gate until the EDT accepts the result. A queued
+                    // completion must not let a second operation overtake profile activation.
+                    activeDownloadSession = null;
+                    activeWorkerThread = null;
+                    onCudaProfileSwitchCompleted(completed, error, session.isCancelled());
+                  });
+            },
+            "katago-switch-cuda");
+    activeWorkerThread = worker;
+    worker.start();
+  }
+
+  /** Runs discovery, compatibility inference and profile persistence on the setup worker. */
+  SetupResult applyCudaProfile(SetupSnapshot selected, DownloadSession session) throws IOException {
+    if (selected == null) selected = KataGoAutoSetupHelper.inspectLocalSetup();
     KataGoRuntimeHelper.TensorRtInstallStatus status =
-        KataGoRuntimeHelper.inspectTensorRtInstall(snapshot);
-    if (!status.active) {
+        KataGoRuntimeHelper.inspectTensorRtInstall(selected);
+    return status.active ? KataGoRuntimeHelper.applyBundledCudaProfile(selected, session) : null;
+  }
+
+  void onCudaProfileSwitchCompleted(SetupResult result, Exception failure, boolean cancelled) {
+    // A returned result means persistence already completed; a late close/cancel cannot undo it.
+    if (result != null) {
+      setBusy(false, text("AutoSetup.cudaSwitchDone"), 0, 0);
+      onSetupApplied(result, text("AutoSetup.cudaSwitchDoneMessage"), false);
+    } else if (cancelled
+        && (failure == null || failure instanceof java.io.InterruptedIOException)) {
+      setBusy(false, text("AutoSetup.cudaSwitchCancelled"), 0, 0);
+      renderSnapshot();
+      lblStatus.setText(text("AutoSetup.cudaSwitchCancelled"));
+      lblStatus.setForeground(WARN_COLOR());
+    } else if (failure != null) {
+      onBackgroundError(failure);
+    } else {
+      setBusy(false, text("AutoSetup.cudaAlreadyActive"), 0, 0);
       lblStatus.setText(text("AutoSetup.cudaAlreadyActive"));
       lblStatus.setForeground(OK_COLOR());
       updateTensorRtInfo();
-      return;
-    }
-    try {
-      SetupResult setupResult = KataGoRuntimeHelper.applyBundledCudaProfile(snapshot);
-      setBusy(false, text("AutoSetup.cudaSwitchDone"), 0, 0);
-      onSetupApplied(setupResult, text("AutoSetup.cudaSwitchDoneMessage"), false);
-    } catch (IOException e) {
-      onBackgroundError(e);
     }
   }
 

@@ -2616,6 +2616,115 @@ public class KataGoRuntimeHelperTest {
   }
 
   @Test
+  void cancelledCudaReturnPreservesProfiles() throws Exception {
+    Path root = Files.createTempDirectory("katago-cuda-return-cancelled");
+    withConfig(
+        root,
+        () -> {
+          String before = Lizzie.config.leelazConfig.toString();
+          DownloadSession session = new DownloadSession();
+          session.cancel();
+          assertThrows(
+              DownloadCancelledException.class,
+              () -> KataGoRuntimeHelper.applyBundledCudaProfile(null, session));
+          assertEquals(before, Lizzie.config.leelazConfig.toString());
+        });
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void uncachedCuda13ProbeCancellationStopsProcessWithoutSavingProfile(boolean interrupt)
+      throws Exception {
+    org.junit.jupiter.api.Assumptions.assumeTrue(
+        Files.isExecutable(Path.of("/bin/sh")),
+        "The synthetic executable uses a POSIX shell; it does not require a GPU.");
+    // Initialize native process support with the real host OS before simulating the Windows bundle.
+    assertEquals(0, new ProcessBuilder("/bin/true").start().waitFor());
+    withOsName(
+        WINDOWS_OS_NAME,
+        () -> {
+          Path root = Files.createTempDirectory("katago-cuda-return-live-probe");
+          SetupSnapshot tensorRt = createStandaloneTensorRtSnapshot(root);
+          Path cuda =
+              touch(
+                  tensorRt.appRoot.resolve("engines/katago/windows-x64-nvidia-cuda13/katago.exe"));
+          touchRequiredCuda13_2Dlls(cuda.getParent());
+          Path started = root.resolve("probe.pid");
+          Path release = root.resolve("probe.release");
+          Files.writeString(
+              cuda,
+              "#!/bin/sh\nprintf '%s' \"$$\" > '"
+                  + started
+                  + "'\n"
+                  + (interrupt
+                      ? "exec /bin/sleep 30\n"
+                      : "i=0; while [ ! -f '"
+                          + release
+                          + "' ] && [ $i -lt 500 ]; do /bin/sleep 0.01; i=$((i+1)); done\n"
+                          + "printf '%s\\n"
+                          + "' 'numSearchThreads = 1: 1 / 1 positions, visits/s = 10.0 nnEvals/s ="
+                          + " 10.0 nnBatches/s = 10.0 avgBatchSize = 1.0 (1.0 secs)'\n"));
+          assertTrue(cuda.toFile().setExecutable(true));
+          withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                KataGoRuntimeHelper.applyInstalledTensorRt(tensorRt);
+                String uiBefore = Lizzie.config.uiConfig.toString();
+                String enginesBefore = Lizzie.config.leelazConfig.toString();
+                DownloadSession session = new DownloadSession();
+                AtomicReference<Throwable> outcome = new AtomicReference<>();
+                String driverKey = "lizzie.opencl.nvidiaDriverVersion";
+                String previousDriver = System.getProperty(driverKey);
+                Thread worker =
+                    new Thread(
+                        () -> {
+                          try {
+                            KataGoRuntimeHelper.applyBundledCudaProfile(tensorRt, session);
+                          } catch (Throwable error) {
+                            outcome.set(error);
+                          }
+                        });
+                try {
+                  System.setProperty(driverKey, "610.74");
+                  assertFalse(Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(cuda)));
+                  worker.start();
+                  long deadline =
+                      System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+                  while ((!Files.isRegularFile(started) || Files.size(started) == 0)
+                      && worker.isAlive()
+                      && System.nanoTime() < deadline) Thread.sleep(10);
+                  assertTrue(
+                      Files.isRegularFile(started),
+                      "uncached CUDA 13 must actually launch inference: " + outcome.get());
+                  ProcessHandle process =
+                      ProcessHandle.of(Long.parseLong(Files.readString(started))).orElseThrow();
+                  session.cancel();
+                  if (interrupt) worker.interrupt();
+                  else Files.writeString(release, "complete inference after cancellation");
+                  worker.join(5000);
+                  assertFalse(worker.isAlive());
+                  assertTrue(
+                      outcome.get() instanceof java.io.InterruptedIOException,
+                      String.valueOf(outcome.get()));
+                  process.onExit().get(5, java.util.concurrent.TimeUnit.SECONDS);
+                  assertFalse(process.isAlive());
+                  assertEquals(
+                      !interrupt,
+                      Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(cuda)),
+                      "completed inference may be cached, but must not save a cancelled profile");
+                  assertEquals(uiBefore, Lizzie.config.uiConfig.toString());
+                  assertEquals(enginesBefore, Lizzie.config.leelazConfig.toString());
+                } finally {
+                  session.cancel();
+                  worker.interrupt();
+                  worker.join(5000);
+                  restoreProperty(driverKey, previousDriver);
+                }
+              });
+        });
+  }
+
+  @Test
   void cuda13ReturnRejectsOldDriverBeforeChangingProfiles() throws Exception {
     withOsName(
         WINDOWS_OS_NAME,
