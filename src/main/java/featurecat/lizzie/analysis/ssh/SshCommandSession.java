@@ -1,10 +1,13 @@
 package featurecat.lizzie.analysis.ssh;
 
 import featurecat.lizzie.logging.LogCategories;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
 import java.io.OutputStream;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.EnumSet;
@@ -12,6 +15,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import org.apache.sshd.client.ClientBuilder;
 import org.apache.sshd.client.SshClient;
@@ -71,6 +76,89 @@ public final class SshCommandSession implements AutoCloseable {
     }
   }
 
+  /**
+   * Runs a finite command, collecting both output streams as packets arrive. The command timeout
+   * starts after the bounded connection/authentication/channel-open phases. Output ends at remote
+   * EOF or channel close, never at exit status alone. Each stream has its own byte limit.
+   */
+  public static CommandOutput execute(
+      SshTarget target,
+      SshCredential credential,
+      String command,
+      SshKnownHosts knownHosts,
+      Duration timeout,
+      int maxOutputBytes)
+      throws IOException {
+    if (timeout.isNegative() || timeout.isZero() || maxOutputBytes <= 0) {
+      throw new IllegalArgumentException("Command timeout and output limit must be positive.");
+    }
+    LimitedOutput stdout = new LimitedOutput(maxOutputBytes);
+    LimitedOutput stderr = new LimitedOutput(maxOutputBytes);
+    try (ConnectionAttempt attempt = new ConnectionAttempt();
+        SshCommandSession running =
+            attempt.open(target, credential, command, knownHosts, stdout, stderr)) {
+      running.stdin().close();
+      CountDownLatch completed = new CountDownLatch(1);
+      running.channel.addCloseFutureListener(ignored -> completed.countDown());
+      running.channel.addChannelListener(
+          new ChannelListener() {
+            @Override
+            public void channelStateChanged(Channel changed, String hint) {
+              if (changed.isEofSignalled()) completed.countDown();
+            }
+          });
+      // EOF may have arrived before the listener was registered, including during exec open.
+      if (running.channel.isEofSignalled()) completed.countDown();
+      if (!completed.await(timeout.toNanos(), TimeUnit.NANOSECONDS)) {
+        throw new SocketTimeoutException("SSH command timed out.");
+      }
+      return new CommandOutput(stdout.text(), stderr.text());
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      InterruptedIOException failure = new InterruptedIOException("SSH command interrupted.");
+      failure.initCause(interrupted);
+      throw failure;
+    } catch (IOException failure) {
+      // An output-limit failure can also close the channel while exec is still opening.
+      stdout.checkLimit();
+      stderr.checkLimit();
+      throw failure;
+    }
+  }
+
+  public record CommandOutput(String stdout, String stderr) {}
+
+  private static final class LimitedOutput extends OutputStream {
+    private final int limit;
+    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+    private boolean exceeded;
+
+    private LimitedOutput(int limit) {
+      this.limit = limit;
+    }
+
+    @Override
+    public synchronized void write(int value) throws IOException {
+      write(new byte[] {(byte) value}, 0, 1);
+    }
+
+    @Override
+    public synchronized void write(byte[] data, int offset, int length) throws IOException {
+      if (length > limit - bytes.size()) exceeded = true;
+      checkLimit();
+      bytes.write(data, offset, length);
+    }
+
+    private synchronized void checkLimit() throws IOException {
+      if (exceeded) throw new IOException("SSH command output is too large.");
+    }
+
+    private synchronized String text() throws IOException {
+      checkLimit();
+      return bytes.toString(StandardCharsets.UTF_8);
+    }
+  }
+
   /** Owns a connection while it is starting, so its caller can cancel before publication. */
   public static final class ConnectionAttempt implements AutoCloseable {
     private SshClient client;
@@ -89,6 +177,17 @@ public final class SshCommandSession implements AutoCloseable {
 
     public SshCommandSession open(
         SshTarget target, SshCredential credential, String command, SshKnownHosts knownHosts)
+        throws IOException {
+      return open(target, credential, command, knownHosts, null, null);
+    }
+
+    private SshCommandSession open(
+        SshTarget target,
+        SshCredential credential,
+        String command,
+        SshKnownHosts knownHosts,
+        OutputStream stdout,
+        OutputStream stderr)
         throws IOException {
       Objects.requireNonNull(target, "target");
       Objects.requireNonNull(credential, "credential");
@@ -129,7 +228,12 @@ public final class SshCommandSession implements AutoCloseable {
         synchronized (this) {
           if (closed) throw new InterruptedIOException("SSH connection was cancelled.");
           channel = connected.createExecChannel(command);
-          forwardOutputEof(channel);
+          if (stdout == null) {
+            forwardOutputEof(channel);
+          } else {
+            channel.setOut(stdout);
+            channel.setErr(stderr);
+          }
           opening = channel.open();
           commandStarting = true;
         }
@@ -265,7 +369,10 @@ public final class SshCommandSession implements AutoCloseable {
     return channel.getInvertedIn();
   }
 
-  /** Waits until the remote command exits or closes its channel. */
+  /**
+   * Waits for exit status or channel close, which need not include output EOF. Use {@link #execute}
+   * for a finite command whose complete response must be collected within a deadline.
+   */
   public boolean awaitCompletion(Duration timeout) {
     Set<ClientChannelEvent> events =
         channel.waitFor(

@@ -25,6 +25,7 @@ import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.channel.ChannelSession;
 import org.apache.sshd.server.channel.ChannelSessionFactory;
 import org.apache.sshd.server.command.Command;
+import org.apache.sshd.server.command.CommandFactory;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -92,7 +93,9 @@ public final class TestSshServer implements AutoCloseable {
     server.setCommandFactory(
         (channel, command) -> {
           commands.add(command);
-          return new ScriptedCommand(command);
+          return builder.commandFactory == null
+              ? new ScriptedCommand(command)
+              : builder.commandFactory.createCommand(channel, command);
         });
     server.start();
   }
@@ -146,6 +149,12 @@ public final class TestSshServer implements AutoCloseable {
     private String catalogResponse = "";
     private Runnable beforePasswordAuthentication = () -> {};
     private Runnable beforeChannelOpen = () -> {};
+    private CommandFactory commandFactory;
+
+    public Builder commandFactory(CommandFactory commandFactory) {
+      this.commandFactory = commandFactory;
+      return this;
+    }
 
     public Builder hostKey(KeyPair hostKey) {
       this.hostKey = hostKey;
