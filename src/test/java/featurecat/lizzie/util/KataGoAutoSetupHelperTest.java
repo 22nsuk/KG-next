@@ -38,6 +38,7 @@ import java.util.zip.GZIPOutputStream;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -1285,7 +1286,8 @@ public class KataGoAutoSetupHelperTest {
         response.put("model_file", officialModelUrl(STRONGEST_NAME).replace("https:", "http:"));
         break;
       case "different-file":
-        response.put("model_file", officialModelUrl(KataGoAutoSetupHelper.DEFAULT_TRANSFORMER_MODEL));
+        response.put(
+            "model_file", officialModelUrl(KataGoAutoSetupHelper.DEFAULT_TRANSFORMER_MODEL));
         break;
       case "query-url":
         response.put("model_file", officialModelUrl(STRONGEST_NAME) + "?download=1");
@@ -1462,13 +1464,17 @@ public class KataGoAutoSetupHelperTest {
           if (status != 304) body.write(bytes);
         }
       });
-      withOfficialWeightSources(server.url("/networks/"), server.url("/strongest/"), () -> {
-        List<KataGoAutoSetupHelper.RemoteWeightInfo> weights =
-            KataGoAutoSetupHelper.fetchOfficialWeights();
-        assertEquals(3, weights.size());
-        assertTrue(weights.stream().noneMatch(info -> info.officialStrongest));
-        assertEquals(0, redirectRequests.get(), "metadata must come directly from the official API");
-      });
+      withOfficialWeightSources(
+          server.url("/networks/"),
+          server.url("/strongest/"),
+          () -> {
+            List<KataGoAutoSetupHelper.RemoteWeightInfo> weights =
+                KataGoAutoSetupHelper.fetchOfficialWeights();
+            assertEquals(3, weights.size());
+            assertTrue(weights.stream().noneMatch(info -> info.officialStrongest));
+            assertEquals(
+                0, redirectRequests.get(), "metadata must come directly from the official API");
+          });
     }
   }
 
@@ -1533,6 +1539,35 @@ public class KataGoAutoSetupHelperTest {
         choices.stream()
             .anyMatch(info -> info.modelName.equals(strongestModel) && info.recommended));
     assertFalse(choices.stream().anyMatch(info -> officialFamily(info).equals("b80")));
+  }
+
+  @Test
+  void networksPageLinksOutsideTheTrainingSiteOrWithFoldersAreDropped() throws Exception {
+    String good = officialModel("b28", 3);
+    String html =
+        new StringBuilder()
+            .append("<table class=\"table mt-3\">")
+            .append(officialRow(good, "2026-06-28", "14180 Elo"))
+            .append(row("kata1-b28-plain-http", "http://media.katagotraining.org/m/a.bin.gz"))
+            .append(row("kata1-b28-elsewhere", "https://example.com/kata1-b28-elsewhere.bin.gz"))
+            .append(row("kata1-b28-folder", "https://media.katagotraining.org/m/..%5Cevil.bin.gz"))
+            .append("</table>")
+            .toString();
+
+    List<KataGoAutoSetupHelper.RemoteWeightInfo> choices =
+        KataGoAutoSetupHelper.parseOfficialWeights(html);
+
+    assertEquals(List.of(good), choices.stream().map(info -> info.modelName).toList());
+  }
+
+  private static String row(String model, String url) {
+    return "<tr><td>"
+        + model
+        + "</td><td>2026-06-20</td><td>14000 Elo</td><td><a href=\""
+        + url
+        + "\">"
+        + model
+        + "</a></td></tr>";
   }
 
   @Test
@@ -1630,6 +1665,48 @@ public class KataGoAutoSetupHelperTest {
   }
 
   @Test
+  void aWeightListedWithoutSizeOrDigestIsNotInstalledFromACutOffPartial() throws Exception {
+    Path tempRoot = Files.createTempDirectory("katago-scraped-truncated");
+    byte[] raw = new byte[3 * 1024 * 1024];
+    new java.util.Random(11).nextBytes(raw);
+    java.io.ByteArrayOutputStream gzip = new java.io.ByteArrayOutputStream();
+    try (java.util.zip.GZIPOutputStream output = new java.util.zip.GZIPOutputStream(gzip)) {
+      output.write(raw);
+    }
+    byte[] modelBytes = gzip.toByteArray();
+    int partialSize = 2 * 1024 * 1024;
+    try (RangeFixtureServer server = RangeFixtureServer.start(modelBytes)) {
+      withUserDirAndConfig(
+          tempRoot,
+          () -> {
+            Path weightsDir = Files.createDirectories(tempRoot.resolve("weights"));
+            Files.write(
+                weightsDir.resolve("model.bin.gz.part"),
+                java.util.Arrays.copyOf(modelBytes, partialSize));
+            // Rows read from the networks page carry neither a size nor a digest.
+            KataGoAutoSetupHelper.RemoteWeightInfo info =
+                new KataGoAutoSetupHelper.RemoteWeightInfo(
+                    "Transformer",
+                    "fixture-listed",
+                    server.url(),
+                    "2026-07-29",
+                    "",
+                    false,
+                    false,
+                    "",
+                    0L,
+                    "1.17.0",
+                    KataGoAutoSetupHelper.TransformerTier.BALANCED);
+
+            Path downloaded = KataGoAutoSetupHelper.downloadWeight(info, null);
+
+            assertEquals("bytes=" + partialSize + "-", server.lastRangeHeader());
+            assertArrayEquals(modelBytes, Files.readAllBytes(downloaded));
+          });
+    }
+  }
+
+  @Test
   void transformerWeightChecksumFailureDeletesDamagedPartialFile() throws Exception {
     Path tempRoot = Files.createTempDirectory("katago-transformer-bad-sha");
     byte[] modelBytes = repeatedBytes(16 * 1024, (byte) 31);
@@ -1656,6 +1733,182 @@ public class KataGoAutoSetupHelperTest {
             assertFalse(Files.exists(tempRoot.resolve("weights").resolve("model.bin.gz.part")));
           });
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"truncated", "crc", "size-only-crc"})
+  void invalidUnpinnedDownloadsAreNotInstalledAndCanBeRetried(String damage) throws Exception {
+    Path root = Files.createTempDirectory("katago-unpinned-invalid");
+    byte[] modelBytes = gzipFixtureBytes();
+    byte[] broken = modelBytes.clone();
+    if (damage.equals("truncated")) {
+      broken = java.util.Arrays.copyOf(modelBytes, 2 * 1024 * 1024);
+    } else {
+      broken[broken.length - 8] ^= 1;
+    }
+    byte[] response = broken;
+    long expectedSize = damage.equals("size-only-crc") ? modelBytes.length : -1L;
+    try (FixtureServer first = FixtureServer.start(response);
+        RangeFixtureServer retry = RangeFixtureServer.start(modelBytes)) {
+      withUserDirAndConfig(
+          root,
+          () -> {
+            String selected = selectCustomHumanSlForDownloadTest(root);
+            Path target = root.resolve("weights/model.bin.gz");
+            Path partial = root.resolve("weights/model.bin.gz.part");
+
+            assertThrows(
+                IOException.class,
+                () ->
+                    KataGoAutoSetupHelper.downloadWeight(
+                        unpinnedFixtureWeight(first.url(), expectedSize), null));
+            assertFalse(Files.exists(target));
+            assertArrayEquals(response, Files.readAllBytes(partial));
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+
+            Path installed =
+                KataGoAutoSetupHelper.downloadWeight(
+                    unpinnedFixtureWeight(retry.url(), expectedSize), null);
+
+            assertEquals(target, installed);
+            assertArrayEquals(modelBytes, Files.readAllBytes(installed));
+            assertFalse(Files.exists(partial));
+            assertEquals(damage.equals("truncated") ? 1 : 2, retry.requestCount());
+            assertEquals(
+                damage.equals("truncated") ? "bytes=" + response.length + "-" : "",
+                retry.lastRangeHeader());
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void cancelledUnpinnedDownloadKeepsPartialWithoutChangingHumanSlSelection(boolean beforeStart)
+      throws Exception {
+    Path root = Files.createTempDirectory("katago-unpinned-cancel");
+    byte[] modelBytes = gzipFixtureBytes();
+    try (RangeFixtureServer server = RangeFixtureServer.start(modelBytes)) {
+      withUserDirAndConfig(
+          root,
+          () -> {
+            String selected = selectCustomHumanSlForDownloadTest(root);
+            Path target = root.resolve("weights/model.bin.gz");
+            Path partial = root.resolve("weights/model.bin.gz.part");
+            KataGoAutoSetupHelper.DownloadSession session =
+                new KataGoAutoSetupHelper.DownloadSession();
+            if (beforeStart) {
+              Files.createDirectories(partial.getParent());
+              Files.write(partial, java.util.Arrays.copyOf(modelBytes, 2 * 1024 * 1024));
+              session.cancel();
+            }
+            assertThrows(
+                KataGoAutoSetupHelper.DownloadCancelledException.class,
+                () ->
+                    KataGoAutoSetupHelper.downloadWeight(
+                        unpinnedFixtureWeight(server.url(), -1L),
+                        (name, downloaded, total) -> session.cancelAsync(),
+                        session));
+            assertFalse(Files.exists(target));
+            long partialSize = Files.size(partial);
+            assertTrue(partialSize > 0 && partialSize < modelBytes.length);
+            assertArrayEquals(
+                java.util.Arrays.copyOf(modelBytes, (int) partialSize),
+                Files.readAllBytes(partial));
+            assertEquals(beforeStart ? 0 : 1, server.requestCount());
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+
+            Path installed =
+                KataGoAutoSetupHelper.downloadWeight(
+                    unpinnedFixtureWeight(server.url(), -1L), null);
+            assertArrayEquals(modelBytes, Files.readAllBytes(installed));
+            assertEquals("bytes=" + partialSize + "-", server.lastRangeHeader());
+            assertFalse(Files.exists(partial));
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"../outside", "..\\outside", "C:outside"})
+  void unsafeDownloadNamesAreRejectedBeforeNetworkOrFileMutation(String name) throws Exception {
+    Path root = Files.createTempDirectory("katago-unsafe-download");
+    try (RangeFixtureServer server = RangeFixtureServer.start(new byte[] {1})) {
+      withUserDirAndConfig(
+          root,
+          () -> {
+            String selected = selectCustomHumanSlForDownloadTest(root);
+            KataGoAutoSetupHelper.RemoteWeightInfo info =
+                new KataGoAutoSetupHelper.RemoteWeightInfo(
+                    "fixture", name, server.url(""), "", "", false, false);
+            IOException failure =
+                assertThrows(
+                    IOException.class, () -> KataGoAutoSetupHelper.downloadWeight(info, null));
+            assertTrue(failure.getMessage().contains("Unsafe weight file name"));
+            assertEquals(0, server.requestCount());
+            assertFalse(Files.exists(root.resolve("weights")));
+            assertFalse(Files.exists(root.resolve("outside.bin.gz")));
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+          });
+    }
+  }
+
+  @Test
+  void cachedCompletePartialIsVerifiedAndInstalledWithoutNetwork() throws Exception {
+    Path root = Files.createTempDirectory("katago-unpinned-complete");
+    byte[] modelBytes = gzipFixtureBytes();
+    try (RangeFixtureServer server = RangeFixtureServer.start(modelBytes)) {
+      withUserDirAndConfig(
+          root,
+          () -> {
+            String selected = selectCustomHumanSlForDownloadTest(root);
+            Path partial =
+                Files.createDirectories(root.resolve("weights")).resolve("model.bin.gz.part");
+            Files.write(partial, modelBytes);
+            KataGoAutoSetupHelper.RemoteWeightInfo info =
+                unpinnedFixtureWeight(server.url() + "?download=/ignored#fragment", -1L);
+            assertEquals("model.bin.gz", info.fileName());
+            Path installed = KataGoAutoSetupHelper.downloadWeight(info, null);
+            assertArrayEquals(modelBytes, Files.readAllBytes(installed));
+            assertEquals(0, server.requestCount());
+            assertFalse(Files.exists(partial));
+            assertEquals(installed, KataGoAutoSetupHelper.downloadWeight(info, null));
+            assertEquals(0, server.requestCount());
+            assertEquals(selected, Lizzie.config.uiConfig.getString("katago-human-sl-model-path"));
+          });
+    }
+  }
+
+  private static String selectCustomHumanSlForDownloadTest(Path root) throws Exception {
+    Path custom = touchModel(root.resolve("human-sl-models/custom-human.bin.gz"));
+    Lizzie.config.uiConfig.put("katago-human-sl-model-path", custom.toString());
+    return custom.toString();
+  }
+
+  private static KataGoAutoSetupHelper.RemoteWeightInfo unpinnedFixtureWeight(
+      String url, long size) {
+    return new KataGoAutoSetupHelper.RemoteWeightInfo(
+        "fixture",
+        "unlisted",
+        url,
+        "",
+        "",
+        false,
+        false,
+        "",
+        size,
+        "",
+        KataGoAutoSetupHelper.TransformerTier.NONE);
+  }
+
+  private static byte[] gzipFixtureBytes() throws IOException {
+    byte[] raw = new byte[3 * 1024 * 1024];
+    new java.util.Random(11).nextBytes(raw);
+    java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+    try (GZIPOutputStream gzip = new GZIPOutputStream(bytes)) {
+      gzip.write(raw);
+    }
+    return bytes.toByteArray();
   }
 
   @Test
@@ -1809,6 +2062,51 @@ public class KataGoAutoSetupHelperTest {
                     assertFalse(Lizzie.config.quickAnalysisLightweightModelEnabled);
                   }));
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,true", "true,true", "false,false", "true,false"})
+  void cancelledQuickAnalysisValidationIsRetriedWithoutChangingModel(
+      boolean configuredPath, boolean validChecksum, @TempDir Path root) throws Exception {
+    byte[] modelBytes = gzipFixtureBytes();
+    Path model =
+        writeModel(
+            root.resolve(configuredPath ? "custom-models" : "quick-analysis-models")
+                .resolve(KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME),
+            modelBytes);
+    var modified = Files.getLastModifiedTime(model);
+    withQuickAnalysisDownloadProperties(
+        "http://127.0.0.1/not-used/" + KataGoAutoSetupHelper.QUICK_ANALYSIS_MODEL_FILE_NAME,
+        validChecksum ? sha256(modelBytes) : "0".repeat(64),
+        modelBytes.length,
+        () ->
+            withUserDirAndConfig(
+                root,
+                () -> {
+                  if (configuredPath) {
+                    Lizzie.config.uiConfig.put("katago-quick-analysis-model-path", model.toString());
+                  }
+                  var snapshot = KataGoAutoSetupHelper.inspectLocalSetup();
+                  try {
+                    Thread.currentThread().interrupt();
+                    assertFalse(
+                        KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot).isInstalled());
+                    assertTrue(Thread.currentThread().isInterrupted());
+                  } finally {
+                    Thread.interrupted();
+                  }
+
+                  // Retry with the same path, contents and mtime: cancellation must not cache false.
+                  var status = KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot);
+                  assertEquals(validChecksum, status.isInstalled());
+                  if (validChecksum) {
+                    assertEquals(model.toAbsolutePath().normalize(), status.modelPath);
+                    KataGoAutoSetupHelper.setQuickAnalysisModelEnabled(true);
+                    assertTrue(KataGoAutoSetupHelper.inspectQuickAnalysisModel(snapshot).isEnabled());
+                  }
+                  assertArrayEquals(modelBytes, Files.readAllBytes(model));
+                  assertEquals(modified, Files.getLastModifiedTime(model));
+                }));
   }
 
   @Test
@@ -2823,7 +3121,7 @@ public class KataGoAutoSetupHelperTest {
   }
 
   private static String officialLink(String model) {
-    return "<a href=\"https://example.com/" + model + ".bin.gz\">" + model + "</a>";
+    return "<a href=\"" + officialModelUrl(model) + "\">" + model + "</a>";
   }
 
   private static String officialRow(String model, String releaseDate, String elo) {
@@ -3031,6 +3329,8 @@ public class KataGoAutoSetupHelperTest {
     private final HttpServer server;
     private final ExecutorService executor;
     private volatile String lastRangeHeader = "";
+    private final java.util.concurrent.atomic.AtomicInteger requests =
+        new java.util.concurrent.atomic.AtomicInteger();
 
     private RangeFixtureServer(HttpServer server, ExecutorService executor) {
       this.server = server;
@@ -3044,12 +3344,19 @@ public class KataGoAutoSetupHelperTest {
       server.createContext(
           "/",
           exchange -> {
+            fixture.requests.incrementAndGet();
             String range = exchange.getRequestHeaders().getFirst("Range");
             fixture.lastRangeHeader = range == null ? "" : range;
             int start = 0;
             int status = 200;
             if (range != null && range.startsWith("bytes=") && range.endsWith("-")) {
               start = Integer.parseInt(range.substring(6, range.length() - 1));
+              if (start >= bytes.length) {
+                exchange.getResponseHeaders().set("Content-Range", "bytes */" + bytes.length);
+                exchange.sendResponseHeaders(416, -1);
+                exchange.close();
+                return;
+              }
               status = 206;
               exchange
                   .getResponseHeaders()
@@ -3079,6 +3386,10 @@ public class KataGoAutoSetupHelperTest {
 
     private String lastRangeHeader() {
       return lastRangeHeader;
+    }
+
+    private int requestCount() {
+      return requests.get();
     }
 
     @Override

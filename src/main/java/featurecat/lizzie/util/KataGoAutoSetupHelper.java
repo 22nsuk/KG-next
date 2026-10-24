@@ -1696,13 +1696,13 @@ public final class KataGoAutoSetupHelper {
     if (info == null || weightsDir == null) {
       throw new IOException(resource("AutoSetup.noRemoteWeights", "No downloadable weight found."));
     }
-    Files.createDirectories(weightsDir);
     DownloadSession activeSession = session != null ? session : new DownloadSession();
     activeSession.throwIfCancelled();
 
-    Path target = weightsDir.resolve(info.fileName());
+    Path target = KataGoWeightFile.inFolder(weightsDir, info.fileName());
+    Files.createDirectories(weightsDir);
     long existingStarted = System.nanoTime();
-    if (isDownloadedWeightValid(target, info)) {
+    if (isDownloadedWeightValid(target, info, activeSession)) {
       recordWeightDownload(
           MaintenanceObservation.STAGE_EXISTING_FILE,
           MaintenanceObservation.OUTCOME_SUCCESS,
@@ -1711,16 +1711,18 @@ public final class KataGoAutoSetupHelper {
       if (listener != null) {
         listener.onProgress(info.modelName, Files.size(target), Files.size(target));
       }
+      activeSession.throwIfCancelled();
       return target;
     }
+    activeSession.throwIfCancelled();
     Files.deleteIfExists(target);
 
-    Path temp = weightsDir.resolve(info.fileName() + ".part");
+    Path temp = target.resolveSibling(target.getFileName() + ".part");
     HttpURLConnection conn = null;
     String currentStage = null;
     long stageStarted = 0L;
     try {
-      if (isDownloadedWeightValid(temp, info)) {
+      if (isDownloadedWeightValid(temp, info, activeSession)) {
         recordWeightDownload(
             MaintenanceObservation.STAGE_EXISTING_FILE,
             MaintenanceObservation.OUTCOME_SUCCESS,
@@ -1728,6 +1730,7 @@ public final class KataGoAutoSetupHelper {
             null);
         currentStage = MaintenanceObservation.STAGE_MOVE;
         stageStarted = System.nanoTime();
+        activeSession.throwIfCancelled();
         Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
         recordWeightDownload(
             MaintenanceObservation.STAGE_MOVE,
@@ -1760,7 +1763,7 @@ public final class KataGoAutoSetupHelper {
         if (resumeFrom > 0L && code == 416) {
           conn.disconnect();
           activeSession.clear();
-          if (isDownloadedWeightValid(temp, info)) {
+          if (isDownloadedWeightValid(temp, info, activeSession)) {
             break;
           }
           Files.deleteIfExists(temp);
@@ -1824,7 +1827,7 @@ public final class KataGoAutoSetupHelper {
       currentStage = MaintenanceObservation.STAGE_VERIFY;
       stageStarted = System.nanoTime();
       activeSession.throwIfCancelled();
-      verifyDownloadedWeight(temp, info);
+      verifyDownloadedWeight(temp, info, activeSession);
       recordWeightDownload(
           MaintenanceObservation.STAGE_VERIFY,
           MaintenanceObservation.OUTCOME_SUCCESS,
@@ -1832,6 +1835,7 @@ public final class KataGoAutoSetupHelper {
           null);
       currentStage = MaintenanceObservation.STAGE_MOVE;
       stageStarted = System.nanoTime();
+      activeSession.throwIfCancelled();
       try {
         Files.move(
             temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -1894,19 +1898,28 @@ public final class KataGoAutoSetupHelper {
         MaintenanceObservation.OPERATION_WEIGHT_DOWNLOAD, stage, outcome, durationMs, reason);
   }
 
-  private static boolean isDownloadedWeightValid(Path path, RemoteWeightInfo info) {
+  private static boolean isDownloadedWeightValid(
+      Path path, RemoteWeightInfo info, DownloadSession session) throws IOException {
     if (path == null || !Files.isRegularFile(path)) {
       return false;
     }
     try {
-      verifyDownloadedWeight(path, info);
+      verifyDownloadedWeight(path, info, session);
       return true;
+    } catch (DownloadCancelledException e) {
+      throw e;
     } catch (IOException e) {
       return false;
     }
   }
 
   private static void verifyDownloadedWeight(Path path, RemoteWeightInfo info) throws IOException {
+    verifyDownloadedWeight(path, info, new DownloadSession());
+  }
+
+  private static void verifyDownloadedWeight(
+      Path path, RemoteWeightInfo info, DownloadSession session) throws IOException {
+    session.throwIfCancelled();
     if (path == null || !Files.isRegularFile(path)) {
       throw new WeightIntegrityException(
           resource("AutoSetup.weightDownloadIncomplete", "Weight download is incomplete."), false);
@@ -1916,17 +1929,18 @@ public final class KataGoAutoSetupHelper {
       throw new WeightIntegrityException(
           resource("AutoSetup.weightDownloadIncomplete", "Weight download is incomplete."), false);
     }
-    if (expectedSize <= 0L && Files.size(path) <= 1024L * 1024L) {
+    String expectedSha = info == null ? "" : info.sha256;
+    if (expectedSha.isEmpty() && !KataGoWeightFile.isWhole(path, session)) {
       throw new WeightIntegrityException(
           resource("AutoSetup.weightDownloadIncomplete", "Weight download is incomplete."), false);
     }
-    String expectedSha = info == null ? "" : info.sha256;
-    if (!expectedSha.isEmpty() && !expectedSha.equalsIgnoreCase(sha256(path))) {
+    if (!expectedSha.isEmpty() && !expectedSha.equalsIgnoreCase(sha256(path, session))) {
       throw new WeightIntegrityException(
           resource(
               "AutoSetup.weightChecksumFailed", "Weight checksum failed. Please download again."),
           true);
     }
+    session.throwIfCancelled();
   }
 
   private static boolean shouldDiscardWeightPartial(IOException error) {
@@ -2582,7 +2596,7 @@ public final class KataGoAutoSetupHelper {
         String uploadedAt = cleanHtmlText(cells.get(1));
         String eloRating = cleanHtmlText(cells.get(2));
         String downloadUrl = resolveUrl(extractHref(cells.get(3)));
-        if (modelName.isEmpty() || downloadUrl.isEmpty()) {
+        if (modelName.isEmpty() || !KataGoWeightFile.isTrustedListing(downloadUrl)) {
           continue;
         }
         String dedupKey = modelName.toLowerCase(Locale.ROOT);
@@ -3908,6 +3922,9 @@ public final class KataGoAutoSetupHelper {
       verifyDownloadedWeight(path, quickAnalysisDownloadInfo());
       rememberQuickAnalysisValidation(normalized, size, modified, expectedSha, true);
       return true;
+    } catch (DownloadCancelledException e) {
+      // An interrupted inspection says nothing about the file's integrity; allow a later retry.
+      return false;
     } catch (IOException e) {
       try {
         Path normalized = path.toAbsolutePath().normalize();
@@ -3954,13 +3971,21 @@ public final class KataGoAutoSetupHelper {
   }
 
   private static String sha256(Path path) throws IOException {
+    return sha256(path, null);
+  }
+
+  private static String sha256(Path path, DownloadSession session) throws IOException {
     try (InputStream input = Files.newInputStream(path)) {
       MessageDigest digest = MessageDigest.getInstance("SHA-256");
       byte[] buffer = new byte[8192];
       int read;
-      while ((read = input.read(buffer)) >= 0) {
+      while (true) {
+        if (session != null) session.throwIfCancelled();
+        read = input.read(buffer);
+        if (read < 0) break;
         digest.update(buffer, 0, read);
       }
+      if (session != null) session.throwIfCancelled();
       StringBuilder builder = new StringBuilder();
       for (byte value : digest.digest()) {
         builder.append(String.format(Locale.ROOT, "%02x", value & 0xff));
@@ -4400,16 +4425,12 @@ public final class KataGoAutoSetupHelper {
     if (url == null || url.trim().isEmpty()) {
       return "";
     }
-    int slashIndex = url.lastIndexOf('/');
-    if (slashIndex < 0 || slashIndex == url.length() - 1) {
+    try {
+      String path = URI.create(url).getRawPath();
+      return path == null ? "" : path.substring(path.lastIndexOf('/') + 1);
+    } catch (IllegalArgumentException e) {
       return "";
     }
-    String name = url.substring(slashIndex + 1);
-    int queryIndex = name.indexOf('?');
-    if (queryIndex >= 0) {
-      name = name.substring(0, queryIndex);
-    }
-    return name;
   }
 
   private static String resolveUrl(String url) {
