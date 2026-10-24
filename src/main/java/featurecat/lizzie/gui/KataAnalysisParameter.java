@@ -2,7 +2,7 @@ package featurecat.lizzie.gui;
 
 import java.util.OptionalDouble;
 
-/** Validation for the editable WRN/PDA toolbar values, independent of their applied settings. */
+/** Validation for the editable WRN/PDA values, independent of their applied settings. */
 enum KataAnalysisParameter {
   WRN(0, 2, "txt-kata-engine-wrn"),
   PDA(-3, 3, "txt-kata-engine-pda");
