@@ -2,23 +2,29 @@ package featurecat.lizzie.analysis.ssh;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.KeyPair;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import org.apache.sshd.client.SshClient;
+import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.NamedResource;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
+import org.apache.sshd.common.session.helpers.SessionHelper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,6 +52,43 @@ class SshCommandSessionTest {
       assertTrue(recorded.contains("[127.0.0.1]:" + server.port()), recorded);
       assertTrue(
           recorded.contains(PublicKeyEntry.toString(server.hostKey().getPublic())), recorded);
+    }
+  }
+
+  @Test
+  void pausedEngineRemainsUsableAfterLongIdleTimeoutChecks() throws Exception {
+    SshKnownHosts knownHosts = new SshKnownHosts(temp.resolve("known_hosts"));
+    try (TestSshServer server = TestSshServer.builder().password("secret").start();
+        SshCommandSession session =
+            SshCommandSession.open(
+                server.target("player"), SshCredential.password("secret"), "gtp", knownHosts)) {
+      assertEquals("started gtp", readLine(session.stderr()));
+      // Leelaz pauses analysis with name, then leaves the engine connected without traffic.
+      assertEquals("= test-engine", gtp(session, "name"));
+      assertEquals("", readLine(session.stdout()));
+
+      Field clientSessionField = SshCommandSession.class.getDeclaredField("session");
+      clientSessionField.setAccessible(true);
+      ClientSession clientSession = (ClientSession) clientSessionField.get(session);
+      Method idleCheck =
+          SessionHelper.class.getDeclaredMethod("checkIdleTimeout", Instant.class, Duration.class);
+      idleCheck.setAccessible(true);
+      for (Duration pause : List.of(Duration.ofMinutes(11), Duration.ofHours(24))) {
+        // Exercise MINA's real timeout detector with a future clock instead of sleeping or
+        // changing the configured timeout. Its periodic checker disconnects on a non-null result.
+        Instant nextCheck = Instant.now().plus(pause);
+        assertNull(
+            idleCheck.invoke(clientSession, nextCheck, clientSession.getIdleTimeout()),
+            "A paused engine must not time out after " + pause);
+        assertTrue(session.isOpen());
+        assertEquals("= test-engine", gtp(session, "name"));
+        assertEquals("", readLine(session.stdout()));
+      }
+
+      assertEquals("= ", gtp(session, "quit"));
+      assertTrue(session.awaitCompletion(Duration.ofSeconds(10)));
+      assertEquals(List.of("name", "name", "name", "quit"), server.inputCommands);
+      assertEquals(List.of("gtp"), server.commands, "the same remote command stays connected");
     }
   }
 

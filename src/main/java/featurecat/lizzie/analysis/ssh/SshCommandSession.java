@@ -29,6 +29,7 @@ import org.apache.sshd.common.kex.KeyExchangeFactory;
 import org.apache.sshd.common.keyprovider.KeyIdentityProvider;
 import org.apache.sshd.common.signature.Signature;
 import org.apache.sshd.common.util.io.IoUtils;
+import org.apache.sshd.core.CoreModuleProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -95,6 +96,8 @@ public final class SshCommandSession implements AutoCloseable {
       Objects.requireNonNull(knownHosts, "knownHosts");
       SshKnownHosts.Check hostKeyCheck = knownHosts.newCheck(target);
       SshClient connecting = SshClient.setUpDefaultClient();
+      // Paused engines may be silent indefinitely; their owner decides when to close them.
+      CoreModuleProperties.IDLE_TIMEOUT.set(connecting, Duration.ZERO);
       // Offer only this engine's configured identity, never ~/.ssh keys or host aliases.
       connecting.setKeyIdentityProvider(KeyIdentityProvider.EMPTY_KEYS_PROVIDER);
       connecting.setHostConfigEntryResolver(HostConfigEntryResolver.EMPTY);
