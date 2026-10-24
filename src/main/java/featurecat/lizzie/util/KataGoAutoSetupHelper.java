@@ -204,7 +204,7 @@ public final class KataGoAutoSetupHelper {
       connection = null;
     }
 
-    void throwIfCancelled() throws DownloadCancelledException {
+    public void throwIfCancelled() throws DownloadCancelledException {
       if (isCancelled()) {
         throw new DownloadCancelledException(
             resource("AutoSetup.downloadCancelled", "Download cancelled."));
@@ -1246,18 +1246,25 @@ public final class KataGoAutoSetupHelper {
       if (!snapshot.hasEngine() || !snapshot.hasConfigs() || !snapshot.hasWeight()) {
         return false;
       }
-      ArrayList<EngineData> engines = Utils.getEngineData();
-      int startupEngineIndex = resolveStartupEngineIndex(engines);
-      if (!shouldRepairStartupEngine(engines, startupEngineIndex, snapshot)) {
-        return false;
+      // The repair index belongs to this exact list. Keep its eligibility check and application
+      // under the persistence owner so a concurrent reorder cannot redirect the repair.
+      synchronized (Utils.class) {
+        if (Thread.currentThread().isInterrupted()) {
+          return false;
+        }
+        ArrayList<EngineData> engines = Utils.getEngineData();
+        int startupEngineIndex = resolveStartupEngineIndex(engines);
+        if (!shouldRepairStartupEngine(engines, startupEngineIndex, snapshot)) {
+          return false;
+        }
+        String name =
+            startupEngineIndex >= 0 && startupEngineIndex < engines.size()
+                ? safeEngineName(engines.get(startupEngineIndex).name, AUTO_SETUP_ENGINE_NAME)
+                : AUTO_SETUP_ENGINE_NAME;
+        applyEngineProfile(
+            snapshot.withActiveWeight(snapshot.activeWeightPath), name, false, startupEngineIndex);
+        return true;
       }
-      String name =
-          startupEngineIndex >= 0 && startupEngineIndex < engines.size()
-              ? safeEngineName(engines.get(startupEngineIndex).name, AUTO_SETUP_ENGINE_NAME)
-              : AUTO_SETUP_ENGINE_NAME;
-      applyEngineProfile(
-          snapshot.withActiveWeight(snapshot.activeWeightPath), name, false, startupEngineIndex);
-      return true;
     } catch (Exception e) {
       e.printStackTrace();
     }
@@ -2170,39 +2177,44 @@ public final class KataGoAutoSetupHelper {
 
   public static SetupResult applyAutoSetup(SetupSnapshot snapshot, boolean makeDefault)
       throws IOException {
-    SetupSnapshot resolvedSnapshot = snapshot == null ? inspectLocalSetup() : snapshot;
-    ArrayList<EngineData> engines = Utils.getEngineData();
-    int existingIndex = findManagedWeightProfileIndex(engines, resolvedSnapshot);
-    if (existingIndex < 0) {
-      existingIndex =
-          findManagedEngineIndex(engines, AUTO_SETUP_ENGINE_NAME, resolvedSnapshot);
-    }
-    String engineName =
-        existingIndex >= 0
-            ? safeEngineName(engines.get(existingIndex).name, AUTO_SETUP_ENGINE_NAME)
-            : AUTO_SETUP_ENGINE_NAME;
-    return applyEngineProfile(resolvedSnapshot, engineName, makeDefault, existingIndex);
+    SetupSnapshot resolved = snapshot == null ? inspectLocalSetup() : snapshot;
+    return applyEngineProfile(
+        resolved,
+        makeDefault,
+        (engines, command) -> {
+          int index = findManagedWeightProfileIndex(engines, resolved, command);
+          if (index < 0) index = findManagedEngineIndex(engines, AUTO_SETUP_ENGINE_NAME, resolved);
+          String name =
+              index >= 0
+                  ? safeEngineName(engines.get(index).name, AUTO_SETUP_ENGINE_NAME)
+                  : AUTO_SETUP_ENGINE_NAME;
+          return new KataGoSetupProfileTransaction.Selection(name, index);
+        });
   }
 
   public static SetupResult addWeightEngineProfile(SetupSnapshot snapshot) throws IOException {
-    SetupSnapshot resolvedSnapshot = snapshot == null ? inspectLocalSetup() : snapshot;
-    ArrayList<EngineData> engines = Utils.getEngineData();
-    int existingIndex = findManagedWeightProfileIndex(engines, resolvedSnapshot);
-    String profileName;
-    if (existingIndex >= 0
-        && (isManagedBundledProfile(engines.get(existingIndex))
-            || (engines.get(existingIndex).name != null
-                && engines.get(existingIndex).name.startsWith(WEIGHT_ENGINE_NAME_PREFIX)))) {
-      profileName = engines.get(existingIndex).name;
-    } else {
-      String displayName = resolveWeightDisplayName(resolvedSnapshot.activeWeightPath);
-      if (Utils.isBlank(displayName) && resolvedSnapshot.activeWeightPath != null) {
-        displayName = resolvedSnapshot.activeWeightPath.getFileName().toString();
-      }
-      profileName =
-          uniqueEngineProfileName(engines, WEIGHT_ENGINE_NAME_PREFIX + displayName, existingIndex);
+    SetupSnapshot resolved = snapshot == null ? inspectLocalSetup() : snapshot;
+    String displayName = resolveWeightDisplayName(resolved.activeWeightPath);
+    if (Utils.isBlank(displayName) && resolved.activeWeightPath != null) {
+      displayName = resolved.activeWeightPath.getFileName().toString();
     }
-    return applyEngineProfile(resolvedSnapshot, profileName, true, existingIndex);
+    String requestedName = WEIGHT_ENGINE_NAME_PREFIX + displayName;
+    return applyEngineProfile(
+        resolved,
+        true,
+        (engines, command) -> {
+          int index = findManagedWeightProfileIndex(engines, resolved, command);
+          String name;
+          if (index >= 0
+              && (isManagedBundledProfile(engines.get(index))
+                  || (engines.get(index).name != null
+                      && engines.get(index).name.startsWith(WEIGHT_ENGINE_NAME_PREFIX)))) {
+            name = engines.get(index).name;
+          } else {
+            name = uniqueEngineProfileName(engines, requestedName, index);
+          }
+          return new KataGoSetupProfileTransaction.Selection(name, index);
+        });
   }
 
   public static SetupResult applyEngineProfile(
@@ -2213,21 +2225,44 @@ public final class KataGoAutoSetupHelper {
   static SetupResult applyEngineProfile(
       SetupSnapshot snapshot, String engineName, boolean makeDefault, Path preferredExecutable)
       throws IOException {
-    ArrayList<EngineData> engines = Utils.getEngineData();
-    if (snapshot == null) snapshot = inspectLocalSetup();
-    int existingIndex = findManagedEngineIndex(engines, engineName, snapshot);
-    if (existingIndex < 0 && preferredExecutable != null) {
-      existingIndex = findEngineIndexByExecutable(engines, preferredExecutable);
-    }
-    return applyEngineProfile(snapshot, engineName, makeDefault, existingIndex);
+    SetupSnapshot resolved = snapshot == null ? inspectLocalSetup() : snapshot;
+    return applyEngineProfile(
+        resolved,
+        makeDefault,
+        (engines, command) -> {
+          int index = findManagedEngineIndex(engines, engineName, resolved);
+          if (index < 0 && preferredExecutable != null)
+            index = findEngineIndexByExecutable(engines, preferredExecutable);
+          return new KataGoSetupProfileTransaction.Selection(
+              safeEngineName(engineName, AUTO_SETUP_ENGINE_NAME), index);
+        });
   }
 
   private static SetupResult applyEngineProfile(
       SetupSnapshot snapshot, String engineName, boolean makeDefault, int preferredEngineIndex)
       throws IOException {
-    if (snapshot == null) {
-      snapshot = inspectLocalSetup();
-    }
+    SetupSnapshot resolved = snapshot == null ? inspectLocalSetup() : snapshot;
+    return applyEngineProfile(
+        resolved,
+        makeDefault,
+        (engines, command) -> {
+          String name = safeEngineName(engineName, AUTO_SETUP_ENGINE_NAME);
+          int index =
+              preferredEngineIndex >= 0 && preferredEngineIndex < engines.size()
+                  ? preferredEngineIndex
+                  : findManagedEngineIndex(engines, name, resolved);
+          return new KataGoSetupProfileTransaction.Selection(name, index);
+        });
+  }
+
+  private static SetupResult applyEngineProfile(
+      SetupSnapshot snapshot,
+      boolean makeDefault,
+      java.util.function.BiFunction<
+              ArrayList<EngineData>, String, KataGoSetupProfileTransaction.Selection>
+          selection)
+      throws IOException {
+    if (snapshot == null) snapshot = inspectLocalSetup();
     if (!snapshot.hasEngine()) {
       throw new IOException(
           resource("AutoSetup.missingEngine", "No local KataGo binary was found."));
@@ -2241,11 +2276,9 @@ public final class KataGoAutoSetupHelper {
       throw new IOException(
           resource("AutoSetup.missingWeight", "No KataGo weight file was found."));
     }
-
     Path analysisConfig =
         snapshot.analysisConfigPath != null ? snapshot.analysisConfigPath : snapshot.gtpConfigPath;
     String backendOverrides = experimentalBackendOverrides(snapshot);
-
     String engineCommand = generatedGtpCommand(snapshot);
     String analysisCommand =
         quoteCommandPath(snapshot.workingDir, snapshot.enginePath)
@@ -2255,123 +2288,16 @@ public final class KataGoAutoSetupHelper {
             + quoteCommandPath(snapshot.workingDir, analysisConfig)
             + backendOverrides
             + " -quit-without-waiting";
-
-    ArrayList<EngineData> engines = Utils.getEngineData();
-    // Treat an entirely unspecified startup mode as part of this setup transaction. The engine
-    // flags and default index must be valid before saveEngineSettings normalizes and persists them.
-    boolean firstRunSetup =
-        !Lizzie.config.uiConfig.has("autoload-default")
-            && !Lizzie.config.uiConfig.has("autoload-empty")
-            && !Lizzie.config.uiConfig.has("autoload-last");
-    boolean selectAsDefault = makeDefault || firstRunSetup;
-    String resolvedEngineName =
-        Utils.isBlank(engineName) ? AUTO_SETUP_ENGINE_NAME : engineName.trim();
-    int engineIndex =
-        preferredEngineIndex >= 0 && preferredEngineIndex < engines.size()
-            ? preferredEngineIndex
-            : findManagedEngineIndex(engines, resolvedEngineName, snapshot);
-    EngineData engineData;
-    boolean createdEngine = engineIndex < 0;
-    if (engineIndex >= 0) {
-      engineData = engines.get(engineIndex);
-    } else {
-      engineData = new EngineData();
-      engines.add(engineData);
-      engineIndex = engines.size() - 1;
-    }
-    // Capture ownership before rewriting; a reused user command must not regain it by name.
-    boolean managedProfile =
-        isManagedBundledProfile(engineData)
-            || BundledKataGoProfile.canMigrate(engineData, snapshot.appRoot)
-            || (createdEngine && isManagedWeightProfileName(resolvedEngineName));
-
-    for (int i = 0; i < engines.size(); i++) {
-      EngineData existing = engines.get(i);
-      existing.index = i;
-      if (selectAsDefault) {
-        existing.isDefault = false;
-      }
-    }
-
-    engineData.index = engineIndex;
-    if (createdEngine || !AUTO_SETUP_ENGINE_NAME.equals(resolvedEngineName)) {
-      engineData.name = resolvedEngineName;
-    }
-    engineData.commands = engineCommand;
-    if (managedProfile
-        || BundledKataGoProfile.isDefaultCommand(engineCommand, snapshot.appRoot, false)) {
-      BundledKataGoProfile.claim(engineData);
-    }
-    engineData.preload = createdEngine ? false : engineData.preload;
-    engineData.width = normalizeBoardSize(createdEngine ? 19 : engineData.width);
-    engineData.height = normalizeBoardSize(createdEngine ? 19 : engineData.height);
-    engineData.komi = normalizeKomi(createdEngine ? 7.5F : engineData.komi);
-    engineData.isDefault = selectAsDefault || engineData.isDefault;
-    engineData.useJavaSSH = false;
-    engineData.ip = "";
-    engineData.port = "";
-    engineData.userName = "";
-    engineData.password = "";
-    engineData.useKeyGen = false;
-    engineData.keyGenPath = "";
-    engineData.initialCommand = createdEngine ? "" : safeString(engineData.initialCommand);
-    if (createdEngine) {
-      engineData.threadPolicy =
-          new JSONObject().put("source", "CFG").put("sourceRevision", 0L).put("initialSetup", true);
-    }
-    JSONObject candidateUi = new JSONObject(Lizzie.config.uiConfig.toString());
-
-    // Only force autoload=default on a truly fresh install. Once the user has picked
-    // "start with no engine" or "pick manually", respect that choice across setup runs.
-    if (firstRunSetup) {
-      candidateUi.put("autoload-default", true);
-      candidateUi.put("autoload-empty", false);
-      candidateUi.put("autoload-last", false);
-    }
-    if (selectAsDefault) {
-      candidateUi.put("default-engine", engineIndex);
-    }
-    candidateUi.put(
-        "katago-preferred-weight-path",
-        snapshot.activeWeightPath.toAbsolutePath().normalize().toString());
-    boolean updateAnalysisCommand = canUpdateAnalysisCommand();
-    if (updateAnalysisCommand) {
-      candidateUi.put("analysis-engine-command", analysisCommand);
-    }
-    candidateUi.put(
-        "katago-auto-setup-weight-path",
-        snapshot.activeWeightPath.toAbsolutePath().normalize().toString());
-    candidateUi.put(
-        "katago-auto-setup-engine-path",
-        snapshot.enginePath.toAbsolutePath().normalize().toString());
-    candidateUi.put(
-        "katago-auto-setup-gtp-config-path",
-        snapshot.gtpConfigPath.toAbsolutePath().normalize().toString());
-    candidateUi.put(
-        "katago-auto-setup-analysis-config-path",
-        snapshot.analysisConfigPath.toAbsolutePath().normalize().toString());
-    candidateUi.put("katago-auto-setup-updated-at", System.currentTimeMillis());
-    try {
-      Utils.saveEngineSettings(engines, candidateUi);
-    } catch (UncheckedIOException failure) {
-      throw failure.getCause();
-    }
-    if (updateAnalysisCommand) Lizzie.config.analysisEngineCommand = analysisCommand;
+    KataGoSetupProfileTransaction.Saved saved =
+        KataGoSetupProfileTransaction.save(
+            snapshot, engineCommand, analysisCommand, analysisConfig, makeDefault, selection);
     return new SetupResult(
-        inspectSavedEngine(engineData), engineIndex, resolvedEngineName, createdEngine);
+        inspectSavedEngine(saved.entry()), saved.index(), saved.name(), saved.created());
   }
 
-  private static int normalizeBoardSize(int size) {
-    return size > 0 ? size : 19;
-  }
-
-  private static boolean canUpdateAnalysisCommand() {
+  static boolean canUpdateAnalysisCommand() {
     return !Lizzie.config.analysisEngineCommandCustomized
         && !Utils.getAnalysisEngineRemoteEngineData().useJavaSSH;
-  }
-
-  private static float normalizeKomi(float komi) {
-    return Float.isFinite(komi) ? komi : 7.5F;
   }
 
   private static String experimentalBackendOverrides(SetupSnapshot snapshot) {
@@ -2411,10 +2337,6 @@ public final class KataGoAutoSetupHelper {
       return " -override-config \"" + override + "\"";
     }
     return "";
-  }
-
-  private static String safeString(String value) {
-    return value == null ? "" : value;
   }
 
   public static String getAutoSetupEngineName() {
@@ -2463,7 +2385,7 @@ public final class KataGoAutoSetupHelper {
     return -1;
   }
 
-  private static boolean isManagedBundledProfile(EngineData entry) {
+  static boolean isManagedBundledProfile(EngineData entry) {
     return BundledKataGoProfile.isManaged(entry) || BundledKataGoProfile.isManagedCuda13(entry);
   }
 
@@ -2487,7 +2409,7 @@ public final class KataGoAutoSetupHelper {
   }
 
   private static int findManagedWeightProfileIndex(
-      ArrayList<EngineData> engines, SetupSnapshot snapshot) {
+      ArrayList<EngineData> engines, SetupSnapshot snapshot, String engineCommand) {
     if (engines == null
         || snapshot == null
         || snapshot.enginePath == null
@@ -2495,7 +2417,7 @@ public final class KataGoAutoSetupHelper {
         || snapshot.activeWeightPath == null) {
       return -1;
     }
-    List<String> generated = Utils.splitCommand(generatedGtpCommand(snapshot));
+    List<String> generated = Utils.splitCommand(engineCommand);
     int firstMatch = -1;
     for (int i = 0; i < engines.size(); i++) {
       EngineData engineData = engines.get(i);
@@ -2515,7 +2437,7 @@ public final class KataGoAutoSetupHelper {
     return firstMatch;
   }
 
-  private static boolean isManagedWeightProfileName(String engineName) {
+  static boolean isManagedWeightProfileName(String engineName) {
     if (engineName == null) {
       return false;
     }

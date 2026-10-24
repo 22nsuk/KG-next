@@ -190,6 +190,10 @@ class KataGoCudaSwitchTest {
     @Override
     public void setVisible(boolean visible) {}
 
+    // The fixture omits discovery; late completion may request it after releasing ownership.
+    @Override
+    public void refreshState() {}
+
     @Override
     SetupResult applyCudaProfile(SetupSnapshot selected, DownloadSession session)
         throws IOException {

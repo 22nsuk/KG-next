@@ -126,6 +126,14 @@ class OfficialStrongestModelDesktopTest {
         value.setVisible(true);
         return value;
       });
+      awaitEdt(() -> invoke(dialog, "runtimeState") != null);
+      SwingUtilities.invokeAndWait(
+          () ->
+              assertFalse(
+                  ((javax.swing.JTextArea) field(dialog, "benchmarkPolicyDetails"))
+                      .getText()
+                      .contains(Lizzie.resourceBundle.getString("AutoSetup.validationChecking")),
+                  "the background observation must replace the benchmark's pending status"));
       JButton refresh = (JButton) field(dialog, "btnReloadRemoteWeights");
       SwingUtilities.invokeAndWait(refresh::doClick);
       awaitEdt(() -> refresh.isEnabled() && remoteWeights(dialog).size() == 4);
