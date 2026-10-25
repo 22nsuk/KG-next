@@ -147,7 +147,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -208,6 +208,9 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
                 ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmSavesStartupRulesAndClosesAfterMatchingReadback"),
                 ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot"),
+                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "threadCheckboxReceivesMouseAtEverySupportedFontSize"),
+                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft"),
+                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
