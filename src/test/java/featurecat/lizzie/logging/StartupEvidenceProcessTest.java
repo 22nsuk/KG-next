@@ -32,7 +32,11 @@ class StartupEvidenceProcessTest {
 
     assertEquals(0, result.exitCode(), result.output());
     assertTrue(result.output().contains("STARTED"), result.output());
+    assertTrue(result.output().contains("startup-stderr-canary password=T02_STDERR_SECRET"));
     String app = LoggingChildProcess.readLog(work, "app.log");
+    assertTrue(app.contains("[lizzie.app.stderr]"), app);
+    assertTrue(app.contains("startup-stderr-canary"), app);
+    assertFalse(app.contains("T02_STDERR_SECRET"), app);
     assertTrue(app.contains("application log session started"), app);
     assertTrue(app.contains("application version="), app);
     assertTrue(app.contains("java.version="), app);

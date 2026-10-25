@@ -55,6 +55,19 @@ class LoggingRuntimeTest {
   }
 
   @Test
+  void awaitIdleWaitsForEarlierEventsWhenTheWriterIsSlow() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    // Slower than the fixed ~400 ms spin after which awaitIdle() used to give up silently.
+    runtime.delayNestedAppendForTests(LogStream.APP, 800L);
+    LoggerFactory.getLogger(LogCategories.APP).warn("slow-writer-canary");
+
+    runtime.awaitIdle();
+
+    assertTrue(read("logs/app.log").contains("slow-writer-canary"));
+  }
+
+  @Test
   void repeatedInitializeReusesRuntimeWithoutDuplicateStartupEvents() throws Exception {
     LoggingRuntime first = start();
     LoggingRuntime second =
@@ -190,8 +203,12 @@ class LoggingRuntimeTest {
     }
     long elapsedNanos = System.nanoTime() - started;
     LoggerFactory.getLogger(LogCategories.APP).error("app-while-trace-blocked");
-    runtime.awaitIdle();
-    gate.countDown();
+    try {
+      // Only the app stream: the trace stream stays blocked until the gate opens.
+      assertTrue(runtime.awaitWritten(LogStream.APP, 10, TimeUnit.SECONDS));
+    } finally {
+      gate.countDown();
+    }
 
     assertTrue(elapsedNanos < TimeUnit.SECONDS.toNanos(1));
     assertTrue(read("logs/app.log").contains("app-while-trace-blocked"));
@@ -532,6 +549,52 @@ class LoggingRuntimeTest {
     String persisted = read("logs/app.log");
     for (int i = 0; i < 24; i++) {
       assertTrue(persisted.contains("shutdown-drain-canary-" + i), persisted);
+    }
+  }
+
+  @Test
+  void handoffReplacementDoesNotMixEnteredAndHoldGates() throws Exception {
+    LoggingRuntime runtime = start();
+    assertTrue(runtime.awaitIdle(3, TimeUnit.SECONDS));
+    CountDownLatch releaseFirstSignal = new CountDownLatch(1);
+    CountDownLatch firstEntered =
+        new CountDownLatch(1) {
+          @Override
+          public void countDown() {
+            super.countDown();
+            try {
+              releaseFirstSignal.await();
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+            }
+          }
+        };
+    CountDownLatch secondEntered = new CountDownLatch(1);
+    CountDownLatch secondHold = new CountDownLatch(1);
+    runtime.pauseHandoffForTests(LogStream.APP, firstEntered, new CountDownLatch(0));
+    org.slf4j.Logger app = LoggerFactory.getLogger(LogCategories.APP);
+    try {
+      app.warn("first-handoff-canary");
+      assertTrue(firstEntered.await(3, TimeUnit.SECONDS));
+      runtime.pauseHandoffForTests(LogStream.APP, secondEntered, secondHold);
+      app.warn("second-handoff-canary");
+      releaseFirstSignal.countDown();
+
+      assertTrue(
+          secondEntered.await(3, TimeUnit.SECONDS),
+          "first event picked up the replacement hold without its entered signal");
+      assertFalse(
+          runtime.awaitWritten(LogStream.APP, 150, TimeUnit.MILLISECONDS),
+          "persistence barrier returned while the second handoff was held");
+      secondHold.countDown();
+      assertTrue(runtime.awaitWritten(LogStream.APP, 3, TimeUnit.SECONDS));
+      String persisted = read("logs/app.log");
+      assertTrue(persisted.contains("first-handoff-canary"), persisted);
+      assertTrue(persisted.contains("second-handoff-canary"), persisted);
+    } finally {
+      releaseFirstSignal.countDown();
+      secondHold.countDown();
+      runtime.awaitIdle(3, TimeUnit.SECONDS);
     }
   }
 

@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
+  private record Handoff(CountDownLatch entered, CountDownLatch hold) {}
+
   private static final class QueuedEvent {
     final long sequence;
     final long incidentGeneration;
@@ -53,8 +55,7 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   private volatile CountDownLatch gate;
   private volatile CountDownLatch beforeAcceptEntered;
   private volatile CountDownLatch beforeAcceptHold;
-  private volatile CountDownLatch handoffEntered;
-  private volatile CountDownLatch handoffHold;
+  private volatile Handoff handoff;
   private volatile CountDownLatch afterAcceptEntered;
   private volatile CountDownLatch afterAcceptHold;
   private volatile boolean failWrites;
@@ -105,8 +106,7 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   }
 
   void setHandoffForTests(CountDownLatch entered, CountDownLatch hold) {
-    this.handoffEntered = entered;
-    this.handoffHold = hold;
+    this.handoff = new Handoff(entered, hold);
   }
 
   void setBeforeAcceptHoldForTests(CountDownLatch entered, CountDownLatch hold) {
@@ -281,13 +281,17 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
           continue;
         }
         inFlight.incrementAndGet();
-        CountDownLatch entered = handoffEntered;
-        if (entered != null) {
-          entered.countDown();
-        }
-        CountDownLatch hold = handoffHold;
-        if (hold != null) {
-          hold.await();
+        // Keep an event's entered signal and hold in the same test-hook generation.
+        Handoff currentHandoff = handoff;
+        if (currentHandoff != null) {
+          CountDownLatch entered = currentHandoff.entered();
+          if (entered != null) {
+            entered.countDown();
+          }
+          CountDownLatch hold = currentHandoff.hold();
+          if (hold != null) {
+            hold.await();
+          }
         }
         boolean persisted = false;
         try {
