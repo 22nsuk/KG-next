@@ -6,6 +6,8 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Bind Windows acceptance failed-start cleanup to the original launcher and observed child process identities; leave uncertain survivors untouched and report incomplete cleanup. Bound transient CIM identity observations to three attempts, and retain failure diagnostics with a matching GUI launcher fixture (upstream #699, #703, #705).
+- Preserve failed startup observations through cleanup so unverified children cannot be adopted later and surviving external descendants keep cleanup incomplete.
 - Verify and persist SSH host keys before authentication, share the SSH transport across ordinary, analysis, contribution and server-catalog connections, and cancel pending connections without reviving a retired engine. Preserve contribution `forcequit` and use the configured port for private-key login.
 - Prefer the system credential store for SSH passwords, migrate legacy settings through the existing transactional save, and keep cancelled or failed edits from replacing saved credentials. Preserve unreadable references and the legacy reversible-storage fallback when the system store is unavailable; explain that fallback in the password fields.
 - Validate the actual HumanSL TensorRT companion against its pinned CUDA provenance and static-zlib linkage, require the exact TensorRT parser DLL, and identify the executable that failed startup checks while retaining separate CUDA12/CUDA13 runtime selection.
