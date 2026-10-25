@@ -1076,7 +1076,8 @@ public class Config {
   // 自动分析
   public int autoAnaStartMove = -1;
   public int autoAnaEndMove = -1;
-  public boolean isAutoAna = false;
+  // Cancellation is published by the UI and consumed by engine/analysis worker threads.
+  public volatile boolean isAutoAna = false;
   public boolean isStartingAutoAna = false;
   public int autoAnaTime = 0;
   public int autoAnaPlayouts = 0;
