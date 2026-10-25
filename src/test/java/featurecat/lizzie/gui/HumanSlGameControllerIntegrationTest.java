@@ -59,9 +59,56 @@ import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class HumanSlGameControllerIntegrationTest {
   private static final int BOARD_SIZE = 3;
+
+  @ParameterizedTest
+  @ValueSource(
+      ints = {
+        KeyEvent.ALT_DOWN_MASK,
+        KeyEvent.ALT_GRAPH_DOWN_MASK,
+        KeyEvent.ALT_DOWN_MASK | KeyEvent.CTRL_DOWN_MASK,
+        KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK
+      })
+  void altSpaceDoesNotStopLiveAnalysisCoach(int modifiers) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      HumanSlGameController controller = env.startLiveAnalysisCoach();
+      BoardHistoryNode position = Lizzie.board.getHistory().getCurrentHistoryNode();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            KeyEvent key =
+                new KeyEvent(
+                    new JPanel(), KeyEvent.KEY_PRESSED, 0L, modifiers, KeyEvent.VK_SPACE, ' ');
+            new Input().keyPressed(key);
+            assertFalse(key.isConsumed(), "the window system/input method still owns Alt+Space");
+            assertFalse(controller.isStopRequested());
+            assertFalse(controller.isFinished());
+            assertSame(controller, Lizzie.frame.humanSlGame);
+            assertSame(position, Lizzie.board.getHistory().getCurrentHistoryNode());
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, KeyEvent.CTRL_DOWN_MASK, KeyEvent.SHIFT_DOWN_MASK})
+  void nonAltSpaceKeepsExistingLiveCoachStopAction(int modifiers) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      HumanSlGameController controller = env.startLiveAnalysisCoach();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            new Input()
+                .keyPressed(
+                    new KeyEvent(
+                        new JPanel(), KeyEvent.KEY_PRESSED, 0L, modifiers, KeyEvent.VK_SPACE, ' '));
+            assertTrue(controller.isStopRequested());
+            assertTrue(controller.isFinished());
+            assertNull(Lizzie.frame.humanSlGame);
+          });
+    }
+  }
 
   @Test
   void passShortcutUsesCoachControllerAndSchedulesTheAiTurn() throws Exception {
@@ -2579,8 +2626,24 @@ class HumanSlGameControllerIntegrationTest {
 
     private HumanSlGameController startCoach(
         BlockingHumanSlRunner runner, HumanSlTrainingConfig.PlayerColor playerColor) {
+      return startCoach(runner, coachConfig(playerColor));
+    }
+
+    private HumanSlGameController startLiveAnalysisCoach() {
+      return startCoach(
+          new BlockingHumanSlRunner(),
+          HumanSlTrainingConfig.builder()
+              .mode(TrainingMode.LIVE_ANALYSIS)
+              .playerColor(HumanSlTrainingConfig.PlayerColor.BLACK)
+              .fromCurrentPosition(true)
+              .moveTimeSeconds(2)
+              .build());
+    }
+
+    private HumanSlGameController startCoach(
+        BlockingHumanSlRunner runner, HumanSlTrainingConfig config) {
       HumanSlGameController controller =
-          new HumanSlGameController(runner, coachConfig(playerColor), new HumanSlTrainingSession());
+          new HumanSlGameController(runner, config, new HumanSlTrainingSession());
       controller.setExitLifecycleForTesting(
           Runnable::run, Runnable::run, () -> true, null);
       controller.start();

@@ -2095,6 +2095,50 @@ class LizzieFrameRegressionTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      ints = {
+        KeyEvent.ALT_DOWN_MASK,
+        KeyEvent.ALT_GRAPH_DOWN_MASK,
+        KeyEvent.ALT_DOWN_MASK | KeyEvent.CTRL_DOWN_MASK,
+        KeyEvent.ALT_DOWN_MASK | KeyEvent.SHIFT_DOWN_MASK
+      })
+  void altSpaceDoesNotResumeForegroundAnalysis(int modifiers) throws Exception {
+    assertSpaceAnalysisAction(modifiers, false);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {0, KeyEvent.CTRL_DOWN_MASK, KeyEvent.SHIFT_DOWN_MASK})
+  void nonAltSpaceStillSyncsAndResumesForegroundAnalysis(int modifiers) throws Exception {
+    assertSpaceAnalysisAction(modifiers, true);
+  }
+
+  private void assertSpaceAnalysisAction(int modifiers, boolean shouldResume) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze(false);
+      AnalysisSyncBoard board = analysisSyncBoardWith(historyWithUnanalyzedMove());
+      Lizzie.board = board;
+      TrackingLeelaz leelaz = allocate(TrackingLeelaz.class);
+      board.events = leelaz.commands();
+      Lizzie.leelaz = leelaz;
+      EngineManager.isEmpty = false;
+      Lizzie.frame = allocate(ManualPonderTrackingFrame.class);
+      BoardHistoryNode position = board.getHistory().getCurrentHistoryNode();
+
+      SwingUtilities.invokeAndWait(
+          () -> {
+            KeyEvent key =
+                new KeyEvent(
+                    new Canvas(), KeyEvent.KEY_PRESSED, 0L, modifiers, KeyEvent.VK_SPACE, ' ');
+            new Input().keyPressed(key);
+            assertFalse(key.isConsumed());
+          });
+
+      assertEquals(shouldResume ? List.of("sync", "ponder") : List.of(), leelaz.commands());
+      assertSame(position, board.getHistory().getCurrentHistoryNode());
+    }
+  }
+
   @Test
   void confirmedKifuRestoreRemainsConfirmedThroughAutomaticQuickAnalysis() throws Exception {
     TestEnvironment env = TestEnvironment.open();
