@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.EngineStartupStatus;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.gtp.KataRawNnResponse;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.ZhiziGtpTransport;
@@ -519,11 +520,9 @@ public class Leelaz {
   public double heatwinrate = -1;
   public int symmetry = 0;
   public double heatScore;
-  private boolean heatCanGetPolicy;
-  private boolean heatCanGetOwnership;
+  private KataRawNnResponse kataRawNnResponse;
   private volatile ManualGenmoveRequest manualGenmoveRequestOwner;
 
-  private boolean canheatRedraw = false;
   public ArrayList<Double> heatPolicy = new ArrayList<Double>();
   public ArrayList<Double> heatOwnership = new ArrayList<Double>();
   public boolean isGamePaused = false;
@@ -10073,76 +10072,36 @@ public class Leelaz {
   }
 
 
-  private void parseHeatMap(String line) {
+  private synchronized void parseHeatMap(String line) {
     if (isheatmap) {
       if (isKatago) {
         if (line.startsWith("=")) {
-          heatPolicy = new ArrayList<Double>();
-          heatOwnership = new ArrayList<Double>();
-          canheatRedraw = true;
+          kataRawNnResponse = new KataRawNnResponse(Board.boardWidth, Board.boardHeight);
+          heatPolicy = new ArrayList<>();
+          heatOwnership = new ArrayList<>();
           isCommandLine = true;
-          String[] params = line.trim().split(" ");
-          if (params.length == 3) {
-            if (params[1].startsWith("symmetry")) symmetry = Integer.parseInt(params[2]);
+          KataRawNnResponse.headerSymmetry(line).ifPresent(value -> symmetry = value);
+        }
+        if (kataRawNnResponse == null) return;
+        KataRawNnResponse.scalar(line, "whiteWin").ifPresent(value -> heatwinrate = value);
+        KataRawNnResponse.scalar(line, "whiteLead").ifPresent(value -> heatScore = value);
+        boolean complete =
+            kataRawNnResponse.accept(
+                line, () -> Lizzie.board.getHistory().isBlacksTurn(), heatPolicy, heatOwnership);
+        if (!kataRawNnResponse.matchesBoardSize(Board.boardWidth, Board.boardHeight)) {
+          // A resized board cannot display cells from the previous response's geometry.
+          kataRawNnResponse = null;
+          resetHeatmapData();
+          return;
+        }
+        if (complete) {
+          if (iskataHeatmapShowOwner) Lizzie.frame.drawKataEstimate(this, heatOwnership);
+          heatcount = new ArrayList<Integer>();
+          for (Double permille : heatPolicy) {
+            heatcount.add(permille.intValue());
           }
-        }
-        if (line.startsWith("whiteWin")) {
-          String[] params = line.trim().split(" ");
-          heatwinrate = Double.valueOf(params[1]);
-        }
-        if (line.startsWith("whiteLead")) {
-          String[] params = line.trim().split(" ");
-          heatScore = Double.valueOf(params[1]);
-        }
-        if (line.startsWith("policy")) {
-          heatCanGetPolicy = true;
-          heatCanGetOwnership = false;
-        }
-        if (line.startsWith("whiteOwnership")) {
-          heatCanGetPolicy = false;
-          heatCanGetOwnership = true;
-        }
-
-        if (heatCanGetPolicy) {
-          String[] params = line.trim().split("\\s+");
-          if (params.length == Board.boardWidth) {
-            for (int i = 0; i < params.length; i++) {
-              try {
-                heatPolicy.add((Double.parseDouble(params[i]) * 1000.0));
-              } catch (NumberFormatException ex) {
-                heatPolicy.add(0.0);
-              }
-            }
-          }
-        }
-
-        if (heatCanGetOwnership) {
-          String[] params = line.trim().split("\\s+");
-          if (params.length == Board.boardWidth) {
-            boolean blackToPlay = Lizzie.board.getHistory().isBlacksTurn();
-            for (int i = 0; i < params.length; i++) {
-              try {
-                heatOwnership.add(
-                    blackToPlay ? -Double.parseDouble(params[i]) : Double.parseDouble(params[i]));
-              } catch (NumberFormatException ex) {
-                heatOwnership.add(0.0);
-              }
-            }
-          }
-          if (heatOwnership.size() == Board.boardHeight * Board.boardWidth) {
-            // 结束并显示
-            if (canheatRedraw) {
-              canheatRedraw = false;
-              if (iskataHeatmapShowOwner) Lizzie.frame.drawKataEstimate(this, heatOwnership);
-              heatcount = new ArrayList<Integer>();
-              for (int i = 0; i < heatPolicy.size(); i++) {
-                heatcount.add(heatPolicy.get(i).intValue());
-              }
-              if (!Lizzie.frame.isShowingHeatmap) Lizzie.frame.isShowingHeatmap = true;
-              heatCanGetOwnership = false;
-              Lizzie.frame.refresh();
-            }
-          }
+          if (!Lizzie.frame.isShowingHeatmap) Lizzie.frame.isShowingHeatmap = true;
+          Lizzie.frame.refresh();
         }
       } else {
         if (line.startsWith(" ") || line.length() > 0 && Character.isDigit(line.charAt(0))) {
@@ -24385,9 +24344,15 @@ public class Leelaz {
   public void setHeatmap() {
     Lizzie.frame.isShowingHeatmap = true;
     isheatmap = true;
-    heatcount = new ArrayList<Integer>();
-    heatPolicy = new ArrayList<Double>();
-    heatOwnership = new ArrayList<Double>();
+    resetHeatmapData();
+  }
+
+  private synchronized void resetHeatmapData() {
+    // A response may already be in flight (including its header). Keep its parsing phase, but
+    // append subsequent rows to these current display lists rather than detached parser buffers.
+    heatcount = new ArrayList<>();
+    heatPolicy = new ArrayList<>();
+    heatOwnership = new ArrayList<>();
   }
 
   public void toggleHeatmap(boolean bySpace) {
@@ -24420,9 +24385,7 @@ public class Leelaz {
       isheatmap = Lizzie.frame.isShowingHeatmap;
       iskataHeatmapShowOwner = false;
     }
-    heatcount = new ArrayList<Integer>();
-    heatPolicy = new ArrayList<Double>();
-    heatOwnership = new ArrayList<Double>();
+    resetHeatmapData();
     if (isheatmap) {
       sendHeatCommand();
       isPondering = true;
@@ -24457,9 +24420,7 @@ public class Leelaz {
       isheatmap = Lizzie.frame.isShowingHeatmap;
       iskataHeatmapShowOwner = false;
     }
-    heatcount = new ArrayList<Integer>();
-    heatPolicy = new ArrayList<Double>();
-    heatOwnership = new ArrayList<Double>();
+    resetHeatmapData();
     if (isheatmap) {
       // sendHeatCommand();
     } else {

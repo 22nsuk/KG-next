@@ -4,6 +4,7 @@ All notable maintenance updates to this fork are documented here.
 
 ## Unreleased
 
+- Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
 - Adapt upstream #654's title, lead/rounded-zero and played-candidate text fixes. Suppress stale evaluation text on unanalysed positions and require adjacent analysis for previous-move changes; keep retry feedback on its own line even when shortcut hints are hidden. Match Japanese/Korean presets to KataGo readback while preserving legacy territory-rule labels and strict protocol parameter comparison.
