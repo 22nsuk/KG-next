@@ -8641,7 +8641,7 @@ public class Leelaz {
     List<MoveData> acceptedMoves =
         acceptedInfo == null ? List.of() : acceptedInfo.moves;
     int acceptedPlayouts = acceptedInfo == null ? 0 : acceptedInfo.totalPlayouts;
-    if (this != Lizzie.leelaz) return;
+    if (this != Lizzie.leelaz || !Lizzie.config.isAutoAna) return;
     if (Lizzie.config.autoAnaDiffFirstPlayouts > 0) {
       if (!acceptedMoves.isEmpty()
           && acceptedMoves.get(0).playouts >= Lizzie.config.autoAnaDiffFirstPlayouts) {
@@ -8677,7 +8677,7 @@ public class Leelaz {
     List<MoveData> acceptedMoves =
         acceptedInfo == null ? List.of() : acceptedInfo.moves;
     int acceptedPlayouts = acceptedInfo == null ? 0 : acceptedInfo.totalPlayouts;
-    if (this != Lizzie.leelaz) return;
+    if (this != Lizzie.leelaz || !Lizzie.config.isAutoAna) return;
     if (Lizzie.board.getHistory().isBlacksTurn() && !Lizzie.config.anaBlack) {
       Lizzie.board.getHistory().getCurrentHistoryNode().analyzed = true;
       return;
@@ -8725,7 +8725,7 @@ public class Leelaz {
     List<MoveData> acceptedMoves =
         acceptedInfo == null ? List.of() : acceptedInfo.moves;
     int acceptedPlayouts = acceptedInfo == null ? 0 : acceptedInfo.totalPlayouts;
-    if (this != Lizzie.leelaz) return;
+    if (this != Lizzie.leelaz || !Lizzie.config.isAutoAna) return;
     if (Lizzie.config.autoAnaEndMove != -1) {
       if (Lizzie.config.autoAnaEndMove < Lizzie.board.getHistory().getData().moveNumber) {
         LizzieFrame.toolbar.stopAutoAna(true, false);

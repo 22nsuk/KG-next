@@ -30,6 +30,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### Inherited upstream changes
 
+- Discard automatic-analysis progression and completion effects after cancellation, including already accepted engine output; preserve accepted analysis statistics, active analysis budgets, and independent autoplay (#710, common cancellation boundary).
 - Update JCEF from 127.3.1 to 152.0.6 / Chromium 152.0.7977.83, with matching Windows/macOS native checksums and package/workflow pins checked together (#631). Preserve KG-next's offline runtime lookup and existing Yike source validation. Embedded browsing requires Windows 10+ or macOS 13+; upgrading a JCEF 127 installation requires a full package because `core-update.zip` does not replace the browser runtime.
 - Repair missing bundled analysis executables while preserving custom model/config choices and options; restrict missing-file foreground fallback to automatic quick analysis, preserve manual diagnostics and separate lightweight/remote engines, and refresh live graphs with or without a progress window (#652).
 - Remove the retired lizzieyzy.cn sharing clients, login/search dialogs, hidden upload controls and offline search entries (#630). Remove only their legacy account, labels and search-window settings on successful configuration reads using atomic replacement; preserve local SGF saving and unrelated online sources.
