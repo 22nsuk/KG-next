@@ -154,9 +154,9 @@ jobs:
           test -f "dist/windows/input-with-katago/jcef-bundle/install.lock"
           test -f "dist/windows/input-with-katago/jcef-bundle/libcef.dll"
           test -f "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
-          grep -qx "release-tag=jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
+          grep -qx "release-tag=jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
           grep -qx "platform=windows-amd64" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
-          grep -qx "sha256=6d0466b9d5a2c4607a8a9eded1b5b9f77ca4514eadb68a1333b19053a462ceac" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
+          grep -qx "sha256=0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
           grep -qx "release-tag=v3.0.6" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
           grep -qx "asset-name=readboard-github-release-v3.0.6.zip" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
           grep -qx "sha256=1ba4c265f560cd988be24f4ea0eeb29516883f42ece477bd32b72f8bccf6565d" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
@@ -336,8 +336,9 @@ jobs:
             test -f "$jcef_bundle/jcef.dll"
             test -f "$jcef_bundle/jcef_helper.exe"
             test -f "$jcef_bundle/lizzieyzy-next-jcef-manifest.txt"
-            grep -qx "release-tag=jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100" "$jcef_bundle/lizzieyzy-next-jcef-manifest.txt"
+            grep -qx "release-tag=jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83" "$jcef_bundle/lizzieyzy-next-jcef-manifest.txt"
             grep -qx "platform=windows-amd64" "$jcef_bundle/lizzieyzy-next-jcef-manifest.txt"
+            grep -qx "sha256=0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875" "$jcef_bundle/lizzieyzy-next-jcef-manifest.txt"
             jcef_bundle_count=$((jcef_bundle_count + 1))
           done
           if (( jcef_bundle_count < 2 )); then

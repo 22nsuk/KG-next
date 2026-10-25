@@ -26,7 +26,7 @@ RUNTIME_TOOLS_SCRIPT="$ROOT_DIR/scripts/package_runtime_tools.py"
 JCEF_BUNDLE_PREPARE_SCRIPT="$ROOT_DIR/scripts/prepare_bundled_jcef.py"
 KATAGO_BUNDLE_SCRIPT="$ROOT_DIR/scripts/macos_katago_bundle.py"
 MACOS_BUNDLE_VERSION_SCRIPT="$ROOT_DIR/scripts/macos_bundle_version.py"
-JCEF_RELEASE_TAG="jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100"
+JCEF_RELEASE_TAG="jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
 JCEF_JAVA_OPTIONS=(
   "--add-exports=java.desktop/sun.awt=ALL-UNNAMED"
   "--add-exports=java.desktop/sun.lwawt=ALL-UNNAMED"
@@ -117,14 +117,14 @@ if [[ "$ARCH" == "arm64" ]]; then
   DMG_ARCH_LABEL="Apple Silicon"
   ENGINE_PLATFORM_DIR="macos-arm64"
   JCEF_PLATFORM="macosx-arm64"
-  JCEF_ASSET_SHA256="1746a503e38614ea3e4fe7986e22443ab48a3a245ba1f4b17575aaccab5e7994"
+  JCEF_ASSET_SHA256="685b27b3dc7f6899a7d4a3a3d58978c95c36ebd1afd571c7027a66fe6f1252a0"
 else
   ARCH_TAG="mac-amd64"
   PUBLIC_ARCH_TAG="mac-intel"
   DMG_ARCH_LABEL="Intel"
   ENGINE_PLATFORM_DIR="macos-amd64"
   JCEF_PLATFORM="macosx-amd64"
-  JCEF_ASSET_SHA256="36ed38af450dff481513c352a92a88aaa73ec34a399edadc7a4a947c7d1ddaed"
+  JCEF_ASSET_SHA256="0a49f85ebc8f942fae81bc0120950ce83a629696352338f000856ee72580908a"
 fi
 
 has_bundled_katago() {
@@ -306,6 +306,7 @@ macOS bundle version: $APP_VERSION
 Main asset: $(basename "$FINAL_DMG")
 Engine: $PACKAGE_NOTE
 Browser: Bundled JCEF $JCEF_RELEASE_TAG ($JCEF_PLATFORM)
+Browser requirement: macOS 13 or later (Chromium 152)
 
 Install:
 1. Open $(basename "$FINAL_DMG").

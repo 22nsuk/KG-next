@@ -17,6 +17,7 @@ def verify_manual_core_update(package_script: str) -> None:
         raise AssertionError("KG-next must not publish the retired upstream updater manifest")
     if os.name == "nt" or shutil.which("bash") is None:
         return  # Exercise the shell packager in the POSIX script gate.
+    from prepare_bundled_jcef import JCEF_RELEASE_TAG
     from validate_windows_release_assets import validate_core_update_archive
 
     start = package_script.index("create_core_update_asset() {")
@@ -36,6 +37,7 @@ MAIN_JAR=lizzie-yzy2.5.3-shaded.jar
 DATE_TAG=2026-10-13
 ARCH_TAG=windows64
 APP_DISPLAY_VERSION=next-2026-10-13.1
+JCEF_RELEASE_TAG="$2"
 artifacts=()
 resolve_python_bin() { PYTHON_BIN=python3; }
 to_native_path() { printf '%s' "$1"; }
@@ -44,8 +46,13 @@ powershell.exe() { :; }
 ''' + package_script[start:end] + '\ncreate_core_update_asset\n'
         # Only native ZIP compression is replaced; stage files and the installed
         # manifest are produced by the actual release function above.
-        subprocess.run(["bash", "-c", script, "fixture", str(root)], check=True)
+        subprocess.run(
+            ["bash", "-c", script, "fixture", str(root), JCEF_RELEASE_TAG], check=True
+        )
         core_root = root / "dist/core-update"
+        readme = (core_root / "README.txt").read_text(encoding="utf-8")
+        require(readme, f"release-tag={JCEF_RELEASE_TAG}", "core-update browser prerequisite")
+        require(readme, "use a full package instead", "core-update runtime upgrade guidance")
         with zipfile.ZipFile(root / "release/2026-10-13-windows64.core-update.zip", "w") as archive:
             for file in core_root.rglob("*"):
                 if file.is_file():

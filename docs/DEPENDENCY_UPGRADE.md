@@ -61,8 +61,17 @@
 
 | 依赖 | 原版本 | 新版本 | 说明 |
 |------|--------|--------|------|
-| `jcefmaven` | 95.7.14.11 | **127.3.1** | Chromium从95升级到127，重大安全更新 |
+| `jcefmaven` | 95.7.14.11 → 127.3.1 | **152.0.6** | Chromium 更新至 152.0.7977.83；Java 依赖、原生包和发布校验同步更新 |
 | `ganymed-ssh2` | build210 | **262** | SSH库更新 |
+
+### JCEF 152 的运行环境与升级边界
+
+KG-next 使用 [jcefmaven 152.0.6](https://github.com/jcefmaven/jcefmaven/releases/tag/152.0.6)，并固定 Windows x64、macOS arm64 和 macOS x64 原生包的 SHA-256。`prepare_bundled_jcef.py`、平台打包脚本、发布工作流及 `BrowserFrame` 必须使用同一版本；`test_prepare_bundled_jcef.py` 检查这些固定值的一致性。
+
+- **运行系统：Windows 10+、macOS 13+。** [CEF 官方构建与部署表](https://github.com/chromiumembedded/cef/blob/master/docs/branches_and_building.md)的 152 / 7977 行给出了这两个下限；[Chrome 151 发布说明](https://developer.chrome.com/release-notes/151#chrome-151-removes-support-for-macos-12)也记录了 macOS 12 支持的结束。不要把上游 #631 中的 macOS 12+ 描述当作本次支持承诺。
+- **旧包升级：使用完整包。** `windows64.core-update.zip` 保留旧 JCEF，不能把 JCEF 127 安装升级为 152；它只适用于已具有匹配浏览器运行时的目录。应用 JAR 与原生包必须配套回滚，不能单独降级其中一项。
+- **离线运行时：保持现有边界。** KG-next 只查找与版本、平台匹配的本地 `jcef-bundle`，缺失或不匹配时拒绝打开浏览器。此次不启用 jcefmaven 的运行时自动下载，也不增加 Linux 原生包的发布支持。
+- **发布验收：分别记录。** 依赖解析、编译、原生包摘要和内容检查不能替代 Windows、Apple Silicon、Intel Mac 上的真实浏览器运行及 macOS 签名、公证验收。发布前仍需验证弈客同步、网页加载和窗口退出。
 
 ### 不升级的依赖
 
@@ -128,7 +137,7 @@
 
 | 依赖 | 版本 | Java 17 兼容性 | 说明 |
 |------|------|----------------|------|
-| `jcefmaven` | 127.3.1 | ✅ 支持 | 需要添加JVM参数 |
+| `jcefmaven` | 152.0.6 | ✅ 支持 | 需要添加JVM参数；原生浏览器另受上述系统要求限制 |
 | `fmt-maven-plugin` | 2.29 (Spotify) | ✅ 支持 | 从 com.coveo 迁移到 com.spotify.fmt |
 | `socket.io-client` | 1.0.0 | ✅ 支持 | 无问题 |
 | `ganymed-ssh2` | 262 | ✅ 支持 | 无问题 |

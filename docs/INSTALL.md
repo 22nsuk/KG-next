@@ -19,6 +19,10 @@
 
 ## 先选对包
 
+内嵌浏览器使用 JCEF 152.0.6 / Chromium 152.0.7977.83，需要 Windows 10+ 或 macOS 13+。Windows 和 macOS 完整包包含匹配的浏览器运行时；详见 [JCEF 依赖与升级说明](DEPENDENCY_UPGRADE.md)。
+
+**从 JCEF 127 旧包升级时，请改用本次完整包。** `windows64.core-update.zip` 只更新应用 JAR 和启动配置，不包含 JCEF；仅适用于已经装有同一 JCEF 运行时的目录。把新版 JAR 覆盖到旧浏览器运行时上会导致内嵌网页无法打开，软件不会自动下载替代运行时。
+
 | 你的系统 | 推荐下载 | 内置 Java | 内置 KataGo | 适合谁 |
 | --- | --- | --- | --- | --- |
 | Windows 64 位 | `<date>-windows64.nvidia.portable.zip` | 是 | 是 | RTX 20/30/40/50 NVIDIA 显卡，推荐，免安装 |

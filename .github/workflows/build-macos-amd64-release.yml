@@ -140,10 +140,10 @@ jobs:
           test -f "$jcef/libjcef.dylib"
           test -f "$jcef/Chromium Embedded Framework.framework/Chromium Embedded Framework"
           test -f "$jcef/jcef Helper.app/Contents/MacOS/jcef Helper"
-          grep -qx "release-tag=jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100" \
+          grep -qx "release-tag=jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83" \
             "$jcef/lizzieyzy-next-jcef-manifest.txt"
           grep -qx "platform=macosx-amd64" "$jcef/lizzieyzy-next-jcef-manifest.txt"
-          grep -qx "sha256=36ed38af450dff481513c352a92a88aaa73ec34a399edadc7a4a947c7d1ddaed" \
+          grep -qx "sha256=0a49f85ebc8f942fae81bc0120950ce83a629696352338f000856ee72580908a" \
             "$jcef/lizzieyzy-next-jcef-manifest.txt"
 
       - name: Sign and notarize (if Apple Developer credentials configured)

@@ -72,7 +72,7 @@
 | Windows，AMD / Intel / 较老 NVIDIA 显卡，想安装 | `*windows64.opencl.installer.exe` |
 | Windows，没有合适 GPU 或 GPU 版本无法启动，CPU 兼容版 | `*windows64.with-katago.portable.zip` |
 | Windows，CPU 兼容版，想安装 | `*windows64.with-katago.installer.exe` |
-| 已经有 Windows 免安装版，日常升级 | `*windows64.core-update.zip`，解压到旧目录覆盖 |
+| 已经有 Windows 免安装版，且 JCEF 运行时版本一致 | `*windows64.core-update.zip`，解压到旧目录覆盖 |
 | Windows，RTX 30 系及以下，想测试 TensorRT | 先下载统一 NVIDIA 包，再在 `KataGo 一键设置` 里选装 |
 | Windows，RTX 30 系及以下，想离线测试 TensorRT | `*windows64.nvidia.tensorrt.portable.7z.001` 起的全部分卷，先看同名 `README.txt` |
 | Windows，DirectX 12 GPU，参与 DirectML 测试 | `*windows64.experimental.directml.portable.zip` |
@@ -87,6 +87,8 @@
 Windows `portable.zip` 把配置、日志、棋谱、权重和软件内安装的 TensorRT 文件保存在解压目录，主要位于 `user-data/`。删除整个目录即可卸载；换目录升级时，复制 `user-data/` 可保留设置。
 
 已有 Windows 免安装版时，小版本升级可下载 `*windows64.core-update.zip`。关闭软件后，把 zip 内容解压到原目录并覆盖旧文件。该包只更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/KG-next*.cfg`，不会覆盖 `weights/`、`engines/`、`runtime/`、`jcef-bundle/`、`readboard/` 或 `user-data/`。如果 release 说明包含 KataGo、权重或运行环境升级，请改用完整包或对应资源包。
+
+本次内嵌浏览器升级至 JCEF 152.0.6 / Chromium 152.0.7977.83，需要 Windows 10+ 或 macOS 13+。**从 JCEF 127 旧包升级请使用新完整包，不能只覆盖 `core-update.zip`。** 新版 JAR 不会加载旧版浏览器运行时，也不会自动下载替代运行时；参见[安装说明](docs/INSTALL.md)。
 
 完整包的 CPU、OpenCL、CUDA、TensorRT、Metal 后端和 Linux 包均使用 KataGo `v1.18.2`。Linux NVIDIA 仍使用 CUDA 12.1，以兼顾系统运行环境。
 

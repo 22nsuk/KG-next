@@ -61,6 +61,10 @@ KG-next 릴리스에서 운영체제와 백엔드에 맞는 패키지를 선택�
 
 Windows 설치 제품명은 `KG-next`이며 NVIDIA·OpenCL 등 변형에는 백엔드 이름이 붙습니다. 원본 제품을 업그레이드 대상으로 오인하지 않도록 설치 식별자를 분리합니다. macOS 앱 이름도 `KG-next.app`입니다. 내부 Java 패키지명과 기존 SGF 분석 속성은 기보 호환성을 위해 유지합니다.
 
+앱 내 웹 브라우저는 **JCEF 152.0.6 / Chromium 152.0.7977.83**을 사용하며, Windows 10 이상 또는 macOS 13 이상이 필요합니다. Windows·macOS 전체 패키지에는 운영체제와 CPU에 맞는 브라우저 런타임을 포함합니다. 지원 기준은 [CEF 플랫폼 표](https://github.com/chromiumembedded/cef/blob/master/docs/branches_and_building.md)와 [의존성 안내](docs/DEPENDENCY_UPGRADE.md)를 참고하세요.
+
+**기존 JCEF 127 패키지에서 전환할 때는 새 전체 패키지를 사용하세요.** `windows64.core-update.zip`은 앱 JAR와 실행 설정만 갱신하고 JCEF를 교체하지 않으므로 이 전환에 사용할 수 없습니다. 앱과 같은 JCEF 버전의 런타임이 이미 설치된 경우에만 소형 업데이트를 사용하세요. JAR만 바꾸거나 구 런타임과 섞으면 앱 내 웹 브라우저를 열 수 없습니다. KG-next는 누락된 브라우저 런타임을 자동으로 내려받지 않습니다.
+
 ### 소스 빌드
 
 JDK 17 이상과 Maven이 필요합니다. 저장소의 CI는 JDK 21 환경도 사용합니다.

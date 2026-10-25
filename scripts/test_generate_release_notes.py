@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
+import xml.etree.ElementTree as ET
 
 
 SCRIPT_PATH = Path(__file__).with_name("generate_release_notes.py")
@@ -114,6 +115,35 @@ class GenerateReleaseNotesTest(unittest.TestCase):
         )
         self.assertNotIn("windows64.nvidia.cuda13.portable.zip", notes)
         self.assertNotIn("requires a CUDA 13 compatible", notes)
+
+    def test_future_notes_explain_browser_runtime_upgrade_in_every_language(self) -> None:
+        notes = NOTES.build_release_notes(
+            self.asset_map, NOTES.load_bundle_metadata(), "22nsuk/KG-next", "next-2099-01-01.1"
+        )
+        pom = ET.parse(SCRIPT_PATH.parent.parent / "pom.xml")
+        ns = {"m": "http://maven.apache.org/POM/4.0.0"}
+        version = pom.findtext(
+            ".//m:dependency[m:artifactId='jcefmaven']/m:version", namespaces=ns
+        )
+        self.assertIsNotNone(version)
+        for language in NOTES.RELEASE_LANGUAGES:
+            with self.subTest(language=language):
+                start = notes.index(f"## {language}\n")
+                next_heading = notes.find("\n## ", start + 1)
+                section = notes[start:] if next_heading < 0 else notes[start:next_heading]
+                self.assertIn(f"JCEF {version}", section)
+                self.assertIn("JCEF 127", section)
+                self.assertIn("Windows 10+", section)
+                self.assertIn("macOS 13+", section)
+                self.assertIn("`core-update.zip`", section)
+        self.assertIn("Use a full package when upgrading from JCEF 127", notes)
+        self.assertIn("only for installations that already have the matching", notes)
+        self.assertNotIn("should prefer `windows64.core-update.zip` for routine updates", notes)
+
+    def test_historical_notes_do_not_claim_the_new_browser_runtime(self) -> None:
+        notes = self.build_notes("next-2026-07-13.1")
+        self.assertNotIn("JCEF 152", notes)
+        self.assertNotIn("macOS 13+", notes)
 
 
 if __name__ == "__main__":

@@ -24,6 +24,12 @@ This page describes the public release layout of the maintained `LizzieYzy Next`
 - Driver `570.65` or newer loads directly; `528.33–570.64` runs one lightweight real-inference probe; older drivers show an explicit repair state
 - `KataGo Auto Setup` detects the local NVIDIA GPU / Compute Capability and shows recommended, try, not recommended, or unknown status before TensorRT install
 
+### Embedded browser requirements and upgrades
+
+Full Windows and macOS packages include JCEF 152.0.6 / Chromium 152.0.7977.83 for the matching CPU architecture. The embedded browser requires Windows 10+ or macOS 13+; see the [JCEF dependency notes](DEPENDENCY_UPGRADE.md) for the platform source.
+
+Use a full package when moving from JCEF 127 to 152. `windows64.core-update.zip` replaces only the application JAR and launcher configuration and preserves JCEF, engines, weights, Java, readboard and user data. It is suitable only when the installation already has the matching JCEF runtime. Mixing the new JAR with an old runtime prevents embedded web pages from opening; KG-next does not automatically download missing browser runtimes.
+
 ## The 13 Stable Public Release Assets
 
 | Package type | Typical filename | Best for |
