@@ -13,8 +13,8 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.enginegame.EngineGamePlans;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
-import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.gui.Menu;
+import featurecat.lizzie.rules.Board;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -34,6 +34,11 @@ class LeelazEngineRulesProtocolTest {
   private static final String POSITIONAL_CHINESE =
       "{\"ko\":\"POSITIONAL\",\"scoring\":\"AREA\",\"tax\":\"NONE\",\"suicide\":false,"
           + "\"hasButton\":false,\"whiteHandicapBonus\":\"N\",\"friendlyPassOk\":true}";
+  // Actual kata-get-rules payload after japanese/korean on the installed KataGo v1.18.2.
+  private static final String JAPANESE_READBACK =
+      "{\"friendlyPassOk\":false,\"hasButton\":false,\"ko\":\"SIMPLE\","
+          + "\"scoring\":\"TERRITORY\",\"suicide\":false,\"tax\":\"SEKI\","
+          + "\"whiteHandicapBonus\":\"0\"}";
 
   @Test
   void parameterReadbackPublishesTheCompletePairRegardlessOfRulesResponseOrder() throws Exception {
@@ -210,6 +215,26 @@ class LeelazEngineRulesProtocolTest {
       assertEquals("POSITIONAL", result.observed().string("ko"));
       assertFalse(result.observed().semanticallyEquals(KataGoRules.parse("chinese").orElseThrow()));
       assertEquals(KataGoRules.Summary.CHINESE, fixture.engine.rulesSummary);
+    }
+  }
+
+  @Test
+  void namedJapaneseAndKoreanRequestsMatchReadbackAndPublishJapaneseSummary() throws Exception {
+    for (String name : List.of("japanese", "korean")) {
+      try (Fixture fixture = Fixture.ordinary()) {
+        KataGoRules requested = KataGoRules.parse(name).orElseThrow();
+        fixture.engine.applyEngineRules(requested);
+        fixture.engine.dispatchReaderLineForTest(
+            "=" + commandIdFor(fixture.output.toString(), "kata-set-rules"));
+        fixture.reply("kata-get-rules", JAPANESE_READBACK);
+
+        EngineRulesResult result = fixture.engine.engineRulesResult();
+        assertTrue(result.isConfirmed(), name);
+        assertTrue(result.observed().semanticallyEquals(requested), name);
+        assertEquals(KataGoRules.Summary.JAPANESE, fixture.engine.rulesSummary, name);
+        assertEquals("= " + JAPANESE_READBACK, fixture.engine.recentRulesLine, name);
+        assertEquals(fixture.engine.recentRulesLine, Lizzie.config.currentKataGoRules, name);
+      }
     }
   }
 

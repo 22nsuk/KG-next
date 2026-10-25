@@ -262,6 +262,133 @@ class LizzieFrameRegressionTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void scoreTextDisappearsAfterNavigatingToUnanalysedNode(boolean withKomi) throws Exception {
+    Font previousFont = LizzieFrame.uiFont;
+    try (TestEnvironment env = TestEnvironment.open()) {
+      EmptyEngineUiFrame frame = prepareEmptyEngineUiFrame();
+      LizzieFrame.uiFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+      Lizzie.config.showKataGoScoreLeadWithKomi = withKomi;
+      BoardData analysed = Lizzie.board.getData();
+      analysed.analysisHeaderSlots = 3;
+      analysed.isKataData = true;
+      analysed.setPlayouts(20);
+      analysed.scoreMean = 7.3;
+      analysed.winrate = 60;
+      assertTrue(paintedStatusTextPixels(frame) > 0);
+      BoardData empty = moveData(new int[] {0, 0}, Stone.BLACK, false, 1, 0);
+      empty.isKataData = true;
+      Lizzie.board.getHistory().add(empty);
+      assertEquals(0, paintedStatusTextPixels(frame), "no stale score or previous-move delta");
+      empty.setPlayouts(20);
+      empty.analysisHeaderSlots = 3;
+      empty.winrate = 50;
+      empty.scoreMean = 0;
+      assertTrue(paintedStatusTextPixels(frame) > 0, "a measured zero is valid");
+    } finally {
+      LizzieFrame.uiFont = previousFont;
+    }
+  }
+
+  @Test
+  void previousMoveTextDoesNotBorrowGrandparentAnalysis() throws Exception {
+    Font previousFont = LizzieFrame.uiFont;
+    try (TestEnvironment env = TestEnvironment.open()) {
+      EmptyEngineUiFrame frame = prepareEmptyEngineUiFrame();
+      LizzieFrame.uiFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+      BoardHistoryList history = Lizzie.board.getHistory();
+      history.getData().setPlayouts(20);
+      history.getData().analysisHeaderSlots = 3;
+      history.getData().winrate = 60;
+      BoardData middle = moveData(new int[] {0, 0}, Stone.BLACK, false, 1, 0);
+      history.add(middle);
+      BoardData current = moveData(new int[] {1, 1}, Stone.WHITE, true, 2, 20);
+      current.winrate = 40;
+      current.analysisHeaderSlots = 3;
+      history.add(current);
+      assertEquals(0, paintedStatusTextPixels(frame), "N-2 is not the preceding position");
+      middle.setPlayouts(20);
+      middle.analysisHeaderSlots = 3;
+      middle.winrate = 55;
+      assertTrue(paintedStatusTextPixels(frame) > 0, "N-1 arrival enables the delta");
+    } finally {
+      LizzieFrame.uiFont = previousFont;
+    }
+  }
+
+  private static void assertRetryLineIndependentOfEngineName(AutomaticQuickAnalysisTask task)
+      throws Exception {
+    EmptyEngineUiFrame statusFrame = allocate(EmptyEngineUiFrame.class);
+    statusFrame.mainPanel = new JPanel();
+    statusFrame.mainPanel.setSize(800, 400);
+    setField(statusFrame, "boardX", 260);
+    setField(statusFrame, "automaticQuickAnalysisTask", task);
+    Method status =
+        LizzieFrame.class.getDeclaredMethod(
+            "drawPonderingState",
+            Graphics2D.class,
+            String.class,
+            String.class,
+            int.class,
+            int.class);
+    Method hint =
+        LizzieFrame.class.getDeclaredMethod("drawCommandString", Graphics2D.class, int.class);
+    status.setAccessible(true);
+    hint.setAccessible(true);
+    BufferedImage[] images = new BufferedImage[2];
+    SwingUtilities.invokeAndWait(
+        () -> {
+          for (int i = 0; i < 2; i++) {
+            images[i] = new BufferedImage(800, 400, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D g = images[i].createGraphics();
+            try {
+              invokeUnchecked(
+                  status,
+                  statusFrame,
+                  g,
+                  i == 0 ? "KataGo" : "SSH engine ".repeat(80),
+                  "Analyzing",
+                  0,
+                  310);
+              invokeUnchecked(hint, statusFrame, g, 310);
+            } finally {
+              g.dispose();
+            }
+          }
+        });
+    int[] line = LizzieFrame.statusLineBounds(310, 396, 3)[2];
+    int drawn = 0;
+    for (int y = line[0]; y < line[0] + line[1]; y++) {
+      for (int x = 0; x < 260; x++) {
+        assertEquals(images[0].getRGB(x, y), images[1].getRGB(x, y));
+        if ((images[1].getRGB(x, y) & 0xffffff) != 0) drawn++;
+      }
+    }
+    assertTrue(drawn > 0, "retry remains painted in the narrow column despite a long engine name");
+  }
+
+  private static int paintedStatusTextPixels(LizzieFrame frame) throws Exception {
+    BufferedImage image = new BufferedImage(400, 120, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D graphics = image.createGraphics();
+    try {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            try {
+              invokeDrawMoveStatistics(frame, graphics, 0, 0, 400, 120);
+            } catch (Exception e) {
+              throw new RuntimeException(e);
+            }
+          });
+    } finally {
+      graphics.dispose();
+    }
+    int count = 0;
+    for (int y = 85; y < 120; y++)
+      for (int x = 0; x < 400; x++) if ((image.getRGB(x, y) & 0xffffff) != 0) count++;
+    return count;
+  }
+
   @Test
   void engineThreadRefreshesCoalescePerFrameWhileEdtCallsRemainImmediate() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
@@ -3400,6 +3527,9 @@ class LizzieFrameRegressionTest {
         drainEdt();
         assertTrue(task.isActive());
         assertTrue(task.isRetrying());
+        Lizzie.config.userKnownX = true;
+        assertTrue(frame.showStatusHint(), "retry feedback survives hidden shortcut hints");
+        assertRetryLineIndependentOfEngineName(task);
         assertFalse(frame.isUserAnalysisPaused());
         assertFalse((boolean) getField(frame, "pendingForegroundResumeAfterCleanup"));
         assertTrue(frame.prompts().isEmpty());
