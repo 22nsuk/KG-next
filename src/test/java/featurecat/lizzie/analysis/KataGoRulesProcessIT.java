@@ -13,8 +13,8 @@ import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
-import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.io.CleanupMode;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Actual packaged-engine protocol acceptance; never substitutes a fake process. */
 @EnabledIfSystemProperty(named = "lizzie.acceptance.engine", matches = ".+")
@@ -22,7 +22,7 @@ class KataGoRulesProcessIT {
   @TempDir(cleanup = CleanupMode.ON_SUCCESS) Path directory;
 
   @Test
-  void everyPresetRoundTripsThroughRealKataGo() throws Exception {
+  void everyPresetMatchesItsEngineNameAndJsonRoundTripsThroughRealKataGo() throws Exception {
     Path config = directory.resolve("gtp.cfg");
     Files.writeString(config, "rules = chinese\nnumSearchThreads = 1\nmaxVisits = 16\n"
         + "logAllGTPCommunication = true\nlogSearchInfo = true\n"
@@ -37,20 +37,22 @@ class KataGoRulesProcessIT {
       int id = 1;
       for (String preset : KataGoRules.officialPresetNames()) {
         KataGoRules expected = KataGoRules.parse(preset).orElseThrow();
-        output.write(id + " kata-set-rules " + expected.toGtpArgument() + "\n");
-        output.flush();
-        String applied = reader.submit(() -> response(input)).get(90, TimeUnit.SECONDS);
-        assertTrue(applied.startsWith("=" + id), preset + ": " + applied);
-        id++;
-        output.write(id + " kata-get-rules\n");
-        output.flush();
-        String observed = reader.submit(() -> response(input)).get(10, TimeUnit.SECONDS);
-        assertTrue(observed.startsWith("=" + id), preset + ": " + observed);
-        JSONObject actual = new JSONObject(observed.substring(observed.indexOf('{')));
-        for (String key : expected.toJson().keySet()) {
-          assertEquals(expected.toJson().get(key), actual.get(key), preset + "/" + key);
+        for (String argument : java.util.List.of(preset, expected.toGtpArgument())) {
+          output.write(id + " kata-set-rules " + argument + "\n");
+          output.flush();
+          String applied = reader.submit(() -> response(input)).get(90, TimeUnit.SECONDS);
+          assertTrue(applied.startsWith("=" + id), preset + ": " + applied);
+          id++;
+          output.write(id + " kata-get-rules\n");
+          output.flush();
+          String observed = reader.submit(() -> response(input)).get(10, TimeUnit.SECONDS);
+          assertTrue(observed.startsWith("=" + id), preset + ": " + observed);
+          JSONObject actual = new JSONObject(observed.substring(observed.indexOf('{')));
+          for (String key : expected.toJson().keySet()) {
+            assertEquals(expected.toJson().get(key), actual.get(key), preset + "/" + key);
+          }
+          id++;
         }
-        id++;
       }
       output.write(id + " quit\n");
       output.flush();

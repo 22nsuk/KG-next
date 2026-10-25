@@ -6,6 +6,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Adapt upstream #654's title, lead/rounded-zero and played-candidate text fixes. Suppress stale evaluation text on unanalysed positions and require adjacent analysis for previous-move changes; keep retry feedback on its own line even when shortcut hints are hidden. Match Japanese/Korean presets to KataGo readback while preserving legacy territory-rule labels and strict protocol parameter comparison.
 - Keep newer WRN/PDA values and analysis results when an asynchronous thread change or source restore completes without edits to those parameters. Apply explicit parameter edits from the validated submission, while saving menu and auto-load preferences independently.
 - Stop background retries for imported positions that an in-band engine cannot represent, including White-to-play setups without a real move tail. Preserve the game and pause analysis, explain the unsupported position, and allow Continue to retry after selecting a compatible engine (#632, SPEC-001).
 - Bind Windows acceptance failed-start cleanup to the original launcher and observed child process identities; leave uncertain survivors untouched and report incomplete cleanup. Bound transient CIM identity observations to three attempts, and retain failure diagnostics with a matching GUI launcher fixture (upstream #699, #703, #705).

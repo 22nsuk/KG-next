@@ -572,16 +572,11 @@ public class AnalysisFrame extends JFrame {
       }
       if (table.getValueAt(row, 0).toString().length() > 3) {
         isNextMove = true;
-        String winrate = table.getValueAt(row, 3).toString();
-        if (winrate.contains("("))
-          diff = Double.parseDouble(winrate.substring(1, winrate.indexOf("(")));
-        else diff = 0;
-        if (table.getColumnCount() > 7) {
-          String score = table.getValueAt(row, 7).toString();
-          if (score.contains("("))
-            scoreDiff = Double.parseDouble(score.substring(1, score.indexOf("(")));
-          else scoreDiff = 0;
-        } else scoreDiff = 0;
+        diff = CandidateTableText.differenceIn(table.getValueAt(row, 3).toString());
+        scoreDiff =
+            table.getColumnCount() > 7
+                ? CandidateTableText.differenceIn(table.getValueAt(row, 7).toString())
+                : 0;
       } else isNextMove = false;
 
       String coordsName =
@@ -1009,12 +1004,8 @@ public class AnalysisFrame extends JFrame {
           case 3:
             if (data.isNextMove) {
               if (data.order != 0) {
-                double diff = data.winrate - data.bestWinrate;
-                return (diff > 0 ? "↑" : "↓")
-                    + String.format(Locale.ENGLISH, "%.1f", diff)
-                    + "("
-                    + String.format(Locale.ENGLISH, "%.1f", data.winrate)
-                    + ")";
+                return CandidateTableText.valueWithDifference(
+                    data.winrate, data.winrate - data.bestWinrate);
               }
             }
             return String.format(Locale.ENGLISH, "%.1f", data.winrate);
@@ -1051,12 +1042,8 @@ public class AnalysisFrame extends JFrame {
               }
             }
             if (data.isNextMove && data.order != 0) {
-              double diff = data.scoreMean - data.bestScoreMean;
-              return (diff > 0 ? "↑" : "↓")
-                  + String.format(Locale.ENGLISH, "%.1f", diff)
-                  + "("
-                  + String.format(Locale.ENGLISH, "%.1f", score)
-                  + ")";
+              return CandidateTableText.valueWithDifference(
+                  score, data.scoreMean - data.bestScoreMean);
             } else return String.format(Locale.ENGLISH, "%.1f", score);
           case 8:
             return String.format(Locale.ENGLISH, "%.1f", data.scoreStdev);

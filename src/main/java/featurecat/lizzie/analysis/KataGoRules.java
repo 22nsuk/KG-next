@@ -15,7 +15,8 @@ import org.json.JSONObject;
 
 /**
  * Immutable KataGo rules value used for parse, semantic comparison, display summary, and editing.
- * JSON key order is not identity. A display summary names a preset only when every field equals it.
+ * JSON key order is not identity. Display summaries ignore the area-only friendly-pass setting for
+ * territory rules; protocol comparison and serialization preserve every parameter.
  */
 public final class KataGoRules {
   public static final String KO = "ko";
@@ -29,7 +30,7 @@ public final class KataGoRules {
   private static final List<String> REQUIRED_FIELDS =
       List.of(KO, SCORING, TAX, SUICIDE, HAS_BUTTON, WHITE_HANDICAP_BONUS, FRIENDLY_PASS_OK);
 
-  /** Display summary: the named preset family whose fields this rules value equals exactly. */
+  /** Named preset family, ignoring only a boolean friendlyPassOk value under territory scoring. */
   public enum Summary {
     CHINESE("LizzieFrame.currentRules.chinese"),
     CHINESE_ANCIENT("LizzieFrame.currentRules.chn-ancient"),
@@ -84,6 +85,7 @@ public final class KataGoRules {
     return List.copyOf(PRESETS.keySet());
   }
 
+  /** Exact preset parameter match, so parsing the returned name preserves this value. */
   public static Optional<String> officialNameOf(KataGoRules rules) {
     if (rules == null) {
       return Optional.empty();
@@ -124,6 +126,9 @@ public final class KataGoRules {
     return new KataGoRules(fields);
   }
 
+  /**
+   * Full parameter identity for protocol confirmation and persisted rules, including extra fields.
+   */
   public boolean semanticallyEquals(KataGoRules other) {
     return other != null && fields.equals(other.fields);
   }
@@ -194,19 +199,19 @@ public final class KataGoRules {
   }
 
   public Summary summary() {
-    if (matchesOfficial("chinese") || matchesOfficial("chinese-ogs")) {
+    if (matchesSummary("chinese") || matchesSummary("chinese-ogs")) {
       return Summary.CHINESE;
     }
-    if (matchesOfficial("japanese")) {
+    if (matchesSummary("japanese")) {
       return Summary.JAPANESE;
     }
-    if (matchesOfficial("stone-scoring")) {
+    if (matchesSummary("stone-scoring")) {
       return Summary.CHINESE_ANCIENT;
     }
-    if (matchesOfficial("tromp-taylor")) {
+    if (matchesSummary("tromp-taylor")) {
       return Summary.TROMP_TAYLOR;
     }
-    if (matchesOfficial("goe")) {
+    if (matchesSummary("goe")) {
       return Summary.GOE;
     }
     return Summary.OTHER;
@@ -265,6 +270,23 @@ public final class KataGoRules {
   private boolean matchesOfficial(String name) {
     KataGoRules preset = PRESETS.get(name);
     return preset != null && semanticallyEquals(preset);
+  }
+
+  private boolean matchesSummary(String name) {
+    KataGoRules preset = PRESETS.get(name);
+    if (preset == null) {
+      return false;
+    }
+    // KataGo's friendlyPassOk affects passing behavior only for area scoring. Preserve legacy
+    // territory values, but require a complete boolean field and exact matches for all other
+    // fields.
+    if ("TERRITORY".equals(preset.string(SCORING))
+        && fields.get(FRIENDLY_PASS_OK) instanceof Boolean) {
+      Map<String, Object> summaryFields = new TreeMap<>(fields);
+      summaryFields.put(FRIENDLY_PASS_OK, preset.fields.get(FRIENDLY_PASS_OK));
+      return summaryFields.equals(preset.fields);
+    }
+    return semanticallyEquals(preset);
   }
 
   private static String stripGtpPrefix(String raw) {
@@ -343,8 +365,8 @@ public final class KataGoRules {
     presets.put("chinese", preset("SIMPLE", "AREA", "NONE", false, false, "N", true));
     presets.put("chinese-ogs", preset("POSITIONAL", "AREA", "NONE", false, false, "N", true));
     presets.put("chinese-kgs", preset("POSITIONAL", "AREA", "NONE", false, false, "N", true));
-    presets.put("japanese", preset("SIMPLE", "TERRITORY", "SEKI", false, false, "0", true));
-    presets.put("korean", preset("SIMPLE", "TERRITORY", "SEKI", false, false, "0", true));
+    presets.put("japanese", preset("SIMPLE", "TERRITORY", "SEKI", false, false, "0", false));
+    presets.put("korean", preset("SIMPLE", "TERRITORY", "SEKI", false, false, "0", false));
     presets.put("stone-scoring", preset("SIMPLE", "AREA", "ALL", false, false, "0", true));
     presets.put("aga", preset("SITUATIONAL", "AREA", "NONE", false, false, "N-1", true));
     presets.put("bga", preset("SITUATIONAL", "AREA", "NONE", false, false, "N-1", true));

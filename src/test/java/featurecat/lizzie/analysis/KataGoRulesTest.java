@@ -10,6 +10,12 @@ import org.junit.jupiter.api.Test;
 
 class KataGoRulesTest {
 
+  // kata-get-rules from the installed KataGo v1.18.2 after japanese and korean presets.
+  private static final String JAPANESE_READBACK =
+      "= {\"friendlyPassOk\":false,\"hasButton\":false,\"ko\":\"SIMPLE\","
+          + "\"scoring\":\"TERRITORY\",\"suicide\":false,\"tax\":\"SEKI\","
+          + "\"whiteHandicapBonus\":\"0\"}";
+
   @Test
   void chineseSimpleAndPositionalShareChineseSummaryButAreNotEquivalent() {
     KataGoRules simple = KataGoRules.parse("chinese").orElseThrow();
@@ -49,6 +55,75 @@ class KataGoRulesTest {
             .overlayEditor("AREA", "SIMPLE", true, "NONE", "N", false, true);
     assertEquals(KataGoRules.Summary.OTHER, oldTrompTaylorButton.summary());
     assertEquals(KataGoRules.Summary.OTHER, chineseWithSuicide.summary());
+  }
+
+  @Test
+  void japaneseAndKoreanPresetsMatchTheEnginesNamedPresetReadback() {
+    KataGoRules readback = KataGoRules.parse(JAPANESE_READBACK).orElseThrow();
+    for (String name : Set.of("japanese", "korean", "jp", "kr")) {
+      KataGoRules preset = KataGoRules.parse(name).orElseThrow();
+      assertFalse(preset.bool(KataGoRules.FRIENDLY_PASS_OK), name);
+      assertTrue(preset.semanticallyEquals(readback), name);
+      assertEquals(KataGoRules.Summary.JAPANESE, preset.summary(), name);
+    }
+    assertTrue(KataGoRules.officialNameOf(readback).isPresent());
+    assertTrue(
+        KataGoRules.parse(KataGoRules.officialNameOf(readback).orElseThrow())
+            .orElseThrow()
+            .semanticallyEquals(readback));
+  }
+
+  @Test
+  void territorySummaryAcceptsLegacyFriendlyPassWithoutChangingParameterIdentity() {
+    KataGoRules canonical = KataGoRules.parse(JAPANESE_READBACK).orElseThrow();
+    KataGoRules legacy =
+        KataGoRules.fromJson(canonical.toJson().put(KataGoRules.FRIENDLY_PASS_OK, true));
+
+    assertEquals(KataGoRules.Summary.JAPANESE, legacy.summary());
+    assertFalse(canonical.semanticallyEquals(legacy));
+    assertFalse(canonical.equals(legacy));
+    assertTrue(KataGoRules.officialNameOf(legacy).isEmpty());
+    assertTrue(legacy.toJson().getBoolean(KataGoRules.FRIENDLY_PASS_OK));
+    assertTrue(KataGoRules.parse(legacy.toGtpArgument()).orElseThrow().semanticallyEquals(legacy));
+  }
+
+  @Test
+  void territorySummaryStillRequiresCompleteKnownParameters() {
+    KataGoRules canonical = KataGoRules.parse(JAPANESE_READBACK).orElseThrow();
+    for (String field : canonical.toJson().keySet()) {
+      var incomplete = canonical.toJson();
+      incomplete.remove(field);
+      assertEquals(KataGoRules.Summary.OTHER, KataGoRules.fromJson(incomplete).summary(), field);
+    }
+    Map<String, Object> changes =
+        Map.of(
+            KataGoRules.KO,
+            "POSITIONAL",
+            KataGoRules.TAX,
+            "NONE",
+            KataGoRules.SUICIDE,
+            true,
+            KataGoRules.HAS_BUTTON,
+            true,
+            KataGoRules.WHITE_HANDICAP_BONUS,
+            "N",
+            KataGoRules.FRIENDLY_PASS_OK,
+            "false",
+            "futureRule",
+            true);
+    changes.forEach(
+        (field, value) ->
+            assertEquals(
+                KataGoRules.Summary.OTHER,
+                KataGoRules.fromJson(canonical.toJson().put(field, value)).summary(),
+                field));
+    KataGoRules areaWithoutFriendlyPass =
+        KataGoRules.fromJson(
+            KataGoRules.parse("chinese")
+                .orElseThrow()
+                .toJson()
+                .put(KataGoRules.FRIENDLY_PASS_OK, false));
+    assertEquals(KataGoRules.Summary.OTHER, areaWithoutFriendlyPass.summary());
   }
 
   @Test
