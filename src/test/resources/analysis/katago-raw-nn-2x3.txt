@@ -1,0 +1,19 @@
+= symmetry 0
+whiteWin 0.034049
+whiteLoss 0.965951
+noResult 0.000000
+whiteLead -15.799
+whiteScoreSelfplay -12.307
+whiteScoreSelfplaySq 165.610
+varTimeLeft 0.001
+shorttermWinlossError 0.046
+shorttermScoreError 3.978
+policy
+0.059762 0.042154
+0.421721 0.360754
+0.056832 0.058776
+policyPass 0.000001
+whiteOwnership
+-0.6974432 -0.6778877
+-0.8245600 -0.8270447
+-0.7112200 -0.6841711
