@@ -78,8 +78,8 @@ TENSORRT_KATAGO_CACHE_DIR="$ROOT_DIR/.cache/katago/tensorrt"
 JCEF_BUNDLE_PREPARE_SCRIPT="$ROOT_DIR/scripts/prepare_bundled_jcef.py"
 JCEF_BUNDLE_STAGE_DIR="$DIST_DIR/jcef-bundle"
 JCEF_PLATFORM="${WINDOWS_JCEF_PLATFORM:-windows-amd64}"
-JCEF_RELEASE_TAG="jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100"
-JCEF_ASSET_SHA256="6d0466b9d5a2c4607a8a9eded1b5b9f77ca4514eadb68a1333b19053a462ceac"
+JCEF_RELEASE_TAG="jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
+JCEF_ASSET_SHA256="0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875"
 READBOARD_RELEASE_REPO="${READBOARD_RELEASE_REPO:-qiyi71w/readboard}"
 READBOARD_RELEASE_TAG="${READBOARD_RELEASE_TAG:-v3.0.6}"
 READBOARD_ASSET_NAME="${READBOARD_ASSET_NAME:-readboard-github-release-v3.0.6.zip}"
@@ -943,12 +943,14 @@ write_windows_install_note() {
 
   cat >"$note_file" <<EOF
 Package type: Windows x64 release assets
+Browser requirement: Windows 10 or later (JCEF / Chromium 152)
 Generated on: $DATE_TAG
 Release display version: $APP_DISPLAY_VERSION
 
 How to pick the right file:
 - ${DATE_TAG}-${ARCH_TAG}.core-update.zip
-  Lightweight update for existing Windows portable users. Use it only after you already have a full portable folder.
+  Lightweight update for existing Windows portable users whose app/jcef-bundle/lizzieyzy-next-jcef-manifest.txt already has release-tag=${JCEF_RELEASE_TAG}.
+  For the JCEF 127-to-152 upgrade, or if the installed browser version is unknown or different, use a full package instead.
   Close the app, extract this zip into the folder that contains KG-next*.exe and app/, and allow overwriting app/${MAIN_JAR}.
   It updates only the application core; engines, weights, Java runtime, JCEF, readboard, TensorRT, settings, saves, and user-data stay in place.
   New users should still download one of the full portable packages below first.
@@ -1284,7 +1286,8 @@ Release: $APP_DISPLAY_VERSION
 Date: $DATE_TAG
 
 用途：
-- 已经在使用 Windows 免安装版的老用户，日常升级优先下载这个小更新包。
+- 仅用于已经使用 Windows 免安装版，且 app/jcef-bundle/lizzieyzy-next-jcef-manifest.txt 中 release-tag=${JCEF_RELEASE_TAG} 的用户。
+- 从 JCEF 127 升级至 152，或无法确认已安装浏览器版本、版本不同时，请使用完整包。
 - 关闭 KG-next 后，把这个 zip 解压到旧的免安装目录里覆盖。
 - 目标目录应该是包含 "KG-next*.exe" 和 "app" 文件夹的目录。
 - 解压时允许覆盖 app/$MAIN_JAR 和 app/KG-next*.cfg。
@@ -1294,7 +1297,8 @@ Date: $DATE_TAG
 KataGo 引擎、权重、JCEF、readboard、Java runtime、设置、棋谱、TensorRT 和 user-data 都会保留。
 
 Manual update:
-- Existing Windows portable users can use this small package for regular updates.
+- Use this small package only when app/jcef-bundle/lizzieyzy-next-jcef-manifest.txt already has release-tag=${JCEF_RELEASE_TAG}.
+- For the JCEF 127-to-152 upgrade, or if the installed browser version is unknown or different, use a full package instead.
 - Close KG-next, then extract this zip into the existing portable app folder.
 - The target folder should contain "KG-next*.exe" and an "app" folder.
 - Allow overwriting app/$MAIN_JAR and app/KG-next*.cfg.

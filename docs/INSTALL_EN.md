@@ -19,6 +19,10 @@ This installation guide is for the actively maintained `KG-next` fork, which is 
 
 ## Pick The Right Package
 
+The embedded browser uses JCEF 152.0.6 / Chromium 152.0.7977.83 and requires Windows 10+ or macOS 13+. Full Windows and macOS packages include the matching browser runtime; see the [JCEF dependency and upgrade notes](DEPENDENCY_UPGRADE.md).
+
+**Use a new full package when upgrading from a JCEF 127 package.** `windows64.core-update.zip` contains only the application JAR and launcher configuration, so it is suitable only when the installation already has the same JCEF runtime. Replacing the JAR while keeping the old browser runtime prevents embedded web pages from opening. The app does not download a replacement runtime automatically.
+
 | Platform | Recommended package | Bundled Java | Bundled KataGo | Best for |
 | --- | --- | --- | --- | --- |
 | Windows x64 | `<date>-windows64.opencl.portable.zip` | Yes | Yes | Main recommendation for regular users, unzip and run |

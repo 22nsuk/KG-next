@@ -42,7 +42,7 @@ import org.json.JSONTokener;
 public class BrowserFrame extends JFrame {
   private static final long serialVersionUID = -5570653778104813836L;
   static final String JCEF_RELEASE_TAG =
-      "jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100";
+      "jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83";
   static final String JCEF_BUNDLE_DIRECTORY = "jcef-bundle";
   static final String JCEF_BUNDLE_MANIFEST = "lizzieyzy-next-jcef-manifest.txt";
   static final boolean JCEF_WINDOWLESS_RENDERING = false;
@@ -478,7 +478,10 @@ public class BrowserFrame extends JFrame {
     }
     throw new IOException(
         "Bundled JCEF browser runtime is missing for "
-            + EnumPlatform.getCurrentPlatform().getIdentifier());
+            + EnumPlatform.getCurrentPlatform().getIdentifier()
+            + " (expected "
+            + JCEF_RELEASE_TAG
+            + "). Install the matching full package; a core-only update does not update JCEF.");
   }
 
   static Optional<File> findBundledJcefFolder(List<File> bases) throws IOException {

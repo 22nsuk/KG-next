@@ -18,7 +18,7 @@
 - RTX 20/30/40/50 NVIDIA 用户优先下载 `windows64.nvidia.portable.zip`
 - AMD、Intel 或较老 NVIDIA 显卡用户下载 `windows64.opencl.portable.zip`
 - 没有合适 GPU，或 GPU 版本无法正常启动时，使用 `windows64.with-katago.portable.zip` CPU 兼容版
-- 已有 Windows 免安装版的老用户，日常升级优先下载 `windows64.core-update.zip` 覆盖旧目录，只更新主程序和启动器配置
+- 已有 Windows 免安装版且 JCEF 运行时与新版一致时，可用 `windows64.core-update.zip` 只更新主程序和启动器配置；从 JCEF 127 升到 152 必须改用完整包
 - OpenCL 表现不好时改用 `windows64.with-katago.portable.zip`
 - RTX 20/30/40/50 NVIDIA 显卡统一使用 CUDA 12.8 的 `windows64.nvidia.portable.zip`
 - RTX 40/50 默认推荐 CUDA；TensorRT 是 RTX 30 系及以下 NVIDIA 显卡的可选方案，可在软件内按需安装
@@ -47,7 +47,7 @@
 | Windows 64 位 OpenCL 安装器 | `<date>-windows64.opencl.installer.exe` | 想保留安装流程的 OpenCL 用户 |
 | Windows 64 位 CPU 兜底免安装包 | `<date>-windows64.with-katago.portable.zip` | 没有合适 GPU 或 GPU 版本无法启动时使用 |
 | Windows 64 位 CPU 兜底安装器 | `<date>-windows64.with-katago.installer.exe` | 想安装的 CPU 兜底用户 |
-| Windows 免安装小更新包 | `<date>-windows64.core-update.zip` | 已经有旧版免安装目录，只想日常升级主程序的用户 |
+| Windows 免安装小更新包 | `<date>-windows64.core-update.zip` | 已有兼容 JCEF 运行时的免安装目录，只更新主程序的用户 |
 | Windows 64 位 TensorRT 可选分卷包 | `<date>-windows64.nvidia.tensorrt.portable.7z.001` 等全部分卷 | 熟悉 7-Zip、想离线使用 TensorRT 的 RTX 30 系及以下用户 |
 | Windows 64 位无引擎便携包 | `<date>-windows64.without.engine.portable.zip` | 想自己配置分析引擎 |
 | Windows 64 位无引擎安装器 | `<date>-windows64.without.engine.installer.exe` | 想保留安装流程，但自己配置分析引擎 |
@@ -64,7 +64,7 @@
 - TensorRT 分卷包是可选资产，不计入普通用户主推荐路径；只下载 `.7z.001` 没用，必须下载全部 `.7z.00N`。
 - Windows 64 位现在优先推荐免安装包，安装器作为可选路径保留。
 - Windows 免安装包会在解压目录内启用便携模式，配置、日志、保存棋谱、下载权重和软件内安装的 TensorRT 文件都随这个文件夹保存，主要位于 `user-data/`。
-- 已有 KG-next Windows 免安装版时，关闭软件后把 `<date>-windows64.core-update.zip` 解压到旧目录覆盖即可；它更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/KG-next*.cfg`，不会覆盖权重、引擎、运行环境、JCEF、readboard、TensorRT 或 `user-data/`。
+- 已有 KG-next Windows 免安装版且 JCEF 运行时版本一致时，关闭软件后可把 `<date>-windows64.core-update.zip` 解压到旧目录覆盖；它更新 `app/lizzie-yzy2.5.3-shaded.jar` 和 `app/KG-next*.cfg`，不会覆盖权重、引擎、运行环境、JCEF、readboard、TensorRT 或 `user-data/`。从 JCEF 127 旧包转到 152 时应使用完整包；只替换 JAR 会让内嵌网页无法打开。
 - KG-next 不发布旧版应用内更新器的 `lizzieyzy-next-update-manifest.json`，也不在 core zip 中保留 `lizzieyzy-next-core.jar` 别名。KG-next 的更新入口只打开本项目的 Release 页面；上游旧客户端读取的是上游发布地址，不能把上游 core zip 当作 KG-next 更新发布。core zip 内的 `lizzieyzy-next-core-update-manifest.json` 仍记录本次构建的版本、文件大小和 SHA-256，供手动覆盖包校验使用。
 - 远程算力不属于发布包资产：`设置 -> 远程算力中心` 只保存非敏感连接配置；勾选记住的智子凭据进入系统安全存储，不写普通配置。智子云算力、KaTrain/SWHub 自建远程服务或任何云端模型都不会打进安装包。
 - 旧 tag 里如果还看到兼容 zip 或历史包，那属于历史发布格式。
@@ -94,7 +94,7 @@
 | `windows64.with-katago.installer.exe` | 是 | 是 | 安装后从开始菜单或桌面打开 |
 | `windows64.nvidia.portable.zip` | 是 | 是 | 解压后运行 `LizzieYzy Next NVIDIA.exe` |
 | `windows64.nvidia.installer.exe` | 是 | 是 | 安装后从开始菜单或桌面打开 |
-| `windows64.core-update.zip` | 否 | 依赖旧免安装目录 | 解压到旧免安装目录覆盖，用于日常升级主程序和启动器配置 |
+| `windows64.core-update.zip` | 否 | 依赖兼容的旧免安装目录 | JCEF 运行时版本一致时覆盖主程序和启动器配置 |
 | `windows64.without.engine.portable.zip` | 是 | 否 | 解压后运行 `LizzieYzy Next.exe` |
 | `windows64.without.engine.installer.exe` | 是 | 否 | 安装后从开始菜单或桌面打开 |
 | `mac-apple-silicon.with-katago.dmg` | App 自带 | 是 | 按安装画面拖到 Applications，弹出 DMG 后启动 |
@@ -195,7 +195,7 @@
 - Windows 自定义 runtime 固定包含 `jdk.accessibility` 和 Java Access Bridge 原生组件，确保 NVDA、Windows 讲述人等辅助技术可以读取 Swing 控件；打包和 CI 会同时校验模块与桥接文件，缺失时拒绝生成发布包。
 - Windows 启动内存：启动器不再固定申请 `-Xmx4096m`，而是按机器可用内存自适应设置 JVM 上限。这样低内存电脑不会因为无法预留 4 GB 堆而只显示 `Failed to launch JVM`，高内存电脑仍可按需使用更多内存；KataGo 引擎显存和内存仍由独立进程管理。
 - Base CDS 启动共享：`jlink` runtime 构建后会执行 `java -Xshare:dump` 生成可随应用目录移动的基础类归档，启动参数使用 `-Xshare:auto`。不再打包绑定构建路径的 AppCDS；实测该归档在安装或解压到新目录后会因 classpath 不匹配而失效，移除后可避免无效体积和小更新后的归档过期。
-- JCEF 浏览器运行时：Windows 和 macOS 发布包都内置与 CPU 架构匹配的 JCEF，弈客网页版、弈客大厅和网页棋谱无需首次启动下载；macOS 打包及签名流程会校验 Chromium framework、`libjcef` 和全部 Helper app，缺失时直接终止发布。
+- JCEF 浏览器运行时：Windows 和 macOS 发布包都内置与 CPU 架构匹配的 JCEF 152.0.6 / Chromium 152.0.7977.83，需要 Windows 10+ 或 macOS 13+；依据和升级注意事项见[依赖说明](DEPENDENCY_UPGRADE.md)。弈客网页版、弈客大厅和网页棋谱使用随包交付的运行时，KG-next 不会自动下载缺失的 JCEF；macOS 打包及签名流程会校验 Chromium framework、`libjcef` 和全部 Helper app，缺失时直接终止发布。
 - macOS KataGo 运行库：发布脚本会递归收集 Homebrew KataGo 的全部非系统动态库，并改写为 App 内相对路径；打包前和最终 DMG 挂载后都会检查外部依赖并实际运行 `katago version`。只要仍引用 `/opt/homebrew`、`/usr/local`、`@rpath` 或缺少运行库，发布流程会直接失败。
 - macOS 应用索引：每个 release tag 都会生成单调递增的 `CFBundleVersion`，最终签名 DMG 会再次核对该值，避免 Spotlight 的“应用”视图把新版与旧 DMG 副本混为同一构建。
 - JCEF 语言资源：发布包只保留软件六种语言需要的 Chromium 语言包（简体中文、繁体中文、英语、日语、韩语、泰语），浏览器内核、HTTPS、弈客、腾讯棋谱等功能文件完整保留；CEF locale 会按软件语言或系统语言安全回退。

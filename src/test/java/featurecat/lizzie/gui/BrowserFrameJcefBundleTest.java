@@ -44,13 +44,16 @@ class BrowserFrameJcefBundleTest {
   }
 
   @Test
-  void rejectsStaleJcefBundle() throws IOException {
+  void rejectsPreviousReleaseWithoutDeletingItsBundle() throws IOException {
     Path bundle = tempDir.resolve(BrowserFrame.JCEF_BUNDLE_DIRECTORY);
-    writeBundle(bundle, "jcef-old", "*");
+    writeBundle(bundle, "jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100", "*");
+    String originalMetadata = Files.readString(bundle.resolve("build_meta.json"));
 
     Optional<java.io.File> resolved = BrowserFrame.findBundledJcefFolder(List.of(tempDir.toFile()));
 
     assertTrue(resolved.isEmpty());
+    assertEquals(originalMetadata, Files.readString(bundle.resolve("build_meta.json")));
+    assertTrue(Files.isRegularFile(bundle.resolve("libcef.dll")));
   }
 
   @Test

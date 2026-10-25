@@ -480,6 +480,14 @@ def apply_current_windows_download_guidance(
         '한국어': '선택형 {cuda13} 는 CUDA 13.2 / cuDNN 9.24 runtime 을 별도로 포함하며 CUDA 13 호환 NVIDIA 드라이버가 필요합니다. 기본 NVIDIA 패키지는 CUDA 12.8 을 사용합니다.',
         'ภาษาไทย': '{cuda13} เป็นทางเลือกที่รวม CUDA 13.2 / cuDNN 9.24 แยกต่างหาก และต้องใช้ NVIDIA driver ที่รองรับ CUDA 13 ส่วนแพ็กเกจ NVIDIA มาตรฐานยังใช้ CUDA 12.8',
     }
+    jcef_guidance = {
+        '中文': '内嵌浏览器升级到 JCEF 152.0.6，需要 Windows 10+ 或 macOS 13+。从 JCEF 127 升级或不确定现有版本时，请下载完整包；`core-update.zip` 保留旧 JCEF，只适用于已经带有相同 JCEF 152.0.6 运行时的安装。',
+        '繁體中文': '內嵌瀏覽器升級至 JCEF 152.0.6，需要 Windows 10+ 或 macOS 13+。從 JCEF 127 升級或不確定現有版本時，請下載完整套件；`core-update.zip` 保留舊 JCEF，只適用於已經帶有相同 JCEF 152.0.6 執行環境的安裝。',
+        'English': 'The embedded browser now uses JCEF 152.0.6 and requires Windows 10+ or macOS 13+. Use a full package when upgrading from JCEF 127 or when the installed version is unknown; `core-update.zip` preserves JCEF and is only for installations that already have the matching JCEF 152.0.6 runtime.',
+        '日本語': '内蔵ブラウザを JCEF 152.0.6 に更新しました。Windows 10+ または macOS 13+ が必要です。JCEF 127 からの更新や現在のバージョンが不明な場合は完全パッケージを使用してください。`core-update.zip` は JCEF を更新しないため、同じ JCEF 152.0.6 ランタイムを導入済みの場合に限ります。',
+        '한국어': '내장 브라우저를 JCEF 152.0.6으로 갱신했으며 Windows 10+ 또는 macOS 13+가 필요합니다. JCEF 127에서 업그레이드하거나 설치된 버전을 모르면 전체 패키지를 사용하세요. `core-update.zip`은 JCEF를 갱신하지 않으므로 동일한 JCEF 152.0.6 런타임이 이미 있는 설치에만 적용하세요.',
+        'ภาษาไทย': 'เบราว์เซอร์ในแอปใช้ JCEF 152.0.6 และต้องใช้ Windows 10+ หรือ macOS 13+ หากอัปเกรดจาก JCEF 127 หรือไม่ทราบเวอร์ชันเดิม ให้ใช้แพ็กเกจเต็ม ส่วน `core-update.zip` จะคง JCEF เดิมไว้ จึงใช้ได้เฉพาะเมื่อติดตั้ง runtime JCEF 152.0.6 ที่ตรงกันอยู่แล้ว',
+    }
     why_items = {
         '中文': (
             'Windows 现在按硬件明确区分 CUDA、OpenCL 和 CPU 兼容版，下载时不再猜。',
@@ -542,6 +550,7 @@ def apply_current_windows_download_guidance(
             for item in before_items
             if not any(asset in str(item) for asset in selected_assets)
             and not any(marker in str(item) for marker in legacy_why_markers)
+            and 'core-update' not in str(item)
         ]
         guidance = [
             template.format(
@@ -554,6 +563,7 @@ def apply_current_windows_download_guidance(
         cuda13_asset = localized_assets.get('windows_nvidia_cuda13_portable')
         if formatted_asset_available(cuda13_asset):
             guidance.append(cuda13_templates.get(language, cuda13_templates['English']).format(cuda13=cuda13_asset))
+        guidance.append(jcef_guidance.get(language, jcef_guidance['English']))
         before['items'] = guidance + before['items']
 
         download = section['download']

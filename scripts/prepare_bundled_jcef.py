@@ -17,7 +17,7 @@ import urllib.request
 import zipfile
 
 
-JCEF_RELEASE_TAG = "jcef-99c2f7a+cef-127.3.1+g6cbb30e+chromium-127.0.6533.100"
+JCEF_RELEASE_TAG = "jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
 MAVEN_BASE_URL = "https://repo.maven.apache.org/maven2/me/friwi"
 MANIFEST_NAME = "lizzieyzy-next-jcef-manifest.txt"
 SUPPORTED_WINDOWS_LOCALES = {
@@ -58,7 +58,7 @@ MACOS_REQUIRED_FILES = [
 PLATFORM_PACKAGES = {
     "windows-amd64": {
         "artifact": "jcef-natives-windows-amd64",
-        "sha256": "6d0466b9d5a2c4607a8a9eded1b5b9f77ca4514eadb68a1333b19053a462ceac",
+        "sha256": "0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875",
         "required": [
             "build_meta.json",
             "install.lock",
@@ -74,12 +74,12 @@ PLATFORM_PACKAGES = {
     },
     "macosx-arm64": {
         "artifact": "jcef-natives-macosx-arm64",
-        "sha256": "1746a503e38614ea3e4fe7986e22443ab48a3a245ba1f4b17575aaccab5e7994",
+        "sha256": "685b27b3dc7f6899a7d4a3a3d58978c95c36ebd1afd571c7027a66fe6f1252a0",
         "required": MACOS_REQUIRED_FILES,
     },
     "macosx-amd64": {
         "artifact": "jcef-natives-macosx-amd64",
-        "sha256": "36ed38af450dff481513c352a92a88aaa73ec34a399edadc7a4a947c7d1ddaed",
+        "sha256": "0a49f85ebc8f942fae81bc0120950ce83a629696352338f000856ee72580908a",
         "required": MACOS_REQUIRED_FILES,
     },
 }
