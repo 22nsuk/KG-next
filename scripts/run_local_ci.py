@@ -103,6 +103,7 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
     ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
     ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
+    ("featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest", "opensAndNavigatesSgfBeforeAnyEngineHasStarted"),
     ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
     ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
 )
@@ -664,7 +665,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
+                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
                     "test",
                 ),
                 group="desktop",

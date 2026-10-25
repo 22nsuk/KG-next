@@ -6,6 +6,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Stop background retries for imported positions that an in-band engine cannot represent, including White-to-play setups without a real move tail. Preserve the game and pause analysis, explain the unsupported position, and allow Continue to retry after selecting a compatible engine (#632, SPEC-001).
 - Verify and persist SSH host keys before authentication, share the SSH transport across ordinary, analysis, contribution and server-catalog connections, and cancel pending connections without reviving a retired engine. Preserve contribution `forcequit` and use the configured port for private-key login.
 - Prefer the system credential store for SSH passwords, migrate legacy settings through the existing transactional save, and keep cancelled or failed edits from replacing saved credentials. Preserve unreadable references and the legacy reversible-storage fallback when the system store is unavailable; explain that fallback in the password fields.
 - Validate the actual HumanSL TensorRT companion against its pinned CUDA provenance and static-zlib linkage, require the exact TensorRT parser DLL, and identify the executable that failed startup checks while retaining separate CUDA12/CUDA13 runtime selection.
@@ -29,6 +30,7 @@ All notable maintenance updates to this fork are documented here.
 ### Inherited upstream changes
 
 - Update JCEF from 127.3.1 to 152.0.6 / Chromium 152.0.7977.83, with matching Windows/macOS native checksums and package/workflow pins checked together (#631). Preserve KG-next's offline runtime lookup and existing Yike source validation. Embedded browsing requires Windows 10+ or macOS 13+; upgrading a JCEF 127 installation requires a full package because `core-update.zip` does not replace the browser runtime.
+- Restore winrate graph click and drag navigation when opening an SGF before any engine has started. Preserve unsupported rule declarations for offline viewing, retain rule checks before batch analysis, and keep live-reader and engine-generation checks before completing engine synchronization (#711).
 - Repair missing bundled analysis executables while preserving custom model/config choices and options; restrict missing-file foreground fallback to automatic quick analysis, preserve manual diagnostics and separate lightweight/remote engines, and refresh live graphs with or without a progress window (#652).
 - Remove the retired lizzieyzy.cn sharing clients, login/search dialogs, hidden upload controls and offline search entries (#630). Remove only their legacy account, labels and search-window settings on successful configuration reads using atomic replacement; preserve local SGF saving and unrelated online sources.
 - Accept Yike bridge queries only from the actual main frame of a Yike window on an HTTP(S) yikeweiqi.com domain; reject other sources before acknowledging or dispatching their payloads (#631).

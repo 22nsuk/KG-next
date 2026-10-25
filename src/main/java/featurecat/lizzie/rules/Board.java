@@ -4200,7 +4200,7 @@ public class Board {
   }
 
   private static void showHistoryRestoreFailure(Throwable failure) {
-    if (EngineFollowController.presentSnapshotPreparationFailure(failure)) {
+    if (EngineFollowController.presentPositionRestoreFailure(failure)) {
       return;
     }
     if (Lizzie.resourceBundle != null

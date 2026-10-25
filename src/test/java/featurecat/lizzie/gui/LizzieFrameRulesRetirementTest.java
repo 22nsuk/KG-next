@@ -2,10 +2,13 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -137,6 +140,80 @@ class LizzieFrameRulesRetirementTest {
   @Test
   void nullEngineIncarnationFenceRemainsCurrentUntilAnEngineAppears() {
     assertTrue(LizzieFrame.exactEngineIncarnationsRemainCurrent(null, null, null, null));
+  }
+
+  @Test
+  void coldStartPlaceholderRemainsCurrentOnlyWhileEmptyAndUnstarted() throws Exception {
+    boolean previousEmpty = EngineManager.isEmpty;
+    try {
+      Leelaz placeholder = new Leelaz("");
+      placeholder.isLoaded = true;
+      EngineManager.isEmpty = true;
+      assertNull(placeholder.engineIncarnationToken());
+      assertTrue(LizzieFrame.exactEngineIncarnationsRemainCurrent(placeholder, null, null, null));
+
+      EngineManager.isEmpty = false;
+      assertFalse(LizzieFrame.exactEngineIncarnationsRemainCurrent(placeholder, null, null, null));
+      EngineManager.isEmpty = true;
+      placeholder.started = true;
+      assertFalse(LizzieFrame.exactEngineIncarnationsRemainCurrent(placeholder, null, null, null));
+    } finally {
+      EngineManager.isEmpty = previousEmpty;
+    }
+  }
+
+  @Test
+  void offlinePlaceholderCannotSupplyASyntheticOrComparisonReader() throws Exception {
+    boolean previousEmpty = EngineManager.isEmpty;
+    try {
+      EngineManager.isEmpty = true;
+      Leelaz placeholder = new Leelaz("");
+      assertFalse(
+          LizzieFrame.exactEngineIncarnationsRemainCurrent(
+              placeholder, null, new Leelaz(""), null));
+      assertFalse(
+          LizzieFrame.exactEngineIncarnationsRemainCurrent(placeholder, new Object(), null, null));
+      assertFalse(
+          LizzieFrame.exactEngineIncarnationsRemainCurrent(placeholder, null, null, new Object()));
+    } finally {
+      EngineManager.isEmpty = previousEmpty;
+    }
+  }
+
+  @Test
+  void livePrimaryAndComparisonRequireTheirExactCapturedReaders() throws Exception {
+    boolean previousEmpty = EngineManager.isEmpty;
+    try {
+      EngineManager.isEmpty = false;
+      Leelaz primary = new Leelaz("");
+      Leelaz mirror = new Leelaz("");
+      try (var primaryTransport =
+              ExactSnapshotRestoreProtocolFixture.install(
+                  primary, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+          var mirrorTransport =
+              ExactSnapshotRestoreProtocolFixture.install(
+                  mirror, command -> ExactSnapshotRestoreProtocolFixture.Response.success())) {
+        Object primaryReader = primary.engineIncarnationToken();
+        Object mirrorReader = mirror.engineIncarnationToken();
+        assertNotNull(primaryReader);
+        assertNotNull(mirrorReader);
+        assertTrue(
+            LizzieFrame.exactEngineIncarnationsRemainCurrent(
+                primary, primaryReader, mirror, mirrorReader));
+        assertFalse(
+            LizzieFrame.exactEngineIncarnationsRemainCurrent(
+                primary, new Object(), mirror, mirrorReader));
+        assertFalse(
+            LizzieFrame.exactEngineIncarnationsRemainCurrent(
+                primary, primaryReader, mirror, new Object()));
+        EngineManager.isEmpty = true;
+        assertFalse(LizzieFrame.exactEngineIncarnationsRemainCurrent(primary, null, null, null));
+        assertTrue(primaryTransport.commands().isEmpty());
+        assertTrue(mirrorTransport.commands().isEmpty());
+      }
+    } finally {
+      EngineManager.isEmpty = previousEmpty;
+    }
   }
 
   @Test

@@ -215,10 +215,10 @@ public class EngineFollowControllerTest {
 
       assertEquals(
           "snapshot preparation failed: no readable path",
-          EngineFollowController.snapshotPreparationFailureMessage(failure));
+          EngineFollowController.positionRestoreFailureMessage(failure));
       assertEquals(
           null,
-          EngineFollowController.snapshotPreparationFailureMessage(
+          EngineFollowController.positionRestoreFailureMessage(
               new IllegalStateException("other failure")));
     } finally {
       Lizzie.resourceBundle = previousResourceBundle;
@@ -233,13 +233,13 @@ public class EngineFollowControllerTest {
 
       assertEquals(
           "无法准备引擎可读取的局面快照文件：没有可写的快照位置。请检查临时目录、引擎工作目录和应用运行目录的权限。",
-          EngineFollowController.snapshotPreparationFailureMessage(
+          EngineFollowController.positionRestoreFailureMessage(
               new ExactSnapshotEngineRestore.Failure(
                   ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION,
                   ExactSnapshotEngineRestore.NO_WRITABLE_SNAPSHOT_LOCATION_DETAIL)));
       assertEquals(
           "无法准备引擎可读取的局面快照文件：此引擎命令无法证明能访问本地快照文件。请使用相同的 GTP 参数直接运行本地引擎可执行文件。",
-          EngineFollowController.snapshotPreparationFailureMessage(
+          EngineFollowController.positionRestoreFailureMessage(
               new ExactSnapshotEngineRestore.Failure(
                   ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION,
                   ExactSnapshotEngineRestore.UNSUPPORTED_SNAPSHOT_TRANSPORT_DETAIL)));
@@ -248,4 +248,44 @@ public class EngineFollowControllerTest {
     }
   }
 
+  @Test
+  void unsupportedPositionFailureExplainsTheTurnAndRecovery() {
+    var previousResourceBundle = Lizzie.resourceBundle;
+    try {
+      Lizzie.resourceBundle = AppLocale.ENGLISH.loadBundle();
+
+      assertEquals(
+          "<html><div style=\"width: 460px\">The current engine cannot restore this position: "
+              + "The position is White to play with "
+              + "no subsequent moves. This engine cannot preserve that turn when restoring the "
+              + "setup stones.<br><br>Choose an engine or launch method that supports this position, "
+              + "then retry.</div></html>",
+          EngineFollowController.positionRestoreFailureMessage(
+              new ExactSnapshotEngineRestore.Failure(
+                  ExactSnapshotEngineRestore.FailureCategory.UNSUPPORTED_REMOTE_POSITION,
+                  "Remote exact snapshot restore cannot represent a white-to-play position with "
+                      + "an empty real tail.")));
+    } finally {
+      Lizzie.resourceBundle = previousResourceBundle;
+    }
+  }
+
+  @Test
+  void unsupportedHandicapFailureUsesTheCurrentLocaleAndExplainsRecovery() {
+    var previousResourceBundle = Lizzie.resourceBundle;
+    try {
+      Lizzie.resourceBundle = AppLocale.KOREAN.loadBundle();
+
+      assertEquals(
+          "<html><div style=\"width: 460px\">현재 엔진으로 이 국면을 복원할 수 없습니다: "
+              + "이 엔진은 현재 연결 방식에서 초기 접바둑 배치를 복원하는 기능을 지원하지 않습니다."
+              + "<br><br>이 국면을 지원하는 엔진 또는 실행 방식으로 변경한 뒤 다시 시도하세요.</div></html>",
+          EngineFollowController.positionRestoreFailureMessage(
+              new ExactSnapshotEngineRestore.Failure(
+                  ExactSnapshotEngineRestore.FailureCategory.UNSUPPORTED_REMOTE_POSITION,
+                  ExactSnapshotEngineRestore.UNSUPPORTED_HANDICAP_RESTORE_DETAIL)));
+    } finally {
+      Lizzie.resourceBundle = previousResourceBundle;
+    }
+  }
 }

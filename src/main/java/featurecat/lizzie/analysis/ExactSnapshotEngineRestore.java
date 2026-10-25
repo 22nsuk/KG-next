@@ -37,6 +37,11 @@ public final class ExactSnapshotEngineRestore {
   static final String UNSUPPORTED_SNAPSHOT_TRANSPORT_DETAIL =
       "This engine command cannot prove access to local snapshot files. Run a direct local engine "
           + "executable with the same GTP options.";
+  static final String UNSUPPORTED_HANDICAP_RESTORE_DETAIL =
+      "Engine does not advertise set_free_handicap for exact handicap restore.";
+  static final String UNSUPPORTED_WHITE_TO_PLAY_DETAIL =
+      "Remote exact snapshot restore cannot represent a white-to-play position with an "
+          + "empty real tail.";
   private static final ScheduledExecutorService DELETE_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(ExactSnapshotEngineRestore::newCleanupThread);
 
@@ -70,10 +75,11 @@ public final class ExactSnapshotEngineRestore {
     }
   }
 
-  /** Preparation needs a different launcher or writable location, not a background retry. */
-  public static boolean isSnapshotPreparationFailure(Throwable failure) {
+  /** These preflight failures need a different engine, launcher or location, not a retry. */
+  public static boolean isPermanentPositionRestoreFailure(Throwable failure) {
     return failure instanceof Failure exactFailure
-        && exactFailure.category() == FailureCategory.SNAPSHOT_PREPARATION;
+        && (exactFailure.category() == FailureCategory.SNAPSHOT_PREPARATION
+            || exactFailure.category() == FailureCategory.UNSUPPORTED_REMOTE_POSITION);
   }
 
   public static Optional<PreparedRestore> prepare(
@@ -215,8 +221,8 @@ public final class ExactSnapshotEngineRestore {
       for (Leelaz target : plan.targetEngines) {
         if (target.requiresInBandSnapshotRestore(plan.admission)) {
           if (plan.initialHandicap && !target.supportsHandicapSnapshotRestore(plan.admission)) {
-            throw new Failure(FailureCategory.UNSUPPORTED_REMOTE_POSITION,
-                "Engine does not advertise set_free_handicap for exact handicap restore.");
+            throw new Failure(
+                FailureCategory.UNSUPPORTED_REMOTE_POSITION, UNSUPPORTED_HANDICAP_RESTORE_DETAIL);
           }
           if (!target.useRemoteCompute
               && !plan.initialHandicap
@@ -289,9 +295,7 @@ public final class ExactSnapshotEngineRestore {
     for (Leelaz target : remoteTargets) {
       if (!target.namesSideToPlayInCommands()) {
         throw new Failure(
-            FailureCategory.UNSUPPORTED_REMOTE_POSITION,
-            "Remote exact snapshot restore cannot represent a white-to-play position with an "
-                + "empty real tail.");
+            FailureCategory.UNSUPPORTED_REMOTE_POSITION, UNSUPPORTED_WHITE_TO_PLAY_DETAIL);
       }
     }
   }

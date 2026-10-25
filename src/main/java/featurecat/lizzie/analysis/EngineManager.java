@@ -14345,7 +14345,7 @@ public class EngineManager {
   }
 
   protected void showEngineSynchronizationFailure(Leelaz engine, Throwable failure) {
-    if (!EngineFollowController.presentSnapshotPreparationFailure(failure)) {
+    if (!EngineFollowController.presentPositionRestoreFailure(failure)) {
       showEngineSynchronizationFailure(engine, engineSwitchFailureDetail(failure));
     }
   }
