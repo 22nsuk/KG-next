@@ -1387,6 +1387,7 @@ $script:phase = 'starting'
 $script:killed = [System.Collections.Generic.List[int]]::new()
 $script:restored = [System.Collections.Generic.List[string]]::new()
 $script:childReused = $false
+$script:reads = 0
 $script:launcherPath = Join-Path $PSScriptRoot 'product/launcher.exe'
 $script:childPath = Join-Path $PSScriptRoot 'product/engine.exe'
 $script:old = [datetime]'2026-10-23T01:00:00.1234560Z'
@@ -1422,6 +1423,27 @@ function Get-OwnedProcessTree {
     if ($script:phase -eq 'failed' -and $script:case -eq 'child-reused-before-stop') { $script:childReused=$true }
 }
 function Get-CimInstance {
+    $script:reads++
+    if ($script:case -like 'observation-*') {
+        if (-not $script:killed.Contains(4242)) { New-Snapshot 4242 1 $script:launcherPath $script:old }
+        if ($script:case -eq 'observation-known-child' -and -not $script:killed.Contains(4245)) {
+            New-Snapshot 4245 4242 $script:childPath $script:old.AddSeconds(1)
+        }
+        $initialRead = if ($script:case -eq 'observation-known-child') { 2 } else { 1 }
+        if ($script:reads -lt $initialRead) { return }
+        if ($script:case -like 'observation-orphan*') {
+            if ($script:reads -eq $initialRead) { New-Snapshot 4243 4242 $null $script:old.AddSeconds(2) }
+            New-Snapshot 4244 4243 'C:\external\helper.exe' $script:old.AddSeconds(3)
+            if ($script:case -eq 'observation-orphan-new-child' -and $script:reads -gt 2) {
+                New-Snapshot 4246 4244 'C:\external\new-helper.exe' $script:old.AddSeconds(4)
+            }
+        }
+        elseif (-not $script:killed.Contains(4243) -and -not ($script:case -eq 'observation-all-gone' -and $script:reads -gt 2)) {
+            $created = if ($script:reads -eq $initialRead) { $null } else { $script:old.AddSeconds(2) }
+            New-Snapshot 4243 4242 $script:childPath $created
+        }
+        return
+    }
     $failed = $script:phase -eq 'failed'
     $rootTime=$script:old; $childTime=$script:old.AddSeconds(1)
     $rootImage=$script:launcherPath
@@ -1450,6 +1472,7 @@ function Get-CimInstance {
     }
 }
 function Get-Process {
+    if ($script:case -like 'observation-*') { return @() }
     if ($script:phase -eq 'starting') { $script:phase='failed'; throw 'fixture startup failure' }
     return @()
 }
@@ -1509,9 +1532,52 @@ if ($script:entryPoint -ne 'prepared') { $cleanup=Read-JsonFile -Path (Join-Path
             self.assertEqual([], value["cleanup"]["remainingOwnedPids"])
             if scenario.startswith("early-"):
                 self.assertIn("Packaged launcher exited before readiness with code 17", value["message"])
+            elif scenario.startswith("observation-"):
+                reason = (
+                    "possible descendants remain unverified" if scenario.startswith("observation-orphan")
+                    else "cannot be tied to its original creation and parent"
+                )
+                self.assertIn(reason, value["message"])
+                self.assertEqual("failed", value["cleanup"]["startupProcessObservation"]["outcome"])
             elif scenario != "missing-launch-time":
                 self.assertIn("fixture startup failure", value["message"])
             return value
+
+    def test_cleanup_never_rebinds_a_failed_observation_candidate(self) -> None:
+        for entry_point in ("prepared", "start", "run"):
+            with self.subTest(entry_point=entry_point):
+                value = self.run_failure("observation-missing-time", entry_point)
+                self.assertEqual([4242], value["killed"])
+                self.assertFalse(value["cleanup"]["complete"])
+                self.assertEqual([4243], [item["pid"] for item in value["cleanup"]["unverifiedProcesses"]])
+                self.assertTrue(value["cleanup"]["identityErrors"])
+                if entry_point == "run":
+                    self.assertFalse(value["acceptance"]["cleanup"]["complete"])
+
+    def test_cleanup_retains_failed_observation_orphan_branches(self) -> None:
+        for scenario in ("observation-orphan", "observation-orphan-new-child"):
+            for entry_point in ("prepared", "start", "run"):
+                with self.subTest(scenario=scenario, entry_point=entry_point):
+                    value = self.run_failure(scenario, entry_point)
+                    self.assertEqual([4242], value["killed"])
+                    self.assertFalse(value["cleanup"]["complete"])
+                    expected = [4244, 4246] if scenario.endswith("new-child") else [4244]
+                    self.assertCountEqual(expected, [item["pid"] for item in value["cleanup"]["unverifiedProcesses"]])
+                    self.assertTrue(value["cleanup"]["identityErrors"])
+                    if entry_point == "run":
+                        self.assertFalse(value["acceptance"]["cleanup"]["complete"])
+
+    def test_failed_observation_still_cleans_previously_bound_child(self) -> None:
+        value = self.run_failure("observation-known-child")
+        self.assertEqual([4245, 4242], value["killed"])
+        self.assertFalse(value["cleanup"]["complete"])
+        self.assertEqual([4243], [item["pid"] for item in value["cleanup"]["unverifiedProcesses"]])
+
+    def test_failed_observation_with_no_survivors_can_finish_cleanup(self) -> None:
+        value = self.run_failure("observation-all-gone")
+        self.assertEqual([4242], value["killed"])
+        self.assertTrue(value["cleanup"]["complete"])
+        self.assertEqual([], value["cleanup"]["unverifiedProcesses"])
 
     def test_early_exit_reused_launcher_does_not_adopt_foreign_children(self) -> None:
         value = self.run_failure("early-reused-root")

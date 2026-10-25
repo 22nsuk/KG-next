@@ -1254,7 +1254,8 @@ function Start-PreparedProduct {
     catch {
         $failure = $_
         $cleanupErrors = New-Object System.Collections.Generic.List[string]
-        $processCleanup = Stop-OwnedStartupProcesses -LauncherIdentity $launcherIdentity -KnownProcesses $processHistory.ToArray() -ProductRoot $layout.Root
+        $failedObservation = $failure.Exception.Data['StartupProcessObservation']
+        $processCleanup = Stop-OwnedStartupProcesses -LauncherIdentity $launcherIdentity -KnownProcesses $processHistory.ToArray() -ProductRoot $layout.Root -FailedObservation $failedObservation
         foreach ($message in $processCleanup.errors) { $cleanupErrors.Add($message) }
         # Start/Run aggregate errors as remaining resources; retain uncertain startup
         # ownership there as well, without changing normal Stop's identity-only semantics.
@@ -1274,6 +1275,7 @@ function Start-PreparedProduct {
             remainingOwnedPids = @($survivors); firewallRulesRemaining = @($firewallRemaining); auditPolicyRestored = $auditRestored; configRestored = $configRestored
             sharedDataUnchanged = $sharedUnchanged; uninstallComplete = $null; identityErrors = @($processCleanup.identityErrors); errors = $cleanupErrors.ToArray()
             processes = @($processCleanup.processes); observedProcesses = @($processCleanup.observedProcesses); unverifiedProcesses = @($processCleanup.unverifiedProcesses)
+            startupProcessObservation = $failedObservation
         }
         $failure.Exception.Data["StartupCleanup"] = $startupCleanup
         throw $failure
@@ -1301,11 +1303,12 @@ function Test-ProcessSnapshotMatch {
 }
 
 function Get-UnverifiedStartupProcesses {
-    param([object[]]$Snapshots, [hashtable]$Known, [object]$LauncherIdentity, [string]$ProductRoot)
+    param([object[]]$Snapshots, [hashtable]$Known, [object]$LauncherIdentity, [string]$ProductRoot, [int[]]$ObservedProcessIds = @())
     $started = Get-ProcessCreationIdentity -Value $LauncherIdentity.creationDate
     $prefix = [System.IO.Path]::GetFullPath($ProductRoot).TrimEnd('\') + '\'
     $possibleIds = New-Object 'System.Collections.Generic.HashSet[int]'
     foreach ($processId in $Known.Keys) { [void]$possibleIds.Add([int]$processId) }
+    foreach ($processId in $ObservedProcessIds) { [void]$possibleIds.Add($processId) }
     # This walk identifies uncertainty only. A missing parent cannot bind a child,
     # so none of these snapshots may be adopted into the termination set.
     do {
@@ -1327,13 +1330,21 @@ function Get-UnverifiedStartupProcesses {
 }
 
 function Stop-OwnedStartupProcesses {
-    param([object]$LauncherIdentity, [object[]]$KnownProcesses, [string]$ProductRoot)
+    param([object]$LauncherIdentity, [object[]]$KnownProcesses, [string]$ProductRoot, [object]$FailedObservation = $null)
     $identityErrors = New-Object System.Collections.Generic.List[string]
     $errors = New-Object System.Collections.Generic.List[string]
     $observed = New-Object System.Collections.Generic.List[object]
     $known = @{}
     foreach ($snapshot in $KnownProcesses) { $known[[int]$snapshot.pid] = $snapshot }
     if ($LauncherIdentity) { $known[[int]$LauncherIdentity.pid] = $LauncherIdentity }
+    $uncertainIds = New-Object 'System.Collections.Generic.HashSet[int]'
+    if ($FailedObservation) {
+        # A failed observation cannot grant fresh termination authority during cleanup.
+        # Retain even vanished intermediate PIDs so surviving external branches remain visible.
+        foreach ($observation in $FailedObservation.observations) {
+            foreach ($snapshot in $observation.processes) { [void]$uncertainIds.Add([int]$snapshot.pid) }
+        }
+    }
     if ($LauncherIdentity) {
         try {
             $rootNow = @(Get-ProcessSnapshot -ProcessIds @([int]$LauncherIdentity.pid))
@@ -1343,10 +1354,12 @@ function Stop-OwnedStartupProcesses {
             }
             elseif ($rootNow.Count -gt 0) {
                 if ($rootNow.Count -eq 1 -and (Test-ProcessSnapshotMatch -Expected $LauncherIdentity -Actual $rootNow[0])) {
-                    foreach ($snapshot in @(Get-OwnedProcessTree -RootPid ([int]$LauncherIdentity.pid) -ProductRoot $ProductRoot -RootIdentity $LauncherIdentity -IncludeSnapshots)) {
-                        $observed.Add($snapshot)
-                        # Never replace a bound child identity with a reused PID.
-                        if (-not $known.ContainsKey([int]$snapshot.pid)) { $known[[int]$snapshot.pid] = $snapshot }
+                    if (-not $FailedObservation) {
+                        foreach ($snapshot in @(Get-OwnedProcessTree -RootPid ([int]$LauncherIdentity.pid) -ProductRoot $ProductRoot -RootIdentity $LauncherIdentity -IncludeSnapshots)) {
+                            $observed.Add($snapshot)
+                            # Never replace a bound child identity with a reused PID.
+                            if (-not $known.ContainsKey([int]$snapshot.pid)) { $known[[int]$snapshot.pid] = $snapshot }
+                        }
                     }
                 }
                 else { $identityErrors.Add("Launcher PID $($LauncherIdentity.pid) no longer matches the started incarnation; descendants were not discovered.") }
@@ -1380,7 +1393,7 @@ function Stop-OwnedStartupProcesses {
             # one complete final snapshot, rather than only the PIDs already bound.
             $finalSnapshots = @(Get-CimInstance Win32_Process -ErrorAction Stop | ForEach-Object { ConvertTo-ProcessSnapshot -Process $_ })
             $survivors = @($finalSnapshots | Where-Object { Test-ProcessSnapshotMatch -Expected $known[[int]$_.pid] -Actual $_ } | ForEach-Object { [int]$_.pid })
-            $unverified = @(Get-UnverifiedStartupProcesses -Snapshots $finalSnapshots -Known $known -LauncherIdentity $LauncherIdentity -ProductRoot $ProductRoot)
+            $unverified = @(Get-UnverifiedStartupProcesses -Snapshots $finalSnapshots -Known $known -LauncherIdentity $LauncherIdentity -ProductRoot $ProductRoot -ObservedProcessIds @($uncertainIds))
             foreach ($snapshot in $unverified) {
                 $observed.Add($snapshot)
                 $identityErrors.Add("Possible startup descendant or product process PID $($snapshot.pid) remains unbound; ownership is unverified and it was not terminated.")
