@@ -6,6 +6,8 @@ All notable maintenance updates to this fork are documented here.
 
 ### KG-next
 
+- Verify and persist SSH host keys before authentication, share the SSH transport across ordinary, analysis, contribution and server-catalog connections, and cancel pending connections without reviving a retired engine. Preserve contribution `forcequit` and use the configured port for private-key login.
+- Prefer the system credential store for SSH passwords, migrate legacy settings through the existing transactional save, and keep cancelled or failed edits from replacing saved credentials. Preserve unreadable references and the legacy reversible-storage fallback when the system store is unavailable; explain that fallback in the password fields.
 - Validate the actual HumanSL TensorRT companion against its pinned CUDA provenance and static-zlib linkage, require the exact TensorRT parser DLL, and identify the executable that failed startup checks while retaining separate CUDA12/CUDA13 runtime selection.
 - Ground API-key commentary in frozen board coordinates, point-loss units, the recorded move, and legally replayed continuations. Keep complete selected positions within the range/whole-game request budget. Validate completed replies before display or SGF storage, allow at most one correction request, and reject interrupted replies or results whose game or target changed.
 - Preserve managed engine profiles and selected models across restarts and portable package moves, including downloaded models in `user-data/weights`; keep CUDA12/CUDA13 profile selection separate and retain customized independent analysis commands.

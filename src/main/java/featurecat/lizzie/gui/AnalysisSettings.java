@@ -702,6 +702,7 @@ public class AnalysisSettings extends JDialog {
       showSaveFailure(e);
       return false;
     }
+    remoteEngineData.password = Utils.getAnalysisEngineRemoteEngineData().password;
     Lizzie.config.analysisEngineCommand = newCommand;
     Lizzie.config.analysisEngineCommandCustomized = newCommandCustomized;
     Lizzie.config.analysisMaxVisits = newAnalysisMaxVisits;

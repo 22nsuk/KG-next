@@ -1,11 +1,13 @@
 package featurecat.lizzie.analysis.remote;
 
-import ch.ethz.ssh2.ChannelCondition;
-import ch.ethz.ssh2.Connection;
-import ch.ethz.ssh2.Session;
+import featurecat.lizzie.analysis.ssh.SshAuthenticationException;
+import featurecat.lizzie.analysis.ssh.SshCommandSession;
+import featurecat.lizzie.analysis.ssh.SshCredential;
+import featurecat.lizzie.analysis.ssh.SshKnownHosts;
+import featurecat.lizzie.analysis.ssh.SshTarget;
 import featurecat.lizzie.util.NetworkProxy;
 import java.io.IOException;
-import java.io.InputStream;
+import java.net.SocketTimeoutException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -27,7 +29,7 @@ final class ZhiziServerCatalogClient {
   static final URI DEFAULT_WORLD_URI =
       URI.create("https://ikatago-fairyland.oss-cn-beijing.aliyuncs.com/world.json");
   private static final Duration HTTP_TIMEOUT = Duration.ofSeconds(15);
-  private static final int SSH_TIMEOUT_MILLIS = 10_000;
+  private static final Duration SSH_TIMEOUT = Duration.ofSeconds(10);
   private static final int MAX_RESPONSE_BYTES = 512 * 1024;
 
   private final URI worldUri;
@@ -122,42 +124,41 @@ final class ZhiziServerCatalogClient {
 
   private static String queryOverSsh(
       String host, int port, String username, String password, String command) throws IOException {
-    Connection connection = new Connection(host, port);
-    Session session = null;
+    return queryOverSsh(
+        host, port, username, password, command, SshKnownHosts.forWorkDirectory(), SSH_TIMEOUT);
+  }
+
+  static String queryOverSsh(
+      String host,
+      int port,
+      String username,
+      String password,
+      String command,
+      SshKnownHosts knownHosts,
+      Duration timeout)
+      throws IOException {
+    SshTarget target = new SshTarget(host, port, username);
     try {
-      connection.connect(null, SSH_TIMEOUT_MILLIS, SSH_TIMEOUT_MILLIS);
-      if (!connection.authenticateWithPassword(username, password)) {
-        throw new IOException("iKataGo catalog authentication failed.");
-      }
-      session = connection.openSession();
-      session.execCommand(command);
-      int condition =
-          session.waitForCondition(
-              ChannelCondition.EOF | ChannelCondition.CLOSED, SSH_TIMEOUT_MILLIS);
-      if ((condition & ChannelCondition.TIMEOUT) != 0) {
-        throw new IOException("iKataGo catalog query timed out.");
-      }
-      String stdout = readLimited(session.getStdout());
-      String stderr = readLimited(session.getStderr());
+      SshCommandSession.CommandOutput output =
+          SshCommandSession.execute(
+              target,
+              SshCredential.password(password),
+              command,
+              knownHosts,
+              timeout,
+              MAX_RESPONSE_BYTES);
+      String stdout = output.stdout();
+      String stderr = output.stderr();
       if (stdout.isBlank()) {
         throw new IOException(
             stderr.isBlank() ? "iKataGo catalog response is empty." : stderr.trim());
       }
       return stdout;
-    } finally {
-      if (session != null) {
-        session.close();
-      }
-      connection.close();
+    } catch (SocketTimeoutException e) {
+      throw new IOException("iKataGo catalog query timed out.", e);
+    } catch (SshAuthenticationException e) {
+      throw new IOException("iKataGo catalog authentication failed.", e);
     }
-  }
-
-  private static String readLimited(InputStream input) throws IOException {
-    byte[] bytes = input.readNBytes(MAX_RESPONSE_BYTES + 1);
-    if (bytes.length > MAX_RESPONSE_BYTES) {
-      throw new IOException("iKataGo catalog response is too large.");
-    }
-    return new String(bytes, StandardCharsets.UTF_8);
   }
 
   interface SshCatalogQuery {

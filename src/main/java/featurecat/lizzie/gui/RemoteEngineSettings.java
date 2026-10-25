@@ -1,6 +1,7 @@
 package featurecat.lizzie.gui;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
 import java.awt.Container;
@@ -31,6 +32,7 @@ public class RemoteEngineSettings extends JDialog {
   private JFontTextField txtUserName;
   private JFontCheckBox chkUsePassword;
   private JPasswordField txtPassword;
+  private SshEnginePasswords.Display passwordDisplay;
   private JFontCheckBox chkUseKeyGen;
   private String keyGenPath = "";
   private JDialog thisDialog = this;
@@ -103,7 +105,10 @@ public class RemoteEngineSettings extends JDialog {
     txtIP.setText(remoteEngineData.ip);
     txtPort.setText(remoteEngineData.port);
     txtUserName.setText(remoteEngineData.userName);
-    txtPassword.setText(Utils.doDecrypt(remoteEngineData.password));
+    passwordDisplay = SshEnginePasswords.display(remoteEngineData.password);
+    txtPassword.setText(passwordDisplay.text());
+    txtPassword.setToolTipText(SshEnginePasswords.displayHint(passwordDisplay));
+    chkUsePassword.setToolTipText(SshEnginePasswords.storageHint());
     chkUsePassword.setSelected(!remoteEngineData.useKeyGen);
     chkUseKeyGen.setSelected(remoteEngineData.useKeyGen);
     if (chkUsePassword.isSelected()) {
@@ -197,13 +202,18 @@ public class RemoteEngineSettings extends JDialog {
             remoteEngineData.ip = txtIP.getText();
             remoteEngineData.port = txtPort.getText();
             remoteEngineData.userName = txtUserName.getText();
-            remoteEngineData.password = Utils.doEncrypt(new String(txtPassword.getPassword()));
+            remoteEngineData.password = passwordDisplay.edited(new String(txtPassword.getPassword()));
             remoteEngineData.keyGenPath = keyGenPath;
             remoteEngineData.useKeyGen = chkUseKeyGen.isSelected();
-            if (analysisEngineDataConsumer != null)
-              analysisEngineDataConsumer.accept(remoteEngineData);
-            else if (isAnalysisEngine) Utils.saveAnalysisEngineRemoteEngineData(remoteEngineData);
-            else Utils.saveContributeRemoteEngineData(remoteEngineData);
+            try {
+              if (analysisEngineDataConsumer != null)
+                analysisEngineDataConsumer.accept(remoteEngineData);
+              else if (isAnalysisEngine) Utils.saveAnalysisEngineRemoteEngineData(remoteEngineData);
+              else Utils.saveContributeRemoteEngineData(remoteEngineData);
+            } catch (java.io.UncheckedIOException failure) {
+              showSaveFailure(failure.getCause());
+              return;
+            }
             setVisible(false);
           }
         });
@@ -213,5 +223,9 @@ public class RemoteEngineSettings extends JDialog {
         okButton,
         new GridBagConstraints(1, 0, 1, 1, 0.0, 0.0, center, both, new Insets(0, 0, 0, 0), 0, 0));
     dialogPane.add(buttonBar, BorderLayout.SOUTH);
+  }
+
+  void showSaveFailure(IOException failure) {
+    Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.saveFileFailed"));
   }
 }

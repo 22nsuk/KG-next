@@ -107,7 +107,7 @@ Java의 헤드리스 테스트, 실제 CPU 엔진 테스트, Windows GPU 테스�
 
 ## 문서와 원본
 
-[개발](docs/DEVELOPMENT.md) · [배포 체크리스트](docs/RELEASE_CHECKLIST.md) · [변경 이력](CHANGELOG.md) · [기여](CONTRIBUTING.md)
+[개발](docs/DEVELOPMENT.md) · [SSH 연결과 비밀번호](docs/SSH_KO.md) · [배포 체크리스트](docs/RELEASE_CHECKLIST.md) · [변경 이력](CHANGELOG.md) · [기여](CONTRIBUTING.md)
 
 다른 언어의 README와 원본의 이전 검증 기록은 기능 참고 자료입니다. KG-next의 현재 모델·엔진 조건 및 배포 상태는 이 기본 문서와 자산 목록을 기준으로 합니다.
 

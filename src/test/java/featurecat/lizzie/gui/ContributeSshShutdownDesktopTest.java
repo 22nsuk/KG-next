@@ -2,31 +2,35 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import ch.ethz.ssh2.AuthenticationResult;
-import ch.ethz.ssh2.ServerAuthenticationCallback;
-import ch.ethz.ssh2.ServerConnection;
-import ch.ethz.ssh2.ServerSession;
-import ch.ethz.ssh2.SimpleServerSessionCallback;
-import ch.ethz.ssh2.signature.RSAPrivateKey;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.ssh.TestSshServer;
 import featurecat.lizzie.util.Utils;
 import java.awt.Window;
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
-import java.net.InetAddress;
-import java.net.ServerSocket;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
+import org.apache.sshd.common.SshConstants;
+import org.apache.sshd.common.channel.ChannelOutputStream;
+import org.apache.sshd.common.keyprovider.KeyPairProvider;
+import org.apache.sshd.server.ExitCallback;
+import org.apache.sshd.server.SshServer;
+import org.apache.sshd.server.channel.ChannelSession;
+import org.apache.sshd.server.command.Command;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /** Real GUI/SSH transport and children that deliberately survive stdin EOF, as KataGo does. */
 public class ContributeSshShutdownDesktopTest {
@@ -119,7 +123,7 @@ public class ContributeSshShutdownDesktopTest {
               new JSONObject()
                   .put("useJavaSSH", true)
                   .put("ip", "127.0.0.1")
-                  .put("port", Integer.toString(server.listener.getLocalPort()))
+                  .put("port", Integer.toString(server.server.getPort()))
                   .put("userName", "fixture")
                   .put("password", Utils.doEncrypt("fixture-password")));
           Lizzie.frame.startContributeEngine();
@@ -162,9 +166,8 @@ public class ContributeSshShutdownDesktopTest {
   private record Child(Process process, Path work) {}
 
   private static final class SshFixture implements AutoCloseable {
-    final ServerSocket listener = new ServerSocket(0, 8, InetAddress.getByName("127.0.0.1"));
+    final SshServer server = SshServer.setUpDefaultServer();
     final List<Child> children = new CopyOnWriteArrayList<>();
-    final List<ServerConnection> connections = new CopyOnWriteArrayList<>();
     final AtomicReference<Throwable> failure = new AtomicReference<>();
     final java.util.concurrent.ExecutorService workers =
         Executors.newCachedThreadPool(
@@ -173,113 +176,140 @@ public class ContributeSshShutdownDesktopTest {
               thread.setDaemon(true);
               return thread;
             });
-    final RSAPrivateKey key = RSAPrivateKey.generateKey(2048);
+    final Path work;
 
     SshFixture(Path work) throws IOException {
-      workers.execute(
-          () -> {
-            try {
-              while (!listener.isClosed()) {
-                ServerConnection connection = new ServerConnection(listener.accept());
-                connections.add(connection);
-                connection.setRsaHostKey(key);
-                connection.setAuthenticationCallback(
-                    new ServerAuthenticationCallback() {
-                      public String initAuthentication(ServerConnection c) {
-                        return null;
-                      }
+      this.work = work;
+      server.setHost("127.0.0.1");
+      server.setPort(0);
+      server.setKeyPairProvider(KeyPairProvider.wrap(TestSshServer.ecKeyPair()));
+      server.setPasswordAuthenticator(
+          (user, password, session) ->
+              user.equals("fixture") && password.equals("fixture-password"));
+      server.setCommandFactory((channel, command) -> new RemoteCommand(command));
+      server.start();
+    }
 
-                      public String[] getRemainingAuthMethods(ServerConnection c) {
-                        return new String[] {"password"};
-                      }
+    private final class RemoteCommand implements Command {
+      private final String command;
+      private InputStream input;
+      private ExitCallback exit;
 
-                      public AuthenticationResult authenticateWithNone(
-                          ServerConnection c, String user) {
-                        return AuthenticationResult.FAILURE;
-                      }
+      private RemoteCommand(String command) {
+        this.command = command;
+      }
 
-                      public AuthenticationResult authenticateWithPassword(
-                          ServerConnection c, String user, String password) {
-                        return user.equals("fixture") && password.equals("fixture-password")
-                            ? AuthenticationResult.SUCCESS
-                            : AuthenticationResult.FAILURE;
-                      }
+      @Override
+      public void setInputStream(InputStream input) {
+        this.input = input;
+      }
 
-                      public AuthenticationResult authenticateWithPublicKey(
-                          ServerConnection c,
-                          String user,
-                          String algorithm,
-                          byte[] key,
-                          byte[] signature) {
-                        return AuthenticationResult.FAILURE;
-                      }
-                    });
-                connection.setServerConnectionCallback(
-                    session ->
-                        new SimpleServerSessionCallback() {
-                          @Override
-                          public Runnable requestExec(ServerSession session, String command)
-                              throws IOException {
-                            if (!List.of("stop", "clean", "fatal", "retry").contains(command))
-                              throw new IOException("Unexpected fixture command");
-                            Path run = Files.createTempDirectory(work, "ssh-child-");
-                            List<String> args =
-                                List.of(
-                                    Path.of(
-                                            System.getProperty("java.home"),
-                                            "bin",
-                                            System.getProperty("os.name").startsWith("Windows")
-                                                ? "java.exe"
-                                                : "java")
-                                        .toString(),
-                                    "-cp",
-                                    System.getProperty("java.class.path"),
-                                    ContributeSshShutdownDesktopTest.class.getName(),
-                                    "child",
-                                    run.toString(),
-                                    command);
-                            Process process =
-                                new ProcessBuilder(args)
-                                    .redirectError(run.resolve("stderr.log").toFile())
-                                    .start();
-                            children.add(new Child(process, run));
-                            return () -> {
-                              workers.execute(
-                                  () -> {
-                                    try (var remoteInput = process.getOutputStream()) {
-                                      byte[] buffer = new byte[1024];
-                                      int count;
-                                      while ((count = session.getStdout().read(buffer)) != -1) {
-                                        remoteInput.write(buffer, 0, count);
-                                        remoteInput.flush();
-                                      }
-                                    } catch (IOException closed) {
-                                      // Channel closure delivers EOF to the fixture, not a process
-                                      // kill.
-                                    }
-                                  });
-                              workers.execute(
-                                  () -> {
-                                    try (var remoteOutput = session.getStdin()) {
-                                      process.getInputStream().transferTo(remoteOutput);
-                                    } catch (IOException closed) {
-                                      // The client may close its channel after sending forcequit.
-                                    }
-                                  });
-                            };
-                          }
-                        });
-                connection.connect();
-              }
-            } catch (Throwable error) {
-              if (!listener.isClosed()) failure.set(error);
-            }
-          });
+      @Override
+      public void setOutputStream(OutputStream output) {
+        // start() supplies an EOF-on-close stream, independent of the child process lifetime.
+      }
+
+      @Override
+      public void setErrorStream(OutputStream error) {}
+
+      @Override
+      public void setExitCallback(ExitCallback exit) {
+        this.exit = exit;
+      }
+
+      @Override
+      public void start(ChannelSession channel, org.apache.sshd.server.Environment environment)
+          throws IOException {
+        try {
+          if (!List.of("stop", "clean", "fatal", "retry").contains(command))
+            throw new IOException("Unexpected fixture command");
+          Path run = Files.createTempDirectory(work, "ssh-child-");
+          List<String> args =
+              List.of(
+                  Path.of(
+                          System.getProperty("java.home"),
+                          "bin",
+                          System.getProperty("os.name").startsWith("Windows") ? "java.exe" : "java")
+                      .toString(),
+                  "-cp",
+                  System.getProperty("java.class.path"),
+                  ContributeSshShutdownDesktopTest.class.getName(),
+                  "child",
+                  run.toString(),
+                  command);
+          Process process =
+              new ProcessBuilder(args).redirectError(run.resolve("stderr.log").toFile()).start();
+          children.add(new Child(process, run));
+          CountDownLatch stdoutDrained = new CountDownLatch(1);
+          workers.execute(
+              () -> {
+                try (var remoteInput = process.getOutputStream()) {
+                  byte[] buffer = new byte[1024];
+                  int count;
+                  while ((count = input.read(buffer)) != -1) {
+                    remoteInput.write(buffer, 0, count);
+                    remoteInput.flush();
+                  }
+                } catch (IOException closed) {
+                  // Channel closure delivers EOF; it must not kill the child for the client.
+                }
+              });
+          workers.execute(
+              () -> {
+                try (var childOutput = process.getInputStream();
+                    var remoteOutput =
+                        new ChannelOutputStream(
+                            channel,
+                            channel.getRemoteWindow(),
+                            LoggerFactory.getLogger(SshFixture.class),
+                            SshConstants.SSH_MSG_CHANNEL_DATA,
+                            true)) {
+                  byte[] buffer = new byte[1024];
+                  int count;
+                  while ((count = childOutput.read(buffer)) != -1) {
+                    remoteOutput.write(buffer, 0, count);
+                    // MINA buffers short writes; deliver output while the child is still running.
+                    remoteOutput.flush();
+                  }
+                } catch (IOException closed) {
+                  // The client may close its channel after sending forcequit.
+                } finally {
+                  stdoutDrained.countDown();
+                }
+              });
+          workers.execute(
+              () -> {
+                try {
+                  int status = process.waitFor();
+                  // Preserve the final clean-exit message before closing the SSH channel.
+                  if (!stdoutDrained.await(10, TimeUnit.SECONDS)) {
+                    failure.compareAndSet(
+                        null, new IOException("SSH fixture did not drain child stdout"));
+                  }
+                  exit.onExit(status);
+                } catch (InterruptedException interrupted) {
+                  failure.compareAndSet(null, interrupted);
+                  Thread.currentThread().interrupt();
+                }
+              });
+        } catch (IOException | RuntimeException error) {
+          failure.compareAndSet(null, error);
+          throw error;
+        }
+      }
+
+      @Override
+      public void destroy(ChannelSession channel) {
+        try {
+          input.close();
+        } catch (IOException closed) {
+          // The child deliberately survives EOF; only fixture cleanup may force it to exit.
+        }
+      }
     }
 
     public void close() throws Exception {
-      listener.close();
-      for (ServerConnection connection : connections) connection.close();
+      server.stop(true);
       for (Child child : children) {
         if (child.process.isAlive()) child.process.destroyForcibly();
         assertTrue(child.process.waitFor(10, TimeUnit.SECONDS), "Fixture child cleanup");

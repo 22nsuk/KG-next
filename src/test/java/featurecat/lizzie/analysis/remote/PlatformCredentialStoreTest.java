@@ -20,6 +20,31 @@ import org.junit.jupiter.api.condition.OS;
 
 class PlatformCredentialStoreTest {
   @Test
+  void sshPasswordsUseIndependentMacAndLinuxCredentialNamespaces() throws Exception {
+    RecordingRunner mac = new RecordingRunner();
+    PlatformCredentialStore.create("Mac OS X", Path.of("unused"), mac)
+        .write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "reference", "ssh-secret");
+    assertTrue(mac.flattenedCommands().contains("cn.lizzieyzy.next.ssh-engine.password"));
+    assertFalse(mac.flattenedCommands().contains("ssh-secret"));
+
+    RecordingRunner linux = new RecordingRunner();
+    PlatformCredentialStore.create("Linux", Path.of("unused"), linux)
+        .write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "reference", "ssh-secret");
+    assertTrue(linux.flattenedCommands().contains("kind ssh-engine-password account reference"));
+    assertFalse(linux.flattenedCommands().contains("ssh-secret"));
+  }
+
+  @Test
+  void windowsDpapiPreservesWhitespaceInSshPasswords() throws Exception {
+    Path directory = Files.createTempDirectory("dpapi-ssh-whitespace");
+    CredentialStore store = PlatformCredentialStore.create("Windows 11", directory,
+        new RecordingRunner(), new FakeWindowsDataProtector());
+    String secret = "  SSH password \t ";
+    store.write(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "reference", secret);
+    assertEquals(secret, store.read(CredentialStore.Kind.SSH_ENGINE_PASSWORD, "reference").orElseThrow());
+  }
+
+  @Test
   void macKeychainReceivesSecretsOnlyThroughStandardInput() throws Exception {
     RecordingRunner runner = new RecordingRunner();
     runner.readOutput = "stored-secret\n";
