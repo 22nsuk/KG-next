@@ -6,6 +6,7 @@ import featurecat.lizzie.Lizzie;
 public final class StartupEvidenceProbe {
   public static void main(String[] args) throws Exception {
     Lizzie.bootstrapLogging();
+    System.err.println("startup-stderr-canary password=T02_STDERR_SECRET");
     Config config = new Config();
     LoggingRuntime.current().ifPresent(runtime -> runtime.applySettings(config.loggingSettings));
     Lizzie.logPersistedLoggingSettingsApplied();

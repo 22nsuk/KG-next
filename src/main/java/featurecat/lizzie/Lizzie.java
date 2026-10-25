@@ -504,7 +504,7 @@ public class Lizzie {
     } catch (Exception ignored) {
     }
     try {
-      LoggingRuntime.initialize(workDirectory);
+      LoggingRuntime.initialize(workDirectory).captureStandardError();
     } catch (Throwable t) {
       System.err.println(
           LoggingRuntime.STDERR_PREFIX + "bootstrap " + t.getClass().getSimpleName());

@@ -33,6 +33,7 @@ import org.slf4j.ILoggerFactory;
 import org.slf4j.LoggerFactory;
 
 public final class LoggingRuntime {
+  private static final long AWAIT_IDLE_SECONDS = 10;
   public static final String STDERR_PREFIX = "LizzieYzy logging: ";
   private static final String PATTERN =
       "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%logger] %corr %msg%n%ex";
@@ -55,6 +56,7 @@ public final class LoggingRuntime {
   private final AtomicBoolean persistenceEnabled = new AtomicBoolean();
   private final Set<String> stderrNotices = ConcurrentHashMap.newKeySet();
   private final PrintStream stderr;
+  private StandardErrorCapture standardErrorCapture;
   private volatile LoggingSettings settings = LoggingSettings.defaults();
   private volatile String traceSessionId;
   private volatile Instant fullTraceStartedAt;
@@ -146,6 +148,18 @@ public final class LoggingRuntime {
       if (!context.isStarted()) {
         context.start();
       }
+    }
+  }
+
+  public synchronized void captureStandardError() {
+    if (shutdown || standardErrorCapture != null || context == null) {
+      return;
+    }
+    BoundedAsyncAppender appender = appenders.get(LogStream.APP);
+    if (appender != null) {
+      standardErrorCapture =
+          StandardErrorCapture.install(
+              context.getLogger(StandardErrorCapture.LOGGER_NAME), appender);
     }
   }
 
@@ -312,6 +326,9 @@ public final class LoggingRuntime {
     synchronized (this) {
       if (shutdown) {
         return new ShutdownReport(Map.of());
+      }
+      if (standardErrorCapture != null) {
+        standardErrorCapture.retire();
       }
       shutdown = true;
       if (context == null) {
@@ -513,8 +530,14 @@ public final class LoggingRuntime {
     notice("crash", "unwritten events=" + unwritten);
   }
 
+  /**
+   * Waits up to {@value #AWAIT_IDLE_SECONDS} seconds for previously submitted events to complete,
+   * then checks for a quiet queue. A fixed spin alone can return before a slow writer finishes.
+   */
   void awaitIdle() {
-    awaitIdle(40);
+    if (awaitIdle(AWAIT_IDLE_SECONDS, TimeUnit.SECONDS)) {
+      awaitIdle(40);
+    }
   }
 
   void awaitIdle(int spins) {
@@ -541,6 +564,17 @@ public final class LoggingRuntime {
         return;
       }
     }
+  }
+
+  /** Waits for previously submitted events in one stream without waiting on other streams. */
+  boolean awaitWritten(LogStream stream, long timeout, TimeUnit unit) {
+    Objects.requireNonNull(unit, "unit");
+    BoundedAsyncAppender appender = appenders.get(stream);
+    if (appender == null) {
+      return true;
+    }
+    long deadline = System.nanoTime() + unit.toNanos(Math.max(0L, timeout));
+    return appender.awaitSubmitted(appender.submittedCount(), deadline);
   }
 
   boolean awaitIdle(long timeout, TimeUnit unit) {
