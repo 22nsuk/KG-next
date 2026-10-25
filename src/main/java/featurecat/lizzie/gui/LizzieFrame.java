@@ -8975,7 +8975,6 @@ public class LizzieFrame extends JFrame {
       return;
     }
     double lastWR = 50; // winrate the previous move
-    double lastScore = 0;
     boolean validLastWinrate = false; // whether it was actually calculated
     Optional<BoardHistoryNode> previous =
         Lizzie.board.getHistory().getCurrentHistoryNode().previous();
@@ -8991,14 +8990,12 @@ public class LizzieFrame extends JFrame {
     if (previous.isPresent()) {
       if (MoveStatusText.hasWinrate(previous.get().getData())) {
         lastWR = previous.get().getData().winrate;
-        lastScore = previous.get().getData().scoreMean;
         validLastWinrate = true;
       } else {
         if (previous.get().previous().isPresent()) {
           BoardData prePreData = previous.get().previous().get().getData();
           if (MoveStatusText.hasWinrate(prePreData)) {
             lastWR = 100 - prePreData.winrate;
-            lastScore = -prePreData.scoreMean;
             validLastWinrate = true;
           }
         }
@@ -9009,7 +9006,6 @@ public class LizzieFrame extends JFrame {
     }
     // Leelaz.WinrateStats stats = Lizzie.leelaz.getWinrateStats();
     double curWR = curData.winrate; // stats.maxWinrate; // winrate on this move
-    double curScore = curData.scoreMean;
     boolean validWinrate = MoveStatusText.hasWinrate(curData);
     //    if (isPlayingAgainstLeelaz
     //        && playerIsBlack == !Lizzie.board.getHistory().getData().blackToPlay) {
@@ -9018,7 +9014,6 @@ public class LizzieFrame extends JFrame {
 
     if (!validWinrate) {
       curWR = 100 - lastWR; // display last move's winrate for now (with color difference)
-      curScore = -lastScore;
     }
     double whiteWR, blackWR;
     if (curData.blackToPlay) {
@@ -9047,20 +9042,7 @@ public class LizzieFrame extends JFrame {
     // Title
     strokeRadius = 2;
     g.setColor(Color.WHITE);
-    // Last move
-    // validLastWinrate && validWinrate
-    //   if (true) {
     String text = "";
-    // if (Lizzie.config.handicapInsteadOfWinrate) {
-    // double currHandicapedWR = Lizzie.leelaz.winrateToHandicap(100 - curWR);
-    // double lastHandicapedWR = Lizzie.leelaz.winrateToHandicap(lastWR);
-    // text = String.format(Locale.ENGLISH,": %.2f", currHandicapedWR - lastHandicapedWR);
-    // } else {
-
-    // }
-    //    if (EngineManager.isEngineGame && Lizzie.board.getHistory().getMoveNumber() <= 3) {
-    //      text = "";
-    //    }
     boolean isKataStyle = false;
     Leelaz engineGameBlack = EngineGamePresentation.blackEngine(engineGame);
     Leelaz engineGameWhite = EngineGamePresentation.whiteEngine(engineGame);
