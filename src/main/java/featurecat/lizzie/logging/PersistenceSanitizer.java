@@ -94,6 +94,19 @@ public class PersistenceSanitizer {
     return FAILURE_MARKER;
   }
 
+  /**
+   * Returns a sanitized newline-terminated record, or null if redaction needs more input. A
+   * credential may span a newline (including an unquoted command argument). Probe with an ordinary
+   * value so the same patterns and canonicalization decide framing as well as redaction. Callers
+   * must bound retained input and fail closed when they cannot establish a boundary.
+   */
+  String sanitizeCompleteRecord(String record) {
+    // Comma assignments can escape the newline and only become recognizable at a later comma.
+    String probe = "STDERR_REDACTION_BOUNDARY,";
+    String safe = sanitize(record + probe);
+    return safe.endsWith(probe) ? safe.substring(0, safe.length() - probe.length()) : null;
+  }
+
   private static String sanitizeCanonical(String text) {
     String safe = COMMAND_CREDENTIAL_PARAMETER.matcher(text).replaceAll("$1<redacted>");
     safe = redactPercentEncodedCredentials(safe);

@@ -33,6 +33,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 class StandardErrorCaptureTest {
@@ -121,7 +123,7 @@ class StandardErrorCaptureTest {
     LoggingRuntime runtime = start(tempDir);
     runtime.captureStandardError();
     String prefix = "x".repeat(16 * 1024);
-    String input = prefix + "\n" + prefix + "discarded-overflow\nshort-line\nunfinished-tail";
+    String input = prefix + "\r\n" + prefix + "discarded-overflow\nshort-line\nunfinished-tail";
     System.err.print(input);
     System.err.flush();
     awaitIdle(runtime);
@@ -185,6 +187,121 @@ class StandardErrorCaptureTest {
       String exported = new String(input.readAllBytes(), StandardCharsets.UTF_8);
       assertTrue(exported.contains("stderr-stack-canary"));
       assertFalse(exported.contains("CANARY_STDERR_SECRET"));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "status\rapi-key=CANARY_BOUNDARY\n",
+        "password=\"prefix\nCANARY_BOUNDARY\" stage=load\n",
+        "password='prefix\r\nCANARY_BOUNDARY' stage=load\n",
+        "-pw prefix\nCANARY_BOUNDARY stage=load\n",
+        "--password \"prefix\nCANARY_BOUNDARY\" stage=load\n",
+        "password=\nCANARY_BOUNDARY\n",
+        "pass%77ord=\"prefix\nCANARY_BOUNDARY\" stage=load\n",
+        "pass\\u0077ord=\"prefix\nCANARY_BOUNDARY\" stage=load\n",
+        "password=prefix\\\nCANARY_BOUNDARY,threads=4\n",
+        "password=\"escaped\\\"prefix\nCANARY_BOUNDARY\" stage=load\n"
+      })
+  void preservesRedactionContextAcrossFragmentedWritesAndExport(String input) throws Exception {
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    byte[] bytes = input.getBytes(StandardCharsets.UTF_8);
+    for (byte value : bytes) {
+      System.err.write(value);
+      System.err.flush();
+    }
+    System.err.println("after-credential");
+    awaitIdle(runtime);
+
+    assertEquals(
+        input + "after-credential" + System.lineSeparator(),
+        consoleBytes.toString(StandardCharsets.UTF_8));
+    assertRedactedInAppAndExport(runtime, "CANARY_BOUNDARY", "after-credential");
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void overlongMultilineCredentialIsOmittedAsAWholeAndThenCaptureResumes(boolean lateCredential)
+      throws Exception {
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    String padding = "x".repeat(16 * 1024);
+    String input =
+        (lateCredential ? padding + " password=\"" : "password=\"" + padding)
+            + "\nCANARY_OVERLONG\"\nafter-overlong\n";
+    System.err.print(input);
+    awaitIdle(runtime);
+
+    assertEquals(input, consoleBytes.toString(StandardCharsets.UTF_8));
+    assertTrue(readApp(runtime).contains("[line omitted: exceeds 16384 bytes]"));
+    assertRedactedInAppAndExport(runtime, "CANARY_OVERLONG", "after-overlong");
+  }
+
+  @Test
+  void hardRecordLimitFailsClosedUntilRuntimeReplacement() throws Exception {
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    String input = "x".repeat(64 * 1024) + " password=\"prefix\nCANARY_HARD_LIMIT\"\nafter-limit\n";
+    System.err.print(input);
+    awaitIdle(runtime);
+
+    assertEquals(input, consoleBytes.toString(StandardCharsets.UTF_8));
+    assertTrue(readApp(runtime).contains("stderr capture suspended"));
+    assertFalse(readApp(runtime).contains("after-limit"));
+    assertRedactedInAppAndExport(runtime, "CANARY_HARD_LIMIT", "stderr capture suspended");
+    runtime.shutdown();
+    LoggingRuntime next = start(tempDir.resolve("replacement"));
+    next.captureStandardError();
+    System.err.println("replacement-capture");
+    awaitIdle(next);
+    assertTrue(readApp(next).contains("replacement-capture"));
+  }
+
+  @Test
+  void boundsRepeatedScansOfUnclosedMultilineCredentials() throws Exception {
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    String input = "password=\"prefix\n" + "CANARY_SCAN\n".repeat(64) + "\"\nafter-scan-limit\n";
+    System.err.print(input);
+    awaitIdle(runtime);
+
+    assertEquals(input, consoleBytes.toString(StandardCharsets.UTF_8));
+    assertRedactedInAppAndExport(runtime, "CANARY_SCAN", "stderr capture suspended");
+    assertFalse(readApp(runtime).contains("after-scan-limit"));
+  }
+
+  @Test
+  void incompleteCredentialRemainsConsoleOnlyOnFlushAndRetirement() throws Exception {
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    String input = "password=\"prefix\nCANARY_UNFINISHED\n";
+    System.err.print(input);
+    System.err.flush();
+    awaitIdle(runtime);
+    runtime.shutdown();
+
+    assertEquals(input, consoleBytes.toString(StandardCharsets.UTF_8));
+    assertFalse(readApp(runtime).contains("CANARY_UNFINISHED"));
+    assertTrue(stderrLines(runtime).isEmpty());
+    assertSame(console, System.err);
+  }
+
+  private void assertRedactedInAppAndExport(LoggingRuntime runtime, String secret, String retained)
+      throws Exception {
+    assertFalse(readApp(runtime).contains(secret), "credential leaked to app.log");
+    assertTrue(readApp(runtime).contains(retained));
+    Path zip =
+        new DiagnosticBundleExporter(tempDir.resolve("diagnostics"))
+            .export(
+                new DiagnosticBundleRequest(
+                    runtime, EnumSet.noneOf(TraceScope.class), new JSONObject(), null, "test"));
+    try (ZipFile bundle = new ZipFile(zip.toFile());
+        var input = bundle.getInputStream(bundle.getEntry("logs/lizzie/app.log"))) {
+      String exported = new String(input.readAllBytes(), StandardCharsets.UTF_8);
+      assertFalse(exported.contains(secret), "credential leaked to diagnostic ZIP");
+      assertTrue(exported.contains(retained));
     }
   }
 

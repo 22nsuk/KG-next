@@ -8,12 +8,20 @@ import java.io.OutputStream;
 import java.io.PrintStream;
 import java.nio.charset.Charset;
 
-/** Copies complete stderr lines to the owning runtime without taking ownership of its console. */
+/**
+ * Copies safely framed stderr records without taking ownership of the runtime's console. Records
+ * above 16 KiB are omitted. If a boundary cannot be established within 64 KiB or 64 physical lines,
+ * persistence is suspended until runtime replacement; console bytes are unchanged.
+ */
 final class StandardErrorCapture extends OutputStream {
   static final String LOGGER_NAME = LogCategories.APP + ".stderr";
   private static final int MAX_LINE_BYTES = 16 * 1024;
   private static final String OVERFLOW_MESSAGE =
       "[line omitted: exceeds " + MAX_LINE_BYTES + " bytes]";
+  private static final int MAX_RECORD_BYTES = 64 * 1024;
+  private static final int MAX_RECORD_LINES = 64;
+  private static final String SUSPENDED_MESSAGE =
+      "[stderr capture suspended: cannot safely frame bounded record; console unchanged]";
   private static final ThreadLocal<Boolean> FORWARDING = new ThreadLocal<>();
 
   private final PrintStream original;
@@ -21,8 +29,10 @@ final class StandardErrorCapture extends OutputStream {
   private final Logger logger;
   private final BoundedAsyncAppender appender;
   private final Charset charset;
-  private final ByteArrayOutputStream line = new ByteArrayOutputStream();
-  private boolean overflowed;
+  private final PersistenceSanitizer sanitizer = new PersistenceSanitizer();
+  private final ByteArrayOutputStream record = new ByteArrayOutputStream();
+  private int recordLines;
+  private boolean suspended;
   private volatile boolean active = true;
 
   private StandardErrorCapture(
@@ -79,7 +89,7 @@ final class StandardErrorCapture extends OutputStream {
     if (!shouldCapture()) {
       return;
     }
-    for (int i = offset; i < offset + length && active; i++) {
+    for (int i = offset; i < offset + length && active && !suspended; i++) {
       append(bytes[i] & 0xff);
     }
   }
@@ -90,7 +100,7 @@ final class StandardErrorCapture extends OutputStream {
   }
 
   private boolean shouldCapture() {
-    if (!active || Boolean.TRUE.equals(FORWARDING.get())) {
+    if (!active || suspended || Boolean.TRUE.equals(FORWARDING.get())) {
       return false;
     }
     String thread = Thread.currentThread().getName();
@@ -100,22 +110,49 @@ final class StandardErrorCapture extends OutputStream {
   }
 
   private void append(int value) {
+    if (record.size() >= MAX_RECORD_BYTES) {
+      suspend();
+      return;
+    }
+    record.write(value);
     if (value == '\n') {
-      forwardLine();
-    } else if (value != '\r') {
-      if (line.size() < MAX_LINE_BYTES) {
-        line.write(value);
+      recordLines++;
+      String raw = record.toString(charset);
+      String safe;
+      try {
+        safe = sanitizer.sanitizeCompleteRecord(raw);
+      } catch (RuntimeException failure) {
+        suspend();
+        return;
+      }
+      if (safe == null) {
+        // Bound both retained bytes and repeated scans of a multiline credential. Once raw
+        // context is discarded, even a later newline cannot prove that a value has ended.
+        if (recordLines >= MAX_RECORD_LINES) {
+          suspend();
+        }
+        return;
+      }
+      int terminatorBytes = raw.endsWith("\r\n") ? 2 : 1;
+      boolean oversized = record.size() - terminatorBytes > MAX_LINE_BYTES;
+      record.reset();
+      recordLines = 0;
+      if (oversized) {
+        forwardLine(OVERFLOW_MESSAGE);
       } else {
-        overflowed = true;
+        // Only split or trim after the shared policy has seen every original separator.
+        safe.lines().map(String::stripTrailing).forEach(this::forwardLine);
       }
     }
   }
 
-  private void forwardLine() {
-    // A raw prefix can lose a redaction delimiter, such as '@' after URI credentials.
-    String text = overflowed ? OVERFLOW_MESSAGE : line.toString(charset).stripTrailing();
-    line.reset();
-    overflowed = false;
+  private void suspend() {
+    suspended = true;
+    record.reset();
+    forwardLine(SUSPENDED_MESSAGE);
+  }
+
+  private void forwardLine(String text) {
     if (!active || text.isEmpty()) {
       return;
     }
