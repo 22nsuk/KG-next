@@ -94,21 +94,19 @@ public class EngineFollowController {
       currentEngineNode = target;
     } catch (RuntimeException ex) {
       LOGGER.error("forceResync failed", ex);
-      presentSnapshotPreparationFailure(ex);
+      presentPositionRestoreFailure(ex);
     }
   }
 
-  public static boolean presentSnapshotPreparationFailure(Throwable failure) {
-    if (!(failure instanceof ExactSnapshotEngineRestore.Failure exactFailure)
-        || exactFailure.category()
-            != ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION) {
-      return false;
-    }
-    return presentSnapshotPreparationFailureDetail(failure.getMessage());
+  public static boolean presentPositionRestoreFailure(Throwable failure) {
+    return presentPositionRestoreFailureMessage(positionRestoreFailureMessage(failure));
   }
 
   static boolean presentSnapshotPreparationFailureDetail(String detail) {
-    String message = snapshotPreparationFailureMessage(detail);
+    return presentPositionRestoreFailureMessage(snapshotPreparationFailureMessage(detail));
+  }
+
+  private static boolean presentPositionRestoreFailureMessage(String message) {
     if (message == null) {
       return false;
     }
@@ -120,13 +118,19 @@ public class EngineFollowController {
     return true;
   }
 
-  static String snapshotPreparationFailureMessage(Throwable failure) {
+  static String positionRestoreFailureMessage(Throwable failure) {
     if (!(failure instanceof ExactSnapshotEngineRestore.Failure exactFailure)
-        || exactFailure.category()
-            != ExactSnapshotEngineRestore.FailureCategory.SNAPSHOT_PREPARATION) {
+        || Lizzie.resourceBundle == null) {
       return null;
     }
-    return snapshotPreparationFailureMessage(failure.getMessage());
+    return switch (exactFailure.category()) {
+      case SNAPSHOT_PREPARATION -> snapshotPreparationFailureMessage(failure.getMessage());
+      case UNSUPPORTED_REMOTE_POSITION ->
+          MessageFormat.format(
+              Lizzie.resourceBundle.getString("EngineFollow.positionRestoreUnsupported"),
+              localizedPositionRestoreDetail(failure.getMessage()));
+      default -> null;
+    };
   }
 
   private static String snapshotPreparationFailureMessage(String detail) {
@@ -135,10 +139,10 @@ public class EngineFollowController {
     }
     return MessageFormat.format(
         Lizzie.resourceBundle.getString("EngineFollow.snapshotPreparationFailed"),
-        localizedSnapshotPreparationDetail(detail));
+        localizedPositionRestoreDetail(detail));
   }
 
-  private static String localizedSnapshotPreparationDetail(String detail) {
+  private static String localizedPositionRestoreDetail(String detail) {
     if (ExactSnapshotEngineRestore.NO_WRITABLE_SNAPSHOT_LOCATION_DETAIL.equals(detail)) {
       return Lizzie.resourceBundle.getString(
           "EngineFollow.snapshotPreparation.noWritableLocation");
@@ -146,6 +150,12 @@ public class EngineFollowController {
     if (ExactSnapshotEngineRestore.UNSUPPORTED_SNAPSHOT_TRANSPORT_DETAIL.equals(detail)) {
       return Lizzie.resourceBundle.getString(
           "EngineFollow.snapshotPreparation.unsupportedTransport");
+    }
+    if (ExactSnapshotEngineRestore.UNSUPPORTED_WHITE_TO_PLAY_DETAIL.equals(detail)) {
+      return Lizzie.resourceBundle.getString("EngineFollow.positionRestore.whiteToPlay");
+    }
+    if (ExactSnapshotEngineRestore.UNSUPPORTED_HANDICAP_RESTORE_DETAIL.equals(detail)) {
+      return Lizzie.resourceBundle.getString("EngineFollow.positionRestore.handicap");
     }
     return detail;
   }

@@ -5652,8 +5652,8 @@ public class LizzieFrame extends JFrame {
               public boolean isCurrent() {
                 return isCurrentKifuRulesRequest(
                         root, rulesTarget, primary, primaryGeneration, mirror)
-                    && kifuEngineIncarnationsRemainCurrent(
-                        primary, primaryIncarnation, mirror, mirrorIncarnation, action);
+                    && exactEngineIncarnationsRemainCurrent(
+                        primary, primaryIncarnation, mirror, mirrorIncarnation);
               }
 
               @Override
@@ -5685,11 +5685,15 @@ public class LizzieFrame extends JFrame {
 
               @Override
               public KifuEngineSyncCoordinator.AttemptResult synchronize() {
-                if (rulesTarget.kind() == BoardHistoryList.SessionRulesKind.INVALID) {
+                boolean offline = primary == null || EngineManager.isEmpty;
+                // Offline viewing preserves unknown rules for a future engine selection. A
+                // batch continuation starts its own analysis worker and still needs valid rules.
+                if (rulesTarget.kind() == BoardHistoryList.SessionRulesKind.INVALID
+                    && (!offline || action instanceof KifuLoadReadyAction)) {
                   rulesFailure = SessionRulesSynchronizer.synchronize(rulesTarget, null);
                   return KifuEngineSyncCoordinator.AttemptResult.PERMANENT_FAILURE;
                 }
-                if (primary == null || EngineManager.isEmpty) {
+                if (offline) {
                   return KifuEngineSyncCoordinator.AttemptResult.COMPLETE;
                 }
                 if (remoteRulesSynchronizationMustWait(primary)) {
@@ -5775,8 +5779,8 @@ public class LizzieFrame extends JFrame {
                       () -> {
                         if (isCurrentKifuRulesContext(
                                 root, rulesTarget, primary, primaryGeneration, mirror)
-                            && kifuEngineIncarnationsRemainCurrent(
-                                primary, primaryIncarnation, mirror, mirrorIncarnation, action)
+                            && exactEngineIncarnationsRemainCurrent(
+                                primary, primaryIncarnation, mirror, mirrorIncarnation)
                             && (synchronizedPosition != null
                                 ? synchronizedPosition.matchesCurrentBoardAndPrimary()
                                 : action instanceof KifuLoadReadyAction
@@ -5844,15 +5848,17 @@ public class LizzieFrame extends JFrame {
     stopQuickAnalysisWarmupTimer();
     failBatchKifuLoad(root);
     SgfObservation.record("engine-sync", "failed", null, failure);
-    // Only an explicit Continue retries a terminal preparation failure. Reacquire the current
+    // Only an explicit Continue retries a terminal restore failure. Reacquire the current
     // rules, position and readers so repaired permissions or a replacement engine can recover.
-    failedKifuPositionRetry = () -> scheduleEngineSyncAndResumeAfterKifuLoad(
-        0, this::resumeForegroundAnalysisForConfirmedPosition, false);
+    failedKifuPositionRetry =
+        () ->
+            scheduleEngineSyncAndResumeAfterKifuLoad(
+                0, this::resumeForegroundAnalysisForConfirmedPosition, false);
     showPositionSyncFailure(failure);
   }
 
   protected void showPositionSyncFailure(RuntimeException failure) {
-    EngineFollowController.presentSnapshotPreparationFailure(failure);
+    EngineFollowController.presentPositionRestoreFailure(failure);
   }
 
   /** Called only by the admitted local restart owner, before publishing its new primary. */
@@ -6096,35 +6102,15 @@ public class LizzieFrame extends JFrame {
         && root == currentHistoryRoot()
         && history != null
         && history.captureSessionRules() == rulesTarget
+        && primaryGeneration >= 0
         && Lizzie.capturePrimaryEngineGeneration(primary) == primaryGeneration
         && currentMirror == mirror;
   }
 
   static boolean exactEngineIncarnationsRemainCurrent(
       Leelaz primary, Object primaryIncarnation, Leelaz mirror, Object mirrorIncarnation) {
-    return (primary == null
-            ? primaryIncarnation == null
-            : primary.isCurrentEngineIncarnationToken(primaryIncarnation))
-        && (mirror == null
-            ? mirrorIncarnation == null
-            : mirror.isCurrentEngineIncarnationToken(mirrorIncarnation));
-  }
-
-  private static boolean kifuEngineIncarnationsRemainCurrent(
-      Leelaz primary,
-      Object primaryIncarnation,
-      Leelaz mirror,
-      Object mirrorIncarnation,
-      Runnable action) {
-    return exactEngineIncarnationsRemainCurrent(
-            primary, primaryIncarnation, mirror, mirrorIncarnation)
-        || (action instanceof KifuLoadReadyAction
-            && EngineManager.isEmpty
-            && primary != null
-            && primaryIncarnation == null
-            && primary.engineIncarnationToken() == null
-            && mirror == null
-            && mirrorIncarnation == null);
+    return KifuEngineIdentity.remainsCurrent(
+        primary, primaryIncarnation, mirror, mirrorIncarnation, EngineManager.isEmpty);
   }
 
   private void offerContinueAfterRulesFailure(
@@ -6187,8 +6173,8 @@ public class LizzieFrame extends JFrame {
                 failure.failure().name());
     int choice = showImportedRulesFailurePrompt(message);
     if (!isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, mirror)
-        || !kifuEngineIncarnationsRemainCurrent(
-            primary, primaryIncarnation, mirror, mirrorIncarnation, action)) return;
+        || !exactEngineIncarnationsRemainCurrent(
+            primary, primaryIncarnation, mirror, mirrorIncarnation)) return;
     if (choice == JOptionPane.YES_OPTION) {
       pendingKifuRulesConsent = null;
       if (primary == null) {

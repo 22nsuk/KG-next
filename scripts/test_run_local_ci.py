@@ -147,7 +147,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -229,6 +229,7 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
                 ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
                 ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
+                ("featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest", "opensAndNavigatesSgfBeforeAnyEngineHasStarted"),
                 ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
                 ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
             ),

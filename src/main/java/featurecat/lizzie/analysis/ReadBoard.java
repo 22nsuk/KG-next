@@ -695,7 +695,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
             }
           } catch (Exception ex) {
             observe(() -> ReadBoardObservation.recordFailure("parse-line", ex));
-            EngineFollowController.presentSnapshotPreparationFailure(ex);
+            EngineFollowController.presentPositionRestoreFailure(ex);
           }
           line = new StringBuilder();
         }

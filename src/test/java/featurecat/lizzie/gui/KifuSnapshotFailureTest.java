@@ -30,15 +30,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import sun.misc.Unsafe;
 
 /** Exercises the imported-position owner without opening windows or using the OS clipboard. */
 class KifuSnapshotFailureTest {
   @TempDir Path directory;
 
-  @Test
-  void mixedSetupFromClipboardStopsRetryingAndExplainsResumeFailure() throws Exception {
-    try (Fixture f = new Fixture()) {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void mixedSetupFromClipboardStopsRetryingAndExplainsResumeFailure(boolean supportsSetPosition)
+      throws Exception {
+    try (Fixture f = new Fixture(supportsSetPosition)) {
       f.submit(false);
       f.runPending();
 
@@ -47,6 +51,9 @@ class KifuSnapshotFailureTest {
       assertEquals(true, field(f.frame, "userAnalysisPaused"));
       assertEquals(0, f.executor.retries);
       assertEquals(1, f.frame.failures);
+      if (supportsSetPosition) {
+        assertTrue(f.frame.lastFailure.getMessage().contains("white-to-play"));
+      }
       assertEquals(0, f.resumes);
       assertTrue(f.output.toString().isEmpty(), "unsupported wrapper must not mutate its board");
       assertSame(f.root, Lizzie.board.getHistory().getStart());
@@ -71,9 +78,11 @@ class KifuSnapshotFailureTest {
     }
   }
 
-  @Test
-  void positionFailureAfterRulesConsentAlsoTerminatesWithoutResuming() throws Exception {
-    try (Fixture f = new Fixture()) {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void positionFailureAfterRulesConsentAlsoTerminatesWithoutResuming(boolean supportsSetPosition)
+      throws Exception {
+    try (Fixture f = new Fixture(supportsSetPosition)) {
       f.submit(true);
       f.runPending();
       assertNull(field(f.frame, "pendingKifuEngineSyncRoot"));
@@ -86,9 +95,11 @@ class KifuSnapshotFailureTest {
     }
   }
 
-  @Test
-  void queuedFailureCannotClearANewerImportOrShowItsPrompt() throws Exception {
-    try (Fixture f = new Fixture()) {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void queuedFailureCannotClearANewerImportOrShowItsPrompt(boolean supportsSetPosition)
+      throws Exception {
+    try (Fixture f = new Fixture(supportsSetPosition)) {
       f.submit(false);
       // Run on the EDT so the terminal callback remains queued until the board has changed.
       SwingUtilities.invokeAndWait(
@@ -109,9 +120,11 @@ class KifuSnapshotFailureTest {
     }
   }
 
-  @Test
-  void directLocalReplacementRestoresThePreservedSetupBeforeResume() throws Exception {
-    try (Fixture f = new Fixture()) {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void directLocalReplacementRestoresThePreservedSetupBeforeResume(boolean supportsSetPosition)
+      throws Exception {
+    try (Fixture f = new Fixture(supportsSetPosition)) {
       f.submit(false);
       f.runPending();
       Leelaz direct = new Leelaz("");
@@ -148,26 +161,37 @@ class KifuSnapshotFailureTest {
         assertTrue(transport.commands().stream().noneMatch(command -> command.startsWith("play ")));
         assertFalse(Lizzie.board.isEngineAlignmentPending());
         // A user pause after restore ACK but before the scheduled resume must still win.
-        SwingUtilities.invokeAndWait(() -> {
-          try {
-            invoke(f.frame, "recordUserAnalysisPause", new Class<?>[] {BoardHistoryNode.class}, f.root);
-            f.frame.scheduledAction.run();
-          } catch (Exception failure) {
-            throw new AssertionError(failure);
-          }
-        });
+        SwingUtilities.invokeAndWait(
+            () -> {
+              try {
+                invoke(
+                    f.frame,
+                    "recordUserAnalysisPause",
+                    new Class<?>[] {BoardHistoryNode.class},
+                    f.root);
+                f.frame.scheduledAction.run();
+              } catch (Exception failure) {
+                throw new AssertionError(failure);
+              }
+            });
         assertFalse(direct.isPondering());
-        assertTrue(transport.commands().stream().noneMatch(command -> command.startsWith("kata-analyze ")));
-        assertTrue(direct.genmove("w", true),
-            "explicit console moves are allowed after alignment, including while analysis is paused");
+        assertTrue(
+            transport.commands().stream()
+                .noneMatch(command -> command.startsWith("kata-analyze ")));
+        assertTrue(
+            direct.genmove("w", true),
+            "explicit console moves are allowed after alignment, including while analysis is"
+                + " paused");
       }
     }
   }
 
-  @Test
-  void queuedFailureCannotAffectAReplacementReaderOrPrimary() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void queuedFailureCannotAffectAReplacementReaderOrPrimary(boolean supportsSetPosition)
+      throws Exception {
     for (boolean replacementPrimary : List.of(false, true)) {
-      try (Fixture f = new Fixture()) {
+      try (Fixture f = new Fixture(supportsSetPosition)) {
         f.submit(false);
         SwingUtilities.invokeAndWait(
             () -> {
@@ -190,8 +214,10 @@ class KifuSnapshotFailureTest {
     }
   }
 
-  @Test
-  void unsupportedComparisonEngineFailsBeforeEitherTargetIsChanged() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void unsupportedComparisonEngineFailsBeforeEitherTargetIsChanged(boolean supportsSetPosition)
+      throws Exception {
     try (Fixture f = new Fixture()) {
       f.install(f.engine, f.output, List.of("katago.exe", "gtp"));
       Leelaz mirror = new Leelaz("");
@@ -200,6 +226,9 @@ class KifuSnapshotFailureTest {
       mirror.isKatago = true;
       ByteArrayOutputStream mirrorOutput = new ByteArrayOutputStream();
       f.install(mirror, mirrorOutput, List.of("helper.bat", "cuda", "gtp", "Elo"));
+      if (supportsSetPosition) {
+        f.advertiseSetPosition(mirror);
+      }
       Lizzie.config.extraMode = ExtraMode.Double_Engine;
       Lizzie.leelaz2 = mirror;
       f.submit(false);
@@ -251,6 +280,10 @@ class KifuSnapshotFailureTest {
     int resumes;
 
     Fixture() throws Exception {
+      this(false);
+    }
+
+    Fixture(boolean supportsSetPosition) throws Exception {
       Lizzie.config = ConfigTestHelper.createForTests(directory);
       Lizzie.frame = null;
       Lizzie.engineManager = null;
@@ -270,6 +303,9 @@ class KifuSnapshotFailureTest {
       engine.started = true;
       engine.isLoaded = true;
       engine.isKatago = true;
+      if (supportsSetPosition) {
+        advertiseSetPosition(engine);
+      }
       EngineManager.isEmpty = false;
       Lizzie.leelaz = engine;
       Lizzie.frame = frame;
@@ -284,6 +320,13 @@ class KifuSnapshotFailureTest {
               "installFreshCommandOutputForTest", OutputStream.class, Path.class, List.class);
       install.setAccessible(true);
       install.invoke(target, stream, directory, commands);
+    }
+
+    void advertiseSetPosition(Leelaz target) throws Exception {
+      Method advertise = Leelaz.class.getDeclaredMethod("advertiseCommandsForTest", List.class);
+      advertise.setAccessible(true);
+      advertise.invoke(target, List.of("set_position"));
+      target.canAddPlayer = false;
     }
 
     void submit(boolean rulesOverride) throws Exception {
@@ -352,12 +395,14 @@ class KifuSnapshotFailureTest {
 
   private static final class RecordingFrame extends LizzieFrame {
     int failures;
+    RuntimeException lastFailure;
     int scheduledResumes;
     Runnable scheduledAction;
 
     @Override
     protected void showPositionSyncFailure(RuntimeException failure) {
       failures++;
+      lastFailure = failure;
     }
 
     @Override
