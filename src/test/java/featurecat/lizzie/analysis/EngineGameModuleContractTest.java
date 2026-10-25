@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -62,9 +63,11 @@ import java.nio.file.attribute.FileTime;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
@@ -98,6 +101,7 @@ class EngineGameModuleContractTest {
   private boolean previousEmpty;
   private int previousEngineNo;
   private boolean previousSavingRaw;
+  private boolean fixtureInstalled;
 
   private OccupancyLeelaz black;
   private OccupancyLeelaz white;
@@ -120,6 +124,7 @@ class EngineGameModuleContractTest {
     previousEmpty = EngineManager.isEmpty;
     previousEngineNo = EngineManager.currentEngineNo;
     previousSavingRaw = LizzieFrame.isSavingRaw;
+    fixtureInstalled = true;
 
     EngineManager.resetEngineGameTransactionStateForTest();
     Config config = allocate(InMemoryConfig.class);
@@ -158,24 +163,189 @@ class EngineGameModuleContractTest {
 
   @AfterEach
   void restoreFixture() throws Exception {
-    Lizzie.engineGame.replaceChromeForTest(null);
-    EngineManager.resetEngineGameTransactionStateForTest();
-    // startEngineGame queues Menu's preparation update before returning. Let that real callback
-    // finish while this fixture's config, frame, and menu still belong together.
-    SwingUtilities.invokeAndWait(() -> {});
-    Lizzie.engineManager = previousManager;
-    EngineManager.isEmpty = previousEmpty;
-    EngineManager.currentEngineNo = previousEngineNo;
-    Lizzie.setPrimaryEngine(previousPrimary);
-    Lizzie.config = previousConfig;
-    Lizzie.frame = previousFrame;
-    LizzieFrame.toolbar = previousToolbar;
-    LizzieFrame.menu = previousMenu;
-    Menu.engineMenu = previousEngineMenu;
-    Lizzie.board = previousBoard;
-    LizzieFrame.winrateGraph = previousWinrateGraph;
-    LizzieFrame.isSavingRaw = previousSavingRaw;
-    Lizzie.gtpConsole = previousGtpConsole;
+    if (!fixtureInstalled) return;
+    Throwable failure = null;
+    boolean interrupted = Thread.interrupted();
+    try {
+      try {
+        Lizzie.engineGame.replaceChromeForTest(null);
+        EngineManager.resetEngineGameTransactionStateForTest();
+      } catch (Exception | Error error) {
+        failure = error;
+      }
+      try {
+        if (manager != null) manager.awaitOwnedWorkers();
+      } catch (Exception | Error error) {
+        if (error instanceof InterruptedException) interrupted = true;
+        if (failure == null) failure = error;
+        else failure.addSuppressed(error);
+      }
+      // Workers can queue their final UI updates while exiting. Drain those updates only after
+      // joining, and keep the fixture installed even when an earlier cleanup stage failed.
+      FutureTask<Void> drained = new FutureTask<>(() -> null);
+      SwingUtilities.invokeLater(drained);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      while (true) {
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0 && !drained.isDone()) {
+          AssertionError timeout = new AssertionError("fixture EDT callbacks did not finish");
+          if (failure == null) failure = timeout;
+          else failure.addSuppressed(timeout);
+          break;
+        }
+        try {
+          drained.get(Math.max(0L, remaining), TimeUnit.NANOSECONDS);
+          break;
+        } catch (InterruptedException error) {
+          interrupted = true;
+          if (failure == null) failure = error;
+          else failure.addSuppressed(error);
+        } catch (Exception | Error error) {
+          if (failure == null) failure = error;
+          else failure.addSuppressed(error);
+          break;
+        }
+      }
+    } finally {
+      Lizzie.engineManager = previousManager;
+      EngineManager.isEmpty = previousEmpty;
+      EngineManager.currentEngineNo = previousEngineNo;
+      Lizzie.setPrimaryEngine(previousPrimary);
+      Lizzie.config = previousConfig;
+      Lizzie.frame = previousFrame;
+      LizzieFrame.toolbar = previousToolbar;
+      LizzieFrame.menu = previousMenu;
+      Menu.engineMenu = previousEngineMenu;
+      Lizzie.board = previousBoard;
+      LizzieFrame.winrateGraph = previousWinrateGraph;
+      LizzieFrame.isSavingRaw = previousSavingRaw;
+      Lizzie.gtpConsole = previousGtpConsole;
+      fixtureInstalled = false;
+      if (interrupted) Thread.currentThread().interrupt();
+    }
+    if (failure instanceof Error) throw (Error) failure;
+    if (failure != null) throw (Exception) failure;
+  }
+
+  @Test
+  void fixtureCleanupFinishesOwnedWorkerAndItsEdtCallbackBeforeRestoringGlobals() throws Exception {
+    Config installedConfig = Lizzie.config;
+    CountDownLatch entered = new CountDownLatch(2);
+    CountDownLatch releaseOwned = new CountDownLatch(1);
+    CountDownLatch releaseUnrelated = new CountDownLatch(1);
+    AtomicReference<Config> workerConfig = new AtomicReference<>();
+    AtomicReference<Config> callbackConfig = new AtomicReference<>();
+    AtomicBoolean unrelatedInterrupted = new AtomicBoolean();
+    String name = "engine-game-fixture-cleanup-probe";
+    Thread owned =
+        manager.createEngineGameWorker(
+            () -> {
+              entered.countDown();
+              try {
+                releaseOwned.await();
+              } catch (InterruptedException expectedDuringCleanup) {
+                Thread.currentThread().interrupt();
+              } finally {
+                workerConfig.set(Lizzie.config);
+                SwingUtilities.invokeLater(() -> callbackConfig.set(Lizzie.config));
+              }
+            },
+            name);
+    Thread unrelated =
+        new Thread(
+            () -> {
+              entered.countDown();
+              try {
+                releaseUnrelated.await();
+              } catch (InterruptedException unexpected) {
+                unrelatedInterrupted.set(true);
+                Thread.currentThread().interrupt();
+              }
+            },
+            name);
+    owned.setDaemon(true);
+    unrelated.setDaemon(true);
+    try (AutoCloseable probes =
+        () -> {
+          releaseOwned.countDown();
+          releaseUnrelated.countDown();
+          owned.join(2000);
+          unrelated.join(2000);
+          SwingUtilities.invokeAndWait(() -> {});
+          assertFalse(owned.isAlive() || unrelated.isAlive(), "probe workers must finish");
+        }) {
+      owned.start();
+      unrelated.start();
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+
+      restoreFixture();
+
+      assertFalse(owned.isAlive(), "fixture cleanup must join its owned worker");
+      assertSame(installedConfig, workerConfig.get(), "globals must outlive the worker");
+      assertSame(installedConfig, callbackConfig.get(), "globals must outlive its EDT callback");
+      assertTrue(unrelated.isAlive(), "a same-name worker belongs to a different owner");
+      assertFalse(unrelatedInterrupted.get(), "cleanup must not interrupt unrelated workers");
+      assertSame(previousConfig, Lizzie.config);
+    }
+  }
+
+  @Test
+  void fixtureCleanupPreservesWorkerFailureAndFinishesRemainingCleanup() throws Exception {
+    Config installedConfig = Lizzie.config;
+    AssertionError workerFailure = new AssertionError("controlled owned-worker failure");
+    AssertionError originalFailure = new AssertionError("controlled assertion before cleanup");
+    CountDownLatch entered = new CountDownLatch(2);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicReference<Config> callbackConfig = new AtomicReference<>();
+    Thread failing =
+        manager.createEngineGameWorker(
+            () -> {
+              entered.countDown();
+              throw workerFailure;
+            },
+            "engine-game-fixture-failing-probe");
+    Thread remaining =
+        manager.createEngineGameWorker(
+            () -> {
+              entered.countDown();
+              try {
+                release.await();
+              } catch (InterruptedException expectedDuringCleanup) {
+                Thread.currentThread().interrupt();
+              } finally {
+                SwingUtilities.invokeLater(() -> callbackConfig.set(Lizzie.config));
+              }
+            },
+            "engine-game-fixture-remaining-probe");
+    failing.setDaemon(true);
+    remaining.setDaemon(true);
+    try (AutoCloseable probes =
+        () -> {
+          release.countDown();
+          failing.join(2000);
+          remaining.join(2000);
+          SwingUtilities.invokeAndWait(() -> {});
+          assertFalse(failing.isAlive() || remaining.isAlive(), "probe workers must finish");
+        }) {
+      failing.start();
+      remaining.start();
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+
+      AssertionError observed =
+          assertThrows(
+              AssertionError.class,
+              () -> {
+                try (AutoCloseable fixture = this::restoreFixture) {
+                  throw originalFailure;
+                }
+              });
+
+      assertSame(originalFailure, observed, "cleanup must preserve the original assertion");
+      assertArrayEquals(new Throwable[] {workerFailure}, observed.getSuppressed());
+      assertFalse(failing.isAlive() || remaining.isAlive(), "all owned workers must finish");
+      assertSame(installedConfig, callbackConfig.get(), "cleanup must still drain the EDT");
+      assertSame(previousConfig, Lizzie.config, "cleanup failure must not leak fixture globals");
+    }
   }
 
   @Test
@@ -1890,6 +2060,8 @@ class EngineGameModuleContractTest {
   }
 
   private static final class CountingLeaseEngineManager extends EngineManager {
+    private final List<Thread> ownedWorkers = new CopyOnWriteArrayList<>();
+    private final List<Throwable> workerFailures = new CopyOnWriteArrayList<>();
     private int leaseConflictCount;
     private boolean runWorkersInline;
     private boolean manualActivation;
@@ -2002,15 +2174,61 @@ class EngineGameModuleContractTest {
     @Override
     protected Thread createEngineGameWorker(Runnable task, String name) {
       if (observingStoppedSuccessor) stoppedSuccessorWorkers.add(name);
+      Thread worker;
       if (!runWorkersInline || isEngineGameDeadlineWatcher(name)) {
-        return super.createEngineGameWorker(task, name);
+        worker = super.createEngineGameWorker(task, name);
+      } else {
+        worker =
+            new Thread(task, name) {
+              @Override
+              public synchronized void start() {
+                run();
+              }
+            };
       }
-      return new Thread(task, name) {
-        @Override
-        public synchronized void start() {
-          run();
+      worker.setUncaughtExceptionHandler((thread, failure) -> workerFailures.add(failure));
+      ownedWorkers.add(worker);
+      return worker;
+    }
+
+    private void awaitOwnedWorkers() throws Exception {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+      Throwable failure = null;
+      InterruptedException interrupted = null;
+      // Reset retires the transaction but does not join startup/deadline workers. A worker can
+      // create another owned worker while exiting, so include additions after each bounded join.
+      for (int index = 0; index < ownedWorkers.size(); index++) {
+        for (Thread worker : ownedWorkers) worker.interrupt();
+        Thread worker = ownedWorkers.get(index);
+        while (worker.isAlive()) {
+          long remaining = deadline - System.nanoTime();
+          if (remaining <= 0) {
+            AssertionError timeout =
+                new AssertionError("fixture worker did not finish: " + worker.getName());
+            if (failure == null) failure = timeout;
+            else failure.addSuppressed(timeout);
+            break;
+          }
+          try {
+            TimeUnit.NANOSECONDS.timedJoin(worker, remaining);
+          } catch (InterruptedException error) {
+            if (interrupted == null) interrupted = error;
+            else interrupted.addSuppressed(error);
+          }
         }
-      };
+      }
+      List<Throwable> observed = List.copyOf(workerFailures);
+      workerFailures.removeAll(observed);
+      for (Throwable error : observed) {
+        if (failure == null) failure = error;
+        else if (failure != error) failure.addSuppressed(error);
+      }
+      if (interrupted != null) {
+        if (failure != null) interrupted.addSuppressed(failure);
+        throw interrupted;
+      }
+      if (failure instanceof Error) throw (Error) failure;
+      if (failure != null) throw (Exception) failure;
     }
 
     @Override

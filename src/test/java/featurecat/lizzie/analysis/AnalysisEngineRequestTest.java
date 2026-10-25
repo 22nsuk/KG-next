@@ -44,13 +44,17 @@ import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
@@ -3481,7 +3485,10 @@ class AnalysisEngineRequestTest {
   }
 
   private static Board boardWithHistory(BoardHistoryList history) throws Exception {
-    Board board = allocate(Board.class);
+    waitForMovelistRefreshThreads();
+    RequestBoard board = allocate(RequestBoard.class);
+    board.movelistWorkers = new CopyOnWriteArrayList<>();
+    board.movelistFailures = new CopyOnWriteArrayList<>();
     board.startStonelist = new ArrayList<>();
     board.hasStartStone = false;
     board.setHistory(history);
@@ -3653,9 +3660,315 @@ class AnalysisEngineRequestTest {
   }
 
   private static void waitForMovelistRefreshThreads() throws InterruptedException {
-    for (Thread thread : Thread.getAllStackTraces().keySet()) {
-      if ("lizzie-movelist-refresh".equals(thread.getName()) && thread.isAlive()) {
-        thread.join(1000);
+    if (Lizzie.board instanceof RequestBoard) {
+      ((RequestBoard) Lizzie.board).awaitMovelistRefresh();
+    }
+  }
+
+  private static final class RequestBoard extends Board {
+    private List<Thread> movelistWorkers;
+    private List<Throwable> movelistFailures;
+    private volatile CountDownLatch refreshStarted;
+    private CountDownLatch awaitStarted;
+    private Runnable beforeRefreshUpdate;
+
+    @Override
+    public synchronized void setMovelistAll(Runnable onComplete) {
+      if (getHistory() == null) return;
+      CountDownLatch started = new CountDownLatch(1);
+      refreshStarted = started;
+      super.setMovelistAll(onComplete);
+      // Bind the actual worker before a later generation can replace its start signal.
+      // updateMovelist records ownership before calling code that may need this monitor.
+      try {
+        assertTrue(started.await(5, TimeUnit.SECONDS), "move-list worker must start");
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError("interrupted waiting for move-list worker", failure);
+      }
+    }
+
+    @Override
+    public void updateMovelist(BoardHistoryNode node) {
+      Thread worker = Thread.currentThread();
+      if (!"lizzie-movelist-refresh".equals(worker.getName())) {
+        super.updateMovelist(node);
+        return;
+      }
+      if (!movelistWorkers.contains(worker)) {
+        worker.setUncaughtExceptionHandler((thread, failure) -> movelistFailures.add(failure));
+        movelistWorkers.add(worker);
+        refreshStarted.countDown();
+      }
+      if (beforeRefreshUpdate != null) beforeRefreshUpdate.run();
+      super.updateMovelist(node);
+    }
+
+    private void awaitMovelistRefresh() throws InterruptedException {
+      if (awaitStarted != null) awaitStarted.countDown();
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      AssertionError failure = null;
+      InterruptedException interrupted = null;
+      for (int index = 0; index < movelistWorkers.size(); index++) {
+        Thread worker = movelistWorkers.get(index);
+        while (worker.isAlive()) {
+          long remaining = deadline - System.nanoTime();
+          if (remaining <= 0) {
+            AssertionError timeout = new AssertionError("owned move-list worker must exit");
+            if (failure == null) failure = timeout;
+            else failure.addSuppressed(timeout);
+            break;
+          }
+          try {
+            TimeUnit.NANOSECONDS.timedJoin(worker, remaining);
+          } catch (InterruptedException error) {
+            if (interrupted == null) interrupted = error;
+            else interrupted.addSuppressed(error);
+          }
+        }
+      }
+      if (!movelistFailures.isEmpty()) {
+        AssertionError workerFailure =
+            new AssertionError("owned move-list worker failed", movelistFailures.get(0));
+        for (int index = 1; index < movelistFailures.size(); index++) {
+          workerFailure.addSuppressed(movelistFailures.get(index));
+        }
+        if (failure == null) failure = workerFailure;
+        else failure.addSuppressed(workerFailure);
+      }
+      if (interrupted != null) {
+        if (failure != null) interrupted.addSuppressed(failure);
+        throw interrupted;
+      }
+      if (failure != null) throw failure;
+    }
+  }
+
+  @Test
+  void alreadyBoundMovelistWorkerCannotReleaseTheNextStartGate() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      CountDownLatch entered = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      AtomicInteger updates = new AtomicInteger();
+      board.beforeRefreshUpdate =
+          () -> {
+            if (updates.getAndIncrement() != 0) return;
+            entered.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release first node");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+          };
+      try {
+        board.setMovelistAll();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        CountDownLatch nextStart = new CountDownLatch(1);
+        board.refreshStarted = nextStart;
+        release.countDown();
+        board.awaitMovelistRefresh();
+        assertEquals(2, updates.get(), "both real history nodes must be refreshed");
+        assertEquals(1, nextStart.getCount(), "an old worker cannot bind a new generation");
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
+  void environmentCloseWaitsForOwnedMovelistWorkerBeforeRestoringGlobals() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Config scopedConfig = Lizzie.config;
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      CountDownLatch release = new CountDownLatch(1);
+      board.awaitStarted = new CountDownLatch(1);
+      AtomicReference<Config> observedConfig = new AtomicReference<>();
+      board.beforeRefreshUpdate =
+          () -> {
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release refresh");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+            observedConfig.set(Lizzie.config);
+          };
+      ExecutorService executor = Executors.newSingleThreadExecutor();
+      try {
+        board.setMovelistAll();
+        Future<?> closing =
+            executor.submit(
+                () -> {
+                  env.close();
+                  return null;
+                });
+        assertTrue(
+            board.awaitStarted.await(5, TimeUnit.SECONDS), "close must join owned refreshes");
+        assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
+        assertSame(scopedConfig, Lizzie.config);
+        release.countDown();
+        closing.get(5, TimeUnit.SECONDS);
+        assertSame(scopedConfig, observedConfig.get());
+        assertTrue(board.movelistWorkers.stream().noneMatch(Thread::isAlive));
+        assertSame(env.previousConfig, Lizzie.config);
+      } finally {
+        release.countDown();
+        executor.shutdown();
+        try {
+          assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "fixture close must finish");
+        } finally {
+          executor.shutdownNow();
+        }
+      }
+    }
+  }
+
+  @Test
+  void interruptedCloseStillJoinsOwnedWorkersAndDrainsEdt() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Config scopedConfig = Lizzie.config;
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      CountDownLatch entered = new CountDownLatch(2);
+      CountDownLatch release = new CountDownLatch(1);
+      board.awaitStarted = new CountDownLatch(1);
+      List<Config> workerConfigs = new CopyOnWriteArrayList<>();
+      List<Config> callbackConfigs = new CopyOnWriteArrayList<>();
+      AtomicReference<Thread> closer = new AtomicReference<>();
+      AtomicBoolean interruptPreserved = new AtomicBoolean();
+      board.beforeRefreshUpdate =
+          () -> {
+            entered.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release both workers");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+            workerConfigs.add(Lizzie.config);
+            javax.swing.SwingUtilities.invokeLater(() -> callbackConfigs.add(Lizzie.config));
+          };
+      ExecutorService executor = Executors.newSingleThreadExecutor();
+      try (AutoCloseable probes =
+          () -> {
+            release.countDown();
+            executor.shutdown();
+            try {
+              assertTrue(
+                  executor.awaitTermination(5, TimeUnit.SECONDS), "fixture close must finish");
+            } finally {
+              executor.shutdownNow();
+              board.awaitMovelistRefresh();
+            }
+          }) {
+        board.setMovelistAll();
+        board.setMovelistAll();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+        assertEquals(2, board.movelistWorkers.size(), "both real worker generations must be owned");
+        Future<?> closing =
+            executor.submit(
+                () -> {
+                  closer.set(Thread.currentThread());
+                  try {
+                    env.close();
+                    return null;
+                  } finally {
+                    interruptPreserved.set(Thread.currentThread().isInterrupted());
+                  }
+                });
+        assertTrue(board.awaitStarted.await(5, TimeUnit.SECONDS));
+        closer.get().interrupt();
+        assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
+        assertSame(scopedConfig, Lizzie.config);
+        release.countDown();
+        ExecutionException failure =
+            assertThrows(ExecutionException.class, () -> closing.get(5, TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof InterruptedException);
+        assertTrue(interruptPreserved.get(), "cleanup must restore the closer's interrupt flag");
+        assertTrue(board.movelistWorkers.stream().noneMatch(Thread::isAlive));
+        assertTrue(workerConfigs.size() >= 2, "both workers must finish against fixture globals");
+        assertEquals(workerConfigs.size(), callbackConfigs.size());
+        assertTrue(workerConfigs.stream().allMatch(config -> config == scopedConfig));
+        assertTrue(callbackConfigs.stream().allMatch(config -> config == scopedConfig));
+        assertSame(env.previousConfig, Lizzie.config);
+      }
+    }
+  }
+
+  @Test
+  void workerFailureStillDrainsEdtAndRestoresGlobals() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Config scopedConfig = Lizzie.config;
+      RequestBoard board =
+          (RequestBoard)
+              boardWithHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+      IllegalStateException workerFailure = new IllegalStateException("move-list fixture failure");
+      AtomicReference<Config> observedConfig = new AtomicReference<>();
+      AtomicReference<Throwable> edtFailure = new AtomicReference<>();
+      CountDownLatch edtEntered = new CountDownLatch(1);
+      CountDownLatch releaseEdt = new CountDownLatch(1);
+      board.awaitStarted = new CountDownLatch(1);
+      ExecutorService executor = Executors.newSingleThreadExecutor();
+      try {
+        javax.swing.SwingUtilities.invokeLater(
+            () -> {
+              edtEntered.countDown();
+              try {
+                if (!releaseEdt.await(5, TimeUnit.SECONDS)) {
+                  edtFailure.set(new AssertionError("test must release EDT"));
+                }
+              } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                edtFailure.set(failure);
+              }
+            });
+        assertTrue(edtEntered.await(5, TimeUnit.SECONDS));
+        board.beforeRefreshUpdate =
+            () -> {
+              javax.swing.SwingUtilities.invokeLater(() -> observedConfig.set(Lizzie.config));
+              throw workerFailure;
+            };
+        board.setMovelistAll();
+        Future<?> closing =
+            executor.submit(
+                () -> {
+                  env.close();
+                  return null;
+                });
+        assertTrue(board.awaitStarted.await(5, TimeUnit.SECONDS));
+        assertThrows(TimeoutException.class, () -> closing.get(100, TimeUnit.MILLISECONDS));
+        assertSame(scopedConfig, Lizzie.config);
+        releaseEdt.countDown();
+        ExecutionException failure =
+            assertThrows(ExecutionException.class, () -> closing.get(5, TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof AssertionError);
+        assertSame(workerFailure, failure.getCause().getCause());
+        assertSame(
+            scopedConfig, observedConfig.get(), "queued EDT work must retain fixture globals");
+        assertNull(edtFailure.get());
+        assertTrue(board.movelistWorkers.stream().noneMatch(Thread::isAlive));
+        assertSame(env.previousConfig, Lizzie.config);
+        assertSame(env.previousBoard, Lizzie.board);
+        assertSame(env.previousFrame, Lizzie.frame);
+        assertSame(env.previousLeelaz, Lizzie.leelaz);
+      } finally {
+        releaseEdt.countDown();
+        executor.shutdown();
+        try {
+          assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "fixture close must finish");
+        } finally {
+          executor.shutdownNow();
+        }
       }
     }
   }
@@ -3984,6 +4297,7 @@ class AnalysisEngineRequestTest {
     private final Board previousBoard;
     private final LizzieFrame previousFrame;
     private final Leelaz previousLeelaz;
+    private boolean closed;
 
     private TestEnvironment(
         int previousBoardWidth,
@@ -4049,17 +4363,58 @@ class AnalysisEngineRequestTest {
     }
 
     @Override
-    public void close() throws Exception {
-      closeExclusiveSessionForTest(Lizzie.leelaz);
-      // Engine completion can queue a frame refresh; keep its globals alive through the EDT pass.
-      javax.swing.SwingUtilities.invokeAndWait(() -> {});
-      Board.boardWidth = previousBoardWidth;
-      Board.boardHeight = previousBoardHeight;
-      Zobrist.init();
-      Lizzie.config = previousConfig;
-      Lizzie.board = previousBoard;
-      Lizzie.frame = previousFrame;
-      Lizzie.leelaz = previousLeelaz;
+    public synchronized void close() throws Exception {
+      if (closed) return;
+      closed = true;
+      Throwable failure = null;
+      boolean interrupted = Thread.interrupted();
+      try {
+        closeExclusiveSessionForTest(Lizzie.leelaz);
+      } catch (Exception | Error error) {
+        if (error instanceof InterruptedException) interrupted = true;
+        failure = error;
+      }
+      try {
+        waitForMovelistRefreshThreads();
+      } catch (Exception | Error error) {
+        if (error instanceof InterruptedException) interrupted = true;
+        if (failure == null) failure = error;
+        else failure.addSuppressed(error);
+      }
+      try {
+        // Worker and engine completion can queue refreshes, even when their own work fails.
+        FutureTask<Void> drained = new FutureTask<>(() -> null);
+        javax.swing.SwingUtilities.invokeLater(drained);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (true) {
+          long remaining = deadline - System.nanoTime();
+          if (remaining <= 0 && !drained.isDone()) {
+            throw new TimeoutException("queued EDT work must finish before restoring globals");
+          }
+          try {
+            drained.get(Math.max(0L, remaining), TimeUnit.NANOSECONDS);
+            break;
+          } catch (InterruptedException error) {
+            interrupted = true;
+            if (failure == null) failure = error;
+            else failure.addSuppressed(error);
+          }
+        }
+      } catch (Exception | Error error) {
+        if (failure == null) failure = error;
+        else failure.addSuppressed(error);
+      } finally {
+        Board.boardWidth = previousBoardWidth;
+        Board.boardHeight = previousBoardHeight;
+        Zobrist.init();
+        Lizzie.config = previousConfig;
+        Lizzie.board = previousBoard;
+        Lizzie.frame = previousFrame;
+        Lizzie.leelaz = previousLeelaz;
+        if (interrupted) Thread.currentThread().interrupt();
+      }
+      if (failure instanceof Error) throw (Error) failure;
+      if (failure != null) throw (Exception) failure;
     }
   }
 
