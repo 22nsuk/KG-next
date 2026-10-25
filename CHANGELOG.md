@@ -31,6 +31,7 @@ All notable maintenance updates to this fork are documented here.
 
 ### Inherited upstream changes
 
+- Translate 88 diagnostics/logging labels, flash-analysis engine reuse messages, and the ReadBoard WebSocket pondering notice into Korean, preserving resource keys and formatting arguments (#635, Korean strings).
 - Discard automatic-analysis progression and completion effects after cancellation, including already accepted engine output; preserve accepted analysis statistics, active analysis budgets, and independent autoplay (#710, common cancellation boundary).
 - Explain explicit Windows DLL loader error 206 with guidance to extract the complete KG-next portable package into a new, shorter folder while preserving the original folder and data. Keep the DLL name and original error evidence, and avoid diagnosing path length from unrelated numbers or a long path alone (upstream #704).
 - Copy complete JVM stderr lines, including caught exceptions printed with `printStackTrace`, into the existing sanitized application log while preserving the console output. Bind capture to its logging runtime and retire it without blocking shutdown; prevent logging-worker feedback and wait for submitted log events before verification reads (upstream #638, #644).
