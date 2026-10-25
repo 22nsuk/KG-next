@@ -42,7 +42,11 @@ final class StandardErrorCapture extends OutputStream {
   }
 
   private static Charset stderrCharset() {
-    String encoding = System.getProperty("sun.stderr.encoding");
+    // A Windows standard stream can use a native encoding even when the default charset is UTF-8.
+    String encoding = System.getProperty("stderr.encoding");
+    if (encoding == null || encoding.isBlank()) {
+      encoding = System.getProperty("sun.stderr.encoding");
+    }
     if (encoding != null && !encoding.isBlank()) {
       try {
         return Charset.forName(encoding);

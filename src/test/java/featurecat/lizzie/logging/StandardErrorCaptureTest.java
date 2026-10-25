@@ -16,6 +16,7 @@ import ch.qos.logback.core.spi.FilterReply;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.io.PrintStream;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -38,6 +39,7 @@ class StandardErrorCaptureTest {
   @TempDir Path tempDir;
   private PrintStream previousStderr;
   private String previousEncoding;
+  private String previousModernEncoding;
   private ByteArrayOutputStream consoleBytes;
   private PrintStream console;
 
@@ -46,7 +48,9 @@ class StandardErrorCaptureTest {
     LoggingRuntime.resetForTests();
     previousStderr = System.err;
     previousEncoding = System.getProperty("sun.stderr.encoding");
+    previousModernEncoding = System.getProperty("stderr.encoding");
     System.setProperty("sun.stderr.encoding", StandardCharsets.UTF_8.name());
+    System.setProperty("stderr.encoding", StandardCharsets.UTF_8.name());
     consoleBytes = new ByteArrayOutputStream();
     console = new PrintStream(consoleBytes, true, StandardCharsets.UTF_8);
     System.setErr(console);
@@ -62,6 +66,11 @@ class StandardErrorCaptureTest {
         System.clearProperty("sun.stderr.encoding");
       } else {
         System.setProperty("sun.stderr.encoding", previousEncoding);
+      }
+      if (previousModernEncoding == null) {
+        System.clearProperty("stderr.encoding");
+      } else {
+        System.setProperty("stderr.encoding", previousModernEncoding);
       }
     }
   }
@@ -88,6 +97,23 @@ class StandardErrorCaptureTest {
     assertEquals(2, lines.size());
     assertTrue(lines.get(0).endsWith("stderr: 한글 café🙂"));
     assertTrue(lines.get(1).endsWith("stderr: fragmented 바둑"));
+  }
+
+  @Test
+  void modernStderrEncodingTakesPriorityOverLegacyProperty() throws Exception {
+    Charset charset = Charset.forName("x-windows-949");
+    System.setProperty("stderr.encoding", charset.name());
+    System.setProperty("sun.stderr.encoding", StandardCharsets.UTF_8.name());
+
+    assertConsoleAndLogEncoding(charset);
+  }
+
+  @Test
+  void legacyStderrEncodingIsUsedWhenModernPropertyIsAbsent() throws Exception {
+    System.clearProperty("stderr.encoding");
+    System.setProperty("sun.stderr.encoding", "MS949");
+
+    assertConsoleAndLogEncoding(Charset.forName("MS949"));
   }
 
   @Test
@@ -386,6 +412,24 @@ class StandardErrorCaptureTest {
     assertFalse(readApp(runtime).contains("blocked-console-canary"));
     assertFalse(readApp(next).contains("blocked-console-canary"));
     assertTrue(readApp(next).contains("after-console-release"));
+  }
+
+  private void assertConsoleAndLogEncoding(Charset charset) throws Exception {
+    console = new PrintStream(consoleBytes, true, charset);
+    System.setErr(console);
+    LoggingRuntime runtime = start(tempDir);
+    runtime.captureStandardError();
+    String line = "Windows 한글 바둑\n";
+
+    System.err.print(line);
+    System.err.write(line.getBytes(charset));
+    awaitIdle(runtime);
+
+    assertArrayEquals((line + line).getBytes(charset), consoleBytes.toByteArray());
+    List<String> lines = stderrLines(runtime);
+    assertEquals(2, lines.size());
+    assertTrue(lines.get(0).endsWith("stderr: Windows 한글 바둑"));
+    assertTrue(lines.get(1).endsWith("stderr: Windows 한글 바둑"));
   }
 
   private LoggingRuntime start(Path directory) {
