@@ -2,6 +2,8 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -27,8 +29,19 @@ import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class TrackingProductionCutoverTest {
   @Test
@@ -48,7 +61,7 @@ class TrackingProductionCutoverTest {
       assertTrue(rules.isDone(), "the rules owner must receive its reply during capability probing");
       assertTrue(rules.result().isConfirmed());
       assertEquals(Leelaz.MoveFocusCapability.PROBING, environment.engine.moveFocusCapability());
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
     }
   }
@@ -78,8 +91,240 @@ class TrackingProductionCutoverTest {
         assertTrue(returned.await(2, java.util.concurrent.TimeUnit.SECONDS));
       }
       assertEquals(null, failure.get());
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
+    }
+  }
+
+  @Test
+  void commandExchangeWaitsForAProbeWhosePhysicalWriteIsDelayed() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      var admission =
+          (java.util.concurrent.locks.ReentrantLock)
+              fieldValue(null, EngineManager.class, "ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK");
+      CountDownLatch waiting = new CountDownLatch(1);
+      FixtureWorker<Void> exchange =
+          environment.worker(
+              () -> {
+                waiting.countDown();
+                environment.settleSupportedProbe();
+                return null;
+              },
+              "tracking-fixture-delayed-probe");
+      admission.lock();
+      try {
+        javax.swing.SwingUtilities.invokeAndWait(
+            () -> assertTrue(environment.engine.startMoveFocusProbeAfterInitialization()));
+        exchange.thread.start();
+        assertTrue(waiting.await(2, TimeUnit.SECONDS));
+        assertThrows(
+            TimeoutException.class,
+            () -> exchange.result.get(1, TimeUnit.SECONDS),
+            "no output while physical admission is held must not imply completion");
+        assertEquals(Leelaz.MoveFocusCapability.PROBING, environment.engine.moveFocusCapability());
+        assertEquals("", environment.commands());
+      } finally {
+        admission.unlock();
+        exchange.thread.join(3000);
+      }
+      assertFalse(exchange.thread.isAlive());
+      exchange.result.get(1, TimeUnit.SECONDS);
+      assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
+    }
+  }
+
+  @Test
+  void commandExchangeIncludesAnOrdinaryWriteAfterThePreviousOutputRead() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.answerAvailableCommands();
+      AtomicBoolean replied = new AtomicBoolean();
+      Method send =
+          Leelaz.class.getDeclaredMethod(
+              "sendCommandWithResponseForTest", String.class, Runnable.class);
+      send.setAccessible(true);
+      send.invoke(environment.engine, "name", (Runnable) () -> replied.set(true));
+      assertTrue(environment.commands().contains("name"));
+      assertFalse(replied.get());
+      assertFalse(environment.commandExchangeComplete(true));
+      assertFalse(environment.commandExchangeComplete(false));
+
+      environment.settleCommands();
+
+      assertTrue(replied.get(), "the last ordinary write must receive its actual GTP response");
+      assertTrue(environment.commandExchangeComplete(true));
+    }
+  }
+
+  private enum CleanupFailure {
+    NONE,
+    CANCELLED_WORKER,
+    INTERRUPTED_CLOSE
+  }
+
+  @ParameterizedTest
+  @EnumSource(CleanupFailure.class)
+  void fixtureCloseWaitsForItsWorkerBeforeRestoringGlobals(CleanupFailure mode) throws Exception {
+    TestEnvironment environment = TestEnvironment.open();
+    CancellationException cancellation = new CancellationException("cancelled owned worker");
+    FixtureWorker<Void> cancelled = null;
+    if (mode == CleanupFailure.CANCELLED_WORKER) {
+      cancelled =
+          environment.worker(
+              (Callable<Void>)
+                  () -> {
+                    throw cancellation;
+                  },
+              "tracking-fixture-cancelled-worker");
+      cancelled.thread.start();
+    }
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    FixtureWorker<Void> worker =
+        environment.worker(
+            () -> {
+              entered.countDown();
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release its owned worker");
+              assertSame(
+                  environment.engine,
+                  Lizzie.leelaz,
+                  "the fixture globals must remain installed until the worker returns");
+              return null;
+            },
+            "tracking-fixture-close-owner");
+    CountDownLatch closing = new CountDownLatch(1);
+    AtomicBoolean interruptRestored = new AtomicBoolean();
+    FixtureWorker<Void> cleanup =
+        new FixtureWorker<>(
+            () -> {
+              closing.countDown();
+              try {
+                environment.close();
+                return null;
+              } finally {
+                interruptRestored.set(Thread.currentThread().isInterrupted());
+              }
+            },
+            "tracking-fixture-close");
+    try {
+      worker.thread.start();
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+      cleanup.thread.start();
+      assertTrue(closing.await(2, TimeUnit.SECONDS));
+      if (mode == CleanupFailure.INTERRUPTED_CLOSE) {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (cleanup.thread.getState() != Thread.State.TIMED_WAITING
+            && cleanup.thread.isAlive()
+            && System.nanoTime() < deadline) Thread.sleep(1);
+        assertEquals(Thread.State.TIMED_WAITING, cleanup.thread.getState());
+        cleanup.thread.interrupt();
+      }
+      assertThrows(TimeoutException.class, () -> cleanup.result.get(1, TimeUnit.SECONDS));
+      assertSame(environment.engine, Lizzie.leelaz);
+      release.countDown();
+      cleanup.thread.join(3000);
+      assertFalse(cleanup.thread.isAlive());
+      if (mode == CleanupFailure.NONE) {
+        cleanup.result.get(1, TimeUnit.SECONDS);
+      } else if (mode == CleanupFailure.CANCELLED_WORKER) {
+        assertSame(
+            cancellation,
+            assertThrows(
+                CancellationException.class, () -> cleanup.result.get(1, TimeUnit.SECONDS)));
+      } else {
+        var failure =
+            assertThrows(
+                java.util.concurrent.ExecutionException.class,
+                () -> cleanup.result.get(1, TimeUnit.SECONDS));
+        assertTrue(failure.getCause() instanceof InterruptedException);
+      }
+      assertEquals(mode == CleanupFailure.INTERRUPTED_CLOSE, interruptRestored.get());
+      assertFalse(worker.thread.isAlive());
+      if (cancelled != null) assertFalse(cancelled.thread.isAlive());
+      assertSame(environment.previousEngine, Lizzie.leelaz);
+      assertSame(environment.previousBoard, Lizzie.board);
+      assertSame(environment.previousConfig, Lizzie.config);
+      assertSame(environment.previousFrame, Lizzie.frame);
+    } finally {
+      release.countDown();
+      worker.thread.join(3000);
+      cleanup.thread.join(3000);
+      environment.engine.forceQuit();
+      environment.restoreGlobals();
+    }
+  }
+
+  @Test
+  void failedExchangeStillReportsWorkerFailureAndRestoresGlobals() throws Exception {
+    TestEnvironment environment = TestEnvironment.open();
+    IllegalStateException exchangeFailure = new IllegalStateException("failed sync confirmation");
+    IllegalStateException workerFailure = new IllegalStateException("failed owned worker");
+    ((TrackingBoard) Lizzie.board).syncConfirmation =
+        CompletableFuture.failedFuture(exchangeFailure);
+    FixtureWorker<Void> worker =
+        environment.worker(
+            (Callable<Void>)
+                () -> {
+                  throw workerFailure;
+                },
+            "tracking-fixture-failed-worker");
+    try {
+      worker.thread.start();
+      var failure = assertThrows(java.util.concurrent.ExecutionException.class, environment::close);
+      assertSame(exchangeFailure, failure.getCause());
+      assertTrue(
+          java.util.Arrays.asList(failure.getSuppressed()).contains(workerFailure),
+          "a prior exchange failure must not hide an owned worker failure");
+      assertFalse(worker.thread.isAlive());
+      assertSame(environment.previousEngine, Lizzie.leelaz);
+      assertSame(environment.previousBoard, Lizzie.board);
+      assertSame(environment.previousConfig, Lizzie.config);
+      assertSame(environment.previousFrame, Lizzie.frame);
+    } finally {
+      worker.thread.join(3000);
+      environment.engine.forceQuit();
+      environment.restoreGlobals();
+    }
+  }
+
+  @Test
+  void fixtureTimeoutStillReapsItsWorkerBeforeRestoringGlobals() throws Exception {
+    TestEnvironment environment = TestEnvironment.open();
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicBoolean observedOwnedGlobals = new AtomicBoolean();
+    FixtureWorker<Void> worker =
+        environment.worker(
+            () -> {
+              entered.countDown();
+              try {
+                release.await();
+                return null;
+              } finally {
+                observedOwnedGlobals.set(Lizzie.leelaz == environment.engine);
+              }
+            },
+            "tracking-fixture-timeout");
+    try {
+      worker.thread.start();
+      assertTrue(entered.await(2, TimeUnit.SECONDS));
+      AssertionError failure = assertThrows(AssertionError.class, environment::close);
+      assertTrue(failure.getMessage().contains("Fixture worker did not finish"));
+      assertTrue(observedOwnedGlobals.get());
+      assertFalse(worker.thread.isAlive());
+      assertTrue(worker.result.isCompletedExceptionally());
+      assertFalse(
+          Thread.currentThread().isInterrupted(),
+          "interrupting an owned worker must not interrupt its cleanup caller");
+      assertSame(environment.previousEngine, Lizzie.leelaz);
+      assertSame(environment.previousBoard, Lizzie.board);
+      assertSame(environment.previousConfig, Lizzie.config);
+      assertSame(environment.previousFrame, Lizzie.frame);
+    } finally {
+      release.countDown();
+      worker.thread.interrupt();
+      worker.thread.join(3000);
+      environment.engine.forceQuit();
+      environment.restoreGlobals();
     }
   }
 
@@ -108,20 +353,32 @@ class TrackingProductionCutoverTest {
           (java.util.concurrent.locks.ReentrantLock) lockField.get(null);
       java.util.concurrent.atomic.AtomicReference<Throwable> failure =
           new java.util.concurrent.atomic.AtomicReference<>();
-      Thread writer = new Thread(() -> {
-        try {
-          if (resumed) environment.engine.ponderIfAnalysisControlAllows();
-          else environment.engine.startMoveFocusProbeAfterInitialization();
-        } catch (Throwable thrown) { failure.set(thrown); }
-      }, "focus-probe-admission-regression");
+      Thread writer =
+          environment.worker(
+              () -> {
+                try {
+                  if (resumed) environment.engine.ponderIfAnalysisControlAllows();
+                  else environment.engine.startMoveFocusProbeAfterInitialization();
+                } catch (Throwable thrown) {
+                  failure.set(thrown);
+                }
+              },
+              "focus-probe-admission-regression");
       java.util.concurrent.CountDownLatch pauseComplete = new java.util.concurrent.CountDownLatch(1);
-      Thread pauser = new Thread(() -> {
-        environment.engine.pauseForAnalysisControl(() -> {
-          try { paused.setBoolean(environment.frame, true); }
-          catch (IllegalAccessException exception) { throw new AssertionError(exception); }
-        });
-        pauseComplete.countDown();
-      }, "focus-probe-pause-regression");
+      Thread pauser =
+          environment.worker(
+              () -> {
+                environment.engine.pauseForAnalysisControl(
+                    () -> {
+                      try {
+                        paused.setBoolean(environment.frame, true);
+                      } catch (IllegalAccessException exception) {
+                        throw new AssertionError(exception);
+                      }
+                    });
+                pauseComplete.countDown();
+              },
+              "focus-probe-pause-regression");
       admission.lock();
       try {
         writer.start();
@@ -140,14 +397,14 @@ class TrackingProductionCutoverTest {
       assertFalse(writer.isAlive());
       assertFalse(pauser.isAlive());
       assertEquals(null, failure.get());
-      long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2);
-      while (environment.engine.moveFocusCapability() == Leelaz.MoveFocusCapability.PROBING
-          && System.nanoTime() < deadline) Thread.sleep(1);
+      // The caller may finish after scheduling the physical writer. UNKNOWN alone does not
+      // establish that cancellation has released that writer before the next resume.
+      environment.settleCommands();
       assertEquals(Leelaz.MoveFocusCapability.UNKNOWN, environment.engine.moveFocusCapability());
       assertEquals("", environment.commands(), "cancelled probe must not reach the engine");
       paused.setBoolean(environment.frame, false);
       assertTrue(environment.engine.ponderIfAnalysisControlAllows());
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability(),
           "commands=" + environment.commands() + ", pondering=" + environment.engine.isPondering());
     }
@@ -163,7 +420,7 @@ class TrackingProductionCutoverTest {
       assertEquals("", environment.commands());
       paused.setBoolean(environment.frame, false);
       assertTrue(environment.engine.ponderIfAnalysisControlAllows());
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
       assertEquals(1, environment.commands().lines().filter(line -> line.contains("focus pass 0")).count());
       environment.engine.ponder();
@@ -185,7 +442,7 @@ class TrackingProductionCutoverTest {
       assertEquals(Leelaz.MoveFocusCapability.UNKNOWN, environment.engine.moveFocusCapability());
       assertTrue(environment.engine.startMoveFocusProbeAfterInitialization(),
           "A settled probe for an old board must not retain the current stream's probe slot");
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
       assertEquals(2, environment.commands().lines().filter(line -> line.contains("focus pass 0")).count());
     }
@@ -231,7 +488,7 @@ class TrackingProductionCutoverTest {
       environment.respondedCommands = 1;
       environment.streaming = true;
       environment.engine.pauseForAnalysisControl(() -> {});
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
       assertFalse(environment.engine.isPondering());
       assertEquals(1, environment.commands().lines().filter(line -> line.contains("kata-analyze")).count());
@@ -245,7 +502,7 @@ class TrackingProductionCutoverTest {
       Field paused = LizzieFrame.class.getDeclaredField("userAnalysisPaused");
       paused.setAccessible(true);
       paused.setBoolean(environment.frame, true);
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
       assertFalse(environment.engine.isPondering());
       assertEquals(1, environment.commands().lines().filter(line -> line.contains("kata-analyze")).count());
@@ -271,7 +528,7 @@ class TrackingProductionCutoverTest {
           environment.frame.addTrackingPoint("A1"));
       environment.respondedCommands = 1;
       environment.streaming = true;
-      environment.settleCommands();
+      environment.settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, environment.engine.moveFocusCapability());
     }
   }
@@ -641,10 +898,16 @@ class TrackingProductionCutoverTest {
       field.setAccessible(true);
       var admission = (java.util.concurrent.locks.ReentrantLock) field.get(null);
       var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
-      Thread writer = new Thread(() -> {
-        try { environment.settleCommands(); }
-        catch (Throwable thrown) { failure.set(thrown); }
-      }, "focus-selected-before-write");
+      Thread writer =
+          environment.worker(
+              () -> {
+                try {
+                  environment.settleCommands();
+                } catch (Throwable thrown) {
+                  failure.set(thrown);
+                }
+              },
+              "focus-selected-before-write");
       admission.lock();
       try {
         writer.start();
@@ -865,9 +1128,9 @@ class TrackingProductionCutoverTest {
         // Retirement is posted to the controller asynchronously. Holding its monitor leaves the
         // old points visible while the engine has already cleared and started another search.
         environment.engine.sendCommand("clear_board");
-        environment.settleCommands();
+        environment.settleCommandWrites();
         environment.engine.sendCommand("kata-analyze B 10 rootInfo true");
-        environment.settleCommands();
+        environment.settleCommandWrites();
         assertEquals(java.util.Set.of("A1"), controller.snapshot().selectedPoints());
         assertTrue(environment.engine.canStartMoveFocus());
         assertEquals(Boolean.FALSE, keepsSearch.invoke(environment.frame));
@@ -1093,6 +1356,8 @@ class TrackingProductionCutoverTest {
     private final Leelaz engine;
     private final ByteArrayOutputStream output;
     private final LizzieFrame frame;
+    private final List<FixtureWorker<?>> workers = new ArrayList<>();
+    private boolean closed;
 
     private TestEnvironment(
         Leelaz previousEngine,
@@ -1250,21 +1515,40 @@ class TrackingProductionCutoverTest {
 
     void startSupportedAnalysis() throws Exception {
       assertTrue(engine.startMoveFocusProbeAfterInitialization());
-      settleCommands();
+      settleSupportedProbe();
       assertEquals(Leelaz.MoveFocusCapability.SUPPORTED, engine.moveFocusCapability());
     }
 
     void settleCommands() throws Exception {
+      settleCommands(true, () -> true);
+    }
+
+    void settleSupportedProbe() throws Exception {
+      settleCommands(
+          true, () -> engine.moveFocusCapability() == Leelaz.MoveFocusCapability.SUPPORTED);
+    }
+
+    void settleCommandWrites() throws Exception {
+      settleCommands(false, () -> true);
+    }
+
+    private void settleCommands(boolean awaitController, BooleanSupplier operationComplete)
+        throws Exception {
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(3);
-      int quiet = 0;
       while (System.nanoTime() < deadline) {
+        answerAvailableCommands();
+        if (operationComplete.getAsBoolean() && commandExchangeComplete(awaitController)) return;
+        Thread.sleep(1);
+      }
+      throw new AssertionError("Command exchange did not complete: " + commands());
+    }
+
+    private void answerAvailableCommands() throws Exception {
+      while (true) {
         String[] lines = commands().split("\n");
         if (respondedCommands >= lines.length || lines[respondedCommands].isEmpty()) {
-          if (++quiet >= 5) return;
-          Thread.sleep(1);
-          continue;
+          return;
         }
-        quiet = 0;
         String command = lines[respondedCommands++];
         if (streaming) {
           dispatch("");
@@ -1277,7 +1561,52 @@ class TrackingProductionCutoverTest {
         if (body.startsWith("kata-analyze")) streaming = true;
         else dispatch("");
       }
-      throw new AssertionError("Command exchange did not settle: " + commands());
+    }
+
+    private boolean commandExchangeComplete(boolean awaitController) throws Exception {
+      if (!commandWorkComplete(awaitController)) return false;
+      // The last ordinary writer can finish after the pump's output snapshot. Re-read after
+      // observing its completion so a newly written command still receives its response.
+      String[] lines = commands().split("\n");
+      return respondedCommands >= lines.length || lines[respondedCommands].isEmpty();
+    }
+
+    private boolean commandWorkComplete(boolean awaitController) throws Exception {
+      // A quiet output buffer is not a completion signal: the probe writer or a controller
+      // continuation can still be waiting for admission. Observe their actual protocol state.
+      Object queue = fieldValue(engine, Leelaz.class, "cmdQueue");
+      synchronized (queue) {
+        if (!((java.util.Deque<?>) queue).isEmpty()
+            || (boolean) fieldValue(engine, Leelaz.class, "normalCommandSendInProgress")
+            || ((AtomicBoolean) fieldValue(engine, Leelaz.class, "eventDispatchCommandScheduled"))
+                .get()) return false;
+      }
+      Object boundary = fieldValue(engine, Leelaz.class, "moveFocusBoundary");
+      boolean failed =
+          boundary != null && (boolean) fieldValue(boundary, boundary.getClass(), "failed");
+      if (boundary != null && !failed) return false;
+      if (fieldValue(engine, Leelaz.class, "deferredMoveFocusProbe") != null) return false;
+      if (fieldValue(engine, Leelaz.class, "moveFocusProbe") != null && !failed) return false;
+      if (!awaitController) return true;
+
+      Object state = fieldValue(engine, Leelaz.class, "moveFocusState");
+      if (state == null) return true;
+      TrackingAnalysisController owner =
+          (TrackingAnalysisController) fieldValue(state, state.getClass(), "owner");
+      synchronized (owner) {
+        var snapshot = owner.snapshot();
+        Object context = fieldValue(state, state.getClass(), "context");
+        if (snapshot.context() != context) return true;
+        if ((boolean) fieldValue(state, state.getClass(), "retired")) return false;
+        if ((boolean) fieldValue(state, state.getClass(), "paused")) {
+          return snapshot.activePoints().isEmpty() && !snapshot.cancellationPending();
+        }
+        Object installed = fieldValue(state, state.getClass(), "installed");
+        return installed.equals(fieldValue(state, state.getClass(), "desired"))
+            && installed.equals(
+                fieldValue(owner, TrackingAnalysisController.class, "installedPoints"))
+            && !snapshot.cancellationPending();
+      }
     }
 
     private void dispatch(String line) throws Exception {
@@ -1310,15 +1639,18 @@ class TrackingProductionCutoverTest {
               "resumeForegroundAnalysisForCurrentPosition", boolean.class);
       handBack.setAccessible(true);
       // A resend may wait for replies, so keep the transport on this thread and bound the exchange.
-      java.util.concurrent.CompletableFuture<Object> handedBack =
-          java.util.concurrent.CompletableFuture.supplyAsync(
+      FixtureWorker<Object> handBackWorker =
+          worker(
               () -> {
                 try {
                   return handBack.invoke(frame, false);
                 } catch (ReflectiveOperationException failure) {
                   throw new IllegalStateException(failure);
                 }
-              });
+              },
+              "tracking-fixture-hand-back");
+      CompletableFuture<Object> handedBack = handBackWorker.result;
+      handBackWorker.thread.start();
       long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
       while (!handedBack.isDone() && System.nanoTime() < deadline) settleCommands();
       assertTrue(handedBack.isDone(), "foreground hand-back did not finish: " + commands());
@@ -1347,11 +1679,127 @@ class TrackingProductionCutoverTest {
       return output.toString(StandardCharsets.UTF_8);
     }
 
+    Thread worker(Runnable action, String name) {
+      return worker(
+              () -> {
+                action.run();
+                return null;
+              },
+              name)
+          .thread;
+    }
+
+    private <T> FixtureWorker<T> worker(Callable<T> action, String name) {
+      FixtureWorker<T> worker = new FixtureWorker<>(action, name);
+      workers.add(worker);
+      return worker;
+    }
+
+    private void finishWorkers(CleanupFailures failures, boolean interruptRemaining) {
+      if (interruptRemaining) {
+        for (FixtureWorker<?> worker : workers) {
+          if (worker.thread.isAlive()) worker.thread.interrupt();
+        }
+      }
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      boolean answerCommands = !interruptRemaining;
+      for (FixtureWorker<?> worker : workers) {
+        if (worker.thread.getState() == Thread.State.NEW) continue;
+        while (worker.thread.isAlive() && System.nanoTime() < deadline) {
+          if (answerCommands) {
+            try {
+              answerAvailableCommands();
+            } catch (Throwable failure) {
+              failures.add(failure);
+              answerCommands = false;
+            }
+          }
+          try {
+            long remaining = deadline - System.nanoTime();
+            if (remaining > 0)
+              TimeUnit.NANOSECONDS.timedJoin(
+                  worker.thread, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(1)));
+          } catch (InterruptedException interrupted) {
+            failures.interrupted(interrupted);
+          }
+        }
+        if (worker.thread.isAlive()) {
+          failures.add(
+              new AssertionError(
+                  "Fixture worker did not finish "
+                      + (interruptRemaining ? "after interruption: " : ": ")
+                      + worker.thread.getName()));
+        } else if (!worker.failureObserved) {
+          worker.failureObserved = true;
+          try {
+            worker.result.join();
+          } catch (java.util.concurrent.CompletionException thrown) {
+            failures.add(thrown.getCause());
+          } catch (CancellationException cancelled) {
+            failures.add(cancelled);
+          }
+        }
+      }
+    }
+
+    private boolean drainEventQueue(CleanupFailures failures) {
+      CountDownLatch drained = new CountDownLatch(1);
+      javax.swing.SwingUtilities.invokeLater(drained::countDown);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (drained.getCount() != 0 && System.nanoTime() < deadline) {
+        try {
+          long remaining = deadline - System.nanoTime();
+          if (remaining > 0) drained.await(remaining, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException interrupted) {
+          failures.interrupted(interrupted);
+        }
+      }
+      if (drained.getCount() == 0) return true;
+      failures.add(new AssertionError("Tracking fixture EDT callbacks did not finish"));
+      return false;
+    }
+
     @Override
     public void close() throws Exception {
-      completeSyncConfirmation();
-      frame.clearTrackingPoints();
-      settleCommands();
+      if (closed) return;
+      CleanupFailures failures = new CleanupFailures();
+      failures.run(this::completeSyncConfirmation);
+      failures.run(
+          () -> {
+            frame.clearTrackingPoints();
+            settleCommands();
+          });
+      // Keep supplying replies while fixture-owned hand-back work finishes. Only then retire
+      // the context/engine; a timeout remains a failure even if interruption subsequently reaps it.
+      finishWorkers(failures, false);
+      failures.run(
+          () -> {
+            TrackingAnalysisController controller =
+                (TrackingAnalysisController)
+                    fieldValue(frame, LizzieFrame.class, "trackingAnalysisController");
+            if (controller != null) {
+              controller.contextChanged(null);
+              Object scheduler =
+                  fieldValue(controller, TrackingAnalysisController.class, "timeoutScheduler");
+              if (scheduler.getClass().getName().endsWith("$DaemonTimeoutScheduler")) {
+                ((java.util.Timer) fieldValue(scheduler, scheduler.getClass(), "timer")).cancel();
+              }
+            }
+          });
+      failures.run(engine::forceQuit);
+      finishWorkers(failures, true);
+      boolean eventQueueDrained = drainEventQueue(failures);
+      if (!eventQueueDrained || workers.stream().anyMatch(worker -> worker.thread.isAlive())) {
+        // A still-running fixture worker must never observe another test's global state.
+        failures.finish();
+        throw new AssertionError("Tracking fixture cleanup did not finish");
+      }
+      failures.run(this::restoreGlobals);
+      closed = true;
+      failures.finish();
+    }
+
+    private void restoreGlobals() throws Exception {
       Lizzie.leelaz = previousEngine;
       Lizzie.board = previousBoard;
       Lizzie.config = previousConfig;
@@ -1367,6 +1815,74 @@ class TrackingProductionCutoverTest {
       restoreTables.setAccessible(true);
       restoreTables.invoke(null, previousZobristTables);
     }
+  }
+
+  private static final class FixtureWorker<T> {
+    private final CompletableFuture<T> result = new CompletableFuture<>();
+    private final Thread thread;
+    private boolean failureObserved;
+
+    private FixtureWorker(Callable<T> action, String name) {
+      thread =
+          new Thread(
+              () -> {
+                try {
+                  result.complete(action.call());
+                } catch (Throwable failure) {
+                  result.completeExceptionally(failure);
+                }
+              },
+              name);
+      thread.setDaemon(true);
+    }
+  }
+
+  @FunctionalInterface
+  private interface CleanupStep {
+    void run() throws Exception;
+  }
+
+  private static final class CleanupFailures {
+    private Throwable first;
+    private boolean interrupted;
+
+    private CleanupFailures() {
+      if (Thread.interrupted())
+        interrupted(new InterruptedException("Interrupted before fixture cleanup"));
+    }
+
+    private void add(Throwable failure) {
+      if (first == null) first = failure;
+      else if (first != failure) first.addSuppressed(failure);
+    }
+
+    private void interrupted(InterruptedException failure) {
+      interrupted = true;
+      add(failure);
+    }
+
+    private void run(CleanupStep step) {
+      try {
+        step.run();
+      } catch (InterruptedException failure) {
+        interrupted(failure);
+      } catch (Throwable failure) {
+        add(failure);
+      }
+    }
+
+    private void finish() throws Exception {
+      if (interrupted) Thread.currentThread().interrupt();
+      if (first instanceof Error error) throw error;
+      if (first instanceof Exception exception) throw exception;
+      if (first != null) throw new AssertionError(first);
+    }
+  }
+
+  private static Object fieldValue(Object target, Class<?> owner, String name) throws Exception {
+    Field field = owner.getDeclaredField(name);
+    field.setAccessible(true);
+    return field.get(target);
   }
 
   private static final class TrackingFrame extends LizzieFrame {
