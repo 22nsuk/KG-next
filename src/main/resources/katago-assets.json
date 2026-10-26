@@ -61,19 +61,19 @@
     "windows-nvidia": {
       "platform": "windows-x64",
       "backend": "cuda",
-      "assetName": "katago-source-0feaf24d35f7-windows-nvidia.zip",
-      "sizeBytes": 7309345,
-      "sha256": "738a29409327b5a92a5be8135c2dfef6e0cd03b8b1ecb44501d6acb21f121833",
-      "executableSha256": "dd07af64797760c1c7d6ed98fef63f59cbbc8ea114765a8435cb2d21cedc2187",
+      "assetName": "katago-source-1f839badf110-windows-nvidia.zip",
+      "sizeBytes": 7318299,
+      "sha256": "b178fb370294b5945f7b05633da1d94346ae6d52be340e7913b292961128d073",
+      "executableSha256": "887fb3ca48b5a192f365e612f599e9d0c480266eef3bb8810f6c7bdac9f1ecfd",
       "runtimeProfile": "cuda12.8-cudnn9",
       "zlibLinkage": "static",
       "releaseTier": "stable",
       "origin": "project-source-build",
-      "katagoSourceCommit": "0feaf24d35f75d6b424b7db3f24063d5a78fa1be",
+      "katagoSourceCommit": "1f839badf11043fbda64b03265f342e51eeea348",
       "katagoSourceRepository": "https://github.com/22nsuk/KataGo",
       "engineReleaseRepository": "22nsuk/KataGo",
-      "engineReleaseTag": "kg-next-0feaf24d35f7",
-      "sourceMetadataSha256": "726d6f09d612a8522b5497cea871d5f3e7894c06524b4cdb56f29cfce8c071a6"
+      "engineReleaseTag": "kg-next-1f839badf110",
+      "sourceMetadataSha256": "425de2cd21832a3cb6da31273e355cee393f5c8b9cae0bf874ec36a07106daa1"
     },
     "windows-nvidia-cuda13": {
       "platform": "windows-x64",
