@@ -13,6 +13,8 @@ import featurecat.lizzie.gui.SetKataEngines;
 import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
@@ -50,8 +52,24 @@ public final class EngineGameParameterSession {
 
     private final String gtpName;
 
+    private static final MathContext WRN_READBACK_PRECISION =
+        new MathContext(6, RoundingMode.HALF_EVEN);
+
     Parameter(String gtpName) {
       this.gtpName = gtpName;
+    }
+
+    /**
+     * KataGo's WRN getter uses Global::doubleToString (six significant digits), whereas PDA
+     * uses the JSON serializer's round-trip representation. Accept either an exact reply or
+     * WRN's rounded representation, not an arbitrary absolute/relative error. This belongs
+     * only to protocol verification: distinct requested values must still be sent in full.
+     */
+    private boolean matchesReadback(double expected, double actual) {
+      return expected == actual
+          || (this == WRN
+              // Round the binary double itself, including values beside decimal halfway points.
+              && new BigDecimal(expected, WRN_READBACK_PRECISION).doubleValue() == actual);
     }
   }
 
@@ -200,7 +218,7 @@ public final class EngineGameParameterSession {
     int k = parameter.ordinal();
     Double target = current.target[k][p];
     Double confirmed = current.confirmed[k][p];
-    boolean unmet = target != null && !same(target, confirmed);
+    boolean unmet = target != null && !sameValue(target, confirmed);
     return new EngineGameParameterState.Value(
         current.supported[k][p], confirmed, unmet ? target : null);
   }
@@ -381,7 +399,7 @@ public final class EngineGameParameterSession {
           for (int k = 0; k < 2; k++) {
             for (int p = 0; p < 2; p++) {
               Double target = current.target[k][p];
-              if (target != null && !same(target, current.confirmed[k][p])) {
+              if (target != null && !sameValue(target, current.confirmed[k][p])) {
                 // Only edited parameters are written. A timed-out setter may still apply later,
                 // so the value is unknown until confirmed.
                 write[k][p] = target;
@@ -689,7 +707,7 @@ public final class EngineGameParameterSession {
         "kata-get-param " + parameter.gtpName,
         payload -> {
           Double actual = parse(payload);
-          return actual != null && same(actual, expected)
+          return actual != null && parameter.matchesReadback(expected, actual)
               ? null
               : text("EngineGameParameters.readbackMismatch", payload, plain(expected));
         });
@@ -759,14 +777,15 @@ public final class EngineGameParameterSession {
   private static boolean unmet(Double[][] target, Double[][] confirmed) {
     for (int k = 0; k < 2; k++) {
       for (int p = 0; p < 2; p++) {
-        if (target[k][p] != null && !same(target[k][p], confirmed[k][p])) return true;
+        if (target[k][p] != null && !sameValue(target[k][p], confirmed[k][p])) return true;
       }
     }
     return false;
   }
 
-  private static boolean same(Double expected, Double actual) {
-    return actual != null && Math.abs(expected - actual) <= 1e-9;
+  /** Confirmed values retain the full request; readback formatting does not change user intent. */
+  private static boolean sameValue(Double expected, Double actual) {
+    return actual != null && expected.doubleValue() == actual.doubleValue();
   }
 
   private static Double parse(String payload) {

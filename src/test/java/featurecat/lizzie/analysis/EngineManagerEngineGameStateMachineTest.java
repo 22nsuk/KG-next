@@ -465,6 +465,119 @@ class EngineManagerEngineGameStateMachineTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "0.1234567, 0.123457",
+    "1.234567, 1.23457",
+    "0.00001234567, 1.23457e-05",
+    "0.9999999, 1",
+    "0.1234565, 0.123456",
+    "1.000005, 1.00001",
+    "1.234565, 1.23456",
+    "1e-10, 1e-10"
+  })
+  void roundedWrnReadbackConfirmsOpeningSmallEditsAndRestore(double opening, String readback)
+      throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(opening, 0.4, -1.234567, 0.0);
+    // These are six-significant-digit replies, including rounding across a power of ten,
+    // scientific notation, and binary doubles on either side of decimal halfway points.
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7, 0.25, -0.75)) {
+      kata.wrnReadbacks.put(opening, readback);
+      double rounded = Double.parseDouble(readback);
+      double edited = rounded == opening ? Math.nextUp(opening) : Math.nextAfter(opening, rounded);
+      kata.wrnReadbacks.put(edited, readback);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, opening, 0.4, -1.234567, 0.0), black, 0);
+      session.applyOpening(owner);
+      assertEquals(opening, kata.of(black), "the setter receives the full requested value");
+      assertEquals(opening, black.wrn);
+      assertEquals(-1.234567, black.pda, "PDA keeps its JSON round-trip precision");
+      assertEquals(opening, EngineGameParameterSession.state(owner).first().wrn().confirmed());
+      EngineManager.pauseEngineGame(owner);
+      int sets = commandLineCount(black.commandText(), "kata-set-param " + WRN);
+
+      assertEquals(
+          featurecat.lizzie.enginegame.EngineGameParameterRevision.ACCEPTED,
+          EngineGameParameterSession.revise(
+              owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(edited, null),
+              () -> {}));
+      awaitCondition(() -> !EngineGameParameterSession.state(owner).pending());
+      awaitOperationsReleased(owner);
+      var state = EngineGameParameterSession.state(owner);
+      assertNull(state.failure());
+      assertNull(state.first().wrn().target());
+      assertEquals(edited, state.first().wrn().confirmed());
+      assertEquals(edited, black.wrn);
+      assertEquals(edited, kata.of(black));
+      assertEquals(sets + 1, commandLineCount(black.commandText(), "kata-set-param " + WRN),
+          "a distinct request is sent once even when its rounded readback has not changed");
+      assertEquals(
+          featurecat.lizzie.enginegame.EngineGameParameterRevision.UNCHANGED,
+          EngineGameParameterSession.revise(
+              owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(edited, null),
+              () -> {}));
+      assertTrue(owner.paused());
+
+      EngineManager.resetEngineGameTransactionStateForTest();
+      session.restoreOnce();
+      assertEquals(0.3, kata.of(black));
+      assertEquals(0.3, black.wrn);
+      assertEquals(0.25, black.pda);
+      assertEquals(0.7, white.wrn);
+      assertEquals(-0.75, white.pda);
+      assertTrue(black.isLoaded());
+      assertTrue(white.isLoaded());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "analysisWideRootNoise, 0.1234567, 0.123456",
+    "analysisWideRootNoise, 0.1234567, 0.1234567001",
+    "analysisWideRootNoise, 1e-10, 0",
+    "analysisWideRootNoise, 0.1234567, NaN",
+    "analysisWideRootNoise, 0.1234567, Infinity",
+    "analysisWideRootNoise, 0.1234567, unreadable",
+    "playoutDoublingAdvantage, -1.234567, -1.23457",
+    "playoutDoublingAdvantage, 1e-10, 0"
+  })
+  void readbackPrecisionNeverHidesADifferentOrUnreadableValue(
+      String parameter, double requested, String reply) throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.5, 0.4, 0.0, 0.0);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.5, 0.4, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      kata.overrideNextReadback(white, parameter, reply);
+      boolean wrn = WRN.equals(parameter);
+      var request = new featurecat.lizzie.enginegame.EngineGameParameterRequest(
+          null, wrn ? requested : null, null, wrn ? null : requested);
+      assertEquals(
+          featurecat.lizzie.enginegame.EngineGameParameterRevision.ACCEPTED,
+          EngineGameParameterSession.revise(owner, request, () -> {}));
+      awaitCondition(() -> !EngineGameParameterSession.state(owner).pending());
+      awaitOperationsReleased(owner);
+      var state = EngineGameParameterSession.state(owner);
+      var value = wrn ? state.second().wrn() : state.second().pda();
+      assertNotNull(state.failure());
+      assertNull(value.confirmed());
+      assertEquals(requested, value.target());
+      assertTrue(owner.paused(), "an unconfirmed value must still block play");
+
+      // The retry gets the fixture's full-precision reply, which must also be supported.
+      assertEquals(
+          featurecat.lizzie.enginegame.EngineGameParameterRevision.ACCEPTED,
+          EngineGameParameterSession.revise(owner, request, () -> {}));
+      awaitCondition(() -> !EngineGameParameterSession.state(owner).pending());
+      awaitOperationsReleased(owner);
+      assertNull(EngineGameParameterSession.state(owner).failure());
+      assertEquals(requested, wrn ? white.wrn : white.pda);
+      assertTrue(owner.paused(), "successful retry preserves the failure's pause");
+    }
+  }
+
   @Test
   void runtimeBreadthWritesOnlyTheEditedPositionAndKeepsTheMoveBudget() throws Exception {
     ImmediateUiEngineManager manager = installManager();
@@ -1188,7 +1301,9 @@ class EngineManagerEngineGameStateMachineTest {
         java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Set<String> droppedCommands =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
-    private final java.util.Map<String, Double> readbackOverrides =
+    private final java.util.Map<String, String> readbackOverrides =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<Double, String> wrnReadbacks =
         new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicReference<String> droppedReply = new AtomicReference<>();
     private final AtomicBoolean held = new AtomicBoolean();
@@ -1251,7 +1366,11 @@ class EngineManagerEngineGameStateMachineTest {
     }
 
     private void overrideNextReadback(StateMachineLeelaz engine, String parameter, double value) {
-      readbackOverrides.put(key(engine, parameter), value);
+      overrideNextReadback(engine, parameter, Double.toString(value));
+    }
+
+    private void overrideNextReadback(StateMachineLeelaz engine, String parameter, String reply) {
+      readbackOverrides.put(key(engine, parameter), reply);
     }
 
     private void rejectSets(StateMachineLeelaz engine, String parameter) {
@@ -1296,8 +1415,11 @@ class EngineManagerEngineGameStateMachineTest {
         } else if (parts.length == 3
             && parts[1].equals("kata-get-param")
             && values.get(engine).containsKey(parts[2])) {
-          Double override = readbackOverrides.remove(key(engine, parts[2]));
-          reply = "=" + id + " " + (override == null ? values.get(engine).get(parts[2]) : override);
+          String override = readbackOverrides.remove(key(engine, parts[2]));
+          double value = values.get(engine).get(parts[2]);
+          String normal = parts[2].equals(WRN)
+              ? wrnReadbacks.getOrDefault(value, Double.toString(value)) : Double.toString(value);
+          reply = "=" + id + " " + (override == null ? normal : override);
         }
         if (parts.length >= 3
             && droppedCommands.remove(key(engine, parts[1] + " " + parts[2]))) {

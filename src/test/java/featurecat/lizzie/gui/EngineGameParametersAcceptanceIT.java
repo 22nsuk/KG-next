@@ -62,6 +62,12 @@ public final class EngineGameParametersAcceptanceIT {
   private static final Logger LOG = LoggerFactory.getLogger(EngineGameParametersAcceptanceIT.class);
   private static final String WRN = "analysisWideRootNoise";
   private static final String PDA = "playoutDoublingAdvantage";
+  // Real KataGo rounds WRN readback to six significant digits. Keep both startup and UI edits
+  // beyond that precision so this acceptance exercises the protocol boundary, not just integers.
+  private static final double OPENING_FIRST_WRN = 0.1234567;
+  private static final double OPENING_SECOND_WRN = 1.234567;
+  private static final double EDITED_FIRST_WRN = 0.7654321;
+  private static final double EDITED_SECOND_WRN = 0.8765432;
 
   @Test
   void realParticipantsApplyPanelChangesPreservePauseAndRestoreAfterStop() throws Exception {
@@ -233,7 +239,7 @@ public final class EngineGameParametersAcceptanceIT {
                   batch ? 6 : 200,
                   new EngineGameOutputChoices(false, false, "parameter-acceptance"),
                   KataGoRules.parse("chinese").orElseThrow(),
-                  new EngineGameOpeningParameters(0.2, 0.4, 0.5, -0.5));
+                  new EngineGameOpeningParameters(OPENING_FIRST_WRN, OPENING_SECOND_WRN, 0.5, -0.5));
           assertInstanceOf(
               Acceptance.Accepted.class,
               Lizzie.engineGame.accept(
@@ -256,7 +262,7 @@ public final class EngineGameParametersAcceptanceIT {
         },
         70,
         "first game starts");
-    awaitParameters(0.2, 0.4, 0.5, -0.5);
+    awaitParameters(OPENING_FIRST_WRN, OPENING_SECOND_WRN, 0.5, -0.5);
     assertTrue(edt(() -> Lizzie.engineGame.current().view().firstIsBlack()));
     record(result, "opening-both-participants=PASS");
     try {
@@ -278,9 +284,9 @@ public final class EngineGameParametersAcceptanceIT {
             });
 
     if (batch) {
-      applyPanel(0.7, null, null, null, result.resolveSibling("parameters-game1-ko.png"));
+      applyPanel(EDITED_FIRST_WRN, null, null, null, result.resolveSibling("parameters-game1-ko.png"));
       record(result, "hidden-toolbar-game-menu-entry=PASS");
-      awaitParameters(0.7, 0.4, 0.5, -0.5);
+      awaitParameters(EDITED_FIRST_WRN, OPENING_SECOND_WRN, 0.5, -0.5);
       await(
           () ->
               Lizzie.engineGame.current().playing()
@@ -292,7 +298,7 @@ public final class EngineGameParametersAcceptanceIT {
             Lizzie.engineGame.pause();
             return null;
           });
-      awaitParameters(0.2, 0.4, 0.5, -0.5);
+      awaitParameters(OPENING_FIRST_WRN, OPENING_SECOND_WRN, 0.5, -0.5);
       assertFalse(edt(() -> Lizzie.engineGame.current().view().firstIsBlack()));
       record(result, "second-game-position-settings-and-color-swap=PASS");
       edt(
@@ -311,9 +317,9 @@ public final class EngineGameParametersAcceptanceIT {
     } else {
       await(() -> moveNumber() >= 1, 20, "real game advances before edit");
       int[][] before = parameterWrites(work);
-      applyPanel(null, 0.75, null, null, result.resolveSibling("parameters-breadth-ko.png"));
+      applyPanel(null, EDITED_SECOND_WRN, null, null, result.resolveSibling("parameters-breadth-ko.png"));
       record(result, "separate-toolbar-entry=PASS");
-      awaitParameters(0.2, 0.75, 0.5, -0.5);
+      awaitParameters(OPENING_FIRST_WRN, EDITED_SECOND_WRN, 0.5, -0.5);
       assertWriteDelta(before, parameterWrites(work), new int[][] {{0, 0}, {1, 0}});
       record(result, "single-side-edit-only=PASS");
       edt(
@@ -324,7 +330,7 @@ public final class EngineGameParametersAcceptanceIT {
       await(() -> Lizzie.engineGame.current().paused(), 10, "game pause");
       before = parameterWrites(work);
       applyPanel(null, null, 1.25, -1.25, result.resolveSibling("parameters-paused-ko.png"));
-      awaitParameters(0.2, 0.75, 1.25, -1.25);
+      awaitParameters(OPENING_FIRST_WRN, EDITED_SECOND_WRN, 1.25, -1.25);
       assertWriteDelta(before, parameterWrites(work), new int[][] {{0, 1}, {0, 1}});
       assertTrue(edt(() -> Lizzie.engineGame.current().paused()));
       // Confirmation drains moves admitted before the pause intent reached the reader.

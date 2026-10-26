@@ -12,7 +12,8 @@ public record EngineGameParameterState(
 
   /**
    * @param supported whether the participant accepts runtime changes of this parameter
-   * @param confirmed confirmed value, or null while unknown
+   * @param confirmed requested value confirmed by the parameter's readback representation, or null
+   *     while unknown
    * @param target requested value while it differs from the confirmed value, otherwise null
    */
   public record Value(boolean supported, Double confirmed, Double target) {}
