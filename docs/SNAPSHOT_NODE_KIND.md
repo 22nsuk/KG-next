@@ -138,6 +138,9 @@ ReadBoard 协议里的 `pass` 行在自动落子/交换顺序链路中表示用�
 - 对局中所有贴目入口统一提交给当前 engine-game owner；界面区分已确认贴目与待应用目标，连续输入只保留最新目标，不修改 frozen opening plan 或后续批次默认值。GENMOVE 已发出的当前合法手须先完成并由对手接受，再开始贴目切换。
 - runtime komi 使用 captured owner 与 reader incarnation 授权，双方 `komi` ACK 及最终 `name` fence 均成功后，才原子提交当前 GameInfo 与分析缓存；连续目标间不恢复搜索，最终恢复遵循最新暂停意图。旧 komi revision 的分析与落子回调不得提交。
 - 任一贴目确认拒绝、发送失败、超时或实例丢失均 fail-closed 结束当前批次，保留最后确认贴目，不制造结果或 successor。部分写入后失败或取消须退役可能持有未确认贴目的原实例；旧实例确认不得影响替换实例或新对局。
+- 分析模式引擎对局的 WRN/PDA 由 `EngineGameParameterSession` 按批次持有，按引擎 1／引擎 2 位置而非颜色绑定。首局覆盖前按 exact engine + reader incarnation 读取双方实际值，全部读取完成后才开始写入；每局应用冻结开局值并逐项回读，局中修改只影响本局，不改配置、冻结值或恢复值。
+- runtime komi 与参数更新由同一 `EngineGameSearchUpdates` worker 串行执行。更新停止搜索并排空已准入的落子，递增 search revision，仅设置已修改且与确认值不同的项；全部回读后才按最新暂停意图继续，保留本手时间。参数确认失败暂停对局并阻止普通继续；不支持的项在任何写入前整体拒绝。非 KataGo 不支持两项，专用／动态 PDA 引擎不支持 PDA；不支持项的开局 0 表示跳过，非零拒绝，不改写颜色／动态策略。
+- 批次结束或用户中止后按原 incarnation 设值并回读恢复，批次间隔不恢复。保存失败保留现有重试和未保存棋谱；停止已完成的批次仍等 exact owner retirement 后恢复，保存成功后的最终 Idle 转换也触发恢复。失败的原进程退出并报告，替换进程不接收旧恢复；回读后的 Java 字段发布也须在同一 live incarnation 下完成。后继对局，包括 genmove，开始前等待前一批次恢复完成。双方恢复全部确认前保留 admission 与 completion claim，普通分析及参数写入不可插入恢复过程。普通工具栏及已打开的高级 WRN/PDA 编辑器在分析模式批次管理参数及恢复期间锁定，显示／自动载入偏好仍可保存；genmove 保留既有 WRN 锁定、普通 PDA 编辑及专用 KataGoPda 参与者设置。
 - `PreparedRestore` 可在首次 `execute()` 前由捕获它的 owner 调用 one-shot `discard()` 释放 captured admission；`discard()` 不写临时 SGF、不发任何命令。首次 `execute()` 或 `discard()` 后，另一操作必须以既有 `Exact snapshot restore has already been executed` 失败；一旦 execute 开始，所有失败仍按 owner 的既有 fail-closed 语义处理。
 - 没有可用静态锚点时，调用方保留既有 root replay；默认空 root 不是 exact 锚点。exact 一旦开始，`loadsgf`、tail 或 arbitration 失败都原样失败，禁止猜测性 root fallback。
 - lifecycle exact/root 抛错时，owner 将 frozen target 标为 unavailable，并在既有 completion boundary 释放 reservation；不因本票据新建 `ENGINE_STATE_UNRESTORED` 或通用 retry。ReadBoard GMA 固定点既有 quarantine/retirement 行为保持独立。

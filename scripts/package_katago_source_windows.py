@@ -12,7 +12,7 @@ import re
 import shutil
 import subprocess
 
-from build_katago_source import SOURCE_COMMIT, file_record
+from build_katago_source import SOURCE_COMMIT, SOURCE_REPOSITORY, file_record
 from build_katago_windows_dependencies import LOCK_PATH, TARGETS, verify_sdk
 from build_katago_macos_dependencies import digest
 import build_katago_directml_dependencies as directml
@@ -67,7 +67,8 @@ def portable_environment() -> dict[str, str]:
     return env
 
 
-def package(build: Path, sdk: Path, output: Path) -> dict:
+def package(build: Path, sdk: Path, output: Path, *, source_commit: str = SOURCE_COMMIT,
+            source_repository: str = SOURCE_REPOSITORY) -> dict:
     if platform.system() != "Windows" or platform.machine().lower() not in {"amd64", "x86_64"}:
         raise ValueError("Windows packaging needs a native Windows/x86_64 host")
     build, sdk, output = build.resolve(), sdk.resolve(), output.resolve()
@@ -79,7 +80,8 @@ def package(build: Path, sdk: Path, output: Path) -> dict:
         provider_tools = rocm
     verified_sdk = provider_tools.verify_sdk(sdk) if provider_tools else verify_sdk(sdk)
     lock = provider_tools.LOCK_PATH if provider_tools else LOCK_PATH
-    if (target not in TARGETS | rocm.TARGETS | {directml.TARGET, openvino.TARGET, cuda.TARGET, tensorrt.TARGET} or original.get("sourceCommit") != SOURCE_COMMIT
+    if (target not in TARGETS | rocm.TARGETS | {directml.TARGET, openvino.TARGET, cuda.TARGET, tensorrt.TARGET} or original.get("sourceCommit") != source_commit
+            or original.get("sourceRepository") != source_repository
             or original.get("origin") != "project-source-build" or original.get("buildStatus") != "PASS"
             or original.get("dependencyLockSha256") != digest(lock)
             or original.get("sdkReceipt") != file_record(sdk / "sdk-receipt.json", sdk)
@@ -145,7 +147,10 @@ def package(build: Path, sdk: Path, output: Path) -> dict:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", required=True, type=Path)
+    parser.add_argument("--source-commit", default=SOURCE_COMMIT)
+    parser.add_argument("--source-repository", default=SOURCE_REPOSITORY)
     parser.add_argument("--sdk", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    print(json.dumps(package(args.build, args.sdk, args.output), indent=2))
+    print(json.dumps(package(args.build, args.sdk, args.output,
+                             source_commit=args.source_commit, source_repository=args.source_repository), indent=2))

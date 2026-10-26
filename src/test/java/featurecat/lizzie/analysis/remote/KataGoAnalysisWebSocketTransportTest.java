@@ -629,11 +629,13 @@ public class KataGoAnalysisWebSocketTransportTest {
         new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
 
     assertEquals("= KataGo\n\n", sendGtp(transport, "name"));
-    assertEquals("= 1.16.4\n\n", sendGtp(transport, "version"));
+    assertEquals("= 1.18.2+kg-next-analysis-adapter\n\n", sendGtp(transport, "version"));
 
     String commands = sendGtp(transport, "list_commands");
     assertTrue(commands.contains("kata-analyze"));
     assertTrue(commands.contains("kata-get-param"));
+    assertTrue(commands.contains("\nkata-get-param-state\n"));
+    assertTrue(commands.contains("\nkata-set-params\n"));
     assertTrue(commands.contains("kata-get-rules"));
     assertTrue(commands.contains("set_position"));
     assertTrue(commands.contains("loadsgf"));
@@ -781,6 +783,176 @@ public class KataGoAnalysisWebSocketTransportTest {
     assertTrue(sendGtp(transport, "68 kata-set-param ponderingEnabled true").startsWith("?68 "));
     assertTrue(sendGtp(transport, "69 kata-get-param unsupported").startsWith("?69 "));
     assertTrue(sendGtp(transport, "70 kata-set-param unsupported 1").startsWith("?70 "));
+  }
+
+  @Test
+  void parameterStatesRestoreExactValuesIntoAnalysisQueries() throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      double originalPda = -1.2345678901234567;
+      double originalNoise = 0.12345678901234568;
+      assertEquals(
+          "=\n\n",
+          sendGtp(harness.transport, "kata-set-param playoutDoublingAdvantage " + originalPda));
+      assertEquals(
+          "=\n\n",
+          sendGtp(harness.transport, "kata-set-param analysisWideRootNoise " + originalNoise));
+      JSONObject pdaState = parameterState(harness.transport, "playoutDoublingAdvantage");
+      JSONObject noiseState = parameterState(harness.transport, "analysisWideRootNoise");
+      assertEquals(originalPda, pdaState.getDouble("value"));
+      assertEquals(Double.toString(originalPda), pdaState.getString("configuredValue"));
+      assertEquals(originalNoise, noiseState.getDouble("value"));
+      assertEquals(Double.toString(originalNoise), noiseState.getString("configuredValue"));
+
+      assertEquals(
+          "=\n\n", sendGtp(harness.transport, "kata-set-param playoutDoublingAdvantage 2"));
+      assertEquals(
+          "=\n\n", sendGtp(harness.transport, "kata-set-param analysisWideRootNoise 0"));
+      JSONObject restore =
+          new JSONObject()
+              .put("playoutDoublingAdvantage", pdaState.getString("configuredValue"))
+              .put("analysisWideRootNoise", noiseState.getString("configuredValue"));
+      assertEquals("=81\n\n", sendGtp(harness.transport, "81 kata-set-params " + restore));
+      assertTrue(pdaState.similar(parameterState(harness.transport, "playoutDoublingAdvantage")));
+      assertTrue(noiseState.similar(parameterState(harness.transport, "analysisWideRootNoise")));
+
+      writeGtp(harness.transport, "82 kata-analyze B 10");
+      JSONObject analysis = harness.webSocket.sentJson(0);
+      assertEquals(originalPda, analysis.getDouble("playoutDoublingAdvantage"));
+      assertEquals(
+          originalNoise, analysis.getJSONObject("overrideSettings").getDouble("wideRootNoise"));
+    }
+  }
+
+  @Test
+  void parameterStatesUseCanonicalNumericConfigurationForAdapterDefaults() throws Exception {
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
+
+    JSONObject pda = parameterState(transport, "playoutDoublingAdvantage");
+    JSONObject noise = parameterState(transport, "analysisWideRootNoise");
+    assertEquals(0.0, pda.getDouble("value"));
+    assertEquals("0.0", pda.getString("configuredValue"));
+    assertEquals(0.04, noise.getDouble("value"));
+    assertEquals("0.04", noise.getString("configuredValue"));
+
+    assertEquals("=\n\n", sendGtp(transport, "kata-set-param analysisWideRootNoise 1e-300"));
+    JSONObject tinyNoise = parameterState(transport, "analysisWideRootNoise");
+    assertEquals(1e-300, tinyNoise.getDouble("value"));
+    assertEquals("1.0E-300", tinyNoise.getString("configuredValue"));
+    assertEquals(
+        "=\n\n",
+        sendGtp(
+            transport,
+            "kata-set-params "
+                + new JSONObject().put("analysisWideRootNoise", tinyNoise.get("configuredValue"))));
+    assertTrue(tinyNoise.similar(parameterState(transport, "analysisWideRootNoise")));
+  }
+
+  @Test
+  void rejectsMalformedOrUnsupportedParameterStateRequestsWithResponseIds() throws Exception {
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
+
+    for (String arguments :
+        List.of("", "playoutDoublingAdvantage extra", "maxTime", "unsupported")) {
+      assertTrue(
+          sendGtp(transport, "83 kata-get-param-state " + arguments).startsWith("?83 "),
+          arguments);
+    }
+    assertEquals("= 0.0\n\n", sendGtp(transport, "kata-get-param playoutDoublingAdvantage"));
+    assertEquals("= 0.04\n\n", sendGtp(transport, "kata-get-param analysisWideRootNoise"));
+  }
+
+  @Test
+  void batchParameterUpdatesCommitTogetherAndCanResetAdapterBaselines() throws Exception {
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
+    JSONObject values =
+        new JSONObject()
+            .put("maxTime", 0.75)
+            .put("maxVisits", "321")
+            .put("playoutDoublingAdvantage", "-1.5")
+            .put("analysisWideRootNoise", 0.5);
+    assertEquals("=84\n\n", sendGtp(transport, "84 kata-set-params " + values));
+
+    JSONObject genmove = transport.buildAnalysisQuery("move", true, false, 50, "B");
+    JSONObject analysis = transport.buildAnalysisQuery("analysis", false, false, 50, "B");
+    assertEquals(0.75, genmove.getJSONObject("overrideSettings").getDouble("maxTime"));
+    assertEquals(321, genmove.getInt("maxVisits"));
+    assertEquals(-1.5, genmove.getDouble("playoutDoublingAdvantage"));
+    assertEquals(0.5, analysis.getJSONObject("overrideSettings").getDouble("wideRootNoise"));
+
+    JSONObject reset = new JSONObject();
+    for (String param : values.keySet()) {
+      reset.put(param, "");
+    }
+    assertEquals("=85\n\n", sendGtp(transport, "85 kata-set-params " + reset));
+    assertEquals("= 1.0E20\n\n", sendGtp(transport, "kata-get-param maxTime"));
+    assertEquals("= 256\n\n", sendGtp(transport, "kata-get-param maxVisits"));
+    assertEquals("= 0.0\n\n", sendGtp(transport, "kata-get-param playoutDoublingAdvantage"));
+    assertEquals("= 0.04\n\n", sendGtp(transport, "kata-get-param analysisWideRootNoise"));
+    assertTrue(sendGtp(transport, "kata-set-param playoutDoublingAdvantage").startsWith("? "));
+    assertTrue(sendGtp(transport, "kata-set-param analysisWideRootNoise").startsWith("? "));
+  }
+
+  @Test
+  void rejectedBatchDoesNotPartiallyUpdateAnyQueryParameter() throws Exception {
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
+    JSONObject initial =
+        new JSONObject()
+            .put("maxTime", 2.5)
+            .put("maxVisits", 777)
+            .put("playoutDoublingAdvantage", -1.5)
+            .put("analysisWideRootNoise", 0.5);
+    assertEquals("=\n\n", sendGtp(transport, "kata-set-params " + initial));
+    JSONObject beforeMove = transport.buildAnalysisQuery("move", true, false, 50, "B");
+    JSONObject beforeAnalysis = transport.buildAnalysisQuery("analysis", false, false, 50, "B");
+    String[] invalidEntries = {
+      "\"unsupported\":1",
+      "\"analysisWideRootNoise\":-1",
+      "\"playoutDoublingAdvantage\":\"NaN\"",
+      "\"playoutDoublingAdvantage\":\"Infinity\"",
+      "\"maxTime\":null",
+      "\"maxTime\":true",
+      "\"maxTime\":{}",
+      "\"maxVisits\":1.5",
+      "\"maxVisits\":0",
+      "\"maxVisits\":1125899906842625"
+    };
+    for (String invalid : invalidEntries) {
+      JSONObject update =
+          new JSONObject()
+              .put("playoutDoublingAdvantage", 2)
+              .put("analysisWideRootNoise", 1)
+              .put("maxTime", 1)
+              .put("maxVisits", 10);
+      JSONObject invalidEntry = new JSONObject("{" + invalid + "}");
+      for (String param : invalidEntry.keySet()) {
+        update.put(param, invalidEntry.get(param));
+      }
+      assertTrue(
+          sendGtp(transport, "86 kata-set-params " + update)
+              .startsWith("?86 "),
+          invalid);
+      assertTrue(
+          beforeMove.similar(transport.buildAnalysisQuery("move", true, false, 50, "B")), invalid);
+      assertTrue(
+          beforeAnalysis.similar(transport.buildAnalysisQuery("analysis", false, false, 50, "B")),
+          invalid);
+    }
+  }
+
+  @Test
+  void malformedBatchJsonDoesNotChangeParameters() throws Exception {
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
+    assertEquals("=\n\n", sendGtp(transport, "kata-set-param playoutDoublingAdvantage 1.5"));
+
+    for (String body : List.of("", "[]", "{", "{\"maxTime\":}", "{} trailing")) {
+      assertTrue(sendGtp(transport, "87 kata-set-params " + body).startsWith("?87 "), body);
+      assertEquals("= 1.5\n\n", sendGtp(transport, "kata-get-param playoutDoublingAdvantage"));
+    }
   }
 
   @Test
@@ -1122,6 +1294,13 @@ public class KataGoAnalysisWebSocketTransportTest {
     byte[] buffer = new byte[available];
     int read = stdout.read(buffer);
     return new String(buffer, 0, read, StandardCharsets.UTF_8);
+  }
+
+  private static JSONObject parameterState(
+      KataGoAnalysisWebSocketTransport transport, String param) throws Exception {
+    String response = sendGtp(transport, "kata-get-param-state " + param);
+    assertTrue(response.startsWith("= "), response);
+    return new JSONObject(response.substring(2).trim());
   }
 
   private static void writeGtp(KataGoAnalysisWebSocketTransport transport, String command)

@@ -87,6 +87,27 @@ class SourceBuildTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "clean"):
                 check_source(Path("source"))
 
+    def test_integration_build_still_requires_an_exact_clean_pin(self):
+        commit = "a" * 40
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)
+            (source / "cpp").mkdir()
+            (source / "cpp/CMakeLists.txt").write_text("project(test)")
+            with patch("build_katago_source.checked", side_effect=[commit, ""]):
+                check_source(source, commit)
+            for requested in ("master", "a" * 7, "A" * 40):
+                with self.subTest(requested=requested), self.assertRaisesRegex(ValueError, "exact"):
+                    check_source(source, requested)
+            with patch("build_katago_source.checked", return_value=SOURCE_COMMIT):
+                with self.assertRaisesRegex(ValueError, "pinned"):
+                    check_source(source, commit)
+
+    def test_integration_receipts_cannot_replace_release_sources(self):
+        receipts = self.receipts()
+        receipts[0].update(sourceCommit="a" * 40, sourceRepository="https://github.com/22nsuk/KataGo")
+        with self.assertRaisesRegex(ValueError, "source identity"):
+            check_release_receipts(receipts)
+
     def test_wrong_os_cannot_claim_target(self):
         with patch("build_katago_source.platform.system", return_value="Darwin"):
             with self.assertRaises(ValueError):

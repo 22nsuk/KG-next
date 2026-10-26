@@ -68,7 +68,11 @@ public class SetKataPDA extends JDialog {
     btnApply.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            Leelaz engine = kataGoPdaEngineGameParticipantOrPrimary();
+            // Analysis batches own runtime PDA; other modes retain their existing participant path.
+            Leelaz engine =
+                EngineGameDesktop.parametersOwned()
+                    ? null
+                    : kataGoPdaEngineGameParticipantOrPrimary();
             if (chkDymPda.isSelected()) {
               double dymCap;
               try {
@@ -88,13 +92,15 @@ public class SetKataPDA extends JDialog {
                 msg.setVisible(true);
                 return;
               }
-              engine.pda = 0;
-              engine.sendCommand("pda 0");
-              LizzieFrame.menu.txtPDA.setText("0.000");
-              engine.sendCommand("dympdacap " + dymCap);
               if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "dympdacap " + dymCap;
-              engine.pdaCap = dymCap;
-              engine.isStaticPda = false;
+              if (engine != null) {
+                engine.pda = 0;
+                engine.sendCommand("pda 0");
+                LizzieFrame.menu.txtPDA.setText("0.000");
+                engine.sendCommand("dympdacap " + dymCap);
+                engine.pdaCap = dymCap;
+                engine.isStaticPda = false;
+              }
 
             } else if (chkStaticPda.isSelected()) {
               double staticCur;
@@ -108,21 +114,23 @@ public class SetKataPDA extends JDialog {
                 msg.setVisible(true);
                 return;
               }
-              engine.sendCommand("pda " + staticCur);
-              if (chkAutoPDA.isSelected()) {
-                Lizzie.config.AutoPDA = "pda " + staticCur;
+              if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "pda " + staticCur;
+              if (engine != null) {
+                engine.sendCommand("pda " + staticCur);
+                engine.pda = staticCur;
+                engine.isStaticPda = true;
+                LizzieFrame.menu.txtPDA.setText(String.valueOf(staticCur));
               }
-              engine.pda = staticCur;
-              engine.isStaticPda = true;
-              LizzieFrame.menu.txtPDA.setText(String.valueOf(staticCur));
             }
             if (chkNoPDA.isSelected()) {
-              engine.sendCommand("pda 0");
-              engine.pda = 0;
-              if (Lizzie.config.isDoubleEngineMode()) Lizzie.leelaz2.pda = 0;
               Lizzie.config.AutoPDA = "pda 0";
-              LizzieFrame.menu.txtPDA.setText("0");
-              engine.isStaticPda = true;
+              if (engine != null) {
+                engine.sendCommand("pda 0");
+                engine.pda = 0;
+                if (Lizzie.config.isDoubleEngineMode()) Lizzie.leelaz2.pda = 0;
+                LizzieFrame.menu.txtPDA.setText("0");
+                engine.isStaticPda = true;
+              }
             }
 
             Lizzie.config.chkDymPDA = chkDymPda.isSelected();
@@ -137,7 +145,7 @@ public class SetKataPDA extends JDialog {
             Lizzie.config.uiConfig.put("dym-pda-cap", Lizzie.config.dymPDACap);
             Lizzie.config.uiConfig.put("static-pda-cur", Lizzie.config.staticPDAcur);
             Lizzie.config.uiConfig.put("auto-pda", Lizzie.config.AutoPDA);
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
+            if (engine != null && engine.isPondering()) engine.ponder();
             setVisible(false);
           }
         });

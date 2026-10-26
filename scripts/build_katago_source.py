@@ -25,6 +25,8 @@ import build_katago_linux_cuda_dependencies as linux_cuda_sdk_tools
 import build_katago_rocm_dependencies as rocm_sdk_tools
 
 
+SOURCE_REPOSITORY = "https://github.com/lightvector/KataGo"
+
 ARCH_ALIASES = {"amd64": "x86_64", "aarch64": "arm64"}
 MACOS_MINIMUM_VERSION = "15.0"
 SDK_CACHE_KEYS = {
@@ -40,9 +42,11 @@ def checked(*command: str, cwd: Path | None = None) -> str:
     return subprocess.run(command, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
 
 
-def check_source(source: Path) -> None:
-    if checked("git", "rev-parse", "HEAD", cwd=source) != SOURCE_COMMIT:
-        raise ValueError("source HEAD must equal the pinned merged upstream commit")
+def check_source(source: Path, source_commit: str = SOURCE_COMMIT) -> None:
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("source commit must be an exact lowercase SHA")
+    if checked("git", "rev-parse", "HEAD", cwd=source) != source_commit:
+        raise ValueError("source HEAD must equal the pinned commit")
     if checked("git", "status", "--porcelain", "--untracked-files=all", cwd=source):
         raise ValueError("source checkout must be clean, including untracked files")
     if not (source / "cpp/CMakeLists.txt").is_file():
@@ -127,10 +131,11 @@ def macos_sdk_options(prefix: Path) -> list[str]:
 
 def build(source: Path, output: Path, target: str, sdk: list[str], jobs: int,
           macos_sdk: Path | None = None, linux_sdk: Path | None = None,
-          windows_sdk: Path | None = None) -> dict:
+          windows_sdk: Path | None = None, *, source_commit: str = SOURCE_COMMIT,
+          source_repository: str = SOURCE_REPOSITORY) -> dict:
     check_host(target)
     source, output = source.resolve(), output.resolve()
-    check_source(source)
+    check_source(source, source_commit)
     if output == source or source in output.parents:
         raise ValueError("build output must be outside the source checkout")
     options = configuration(target, sdk)
@@ -193,8 +198,8 @@ def build(source: Path, output: Path, target: str, sdk: list[str], jobs: int,
     result = {
         "schemaVersion": 1,
         "origin": "project-source-build",
-        "sourceRepository": "https://github.com/lightvector/KataGo",
-        "sourceCommit": SOURCE_COMMIT,
+        "sourceRepository": source_repository,
+        "sourceCommit": source_commit,
         "target": target,
         "backend": TARGETS[target][2],
         "experimental": TARGETS[target][3],
@@ -214,7 +219,7 @@ def build(source: Path, output: Path, target: str, sdk: list[str], jobs: int,
                 ["cmake", "--build", str(output), "--target", "katago", "--parallel", str(jobs)],
             ):
                 subprocess.run(command, check=True, stdout=log, stderr=subprocess.STDOUT, env=build_env)
-        check_source(source)
+        check_source(source, source_commit)
         if target in rocm_sdk_tools.TARGETS:
             rocm_sdk_tools.validate_build(output)
         binary = output / ("katago.exe" if os.name == "nt" else "katago")
@@ -226,7 +231,7 @@ def build(source: Path, output: Path, target: str, sdk: list[str], jobs: int,
             [str(binary), "version"], check=True, capture_output=True, text=True, timeout=30,
             env=build_env,
         ).stdout
-        if f"Git revision: {SOURCE_COMMIT}" not in version:
+        if f"Git revision: {source_commit}" not in version:
             raise ValueError("built executable does not report the requested source revision")
         expected_backend = {
             "EIGEN": "Eigen(CPU)", "OPENCL": "OpenCL", "METAL": "Metal",
@@ -299,6 +304,9 @@ def check_release_receipts(receipts: list[dict]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", required=True, type=Path)
+    parser.add_argument("--source-commit", default=SOURCE_COMMIT,
+                        help="Exact integration-test pin; release receipts still require the release catalog pin")
+    parser.add_argument("--source-repository", default=SOURCE_REPOSITORY)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--target", required=True, choices=TARGETS)
     parser.add_argument("--sdk", action="append", default=[])
@@ -310,7 +318,8 @@ def main() -> int:
     if not 1 <= args.jobs <= 64:
         parser.error("jobs must be between 1 and 64")
     result = build(args.source, args.output, args.target, args.sdk, args.jobs,
-                   args.macos_sdk, args.linux_sdk, args.windows_sdk)
+                   args.macos_sdk, args.linux_sdk, args.windows_sdk,
+                   source_commit=args.source_commit, source_repository=args.source_repository)
     print(json.dumps(result, indent=2))
     return 0
 

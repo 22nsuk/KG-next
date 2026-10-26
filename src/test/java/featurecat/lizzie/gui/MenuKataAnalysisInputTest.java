@@ -6,8 +6,11 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.enginegame.EngineGamePlayMode;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
 import featurecat.lizzie.enginegame.EngineGameSnapshotFixtures;
+import featurecat.lizzie.enginegame.GameActivity;
+import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -282,29 +285,97 @@ class MenuKataAnalysisInputTest {
 
   @ParameterizedTest
   @CsvSource({"WRN,true", "WRN,false", "PDA,true", "PDA,false"})
-  void startingAndPlayingGamesShareValidationAndDispatchToBothParticipants(
+  void analysisGamesRejectQueuedToolbarEditsUntilTheirOwnershipEnds(
       KataAnalysisParameter parameter, boolean starting) throws Exception {
     onEdt(
         () -> {
-          RecordingEngine second = recordingEngine();
-          Lizzie.engineManager = allocate(EngineManager.class);
-          Lizzie.engineManager.engineList = new ArrayList<>(List.of(engine, second));
-          Lizzie.engineGame.publishSnapshotForTest(
-              starting
-                  ? EngineGameSnapshotFixtures.starting()
-                  : EngineGameSnapshotFixtures.playingAnalysis());
+          RecordingEngine second = publishGame(EngineGamePlayMode.ANALYSIS, starting);
           JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
-          field(parameter).setText("-");
-          checkbox(parameter).doClick(0);
+
+          // The game can take ownership before the deferred toolbar refresh reaches the EDT.
+          for (String draft : List.of("-", "1.25")) {
+            field(parameter).setText(draft);
+            queuedCheckboxAction(parameter, false);
+            assertUnchanged(before);
+            assertTrue(second.commands.isEmpty());
+            assertEquals(0, second.ponders);
+            assertTrue(checkbox(parameter).isSelected(), "a queued toggle must roll back");
+            assertFalse(checkbox(parameter).isEnabled());
+            assertFalse(field(parameter).isEnabled());
+            assertEquals(draft, field(parameter).getText());
+            assertEquals(
+                Lizzie.resourceBundle.getString("EngineGameParameters.useGamePanel"),
+                field(parameter).getToolTipText());
+          }
+
+          EngineGameSnapshotFixtures.publishIdle();
+          menu.refreshBreadthAdmission();
+          assertTrue(checkbox(parameter).isEnabled());
+          assertTrue(field(parameter).isEnabled());
+          assertUnchanged(before); // Releasing ownership does not replay the blocked draft.
+          field(parameter).setText("1.5");
+          assertEquals(List.of(command(parameter, "1.5")), engine.commands);
+          assertTrue(second.commands.isEmpty(), "ordinary analysis only changes the primary");
+          assertEquals("1.5", appliedText(parameter));
+          assertEquals(1, engine.ponders);
+          assertEquals(parameter == KataAnalysisParameter.WRN, root.isChanged);
+          assertEquals(parameter == KataAnalysisParameter.WRN, current.isChanged);
+        });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void genmoveGamesKeepWrnLockedAndValidatePdaForBothParticipants(boolean starting)
+      throws Exception {
+    onEdt(
+        () -> {
+          RecordingEngine second = publishGame(EngineGamePlayMode.GENMOVE, starting);
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          menu.txtWRN.setText("1.25");
+          queuedCheckboxAction(KataAnalysisParameter.WRN, false);
           assertUnchanged(before);
           assertTrue(second.commands.isEmpty());
-          field(parameter).setText("1.25");
-          assertEquals(List.of(command(parameter, "1.25")), engine.commands);
+          assertTrue(menu.chkWRN.isSelected());
+          assertFalse(menu.chkWRN.isEnabled());
+          assertFalse(menu.txtWRN.isEnabled());
+          assertTrue(menu.chkPDA.isEnabled());
+          assertTrue(menu.txtGfPDA.isEnabled());
+
+          for (String draft : List.of("-", "NaN", "-3.1", "3.1")) {
+            menu.txtGfPDA.setText(draft);
+            menu.chkPDA.doClick(0);
+            assertUnchanged(before);
+            assertTrue(second.commands.isEmpty());
+            assertTrue(menu.chkPDA.isSelected(), "invalid PDA must not apply a default");
+            assertTrue(menu.txtGfPDA.isEnabled(), "invalid PDA remains repairable in genmove");
+            assertEquals(draft, menu.txtGfPDA.getText());
+            assertEquals(
+                AppleStyleSupport.errorFieldBackground(), menu.txtGfPDA.getBackground());
+          }
+
+          menu.txtGfPDA.setText("1.25");
+          assertEquals(List.of(command(KataAnalysisParameter.PDA, "1.25")), engine.commands);
           assertEquals(engine.commands, second.commands);
-          checkbox(parameter).doClick(0);
+          assertEquals("1.25", Lizzie.config.txtKataEnginePDA);
+          assertEquals("1.25", Lizzie.config.uiConfig.getString("txt-kata-engine-pda"));
+          assertEquals(AppleStyleSupport.validFieldBackground(), menu.txtGfPDA.getBackground());
+          menu.chkPDA.doClick(0);
           assertEquals(
-              List.of(command(parameter, "1.25"), command(parameter, "0.0")), engine.commands);
+              List.of(
+                  command(KataAnalysisParameter.PDA, "1.25"),
+                  command(KataAnalysisParameter.PDA, "0.0")),
+              engine.commands);
           assertEquals(engine.commands, second.commands);
+          assertEquals("1.25", Lizzie.config.txtKataEnginePDA, "disable retains the applied value");
+          assertFalse(Lizzie.config.chkKataEnginePDA);
+          assertFalse(menu.chkPDA.isSelected());
+          assertFalse(menu.txtGfPDA.isEnabled());
+          assertEquals(2, engine.ponders);
+          assertEquals(0, second.ponders);
+          assertFalse(root.isChanged);
+          assertFalse(current.isChanged);
+          assertEquals(500, root.getPlayouts());
+          assertEquals(1000, current.getPlayouts());
         });
   }
 
@@ -342,6 +413,31 @@ class MenuKataAnalysisInputTest {
           assertEquals("0.5", Lizzie.config.txtKataEngineWRN);
           assertEquals("99", menu.txtWRN.getText());
         });
+  }
+
+  private RecordingEngine publishGame(EngineGamePlayMode mode, boolean starting) throws Exception {
+    RecordingEngine second = recordingEngine();
+    EngineGameSnapshot.BatchActive playing =
+        (EngineGameSnapshot.BatchActive) EngineGameSnapshotFixtures.playing(mode, RunState.RUNNING);
+    engine.oriEngineCommand = playing.batch().first().commands();
+    engine.oriEnginename = playing.batch().first().name();
+    second.oriEngineCommand = playing.batch().second().commands();
+    second.oriEnginename = playing.batch().second().name();
+    Lizzie.engineManager = new EngineManager(List.of(engine, second));
+    Lizzie.engineGame.publishSnapshotForTest(
+        starting
+            ? new EngineGameSnapshot.BatchActive(
+                playing.batch(), new GameActivity.Starting(playing.view()))
+            : playing);
+    return second;
+  }
+
+  private void queuedCheckboxAction(KataAnalysisParameter parameter, boolean selected) {
+    JFontCheckBox checkbox = checkbox(parameter);
+    checkbox.setSelected(selected);
+    for (var listener : checkbox.getActionListeners()) {
+      listener.actionPerformed(new java.awt.event.ActionEvent(checkbox, 0, "queued"));
+    }
   }
 
   private void configureEnabled(KataAnalysisParameter parameter, boolean enabled) {
