@@ -28,6 +28,8 @@ import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.InputEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -36,6 +38,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -256,6 +259,12 @@ public final class EngineGameParametersAcceptanceIT {
     awaitParameters(0.2, 0.4, 0.5, -0.5);
     assertTrue(edt(() -> Lizzie.engineGame.current().view().firstIsBlack()));
     record(result, "opening-both-participants=PASS");
+    try {
+      activateMainWindow(result.resolveSibling("parameter-input.log"));
+    } catch (Exception | AssertionError failure) {
+      recordInputFailure(result, null, failure);
+      throw failure;
+    }
     capture(Lizzie.frame, result.resolveSibling("engine-game-running-ko.png"));
     CompletableFuture<?> restoration =
         edt(
@@ -440,38 +449,17 @@ public final class EngineGameParametersAcceptanceIT {
   }
 
   private static void activateMainWindow(Path inputLog) throws Exception {
-    boolean focused =
-        edt(
-            () -> {
-              Lizzie.frame.toFront();
-              Lizzie.frame.requestFocus();
-              return Lizzie.frame.isActive() && Lizzie.frame.isFocused();
-            });
-    if (!focused && System.getProperty("os.name", "").startsWith("Windows")) {
-      // A native runner console can cover an isShowing() component. Activate the real frame
-      // through its title bar before looking up the control or measuring its click coordinates.
-      Point titleBar =
-          edt(
-              () -> {
-                assertTrue(Lizzie.frame.isShowing());
-                assertFalse(Lizzie.frame.isUndecorated(), "Native activation needs a title bar");
-                Rectangle bounds = Lizzie.frame.getBounds();
-                var insets = Lizzie.frame.getInsets();
-                assertTrue(insets.top > 0, "Native title-bar insets must be available");
-                Point point =
-                    new Point(bounds.x + bounds.width / 2, bounds.y + insets.top / 2);
-                assertTrue(
-                    Lizzie.frame.getGraphicsConfiguration().getBounds().contains(point),
-                    "Native title-bar click must be on screen: " + point);
-                return point;
-              });
-      record(inputLog, "activate-title-bar=" + titleBar + " " + edt(() -> inputState(null)));
-      Robot robot = new Robot();
-      robot.mouseMove(titleBar.x, titleBar.y);
-      robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
-      robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
-      robot.waitForIdle();
-    }
+    edt(
+        () -> {
+          // Match SgfUiAcceptanceIT's isolated Windows input fixture: the runner console can
+          // cover even an active/focused Swing window. This does not change saved preferences.
+          if (System.getProperty("os.name", "").startsWith("Windows")) {
+            Lizzie.frame.setAlwaysOnTop(true);
+          }
+          Lizzie.frame.toFront();
+          Lizzie.frame.requestFocus();
+          return null;
+        });
     await(
         () -> Lizzie.frame.isActive() && Lizzie.frame.isFocused(),
         10,
@@ -489,6 +477,8 @@ public final class EngineGameParametersAcceptanceIT {
         + Lizzie.frame.isActive()
         + " focused="
         + Lizzie.frame.isFocused()
+        + " alwaysOnTop="
+        + Lizzie.frame.isAlwaysOnTop()
         + " frame="
         + Lizzie.frame.getBounds()
         + " insets="
@@ -532,14 +522,43 @@ public final class EngineGameParametersAcceptanceIT {
   private static void click(AbstractButton button, Path inputLog) throws Exception {
     assertNotNull(button, "Production game control exists");
     await(() -> button.isShowing() && button.isEnabled(), 10, "visible enabled game control");
-    Rectangle bounds = edt(() -> new Rectangle(button.getLocationOnScreen(), button.getSize()));
-    assertTrue(bounds.width > 0 && bounds.height > 0);
-    record(inputLog, "click=" + bounds + " " + edt(() -> inputState(button)));
-    Robot robot = new Robot();
-    robot.mouseMove(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-    robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
-    robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
-    robot.waitForIdle();
+    CountDownLatch pressed = new CountDownLatch(1);
+    AtomicReference<Point> receivedAt = new AtomicReference<>();
+    MouseAdapter listener =
+        new MouseAdapter() {
+          @Override
+          public void mousePressed(MouseEvent event) {
+            if (event.getButton() == MouseEvent.BUTTON1) {
+              receivedAt.set(event.getLocationOnScreen());
+              pressed.countDown();
+            }
+          }
+        };
+    edt(
+        () -> {
+          button.addMouseListener(listener);
+          return null;
+        });
+    try {
+      Rectangle bounds = edt(() -> new Rectangle(button.getLocationOnScreen(), button.getSize()));
+      assertTrue(bounds.width > 0 && bounds.height > 0);
+      record(inputLog, "click=" + bounds + " " + edt(() -> inputState(button)));
+      Robot robot = new Robot();
+      robot.mouseMove(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+      robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+      robot.waitForIdle();
+      assertTrue(
+          pressed.await(5, TimeUnit.SECONDS),
+          "Robot BUTTON1 press must reach the production game control");
+      record(inputLog, "button1-received=" + receivedAt.get() + " " + edt(() -> inputState(button)));
+    } finally {
+      edt(
+          () -> {
+            button.removeMouseListener(listener);
+            return null;
+          });
+    }
   }
 
   private static void capture(Window window, Path destination) throws Exception {
