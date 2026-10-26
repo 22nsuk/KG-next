@@ -7782,8 +7782,8 @@ public class EngineManager {
     if (owner == null) {
       return;
     }
-    // Order the pause intent and both stop commands with every search continuation. A worker
-    // that already passed its pause check must finish issuing analysis before these stops.
+    // Order pause and both stop enqueues with search continuation and clock publication.
+    // Leelaz dispatches commands off this mutation fence; transport must not block cancellation.
     owner.mutationLock.lock();
     try {
       owner.paused = true;
@@ -7797,8 +7797,12 @@ public class EngineManager {
         owner.genmovePauseSettled = owner.pendingGenmoveSide != null;
         return;
       }
-      owner.blackEngine.nameCmd();
-      owner.whiteEngine.nameCmd();
+      // A parameter failure may already have observed a replacement. Pause only the captured
+      // participants; a newer process never inherits commands from the old game's failure path.
+      owner.blackEngine.runIfCurrentLiveEngineIncarnation(owner.blackIncarnation,
+          () -> runEngineGameIoStep(owner, owner.blackEngine::nameCmd));
+      owner.whiteEngine.runIfCurrentLiveEngineIncarnation(owner.whiteIncarnation,
+          () -> runEngineGameIoStep(owner, owner.whiteEngine::nameCmd));
     } finally {
       owner.mutationLock.unlock();
     }
@@ -7831,8 +7835,8 @@ public class EngineManager {
       if (!isCurrentEngineGameTransaction(owner) || owner.phase != EngineGamePhase.ACTIVE
           || owner.paused()) return;
       if (!owner.isGenmove()) {
-        // Unnumbered analysis must stay ordered with Pause's stop commands. The parameter
-        // worker also holds this fence until it has restored the current move's clock.
+        // Enqueue analysis in order with Pause. The parameter worker also holds this short
+        // fence until it has restored the clock; queued output dispatch never inherits it.
         if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
           if (!runEngineGameIoStep(owner, owner.blackEngine::ponder)) return;
           runEngineGameIoStep(owner, owner.whiteEngine::ponder);
@@ -7971,9 +7975,9 @@ public class EngineManager {
   }
 
   /**
-   * Holds one exact game transaction's mutation lock from physical-write classification through
-   * flush. This is the exact-owner counterpart of {@link TransactionlessAnalysisWriteLease}; it
-   * prevents an old parser mutation or successor owner installation from crossing the write.
+   * Fences exact analysis classification and owner publication against parser mutations. The
+   * writer releases this lease before transport I/O; its physical request owns retirement, and
+   * the command queue rejects premature info until the physical writer finishes.
    */
   static final class EngineGameAnalysisWriteLease implements AutoCloseable {
     final EngineGamePrimaryContext context;
@@ -7996,7 +8000,7 @@ public class EngineManager {
     }
   }
 
-  /** Holds an exact transaction mutation fence across one position-changing physical write. */
+  /** Fences exact position-state invalidation before physical output. */
   static final class EngineGameStateWriteLease implements AutoCloseable {
     private final EngineGameOwnerTransaction transaction;
     private boolean closed;
@@ -9954,13 +9958,15 @@ public class EngineManager {
    * Keeps a physically emitted engine-game command attached to its retiring transaction.
    *
    * <p>Terminal cancellation never waits for this lease. Retirement (and therefore admission of a
-   * same-stream successor) waits until the exact response is drained or the binding is retired,
-   * preventing unnumbered output from an old request being attributed to a new game.
+   * same-stream successor) waits for both response settlement and physical writer completion, or
+   * an exact binding abort. An early response cannot hide a still-blocked flush from the watchdog.
    */
   static final class EngineGamePhysicalRequestLease implements AutoCloseable {
     private static final int OPEN = 0;
-    private static final int FORCE_CLAIMED = 1;
-    private static final int CLOSED = 2;
+    private static final int RESPONSE_SETTLED = 1;
+    private static final int OUTPUT_FINISHED = 2;
+    private static final int FORCE_CLAIMED = 4;
+    private static final int CLOSED = 8;
 
     private final EngineGameOwnerTransaction transaction;
     private final Leelaz endpoint;
@@ -9981,7 +9987,7 @@ public class EngineManager {
     }
 
     private boolean isOpen() {
-      return state.get() == OPEN;
+      return state.get() < FORCE_CLAIMED;
     }
 
     private boolean samePhysicalStream(EngineGamePhysicalRequestLease other) {
@@ -9991,7 +9997,12 @@ public class EngineManager {
     }
 
     private boolean claimForce() {
-      return state.compareAndSet(OPEN, FORCE_CLAIMED);
+      int current;
+      do {
+        current = state.get();
+        if (current >= FORCE_CLAIMED) return false;
+      } while (!state.compareAndSet(current, FORCE_CLAIMED));
+      return true;
     }
 
     private void finishForce() {
@@ -10007,8 +10018,23 @@ public class EngineManager {
 
     @Override
     public void close() {
-      if (state.compareAndSet(OPEN, CLOSED)) {
-        finishClose();
+      complete(RESPONSE_SETTLED);
+    }
+
+    void outputFinished() {
+      complete(OUTPUT_FINISHED);
+    }
+
+    private void complete(int completion) {
+      while (true) {
+        int current = state.get();
+        if (current >= FORCE_CLAIMED) return;
+        int next = current | completion;
+        if (next == (RESPONSE_SETTLED | OUTPUT_FINISHED)) next = CLOSED;
+        if (state.compareAndSet(current, next)) {
+          if (next == CLOSED) finishClose();
+          return;
+        }
       }
     }
   }

@@ -7106,7 +7106,8 @@ public class Leelaz {
     ReaderStreamBinding binding = (ReaderStreamBinding) sourceEngineIncarnation;
     if (readerStreamBinding != binding
         || binding.terminated
-        || suppressesGlobalEnginePresentation(binding)) {
+        || suppressesGlobalEnginePresentation(binding)
+        || gameAnalysisOutputInProgress(binding)) {
       return new AnalysisOutputRoute(AnalysisOutputRouteKind.EXACT_RETIRED, null);
     }
     if (isAnalysisOutputSignalLine(line)) {
@@ -7192,18 +7193,29 @@ public class Leelaz {
   }
 
   /**
-   * Acquires the short binding-owner fence used by parser publications. A numbered genmove writer
-   * owns this lock across its physical write while its response carrier is already visible to the
-   * parser. The parser also holds the transaction admission, so waiting here would let terminal
-   * teardown wait on the parser while the parser waits on transport completion. Output observed in
-   * that window is premature and may safely be dropped instead.
+   * Game parsers already own the transaction fence. The queue's physical sender keeps premature
+   * info out of a newly published owner without holding any state lock across transport I/O.
+   * Ordinary control replies (notably Leela's name delimiter) still make progress during writes.
    */
   private boolean acquireAnalysisOutputMutationLock(AnalysisOutputRoute expected) {
-    if (expected.kind == AnalysisOutputRouteKind.GENMOVE_CURRENT) {
+    if (expected.kind == AnalysisOutputRouteKind.EXACT_CURRENT
+        || expected.kind == AnalysisOutputRouteKind.GENMOVE_CURRENT) {
+      if (gameAnalysisOutputInProgress(expected.binding)) return false;
       return expected.binding.analysisOutputMutationLock.tryLock();
     }
     expected.binding.analysisOutputMutationLock.lock();
     return true;
+  }
+
+  /** Both ingress and commit reject a line observed before its exact physical writer finishes. */
+  private boolean gameAnalysisOutputInProgress(ReaderStreamBinding binding) {
+    synchronized (commandQueue()) {
+      QueuedCommand writer = normalCommandBeingSent;
+      return writer != null && writer.engineGameTransaction() != null
+          && (shouldPublishAnalysisOutputOwnership(writer, binding)
+              || startsNewAnalysisInfoPayload(writer.command)
+              || analysisStateMutation(writer.command) != AnalysisStateMutation.NONE);
+    }
   }
 
   /**
@@ -12063,6 +12075,7 @@ public class Leelaz {
       calculateModifyNumber();
     }
     if (!targetQueue.isEmpty()
+        && !targetQueue.peekLast().isEngineGameCommand()
         && shouldCoalesceQueuedCommand(targetQueue.peekLast().command, noLeelaz2Coalescing)
         && !(targetQueue.peekLast().analysisStateLineage() != null
             && targetQueue.peekLast().analysisStateLineage().pendingRestoreOwners.get() > 0
@@ -13206,6 +13219,14 @@ public class Leelaz {
                     || lastQueuedCommand.startsWith("analyze")
                     || lastQueuedCommand.startsWith("heatmap")))) return;
       }
+      EngineManager.EngineGameOwnerTransaction game = queueHead.engineGameTransaction();
+      if (game != null && game.mutationLock.isHeldByCurrentThread()) {
+        // State/clock publication may enqueue several ordered commands under the game fence.
+        // The existing dispatcher owns delivery and its permit owns asynchronous failures.
+        // Never let either a direct send or response-driven drain inherit that caller's lock.
+        requestCommandDispatchOffEventThread();
+        return;
+      }
       queuedCommand = queueHead;
       if (targetQueue.peekFirst() == queueHead) targetQueue.removeFirst();
       else targetQueue.remove(queueHead);
@@ -13228,10 +13249,11 @@ public class Leelaz {
       synchronized (commandQueue()) {
         if (normalCommandBeingSent == queuedCommand) {
           normalCommandBeingSent = null;
+          normalCommandSendInProgress = false;
+          commandQueue().notifyAll();
         }
-        normalCommandSendInProgress = false;
-        commandQueue().notifyAll();
       }
+      sendFailure = runEngineCleanupStep(sendFailure, queuedCommand::publishOutputFinished);
     }
     if (sendFailure != null) {
       RuntimeException settlementFailure =
@@ -13435,6 +13457,12 @@ public class Leelaz {
             finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
             return null;
           }
+          if (analysisOutputTransaction != null) {
+            // Exact game output is now admitted and the command queue keeps later writes behind
+            // it. Do not make pause or terminal timer cancellation wait for this transport.
+            leela0110PonderPhysicalWriteLocked = false;
+            leela0110PonderPhysicalWriteLock.unlock();
+          }
         }
         try {
           if (publishesAnalysisOutputOwnership
@@ -13448,74 +13476,92 @@ public class Leelaz {
             analysisOutputBindingLocked = true;
           }
           try {
-            synchronized (currentOutputStream) {
-              if (analysisOutputBindingLocked
-                  && (readerStreamBinding != outputBinding
-                      || outputBinding.terminated
-                      || outputBinding.readerShutdownRequested
-                      || outputBinding.output != currentOutputStream
-                      || outputStream != currentOutputStream)) {
-                throw new AnalysisOutputAdmissionFailure(
-                    "analysis/state output lost its live reader before physical output");
+            if (analysisOutputBindingLocked
+                && (readerStreamBinding != outputBinding
+                    || outputBinding.terminated
+                    || outputBinding.readerShutdownRequested
+                    || outputBinding.output != currentOutputStream
+                    || outputStream != currentOutputStream)) {
+              throw new AnalysisOutputAdmissionFailure(
+                  "analysis/state output lost its live reader before physical output");
+            }
+            if (stateMutation != AnalysisStateMutation.NONE) {
+              // Retire and clear/advance the old payload before the first state-command byte is
+              // observable. The manager lease prevents an already-admitted parser mutation from
+              // crossing this boundary, and caller-side cleanup cannot retire a queued successor.
+              bindAnalysisStateLineageAtPhysicalWrite(queuedCommand, outputBinding);
+              applyAnalysisStateMutation(stateMutation);
+              if (exactStateWrite != null) {
+                // Exact terminal cancellation must never wait for a blocked transport flush.
+                // Release binding before transaction: otherwise a parser can acquire the
+                // transaction fence, block behind this binding for the duration of flush, and
+                // indirectly make terminal settlement wait for the transport. Generation has
+                // already retired the old owner, so neither fence is needed after this point.
+                analysisOutputBindingLocked = false;
+                outputBinding.analysisOutputMutationLock.unlock();
+                exactStateWrite.close();
+                exactStateWrite = null;
               }
-              if (stateMutation != AnalysisStateMutation.NONE) {
-                // Retire and clear/advance the old payload before the first state-command byte is
-                // observable. The manager lease prevents an already-admitted parser mutation from
-                // crossing this boundary, and caller-side cleanup cannot retire a queued successor.
-                bindAnalysisStateLineageAtPhysicalWrite(queuedCommand, outputBinding);
-                applyAnalysisStateMutation(stateMutation);
-                if (exactStateWrite != null) {
-                  // Exact terminal cancellation must never wait for a blocked transport flush.
-                  // Release binding before transaction: otherwise a parser can acquire the
-                  // transaction fence, block behind this binding for the duration of flush, and
-                  // indirectly make terminal settlement wait for the transport. Generation has
-                  // already retired the old owner, so neither fence is needed after this point.
-                  analysisOutputBindingLocked = false;
-                  outputBinding.analysisOutputMutationLock.unlock();
-                  exactStateWrite.close();
-                  exactStateWrite = null;
-                }
+            }
+            if (publishesAnalysisOutputOwnership) {
+              analysisOutputPublication =
+                  publishAnalysisOutputOwnershipAtPhysicalWrite(
+                      queuedCommand,
+                      outputBinding,
+                      transactionlessAnalysisWrite,
+                      exactAnalysisOutputContext);
+            }
+            if (queuedCommand.onResponse instanceof RuntimeSearchThreadsResponse) {
+              RuntimeSearchThreadsResponse runtime =
+                  (RuntimeSearchThreadsResponse) queuedCommand.onResponse;
+              boolean admitted =
+                  Lizzie.runIfPrimaryEngine(
+                      this,
+                      runtime.target.primaryGeneration,
+                      () -> {
+                        if (!isCurrentLiveEngineIncarnation(runtime.target.binding)
+                            || outputBinding != runtime.target.binding
+                            || outputBinding.output != currentOutputStream
+                            || outputStream != currentOutputStream
+                            || runtime.result.isDone()) {
+                          throw new IllegalStateException("Runtime thread command lost its reader binding");
+                        }
+                        synchronized (outputBinding) {
+                          runtime.writeSequence = ++outputBinding.runtimeThreadWriteSequence;
+                        }
+                      });
+              if (!admitted) {
+                throw new IllegalStateException("Runtime thread command lost foreground selection");
               }
-              if (publishesAnalysisOutputOwnership) {
-                analysisOutputPublication =
-                    publishAnalysisOutputOwnershipAtPhysicalWrite(
-                        queuedCommand,
-                        outputBinding,
-                        transactionlessAnalysisWrite,
-                        exactAnalysisOutputContext);
-              }
-              if (queuedCommand.onResponse instanceof RuntimeSearchThreadsResponse) {
-                RuntimeSearchThreadsResponse runtime =
-                    (RuntimeSearchThreadsResponse) queuedCommand.onResponse;
-                boolean admitted =
-                    Lizzie.runIfPrimaryEngine(
-                        this,
-                        runtime.target.primaryGeneration,
-                        () -> {
-                          if (!isCurrentLiveEngineIncarnation(runtime.target.binding)
-                              || outputBinding != runtime.target.binding
-                              || outputBinding.output != currentOutputStream
-                              || outputStream != currentOutputStream
-                              || runtime.result.isDone()) {
-                            throw new IllegalStateException("Runtime thread command lost its reader binding");
-                          }
-                          synchronized (outputBinding) {
-                            runtime.writeSequence = ++outputBinding.runtimeThreadWriteSequence;
-                          }
-                        });
-                if (!admitted) {
-                  throw new IllegalStateException("Runtime thread command lost foreground selection");
-                }
-              }
-              // Selection admission is short; transport IO must not hold the global primary lock.
-              // normalCommandSendInProgress keeps this exact reader/output owned until completion.
-              currentOutputStream.write((commandLine + "\n").getBytes());
-              currentOutputStream.flush();
+            }
+            if (analysisOutputTransaction != null) {
+              // Publish the complete new payload before releasing admission. Until this exact
+              // writer leaves the queue, parser admission drops premature info. No transaction
+              // or binding state lock may make cancellation/endpoint retirement wait for I/O.
+              if (startsAnalysisInfoPayload) resetAnalysisInfoPayload(false);
               if (isOrdinaryPositionAnalysisCommand(command)
                   && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
                 ordinaryFocusBaseCommand = command;
               }
-              if (startsAnalysisInfoPayload) {
+              if (analysisOutputBindingLocked) {
+                analysisOutputBindingLocked = false;
+                outputBinding.analysisOutputMutationLock.unlock();
+              }
+              if (exactAnalysisWrite != null) {
+                exactAnalysisWrite.close();
+                exactAnalysisWrite = null;
+              }
+            }
+            // Selection admission is short; transport IO must not hold the global primary lock.
+            // normalCommandSendInProgress keeps this exact reader/output owned until completion.
+            synchronized (currentOutputStream) {
+              currentOutputStream.write((commandLine + "\n").getBytes());
+              currentOutputStream.flush();
+              if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
+                  && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
+                ordinaryFocusBaseCommand = command;
+              }
+              if (startsAnalysisInfoPayload && analysisOutputTransaction == null) {
                 // The binding fence keeps even an immediate reader line from committing before
                 // the new physical command invalidates the prior payload generation.
                 resetAnalysisInfoPayload(false);
@@ -17085,7 +17131,7 @@ public class Leelaz {
       if (lease != null && installed.get()) {
         physicalLease.set(lease);
         if (state.get() == SETTLED) {
-          EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.getAndSet(null);
+          EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.get();
           if (retired != null) {
             retired.close();
           }
@@ -17095,6 +17141,7 @@ public class Leelaz {
       }
       if (lease != null) {
         lease.close();
+        lease.outputFinished();
       }
       state.set(SETTLED);
       return false;
@@ -17127,10 +17174,15 @@ public class Leelaz {
     private void settle() {
       state.set(SETTLED);
       owner.activeEngineGameResponseHandler.compareAndSet(this, null);
-      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.getAndSet(null);
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
       if (lease != null) {
         lease.close();
       }
+    }
+
+    private void outputFinished() {
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
+      if (lease != null) lease.outputFinished();
     }
 
     private void markSettledForBindingRetirement() {
@@ -18841,7 +18893,7 @@ public class Leelaz {
         Throwable physicalFailure, RuntimeException requestFailure) {
       try {
         if (engineGamePermit != null) {
-          engineGamePermit.onRequestFailed(requestFailure);
+          engineGamePermit.onPhysicalWriteFailure(physicalFailure, requestFailure);
         }
       } finally {
         if (settled.compareAndSet(false, true)) {
@@ -18856,6 +18908,11 @@ public class Leelaz {
       if (engineGamePermit != null) {
         engineGamePermit.onResponseSettled();
       }
+    }
+
+    @Override
+    public void onOutputFinished() {
+      if (engineGamePermit != null) engineGamePermit.onOutputFinished();
     }
 
     private EngineManager.EngineGameOwnerTransaction engineGameTransaction() {
@@ -18896,6 +18953,9 @@ public class Leelaz {
     void onWriteClaimed();
 
     default void onWriteCompleted() {}
+
+    /** The physical writer has returned, whether delivery succeeded, failed, or was rejected. */
+    default void onOutputFinished() {}
 
     void onRequestFailed(RuntimeException failure);
 
@@ -18990,7 +19050,7 @@ public class Leelaz {
       }
       physicalLease.set(lease);
       if (state.get() == SETTLED) {
-        EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.getAndSet(null);
+        EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.get();
         if (retired != null) {
           retired.close();
         }
@@ -19004,6 +19064,18 @@ public class Leelaz {
       if (settle()) {
         EngineManager.failEngineGameTransaction(turn == null ? null : turn.transaction, failure);
       }
+    }
+
+    @Override
+    public void onPhysicalWriteFailure(Throwable physicalFailure, RuntimeException failure) {
+      settle();
+      EngineManager.failEngineGameTransaction(turn == null ? null : turn.transaction, failure);
+    }
+
+    @Override
+    public void onOutputFinished() {
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
+      if (lease != null) lease.outputFinished();
     }
 
     @Override
@@ -19024,7 +19096,7 @@ public class Leelaz {
 
     private boolean settle() {
       int previous = state.getAndSet(SETTLED);
-      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.getAndSet(null);
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
       if (lease != null) {
         lease.close();
       }
@@ -19103,7 +19175,7 @@ public class Leelaz {
       }
       physicalLease.set(lease);
       if (state.get() == SETTLED) {
-        EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.getAndSet(null);
+        EngineManager.EngineGamePhysicalRequestLease retired = physicalLease.get();
         if (retired != null) {
           retired.close();
         }
@@ -19117,6 +19189,22 @@ public class Leelaz {
       if (settle() && failurePolicy != FailurePolicy.CALLER) {
         EngineManager.failEngineGameTransaction(transaction, failure);
       }
+    }
+
+    @Override
+    public void onPhysicalWriteFailure(Throwable physicalFailure, RuntimeException failure) {
+      // A successful response may precede a failed flush. It cannot turn delivery failure into
+      // success merely because logical response settlement has already run.
+      settle();
+      if (failurePolicy != FailurePolicy.CALLER) {
+        EngineManager.failEngineGameTransaction(transaction, failure);
+      }
+    }
+
+    @Override
+    public void onOutputFinished() {
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
+      if (lease != null) lease.outputFinished();
     }
 
     @Override
@@ -19137,7 +19225,7 @@ public class Leelaz {
 
     private boolean settle() {
       int previous = state.getAndSet(SETTLED);
-      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.getAndSet(null);
+      EngineManager.EngineGamePhysicalRequestLease lease = physicalLease.get();
       if (lease != null) {
         lease.close();
       }
@@ -19555,6 +19643,13 @@ public class Leelaz {
       if (settlement != null) {
         settlement.onWriteCompleted();
       }
+    }
+
+    private void publishOutputFinished() {
+      if (onResponse instanceof EngineGameResponseHandler) {
+        ((EngineGameResponseHandler) onResponse).outputFinished();
+      }
+      if (settlement != null) settlement.onOutputFinished();
     }
 
     private void publishSettlementFailure(RuntimeException failure) {

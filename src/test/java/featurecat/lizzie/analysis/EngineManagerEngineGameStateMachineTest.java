@@ -381,7 +381,7 @@ class EngineManagerEngineGameStateMachineTest {
         || !white.commandText().contains("komi " + target)) && System.nanoTime() < deadline) {
       for (StateMachineLeelaz engine : List.of(black, white)) {
         for (String line : engine.commandText().split("\\R")) {
-          if (line.matches("\\d+ name")) {
+          if (line.matches("\\d+ (name|stop)")) {
             engine.processCommandResponseLineForTest("=" + line.substring(0, line.indexOf(' ')));
           }
         }
@@ -780,6 +780,8 @@ class EngineManagerEngineGameStateMachineTest {
       assertFalse(pause.isAlive());
       assertFalse(manualResume.isAlive());
       assertNull(failure.get());
+      awaitCondition(() -> black.commandText().substring(blackStart).stripTrailing().endsWith("stop")
+          && white.commandText().substring(whiteStart).stripTrailing().endsWith("stop"));
       awaitOperationsReleased(owner);
       assertTrue(owner.paused());
       assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
@@ -806,6 +808,7 @@ class EngineManagerEngineGameStateMachineTest {
       white.startPonderTime = white.pkMoveStartTime = 5678L;
       CountDownLatch resumed = new CountDownLatch(1);
       CountDownLatch releaseResume = new CountDownLatch(1);
+      CountDownLatch readerReady = new CountDownLatch(1);
       black.afterPonder = () -> {
         resumed.countDown();
         await(releaseResume);
@@ -813,10 +816,17 @@ class EngineManagerEngineGameStateMachineTest {
       AtomicReference<Throwable> readerFailure = new AtomicReference<>();
       Thread reader = new Thread(() -> {
         try {
-          black.parseAnalysisLineForTest(kataAnalysisInfo("D4"));
-          black.notifyAutoPkForEngineGameTest(
-              true, EngineManager.captureEngineGamePrimaryContext(
-                  black, black.currentEngineIncarnation()));
+          readerReady.countDown();
+          awaitCondition(() -> black.commandText().contains("kata-analyze"));
+          // Streaming info can race the end of flush and be dropped as premature. The next
+          // line must use the restored current-move budget and leave the next move's clock intact.
+          awaitCondition(() -> {
+            black.parseAnalysisLineForTest(kataAnalysisInfo("D4"));
+            black.notifyAutoPkForEngineGameTest(
+                true, EngineManager.captureEngineGamePrimaryContext(
+                    black, black.currentEngineIncarnation()));
+            return Lizzie.board.getHistory().getMoveNumber() == 1;
+          });
         } catch (Throwable failure) {
           readerFailure.set(failure);
         }
@@ -826,9 +836,11 @@ class EngineManagerEngineGameStateMachineTest {
             owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null), () -> {});
         assertTrue(resumed.await(2, TimeUnit.SECONDS));
         reader.start();
-        // Force the response into the window after ponder but before the old budget is restored.
-        // The fixed implementation fences the reader; the old one completes the move here.
-        awaitCondition(() -> owner.mutationLock.hasQueuedThread(reader) || !reader.isAlive());
+        assertTrue(readerReady.await(2, TimeUnit.SECONDS));
+        // Exercise the earliest possible reply: either delivery waits for publication, or an
+        // already emitted request's parser must wait for the same clock fence.
+        awaitCondition(() -> !black.commandText().contains("kata-analyze")
+            || owner.mutationLock.hasQueuedThread(reader) || !reader.isAlive());
       } finally {
         releaseResume.countDown();
         reader.join(2000L);
@@ -1382,6 +1394,7 @@ class EngineManagerEngineGameStateMachineTest {
         EngineManager.resetEngineGameTransactionStateForTest();
       } else {
         EngineManager.pauseEngineGame(owner);
+        awaitOperationsReleased(owner);
       }
       AtomicBoolean replaced = new AtomicBoolean();
       white.beforeLiveIncarnationAction =
@@ -1415,7 +1428,8 @@ class EngineManagerEngineGameStateMachineTest {
       assertEquals(0.2, white.wrn, "the replacement keeps its own Java-side breadth");
       assertEquals(-0.25, white.pda, "the replacement keeps its own Java-side aggressiveness");
       assertTrue(white.isLoaded(), "failure cleanup must never terminate the replacement");
-      assertFalse(white.commandText().contains("kata-set-param"), white.commandText());
+      assertTrue(white.commandText().isEmpty(),
+          "the replacement must receive neither old parameters nor the old game's pause commands");
       assertNotNull(failure);
       assertTrue(
           failure.contains(Lizzie.resourceBundle.getString("EngineGameParameters.processChanged")),
@@ -3624,6 +3638,255 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @ParameterizedTest
+  @CsvSource({
+      "pause,false,false", "pause,true,false", "pause,false,true", "pause,true,true",
+      "manual,false,false", "manual,true,false", "manual,false,true", "manual,true,true",
+      "komi,false,false", "komi,true,false", "komi,false,true", "komi,true,true",
+      "parameters,false,false", "parameters,true,false", "parameters,false,true", "parameters,true,true"
+  })
+  void terminalCanCancelBlockedAnalysisCommands(
+      String source, boolean whiteParticipant, boolean blockWrite) throws Exception {
+    String command = source.equals("pause") ? "stop" : "kata-analyze";
+    BlockingCommandFlushOutput output = new BlockingCommandFlushOutput(command, blockWrite);
+    StateMachineLeelaz blockedEngine = whiteParticipant ? white : black;
+    blockedEngine.bindLiveRuntime(output);
+    WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
+    EngineGameParameterSession session = breadthSession(0.0, 0.0);
+    Lizzie.config.enginePkPonder = true;
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      if (source.equals("manual")) {
+        EngineManager.pauseEngineGame(owner);
+        awaitOperationsReleased(owner);
+      }
+      output.beforeBlockedCommand = kata::hold;
+      output.armed = true;
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Thread caller = new Thread(() -> {
+        try {
+          switch (source) {
+            case "pause" -> EngineManager.pauseEngineGame(owner);
+            case "manual" -> EngineManager.resumeEngineGame(owner);
+            case "komi" -> EngineManager.reviseEngineGameKomi(owner, 8.5, () -> {});
+            case "parameters" -> EngineGameParameterSession.revise(owner,
+                featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null), () -> {});
+            default -> throw new AssertionError(source);
+          }
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "blocked-analysis-command");
+      Thread terminal = new Thread(() -> {
+        try {
+          manager.clearEngineGame();
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "cancel-blocked-analysis-command");
+      Thread parser = new Thread(() -> {
+        try {
+          blockedEngine.parseAnalysisLineForTest(kataAnalysisInfo());
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "info-during-blocked-analysis-command");
+      Thread unavailable = new Thread(() -> {
+        try {
+          assertTrue(blockedEngine.markUnavailableIfCurrentIncarnation(
+              whiteParticipant ? owner.whiteIncarnation : owner.blackIncarnation));
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "state-publication-during-blocked-analysis-command");
+      try {
+        caller.start();
+        assertTrue(output.flushEntered.await(2, TimeUnit.SECONDS));
+        parser.start();
+        parser.join(1000L);
+        unavailable.start();
+        unavailable.join(1000L);
+        assertFalse(unavailable.isAlive(), "endpoint state must not wait for physical output");
+        terminal.start();
+        terminal.join(1000L);
+        assertFalse(terminal.isAlive(), "terminal must not wait for " + source + " transport");
+        assertFalse(parser.isAlive(), "parser must not retain the terminal fence behind transport");
+        assertTrue(manager.hasPendingWatchdog(), "the physical request must remain cancellable");
+        assertEquals(EngineManager.EngineGamePhase.CANCELLED, owner.phase());
+        manager.runWatchdog();
+        assertEquals(1, blockedEngine.forceQuitAttempts.get());
+        assertTrue(blockedEngine.getBestMoves().isEmpty(), "premature info must not be published");
+      } finally {
+        output.releaseFlush.countDown();
+        kata.release();
+        caller.join(2000L);
+        terminal.join(2000L);
+        parser.join(2000L);
+        unavailable.join(2000L);
+      }
+      assertFalse(caller.isAlive());
+      assertNull(failure.get());
+      awaitOperationsReleased(owner);
+      assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"startup,false", "startup,true", "postMove,false", "postMove,true",
+      "genmove,false", "genmove,true"})
+  void earlyResponseCannotRetireTheWriterOrHideItsFailure(String source, boolean failFlush)
+      throws Exception {
+    boolean genmove = source.equals("genmove");
+    BlockingCommandFlushOutput output =
+        new BlockingCommandFlushOutput(genmove ? "kata-genmove_analyze" : "stop");
+    black.bindLiveRuntime(output);
+    black.isKatago = true;
+    WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction owner =
+        activeTransaction(manager, EngineGamePlans.harness(0, 1, genmove), black, 0);
+    EngineManager.EngineGamePostMoveToken turn = source.equals("postMove")
+        ? EngineManager.commitEngineGameMove(EngineManager.captureEngineGameAnalysisMoveContext(
+            EngineManager.captureEngineGamePrimaryContext(black, black.currentEngineIncarnation())),
+            3, 3, black, 0) : null;
+    AtomicReference<Throwable> senderFailure = new AtomicReference<>();
+    Thread sender = new Thread(() -> {
+      try {
+        switch (source) {
+          case "startup" -> black.sendEngineGameStartupCommandForTest("stop", owner);
+          case "postMove" -> black.nameCmdfornoponder(turn);
+          case "genmove" -> black.genmoveForPk("B", owner);
+          default -> throw new AssertionError(source);
+        }
+      } catch (Throwable failure) {
+        senderFailure.set(failure);
+      }
+    }, "response-before-flush-return");
+    output.armed = true;
+    output.failAfterRelease = failFlush;
+    try {
+      sender.start();
+      assertTrue(output.flushEntered.await(2, TimeUnit.SECONDS));
+      int id = firstCommandId(output.toString());
+      if (genmove) black.parseEngineGameLineForTest("?" + id + " controlled rejection");
+      else black.processCommandResponseLineForTest("=" + id);
+      assertEquals(1, owner.openPhysicalRequestsForTest(), "response does not finish the writer");
+      assertFalse(owner.retirementFinishedForTest());
+      if (!failFlush) {
+        manager.clearEngineGame();
+        assertTrue(manager.hasPendingWatchdog());
+        manager.runWatchdog();
+        assertEquals(1, black.forceQuitAttempts.get());
+      }
+    } finally {
+      output.releaseFlush.countDown();
+      sender.join(2000L);
+    }
+    assertFalse(sender.isAlive());
+    if (failFlush) {
+      awaitCondition(() -> owner.phase() == EngineManager.EngineGamePhase.FAILED);
+    } else {
+      assertNull(senderFailure.get());
+    }
+    settleEngineGameCommands(white);
+    awaitOperationsReleased(owner);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void exactLeelaTimerAndDispatchedAnalysisRemainCancellable(boolean leelaTimer) throws Exception {
+    String command = leelaTimer ? "time_left b 0 0" : "kata-analyze B 30";
+    BlockingCommandFlushOutput output = new BlockingCommandFlushOutput(command);
+    black.bindLiveRuntime(output);
+    black.isLeela0110 = leelaTimer;
+    black.isKatago = !leelaTimer;
+    WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction owner = beginPreparing(manager, gameInfo());
+    assertTrue(EngineManager.transitionEngineGameToDispatched(owner));
+    assertTrue(EngineManager.bindEngineGameStartupIncarnation(owner, black, black.currentEngineIncarnation()));
+    assertTrue(EngineManager.bindEngineGameStartupIncarnation(owner, white, white.currentEngineIncarnation()));
+    if (leelaTimer) assertTrue(black.installLeela0110PonderStateForTest(owner));
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    Thread sender = new Thread(() -> {
+      try {
+        if (leelaTimer) black.sendLeela0110PonderCommandForTest(command, owner);
+        else black.sendEngineGameStartupCommandForTest(command, owner);
+      } catch (Throwable thrown) {
+        failure.compareAndSet(null, thrown);
+      }
+    }, "blocked-starting-analysis");
+    Thread terminal = new Thread(() -> {
+      try {
+        manager.clearEngineGame();
+      } catch (Throwable thrown) {
+        failure.compareAndSet(null, thrown);
+      }
+    }, "cancel-blocked-starting-analysis");
+    output.armed = true;
+    try {
+      sender.start();
+      assertTrue(output.flushEntered.await(2, TimeUnit.SECONDS));
+      black.parseAnalysisLineForTest(kataAnalysisInfo());
+      assertEquals(0, black.exactAnalysisActions.get());
+      assertEquals(0, black.ordinaryAnalysisActions.get());
+      terminal.start();
+      terminal.join(1000L);
+      assertFalse(terminal.isAlive());
+      assertTrue(manager.hasPendingWatchdog());
+      manager.runWatchdog();
+      assertEquals(1, black.forceQuitAttempts.get());
+      assertFalse(black.hasLeela0110PonderStateForTest(owner));
+    } finally {
+      output.releaseFlush.countDown();
+      sender.join(2000L);
+      terminal.join(2000L);
+    }
+    assertNull(failure.get());
+    awaitOperationsReleased(owner);
+  }
+
+  @Test
+  void terminalDoesNotWaitForAnalysisWriterWaitingOnTheOutputMonitor() throws Exception {
+    java.io.BufferedOutputStream output = Leelaz.createCommandOutputStream(new ByteArrayOutputStream());
+    black.installCommandOutputForTest(output);
+    black.isKatago = true;
+    WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction owner = activeTransaction(manager, gameInfo(), black, 0);
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    Thread sender = new Thread(() -> {
+      try {
+        black.sendEngineGameStartupCommandForTest("kata-analyze B 30", owner);
+      } catch (Throwable thrown) {
+        failure.compareAndSet(null, thrown);
+      }
+    }, "analysis-waiting-for-output-monitor");
+    Thread terminal = new Thread(() -> {
+      try {
+        manager.clearEngineGame();
+      } catch (Throwable thrown) {
+        failure.compareAndSet(null, thrown);
+      }
+    }, "cancel-analysis-waiting-for-output-monitor");
+    try {
+      synchronized (output) {
+        sender.start();
+        awaitThreadState(sender, Thread.State.BLOCKED);
+        terminal.start();
+        terminal.join(1000L);
+        assertFalse(terminal.isAlive(), "waiting for the transport monitor is also blocking I/O");
+        assertTrue(manager.hasPendingWatchdog());
+        manager.runWatchdog();
+      }
+    } finally {
+      sender.join(2000L);
+      terminal.join(2000L);
+    }
+    assertNull(failure.get());
+    assertFalse(sender.isAlive());
+    awaitOperationsReleased(owner);
+  }
+
+  @ParameterizedTest
   @CsvSource({"manual,stop", "manual,kata-genmove_analyze", "manual,kata-analyze",
       "komi,stop", "komi,kata-genmove_analyze", "komi,kata-analyze"})
   void terminalCanCancelEveryBlockedGenmoveResumeCommand(String source, String command)
@@ -5525,8 +5788,10 @@ class EngineManagerEngineGameStateMachineTest {
     assertEquals("EXACT_RETIRED", black.analysisOutputRouteForTest());
   }
 
-  @Test
-  void exactOwnerMutationWaitsUntilPhysicalWriteAndFlushComplete() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void exactAnalysisDropsPrematureInfoUntilPhysicalWriteAndFlushComplete(boolean delayedParser)
+      throws Exception {
     BlockingFirstWriteOutput output = new BlockingFirstWriteOutput();
     black.bindLiveRuntime(output);
     ImmediateUiEngineManager manager = installManager();
@@ -5549,6 +5814,7 @@ class EngineManagerEngineGameStateMachineTest {
             "exact-analysis-physical-owner");
     writer.start();
     assertTrue(output.writeEntered.await(2, TimeUnit.SECONDS));
+    if (delayedParser) black.blockAfterAnalysisOutputRouteCapture();
     Thread parser =
         new Thread(
             () -> {
@@ -5564,12 +5830,22 @@ class EngineManagerEngineGameStateMachineTest {
     parser.start();
 
     try {
-      assertFalse(
-          parserFinished.await(100, TimeUnit.MILLISECONDS),
-          "the parser must not mutate while the exact owner's bytes are still unflushed");
+      if (delayedParser) {
+        assertTrue(black.analysisRouteCaptured.await(2, TimeUnit.SECONDS));
+        output.releaseWrite.countDown();
+        writer.join(2000L);
+        assertFalse(writer.isAlive());
+        black.releaseAnalysisRoute.countDown();
+      }
+      assertTrue(
+          parserFinished.await(2, TimeUnit.SECONDS),
+          "premature info must be dropped without blocking terminal cancellation");
       assertEquals(0, black.exactAnalysisActions.get());
+      assertTrue(black.getBestMoves().isEmpty(),
+          "the premature line must not populate the new payload");
     } finally {
       output.releaseWrite.countDown();
+      if (delayedParser) black.releaseAnalysisRoute.countDown();
     }
     writer.join(2_000L);
     parser.join(2_000L);
@@ -7865,21 +8141,48 @@ class EngineManagerEngineGameStateMachineTest {
   /** Leaves a real command's flush blocked even when terminal cancellation interrupts its worker. */
   private static final class BlockingCommandFlushOutput extends ByteArrayOutputStream {
     private final String command;
+    private final boolean blockWrite;
     private final CountDownLatch flushEntered = new CountDownLatch(1);
     private final CountDownLatch releaseFlush = new CountDownLatch(1);
     private final AtomicBoolean blocked = new AtomicBoolean();
     private volatile boolean armed;
+    private volatile Runnable beforeBlockedCommand;
+    private volatile boolean failAfterRelease;
 
     private BlockingCommandFlushOutput(String command) {
+      this(command, false);
+    }
+
+    private BlockingCommandFlushOutput(String command, boolean blockWrite) {
       this.command = command;
+      this.blockWrite = blockWrite;
+    }
+
+    private boolean matches(String text) {
+      String last = text.stripTrailing();
+      last = last.substring(last.lastIndexOf('\n') + 1).replaceFirst("^\\d+\\s+", "");
+      return armed && (last.equals(command) || last.startsWith(command + " "));
     }
 
     @Override
-    public void flush() {
-      String last = toString().stripTrailing();
-      last = last.substring(last.lastIndexOf('\n') + 1).replaceFirst("^\\d+\\s+", "");
-      if (!armed || !(last.equals(command) || last.startsWith(command + " "))
-          || !blocked.compareAndSet(false, true)) return;
+    public void write(int value) {
+      if (matches(toString() + (char) value)) {
+        Runnable before = beforeBlockedCommand;
+        beforeBlockedCommand = null;
+        if (before != null) before.run();
+        if (blockWrite && value == '\n') block();
+      }
+      super.write(value);
+    }
+
+    @Override
+    public void flush() throws IOException {
+      if (!blockWrite && matches(toString())) block();
+      if (failAfterRelease && blocked.get()) throw new IOException("controlled late flush failure");
+    }
+
+    private void block() {
+      if (!blocked.compareAndSet(false, true)) return;
       flushEntered.countDown();
       boolean interrupted = false;
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
