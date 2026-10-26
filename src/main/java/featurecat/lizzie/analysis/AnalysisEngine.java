@@ -24,6 +24,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRuntimeException;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -52,7 +53,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -555,7 +555,7 @@ public class AnalysisEngine {
         commands,
         engineCommand,
         message,
-        !useJavaSSH && !useRemoteCompute && OS.isWindows(),
+        !useJavaSSH && !useRemoteCompute && OsPlatform.isWindows(),
         false,
         false,
         true,

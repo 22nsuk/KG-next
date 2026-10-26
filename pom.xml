@@ -260,13 +260,6 @@
 			<version>2.20.0</version>
 		</dependency>
 
-		<!-- https://mvnrepository.com/artifact/org.swinglabs.swingx/swingx-core -->
-		<dependency>
-			<groupId>org.swinglabs.swingx</groupId>
-			<artifactId>swingx-core</artifactId>
-			<version>1.6.4</version>
-		</dependency>
-
 		<!-- https://code.google.com/archive/p/juniversalchardet -->
 		<dependency>
 			<groupId>com.googlecode.juniversalchardet</groupId>

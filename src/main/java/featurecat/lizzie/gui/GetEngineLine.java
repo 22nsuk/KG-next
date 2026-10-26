@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.util.CommandLaunchHelper;
+import featurecat.lizzie.util.OsPlatform;
 import java.awt.Component;
 import java.io.BufferedInputStream;
 import java.io.File;
@@ -15,7 +16,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
 import javax.swing.filechooser.FileNameExtensionFilter;
-import org.jdesktop.swingx.util.OS;
 
 public class GetEngineLine {
   public String enginePath = "";
@@ -89,7 +89,7 @@ public class GetEngineLine {
     File weightFile = null;
     File configFile = null;
     JFileChooser chooser = new JFileChooser(".");
-    if (OS.isWindows()) {
+    if (OsPlatform.isWindows()) {
       FileNameExtensionFilter filter =
           new FileNameExtensionFilter(
               isIkatago ? "ikatago" : resourceBundle.getString("LizzieConfig.title.engine"),

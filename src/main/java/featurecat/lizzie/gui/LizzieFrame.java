@@ -60,6 +60,7 @@ import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.GraphicsDriverDiagnostics;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.*;
@@ -123,7 +124,6 @@ import javax.swing.table.TableModel;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -2846,7 +2846,7 @@ public class LizzieFrame extends JFrame {
   }
 
   protected boolean isNativeBoardSyncSupported() {
-    return OS.isWindows();
+    return OsPlatform.isWindows();
   }
 
   protected boolean isNativeReadBoardAvailable() {
@@ -22060,7 +22060,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private void openInVisibleFrame() {
-    if (OS.isWindows()) {
+    if (OsPlatform.isWindows()) {
       String clockHelperJarName = "invisibleFrame.jar";
       File clockHelperJar = new File("clockHelper" + File.separator + clockHelperJarName);
       if (!clockHelperJar.exists()) Utils.copyClockHelper();

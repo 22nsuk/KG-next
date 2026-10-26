@@ -34,6 +34,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRuntimeException;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.Component;
@@ -81,7 +82,6 @@ import javax.swing.Box;
 import javax.swing.JDialog;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -23806,7 +23806,8 @@ public class Leelaz {
     } else {
       message = detail != null && !detail.isBlank() ? detail : fallbackMessage;
     }
-    boolean canUseCmdDiagnostic = OS.isWindows() && !useJavaSSH && !isSSH && !useRemoteCompute;
+    boolean canUseCmdDiagnostic =
+        OsPlatform.isWindows() && !useJavaSSH && !isSSH && !useRemoteCompute;
     EngineFailedMessage.showDialog(
         commands,
         engineCommand != null ? engineCommand : "",
@@ -23913,7 +23914,7 @@ public class Leelaz {
         commands,
         engineCommand,
         message,
-        !useJavaSSH && OS.isWindows(),
+        !useJavaSSH && OsPlatform.isWindows(),
         true,
         false,
         isModal,

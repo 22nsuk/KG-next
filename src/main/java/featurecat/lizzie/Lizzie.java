@@ -33,6 +33,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.NetworkProxy;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
@@ -60,7 +61,6 @@ import java.util.function.Supplier;
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import javax.swing.plaf.FontUIResource;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -345,7 +345,7 @@ public class Lizzie {
   public static Float sysScaleFactor = initialSystemScaleFactor();
 
   static float initialSystemScaleFactor() {
-    if (!OS.isWindows() || GraphicsEnvironment.isHeadless()) {
+    if (!OsPlatform.isWindows() || GraphicsEnvironment.isHeadless()) {
       return 1.0f;
     }
     return java.awt.Toolkit.getDefaultToolkit().getScreenResolution() / 96.0f;

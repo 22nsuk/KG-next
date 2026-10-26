@@ -13,6 +13,7 @@ import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.BufferedReader;
@@ -28,7 +29,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import javax.swing.SwingUtilities;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -1298,7 +1298,7 @@ public class ContributeEngine {
         commands != null ? commands : Utils.splitCommand(engineCommand),
         sanitizer.sanitize(engineCommand),
         sanitizer.sanitize(message),
-        !useJavaSSH && OS.isWindows(),
+        !useJavaSSH && OsPlatform.isWindows(),
         false,
         true,
         true,

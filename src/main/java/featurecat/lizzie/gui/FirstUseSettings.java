@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import featurecat.lizzie.AppLocale;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.awt.Color;
 import java.awt.Insets;
@@ -15,7 +16,6 @@ import javax.swing.ButtonGroup;
 import javax.swing.ImageIcon;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
-import org.jdesktop.swingx.util.OS;
 
 public class FirstUseSettings extends JDialog {
 
@@ -532,7 +532,7 @@ public class FirstUseSettings extends JDialog {
             rdoMouseOverSuggestionNoRefresh.setSelected(true);
             rdoScoreOnBoardWithOutKomi.setSelected(true);
             rdoAlternately.setSelected(true);
-            if (OS.isWindows()) rdoSysLooks.setSelected(true);
+            if (OsPlatform.isWindows()) rdoSysLooks.setSelected(true);
             else rdoJavaLooks.setSelected(true);
             txtLimitSuggestion.setText("10");
             txtLimitVariation.setText("0");

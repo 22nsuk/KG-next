@@ -17,6 +17,7 @@ import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.theme.MorandiPalette;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.awt.Color;
 import java.awt.Component;
@@ -62,7 +63,6 @@ import javax.swing.ToolTipManager;
 import javax.swing.event.DocumentEvent;
 import javax.swing.event.DocumentListener;
 import javax.swing.text.Document;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 
 public class BottomToolbar extends JPanel {
@@ -1139,7 +1139,7 @@ public class BottomToolbar extends JPanel {
             Lizzie.frame.openBoardSync();
           }
         });
-    if (OS.isWindows()) yike.add(syncBoard);
+    if (OsPlatform.isWindows()) yike.add(syncBoard);
 
 
     final JFontMenuItem webBoardToggle =
