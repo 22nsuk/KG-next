@@ -17,6 +17,7 @@ import featurecat.lizzie.theme.Theme;
 import featurecat.lizzie.training.HumanSlTrainingSession;
 import featurecat.lizzie.update.WindowsUpdateController;
 import featurecat.lizzie.util.LocaleFontSupport;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.logging.LoggingRuntime;
 import java.awt.Color;
@@ -51,7 +52,6 @@ import javax.swing.event.MenuListener;
 import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 import javax.swing.text.Document;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 
 public class Menu extends JMenuBar {
@@ -4159,7 +4159,7 @@ public class Menu extends JMenuBar {
 
     final JFontMenuItem readBoard =
         new JFontMenuItem(resourceBundle.getString("Menu.readBoard")); // ("棋盘识别工具(Alt+O)");
-    if (OS.isWindows()) {
+    if (OsPlatform.isWindows()) {
       readBoard.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.ALT_DOWN_MASK));
       live.add(readBoard);
     }

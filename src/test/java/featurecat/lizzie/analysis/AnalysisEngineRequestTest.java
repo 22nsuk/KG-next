@@ -27,6 +27,7 @@ import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.OsPlatform;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -56,7 +57,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -568,7 +568,8 @@ class AnalysisEngineRequestTest {
       String command = "\"" + executable + "\" analysis -model custom.bin.gz -config custom.cfg";
       Lizzie.config.analysisEngineCommand = command;
 
-      assertEquals(!OS.isWindows(), AnalysisEngine.automaticallyReusesPrimaryForeground(false));
+      assertEquals(
+          !OsPlatform.isWindows(), AnalysisEngine.automaticallyReusesPrimaryForeground(false));
       assertEquals(command, Lizzie.config.analysisEngineCommand);
       assertFalse(Lizzie.config.analysisReuseCurrentEngine);
     }

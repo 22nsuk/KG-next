@@ -1,6 +1,7 @@
 package featurecat.lizzie.gui;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.SavedEnginePathResolver;
 import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
@@ -24,7 +25,6 @@ import javax.swing.JPasswordField;
 import javax.swing.JTextField;
 import javax.swing.ToolTipManager;
 import javax.swing.border.EmptyBorder;
-import org.jdesktop.swingx.util.OS;
 
 public class ContributeSettings extends JDialog {
   private JTextField txtEnginePath;
@@ -54,7 +54,7 @@ public class ContributeSettings extends JDialog {
             "ContributeSettings.engineTip"); // "请务必使用官方KataGo引擎,否则无法跑谱贡献";
     String gamesTip =
         Lizzie.resourceBundle.getString("ContributeSettings.gamesTip")
-            + (OS.isWindows()
+            + (OsPlatform.isWindows()
                 ? ""
                 : Lizzie.resourceBundle.getString(
                     "ContributeSettings.gamesTip2")); // "同时进行多盘对局以增加GPU/CPU利用率,设置为default_gtp.cfg中numSearchThreads的数值即可";
@@ -438,7 +438,7 @@ public class ContributeSettings extends JDialog {
     //    gbc_panel_3.fill = GridBagConstraints.BOTH;
     //    gbc_panel_3.gridx = 0;
     //    gbc_panel_3.gridy = 9;
-    //    if (OS.isWindows()) mainPanel.add(panel_3, gbc_panel_3);
+    //    if (OsPlatform.isWindows()) mainPanel.add(panel_3, gbc_panel_3);
     //
     //    JFontLabel lblEnableSlowShutdown =
     //        new
@@ -473,7 +473,7 @@ public class ContributeSettings extends JDialog {
     //    gbc_chckbxNewCheckBox.anchor = GridBagConstraints.WEST;
     //    gbc_chckbxNewCheckBox.gridx = 1;
     //    gbc_chckbxNewCheckBox.gridy = 9;
-    //    if (OS.isWindows()) mainPanel.add(chkSlowShutdown, gbc_chckbxNewCheckBox);
+    //    if (OsPlatform.isWindows()) mainPanel.add(chkSlowShutdown, gbc_chckbxNewCheckBox);
 
     JPanel buttonPanel = new JPanel();
     getContentPane().add(buttonPanel, BorderLayout.SOUTH);

@@ -53,7 +53,6 @@ import javax.swing.JComponent;
 import javax.swing.JTable;
 import javax.swing.JTextField;
 import javax.swing.table.TableModel;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -160,7 +159,7 @@ public class Utils {
     LinkedHashSet<String> candidates = new LinkedHashSet<String>();
     String javaHome = System.getProperty("java.home", "");
     addBundledJavaCandidates(candidates, javaHome);
-    if (OS.isWindows()) {
+    if (OsPlatform.isWindows()) {
       addJavaCandidate(candidates, java64Path1);
       addJavaCandidate(candidates, java64Path2);
       addJavaCandidate(candidates, java32Path);
@@ -216,7 +215,7 @@ public class Utils {
       return;
     }
 
-    String javaBinary = OS.isWindows() ? "java.exe" : "java";
+    String javaBinary = OsPlatform.isWindows() ? "java.exe" : "java";
     addJavaCandidate(candidates, basePath.resolve("bin").resolve(javaBinary).toString());
     addJavaCandidate(
         candidates, basePath.resolve("runtime").resolve("bin").resolve(javaBinary).toString());
@@ -224,7 +223,7 @@ public class Utils {
         candidates,
         basePath
             .resolve("runtime")
-            .resolve(OS.isWindows() ? "windows-x64" : "")
+            .resolve(OsPlatform.isWindows() ? "windows-x64" : "")
             .resolve("bin")
             .resolve(javaBinary)
             .normalize()
@@ -311,7 +310,7 @@ public class Utils {
       return null;
     }
     List<String> suffixes = new ArrayList<String>();
-    if (OS.isWindows()) {
+    if (OsPlatform.isWindows()) {
       String pathext = System.getenv("PATHEXT");
       if (!isBlank(pathext)) {
         for (String ext : pathext.split(";")) {
@@ -344,7 +343,7 @@ public class Utils {
       if (!Files.isDirectory(baseDir)) {
         continue;
       }
-      if (!OS.isWindows() || hasExtension) {
+      if (!OsPlatform.isWindows() || hasExtension) {
         try {
           Path direct = toExistingPath(baseDir.resolve(executable).toString());
           if (direct != null) {
@@ -354,7 +353,7 @@ public class Utils {
           continue;
         }
       }
-      if (OS.isWindows()) {
+      if (OsPlatform.isWindows()) {
         for (String suffix : suffixes) {
           try {
             Path candidate = toExistingPath(baseDir.resolve(executable + suffix).toString());

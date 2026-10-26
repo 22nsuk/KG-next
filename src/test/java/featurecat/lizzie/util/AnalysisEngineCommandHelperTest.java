@@ -39,7 +39,6 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
-import org.jdesktop.swingx.util.OS;
 import org.json.JSONObject;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -85,12 +84,13 @@ class AnalysisEngineCommandHelperTest {
 
     Path suffixedExecutable = executable.resolveSibling(name + ".exe");
     Files.createFile(suffixedExecutable);
-    assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+    assertEquals(
+        !OsPlatform.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
 
     Files.delete(suffixedExecutable);
     Files.createDirectory(suffixedExecutable);
     assertEquals(
-        !OS.isWindows(),
+        !OsPlatform.isWindows(),
         AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
         "an unusable .exe candidate must retain its startup error on Windows");
   }
@@ -139,7 +139,8 @@ class AnalysisEngineCommandHelperTest {
       assertEquals(
           tempDir.toFile(),
           CommandLaunchHelper.prepare(Utils.splitCommand(command)).getWorkingDirectory());
-      assertEquals(!OS.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
+      assertEquals(
+          !OsPlatform.isWindows(), AnalysisEngineCommandHelper.isMissingLocalExecutable(command));
     } finally {
       System.setProperty("user.dir", previousDirectory);
     }
@@ -212,8 +213,8 @@ class AnalysisEngineCommandHelperTest {
         Files.createFile(
             Files.createDirectories(tempDir.resolve("external data")).resolve("data.bin"));
     Path engineDirectory = Files.createTempDirectory(nativeDirectory, "native engines-");
-    Path executable = engineDirectory.resolve(name + (OS.isWindows() ? ".exe" : ""));
-    if (OS.isWindows()) {
+    Path executable = engineDirectory.resolve(name + (OsPlatform.isWindows() ? ".exe" : ""));
+    if (OsPlatform.isWindows()) {
       Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), executable);
     } else {
       Files.writeString(executable, "#!/bin/sh\nexit 0\n", StandardCharsets.UTF_8);
@@ -281,7 +282,7 @@ class AnalysisEngineCommandHelperTest {
       Path relativeExecutable = Path.of(args[1]);
       Path externalFile = Path.of(args[2]);
       Path installedExecutable =
-          OS.isWindows() ? Path.of(relativeExecutable + ".exe") : relativeExecutable;
+          OsPlatform.isWindows() ? Path.of(relativeExecutable + ".exe") : relativeExecutable;
       assertTrue(Files.isRegularFile(installedExecutable), "fixture must exist in the native cwd");
       withUserDirAndConfig(Path.of(args[0]), () -> {
         String command =
@@ -293,7 +294,7 @@ class AnalysisEngineCommandHelperTest {
         ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts())
             .redirectErrorStream(true).redirectOutput(ProcessBuilder.Redirect.DISCARD);
         CommandLaunchHelper.configureProcessBuilder(builder, launch);
-        if (OS.isWindows()) {
+        if (OsPlatform.isWindows()) {
           Process process = builder.start();
           try {
             assertTrue(process.waitFor(10, TimeUnit.SECONDS), "native executable probe timed out");
@@ -311,11 +312,12 @@ class AnalysisEngineCommandHelperTest {
               "POSIX resolves the relative executable after entering the child working directory");
         }
         assertEquals(
-            !OS.isWindows(),
+            !OsPlatform.isWindows(),
             AnalysisEngineCommandHelper.isMissingLocalExecutable(command),
             "missing classification must respect the platform's executable lookup directory");
         Lizzie.config.analysisEngineCommand = command;
-        assertEquals(!OS.isWindows(), AnalysisEngine.shouldFallbackToPrimaryForeground(false));
+        assertEquals(
+            !OsPlatform.isWindows(), AnalysisEngine.shouldFallbackToPrimaryForeground(false));
         assertEquals(command, Lizzie.config.analysisEngineCommand);
         assertFalse(Lizzie.config.analysisReuseCurrentEngine);
 

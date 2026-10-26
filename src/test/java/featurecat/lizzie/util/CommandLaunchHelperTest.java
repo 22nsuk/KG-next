@@ -17,7 +17,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.jdesktop.swingx.util.OS;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
@@ -205,7 +204,7 @@ public class CommandLaunchHelperTest {
   @Test
   void configureProcessBuilderOnNonWindowsPreservesPathAndAppliesWorkingDirectory()
       throws Exception {
-    Assumptions.assumeFalse(OS.isWindows(), "non-Windows scenario");
+    Assumptions.assumeFalse(OsPlatform.isWindows(), "non-Windows scenario");
 
     Path root = Files.createTempDirectory("command-launch-non-windows-root");
     try {

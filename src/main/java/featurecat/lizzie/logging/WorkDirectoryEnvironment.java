@@ -1,12 +1,12 @@
 package featurecat.lizzie.logging;
 
+import featurecat.lizzie.util.OsPlatform;
 import java.io.File;
 import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import org.jdesktop.swingx.util.OS;
 
 public final class WorkDirectoryEnvironment {
   public static final String WORK_DIR_PROPERTY = "lizzie.work.dir";
@@ -59,7 +59,7 @@ public final class WorkDirectoryEnvironment {
     } catch (Exception ignored) {
     }
     return new WorkDirectoryEnvironment(
-        OS.isWindows(),
+        OsPlatform.isWindows(),
         System.getProperty("user.home", ""),
         System.getProperty("user.dir", ""),
         System.getProperty(WORK_DIR_PROPERTY, ""),

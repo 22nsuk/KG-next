@@ -15,6 +15,7 @@ import featurecat.lizzie.util.BundledKataGoProfile;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.LocaleFontSupport;
 import featurecat.lizzie.util.NetworkProxy;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.analysis.remote.SshEnginePasswords;
 import java.awt.Color;
@@ -31,7 +32,6 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import javax.swing.*;
-import org.jdesktop.swingx.util.OS;
 import org.json.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -359,7 +359,7 @@ public class Config {
     if (appRoot == null) {
       return false;
     }
-    String binaryName = OS.isWindows() ? "katago.exe" : "katago";
+    String binaryName = OsPlatform.isWindows() ? "katago.exe" : "katago";
     Path katagoRoot = appRoot.resolve(BUNDLED_ENGINE_ROOT).resolve("katago");
     return Files.isRegularFile(katagoRoot.resolve(detectBundledPlatformDir()).resolve(binaryName))
         && Files.isRegularFile(appRoot.resolve(BUNDLED_WEIGHT_ROOT).resolve(BUNDLED_WEIGHT_NAME))
@@ -1742,7 +1742,7 @@ public class Config {
     showPureEstimateNotOnlive = uiConfig.optBoolean("show-pure-estimate-not-on-live", false);
     showPureEstimateSmall = uiConfig.optBoolean("show-pure-estimate-small", false);
 
-    useJavaLooks = uiConfig.optBoolean("use-java-looks", !OS.isWindows());
+    useJavaLooks = uiConfig.optBoolean("use-java-looks", !OsPlatform.isWindows());
     showNextMoveBlunder = uiConfig.optBoolean("show-next-move-blunder", true);
     batchAnalysisPlayouts = uiConfig.optInt("batch-analysis-playouts", 100);
     wholeGameAnalysisDeepVisits =

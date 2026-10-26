@@ -19,7 +19,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.jdesktop.swingx.util.OS;
 
 public final class CommandLaunchHelper {
   private static final String PATH_KEY = "PATH";
@@ -184,7 +183,7 @@ public final class CommandLaunchHelper {
     if (workingDirectory != null) {
       processBuilder.directory(workingDirectory);
     }
-    if (!OS.isWindows()) {
+    if (!OsPlatform.isWindows()) {
       return;
     }
     replaceWindowsPath(
