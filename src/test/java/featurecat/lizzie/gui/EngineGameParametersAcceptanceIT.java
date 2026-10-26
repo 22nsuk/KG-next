@@ -22,6 +22,7 @@ import featurecat.lizzie.enginegame.StartFailure;
 import featurecat.lizzie.enginegame.StartObserver;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Toolkit;
@@ -357,7 +358,7 @@ public final class EngineGameParametersAcceptanceIT {
   private static void applyPanel(
       Double firstWrn, Double secondWrn, Double firstPda, Double secondPda, Path evidence)
       throws Exception {
-    openParameterPanel();
+    openParameterPanel(evidence);
     EngineGameParametersDialog panel =
         edt(
             () -> {
@@ -393,42 +394,128 @@ public final class EngineGameParametersAcceptanceIT {
     await(() -> !EngineGameParametersDialog.isOpen(), 20, "panel closes after confirmation");
   }
 
-  private static void openParameterPanel() throws Exception {
-    boolean toolbar = edt(() -> Lizzie.config.showTopToolBar);
-    AbstractButton entry =
-        edt(
-            () -> {
-              assertFalse(EngineGameParametersDialog.isOpen());
-              Lizzie.frame.toFront();
-              if (toolbar) {
-                assertTrue(Lizzie.config.showDoubleMenu);
-                return namedButton(
-                    Lizzie.frame.topPanel,
-                    Lizzie.resourceBundle.getString("EngineGameParameters.entry"));
-              }
-              assertFalse(Lizzie.frame.topPanel.isShowing(), "Toolbar is hidden in this scenario");
-              return namedButton(
-                  Lizzie.frame.windowMenuStrip.isShowing()
-                      ? Lizzie.frame.windowMenuStrip
-                      : LizzieFrame.menu,
-                  Lizzie.resourceBundle.getString("Menu.game"));
-            });
-    click(entry);
-    if (!toolbar) {
-      AbstractButton item =
+  private static void openParameterPanel(Path evidence) throws Exception {
+    Path inputLog = evidence.resolveSibling("parameter-input.log");
+    AbstractButton entry = null;
+    try {
+      activateMainWindow(inputLog);
+      boolean toolbar = edt(() -> Lizzie.config.showTopToolBar);
+      entry =
           edt(
               () -> {
-                AbstractButton game =
-                    namedButton(
-                        LizzieFrame.menu, Lizzie.resourceBundle.getString("Menu.game"));
-                assertInstanceOf(JMenu.class, game);
+                assertFalse(EngineGameParametersDialog.isOpen());
+                if (toolbar) {
+                  assertTrue(Lizzie.config.showDoubleMenu);
+                  return namedButton(
+                      Lizzie.frame.topPanel,
+                      Lizzie.resourceBundle.getString("EngineGameParameters.entry"));
+                }
+                assertFalse(Lizzie.frame.topPanel.isShowing(), "Toolbar is hidden in this scenario");
                 return namedButton(
-                    ((JMenu) game).getPopupMenu(),
-                    Lizzie.resourceBundle.getString("EngineGameParameters.entry"));
+                    Lizzie.frame.windowMenuStrip.isShowing()
+                        ? Lizzie.frame.windowMenuStrip
+                        : LizzieFrame.menu,
+                    Lizzie.resourceBundle.getString("Menu.game"));
               });
-      click(item);
+      click(entry, inputLog);
+      if (!toolbar) {
+        entry =
+            edt(
+                () -> {
+                  AbstractButton game =
+                      namedButton(
+                          LizzieFrame.menu, Lizzie.resourceBundle.getString("Menu.game"));
+                  assertInstanceOf(JMenu.class, game);
+                  return namedButton(
+                      ((JMenu) game).getPopupMenu(),
+                      Lizzie.resourceBundle.getString("EngineGameParameters.entry"));
+                });
+        click(entry, inputLog);
+      }
+      await(EngineGameParametersDialog::isOpen, 10, "parameter panel from visible game controls");
+    } catch (Exception | AssertionError failure) {
+      recordInputFailure(evidence, entry, failure);
+      throw failure;
     }
-    await(EngineGameParametersDialog::isOpen, 10, "parameter panel from visible game controls");
+  }
+
+  private static void activateMainWindow(Path inputLog) throws Exception {
+    boolean focused =
+        edt(
+            () -> {
+              Lizzie.frame.toFront();
+              Lizzie.frame.requestFocus();
+              return Lizzie.frame.isActive() && Lizzie.frame.isFocused();
+            });
+    if (!focused && System.getProperty("os.name", "").startsWith("Windows")) {
+      // A native runner console can cover an isShowing() component. Activate the real frame
+      // through its title bar before looking up the control or measuring its click coordinates.
+      Point titleBar =
+          edt(
+              () -> {
+                assertTrue(Lizzie.frame.isShowing());
+                assertFalse(Lizzie.frame.isUndecorated(), "Native activation needs a title bar");
+                Rectangle bounds = Lizzie.frame.getBounds();
+                var insets = Lizzie.frame.getInsets();
+                assertTrue(insets.top > 0, "Native title-bar insets must be available");
+                Point point =
+                    new Point(bounds.x + bounds.width / 2, bounds.y + insets.top / 2);
+                assertTrue(
+                    Lizzie.frame.getGraphicsConfiguration().getBounds().contains(point),
+                    "Native title-bar click must be on screen: " + point);
+                return point;
+              });
+      record(inputLog, "activate-title-bar=" + titleBar + " " + edt(() -> inputState(null)));
+      Robot robot = new Robot();
+      robot.mouseMove(titleBar.x, titleBar.y);
+      robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+      robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+      robot.waitForIdle();
+    }
+    await(
+        () -> Lizzie.frame.isActive() && Lizzie.frame.isFocused(),
+        10,
+        "native application focus before parameter input");
+    record(inputLog, "activation-confirmed " + edt(() -> inputState(null)));
+  }
+
+  /** Captures the native input boundary on the EDT; component visibility alone is insufficient. */
+  private static String inputState(AbstractButton entry) {
+    Rectangle entryBounds =
+        entry != null && entry.isShowing()
+            ? new Rectangle(entry.getLocationOnScreen(), entry.getSize())
+            : null;
+    return "active="
+        + Lizzie.frame.isActive()
+        + " focused="
+        + Lizzie.frame.isFocused()
+        + " frame="
+        + Lizzie.frame.getBounds()
+        + " insets="
+        + Lizzie.frame.getInsets()
+        + " entry="
+        + (entry == null ? "not selected" : entry.getText())
+        + " entryShowing="
+        + (entry != null && entry.isShowing())
+        + " entryEnabled="
+        + (entry != null && entry.isEnabled())
+        + " entryBounds="
+        + entryBounds;
+  }
+
+  private static void recordInputFailure(Path evidence, AbstractButton entry, Throwable failure) {
+    try {
+      record(
+          evidence.resolveSibling("parameter-input.log"),
+          "failure=" + failure + " " + edt(() -> inputState(entry)));
+    } catch (Exception | AssertionError diagnosticFailure) {
+      failure.addSuppressed(diagnosticFailure);
+    }
+    try {
+      capture(Lizzie.frame, evidence.resolveSibling("parameter-input-failure.png"));
+    } catch (Exception | AssertionError diagnosticFailure) {
+      failure.addSuppressed(diagnosticFailure);
+    }
   }
 
   private static AbstractButton namedButton(Container parent, String text) {
@@ -442,11 +529,12 @@ public final class EngineGameParametersAcceptanceIT {
     return null;
   }
 
-  private static void click(AbstractButton button) throws Exception {
+  private static void click(AbstractButton button, Path inputLog) throws Exception {
     assertNotNull(button, "Production game control exists");
     await(() -> button.isShowing() && button.isEnabled(), 10, "visible enabled game control");
     Rectangle bounds = edt(() -> new Rectangle(button.getLocationOnScreen(), button.getSize()));
     assertTrue(bounds.width > 0 && bounds.height > 0);
+    record(inputLog, "click=" + bounds + " " + edt(() -> inputState(button)));
     Robot robot = new Robot();
     robot.mouseMove(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
     robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);

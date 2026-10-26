@@ -32,6 +32,7 @@ class WebTrialSocketLifecycleTest {
       WebBoardDataCollector collector =
           new WebBoardDataCollector(executor, display::get, () -> board.anchor);
       CountDownLatch ownerDisconnected = new CountDownLatch(1);
+      BlockingQueue<WebSocket> closedServerConnections = new LinkedBlockingQueue<>();
       AtomicReference<WebSocket> ownerConnection = new AtomicReference<>();
       WebBoardServer server =
           new WebBoardServer(new InetSocketAddress("127.0.0.1", 0), 4) {
@@ -58,6 +59,7 @@ class WebTrialSocketLifecycleTest {
             public void onClose(WebSocket connection, int code, String reason, boolean remote) {
               super.onClose(connection, code, reason, remote);
               if (connection == ownerConnection.get()) ownerDisconnected.countDown();
+              closedServerConnections.add(connection);
             }
           };
       List<Client> clients = new ArrayList<>();
@@ -135,11 +137,25 @@ class WebTrialSocketLifecycleTest {
       } finally {
         manager.forceExitTrial();
         collector.shutdown();
-        for (Client client : clients) client.closeConnection(1000, "fixture cleanup");
-        server.stop(1000);
-        executor.shutdownNow();
-        assertTrue(executor.awaitTermination(3, TimeUnit.SECONDS));
-        for (Client client : clients) assertTrue(client.closed.await(3, TimeUnit.SECONDS));
+        try {
+          for (Client client : clients) client.close(1000, "fixture cleanup");
+          for (Client client : clients) assertTrue(client.closed.await(3, TimeUnit.SECONDS));
+          // Finish both ends of the handshake before stop() closes the server selector. An abrupt
+          // client close racing stop() can leave a stale connection in its close-frame snapshot.
+          for (int i = 0; i < clients.size(); i++) {
+            assertNotNull(
+                closedServerConnections.poll(3, TimeUnit.SECONDS),
+                "Server must observe each fixture client closing");
+          }
+          assertTrue(server.getConnections().isEmpty());
+        } finally {
+          try {
+            server.stop(1000);
+          } finally {
+            executor.shutdownNow();
+            assertTrue(executor.awaitTermination(3, TimeUnit.SECONDS));
+          }
+        }
       }
     }
   }
