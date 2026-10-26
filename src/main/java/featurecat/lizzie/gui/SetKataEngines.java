@@ -59,6 +59,7 @@ public class SetKataEngines extends JDialog {
   private JFontButton btnApply;
   private JFontButton btnCancel;
   private boolean threadInputEdited;
+  private boolean loadedThreadOverride;
   private boolean applyingThreads;
   private int threadQueryGeneration;
 
@@ -146,6 +147,7 @@ public class SetKataEngines extends JDialog {
               chkAutoLoadPDA.setEnabled(false);
               txtPDA.setEnabled(false);
             }
+            refreshParameterEditors();
           }
         });
 
@@ -182,6 +184,7 @@ public class SetKataEngines extends JDialog {
               chkAutoLoadWRN.setSelected(false);
               chkAutoLoadWRN.setEnabled(false);
             }
+            refreshParameterEditors();
           }
         });
 
@@ -496,10 +499,7 @@ public class SetKataEngines extends JDialog {
     //      chkAutoRPT.setEnabled(true);
     //      chkEditRPT.setSelected(true);
     //    }
-    if (Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.engineGame.current().playingGenmove()) {
-      txtWRN.setEnabled(false);
-      chkEditWRN.setEnabled(false);
-    }
+    refreshParameterEditors();
 
     if (isPdaEngine) {
       txtPDA.setVisible(false);
@@ -524,10 +524,14 @@ public class SetKataEngines extends JDialog {
     if (applyingThreads) return;
     AnalysisSettings settings = captureAnalysisSettings();
     if (settings == null) return;
-    if (runtimeThreads != null && !runtimeThreads.isCurrent()) {
-      showThreadError("SetKataEngines.threadStale");
+    if (EngineGameDesktop.parametersOwned()
+        && !threadInputEdited
+        && chkEditThreads.isSelected() == loadedThreadOverride) {
+      // A hand change may retire the thread handle; preference-only saves do not use it.
+      applyExistingSettings(openingEngine, settings, true, false);
       return;
     }
+    if (staleThreads()) return;
     Leelaz.RuntimeThreadOverrideState state = runtimeThreads == null
         ? Leelaz.RuntimeThreadOverrideState.OFF : runtimeThreads.overrideState();
     if (!chkEditThreads.isSelected()) {
@@ -586,6 +590,34 @@ public class SetKataEngines extends JDialog {
   }
 
   private int previousCloseOperation;
+
+  private boolean staleThreads() {
+    if (runtimeThreads == null || runtimeThreads.isCurrent()) return false;
+    showThreadError("SetKataEngines.threadStale");
+    return true;
+  }
+
+  public static void refreshOpenDialogs() {
+    for (java.awt.Window window : java.awt.Window.getWindows()) {
+      if (window instanceof SetKataEngines dialog && dialog.isShowing()) {
+        dialog.refreshParameterEditors();
+      }
+    }
+  }
+
+  private void refreshParameterEditors() {
+    boolean parametersOwned = EngineGameDesktop.parametersOwned();
+    boolean wrnOwned =
+        parametersOwned
+            || (Lizzie.frame != null && Lizzie.frame.isPlayingAgainstLeelaz)
+            || Lizzie.engineGame.current().playingGenmove();
+    chkEditWRN.setEnabled(!wrnOwned);
+    txtWRN.setEnabled(!wrnOwned && chkEditWRN.isSelected());
+    chkEditPDA.setEnabled(!parametersOwned);
+    txtPDA.setEnabled(!parametersOwned && chkEditPDA.isSelected());
+    EngineGameParameterControls.explainAdvancedLock(
+        parametersOwned, chkEditWRN, txtWRN, chkEditPDA, txtPDA);
+  }
 
   private void beginThreadOperation() {
     previousCloseOperation = getDefaultCloseOperation();
@@ -764,6 +796,12 @@ public class SetKataEngines extends JDialog {
       JCheckBox autoLoad,
       String appliedValue,
       ParameterDraft initial) {
+    if (EngineGameDesktop.parametersOwned()) {
+      // The game owns runtime parameters. A disabled, unfinished pre-game draft must not block
+      // preference-only saves or become an autoload value; retain the last applied value instead.
+      return new ParameterSetting(
+          enabled.isSelected(), autoLoad.isSelected(), appliedValue, false);
+    }
     boolean edited =
         enabled.isSelected() != initial.enabled()
             || (enabled.isSelected() && !field.getText().equals(initial.value()));
@@ -772,7 +810,7 @@ public class SetKataEngines extends JDialog {
     OptionalDouble parsed = parameter.parse(field.getText());
     if (parsed.isEmpty()) {
       field.setBackground(AppleStyleSupport.errorFieldBackground());
-      field.setEnabled(true);
+      field.setEnabled(!EngineGameDesktop.parametersOwned());
       field.requestFocusInWindow();
       return null;
     }
@@ -783,6 +821,7 @@ public class SetKataEngines extends JDialog {
   private void applyExistingSettings(
       Leelaz engine, AnalysisSettings settings, boolean resume, boolean editsOnly) {
     // A thread callback must not replay untouched values over toolbar edits or restart defaults.
+    boolean parametersOwned = EngineGameDesktop.parametersOwned();
     Lizzie.config.showWRNInMenu = settings.showWrn();
     Lizzie.config.uiConfig.put("show-wrn-in-menu", settings.showWrn());
 
@@ -796,7 +835,7 @@ public class SetKataEngines extends JDialog {
         Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-pda", pda.value());
       }
       Lizzie.config.uiConfig.put("autoload-kata-engine-pda", pda.autoLoad());
-      if (!editsOnly || pda.edited()) {
+      if (!parametersOwned && (!editsOnly || pda.edited())) {
         Lizzie.config.chkKataEnginePDA = pda.enabled();
         Lizzie.config.txtKataEnginePDA = pda.value();
         engine.setPda(pda.enabled() ? pda.value() : "0");
@@ -813,7 +852,7 @@ public class SetKataEngines extends JDialog {
       Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-wrn", wrn.value());
     }
     Lizzie.config.uiConfig.put("autoload-kata-engine-wrn", wrn.autoLoad());
-    if (!editsOnly || wrn.edited()) {
+    if (!parametersOwned && (!editsOnly || wrn.edited())) {
       Lizzie.config.chkKataEngineWRN = wrn.enabled();
       Lizzie.config.txtKataEngineWRN = wrn.value();
       engine.sendCommand(
@@ -825,7 +864,7 @@ public class SetKataEngines extends JDialog {
     }
     if (resume) setVisible(false);
     LizzieFrame.menu.updateMenuStatusForEngine();
-    if (resume && engine.isPondering()) engine.ponder();
+    if (resume && !parametersOwned && engine.isPondering()) engine.ponder();
   }
 
   @Override
@@ -836,6 +875,7 @@ public class SetKataEngines extends JDialog {
       threadInputEdited = false;
       boolean active = runtimeThreads != null
           && runtimeThreads.overrideState() == Leelaz.RuntimeThreadOverrideState.ON;
+      loadedThreadOverride = active;
       chkEditThreads.setSelected(active);
       txtThreads.setEnabled(active);
       Integer confirmed = runtimeThreads == null ? null : runtimeThreads.lastConfirmedValue();

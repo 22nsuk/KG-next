@@ -43,6 +43,7 @@ import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.enginegame.StartFailure;
 import featurecat.lizzie.enginegame.StartObserver;
 import featurecat.lizzie.gui.BottomToolbar;
+import featurecat.lizzie.gui.EngineGameDesktop;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.JFontMenu;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -745,6 +746,160 @@ class EngineGameModuleContractTest {
     assertTotals(completed);
     assertEquals(1, savedFiles(".sgf").size());
     assertCompletedSgf(savedFiles(".sgf").get(0));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void finalAnalysisSaveRestoresBothParticipantsAfterSuccessOrRetry(boolean failInitialSave)
+      throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 1, false, false);
+    EngineManager.EngineGameOwnerTransaction owner =
+        (EngineManager.EngineGameOwnerTransaction) transaction.lifecycle().ownerToken();
+    try (SavedGameParameters parameters = new SavedGameParameters(owner)) {
+      if (failInitialSave) Files.writeString(manager.outputDirectory, "blocked output");
+
+      completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+
+      if (failInitialSave) {
+        assertTrue(Lizzie.engineGame.current().saveFailed());
+        assertFalse(parameters.restored.isDone(), "an unfinished batch keeps its game parameters");
+        parameters.assertOpening();
+        Files.delete(manager.outputDirectory);
+        Files.createDirectory(manager.outputDirectory);
+        assertTrue(retrySave());
+      }
+      parameters.awaitRestored();
+      assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+      assertFalse(manager.hasPendingEngineGameSave());
+      assertEquals(0, manager.successorStarts);
+      assertEquals(1, savedFiles(".sgf").size());
+      assertCompletedSgf(savedFiles(".sgf").get(0));
+    }
+  }
+
+  @Test
+  void savedBatchKeepsParameterOwnershipUntilBothReadbacksFinish() throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 1, false, false);
+    EngineManager.EngineGameOwnerTransaction owner =
+        (EngineManager.EngineGameOwnerTransaction) transaction.lifecycle().ownerToken();
+    try (SavedGameParameters parameters = new SavedGameParameters(owner)) {
+      CompletableFuture<Void> editorsReleased = new CompletableFuture<>();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            try {
+              Menu menu = LizzieFrame.menu;
+              Field bundle = Menu.class.getDeclaredField("resourceBundle");
+              bundle.setAccessible(true);
+              bundle.set(menu, Lizzie.resourceBundle);
+              var initialize = Menu.class.getDeclaredMethod("initializeKataAnalysisFields");
+              initialize.setAccessible(true);
+              initialize.invoke(menu);
+              Lizzie.config.chkKataEngineWRN = true;
+              Lizzie.config.chkKataEnginePDA = true;
+              Lizzie.config.txtKataEngineWRN = "0.3";
+              Lizzie.config.txtKataEnginePDA = "0.25";
+              menu.setPdaAndWrn(0.25, 0.3);
+              menu.refreshBreadthAdmission();
+              menu.txtGfPDA.addPropertyChangeListener(
+                  "enabled", event -> {
+                    if (Boolean.TRUE.equals(event.getNewValue())) editorsReleased.complete(null);
+                  });
+            } catch (ReflectiveOperationException failure) {
+              throw new AssertionError(failure);
+            }
+          });
+      parameters.holdRestoreReadback.set(true);
+
+      completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+      assertTrue(parameters.restoreReadbackHeld.await(3, TimeUnit.SECONDS));
+      assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+      assertTrue(owner.retirementFinishedForTest());
+      assertFalse(parameters.restored.isDone());
+      assertTrue(EngineManager.occupiesEngineGameAdmission(),
+          "saving the final game must not hand out its still-borrowed engine parameters");
+      assertTrue(EngineGameDesktop.batchActive(), "ordinary parameter editors must stay locked");
+      assertTrue(EngineGameDesktop.parametersOwned());
+      assertFalse(black.canSetAnalysisWideRootNoise());
+      assertFalse(white.canSetAnalysisWideRootNoise());
+      int commandCount = parameters.commandCount();
+      assertFalse(black.sendRawConsoleCommand("kata-set-param analysisWideRootNoise 0.9"));
+      assertFalse(white.sendRawConsoleCommand("kata-set-param playoutDoublingAdvantage 0.9"));
+      assertFalse(black.sendRawConsoleCommand("kata-analyze B 10"));
+      assertEquals(commandCount, parameters.commandCount());
+      SwingUtilities.invokeAndWait(
+          () -> {
+            Menu menu = LizzieFrame.menu;
+            menu.refreshBreadthAdmission();
+            assertFalse(menu.txtWRN.isEnabled());
+            assertFalse(menu.txtGfPDA.isEnabled());
+            // A queued document event must not publish a rejected edit into preferences.
+            menu.txtWRN.setText("0.9");
+            menu.txtGfPDA.setText("0.9");
+            assertEquals("0.3", Lizzie.config.txtKataEngineWRN);
+            assertEquals("0.25", Lizzie.config.txtKataEnginePDA);
+          });
+      assertFalse(manager.startThroughProductionAdmission(owner.plan));
+      Field sessionField = EngineManager.class.getDeclaredField("engineGameParameterSession");
+      sessionField.setAccessible(true);
+      EngineGameParameterSession rejectedSession =
+          (EngineGameParameterSession) sessionField.get(manager);
+      assertNotSame(parameters.session, rejectedSession);
+      Field originalsField = EngineGameParameterSession.class.getDeclaredField("originals");
+      originalsField.setAccessible(true);
+      assertEquals(List.of(), originalsField.get(rejectedSession));
+      assertTrue(EngineManager.hasUnrestoredEngineGameParameters(),
+          "a rejected new batch must keep its predecessor's unfinished restoration visible");
+
+      parameters.releaseRestoreReadback();
+      parameters.awaitRestored();
+      editorsReleased.get(3, TimeUnit.SECONDS);
+      assertFalse(EngineManager.occupiesEngineGameAdmission());
+      assertFalse(EngineGameDesktop.batchActive());
+      assertFalse(EngineGameDesktop.parametersOwned());
+      assertTrue(black.canSetAnalysisWideRootNoise());
+      assertTrue(white.canSetAnalysisWideRootNoise());
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertTrue(LizzieFrame.menu.txtWRN.isEnabled());
+            assertTrue(LizzieFrame.menu.txtGfPDA.isEnabled());
+          });
+      assertTrue(black.sendRawConsoleCommand("kata-set-param analysisWideRootNoise 0.9"));
+      parameters.blackTransport.awaitResponses();
+      assertEquals(0.9, parameters.blackValues.get("analysisWideRootNoise"));
+    }
+  }
+
+  @Test
+  void stoppingFailedAnalysisBatchRestoresParametersWhileKeepingTheSaveRetry() throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 2, false, false);
+    EngineManager.EngineGameOwnerTransaction owner =
+        (EngineManager.EngineGameOwnerTransaction) transaction.lifecycle().ownerToken();
+    try (SavedGameParameters parameters = new SavedGameParameters(owner)) {
+      Files.writeString(manager.outputDirectory, "blocked output");
+      completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+      assertTrue(owner.retirementFinishedForTest());
+      assertTrue(Lizzie.engineGame.current().saveFailed());
+      assertFalse(parameters.restored.isDone());
+      parameters.assertOpening();
+
+      SwingUtilities.invokeAndWait(() -> Lizzie.engineGame.stop());
+
+      parameters.awaitRestored();
+      assertTrue(manager.hasPendingEngineGameSave());
+      assertTrue(Lizzie.engineGame.current().saveFailed());
+      assertFalse(Lizzie.engineGame.successorPending());
+      assertSame(transaction, Lizzie.engineGame.transaction());
+      int restoredCommands = parameters.commandCount();
+      Files.delete(manager.outputDirectory);
+      Files.createDirectory(manager.outputDirectory);
+      assertTrue(retrySave());
+      assertFalse(manager.hasPendingEngineGameSave());
+      assertEquals(0, manager.successorStarts);
+      assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+      assertEquals(restoredCommands, parameters.commandCount(), "saving again must not restore twice");
+      assertEquals(1, savedFiles(".sgf").size());
+      assertCompletedSgf(savedFiles(".sgf").get(0));
+    }
   }
 
   @Test
@@ -1768,6 +1923,11 @@ class EngineGameModuleContractTest {
 
   private EngineGameTransaction playWithRealSave(boolean batch, int games, boolean image)
       throws Exception {
+    return playWithRealSave(batch, games, image, true);
+  }
+
+  private EngineGameTransaction playWithRealSave(
+      boolean batch, int games, boolean image, boolean genmove) throws Exception {
     manager.outputDirectory = directory.resolve("EngineGames");
     manager.manualActivation = true;
     manager.runWorkersInline = true;
@@ -1790,7 +1950,9 @@ class EngineGameModuleContractTest {
             EngineGameParsedStart.builder()
                 .first(FIRST)
                 .second(SECOND)
-                .genmove(true)
+                .genmove(genmove)
+                .openingParameters(
+                    new featurecat.lizzie.enginegame.EngineGameOpeningParameters(0.5, 1.0, 1.5, -1.5))
                 .timeLimitEnabled(true)
                 .firstTimeSeconds(2)
                 .secondTimeSeconds(2)
@@ -2086,6 +2248,10 @@ class EngineGameModuleContractTest {
       super(engines);
     }
 
+    private boolean startThroughProductionAdmission(EngineGamePlan plan) {
+      return super.startEngineGame(plan, true);
+    }
+
     @Override
     public boolean startEngineGame(EngineGamePlan plan, boolean firstGame) {
       if (!firstGame) {
@@ -2245,6 +2411,110 @@ class EngineGameModuleContractTest {
 
     private static boolean isEngineGameDeadlineWatcher(String name) {
       return name != null && name.startsWith("engine-game-deadline-");
+    }
+  }
+
+  /** Uses the real numbered command queue while the save tests control only engine replies. */
+  private final class SavedGameParameters implements AutoCloseable {
+    private final java.util.Map<String, Double> blackValues =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, Double> whiteValues =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final ExactSnapshotRestoreProtocolFixture.Transport blackTransport;
+    private final ExactSnapshotRestoreProtocolFixture.Transport whiteTransport;
+    private final EngineGameParameterSession session;
+    private final CompletableFuture<?> restored;
+    private final AtomicBoolean holdRestoreReadback = new AtomicBoolean();
+    private final CountDownLatch restoreReadbackHeld = new CountDownLatch(1);
+    private boolean restoreReadbackReleased;
+
+    private SavedGameParameters(EngineManager.EngineGameOwnerTransaction owner) throws Exception {
+      black.isKatago = true;
+      white.isKatago = true;
+      blackValues.put("analysisWideRootNoise", 0.3);
+      blackValues.put("playoutDoublingAdvantage", 0.25);
+      whiteValues.put("analysisWideRootNoise", 0.7);
+      whiteValues.put("playoutDoublingAdvantage", -0.75);
+      blackTransport =
+          ExactSnapshotRestoreProtocolFixture.installAsync(black, command -> respond(blackValues, command));
+      whiteTransport =
+          ExactSnapshotRestoreProtocolFixture.installAsync(white, command -> respond(whiteValues, command));
+      session = EngineGameParameterSession.forBatch(owner.plan, Lizzie.board, null);
+      // Manual activation skips startEngineGame, so reproduce its batch-session ownership too.
+      Field sessionField = EngineManager.class.getDeclaredField("engineGameParameterSession");
+      sessionField.setAccessible(true);
+      sessionField.set(manager, session);
+      session.applyOpening(owner);
+      Field restoredField = EngineGameParameterSession.class.getDeclaredField("restored");
+      restoredField.setAccessible(true);
+      restored = (CompletableFuture<?>) restoredField.get(session);
+      assertOpening();
+    }
+
+    private ExactSnapshotRestoreProtocolFixture.Response respond(
+        java.util.Map<String, Double> values, String command) {
+      String[] parts = command.split(" ");
+      if (parts.length == 3 && parts[0].equals("kata-set-param")) {
+        values.put(parts[1], Double.parseDouble(parts[2]));
+      } else if (parts.length == 2 && parts[0].equals("kata-get-param")) {
+        if (values == whiteValues
+            && parts[1].equals("analysisWideRootNoise")
+            && holdRestoreReadback.compareAndSet(true, false)) {
+          restoreReadbackHeld.countDown();
+          return null;
+        }
+        return ExactSnapshotRestoreProtocolFixture.Response.success(String.valueOf(values.get(parts[1])));
+      }
+      return ExactSnapshotRestoreProtocolFixture.Response.success();
+    }
+
+    private void assertOpening() {
+      assertEquals(0.5, blackValues.get("analysisWideRootNoise"));
+      assertEquals(1.5, blackValues.get("playoutDoublingAdvantage"));
+      assertEquals(1.0, whiteValues.get("analysisWideRootNoise"));
+      assertEquals(-1.5, whiteValues.get("playoutDoublingAdvantage"));
+    }
+
+    private void awaitRestored() throws Exception {
+      restored.get(5, TimeUnit.SECONDS);
+      assertEquals(0.3, blackValues.get("analysisWideRootNoise"));
+      assertEquals(0.25, blackValues.get("playoutDoublingAdvantage"));
+      assertEquals(0.7, whiteValues.get("analysisWideRootNoise"));
+      assertEquals(-0.75, whiteValues.get("playoutDoublingAdvantage"));
+      assertEquals(0.3, black.wrn);
+      assertEquals(0.25, black.pda);
+      assertEquals(0.7, white.wrn);
+      assertEquals(-0.75, white.pda);
+      assertTrue(black.isLoaded() && white.isLoaded());
+    }
+
+    private int commandCount() {
+      return blackTransport.commands().size() + whiteTransport.commands().size();
+    }
+
+    private void releaseRestoreReadback() {
+      if (restoreReadbackHeld.getCount() != 0 || restoreReadbackReleased) return;
+      restoreReadbackReleased = true;
+      List<String> commands = whiteTransport.rawCommands();
+      for (int index = commands.size() - 1; index >= 0; index--) {
+        String command = commands.get(index);
+        if (command.endsWith("kata-get-param analysisWideRootNoise")) {
+          whiteTransport.respond("=" + command.split(" ", 2)[0] + " 0.7");
+          return;
+        }
+      }
+      throw new AssertionError("the held numbered restore request is missing");
+    }
+
+    @Override
+    public void close() throws Exception {
+      // Do not let an assertion failure leave a restore reader running over restored globals.
+      try {
+        releaseRestoreReadback();
+        session.restoreAndWait(5000);
+      } finally {
+        try (blackTransport; whiteTransport) {}
+      }
     }
   }
 

@@ -186,6 +186,7 @@ public class Menu extends JMenuBar {
   private JFontButton doubleMenuPauseGame;
   private JFontButton doubleMenuResign;
   private JFontButton doubleMenuStopGame;
+  private JFontButton doubleMenuGameParameters;
 
   ImageIcon iconAllow;
   ImageIcon iconAvoid;
@@ -3117,6 +3118,7 @@ public class Menu extends JMenuBar {
           }
         });
     gameMenu.add(pauseEngineGame);
+    EngineGameParameterControls.addMenuEntry(gameMenu, EngineGamePresentation::current);
 
     final JFontMenuItem changeEngineGameNumbers =
         new JFontMenuItem(resourceBundle.getString("Menu.changeEngineGameNumbers"));
@@ -5850,6 +5852,7 @@ public class Menu extends JMenuBar {
         new KeyAdapter() {
           @Override
           public void keyReleased(KeyEvent e) {
+            if (EngineGameDesktop.parametersOwned()) return;
             String text = txtPDA.getText().trim();
             if (text.isEmpty() || text.equals("-") || text.equals(".")) return;
             try {
@@ -6789,7 +6792,7 @@ public class Menu extends JMenuBar {
     JFontCheckBox enabled = wrn ? chkWRN : chkPDA;
     boolean wasEnabled = wrn ? Lizzie.config.chkKataEngineWRN : Lizzie.config.chkKataEnginePDA;
     // A queued document/checkbox event must re-check ownership, even before the UI refresh runs.
-    if (wrn && !breadthAdmissionAvailable()) {
+    if (EngineGameDesktop.parametersOwned() || (wrn && !breadthAdmissionAvailable())) {
       if (checkboxChanged) enabled.setSelected(wasEnabled);
       refreshBreadthAdmission();
       return;
@@ -6816,7 +6819,10 @@ public class Menu extends JMenuBar {
         ? engine -> engine.sendCommand("kata-set-param analysisWideRootNoise " + value)
         : engine -> engine.setPda(String.valueOf(value));
     if (snapshot.startingOrPlaying()) {
-      EngineGamePresentation.sendToParticipants(snapshot, command);
+      Leelaz first = EngineGamePresentation.firstEngine(snapshot);
+      Leelaz second = EngineGamePresentation.secondEngine(snapshot);
+      if (first != null) command.accept(first);
+      if (second != null) command.accept(second);
     } else {
       command.accept(Lizzie.leelaz);
     }
@@ -6996,7 +7002,7 @@ public class Menu extends JMenuBar {
       chkPDA.setVisible(false);
     } else {
       if (Lizzie.config.showPDAInMenu
-          && !isEngineGame()
+          && !isGenmoveEngineGame()
           && Lizzie.leelaz != null
           && Lizzie.leelaz.isKatago) {
         chkPDA.setBounds(
@@ -7048,7 +7054,7 @@ public class Menu extends JMenuBar {
     }
 
     if (Lizzie.config.showWRNInMenu
-        && !isEngineGame()
+        && !isGenmoveEngineGame()
         && Lizzie.leelaz != null
         && Lizzie.leelaz.isKatago) {
       chkWRN.setBounds(
@@ -7214,6 +7220,7 @@ public class Menu extends JMenuBar {
       this.remove(byoyomiTime);
       if (doubleMenuNewGame != null) remove(doubleMenuNewGame);
       if (doubleMenuPauseGame != null) remove(doubleMenuPauseGame);
+      if (doubleMenuGameParameters != null) remove(doubleMenuGameParameters);
       if (doubleMenuResign != null) remove(doubleMenuResign);
     }
     byoyomiTime = new JFontLabel();
@@ -7802,6 +7809,7 @@ public class Menu extends JMenuBar {
       doubleMenuPauseGame = new JFontButton(resourceBundle.getString("Menu.pauseGameBtn"));
       doubleMenuNewGame.setFocusable(false);
       doubleMenuPauseGame.setFocusable(false);
+      doubleMenuGameParameters = EngineGameParameterControls.createEntry();
 
       JPopupMenu newGamePopup = new JPopupMenu();
 
@@ -8817,6 +8825,7 @@ public class Menu extends JMenuBar {
     else doubleMenuPauseGame.setText(resourceBundle.getString("Menu.pauseGameBtn"));
     doubleMenuNewGame.setFocusable(false);
     doubleMenuPauseGame.setFocusable(false);
+    doubleMenuGameParameters = EngineGameParameterControls.createEntry();
     AppleStyleSupport.markPrimary(doubleMenuNewGame);
 
     JPopupMenu newGamePopup = new JPopupMenu();
@@ -8924,6 +8933,9 @@ public class Menu extends JMenuBar {
       Lizzie.frame.topPanel.add(doubleMenuPauseGame);
       doubleMenuPauseGame.setPreferredSize(
           new Dimension((int) doubleMenuPauseGame.getPreferredSize().width, Config.menuHeight));
+      Lizzie.frame.topPanel.add(doubleMenuGameParameters);
+      doubleMenuGameParameters.setPreferredSize(
+          new Dimension(doubleMenuGameParameters.getPreferredSize().width, Config.menuHeight));
       Lizzie.frame.topPanel.add(doubleMenuResign);
       doubleMenuResign.setPreferredSize(
           new Dimension((int) doubleMenuResign.getPreferredSize().width, Config.menuHeight));
@@ -9644,16 +9656,17 @@ public class Menu extends JMenuBar {
   }
 
   /**
-   * Breadth is a user analysis setting: not while a web trial owns the engine, while the engine
-   * plays a genmove game or a game against the user, or while the current engine cannot take it.
+   * Breadth is a user analysis setting: not while a web trial or analysis batch owns the engine,
+   * while the engine plays a genmove game or a game against the user, or while the current engine
+   * cannot take it.
    */
   private boolean breadthAdmissionAvailable() {
-    EngineGameSnapshot game = EngineGamePresentation.current();
     LizzieFrame frame = Lizzie.frame;
     Leelaz engine = Lizzie.leelaz;
     return (Lizzie.webBoardManager == null
             || !Lizzie.webBoardManager.isEngineOperationExcludedByTrial())
-        && !(game.startingOrPlaying() && game.view() != null && game.view().genmove())
+        && !EngineGameDesktop.parametersOwned()
+        && !isGenmoveEngineGame()
         && (frame == null || !frame.isPlayingAgainstLeelaz)
         && engine != null
         && engine.canSetAnalysisWideRootNoise();
@@ -9682,6 +9695,19 @@ public class Menu extends JMenuBar {
     boolean available = breadthAdmissionAvailable();
     chkWRN.setEnabled(available);
     txtWRN.setEnabled(available && chkWRN.isSelected());
+    // All analysis controls stay visible while the game panel owns the batch parameters.
+    if (chkPDA == null || txtGfPDA == null) return;
+    boolean parametersOwned = EngineGameDesktop.parametersOwned();
+    Leelaz engine = Lizzie.leelaz;
+    boolean pdaUsable =
+        !parametersOwned
+            && (!Lizzie.config.showDoubleMenu
+                || (engine != null && engine.isLoaded() && engine.isKatago));
+    chkPDA.setEnabled(pdaUsable);
+    txtGfPDA.setEnabled(pdaUsable && chkPDA.isSelected());
+    if (txtPDA != null) txtPDA.setEnabled(!parametersOwned);
+    EngineGameParameterControls.explainToolbarLock(
+        parametersOwned, chkWRN, txtWRN, chkPDA, txtGfPDA, txtPDA);
   }
 
   public void setPdaAndWrn(double pda, double wrn) {
@@ -9712,7 +9738,7 @@ public class Menu extends JMenuBar {
       more2.setVisible(false);
       customPDAMorePanel.setVisible(false);
       if (Lizzie.config.showPDAInMenu
-          && !isEngineGame()
+          && !isGenmoveEngineGame()
           && Lizzie.leelaz != null
           && Lizzie.leelaz.isKatago) {
         if (pdaFieldPanel != null) {
@@ -9731,7 +9757,7 @@ public class Menu extends JMenuBar {
     }
 
     if (Lizzie.config.showWRNInMenu
-        && !isEngineGame()
+        && !isGenmoveEngineGame()
         && Lizzie.leelaz != null
         && Lizzie.leelaz.isKatago) {
       needRemoveS = false;
@@ -9769,6 +9795,7 @@ public class Menu extends JMenuBar {
               toolPanel.add(combinedSeparatorGameControl);
               toolPanel.add(doubleMenuNewGame);
               toolPanel.add(doubleMenuPauseGame);
+              toolPanel.add(doubleMenuGameParameters);
               toolPanel.add(doubleMenuResign);
             }
             toolPanel.add(combinedSeparatorPlaceStone);
@@ -10108,6 +10135,8 @@ public class Menu extends JMenuBar {
               doubleMenuPauseGame.setText(resourceBundle.getString("Menu.pauseGameBtn"));
             }
     resizeGamePauseButton();
+    EngineGameParameterControls.refreshEntry(doubleMenuGameParameters, snapshot);
+    refreshBreadthAdmission();
   }
 
   public void refreshDoubleMoveInfoStatus() {
@@ -10876,11 +10905,12 @@ public class Menu extends JMenuBar {
   public void setUseGfPda(boolean use, String pda) {
     setKataAnalysisText(txtGfPDA, KataAnalysisParameter.PDA, pda);
     chkPDA.setSelected(use);
-    txtGfPDA.setEnabled(use);
+    refreshBreadthAdmission();
   }
 
-  private boolean isEngineGame() {
-    return Lizzie.engineManager != null && EngineGamePresentation.current().startingOrPlaying();
+  private boolean isGenmoveEngineGame() {
+    EngineGameSnapshot snapshot = EngineGamePresentation.current();
+    return snapshot.startingOrPlaying() && snapshot.view() != null && snapshot.view().genmove();
   }
 
   public void setChkShowBlack(boolean show) {

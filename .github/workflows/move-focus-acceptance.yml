@@ -1,4 +1,4 @@
-name: Native Windows Move Focus
+name: Native Windows Engine Acceptance
 
 on:
   workflow_dispatch:
@@ -6,8 +6,17 @@ on:
     paths:
       - '.github/workflows/move-focus-acceptance.yml'
       - 'src/main/java/featurecat/lizzie/analysis/**'
+      - 'src/main/java/featurecat/lizzie/enginegame/**'
       - 'src/main/java/featurecat/lizzie/gui/LizzieFrame.java'
+      - 'src/main/java/featurecat/lizzie/gui/Menu.java'
+      - 'src/main/java/featurecat/lizzie/gui/NewEngineGameDialog.java'
+      - 'src/main/java/featurecat/lizzie/gui/EngineGameBatchSpecCapture.java'
+      - 'src/main/java/featurecat/lizzie/gui/EngineGameParameterControls.java'
+      - 'src/main/java/featurecat/lizzie/gui/EngineGameParametersDialog.java'
+      - 'src/main/java/featurecat/lizzie/gui/SetKataEngines.java'
+      - 'src/main/java/featurecat/lizzie/gui/SetKataPDA.java'
       - 'src/test/java/featurecat/lizzie/gui/MoveFocusNativeAcceptanceIT.java'
+      - 'src/test/java/featurecat/lizzie/gui/EngineGameParametersAcceptanceIT.java'
 
 permissions:
   contents: read
@@ -64,11 +73,15 @@ jobs:
         shell: pwsh
         run: |
           $model = "$env:GITHUB_WORKSPACE/upstream-katago/cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz"
-          mvn -B '-Dfmt.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dlizzie.focus.acceptance=true' "-Dlizzie.focus.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.focus.model=$model" '-Dtest=MoveFocusNativeAcceptanceIT' test
-          if ($LASTEXITCODE -ne 0) { throw 'Native focus acceptance failed' }
+          mvn -B '-Dfmt.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dlizzie.focus.acceptance=true' "-Dlizzie.focus.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.focus.model=$model" '-Dlizzie.acceptance.engineGameParameters=true' "-Dlizzie.acceptance.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.acceptance.model=$model" '-Dtest=MoveFocusNativeAcceptanceIT,EngineGameParametersAcceptanceIT' test
+          if ($LASTEXITCODE -ne 0) { throw 'Native engine acceptance failed' }
           [xml]$report = Get-Content 'target/surefire-reports/TEST-featurecat.lizzie.gui.MoveFocusNativeAcceptanceIT.xml'
           if ([int]$report.testsuite.tests -ne 1 -or [int]$report.testsuite.failures -ne 0 -or [int]$report.testsuite.errors -ne 0 -or [int]$report.testsuite.skipped -ne 0) {
             throw 'Required native case was missing, skipped, or failed'
+          }
+          [xml]$parameters = Get-Content 'target/surefire-reports/TEST-featurecat.lizzie.gui.EngineGameParametersAcceptanceIT.xml'
+          if ([int]$parameters.testsuite.tests -ne 2 -or [int]$parameters.testsuite.failures -ne 0 -or [int]$parameters.testsuite.errors -ne 0 -or [int]$parameters.testsuite.skipped -ne 0) {
+            throw 'Required dual-engine parameter cases were missing, skipped, or failed'
           }
       - name: Keep native evidence without claiming GPU acceptance
         if: always()

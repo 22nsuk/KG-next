@@ -147,7 +147,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -211,6 +211,14 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.SetKataEnginesHitTest", "threadCheckboxReceivesMouseAtEverySupportedFontSize"),
                 ("featurecat.lizzie.gui.SetKataEnginesHitTest", "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft"),
                 ("featurecat.lizzie.gui.SetKataEnginesHitTest", "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange"),
+                ("featurecat.lizzie.gui.NewEngineGameParametersDesktopTest", "openingDialogRejectsInvalidDraftsThenPersistsAndCapturesPositions"),
+                ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused"),
+                ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuHidesThePanelOutsideAnAnalysisGame"),
+                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWaitsForEveryConfirmationWithoutChangingThePanelThenCloses"),
+                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "failureKeepsThePanelOpenAndASuccessfulRetryClosesIt"),
+                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "repeatedOkCannotDismissAnUnconfirmedRequestOrHideItsFailure"),
+                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWithoutEditsAndEscCloseWithoutSendingAndDropTheDraft"),
+                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "panelShrinksBackAfterATemporaryLabelUnlessTheUserResizedIt"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
