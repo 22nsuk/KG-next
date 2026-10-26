@@ -126,7 +126,6 @@ public final class EngineGameParameterSession {
     private final Double[][] confirmed = new Double[2][2];
     private final Double[][] target = new Double[2][2];
     private boolean pending;
-    private boolean workerRunning;
     private String failure;
     private volatile boolean blocked;
 
@@ -278,10 +277,9 @@ public final class EngineGameParameterSession {
       for (int k = 0; k < 2; k++) {
         System.arraycopy(next[k], 0, current.target[k], 0, 2);
       }
+      start = !current.pending;
       current.pending = true;
       current.refreshBlocked();
-      start = !current.workerRunning;
-      current.workerRunning = true;
     }
     onChange.run();
     if (start
@@ -452,7 +450,6 @@ public final class EngineGameParameterSession {
             if (!again) {
               current.pending = false;
               current.failure = null;
-              current.workerRunning = false;
               current.refreshBlocked();
             }
           }
@@ -562,7 +559,6 @@ public final class EngineGameParameterSession {
     EngineGameOwnerTransaction owner = current.owner;
     synchronized (this) {
       current.pending = false;
-      current.workerRunning = false;
       current.failure = detail == null ? text("EngineGameParameters.updateFailedDetail") : detail;
       current.refreshBlocked();
     }

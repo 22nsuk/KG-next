@@ -937,6 +937,10 @@ class EngineManagerEngineGameStateMachineTest {
       startExactAnalyze(black, owner, "B");
       EngineGameParameterSession.revise(
           owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null), () -> {});
+      assertTrue(EngineGameParameterSession.state(owner).pending());
+      assertEquals(featurecat.lizzie.enginegame.EngineGameParameterRevision.ACCEPTED,
+          EngineGameParameterSession.revise(
+              owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(1.2, null), () -> {}));
 
       black.parseAnalysisLineForTest(kataAnalysisInfo("D4"));
       black.notifyAutoPkForEngineGameTest(
@@ -947,6 +951,7 @@ class EngineManagerEngineGameStateMachineTest {
       kata.release();
       awaitCondition(() -> !EngineGameParameterSession.state(owner).pending());
       awaitOperationsReleased(owner);
+      assertEquals(1.2, kata.of(black), "the pending update must apply the latest target");
       black.parseAnalysisLineForTest(kataAnalysisInfo("D4"));
       black.notifyAutoPkForEngineGameTest(
           true,
