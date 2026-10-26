@@ -399,7 +399,6 @@ public final class EngineGameParameterSession {
           invalidateAnalysis();
         }
         boolean again;
-        boolean resume = false;
         owner.mutationLock.lock();
         try {
           if (!EngineManager.isCurrentEngineGameTransaction(owner)) return;
@@ -413,20 +412,21 @@ public final class EngineGameParameterSession {
             }
           }
           if (!again) {
-            resume = !owner.paused && (owner.product == null || !owner.product.paused());
+            if (!owner.paused && (owner.product == null || !owner.product.paused())) {
+              // A fast reply may commit the next move as soon as analysis resumes. Keep the
+              // commit fence until ponder's clock reset has been undone for this same move.
+              EngineManager.continueEngineGame(owner);
+              owner.blackEngine.startPonderTime = ponderStarts[0];
+              owner.whiteEngine.startPonderTime = ponderStarts[1];
+              owner.blackEngine.pkMoveStartTime = moveStarts[0];
+              owner.whiteEngine.pkMoveStartTime = moveStarts[1];
+            }
           }
         } finally {
           owner.mutationLock.unlock();
         }
         onChange.run();
         if (!again) {
-          if (resume && EngineManager.isCurrentEngineGameTransaction(owner)) {
-            EngineManager.continueEngineGame(owner);
-            owner.blackEngine.startPonderTime = ponderStarts[0];
-            owner.whiteEngine.startPonderTime = ponderStarts[1];
-            owner.blackEngine.pkMoveStartTime = moveStarts[0];
-            owner.whiteEngine.pkMoveStartTime = moveStarts[1];
-          }
           return;
         }
       }
@@ -486,14 +486,24 @@ public final class EngineGameParameterSession {
           append(failure, readFailures[i]);
           continue;
         }
-        if (!publish(engine(owner, p), incarnation(owner, p), parameter, parameterValues[p])) {
-          append(failure, label(p) + ": " + text("EngineGameParameters.processChanged"));
-          continue;
-        }
-        if (current != null) {
-          synchronized (this) {
-            current.confirmed[parameter.ordinal()][p] = parameterValues[p];
+        // Readback can finish just before Stop retires this owner and restores the batch.
+        // Publish under the terminal transition's fence, or leave the restored state alone.
+        owner.mutationLock.lock();
+        try {
+          if (!EngineManager.isCurrentEngineGameTransaction(owner)) {
+            throw new IllegalStateException(text("EngineGameParameters.transactionLost"));
           }
+          if (!publish(engine(owner, p), incarnation(owner, p), parameter, parameterValues[p])) {
+            append(failure, label(p) + ": " + text("EngineGameParameters.processChanged"));
+            continue;
+          }
+          if (current != null) {
+            synchronized (this) {
+              current.confirmed[parameter.ordinal()][p] = parameterValues[p];
+            }
+          }
+        } finally {
+          owner.mutationLock.unlock();
         }
       }
     }

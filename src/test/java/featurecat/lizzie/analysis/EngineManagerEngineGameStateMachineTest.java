@@ -567,6 +567,127 @@ class EngineManagerEngineGameStateMachineTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void fastMoveAfterParameterResumeKeepsTheNextMovesOwnClock(boolean ponderBoth) throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = breadthSession(0.0, 0.0);
+    Lizzie.config.enginePkPonder = ponderBoth;
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      black.startPonderTime = black.pkMoveStartTime = 1234L;
+      white.startPonderTime = white.pkMoveStartTime = 5678L;
+      CountDownLatch resumed = new CountDownLatch(1);
+      CountDownLatch releaseResume = new CountDownLatch(1);
+      black.afterPonder = () -> {
+        resumed.countDown();
+        await(releaseResume);
+      };
+      AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+      Thread reader = new Thread(() -> {
+        try {
+          black.parseAnalysisLineForTest(kataAnalysisInfo("D4"));
+          black.notifyAutoPkForEngineGameTest(
+              true, EngineManager.captureEngineGamePrimaryContext(
+                  black, black.currentEngineIncarnation()));
+        } catch (Throwable failure) {
+          readerFailure.set(failure);
+        }
+      }, "fast-resumed-analysis");
+      try {
+        EngineGameParameterSession.revise(
+            owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null), () -> {});
+        assertTrue(resumed.await(2, TimeUnit.SECONDS));
+        reader.start();
+        // Force the response into the window after ponder but before the old budget is restored.
+        // The fixed implementation fences the reader; the old one completes the move here.
+        awaitCondition(() -> owner.mutationLock.hasQueuedThread(reader) || !reader.isAlive());
+      } finally {
+        releaseResume.countDown();
+        reader.join(2000L);
+      }
+      assertFalse(reader.isAlive());
+      assertNull(readerFailure.get());
+      awaitOperationsReleased(owner);
+      assertEquals(1, Lizzie.board.getHistory().getMoveNumber());
+      assertFalse(Lizzie.board.getData().blackToPlay);
+      assertTrue(white.pkMoveStartTime > 5678L, "the next move must keep its new budget");
+      assertEquals(white.pkMoveStartTime, white.startPonderTime);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void manualStopCannotBeOverwrittenByAConfirmedParameterPublication(boolean pda) throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.5, 1.0, 0.0, 2.0);
+    Field wrnControl = Menu.class.getDeclaredField("chkWRN");
+    wrnControl.setAccessible(true);
+    wrnControl.set(LizzieFrame.menu, new featurecat.lizzie.gui.JFontCheckBox());
+    LizzieFrame.menu.txtWRN = new featurecat.lizzie.gui.JFontTextField();
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7, 0.25, -0.75)) {
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.5, 1.0, 0.0, 2.0), black, 0);
+      session.applyOpening(owner);
+      EngineManager.pauseEngineGame(owner);
+      CountDownLatch publishing = new CountDownLatch(1);
+      CountDownLatch releasePublication = new CountDownLatch(1);
+      white.beforeLiveIncarnationAction = () -> {
+        publishing.countDown();
+        // This schedules a CPU pause after readback, not an interruptible protocol wait.
+        boolean interrupted = false;
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        try {
+          while (true) {
+            try {
+              assertTrue(releasePublication.await(
+                  Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+              return;
+            } catch (InterruptedException ignored) {
+              interrupted = true;
+            }
+          }
+        } finally {
+          if (interrupted) Thread.currentThread().interrupt();
+        }
+      };
+      AtomicReference<Throwable> stopFailure = new AtomicReference<>();
+      Thread stop = new Thread(() -> {
+        try {
+          manager.stopEngineGame(0, true);
+        } catch (Throwable failure) {
+          stopFailure.set(failure);
+        }
+      }, "stop-during-parameter-publication");
+      try {
+        EngineGameParameterSession.revise(
+            owner,
+            new featurecat.lizzie.enginegame.EngineGameParameterRequest(
+                null, pda ? null : 0.6, null, pda ? -1.5 : null),
+            () -> {});
+        assertTrue(publishing.await(2, TimeUnit.SECONDS));
+        stop.start();
+        awaitCondition(() -> owner.mutationLock.hasQueuedThread(stop)
+            || !session.hasUnrestoredParameters());
+      } finally {
+        releasePublication.countDown();
+        stop.join(2000L);
+      }
+      assertFalse(stop.isAlive());
+      assertNull(stopFailure.get());
+      awaitOperationsReleased(owner);
+      awaitCondition(() -> !session.hasUnrestoredParameters());
+      awaitCondition(owner::retirementFinishedForTest);
+      assertTrue(white.isLoaded(), "restoration must preserve the original process");
+      assertEquals(0.7, kata.of(white));
+      assertEquals(-0.75, kata.pda(white));
+      assertEquals(kata.of(white), white.wrn, "late publication must not undo WRN restoration");
+      assertEquals(kata.pda(white), white.pda, "late publication must not undo PDA restoration");
+    }
+  }
+
   @Test
   void pendingBreadthUpdateDeniesTheOldSearchItsMove() throws Exception {
     ImmediateUiEngineManager manager = installManager();
@@ -6601,6 +6722,7 @@ class EngineManagerEngineGameStateMachineTest {
     private final AtomicInteger deferredOpenClPrepareCount = new AtomicInteger();
     private volatile ExactSnapshotRestoreProtocolFixture.Transport recoveryTransport;
     private volatile Runnable beforeLiveIncarnationAction;
+    private volatile Runnable afterPonder;
 
     private StateMachineLeelaz() throws Exception {
       super("");
@@ -6638,6 +6760,14 @@ class EngineManagerEngineGameStateMachineTest {
       beforeLiveIncarnationAction = null;
       if (before != null) before.run();
       return super.runIfCurrentLiveEngineIncarnation(expectedIncarnation, action);
+    }
+
+    @Override
+    public void ponder() {
+      super.ponder();
+      Runnable after = afterPonder;
+      afterPonder = null;
+      if (after != null) after.run();
     }
 
     @Override
