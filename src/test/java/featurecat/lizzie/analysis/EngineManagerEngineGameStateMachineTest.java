@@ -721,6 +721,78 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"parameters,false", "parameters,true", "komi,false", "komi,true",
+      "manual,false", "manual,true"})
+  void pauseOrdersStopAfterAnAlreadyAdmittedResume(String source, boolean ponderBoth)
+      throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = breadthSession(0.0, 0.0);
+    Lizzie.config.enginePkPonder = ponderBoth;
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      CountDownLatch resuming = new CountDownLatch(1);
+      CountDownLatch releaseResume = new CountDownLatch(1);
+      black.beforePonder = () -> {
+        resuming.countDown();
+        await(releaseResume);
+      };
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Thread pause = new Thread(() -> {
+        try {
+          EngineManager.pauseEngineGame(owner);
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "pause-during-search-resume");
+      Thread manualResume = new Thread(() -> {
+        try {
+          EngineManager.resumeEngineGame(owner);
+        } catch (Throwable thrown) {
+          failure.compareAndSet(null, thrown);
+        }
+      }, "manual-search-resume");
+      int blackStart = black.commandText().length();
+      int whiteStart = white.commandText().length();
+      try {
+        switch (source) {
+          case "parameters" -> EngineGameParameterSession.revise(
+              owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null),
+              () -> {});
+          case "komi" -> assertTrue(EngineManager.reviseEngineGameKomi(owner, 8.5, () -> {}));
+          case "manual" -> {
+            EngineManager.pauseEngineGame(owner);
+            manualResume.start();
+          }
+          default -> throw new AssertionError(source);
+        }
+        assertTrue(resuming.await(2, TimeUnit.SECONDS));
+        pause.start();
+        // Stop the resumer after its pause check but before the actual analysis command.
+        // The fixed pause waits for the shared fence; the old pause sends stop and returns.
+        awaitCondition(() -> owner.mutationLock.hasQueuedThread(pause) || !pause.isAlive());
+      } finally {
+        releaseResume.countDown();
+        pause.join(2000L);
+        manualResume.join(2000L);
+      }
+      assertFalse(pause.isAlive());
+      assertFalse(manualResume.isAlive());
+      assertNull(failure.get());
+      awaitOperationsReleased(owner);
+      assertTrue(owner.paused());
+      assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
+      String blackCommands = black.commandText().substring(blackStart);
+      String whiteCommands = white.commandText().substring(whiteStart);
+      assertEquals(1, commandLineCount(blackCommands, "kata-analyze"));
+      assertEquals(ponderBoth ? 1 : 0, commandLineCount(whiteCommands, "kata-analyze"));
+      assertTrue(blackCommands.stripTrailing().endsWith("stop"), blackCommands);
+      assertTrue(whiteCommands.stripTrailing().endsWith("stop"), whiteCommands);
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void fastMoveAfterParameterResumeKeepsTheNextMovesOwnClock(boolean ponderBoth) throws Exception {
     ImmediateUiEngineManager manager = installManager();
@@ -6989,6 +7061,7 @@ class EngineManagerEngineGameStateMachineTest {
     private final AtomicInteger deferredOpenClPrepareCount = new AtomicInteger();
     private volatile ExactSnapshotRestoreProtocolFixture.Transport recoveryTransport;
     private volatile Runnable beforeLiveIncarnationAction;
+    private volatile Runnable beforePonder;
     private volatile Runnable afterPonder;
 
     private StateMachineLeelaz() throws Exception {
@@ -7031,6 +7104,9 @@ class EngineManagerEngineGameStateMachineTest {
 
     @Override
     public void ponder() {
+      Runnable before = beforePonder;
+      beforePonder = null;
+      if (before != null) before.run();
       super.ponder();
       Runnable after = afterPonder;
       afterPonder = null;

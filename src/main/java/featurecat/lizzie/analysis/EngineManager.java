@@ -7782,19 +7782,26 @@ public class EngineManager {
     if (owner == null) {
       return;
     }
-    owner.paused = true;
-    if (owner.product != null) {
-      owner.product.setPaused(true);
+    // Order the pause intent and both stop commands with every search continuation. A worker
+    // that already passed its pause check must finish issuing analysis before these stops.
+    owner.mutationLock.lock();
+    try {
+      owner.paused = true;
+      if (owner.product != null) {
+        owner.product.setPaused(true);
+      }
+      if (owner.phase != EngineGamePhase.ACTIVE) {
+        return;
+      }
+      if (owner.isGenmove()) {
+        owner.genmovePauseSettled = owner.pendingGenmoveSide != null;
+        return;
+      }
+      owner.blackEngine.nameCmd();
+      owner.whiteEngine.nameCmd();
+    } finally {
+      owner.mutationLock.unlock();
     }
-    if (owner.phase != EngineGamePhase.ACTIVE) {
-      return;
-    }
-    if (owner.isGenmove()) {
-      owner.genmovePauseSettled = owner.pendingGenmoveSide != null;
-      return;
-    }
-    owner.blackEngine.nameCmd();
-    owner.whiteEngine.nameCmd();
   }
 
   public static void resumeEngineGame(Object ownerToken) {
@@ -7807,48 +7814,54 @@ public class EngineManager {
     if (owner == null) {
       return;
     }
-    owner.paused = false;
-    if (owner.product != null) owner.product.setPaused(false);
-    continueEngineGame(owner);
+    owner.mutationLock.lock();
+    try {
+      owner.paused = false;
+      if (owner.product != null) owner.product.setPaused(false);
+      continueEngineGame(owner);
+    } finally {
+      owner.mutationLock.unlock();
+    }
   }
 
   static void continueEngineGame(EngineGameOwnerTransaction owner) {
-    EngineGameSide pending;
+    // Keep the decision and command issuance in one transition, including both participants.
+    // Parameter/komi workers and explicit Resume all use this same pause/continue boundary.
     owner.mutationLock.lock();
     try {
       if (!isCurrentEngineGameTransaction(owner) || owner.phase != EngineGamePhase.ACTIVE
           || owner.paused()) return;
-      pending = owner.product != null
+      EngineGameSide pending = owner.product != null
           ? owner.product.takePendingGenmoveSide() : owner.pendingGenmoveSide;
       owner.pendingGenmoveSide = null;
       owner.genmovePauseSettled = false;
-    } finally {
-      owner.mutationLock.unlock();
-    }
-    if (owner.isGenmove()) {
-      if (pending == null) {
+      if (owner.isGenmove()) {
+        if (pending == null) {
+          return;
+        }
+        Leelaz mover = pending == EngineGameSide.BLACK ? owner.blackEngine : owner.whiteEngine;
+        String color = pending == EngineGameSide.BLACK ? "B" : "W";
+        if (!runEngineGameIoStep(owner, () -> {
+          mover.nameCmd();
+          mover.genmoveForPk(color, owner);
+        })) return;
+        if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
+          Leelaz opponent =
+              pending == EngineGameSide.BLACK ? owner.whiteEngine : owner.blackEngine;
+          runEngineGameIoStep(owner, opponent::ponder);
+        }
         return;
       }
-      Leelaz mover = pending == EngineGameSide.BLACK ? owner.blackEngine : owner.whiteEngine;
-      String color = pending == EngineGameSide.BLACK ? "B" : "W";
-      if (!runEngineGameIoStep(owner, () -> {
-        mover.nameCmd();
-        mover.genmoveForPk(color, owner);
-      })) return;
       if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
-        Leelaz opponent =
-            pending == EngineGameSide.BLACK ? owner.whiteEngine : owner.blackEngine;
-        runEngineGameIoStep(owner, opponent::ponder);
+        if (!runEngineGameIoStep(owner, owner.blackEngine::ponder)) return;
+        runEngineGameIoStep(owner, owner.whiteEngine::ponder);
+      } else if (Lizzie.board != null && Lizzie.board.getData().blackToPlay) {
+        runEngineGameIoStep(owner, owner.blackEngine::ponder);
+      } else if (Lizzie.board != null) {
+        runEngineGameIoStep(owner, owner.whiteEngine::ponder);
       }
-      return;
-    }
-    if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
-      if (!runEngineGameIoStep(owner, owner.blackEngine::ponder)) return;
-      runEngineGameIoStep(owner, owner.whiteEngine::ponder);
-    } else if (Lizzie.board != null && Lizzie.board.getData().blackToPlay) {
-      runEngineGameIoStep(owner, owner.blackEngine::ponder);
-    } else if (Lizzie.board != null) {
-      runEngineGameIoStep(owner, owner.whiteEngine::ponder);
+    } finally {
+      owner.mutationLock.unlock();
     }
   }
 
