@@ -5,6 +5,8 @@ on:
   pull_request:
     paths:
       - '.github/workflows/move-focus-acceptance.yml'
+      - 'scripts/build_katago_source.py'
+      - 'scripts/package_katago_source_windows.py'
       - 'src/main/java/featurecat/lizzie/analysis/**'
       - 'src/main/java/featurecat/lizzie/enginegame/**'
       - 'src/main/java/featurecat/lizzie/gui/LizzieFrame.java'
@@ -29,12 +31,15 @@ jobs:
   native-focus:
     runs-on: windows-2022
     timeout-minutes: 25
+    env:
+      KATAGO_PARAMETER_COMMIT: 57677bab9dc1db7d993eccd9f26b0e5ac0ed5570
+      KATAGO_PARAMETER_REPOSITORY: https://github.com/22nsuk/KataGo
     steps:
       - uses: actions/checkout@v5
       - uses: actions/checkout@v5
         with:
-          repository: lightvector/KataGo
-          ref: 47aadc08518b3e121f22539796c911002f699584
+          repository: 22nsuk/KataGo
+          ref: ${{ env.KATAGO_PARAMETER_COMMIT }}
           path: upstream-katago
           persist-credentials: false
       - uses: actions/setup-python@v6
@@ -65,9 +70,9 @@ jobs:
         run: |
           python scripts/build_katago_windows_dependencies.py --output "$env:RUNNER_TEMP/focus-sdk" --jobs 3
           if ($LASTEXITCODE -ne 0) { throw 'SDK failed' }
-          python scripts/build_katago_source.py --source upstream-katago --output "$env:RUNNER_TEMP/focus-build" --target windows-cpu --windows-sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --jobs 3
+          python scripts/build_katago_source.py --source upstream-katago --output "$env:RUNNER_TEMP/focus-build" --source-commit "$env:KATAGO_PARAMETER_COMMIT" --source-repository "$env:KATAGO_PARAMETER_REPOSITORY" --target windows-cpu --windows-sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --jobs 3
           if ($LASTEXITCODE -ne 0) { throw 'Engine build failed' }
-          python scripts/package_katago_source_windows.py --build "$env:RUNNER_TEMP/focus-build" --sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --output "$env:RUNNER_TEMP/focus-engine"
+          python scripts/package_katago_source_windows.py --build "$env:RUNNER_TEMP/focus-build" --source-commit "$env:KATAGO_PARAMETER_COMMIT" --source-repository "$env:KATAGO_PARAMETER_REPOSITORY" --sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --output "$env:RUNNER_TEMP/focus-engine"
           if ($LASTEXITCODE -ne 0) { throw 'Engine dependency audit failed' }
       - name: Exercise the real native application with the real engine
         shell: pwsh

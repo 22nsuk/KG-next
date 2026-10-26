@@ -13,8 +13,6 @@ import featurecat.lizzie.gui.SetKataEngines;
 import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
 import java.math.BigDecimal;
-import java.math.MathContext;
-import java.math.RoundingMode;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,7 +24,11 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import javax.swing.SwingUtilities;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,7 +37,7 @@ import org.slf4j.LoggerFactory;
  * one analysis-mode engine-game batch.
  *
  * <p>Keeps apart the batch's frozen opening settings, the current game's requested targets, the
- * values each participant process confirmed by readback, and the values each participant process
+ * values each participant process confirmed by readback, and the parameter states each participant process
  * had before the batch first changed them. Each game applies the opening settings before analysis
  * starts; in-game changes stay with that game and write only the edited parameters. When the batch
  * ends, only the exact captured processes are restored; a replacement process is never written with
@@ -44,6 +46,9 @@ import org.slf4j.LoggerFactory;
  */
 public final class EngineGameParameterSession {
   private static final Logger LOG = LoggerFactory.getLogger(LogCategories.ENGINE);
+  private static final String MINIMUM_KATAGO_VERSION = "1.18.2";
+  private static final Pattern KATAGO_VERSION =
+      Pattern.compile("(\\d+)\\.(\\d+)\\.(\\d+)(?:[-+][^\\s]+)?");
 
   /** The parameters a game sets, in the order they are written. */
   private enum Parameter {
@@ -52,24 +57,35 @@ public final class EngineGameParameterSession {
 
     private final String gtpName;
 
-    private static final MathContext WRN_READBACK_PRECISION =
-        new MathContext(6, RoundingMode.HALF_EVEN);
-
     Parameter(String gtpName) {
       this.gtpName = gtpName;
     }
+  }
 
-    /**
-     * KataGo's WRN getter uses Global::doubleToString (six significant digits), whereas PDA
-     * uses the JSON serializer's round-trip representation. Accept either an exact reply or
-     * WRN's rounded representation, not an arbitrary absolute/relative error. This belongs
-     * only to protocol verification: distinct requested values must still be sent in full.
-     */
-    private boolean matchesReadback(double expected, double actual) {
-      return expected == actual
-          || (this == WRN
-              // Round the binary double itself, including values beside decimal halfway points.
-              && new BigDecimal(expected, WRN_READBACK_PRECISION).doubleValue() == actual);
+  /**
+   * Effective value and the configuration key we borrow. An absent PDA key differs from an
+   * explicit zero: KataGo uses its presence to choose automatic or static PDA for genmove.
+   * Other configuration keys, including dynamic PDA settings, remain with the engine throughout.
+   */
+  private record ParameterSnapshot(double value, String configuredValue) {
+    private static ParameterSnapshot parse(String payload) {
+      try {
+        JSONObject state = new JSONObject(payload);
+        Object value = state.get("value");
+        Object configured = state.get("configuredValue");
+        if (!(value instanceof Number number) || !Double.isFinite(number.doubleValue())) return null;
+        if (configured != JSONObject.NULL
+            && (!(configured instanceof String text) || parseNumber(text) == null)) return null;
+        return new ParameterSnapshot(number.doubleValue(),
+            configured == JSONObject.NULL ? null : (String) configured);
+      } catch (JSONException | NullPointerException invalid) {
+        return null;
+      }
+    }
+
+    private boolean matches(ParameterSnapshot actual) {
+      return actual != null && value == actual.value
+          && Objects.equals(configuredValue, actual.configuredValue);
     }
   }
 
@@ -92,9 +108,10 @@ public final class EngineGameParameterSession {
   /** Guarded by this; reads of {@link Game#blocked} are lock-free. */
   private volatile Game game;
 
-  /** A process's values before the batch; null for a parameter the process does not take. */
-  private record Original(String label, Leelaz engine, Object incarnation, Double wrn, Double pda) {
-    private Double value(Parameter parameter) {
+  /** A process's complete parameter snapshots; null for a parameter the process does not take. */
+  private record Original(String label, Leelaz engine, Object incarnation,
+      ParameterSnapshot wrn, ParameterSnapshot pda) {
+    private ParameterSnapshot snapshot(Parameter parameter) {
       return parameter == Parameter.WRN ? wrn : pda;
     }
   }
@@ -303,7 +320,17 @@ public final class EngineGameParameterSession {
       capturing[p] &= original(engine, incarnation(owner, p)) == null;
     }
     // Every participant is checked and captured before the first write.
-    Double[][] captured = new Double[2][2];
+    List<Leg> versions = new ArrayList<>();
+    for (int p = 0; p < 2; p++) {
+      if (!engine(owner, p).isKatago) continue;
+      versions.add(
+          new Leg(
+              label(p), engine(owner, p), incarnation(owner, p), "version",
+              payload -> supportedVersion(payload) ? null
+                  : text("EngineGameParameters.unsupportedVersion", MINIMUM_KATAGO_VERSION, payload)));
+    }
+    EngineGameParticipantCommands.confirmAll(owner, versions);
+    ParameterSnapshot[][] captured = new ParameterSnapshot[2][2];
     for (Parameter parameter : PARAMETERS) {
       int k = parameter.ordinal();
       List<Leg> captures = new ArrayList<>();
@@ -315,11 +342,11 @@ public final class EngineGameParameterSession {
                 label(p),
                 engine(owner, p),
                 incarnation(owner, p),
-                "kata-get-param " + parameter.gtpName,
+                "kata-get-param-state " + parameter.gtpName,
                 payload -> {
-                  Double value = parse(payload);
+                  ParameterSnapshot value = ParameterSnapshot.parse(payload);
                   if (value == null) {
-                    return "unreadable " + parameter.gtpName + " '" + payload + "'";
+                    return text("EngineGameParameters.snapshotRequired", parameter.gtpName, payload);
                   }
                   captured[k][position] = value;
                   return null;
@@ -630,26 +657,32 @@ public final class EngineGameParameterSession {
     String detail = null;
     try {
       for (Parameter parameter : PARAMETERS) {
-        Double value = original.value(parameter);
-        if (value == null) continue;
+        ParameterSnapshot snapshot = original.snapshot(parameter);
+        if (snapshot == null) continue;
         Leelaz engine = original.engine();
         Object incarnation = original.incarnation();
         detail =
             first(
                 EngineGameParticipantCommands.confirm(
                     null,
-                    List.of(setLeg(original.label(), engine, incarnation, parameter, value)),
+                    List.of(new Leg(original.label(), engine, incarnation,
+                        "kata-set-params " + new JSONObject().put(parameter.gtpName,
+                            snapshot.configuredValue() == null ? "" : snapshot.configuredValue()),
+                        null)),
                     true));
         if (detail == null) {
           detail =
               first(
                   EngineGameParticipantCommands.confirm(
                       null,
-                      List.of(verifyLeg(original.label(), engine, incarnation, parameter, value)),
+                      List.of(new Leg(original.label(), engine, incarnation,
+                          "kata-get-param-state " + parameter.gtpName,
+                          payload -> snapshot.matches(ParameterSnapshot.parse(payload)) ? null
+                              : text("EngineGameParameters.restoreStateMismatch", parameter.gtpName))),
                       true));
         }
         if (detail != null) break;
-        if (!publish(engine, incarnation, parameter, value)) {
+        if (!publish(engine, incarnation, parameter, snapshot.value())) {
           detail = original.label() + ": " + text("EngineGameParameters.processChanged");
           break;
         }
@@ -681,6 +714,20 @@ public final class EngineGameParameterSession {
 
   // ---- Helpers -------------------------------------------------------------------------
 
+  /** Version is read from each captured process, never inferred from its name or Java cache. */
+  private static boolean supportedVersion(String payload) {
+    Matcher version = KATAGO_VERSION.matcher(payload == null ? "" : payload.trim());
+    if (!version.matches()) return false;
+    try {
+      int major = Integer.parseInt(version.group(1));
+      int minor = Integer.parseInt(version.group(2));
+      int patch = Integer.parseInt(version.group(3));
+      return major > 1 || (major == 1 && (minor > 18 || (minor == 18 && patch >= 2)));
+    } catch (NumberFormatException invalid) {
+      return false;
+    }
+  }
+
   private synchronized Original original(Leelaz engine, Object incarnation) {
     for (Original original : originals) {
       if (original.engine() == engine && original.incarnation() == incarnation) return original;
@@ -704,10 +751,10 @@ public final class EngineGameParameterSession {
         label,
         engine,
         incarnation,
-        "kata-get-param " + parameter.gtpName,
+        "kata-get-param-state " + parameter.gtpName,
         payload -> {
-          Double actual = parse(payload);
-          return actual != null && parameter.matchesReadback(expected, actual)
+          ParameterSnapshot actual = ParameterSnapshot.parse(payload);
+          return actual != null && expected == actual.value()
               ? null
               : text("EngineGameParameters.readbackMismatch", payload, plain(expected));
         });
@@ -783,12 +830,12 @@ public final class EngineGameParameterSession {
     return false;
   }
 
-  /** Confirmed values retain the full request; readback formatting does not change user intent. */
+  /** Confirmed values and snapshot readbacks retain the full request precision. */
   private static boolean sameValue(Double expected, Double actual) {
     return actual != null && expected.doubleValue() == actual.doubleValue();
   }
 
-  private static Double parse(String payload) {
+  private static Double parseNumber(String payload) {
     try {
       double value = Double.parseDouble(payload.trim());
       return Double.isFinite(value) ? value : null;

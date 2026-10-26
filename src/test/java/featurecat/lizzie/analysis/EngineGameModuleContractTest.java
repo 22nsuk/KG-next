@@ -2454,16 +2454,23 @@ class EngineGameModuleContractTest {
     private ExactSnapshotRestoreProtocolFixture.Response respond(
         java.util.Map<String, Double> values, String command) {
       String[] parts = command.split(" ");
-      if (parts.length == 3 && parts[0].equals("kata-set-param")) {
+      if (command.equals("version")) {
+        return ExactSnapshotRestoreProtocolFixture.Response.success("1.18.2");
+      } else if (command.startsWith("kata-set-params ")) {
+        org.json.JSONObject changes = new org.json.JSONObject(command.substring(command.indexOf('{')));
+        for (String parameter : changes.keySet()) values.put(parameter, changes.getDouble(parameter));
+      } else if (parts.length == 3 && parts[0].equals("kata-set-param")) {
         values.put(parts[1], Double.parseDouble(parts[2]));
-      } else if (parts.length == 2 && parts[0].equals("kata-get-param")) {
+      } else if (parts.length == 2 && parts[0].equals("kata-get-param-state")) {
         if (values == whiteValues
             && parts[1].equals("analysisWideRootNoise")
             && holdRestoreReadback.compareAndSet(true, false)) {
           restoreReadbackHeld.countDown();
           return null;
         }
-        return ExactSnapshotRestoreProtocolFixture.Response.success(String.valueOf(values.get(parts[1])));
+        return ExactSnapshotRestoreProtocolFixture.Response.success(new org.json.JSONObject()
+            .put("value", values.get(parts[1]))
+            .put("configuredValue", String.valueOf(values.get(parts[1]))).toString());
       }
       return ExactSnapshotRestoreProtocolFixture.Response.success();
     }
@@ -2498,8 +2505,9 @@ class EngineGameModuleContractTest {
       List<String> commands = whiteTransport.rawCommands();
       for (int index = commands.size() - 1; index >= 0; index--) {
         String command = commands.get(index);
-        if (command.endsWith("kata-get-param analysisWideRootNoise")) {
-          whiteTransport.respond("=" + command.split(" ", 2)[0] + " 0.7");
+        if (command.endsWith("kata-get-param-state analysisWideRootNoise")) {
+          whiteTransport.respond("=" + command.split(" ", 2)[0] + " "
+              + new org.json.JSONObject().put("value", 0.7).put("configuredValue", "0.7"));
           return;
         }
       }

@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 
 /** Explicit, isolated native-window acceptance; ordinary unit runs never download an engine. */
 public class MoveFocusNativeAcceptanceIT {
-  private static final String SOURCE = "47aadc08518b3e121f22539796c911002f699584";
+  private static final String SOURCE = "57677bab9dc1db7d993eccd9f26b0e5ac0ed5570";
 
   @Test
   void realPinnedEngineUpdatesFocusAndSgfInTheProductionWindow() throws Exception {

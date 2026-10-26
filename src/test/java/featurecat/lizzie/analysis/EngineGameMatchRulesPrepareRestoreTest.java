@@ -529,15 +529,24 @@ class EngineGameMatchRulesPrepareRestoreTest {
       ExactSnapshotRestoreProtocolFixture.install(
           this,
           gtp -> {
-            // KataGo keeps and reports breadth and PDA; engine games read them back.
+            // Preserve the real snapshot protocol while the test controls match rules.
             String[] parts = gtp.split(" ");
-            if (parts.length == 3
-                && parts[0].equals("kata-set-param")
+            if (gtp.equals("version")) {
+              return ExactSnapshotRestoreProtocolFixture.Response.success("1.18.2");
+            }
+            if (gtp.startsWith("kata-set-params ")) {
+              org.json.JSONObject changes = new org.json.JSONObject(gtp.substring(gtp.indexOf('{')));
+              for (String name : changes.keySet()) parameters.put(name, changes.getString(name));
+            } else if (parts.length == 3 && parts[0].equals("kata-set-param")
                 && parameters.containsKey(parts[1])) {
               parameters.put(parts[1], parts[2]);
+            } else if (parts.length == 2 && parts[0].equals("kata-get-param-state")
+                && parameters.containsKey(parts[1])) {
+              return ExactSnapshotRestoreProtocolFixture.Response.success(new org.json.JSONObject()
+                  .put("value", Double.parseDouble(parameters.get(parts[1])))
+                  .put("configuredValue", parameters.get(parts[1])).toString());
             }
-            return parts.length == 2
-                    && parts[0].equals("kata-get-param")
+            return parts.length == 2 && parts[0].equals("kata-get-param")
                     && parameters.containsKey(parts[1])
                 ? ExactSnapshotRestoreProtocolFixture.Response.success(parameters.get(parts[1]))
                 : ExactSnapshotRestoreProtocolFixture.Response.success();

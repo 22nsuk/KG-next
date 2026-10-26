@@ -29,6 +29,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.json.JSONArray;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 /** Adapts KaTrain-compatible KataGo Analysis Engine WebSocket links to Lizzie's GTP flow. */
 public class KataGoAnalysisWebSocketTransport implements EngineTransport {
@@ -244,12 +245,14 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
       } else if (lower.equals("protocol_version")) {
         writeOk(responseId, "2");
       } else if (lower.equals("version")) {
-        writeOk(responseId, "1.16.4");
+        // This is the GTP contract implemented here, not the remote Analysis API backend's version.
+        writeOk(responseId, "1.18.2+kg-next-analysis-adapter");
       } else if (lower.equals("list_commands")) {
         writeOk(
             responseId,
             "protocol_version\nname\nversion\nlist_commands\nboardsize\nrectangular_boardsize\n"
-                + "komi\nkata-get-rules\nkata-get-param\nkata-set-param\nkata-set-rules\n"
+                + "komi\nkata-get-rules\nkata-get-param\nkata-get-param-state\n"
+                + "kata-set-param\nkata-set-params\nkata-set-rules\n"
                 + "clear_board\nset_position\nloadsgf\nplay\nundo\nkata-analyze\n"
                 + "kata-genmove_analyze\n"
                 + "genmove\nkata-list_time_settings\nkata-time_settings\nstop\nquit");
@@ -277,11 +280,15 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
         writeOk(responseId, rules);
       } else if (lower.equals("kata-get-param") || lower.startsWith("kata-get-param ")) {
         writeKnownKataGoParam(responseId, line);
+      } else if (lower.equals("kata-get-param-state") || lower.startsWith("kata-get-param-state ")) {
+        writeKataGoParamState(responseId, line);
       } else if (lower.startsWith("kata-set-rules ")) {
         rules = normalizeRules(line.substring(line.indexOf(' ') + 1).trim());
         writeOk(responseId, "");
       } else if (lower.equals("kata-set-param") || lower.startsWith("kata-set-param ")) {
         setKataGoParam(responseId, line);
+      } else if (lower.equals("kata-set-params") || lower.startsWith("kata-set-params ")) {
+        setKataGoParams(responseId, line);
       } else if (lower.equals("kata-time_settings none")) {
         writeOk(responseId, "");
       } else if (lower.equals("kata-time_settings") || lower.startsWith("kata-time_settings ")) {
@@ -418,32 +425,81 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     if (!token(command, 3, "").isEmpty()) {
       throw new IllegalArgumentException("invalid parameter value");
     }
+    queryParameters = updatedKataGoParam(queryParameters, param, value, false);
+    writeOk(responseId, "");
+  }
+
+  private void writeKataGoParamState(String responseId, String command) {
+    String param = token(command, 1, "");
+    if (param.isEmpty() || !token(command, 2, "").isEmpty()) {
+      throw new IllegalArgumentException("expected one parameter name");
+    }
+    double value;
+    if ("playoutDoublingAdvantage".equals(param)) {
+      value = queryParameters.playoutDoublingAdvantage();
+    } else if ("analysisWideRootNoise".equals(param)) {
+      value = queryParameters.analysisWideRootNoise();
+    } else {
+      throw new IllegalArgumentException("unknown parameter");
+    }
+    // Each query explicitly carries these values, so the adapter's configured state is numeric.
+    writeOk(
+        responseId,
+        new JSONObject()
+            .put("value", value)
+            .put("configuredValue", Double.toString(value))
+            .toString());
+  }
+
+  private void setKataGoParams(String responseId, String command) {
+    int separator = command.indexOf(' ');
+    if (separator < 0) {
+      throw new IllegalArgumentException("expected parameter JSON object");
+    }
+    JSONTokener tokens = new JSONTokener(command.substring(separator + 1));
+    JSONObject values = new JSONObject(tokens);
+    if (tokens.nextClean() != 0) {
+      throw new IllegalArgumentException("invalid parameter JSON object");
+    }
+    QueryParameters updated = queryParameters;
+    for (String param : values.keySet()) {
+      Object value = values.get(param);
+      if (!(value instanceof String) && !(value instanceof Number)) {
+        throw new IllegalArgumentException("invalid value for " + param);
+      }
+      updated = updatedKataGoParam(updated, param, value.toString(), true);
+    }
+    // Validate the entire batch before publishing one immutable snapshot to subsequent queries.
+    queryParameters = updated;
+    writeOk(responseId, "");
+  }
+
+  private static QueryParameters updatedKataGoParam(
+      QueryParameters parameters, String param, String value, boolean resetCustomizations) {
     if ("maxTime".equals(param)) {
       double parsed =
           value.isEmpty()
               ? DEFAULT_MOVE_MAX_TIME
               : parseFiniteDouble(value, "maxTime", 0.0, DEFAULT_MOVE_MAX_TIME);
-      queryParameters = queryParameters.withMoveMaxTime(parsed);
-      writeOk(responseId, "");
+      return parameters.withMoveMaxTime(parsed);
     } else if ("maxVisits".equals(param)) {
       long parsed =
           value.isEmpty()
               ? DEFAULT_MOVE_MAX_VISITS
               : parseIntegralValue(value, "maxVisits", 1, MAX_MOVE_MAX_VISITS);
-      queryParameters = queryParameters.withMoveMaxVisits(parsed);
-      writeOk(responseId, "");
+      return parameters.withMoveMaxVisits(parsed);
     } else if ("playoutDoublingAdvantage".equals(param)) {
-      queryParameters =
-          queryParameters.withPlayoutDoublingAdvantage(
-              parseFiniteDouble(value, "playoutDoublingAdvantage", -3.0, 3.0));
-      writeOk(responseId, "");
+      return parameters.withPlayoutDoublingAdvantage(
+          value.isEmpty() && resetCustomizations
+              ? DEFAULT_PLAYOUT_DOUBLING_ADVANTAGE
+              : parseFiniteDouble(value, "playoutDoublingAdvantage", -3.0, 3.0));
     } else if ("analysisWideRootNoise".equals(param)) {
-      queryParameters =
-          queryParameters.withAnalysisWideRootNoise(
-              parseFiniteDouble(value, "analysisWideRootNoise", 0.0, 5.0));
-      writeOk(responseId, "");
+      return parameters.withAnalysisWideRootNoise(
+          value.isEmpty() && resetCustomizations
+              ? DEFAULT_ANALYSIS_WIDE_ROOT_NOISE
+              : parseFiniteDouble(value, "analysisWideRootNoise", 0.0, 5.0));
     } else {
-      writeError(responseId, "unknown parameter");
+      throw new IllegalArgumentException("unknown parameter");
     }
   }
 

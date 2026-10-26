@@ -403,8 +403,8 @@ class EngineManagerEngineGameStateMachineTest {
       for (StateMachineLeelaz engine : List.of(black, white)) {
         String commands = engine.commandText();
         int firstSet = commands.indexOf("kata-set-param");
-        assertTrue(commands.indexOf("kata-get-param " + WRN) < firstSet, commands);
-        assertTrue(commands.indexOf("kata-get-param " + PDA) < firstSet, commands);
+        assertTrue(commands.indexOf("kata-get-param-state " + WRN) < firstSet, commands);
+        assertTrue(commands.indexOf("kata-get-param-state " + PDA) < firstSet, commands);
         assertTrue(commands.contains("kata-set-param " + PDA), commands);
       }
       assertEquals(0.5, kata.of(black));
@@ -433,6 +433,49 @@ class EngineManagerEngineGameStateMachineTest {
       assertFalse(black.commandText().contains("kata-set-param"), black.commandText());
       assertFalse(white.commandText().contains("kata-set-param"), white.commandText());
       assertNull(EngineGameParameterSession.state(owner));
+    }
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {
+    "1.8.2", "1.11.0", "1.18.1", "0.19.0", "unknown", "1.18", "1.18.2 garbage", ""
+  })
+  void openingRejectsUnsupportedVersionsBeforeChangingEitherParticipant(String version)
+      throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.0, 0.0, 0.0, 0.0);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      kata.versions.put(white, version);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.0, 0.0, 0.0, 0.0), black, 0);
+      IllegalStateException failure = assertThrows(IllegalStateException.class,
+          () -> session.applyOpening(owner));
+      assertTrue(failure.getMessage().contains("1.18.2"), failure.getMessage());
+      for (StateMachineLeelaz engine : List.of(black, white)) {
+        assertFalse(engine.commandText().contains("kata-set-param"), engine.commandText());
+      }
+      assertNull(EngineGameParameterSession.state(owner));
+      assertFalse(session.hasUnrestoredParameters());
+    }
+  }
+
+  @ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {
+    "1.18.2", "1.18.2+g170-b6c96-s175M", "1.18.3", "1.19.0", "2.0.0"
+  })
+  void openingAcceptsSupportedVersionAndExactPdaReadback(String version) throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.0, 0.0, 1.234567, -1.234567);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      kata.versions.put(white, version);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.0, 0.0, 1.234567, -1.234567), black, 0);
+      session.applyOpening(owner);
+      assertEquals(1.234567, kata.pda(black));
+      assertEquals(-1.234567, kata.pda(white));
+      session.restoreOnce();
+      assertEquals(0.0, kata.pda(black));
+      assertEquals(0.0, kata.pda(white));
     }
   }
 
@@ -476,17 +519,14 @@ class EngineManagerEngineGameStateMachineTest {
     "1.234565, 1.23456",
     "1e-10, 1e-10"
   })
-  void roundedWrnReadbackConfirmsOpeningSmallEditsAndRestore(double opening, String readback)
+  void exactSnapshotsConfirmOpeningSmallEditsAndRestore(double opening, String readback)
       throws Exception {
     ImmediateUiEngineManager manager = installManager();
     EngineGameParameterSession session = parameterSession(opening, 0.4, -1.234567, 0.0);
-    // These are six-significant-digit replies, including rounding across a power of ten,
-    // scientific notation, and binary doubles on either side of decimal halfway points.
+    // Inputs beyond the legacy scalar getter precision keep their full value in snapshots.
     try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7, 0.25, -0.75)) {
-      kata.wrnReadbacks.put(opening, readback);
       double rounded = Double.parseDouble(readback);
       double edited = rounded == opening ? Math.nextUp(opening) : Math.nextAfter(opening, rounded);
-      kata.wrnReadbacks.put(edited, readback);
       EngineManager.EngineGameOwnerTransaction owner =
           activeTransaction(manager, parameterPlan(0, 1, opening, 0.4, -1.234567, 0.0), black, 0);
       session.applyOpening(owner);
@@ -511,7 +551,7 @@ class EngineManagerEngineGameStateMachineTest {
       assertEquals(edited, black.wrn);
       assertEquals(edited, kata.of(black));
       assertEquals(sets + 1, commandLineCount(black.commandText(), "kata-set-param " + WRN),
-          "a distinct request is sent once even when its rounded readback has not changed");
+          "a distinct request is sent once even when its legacy rounded representation is unchanged");
       assertEquals(
           featurecat.lizzie.enginegame.EngineGameParameterRevision.UNCHANGED,
           EngineGameParameterSession.revise(
@@ -1026,7 +1066,7 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"kata-set-param", "kata-get-param"})
+  @ValueSource(strings = {"kata-set-param", "kata-get-param-state"})
   void timedOutParameterStaysPausedAndCanRetryWithoutAcceptingItsLateReply(String command)
       throws Exception {
     ImmediateUiEngineManager manager = installManager();
@@ -1100,7 +1140,7 @@ class EngineManagerEngineGameStateMachineTest {
       assertEquals(0.0, kata.pda(black));
       // The predecessor retired; the next game swaps colors but keeps positions.
       EngineManager.resetEngineGameTransactionStateForTest();
-      int captures = commandLineCount(black.commandText(), "kata-get-param");
+      int captures = commandLineCount(black.commandText(), "kata-get-param-state");
       EngineManager.EngineGameOwnerTransaction second =
           activeTransaction(manager, parameterPlan(1, 0, 0.5, 0.0, 1.0, -1.0), white, 1);
       session.applyOpening(second);
@@ -1110,7 +1150,7 @@ class EngineManagerEngineGameStateMachineTest {
       assertEquals(-1.0, kata.pda(white));
       assertEquals(
           captures + 2,
-          commandLineCount(black.commandText(), "kata-get-param"),
+          commandLineCount(black.commandText(), "kata-get-param-state"),
           "only the two readbacks, no second capture of the same process");
 
       session.restoreOnce();
@@ -1120,6 +1160,73 @@ class EngineManagerEngineGameStateMachineTest {
       assertEquals(-0.75, kata.pda(white));
       assertTrue(black.isLoaded());
       assertTrue(white.isLoaded());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void batchRestoresAbsentPdaAndExplicitZeroAsDifferentStates(boolean editDuringGame)
+      throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.5, 0.4, 0.0, 0.0);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      kata.configured.get(black).remove(PDA);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.5, 0.4, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      assertNotNull(kata.configured.get(black).get(PDA), "opening explicitly sets zero");
+      if (editDuringGame) {
+        EngineManager.pauseEngineGame(owner);
+        EngineGameParameterSession.revise(owner,
+            new featurecat.lizzie.enginegame.EngineGameParameterRequest(null, null, 1.234567, -1.234567),
+            () -> {});
+        awaitCondition(() -> !EngineGameParameterSession.state(owner).pending());
+        awaitOperationsReleased(owner);
+        assertNull(EngineGameParameterSession.state(owner).failure());
+      }
+      EngineManager.resetEngineGameTransactionStateForTest();
+      session.restoreOnce();
+      assertNull(kata.configured.get(black).get(PDA), "automatic PDA needs the key absent again");
+      assertEquals("0.0", kata.configured.get(white).get(PDA), "explicit zero must remain explicit");
+      assertEquals(0.0, black.pda);
+      assertEquals(0.0, white.pda);
+      assertTrue(black.isLoaded() && white.isLoaded());
+    }
+  }
+
+  @Test
+  void numericRestoreCannotHideLossOfTheOriginalAutomaticMode() throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.5, 0.4, 0.0, 0.0);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      kata.configured.get(black).remove(PDA);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.5, 0.4, 0.0, 0.0), black, 0);
+      session.applyOpening(owner);
+      kata.ignoreDeletes = true;
+      EngineManager.resetEngineGameTransactionStateForTest();
+      session.restoreOnce();
+      assertEquals(0.0, kata.pda(black), "the numeric readback alone appears restored");
+      assertFalse(black.isLoaded(), "a process with the wrong mode must not be handed back");
+      assertTrue(white.isLoaded());
+      assertNotNull(Lizzie.engineGame.parameterRestoreFailure());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "0", "{}", "{\"value\":0}",
+    "{\"value\":0,\"configuredValue\":0}", "{\"value\":0,\"configuredValue\":\"NaN\"}"})
+  void openingRequiresTheSnapshotContractBeforeAnyWrite(String reply) throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    EngineGameParameterSession session = parameterSession(0.0, 0.0, 0.0, 0.0);
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7)) {
+      kata.snapshotOverrides.put(kata.key(white, PDA), reply);
+      EngineManager.EngineGameOwnerTransaction owner =
+          activeTransaction(manager, parameterPlan(0, 1, 0.0, 0.0, 0.0, 0.0), black, 0);
+      assertThrows(IllegalStateException.class, () -> session.applyOpening(owner));
+      assertFalse(black.commandText().contains("kata-set-param"));
+      assertFalse(white.commandText().contains("kata-set-param"));
+      assertFalse(session.hasUnrestoredParameters());
     }
   }
 
@@ -1175,8 +1282,8 @@ class EngineManagerEngineGameStateMachineTest {
         // The engine's own response is quoted unchanged inside the translated reason.
         String command =
             failure.equals("reject")
-                ? "kata-set-param " + WRN + " 0.7"
-                : "kata-set-param " + PDA + " 0.5";
+                ? "kata-set-params " + new org.json.JSONObject().put(WRN, "0.7")
+                : "kata-set-params " + new org.json.JSONObject().put(PDA, "0.5");
         String[] reason =
             java.text.MessageFormat.format(
                     Lizzie.resourceBundle.getString("EngineGameCommand.rejected"), command, "\0")
@@ -1292,8 +1399,15 @@ class EngineManagerEngineGameStateMachineTest {
 
   /** Answers numbered GTP commands like KataGo, keeping each process's breadth and PDA. */
   private final class FakeKataParameters implements AutoCloseable {
+    private final java.util.Map<StateMachineLeelaz, String> versions =
+        new java.util.concurrent.ConcurrentHashMap<>();
     private final java.util.Map<StateMachineLeelaz, java.util.Map<String, Double>> values =
         new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<StateMachineLeelaz, java.util.Map<String, String>> configured =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.Map<String, String> snapshotOverrides =
+        new java.util.concurrent.ConcurrentHashMap<>();
+    private volatile boolean ignoreDeletes;
     private final java.util.Map<StateMachineLeelaz, Integer> answered = new java.util.HashMap<>();
     private final java.util.Map<StateMachineLeelaz, Integer> seen = new java.util.HashMap<>();
     private final AtomicReference<Throwable> responderFailure = new AtomicReference<>();
@@ -1302,8 +1416,6 @@ class EngineManagerEngineGameStateMachineTest {
     private final java.util.Set<String> droppedCommands =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
     private final java.util.Map<String, String> readbackOverrides =
-        new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.Map<Double, String> wrnReadbacks =
         new java.util.concurrent.ConcurrentHashMap<>();
     private final AtomicReference<String> droppedReply = new AtomicReference<>();
     private final AtomicBoolean held = new AtomicBoolean();
@@ -1321,6 +1433,10 @@ class EngineManagerEngineGameStateMachineTest {
       values.get(white).put(WRN, whiteWrn);
       values.get(black).put(PDA, blackPda);
       values.get(white).put(PDA, whitePda);
+      for (StateMachineLeelaz engine : List.of(black, white)) {
+        configured.put(engine, new java.util.concurrent.ConcurrentHashMap<>());
+        values.get(engine).forEach((name, value) -> configured.get(engine).put(name, value.toString()));
+      }
       responder =
           new Thread(
               () -> {
@@ -1404,22 +1520,51 @@ class EngineManagerEngineGameStateMachineTest {
         }
         String id = parts[0];
         String reply = "=" + id;
-        if (parts.length == 4
+        if (parts.length == 2 && parts[1].equals("version")) {
+          reply = "=" + id + " " + versions.getOrDefault(engine, "1.18.2");
+        } else if (parts.length == 4
             && parts[1].equals("kata-set-param")
             && values.get(engine).containsKey(parts[2])) {
           if (rejected.contains(key(engine, parts[2]))) {
             reply = "?" + id + " unsupported";
           } else {
             values.get(engine).put(parts[2], Double.parseDouble(parts[3]));
+            configured.get(engine).put(parts[2], parts[3]);
+          }
+        } else if (parts.length >= 3 && parts[1].equals("kata-set-params")) {
+          org.json.JSONObject changes = new org.json.JSONObject(line.substring(line.indexOf('{')));
+          for (String parameter : changes.keySet()) {
+            if (rejected.contains(key(engine, parameter))) {
+              reply = "?" + id + " unsupported";
+            } else {
+              String config = changes.getString(parameter);
+              if (config.isEmpty()) {
+                if (!ignoreDeletes) configured.get(engine).remove(parameter);
+                values.get(engine).put(parameter, parameter.equals(PDA) ? 0.0 : 0.04);
+              } else {
+                configured.get(engine).put(parameter, config);
+                values.get(engine).put(parameter, Double.parseDouble(config));
+              }
+            }
           }
         } else if (parts.length == 3
-            && parts[1].equals("kata-get-param")
+            && parts[1].equals("kata-get-param-state")
             && values.get(engine).containsKey(parts[2])) {
           String override = readbackOverrides.remove(key(engine, parts[2]));
-          double value = values.get(engine).get(parts[2]);
-          String normal = parts[2].equals(WRN)
-              ? wrnReadbacks.getOrDefault(value, Double.toString(value)) : Double.toString(value);
-          reply = "=" + id + " " + (override == null ? normal : override);
+          Object value = values.get(engine).get(parts[2]);
+          if (override != null) {
+            try {
+              double number = Double.parseDouble(override);
+              value = Double.isFinite(number) ? number : override;
+            } catch (NumberFormatException invalid) {
+              value = override;
+            }
+          }
+          String config = configured.get(engine).get(parts[2]);
+          String normal = new org.json.JSONObject().put("value", value)
+              .put("configuredValue", config == null ? org.json.JSONObject.NULL : config).toString();
+          String snapshot = snapshotOverrides.remove(key(engine, parts[2]));
+          reply = "=" + id + " " + (snapshot == null ? normal : snapshot);
         }
         if (parts.length >= 3
             && droppedCommands.remove(key(engine, parts[1] + " " + parts[2]))) {

@@ -12,7 +12,7 @@ public record EngineGameParameterState(
 
   /**
    * @param supported whether the participant accepts runtime changes of this parameter
-   * @param confirmed requested value confirmed by the parameter's readback representation, or null
+   * @param confirmed requested value confirmed by the exact snapshot readback, or null
    *     while unknown
    * @param target requested value while it differs from the confirmed value, otherwise null
    */

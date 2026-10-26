@@ -62,8 +62,7 @@ public final class EngineGameParametersAcceptanceIT {
   private static final Logger LOG = LoggerFactory.getLogger(EngineGameParametersAcceptanceIT.class);
   private static final String WRN = "analysisWideRootNoise";
   private static final String PDA = "playoutDoublingAdvantage";
-  // Real KataGo rounds WRN readback to six significant digits. Keep both startup and UI edits
-  // beyond that precision so this acceptance exercises the protocol boundary, not just integers.
+  // Snapshot readback must preserve every digit, including values the legacy getter rounds.
   private static final double OPENING_FIRST_WRN = 0.1234567;
   private static final double OPENING_SECOND_WRN = 1.234567;
   private static final double EDITED_FIRST_WRN = 0.7654321;
@@ -135,8 +134,8 @@ public final class EngineGameParametersAcceptanceIT {
       throws Exception {
     boolean batch = mode.equals("batch");
     JSONArray entries = new JSONArray();
-    double[] originalWrn = {0.05, 0.15};
-    double[] originalPda = {-0.25, 0.75};
+    double[] originalWrn = {0.051234567, 0.151234567};
+    double[] originalPda = {0.0, batch ? 0.75 : 0.0};
     for (int index = 0; index < 2; index++) {
       Path config = work.resolve("engine-" + index + ".cfg");
       Path log = work.resolve("gtp-" + index);
@@ -153,9 +152,9 @@ public final class EngineGameParametersAcceptanceIT {
               + "analysisWideRootNoise = "
               + originalWrn[index]
               + "\n"
-              + "playoutDoublingAdvantage = "
-              + originalPda[index]
-              + "\n");
+              // Across stop and batch: absent/explicit PDA crossed with absent/explicit dynamic cap.
+              + (index == 0 ? "" : "playoutDoublingAdvantage = " + originalPda[index] + "\n")
+              + (batch ? "dynamicPlayoutDoublingAdvantageCapPerOppLead = 0.05\n" : ""));
       entries.put(
           new JSONObject()
               .put("name", "Acceptance KataGo " + (index + 1))
@@ -205,10 +204,15 @@ public final class EngineGameParametersAcceptanceIT {
         "both real engines ready");
     List<Leelaz> participants = edt(() -> List.copyOf(Lizzie.engineManager.engineList));
     List<Object> incarnations = participants.stream().map(Leelaz::engineIncarnationToken).toList();
+    List<JSONObject> originalWrnStates = new ArrayList<>();
+    List<JSONObject> originalPdaStates = new ArrayList<>();
     for (int index = 0; index < 2; index++) {
       assertNotNull(incarnations.get(index));
-      assertEquals(originalWrn[index], readParameter(participants.get(index), WRN), 0.000001);
-      assertEquals(originalPda[index], readParameter(participants.get(index), PDA), 0.000001);
+      originalWrnStates.add(readSnapshot(participants.get(index), WRN));
+      originalPdaStates.add(readSnapshot(participants.get(index), PDA));
+      assertEquals(originalWrn[index], originalWrnStates.get(index).getDouble("value"));
+      assertEquals(originalPda[index], originalPdaStates.get(index).getDouble("value"));
+      assertEquals(index == 0, originalPdaStates.get(index).isNull("configuredValue"));
     }
     record(result, "pre-batch-distinct-values=PASS");
     AtomicReference<StartFailure> startFailure = new AtomicReference<>();
@@ -352,17 +356,16 @@ public final class EngineGameParametersAcceptanceIT {
     await(() -> !EngineManager.occupiesEngineGameAdmission(), 25, "game ownership retires");
     // Wait for production restoration, not merely delivery of its set commands.
     restoration.get(25, TimeUnit.SECONDS);
-    assertTrue(restoreCommandsPresent(work, originalWrn, originalPda));
     for (int index = 0; index < 2; index++) {
       Leelaz participant = participants.get(index);
       assertTrue(
           participant.isCurrentEngineIncarnationToken(incarnations.get(index)),
           "Acceptance must restore the same physical process");
-      assertEquals(originalWrn[index], readParameter(participant, WRN), 0.000001);
-      assertEquals(originalPda[index], readParameter(participant, PDA), 0.000001);
+      assertSnapshotEquals(originalWrnStates.get(index), readSnapshot(participant, WRN));
+      assertSnapshotEquals(originalPdaStates.get(index), readSnapshot(participant, PDA));
     }
     assertNull(edt(() -> Lizzie.engineGame.parameterRestoreFailure()));
-    record(result, "same-process-original-values-restored=PASS\nmode=" + mode + "\nresult=PASS");
+    record(result, "same-process-values-and-pda-configuration-restored=PASS\nmode=" + mode + "\nresult=PASS");
   }
 
   private static EngineParticipantIdentity identity(JSONArray entries, int index) {
@@ -611,11 +614,11 @@ public final class EngineGameParametersAcceptanceIT {
     return actual.supported()
         && actual.target() == null
         && actual.confirmed() != null
-        && Math.abs(actual.confirmed() - expected) < 0.000001;
+        && actual.confirmed() == expected;
   }
 
   /** Query the actual idle engine, using the existing exact-incarnation response callback seam. */
-  private static double readParameter(Leelaz engine, String name) throws Exception {
+  private static JSONObject readSnapshot(Leelaz engine, String name) throws Exception {
     Method confirm = null;
     for (Method method : Leelaz.class.getDeclaredMethods()) {
       if (method.getName().equals("confirmEngineGameCommand")) confirm = method;
@@ -638,13 +641,13 @@ public final class EngineGameParametersAcceptanceIT {
               engine,
               null,
               engine.engineIncarnationToken(),
-              "kata-get-param " + name,
+              "kata-get-param-state " + name,
               capture,
               success,
               failure);
           return null;
         });
-    return Double.parseDouble(response.get(15, TimeUnit.SECONDS).trim());
+    return new JSONObject(response.get(15, TimeUnit.SECONDS).trim());
   }
 
   private static int[][] parameterWrites(Path work) throws Exception {
@@ -675,25 +678,10 @@ public final class EngineGameParametersAcceptanceIT {
     }
   }
 
-  private static boolean restoreCommandsPresent(Path work, double[] wrn, double[] pda)
-      throws Exception {
-    for (int i = 0; i < 2; i++) {
-      String log = gtpLog(work.resolve("gtp-" + i));
-      // Original values cannot appear in a set command until this batch's restoration.
-      if (!restoredSet(log, WRN, wrn[i]) || !restoredSet(log, PDA, pda[i])) return false;
-    }
-    return true;
-  }
-
-  private static boolean restoredSet(String log, String name, double value) {
-    return Pattern.compile(
-            "Controller: \\d*\\s*kata-set-param "
-                + name
-                + " "
-                + Pattern.quote(Double.toString(value))
-                + "(?:\\s|$)")
-        .matcher(log)
-        .find();
+  private static void assertSnapshotEquals(JSONObject expected, JSONObject actual) {
+    assertEquals(expected.getDouble("value"), actual.getDouble("value"));
+    assertEquals(expected.get("configuredValue"), actual.get("configuredValue"),
+        "An absent PDA key and an explicit zero select different genmove modes");
   }
 
   private static String gtpLog(Path directory) throws Exception {

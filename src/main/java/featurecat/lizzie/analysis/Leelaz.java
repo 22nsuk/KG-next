@@ -14113,11 +14113,18 @@ public class Leelaz {
             && queuedCommand.isEngineGameCommand()
             && !queuedCommand.isOrdinaryEngineGameBootstrap())
         || exactLoadSgf
-        || (command != null
-            && handler != NO_OP_RESPONSE_HANDLER
-            && (command.startsWith("kata-get-param ") || command.startsWith("kata-set-param ")));
+        || (handler != NO_OP_RESPONSE_HANDLER && isKataParameterCommand(command));
   }
 
+  /** Parameter replies need IDs even after the game owner has retired and restoration owns them. */
+  private static boolean isKataParameterCommand(String command) {
+    return command != null
+        && (command.startsWith("kata-get-param ")
+            || command.startsWith("kata-get-param-state ")
+            || command.equals("kata-get-params")
+            || command.startsWith("kata-set-param ")
+            || command.startsWith("kata-set-params "));
+  }
 
   private int nextResponseCommandId(
       String command, Runnable handler, QueuedCommand queuedCommand) {
@@ -14148,9 +14155,7 @@ public class Leelaz {
     if (queuedCommand != null && queuedCommand.isEngineGameCommand()) {
       return engineGameResponseCommandIds.getAndIncrement();
     }
-    if (command != null
-        && handler != NO_OP_RESPONSE_HANDLER
-        && (command.startsWith("kata-get-param ") || command.startsWith("kata-set-param "))) {
+    if (handler != NO_OP_RESPONSE_HANDLER && isKataParameterCommand(command)) {
       return readBoardGmaResponseCommandIds.getAndIncrement();
     }
     return NO_RESPONSE_COMMAND_ID;
