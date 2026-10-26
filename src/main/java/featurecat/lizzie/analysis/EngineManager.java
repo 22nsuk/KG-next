@@ -7818,51 +7818,58 @@ public class EngineManager {
     try {
       owner.paused = false;
       if (owner.product != null) owner.product.setPaused(false);
-      continueEngineGame(owner);
     } finally {
       owner.mutationLock.unlock();
     }
+    continueEngineGame(owner);
   }
 
   static void continueEngineGame(EngineGameOwnerTransaction owner) {
-    // Keep the decision and command issuance in one transition, including both participants.
-    // Parameter/komi workers and explicit Resume all use this same pause/continue boundary.
+    EngineGameMoveResponseContext genmove;
     owner.mutationLock.lock();
     try {
       if (!isCurrentEngineGameTransaction(owner) || owner.phase != EngineGamePhase.ACTIVE
           || owner.paused()) return;
+      if (!owner.isGenmove()) {
+        // Unnumbered analysis must stay ordered with Pause's stop commands. The parameter
+        // worker also holds this fence until it has restored the current move's clock.
+        if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
+          if (!runEngineGameIoStep(owner, owner.blackEngine::ponder)) return;
+          runEngineGameIoStep(owner, owner.whiteEngine::ponder);
+        } else if (Lizzie.board != null && Lizzie.board.getData().blackToPlay) {
+          runEngineGameIoStep(owner, owner.blackEngine::ponder);
+        } else if (Lizzie.board != null) {
+          runEngineGameIoStep(owner, owner.whiteEngine::ponder);
+        }
+        return;
+      }
       EngineGameSide pending = owner.product != null
           ? owner.product.takePendingGenmoveSide() : owner.pendingGenmoveSide;
       owner.pendingGenmoveSide = null;
       owner.genmovePauseSettled = false;
-      if (owner.isGenmove()) {
-        if (pending == null) {
-          return;
-        }
-        Leelaz mover = pending == EngineGameSide.BLACK ? owner.blackEngine : owner.whiteEngine;
-        String color = pending == EngineGameSide.BLACK ? "B" : "W";
-        if (!runEngineGameIoStep(owner, () -> {
-          mover.nameCmd();
-          mover.genmoveForPk(color, owner);
-        })) return;
-        if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
-          Leelaz opponent =
-              pending == EngineGameSide.BLACK ? owner.whiteEngine : owner.blackEngine;
-          runEngineGameIoStep(owner, opponent::ponder);
-        }
-        return;
-      }
-      if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
-        if (!runEngineGameIoStep(owner, owner.blackEngine::ponder)) return;
-        runEngineGameIoStep(owner, owner.whiteEngine::ponder);
-      } else if (Lizzie.board != null && Lizzie.board.getData().blackToPlay) {
-        runEngineGameIoStep(owner, owner.blackEngine::ponder);
-      } else if (Lizzie.board != null) {
-        runEngineGameIoStep(owner, owner.whiteEngine::ponder);
-      }
+      if (pending == null) return;
+      boolean black = pending == EngineGameSide.BLACK;
+      // Admit the pending move atomically with Pause. A later pause lets this current move
+      // finish; it must not strand the consumed pending side by deferring it a second time.
+      genmove = captureEngineGameMoveResponseContext(
+          owner, black ? owner.blackEngine : owner.whiteEngine,
+          black ? owner.blackIncarnation : owner.whiteIncarnation, black ? "B" : "W");
     } finally {
       owner.mutationLock.unlock();
     }
+    if (genmove == null) return;
+    // GENMOVE output has an exact request lease. Never hold the terminal mutation fence over
+    // its transport: cancellation must reach that lease and its watchdog even if flush blocks.
+    Leelaz mover = genmove.participant;
+    if (!runEngineGameIoStep(owner, mover::nameCmd)) return;
+    if (Lizzie.config != null && Lizzie.config.enginePkPonder) {
+      Leelaz opponent = genmove.blackToPlay ? owner.whiteEngine : owner.blackEngine;
+      // Ponder first: a fast genmove reply can start the opponent's next turn immediately.
+      // Pondering afterward could interrupt that newer request.
+      if (!runEngineGameIoStep(owner, opponent::ponder)) return;
+    }
+    runEngineGameIoStep(owner,
+        () -> mover.sendEngineGameGenmove(genmove.blackToPlay ? "B" : "W", genmove));
   }
 
   public void playEngineGameManualMove(

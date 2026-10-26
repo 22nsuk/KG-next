@@ -22887,6 +22887,20 @@ public class Leelaz {
       transaction.blackEngine().nameCmdfornoponder();
       return false;
     }
+    ReaderStreamBinding binding = currentReaderStreamBinding();
+    EngineManager.EngineGameMoveResponseContext responseContext =
+        turn == null
+            ? EngineManager.captureEngineGameMoveResponseContext(
+                transaction, this, binding, color)
+            : EngineManager.captureEngineGameMoveResponseContext(turn, this, binding, color);
+    return sendEngineGameGenmove(color, responseContext);
+  }
+
+  /** Sends an admitted current move; a later pause defers its successor, not this request. */
+  boolean sendEngineGameGenmove(
+      String color, EngineManager.EngineGameMoveResponseContext responseContext) {
+    if (responseContext == null || rejectNewExclusiveWorkDuringGtpLease()) return false;
+    ReaderStreamBinding binding = (ReaderStreamBinding) responseContext.participantIncarnation;
     String command =
         (this.isKatago
             ? ("kata-genmove_analyze " + color + " " + getIntervalForGenmovePk() + addKataTag())
@@ -22902,15 +22916,6 @@ public class Leelaz {
      */
     // bestMoves = new ArrayList<>();
     // canGetGenmoveInfo = true;
-    ReaderStreamBinding binding = currentReaderStreamBinding();
-    EngineManager.EngineGameMoveResponseContext responseContext =
-        turn == null
-            ? EngineManager.captureEngineGameMoveResponseContext(
-                transaction, this, binding, color)
-            : EngineManager.captureEngineGameMoveResponseContext(turn, this, binding, color);
-    if (responseContext == null) {
-      return false;
-    }
     EngineGameResponseHandler responseHandler =
         new EngineGameResponseHandler(
             this, responseContext, binding, isAnalyzeStyleEngineGameGenmove(command));
@@ -22920,7 +22925,7 @@ public class Leelaz {
             responseHandler,
             failure -> {
               responseHandler.settle();
-              EngineManager.failEngineGameTransaction(transaction, failure);
+              EngineManager.failEngineGameTransaction(responseContext.transaction, failure);
             },
             true,
             false,

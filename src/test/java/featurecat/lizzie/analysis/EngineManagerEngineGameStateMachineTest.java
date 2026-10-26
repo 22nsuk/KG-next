@@ -3623,6 +3623,175 @@ class EngineManagerEngineGameStateMachineTest {
     assertEquals(0, transaction.operationsInFlightForTest());
   }
 
+  @ParameterizedTest
+  @CsvSource({"manual,stop", "manual,kata-genmove_analyze", "manual,kata-analyze",
+      "komi,stop", "komi,kata-genmove_analyze", "komi,kata-analyze"})
+  void terminalCanCancelEveryBlockedGenmoveResumeCommand(String source, String command)
+      throws Exception {
+    BlockingCommandFlushOutput output = new BlockingCommandFlushOutput(command);
+    StateMachineLeelaz blockedEngine = command.equals("kata-analyze") ? white : black;
+    blockedEngine.bindLiveRuntime(output);
+    black.isKatago = white.isKatago = true;
+    Lizzie.config.enginePkPonder = true;
+    WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction owner =
+        activeTransaction(manager, EngineGamePlans.harness(0, 1, true), black, 0);
+    EngineManager.pauseEngineGame(owner);
+    assertFalse(black.genmoveForPk("B", owner));
+    assertEquals(EngineGameSide.BLACK, owner.pendingGenmoveSideForTest());
+    settleEngineGameCommands(black);
+    settleEngineGameCommands(white);
+    AtomicReference<Throwable> resumeFailure = new AtomicReference<>();
+    AtomicReference<Throwable> terminalFailure = new AtomicReference<>();
+    Thread resume = new Thread(() -> {
+      try {
+        EngineManager.resumeEngineGame(owner);
+      } catch (Throwable failure) {
+        resumeFailure.set(failure);
+      }
+    }, "blocked-genmove-resume");
+    Thread terminal = new Thread(() -> {
+      try {
+        manager.clearEngineGame();
+      } catch (Throwable failure) {
+        terminalFailure.set(failure);
+      }
+    }, "cancel-blocked-genmove-resume");
+    output.armed = true;
+    boolean cancelledBeforeRelease;
+    boolean watchdogScheduled;
+    try {
+      if (source.equals("komi")) {
+        assertTrue(EngineManager.reviseEngineGameKomi(owner, 8.5, () -> {}));
+        EngineManager.resumeEngineGame(owner); // Still held by the pending komi barrier.
+        awaitKomiCommands("8.5");
+        settleEngineGameCommands(black);
+        settleEngineGameCommands(white);
+      } else {
+        resume.start();
+      }
+      assertTrue(output.flushEntered.await(2, TimeUnit.SECONDS));
+      terminal.start();
+      terminal.join(1000L);
+      cancelledBeforeRelease = !terminal.isAlive();
+      watchdogScheduled = manager.hasPendingWatchdog();
+    } finally {
+      output.releaseFlush.countDown();
+      terminal.join(2000L);
+      resume.join(2000L);
+    }
+    assertFalse(terminal.isAlive());
+    assertFalse(resume.isAlive());
+    assertNull(terminalFailure.get());
+    assertNull(resumeFailure.get());
+    assertTrue(cancelledBeforeRelease, "terminal must not wait for " + command + " transport");
+    assertTrue(watchdogScheduled, "the blocked request must remain reachable by retirement");
+    assertEquals(EngineManager.EngineGamePhase.CANCELLED, owner.phase());
+    manager.runWatchdog();
+    awaitOperationsReleased(owner);
+    assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void admittedGenmoveSurvivesPauseWithoutLosingOrDuplicatingThePendingTurn(boolean resumeAgain)
+      throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    black.isKatago = white.isKatago = true;
+    EngineManager.EngineGameOwnerTransaction owner =
+        activeTransaction(manager, EngineGamePlans.harness(0, 1, true), black, 0);
+    EngineManager.pauseEngineGame(owner);
+    assertFalse(black.genmoveForPk("B", owner));
+    CountDownLatch admitted = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    black.beforeNameCommand = () -> {
+      admitted.countDown();
+      await(release);
+    };
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    Thread resume = new Thread(() -> {
+      try {
+        EngineManager.resumeEngineGame(owner);
+      } catch (Throwable thrown) {
+        failure.set(thrown);
+      }
+    }, "pause-after-genmove-admission");
+    resume.start();
+    try {
+      assertTrue(admitted.await(2, TimeUnit.SECONDS));
+      assertTrue(owner.mutationLock.tryLock(), "admission must release the lock before I/O");
+      owner.mutationLock.unlock();
+      EngineManager.pauseEngineGame(owner);
+      if (resumeAgain) EngineManager.resumeEngineGame(owner);
+    } finally {
+      release.countDown();
+      resume.join(2000L);
+    }
+    assertFalse(resume.isAlive());
+    assertNull(failure.get());
+    assertEquals(1, commandLineCount(black.commandText(), "kata-genmove_analyze B"));
+    assertNull(owner.pendingGenmoveSideForTest());
+    assertEquals(!resumeAgain, owner.paused());
+
+    // An admitted current move may finish after Pause. Only its successor is deferred.
+    black.parseEngineGameLineForTest(
+        "=" + commandIdFor(black.commandText(), "kata-genmove_analyze B 0") + " D4");
+    white.processCommandResponseLineForTest(
+        "=" + commandIdFor(white.commandText(), "play B D4"));
+    assertEquals(1, Lizzie.board.getHistory().getMoveNumber());
+    if (!resumeAgain) {
+      assertEquals(EngineGameSide.WHITE, owner.pendingGenmoveSideForTest());
+      assertEquals(0, commandLineCount(white.commandText(), "kata-genmove_analyze W"));
+      EngineManager.resumeEngineGame(owner);
+    }
+    assertNull(owner.pendingGenmoveSideForTest());
+    assertEquals(1, commandLineCount(white.commandText(), "kata-genmove_analyze W"));
+  }
+
+  @Test
+  void fastResumedGenmoveCannotBeFollowedByOldOpponentPonder() throws Exception {
+    ImmediateUiEngineManager manager = installManager();
+    black.isKatago = white.isKatago = true;
+    Lizzie.config.enginePkPonder = true;
+    EngineManager.EngineGameOwnerTransaction owner =
+        activeTransaction(manager, EngineGamePlans.harness(0, 1, true), black, 0);
+    EngineManager.pauseEngineGame(owner);
+    assertFalse(black.genmoveForPk("B", owner));
+    CountDownLatch sent = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    black.afterGenmove = () -> {
+      sent.countDown();
+      await(release);
+    };
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    Thread resume = new Thread(() -> {
+      try {
+        EngineManager.resumeEngineGame(owner);
+      } catch (Throwable thrown) {
+        failure.set(thrown);
+      }
+    }, "fast-genmove-resume");
+    resume.start();
+    try {
+      assertTrue(sent.await(2, TimeUnit.SECONDS));
+      black.parseEngineGameLineForTest(
+          "=" + commandIdFor(black.commandText(), "kata-genmove_analyze B 0") + " D4");
+      white.processCommandResponseLineForTest(
+          "=" + commandIdFor(white.commandText(), "play B D4"));
+      assertEquals(1, Lizzie.board.getHistory().getMoveNumber());
+      assertEquals(1, commandLineCount(white.commandText(), "kata-genmove_analyze W"));
+    } finally {
+      release.countDown();
+      resume.join(2000L);
+    }
+    assertFalse(resume.isAlive());
+    assertNull(failure.get());
+    String commands = white.commandText();
+    assertEquals(1, commandLineCount(commands, "kata-analyze"));
+    assertTrue(commands.indexOf("kata-analyze") < commands.indexOf("kata-genmove_analyze W"),
+        "old ponder must precede the opponent's next turn: " + commands);
+  }
+
   @Test
   void coldStartBootstrapNameErrorDoesNotFailEngineGameTransaction() throws Exception {
     ImmediateUiEngineManager manager = installManager();
@@ -7063,6 +7232,8 @@ class EngineManagerEngineGameStateMachineTest {
     private volatile Runnable beforeLiveIncarnationAction;
     private volatile Runnable beforePonder;
     private volatile Runnable afterPonder;
+    private volatile Runnable beforeNameCommand;
+    private volatile Runnable afterGenmove;
 
     private StateMachineLeelaz() throws Exception {
       super("");
@@ -7154,9 +7325,22 @@ class EngineManagerEngineGameStateMachineTest {
 
     @Override
     public void nameCmd() {
+      Runnable before = beforeNameCommand;
+      beforeNameCommand = null;
+      if (before != null) before.run();
       if (!enableDeferredRecoveryStart) {
         super.nameCmd();
       }
+    }
+
+    @Override
+    boolean sendEngineGameGenmove(
+        String color, EngineManager.EngineGameMoveResponseContext context) {
+      boolean accepted = super.sendEngineGameGenmove(color, context);
+      Runnable after = afterGenmove;
+      afterGenmove = null;
+      if (after != null) after.run();
+      return accepted;
     }
 
     private void blockAfterEngineGameResponseSettlement() {
@@ -7675,6 +7859,43 @@ class EngineManagerEngineGameStateMachineTest {
 
     private synchronized String text() {
       return toString();
+    }
+  }
+
+  /** Leaves a real command's flush blocked even when terminal cancellation interrupts its worker. */
+  private static final class BlockingCommandFlushOutput extends ByteArrayOutputStream {
+    private final String command;
+    private final CountDownLatch flushEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseFlush = new CountDownLatch(1);
+    private final AtomicBoolean blocked = new AtomicBoolean();
+    private volatile boolean armed;
+
+    private BlockingCommandFlushOutput(String command) {
+      this.command = command;
+    }
+
+    @Override
+    public void flush() {
+      String last = toString().stripTrailing();
+      last = last.substring(last.lastIndexOf('\n') + 1).replaceFirst("^\\d+\\s+", "");
+      if (!armed || !(last.equals(command) || last.startsWith(command + " "))
+          || !blocked.compareAndSet(false, true)) return;
+      flushEntered.countDown();
+      boolean interrupted = false;
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+      try {
+        while (true) {
+          try {
+            assertTrue(releaseFlush.await(
+                Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS));
+            return;
+          } catch (InterruptedException ignored) {
+            interrupted = true;
+          }
+        }
+      } finally {
+        if (interrupted) Thread.currentThread().interrupt();
+      }
     }
   }
 
