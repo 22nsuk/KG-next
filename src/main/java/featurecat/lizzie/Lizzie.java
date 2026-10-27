@@ -1438,17 +1438,25 @@ public class Lizzie {
     }
   }
 
+  private static final java.util.concurrent.atomic.AtomicReference<
+      java.util.concurrent.CompletableFuture<?>> shutdownSaveWait =
+      new java.util.concurrent.atomic.AtomicReference<>();
+
   public static void shutdown() {
     shutdown(System::exit);
   }
 
   static void shutdown(IntConsumer exit) {
+    // Repeated window-close requests join the existing save wait, including its queued callback.
+    if (shutdownSaveWait.get() != null) return;
     try {
       EngineManager manager = engineManager;
       if (manager != null && manager.hasPendingEngineGameSave()) {
         // Preserve the finished game's snapshot while cancelling any successor before retrying.
         engineGame.stop();
-        if (!manager.retryEngineGameSave()) {
+        java.util.concurrent.CompletableFuture<Boolean> save = manager.retryEngineGameSave();
+        if (deferShutdownForSave(save, exit)) return;
+        if (!save.join()) {
           cancelShutdownAfterSaveFailure(null);
           return;
         }
@@ -1459,16 +1467,7 @@ public class Lizzie {
     }
     java.util.concurrent.CompletableFuture<Void> pendingSaves =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
-    if (!pendingSaves.isDone()) {
-      pendingSaves.whenComplete(
-          (ignored, failure) ->
-              SwingUtilities.invokeLater(
-                  () -> {
-                    if (failure != null) cancelShutdownAfterSaveFailure(failure);
-                    else shutdown(exit);
-                  }));
-      return;
-    }
+    if (deferShutdownForSave(pendingSaves, exit)) return;
     boolean saved;
     try {
       pendingSaves.join();
@@ -1578,6 +1577,19 @@ public class Lizzie {
   private static void cancelShutdownAfterSaveFailure(Throwable failure) {
     APP.warn("Shutdown cancelled because saving game data failed", failure);
     Utils.showMsg(resourceBundle.getString("Lizzie.shutdown.saveFailed"));
+  }
+
+  private static boolean deferShutdownForSave(
+      java.util.concurrent.CompletableFuture<?> save, IntConsumer exit) {
+    if (save.isDone()) return false;
+    if (shutdownSaveWait.compareAndSet(null, save)) {
+      save.whenComplete((result, failure) -> SwingUtilities.invokeLater(() -> {
+        if (!shutdownSaveWait.compareAndSet(save, null)) return;
+        if (failure != null || Boolean.FALSE.equals(result)) cancelShutdownAfterSaveFailure(failure);
+        else shutdown(exit);
+      }));
+    }
+    return true;
   }
 
   public static void shutdownLoggingThenExit(IntConsumer exit) {

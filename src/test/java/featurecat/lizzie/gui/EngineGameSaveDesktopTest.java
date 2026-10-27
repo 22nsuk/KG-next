@@ -53,6 +53,7 @@ class EngineGameSaveDesktopTest {
     assertEquals(3, evidence.getInt("stopRoutes"));
     assertTrue(Files.isRegularFile(result.resolveSibling("save-failure-ko.png")));
     assertTrue(Files.isRegularFile(result.resolveSibling("save-failure-detailed-ko.png")));
+    assertTrue(Files.isRegularFile(result.resolveSibling("completed-game-graph.png")));
   }
 
   public static void main(String[] args) throws Exception {
@@ -119,6 +120,9 @@ class EngineGameSaveDesktopTest {
             return null;
           });
       DesktopProbeProcess.phase(result, "korean-save-failure-visible");
+      java.awt.image.BufferedImage graph = onEdt(Lizzie.frame::captureEngineGameGraphImage);
+      assertTrue(graph.getWidth() > 0 && graph.getHeight() > 0);
+      assertTrue(ImageIO.write(graph, "png", result.resolveSibling("completed-game-graph.png").toFile()));
       capture(result.resolveSibling("save-failure-ko.png"));
 
       // These are the ordinary Korean toolbar and menu routes, with their real listeners.
@@ -312,10 +316,10 @@ class EngineGameSaveDesktopTest {
     }
 
     @Override
-    public boolean retryEngineGameSave() {
+    public java.util.concurrent.CompletableFuture<Boolean> retryEngineGameSave() {
       assertTrue(SwingUtilities.isEventDispatchThread());
       retries.incrementAndGet();
-      return false;
+      return java.util.concurrent.CompletableFuture.completedFuture(false);
     }
   }
 }

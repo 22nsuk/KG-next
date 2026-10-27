@@ -37,14 +37,12 @@ import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
-import featurecat.lizzie.util.AtomicSgfFileWriter;
-import featurecat.lizzie.util.AtomicTextFileWriter;
 import featurecat.lizzie.util.Utils;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -59,6 +57,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -200,9 +199,11 @@ public class EngineManager {
     final String summaryName;
     final String summaryText;
     final String completionMessage;
-    final AtomicBoolean attempting = new AtomicBoolean();
+    CompletableFuture<Boolean> attempt;
     final AtomicBoolean continuationScheduled = new AtomicBoolean();
     String sgf;
+    BufferedImage image;
+    boolean imageCaptured;
     Path sgfPath;
     Path summaryPath;
     Path lastTarget;
@@ -1741,83 +1742,105 @@ public class EngineManager {
     return pendingEngineGameSave != null;
   }
 
-  /** Retries only captured files. Completion, comments, and batch statistics are never replayed. */
-  public boolean retryEngineGameSave() {
+  /**
+   * Retries captured files, sharing an in-flight attempt. The future includes save-state publication
+   * on the EDT, but not engine retirement; only the successor must wait for both.
+   * Callers observe this future; Stop cancels the successor, never the accepted file write.
+   */
+  public CompletableFuture<Boolean> retryEngineGameSave() {
     PendingEngineGameSave save = pendingEngineGameSave;
-    if (save == null) return true;
-    if (!save.attempting.compareAndSet(false, true)) return false;
-    try {
-      if (!save.saved) {
-        try {
-          if (save.required && save.sgf == null) {
-            save.sgf = SGFParser.captureSave(save.board, save.history, false);
-          }
-          if (save.required && save.sgfPath == null) {
-            save.sgfPath = writeEngineGameOutput(save, save.sgfName, save.sgf, true);
-            saveEngineGameImage(save);
-          }
-          if (save.summaryText != null && save.summaryPath == null) {
-            save.summaryPath =
-                writeEngineGameOutput(save, save.summaryName, save.summaryText, false);
-          }
-        } catch (IOException | RuntimeException failure) {
-          if (save.ownsCurrentProduct()) save.module.onSaveFailed(save.stopClaim.transaction);
-          presentEngineGameSaveFailure(save, failure);
-          return false;
-        }
-        save.saved = true;
-        if (save.ownsCurrentProduct()) save.module.onSaveSucceeded(save.stopClaim.transaction);
-      }
-      completeEngineGameSaveAfterRetirement(save);
-      return true;
-    } finally {
-      save.attempting.set(false);
+    if (save == null) return CompletableFuture.completedFuture(true);
+    CompletableFuture<Boolean> attempt;
+    synchronized (save) {
+      if (save.attempt != null && (!save.attempt.isDone() || save.saved)) return save.attempt;
+      attempt = new CompletableFuture<>();
+      save.attempt = attempt;
     }
+    try {
+      // Freeze before the terminal caller retires its owner and permits later board mutations.
+      // Only a failed capture may retry from this exact completed history; writes reuse the string.
+      if (save.required && save.sgf == null) {
+        save.sgf = SGFParser.captureSave(save.board, save.history, false);
+      }
+    } catch (IOException | RuntimeException failure) {
+      finishEngineGameSaveOnEdt(save, attempt,
+          new CompletedEngineGameFiles.Result(save.sgfPath, save.summaryPath, save.lastTarget, failure));
+      return attempt;
+    }
+    Runnable submit = () -> submitEngineGameSave(save, attempt);
+    if (SwingUtilities.isEventDispatchThread()) submit.run();
+    else SwingUtilities.invokeLater(submit);
+    return attempt;
   }
 
-  private Path writeEngineGameOutput(
-      PendingEngineGameSave save, String filename, String text, boolean sgf) throws IOException {
-    String primaryFolder = save.stopClaim.plan.batch() ? save.batchName : "";
-    String fallbackFolder = save.stopClaim.plan.batch() ? save.batchTimestamp : "";
-    try {
-      return writeEngineGameOutput(save, primaryFolder, filename, text, sgf);
-    } catch (IOException | RuntimeException primaryFailure) {
-      if (primaryFolder.equals(fallbackFolder)) throw primaryFailure;
+  private void submitEngineGameSave(PendingEngineGameSave save, CompletableFuture<Boolean> attempt) {
+    if (save.required && save.saveImage && !save.imageCaptured) {
+      save.imageCaptured = true;
       try {
-        return writeEngineGameOutput(save, fallbackFolder, filename, text, sgf);
-      } catch (IOException | RuntimeException fallbackFailure) {
-        fallbackFailure.addSuppressed(primaryFailure);
-        throw fallbackFailure;
+        if (save.ownsCurrentHistory() && Lizzie.frame != null) {
+          save.image = Lizzie.frame.captureEngineGameGraphImage();
+        }
+      } catch (RuntimeException failure) {
+        ENGINE_LOG.warn("Engine-game graph image could not be captured", failure);
       }
     }
-  }
-
-  private Path writeEngineGameOutput(
-      PendingEngineGameSave save, String folder, String filename, String text, boolean sgf)
-      throws IOException {
-    Path destination = Path.of(save.directory.toString(), folder, filename);
-    save.lastTarget = destination;
-    Files.createDirectories(destination.getParent());
-    if (sgf) AtomicSgfFileWriter.write(destination, text);
-    else AtomicTextFileWriter.write(destination, text);
-    return destination;
-  }
-
-  private void saveEngineGameImage(PendingEngineGameSave save) {
-    if (!save.saveImage || !save.ownsCurrentHistory() || Lizzie.frame == null) return;
-    try {
-      Path image =
-          save.sgfPath.resolveSibling(save.sgfPath.getFileName().toString().replaceFirst("\\.sgf$", ".png"));
-      Lizzie.frame.saveImage(
-          Lizzie.frame.statx,
-          Lizzie.frame.staty,
-          (int) (Lizzie.frame.grw * 1.03),
-          Lizzie.frame.grh + Lizzie.frame.stath,
-          image.toString());
-    } catch (RuntimeException failure) {
-      // A best-effort graph image must not turn an already committed SGF into a failed save.
-      ENGINE_LOG.warn("Engine-game graph image could not be saved", failure);
+    CompletedEngineGameFiles.Request request =
+        new CompletedEngineGameFiles.Request(
+            save.directory, save.stopClaim.plan.batch() ? save.batchName : "",
+            save.stopClaim.plan.batch() ? save.batchTimestamp : "", save.sgfName, save.sgf,
+            save.summaryName, save.summaryText, save.sgfPath, save.summaryPath, save.image);
+    if (!request.hasWrites()) {
+      finishEngineGameSaveOnEdt(save, attempt,
+          new CompletedEngineGameFiles.Result(save.sgfPath, save.summaryPath, save.lastTarget, null));
+      return;
     }
+    try {
+      CompletedEngineGameFiles.Writer writer = engineGameSaveWriter();
+      CompletableFuture.supplyAsync(
+              () -> CompletedEngineGameFiles.write(request, writer), engineGameSaveExecutor())
+          .whenComplete((result, failure) -> finishEngineGameSaveOnEdt(save, attempt,
+              failure == null ? result : new CompletedEngineGameFiles.Result(
+                  request.savedSgf(), request.savedSummary(), request.directory(),
+                  new IOException("Engine-game save worker failed", failure))));
+    } catch (RuntimeException rejected) {
+      finishEngineGameSaveOnEdt(save, attempt,
+          new CompletedEngineGameFiles.Result(save.sgfPath, save.summaryPath, save.lastTarget, rejected));
+    }
+  }
+
+  Executor engineGameSaveExecutor() {
+    return CompletedEngineGameFiles.WORKER;
+  }
+
+  CompletedEngineGameFiles.Writer engineGameSaveWriter() {
+    return CompletedEngineGameFiles.ATOMIC_WRITER;
+  }
+
+  private void finishEngineGameSaveOnEdt(
+      PendingEngineGameSave save, CompletableFuture<Boolean> attempt,
+      CompletedEngineGameFiles.Result result) {
+    Runnable finish = () -> {
+      try {
+        save.sgfPath = result.sgf();
+        save.summaryPath = result.summary();
+        save.lastTarget = result.lastTarget();
+        if (save.sgfPath != null) save.image = null;
+        if (result.failure() != null) {
+          if (save.ownsCurrentProduct()) save.module.onSaveFailed(save.stopClaim.transaction);
+          presentEngineGameSaveFailure(save, result.failure());
+          attempt.complete(false);
+        } else {
+          save.saved = true;
+          if (save.ownsCurrentProduct()) save.module.onSaveSucceeded(save.stopClaim.transaction);
+          completeEngineGameSaveAfterRetirement(save);
+          attempt.complete(true);
+        }
+      } catch (RuntimeException failure) {
+        attempt.completeExceptionally(failure);
+      }
+    };
+    if (SwingUtilities.isEventDispatchThread()) finish.run();
+    else SwingUtilities.invokeLater(finish);
   }
 
   private void presentEngineGameSaveFailure(PendingEngineGameSave save, Exception failure) {

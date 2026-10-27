@@ -1067,25 +1067,32 @@ class EngineGameModuleContractTest {
     BoardHistoryList history = Lizzie.board.getHistory();
     Lizzie.config.autoSaveOnExit = false;
     Files.writeString(manager.outputDirectory, "blocked output");
-    EngineGameChromeTransition.Kind gatedStage =
-        attemptStarted
-            ? EngineGameChromeTransition.Kind.SAVE_FAILED
-            : EngineGameChromeTransition.Kind.BETWEEN_GAMES;
     AtomicBoolean gateClaimed = new AtomicBoolean();
     CountDownLatch entered = new CountDownLatch(1);
     CountDownLatch release = new CountDownLatch(1);
-    Lizzie.engineGame.replaceChromeForTest(
-        transition -> {
-          if (transition.kind() == gatedStage && gateClaimed.compareAndSet(false, true)) {
-            entered.countDown();
-            try {
-              assertTrue(release.await(5, TimeUnit.SECONDS), "shutdown gate was not released");
-            } catch (InterruptedException interrupted) {
-              Thread.currentThread().interrupt();
-              throw new AssertionError(interrupted);
-            }
+    if (attemptStarted) {
+      // Gate the real writer, not the EDT receipt callback: shutdown must still receive input.
+      manager.saveWriter = (path, text, sgf) -> {
+        if (gateClaimed.compareAndSet(false, true)) {
+          entered.countDown();
+          awaitWriteRelease(release);
+        }
+        CompletedEngineGameFiles.ATOMIC_WRITER.write(path, text, sgf);
+      };
+    } else {
+      Lizzie.engineGame.replaceChromeForTest(transition -> {
+        if (transition.kind() == EngineGameChromeTransition.Kind.BETWEEN_GAMES
+            && gateClaimed.compareAndSet(false, true)) {
+          entered.countDown();
+          try {
+            assertTrue(release.await(5, TimeUnit.SECONDS), "shutdown gate was not released");
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupted);
           }
-        });
+        }
+      });
+    }
     FutureTask<Void> completion =
         new FutureTask<>(
             () -> {
@@ -1114,7 +1121,8 @@ class EngineGameModuleContractTest {
       completionWorker.join(TimeUnit.SECONDS.toMillis(5));
       assertFalse(completionWorker.isAlive(), "completion worker did not settle after the gate");
     }
-    SwingUtilities.invokeAndWait(() -> {});
+    assertFalse(manager.lastSaveAttempt.get(5, TimeUnit.SECONDS));
+    drainSaveCallbacks();
 
     assertEquals(0, exits.get());
     assertTrue(manager.hasPendingEngineGameSave());
@@ -1209,6 +1217,218 @@ class EngineGameModuleContractTest {
     String report = Files.readString(reports.get(0));
     assertTrue(report.contains("0:1"), report);
     assertFalse(report.contains("999.999"), report);
+  }
+
+  @Test
+  void blockedSaveKeepsEdtAndRetirementResponsiveAndSharesRetries() throws Exception {
+    EngineGameTransaction transaction = playWithRealSave(true, 2, false);
+    EngineManager.EngineGameOwnerTransaction owner =
+        (EngineManager.EngineGameOwnerTransaction) transaction.lifecycle().ownerToken();
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicInteger sgfWrites = new AtomicInteger();
+    manager.saveWriter = (path, text, sgf) -> {
+      assertFalse(SwingUtilities.isEventDispatchThread(), "file writes must leave the EDT");
+      if (sgf) {
+        sgfWrites.incrementAndGet();
+        entered.countDown();
+        awaitWriteRelease(release);
+      }
+      CompletedEngineGameFiles.ATOMIC_WRITER.write(path, text, sgf);
+    };
+    FutureTask<CompletableFuture<Boolean>> completed = new FutureTask<>(() -> {
+      completeCurrent(new GameOutcome.Resign(EngineGameSide.BLACK));
+      return manager.lastSaveAttempt;
+    });
+    SwingUtilities.invokeLater(completed);
+    try {
+      CompletableFuture<Boolean> attempt = completed.get(5, TimeUnit.SECONDS);
+      assertTrue(entered.await(5, TimeUnit.SECONDS));
+      FutureTask<CompletableFuture<Boolean>> retry = new FutureTask<>(manager::retryEngineGameSave);
+      SwingUtilities.invokeLater(retry);
+      assertSame(attempt, retry.get(5, TimeUnit.SECONDS));
+      assertFalse(attempt.isDone());
+      assertTrue(owner.retirementFinishedForTest(), "disk I/O must not retain engine leases");
+      assertEquals(0, manager.successorStarts);
+      assertEquals(1, sgfWrites.get());
+    } finally {
+      release.countDown();
+    }
+    assertTrue(manager.lastSaveAttempt.get(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals(1, sgfWrites.get());
+    assertEquals(1, manager.successorStarts);
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+  }
+
+  @Test
+  void stoppedBlockedSaveStillWritesFrozenGameAndDoesNotTouchReplacement() throws Exception {
+    playWithRealSave(true, 2, false);
+    CountDownLatch entered = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    manager.saveWriter = (path, text, sgf) -> {
+      if (sgf) {
+        entered.countDown();
+        awaitWriteRelease(release);
+      }
+      CompletedEngineGameFiles.ATOMIC_WRITER.write(path, text, sgf);
+    };
+    BoardHistoryList original = Lizzie.board.getHistory();
+    BoardHistoryList replacement = SGFParser.parseSgf("(;SZ[19]C[new game];B[cc])", true);
+    try {
+      SwingUtilities.invokeAndWait(() -> completeCurrent(new GameOutcome.Resign(EngineGameSide.BLACK)));
+      assertTrue(entered.await(5, TimeUnit.SECONDS));
+      SwingUtilities.invokeAndWait(() -> {
+        Lizzie.engineGame.stop();
+        original.getStart().getData().comment = "edited during write";
+        Lizzie.board.setHistory(replacement);
+      });
+      assertFalse(manager.lastSaveAttempt.isDone());
+      assertFalse(Lizzie.engineGame.successorPending());
+    } finally {
+      release.countDown();
+    }
+    assertTrue(manager.lastSaveAttempt.get(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals(0, manager.successorStarts);
+    assertSame(replacement, Lizzie.board.getHistory());
+    assertEquals("new game", replacement.getStart().getData().comment);
+    String sgf = Files.readString(savedFiles(".sgf").get(0));
+    assertFalse(sgf.contains("edited during write"), sgf);
+    assertFalse(sgf.contains("new game"), sgf);
+    assertCompletedSgf(savedFiles(".sgf").get(0));
+  }
+
+  @Test
+  void rejectedSaveRemainsRetryableWithItsOriginalPayload() throws Exception {
+    playWithRealSave(true, 2, false);
+    manager.saveExecutor = task -> {
+      throw new java.util.concurrent.RejectedExecutionException("controlled full save queue");
+    };
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    assertTrue(Lizzie.engineGame.current().saveFailed());
+    assertTrue(manager.hasPendingEngineGameSave());
+    assertEquals(0, manager.successorStarts);
+    Lizzie.board.getHistory().getStart().getData().comment = "edited after rejection";
+    manager.saveExecutor = null;
+    assertTrue(retrySave());
+    assertEquals(1, manager.successorStarts);
+    assertEquals(1, manager.saveFailures.size());
+    assertFalse(Files.readString(savedFiles(".sgf").get(0)).contains("edited after rejection"));
+  }
+
+  @Test
+  void gameWithoutRequiredFilesDoesNotSubmitToSaveExecutor() throws Exception {
+    playWithRealSave(false, 1, true, true, false);
+    manager.saveExecutor = task -> {
+      throw new AssertionError("a game without required files must not enqueue a writer");
+    };
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    assertFalse(manager.hasPendingEngineGameSave());
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertEquals(0, ((SilentFrame) Lizzie.frame).imageAttempts);
+    assertFalse(Files.exists(manager.outputDirectory));
+  }
+
+  private static void awaitWriteRelease(CountDownLatch release) throws IOException {
+    try {
+      if (!release.await(10, TimeUnit.SECONDS)) throw new IOException("save gate was not released");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IOException(interrupted);
+    }
+  }
+
+  @Test
+  void shutdownWaitsForRealSaveReceiptAndResumesOnlyOnce() throws Exception {
+    playWithRealSave(true, 2, false);
+    Lizzie.config.autoSaveOnExit = false;
+    Lizzie.frame = allocate(ShutdownFrame.class);
+    CountDownLatch writing = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    CompletableFuture<Void> workerReturned = new CompletableFuture<>();
+    manager.saveWriter = (path, text, sgf) -> {
+      if (sgf) {
+        writing.countDown();
+        awaitWriteRelease(release);
+      }
+      CompletedEngineGameFiles.ATOMIC_WRITER.write(path, text, sgf);
+    };
+    manager.saveExecutor = work -> {
+      Thread worker = new Thread(() -> {
+        try {
+          work.run();
+        } finally {
+          workerReturned.complete(null);
+        }
+      }, "test-save-receipt");
+      manager.ownedWorkers.add(worker);
+      worker.start();
+    };
+    AtomicInteger exits = new AtomicInteger();
+    try {
+      SwingUtilities.invokeAndWait(() -> completeCurrent(new GameOutcome.Resign(EngineGameSide.BLACK)));
+      assertTrue(writing.await(5, TimeUnit.SECONDS));
+      FutureTask<Void> beforeReceipt = new FutureTask<>(() -> {
+        release.countDown();
+        workerReturned.get(5, TimeUnit.SECONDS);
+        assertEquals(1, savedFiles(".sgf").size());
+        assertEquals(1, savedFiles(".txt").size());
+        assertFalse(manager.lastSaveAttempt.isDone(), "EDT receipt has not been applied yet");
+        requestShutdown(exits);
+        requestShutdown(exits);
+        assertEquals(0, ((SilentFrame) Lizzie.frame).shutdownCleanupCalls);
+        assertEquals(0, exits.get());
+        assertFalse(Lizzie.engineGame.successorPending());
+        return null;
+      });
+      SwingUtilities.invokeLater(beforeReceipt);
+      beforeReceipt.get(5, TimeUnit.SECONDS);
+      assertTrue(manager.lastSaveAttempt.get(5, TimeUnit.SECONDS));
+      drainSaveCallbacks();
+      assertEquals(1, ((SilentFrame) Lizzie.frame).shutdownCleanupCalls);
+      assertEquals(1, exits.get());
+      assertEquals(0, manager.successorStarts);
+      assertCompletedSgf(savedFiles(".sgf").get(0));
+    } finally {
+      release.countDown();
+      workerReturned.get(5, TimeUnit.SECONDS);
+      manager.lastSaveAttempt.get(5, TimeUnit.SECONDS);
+      drainSaveCallbacks();
+    }
+  }
+
+  @Test
+  void optionalGraphUsesTheActualFallbackSgfDirectory() throws Exception {
+    playWithRealSave(true, 2, true);
+    Files.createDirectories(manager.outputDirectory);
+    Files.writeString(manager.outputDirectory.resolve("named-batch"), "blocked primary folder");
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    Path sgf = savedFiles(".sgf").get(0);
+    Path png = savedFiles(".png").get(0);
+    assertEquals(sgf.getParent(), png.getParent());
+    assertEquals(2, javax.imageio.ImageIO.read(png.toFile()).getWidth());
+    assertEquals(1, manager.successorStarts);
+    assertTrue(manager.saveFailures.isEmpty());
+  }
+
+  @Test
+  void optionalPngWriteFailureDoesNotFailRequiredFiles() throws Exception {
+    playWithRealSave(true, 2, true);
+    manager.saveWriter = (path, text, sgf) -> {
+      CompletedEngineGameFiles.ATOMIC_WRITER.write(path, text, sgf);
+      if (sgf) {
+        Path image = path.resolveSibling(path.getFileName().toString().replaceFirst("\\.sgf$", ".png"));
+        Files.createDirectories(image);
+        Files.writeString(image.resolve("keep"), "not an image destination");
+      }
+    };
+    completeForSave(new GameOutcome.Resign(EngineGameSide.BLACK));
+    assertEquals(1, savedFiles(".sgf").size());
+    assertEquals(1, savedFiles(".txt").size());
+    assertEquals(1, manager.successorStarts);
+    assertTrue(manager.saveFailures.isEmpty());
   }
 
   @Test
@@ -1928,6 +2148,11 @@ class EngineGameModuleContractTest {
 
   private EngineGameTransaction playWithRealSave(
       boolean batch, int games, boolean image, boolean genmove) throws Exception {
+    return playWithRealSave(batch, games, image, genmove, true);
+  }
+
+  private EngineGameTransaction playWithRealSave(
+      boolean batch, int games, boolean image, boolean genmove, boolean autosave) throws Exception {
     manager.outputDirectory = directory.resolve("EngineGames");
     manager.manualActivation = true;
     manager.runWorkersInline = true;
@@ -1959,7 +2184,7 @@ class EngineGameModuleContractTest {
                 .batch(batch)
                 .batchLimit(games)
                 .batchName("named-batch")
-                .autosave(true)
+                .autosave(autosave)
                 .saveWinrateImage(image)
                 .build());
     assertInstanceOf(Acceptance.Accepted.class, Lizzie.engineGame.accept(spec, observer));
@@ -1973,27 +2198,36 @@ class EngineGameModuleContractTest {
 
   private void completeForSave(GameOutcome outcome) throws Exception {
     SwingUtilities.invokeAndWait(() -> completeCurrent(outcome));
-    SwingUtilities.invokeAndWait(() -> {});
+    manager.lastSaveAttempt.get(5, TimeUnit.SECONDS);
+    drainSaveCallbacks();
   }
 
   private boolean retrySave() throws Exception {
-    boolean[] result = new boolean[1];
-    SwingUtilities.invokeAndWait(() -> result[0] = manager.retryEngineGameSave());
-    SwingUtilities.invokeAndWait(() -> {});
-    return result[0];
+    AtomicReference<CompletableFuture<Boolean>> result = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> result.set(manager.retryEngineGameSave()));
+    boolean saved = result.get().get(5, TimeUnit.SECONDS);
+    drainSaveCallbacks();
+    return saved;
+  }
+
+  private static void drainSaveCallbacks() throws Exception {
+    FutureTask<Void> drained = new FutureTask<>(() -> null);
+    SwingUtilities.invokeAndWait(() -> SwingUtilities.invokeLater(drained));
+    drained.get(5, TimeUnit.SECONDS);
   }
 
   private static void requestShutdown(AtomicInteger exits) throws Exception {
     var shutdown = Lizzie.class.getDeclaredMethod("shutdown", IntConsumer.class);
     shutdown.setAccessible(true);
-    SwingUtilities.invokeAndWait(
-        () -> {
+    Runnable request = () -> {
           try {
             shutdown.invoke(null, (IntConsumer) status -> exits.incrementAndGet());
           } catch (ReflectiveOperationException failure) {
             throw new AssertionError(failure);
           }
-        });
+        };
+    if (SwingUtilities.isEventDispatchThread()) request.run();
+    else SwingUtilities.invokeAndWait(request);
   }
 
   private List<Path> savedFiles(String suffix) throws IOException {
@@ -2222,6 +2456,25 @@ class EngineGameModuleContractTest {
   }
 
   private static final class CountingLeaseEngineManager extends EngineManager {
+    private CompletableFuture<Boolean> lastSaveAttempt = CompletableFuture.completedFuture(true);
+    private java.util.concurrent.Executor saveExecutor;
+    private CompletedEngineGameFiles.Writer saveWriter;
+
+    @Override
+    java.util.concurrent.Executor engineGameSaveExecutor() {
+      return saveExecutor == null ? super.engineGameSaveExecutor() : saveExecutor;
+    }
+
+    @Override
+    CompletedEngineGameFiles.Writer engineGameSaveWriter() {
+      return saveWriter == null ? super.engineGameSaveWriter() : saveWriter;
+    }
+
+    @Override
+    public CompletableFuture<Boolean> retryEngineGameSave() {
+      lastSaveAttempt = super.retryEngineGameSave();
+      return lastSaveAttempt;
+    }
     private final List<Thread> ownedWorkers = new CopyOnWriteArrayList<>();
     private final List<Throwable> workerFailures = new CopyOnWriteArrayList<>();
     private int leaseConflictCount;
@@ -2358,6 +2611,7 @@ class EngineGameModuleContractTest {
     }
 
     private void awaitOwnedWorkers() throws Exception {
+      lastSaveAttempt.get(5, TimeUnit.SECONDS);
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
       Throwable failure = null;
       InterruptedException interrupted = null;
@@ -2588,7 +2842,7 @@ class EngineGameModuleContractTest {
     public void save() {}
   }
 
-  private static final class SilentFrame extends LizzieFrame {
+  private static class SilentFrame extends LizzieFrame {
     private RuntimeException imageFailure;
     private int imageAttempts;
     private int shutdownCleanupCalls;
@@ -2601,9 +2855,11 @@ class EngineGameModuleContractTest {
     }
 
     @Override
-    public void saveImage(int x, int y, int width, int height, String path) {
+    public java.awt.image.BufferedImage captureEngineGameGraphImage() {
+      assertTrue(SwingUtilities.isEventDispatchThread());
       imageAttempts++;
       if (imageFailure != null) throw imageFailure;
+      return new java.awt.image.BufferedImage(2, 2, java.awt.image.BufferedImage.TYPE_INT_RGB);
     }
 
     @Override
@@ -2655,6 +2911,29 @@ class EngineGameModuleContractTest {
 
     @Override
     public void showUnsupportedWebSocketAdvancedClock() {}
+  }
+
+  private static final class ShutdownFrame extends SilentFrame {
+    @Override
+    public CompletableFuture<Void> shutdownHumanSlPreparation() {
+      ((SilentFrame) this).shutdownCleanupCalls++;
+      return CompletableFuture.completedFuture(null);
+    }
+
+    @Override
+    public void closeContributeEngine() {}
+
+    @Override
+    public void shutdownVariationPreviews() {}
+
+    @Override
+    public void shutdownKifuEngineSyncCoordinator() {}
+
+    @Override
+    public void shutdownClockHelper() {}
+
+    @Override
+    public void destroyAnalysisEngine() {}
   }
 
   private static final class SilentToolbar extends BottomToolbar {
