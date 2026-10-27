@@ -112,7 +112,7 @@ public final class WholeGameAnalysisPlan {
     List<BoardHistoryNode> pending = new ArrayList<BoardHistoryNode>();
     for (BoardHistoryNode node : positions) {
       BoardData data = node.getData();
-      if (data == null || !data.hasCompletePrimaryAnalysis(targetVisits, ownershipRequested)) {
+      if (data == null || !data.hasReusablePrimaryAnalysis(targetVisits, ownershipRequested)) {
         pending.add(node);
       }
     }
@@ -155,6 +155,7 @@ public final class WholeGameAnalysisPlan {
   }
 
   static final class PositionFingerprint {
+    private final long primaryAnalysisRevision;
     private final Stone[] stones;
     private final Zobrist zobrist;
     private final boolean blackToPlay;
@@ -165,6 +166,7 @@ public final class WholeGameAnalysisPlan {
     private final int[] lastMove;
 
     private PositionFingerprint(BoardData data) {
+      primaryAnalysisRevision = data == null ? 0 : data.primaryAnalysisRevision();
       stones = data == null || data.stones == null ? null : data.stones.clone();
       zobrist = data == null || data.zobrist == null ? null : data.zobrist.clone();
       blackToPlay = data != null && data.blackToPlay;
@@ -186,7 +188,8 @@ public final class WholeGameAnalysisPlan {
       if (data == null) {
         return false;
       }
-      return Arrays.equals(stones, data.stones)
+      return primaryAnalysisRevision == data.primaryAnalysisRevision()
+          && Arrays.equals(stones, data.stones)
           && (zobrist == null ? data.zobrist == null : zobrist.equals(data.zobrist))
           && blackToPlay == data.blackToPlay
           && moveNode == data.isMoveNode()

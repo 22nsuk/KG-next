@@ -897,10 +897,14 @@ public class AnalysisEngine {
       if (canFinalizeCurrentRequest() && responseCount == analyzeMap.size()) setResult();
       return;
     }
-    boolean payloadApplied = applyAnalysisPayload(node, moves, ownershipArray, reportedPlayouts);
-    if (payloadApplied && node.getData().bestMoves == moves
-        && rootInfo != null && rootInfo.has("visits")) {
-      node.getData().rootVisits = reportedPlayouts;
+    boolean payloadApplied;
+    BoardData data = node.getData();
+    synchronized (data) {
+      payloadApplied = applyAnalysisPayload(node, moves, ownershipArray, reportedPlayouts);
+      if (payloadApplied && data.bestMoves == moves
+          && rootInfo != null && rootInfo.has("visits")) {
+        data.rootVisits = reportedPlayouts;
+      }
     }
     responseCount++;
     if (payloadApplied) {
@@ -1204,15 +1208,18 @@ public class AnalysisEngine {
       return false;
     }
     int reportedPlayouts = rootInfo != null ? rootInfo.visits : MoveData.getPlayouts(moves);
-    boolean payloadApplied = applyAnalysisPayload(job.node, moves, null, reportedPlayouts);
-    if (payloadApplied && job.node.getData().bestMoves == moves && rootInfo != null) {
-      BoardData data = job.node.getData();
-      if (Double.isFinite(rootInfo.winrate)) data.winrate = rootInfo.winrate;
-      if (Double.isFinite(rootInfo.scoreLead)) data.scoreMean = rootInfo.scoreLead;
-      data.setPlayouts(rootInfo.visits);
-      data.rootVisits = rootInfo.visits;
-      data.comment = SGFParser.formatComment(job.node);
-      Lizzie.board.updateMovelist(job.node);
+    boolean payloadApplied;
+    BoardData data = job.node.getData();
+    synchronized (data) {
+      payloadApplied = applyAnalysisPayload(job.node, moves, null, reportedPlayouts);
+      if (payloadApplied && data.bestMoves == moves && rootInfo != null) {
+        if (Double.isFinite(rootInfo.winrate)) data.winrate = rootInfo.winrate;
+        if (Double.isFinite(rootInfo.scoreLead)) data.scoreMean = rootInfo.scoreLead;
+        data.setPlayouts(rootInfo.visits);
+        data.rootVisits = rootInfo.visits;
+        data.comment = SGFParser.formatComment(job.node);
+        Lizzie.board.updateMovelist(job.node);
+      }
     }
     responseCount++;
     if (payloadApplied) {
@@ -1289,15 +1296,20 @@ public class AnalysisEngine {
     }
     BoardData data = node.getData();
     synchronized (data) {
+      WholeGameAnalysisPlan.PositionFingerprint fingerprint =
+          requestPositionFingerprints().get(node);
+      if (fingerprint != null && !fingerprint.matches(data)) {
+        return false;
+      }
       boolean ownershipRequired =
           explicitRequestTargetVisits > 0 && explicitRequestOwnershipRequested;
       if (preserveExistingAnalysis
-          && data.hasCompletePrimaryAnalysis(explicitRequestTargetVisits, ownershipRequired)) {
+          && data.hasReusablePrimaryAnalysis(explicitRequestTargetVisits, ownershipRequired)) {
         return false;
       }
       if (preserveExistingAnalysis
           && ownershipRequired
-          && data.hasCompletePrimaryAnalysis(explicitRequestTargetVisits, false)
+          && data.hasReusablePrimaryAnalysis(explicitRequestTargetVisits, false)
           && data.getPlayouts() > incomingPlayouts) {
         if (ownershipArray == null || ownershipArray.isEmpty()) {
           return false;
@@ -1305,11 +1317,14 @@ public class AnalysisEngine {
         data.estimateArray = new ArrayList<Double>(ownershipArray);
         data.comment = SGFParser.formatComment(node);
         Lizzie.board.updateMovelist(node);
-        return data.hasCompletePrimaryAnalysis(explicitRequestTargetVisits, true);
+        return data.hasReusablePrimaryAnalysis(explicitRequestTargetVisits, true);
       }
 
       List<Double> ownershipToApply =
-          preserveExistingAnalysis && ownershipArray == null && data.estimateArray != null
+          preserveExistingAnalysis
+                  && !data.isChanged
+                  && ownershipArray == null
+                  && data.estimateArray != null
               ? data.estimateArray
               : ownershipArray;
       boolean payloadApplied =
@@ -1329,7 +1344,7 @@ public class AnalysisEngine {
       data.comment = SGFParser.formatComment(node);
       Lizzie.board.updateMovelist(node);
       return explicitRequestTargetVisits <= 0
-          || data.hasCompletePrimaryAnalysis(explicitRequestTargetVisits, ownershipRequired);
+          || data.hasReusablePrimaryAnalysis(explicitRequestTargetVisits, ownershipRequired);
     }
   }
 
@@ -1684,15 +1699,14 @@ public class AnalysisEngine {
         if (node != null
             && node.getData() != null
             && !node.getData()
-                .hasCompletePrimaryAnalysis(
+                .hasReusablePrimaryAnalysis(
                     explicitRequestTargetVisits, explicitRequestOwnershipRequested)) {
           uniqueNodes.add(node);
         }
       }
     }
     for (BoardHistoryNode node : uniqueNodes) {
-      requestPositionFingerprints()
-          .put(node, WholeGameAnalysisPlan.PositionFingerprint.capture(node.getData()));
+      captureRequestPosition(node);
     }
 
     if (useRemoteCompute) {
@@ -1735,7 +1749,7 @@ public class AnalysisEngine {
             && node.getData() != null
             && !node
                 .getData()
-                .hasCompletePrimaryAnalysis(normalizedTargetVisits, ownershipRequested)) {
+                .hasReusablePrimaryAnalysis(normalizedTargetVisits, ownershipRequested)) {
           uniqueNodes.add(node);
         }
       }
@@ -1802,7 +1816,7 @@ public class AnalysisEngine {
   private void captureRequestPosition(BoardHistoryNode node) {
     if (node != null && node.getData() != null) {
       requestPositionFingerprints()
-          .put(node, WholeGameAnalysisPlan.PositionFingerprint.capture(node.getData()));
+          .putIfAbsent(node, WholeGameAnalysisPlan.PositionFingerprint.capture(node.getData()));
     }
   }
 

@@ -447,6 +447,59 @@ class WholeGameAnalysisSessionTest {
   }
 
   @Test
+  void invalidatedAnalyzedGameStartsBaselineInsteadOfCompletingFromOldResults() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode first = root.add(new BoardHistoryNode(passData(Stone.BLACK, 1)));
+      installCompleteAnalysis(root.getData(), 700);
+      installCompleteAnalysis(first.getData(), 700);
+      allocate(Board.class).clearBestMovesAfterForFirstEngine(root);
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      SessionFixture fixture = SessionFixture.createWithHistory(history, () -> engine);
+
+      fixture.session.start();
+
+      try {
+        waitUntil(
+            () -> engine.requestedNodes != null || fixture.session.isTerminal(),
+            "invalidated game should dispatch fresh analysis");
+        assertEquals(WholeGameAnalysisSession.State.BASELINE, fixture.session.state());
+        assertEquals(List.of(root, first), engine.requestedNodes);
+        assertEquals(32, engine.requestedVisits);
+        assertEquals(700, root.getData().getPlayouts());
+        assertEquals(700, first.getData().getPlayouts());
+        assertTrue(root.getData().isChanged);
+        assertTrue(first.getData().isChanged);
+      } finally {
+        fixture.session.cancel();
+        waitForFinished(fixture);
+      }
+    }
+  }
+
+  @Test
+  void repeatedAnalysisInvalidationChangesTheSessionSnapshotEvenWithoutVisits() throws Exception {
+    for (boolean previouslyAnalyzed : List.of(false, true)) {
+      try (TestEnvironment env = TestEnvironment.open()) {
+        BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+        BoardHistoryNode root = history.getStart();
+        if (previouslyAnalyzed) {
+          installCompleteAnalysis(root.getData(), 700);
+        }
+        allocate(Board.class).clearBestMovesAfterForFirstEngine(root);
+        SessionFixture fixture = SessionFixture.createWithHistory(history, null);
+        assertTrue(invokeCurrentGameMatches(fixture.session));
+
+        Lizzie.board.clearBestMovesAfterForFirstEngine(root);
+
+        assertFalse(invokeCurrentGameMatches(fixture.session));
+      }
+    }
+  }
+
+  @Test
   void cancelDuringBaselineEndsTheSessionWithoutCompletingRemainingPositions() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       Lizzie.leelaz = null;
