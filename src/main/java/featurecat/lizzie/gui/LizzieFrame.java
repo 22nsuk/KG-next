@@ -21693,9 +21693,12 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (kifuOpenWaitingForQuickAnalysisRestore) {
-      pendingForegroundResumeAfterCleanup = false;
       finishDeferredKifuOpenAfterQuickAnalysisRestore();
-      return;
+      // A successful load starts a new analysis context and owns its resume. A stale or
+      // rejected load leaves this context intact, so it must not consume the user's request.
+      if (cleanupGeneration != analysisControlCleanupGeneration) {
+        return;
+      }
     }
     if (!pendingForegroundResumeAfterCleanup || userAnalysisPaused) {
       return;

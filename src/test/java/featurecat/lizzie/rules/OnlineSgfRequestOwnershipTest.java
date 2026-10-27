@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.SyncDiagnosticsRecorder;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.OnlineDialog;
@@ -197,6 +198,65 @@ class OnlineSgfRequestOwnershipTest {
     else assertNewGame();
   }
 
+  @ParameterizedTest
+  @CsvSource({"true,true,true", "false,true,true", "true,false,true", "true,true,false"})
+  void userPauseCleanupPreservesResumeWhenDeferredResponseIsStale(
+      boolean stopBeforeRestore, boolean requestResume, boolean restoreSucceeded) throws Exception {
+    Response response = response("/pause-cleanup", NEW);
+    start(response);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    // Hold the asynchronous engine-restore boundary. The request, deferred load, user resume
+    // control and cleanup callback below are real; only engine I/O and native painting are quiet.
+    SwingUtilities.invokeAndWait(
+        () -> {
+          setFrame("analysisControlCleanupInProgress", true);
+          setFrame("userAnalysisPaused", true);
+        });
+    finish(response);
+    assertNotNull(field(LizzieFrame.class, "pendingKifuOpen").get(frame));
+
+    ResumeTrackingLeelaz engine = new ResumeTrackingLeelaz();
+    Lizzie.setPrimaryEngine(engine);
+    EngineManager.isEmpty = false;
+    SwingUtilities.invokeAndWait(
+        () -> {
+          if (requestResume) frame.togglePonderMannul();
+          if (stopBeforeRestore) dialog.stopSync();
+        });
+    assertEquals(
+        requestResume,
+        field(LizzieFrame.class, "pendingForegroundResumeAfterCleanup").getBoolean(frame));
+    assertTrue(engine.events.isEmpty(), "Resume must wait for engine restoration");
+    Method cleanup =
+        LizzieFrame.class.getDeclaredMethod(
+            "finishUserAnalysisPauseCleanup", long.class, boolean.class);
+    cleanup.setAccessible(true);
+    long generation = field(LizzieFrame.class, "analysisControlCleanupGeneration").getLong(frame);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            cleanup.invoke(frame, generation, restoreSucceeded);
+          } catch (ReflectiveOperationException e) {
+            throw new AssertionError(e);
+          }
+        });
+
+    if (stopBeforeRestore) assertSame(current, Lizzie.board.getHistory());
+    else assertNewGame();
+    assertEquals(
+        stopBeforeRestore && requestResume && restoreSucceeded
+            ? List.of("sync", "ponder")
+            : List.of(),
+        engine.events,
+        "A rejected load must not swallow resume; an accepted load owns its own resume");
+    assertFalse(field(LizzieFrame.class, "pendingForegroundResumeAfterCleanup").getBoolean(frame));
+    assertFalse(field(LizzieFrame.class, "analysisControlCleanupInProgress").getBoolean(frame));
+    assertNull(field(LizzieFrame.class, "pendingKifuOpen").get(frame));
+    if (stopBeforeRestore) {
+      assertEquals(!requestResume || !restoreSucceeded, frame.isUserAnalysisPaused());
+    }
+  }
+
   private Response response(String path, String sgf) {
     Response response = new Response(path, sgf);
     responses.add(response);
@@ -287,6 +347,7 @@ class OnlineSgfRequestOwnershipTest {
   }
 
   static final class QuietFrame extends LizzieFrame {
+    @Override public boolean stopAiPlayingAndPolicy() { return false; }
     @Override public void setCommentPaneOrArea(boolean area) {}
     @Override public void cancelYikeLiveCurveCompletion() {}
     @Override public void setResult(String result) {}
@@ -304,5 +365,30 @@ class OnlineSgfRequestOwnershipTest {
     @Override public void refreshProblemListSnapshot() {}
     @Override protected void scheduleMovelistRefreshAfterKifuLoad() {}
     @Override public void scheduleResumeAnalysisAfterLoad(int delay, Runnable action) {}
+  }
+
+  static final class ResumeTrackingLeelaz extends Leelaz {
+    final List<String> events = new ArrayList<>();
+
+    ResumeTrackingLeelaz() throws java.io.IOException {
+      super("");
+    }
+
+    @Override
+    public boolean submitOrdinaryLiveBoardForwarding(
+        EngineManager.OrdinaryLiveBoardForwardingIntent intent) {
+      events.add("sync");
+      return true;
+    }
+
+    @Override
+    public void ponder() {
+      events.add("ponder");
+    }
+
+    @Override
+    public boolean isPondering() {
+      return false;
+    }
   }
 }
