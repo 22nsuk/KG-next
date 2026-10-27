@@ -378,6 +378,71 @@ class LizzieShutdownTest {
   }
 
   @Test
+  void repeatedShutdownJoinsOneAsynchronousEngineGameSaveBeforeCleanup() throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.config.autoSaveOnExit = false;
+      harness.manager.engineGameSavePending = true;
+      CompletableFuture<Boolean> save = new CompletableFuture<>();
+      harness.manager.saveAttempt = save;
+      AtomicInteger exits = new AtomicInteger();
+      try {
+        SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(status -> exits.incrementAndGet()));
+        SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(status -> exits.incrementAndGet()));
+        assertEquals(1, harness.manager.retrySaveCalls);
+        assertEquals(0, exits.get());
+        assertFalse(harness.config.persistCalled);
+        assertEquals(0, harness.frame.strengthShutdownCalls);
+        assertEquals(0, harness.engine.forceQuitCount);
+
+        // A completed disk write is not sufficient until the owner has published its receipt.
+        SwingUtilities.invokeAndWait(() -> {
+          harness.manager.engineGameSavePending = false;
+          save.complete(true);
+          // The queued resumption still owns the close request even though the future is done.
+          Lizzie.shutdown(status -> exits.incrementAndGet());
+          assertEquals(0, exits.get());
+        });
+        SwingUtilities.invokeAndWait(() -> {});
+        assertEquals(1, exits.get());
+        assertEquals(1, harness.frame.strengthShutdownCalls);
+        assertEquals(1, harness.engine.forceQuitCount);
+      } finally {
+        save.complete(false);
+        SwingUtilities.invokeAndWait(() -> {});
+      }
+    }
+  }
+
+  @Test
+  void asynchronousEngineGameSaveFailureLeavesExitRetryable() throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.manager.engineGameSavePending = true;
+      CompletableFuture<Boolean> save = new CompletableFuture<>();
+      harness.manager.saveAttempt = save;
+      AtomicInteger exits = new AtomicInteger();
+      try {
+        SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(status -> exits.incrementAndGet()));
+        save.complete(false);
+        SwingUtilities.invokeAndWait(() -> {});
+        assertEquals(0, exits.get());
+        assertTrue(harness.manager.engineGameSavePending);
+        assertFalse(harness.config.persistCalled);
+        assertEquals(0, harness.frame.strengthShutdownCalls);
+        assertEquals(0, harness.engine.forceQuitCount);
+
+        harness.manager.saveAttempt = null;
+        harness.manager.retrySaveResult = true;
+        SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(status -> exits.incrementAndGet()));
+        assertEquals(1, exits.get());
+        assertEquals(2, harness.manager.retrySaveCalls);
+      } finally {
+        save.complete(false);
+        SwingUtilities.invokeAndWait(() -> {});
+      }
+    }
+  }
+
+  @Test
   void engineGameRetryRuntimeFailurePreservesPendingSaveAndCancelsExit() throws Exception {
     try (Harness harness = Harness.open()) {
       harness.manager.engineGameSavePending = true;
@@ -705,16 +770,19 @@ class LizzieShutdownTest {
       return engineGameSavePending;
     }
 
+    private CompletableFuture<Boolean> saveAttempt;
+
     @Override
-    public boolean retryEngineGameSave() {
+    public CompletableFuture<Boolean> retryEngineGameSave() {
       retrySaveCalls++;
+      if (saveAttempt != null) return saveAttempt;
       if (retrySaveFailure != null) {
         throw retrySaveFailure;
       }
       if (retrySaveResult) {
         engineGameSavePending = retirementPending;
       }
-      return retrySaveResult;
+      return CompletableFuture.completedFuture(retrySaveResult);
     }
   }
 

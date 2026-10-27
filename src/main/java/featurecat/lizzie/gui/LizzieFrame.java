@@ -12549,6 +12549,28 @@ public class LizzieFrame extends JFrame {
     g.drawString(string, x - wid / 2, y + height / 2 + verticalOffset);
   }
 
+  /** Returns owned pixels for a completed game's background writer, never the live render cache. */
+  public BufferedImage captureEngineGameGraphImage() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      throw new IllegalStateException("Engine-game graph images must be captured on the event thread");
+    }
+    int width = (int) (grw * 1.03);
+    int height = grh + stath;
+    BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+    Graphics2D graphics = image.createGraphics();
+    try {
+      graphics.translate(-statx, -staty);
+      graphics.drawImage(cachedBackground, 0, 0, null);
+      graphics.drawImage(cachedImage, 0, 0, null);
+      if (Lizzie.config.showWinrateGraph && cachedWinrateImage != null) {
+        graphics.drawImage(cachedWinrateImage, grx, gry, null);
+      }
+    } finally {
+      graphics.dispose();
+    }
+    return image;
+  }
+
   public void saveImage(int x, int y, int width, int height, String path) {
     Runnable runnable =
         new Runnable() {
