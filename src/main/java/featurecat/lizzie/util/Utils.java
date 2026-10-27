@@ -657,14 +657,18 @@ public class Utils {
     SshEnginePasswords.writeTo(remoteEngineInfo, remoteEngineData.password);
     remoteEngineInfo.put("useKeyGen", remoteEngineData.useKeyGen);
     remoteEngineInfo.put("keyGenPath", remoteEngineData.keyGenPath);
-    JSONObject candidate = new JSONObject(Lizzie.config.leelazConfig.toString());
-    candidate.put("contribute-engine-ssh-info", remoteEngineInfo);
-    try {
-      Lizzie.config.saveConfigSections(Lizzie.config.uiConfig, candidate);
-    } catch (IOException e) {
-      throw new java.io.UncheckedIOException(e);
+    Config config = Lizzie.config;
+    synchronized (config) {
+      try {
+        config.updateConfigSections(
+            (ui, leelaz) -> leelaz.put("contribute-engine-ssh-info", remoteEngineInfo));
+      } catch (IOException e) {
+        throw new java.io.UncheckedIOException(e);
+      }
+      remoteEngineData.password =
+          SshEnginePasswords.readFrom(
+              config.leelazConfig.optJSONObject("contribute-engine-ssh-info"));
     }
-    remoteEngineData.password = getContributeRemoteEngineData().password;
   }
 
 
@@ -686,14 +690,18 @@ public class Utils {
   }
 
   public static synchronized void saveAnalysisEngineRemoteEngineData(RemoteEngineData remoteEngineData) {
-    JSONObject candidate = new JSONObject(Lizzie.config.leelazConfig.toString());
-    updateAnalysisEngineRemoteEngineData(candidate, remoteEngineData);
-    try {
-      Lizzie.config.saveConfigSections(Lizzie.config.uiConfig, candidate);
-    } catch (IOException e) {
-      throw new java.io.UncheckedIOException(e);
+    Config config = Lizzie.config;
+    synchronized (config) {
+      try {
+        config.updateConfigSections(
+            (ui, leelaz) -> updateAnalysisEngineRemoteEngineData(leelaz, remoteEngineData));
+      } catch (IOException e) {
+        throw new java.io.UncheckedIOException(e);
+      }
+      remoteEngineData.password =
+          SshEnginePasswords.readFrom(
+              config.leelazConfig.optJSONObject("analysis-engine-ssh-info"));
     }
-    remoteEngineData.password = getAnalysisEngineRemoteEngineData().password;
   }
 
   public static void updateAnalysisEngineRemoteEngineData(
@@ -738,16 +746,11 @@ public class Utils {
   }
 
   public static synchronized void saveEngineSettings(ArrayList<EngineData> engineData) {
-    saveEngineSettings(
-        engineData,
-        Lizzie.config.uiConfig == null
-            ? new JSONObject()
-            : new JSONObject(Lizzie.config.uiConfig.toString()));
+    saveEngineSettings(engineData, ui -> {});
   }
 
   static synchronized void saveEngineSettings(
-      ArrayList<EngineData> engineData, JSONObject candidateUi) {
-    JSONArray engineDate = new JSONArray();
+      ArrayList<EngineData> engineData, Consumer<JSONObject> updateUi) {
     ArrayList<EngineData> candidates = new ArrayList<>(engineData.size());
     java.util.HashSet<String> ids = new java.util.HashSet<>();
     for (EngineData entry : engineData) {
@@ -758,45 +761,51 @@ public class Utils {
       }
       candidates.add(candidate);
     }
-    EngineThreadPolicy.migrateLegacyEntries(
-        candidates, Lizzie.config.uiConfig == null ? new JSONObject() : Lizzie.config.uiConfig);
-    int configuredDefaultEngine = -1;
-    if (candidateUi.optBoolean("autoload-default", false)) {
-      configuredDefaultEngine = candidateUi.optInt("default-engine", -1);
-    }
-    int defaultEngineIndex = normalizeDefaultEngineFlags(candidates, configuredDefaultEngine);
-    for (int i = 0; i < engineData.size(); i++) {
-      engineDate.put(engineDataToJson(candidates.get(i)));
-    }
-    JSONObject candidateLeelaz = new JSONObject(Lizzie.config.leelazConfig.toString());
-    candidateUi.put("engine-thread-policy-migrated", true);
-    for (String key :
-        List.of(
-            "engine-command",
-            "engine-command-list",
-            "engine-name-list",
-            "engine-preload-list",
-            "engine-width-list",
-            "engine-height-list",
-            "engine-komi-list")) {
-      candidateLeelaz.remove(key);
-    }
-    candidateLeelaz.put("engine-settings-list", engineDate);
-    candidateUi.put("default-engine", defaultEngineIndex);
-    try {
-      Lizzie.config.saveConfigSections(candidateUi, candidateLeelaz);
-    } catch (IOException e) {
-      throw new java.io.UncheckedIOException(e);
-    }
-    for (int i = 0; i < engineData.size(); i++) {
-      EngineData candidate = candidates.get(i);
-      EngineData entry = engineData.get(i);
-      entry.id = candidate.id;
-      entry.index = candidate.index;
-      entry.isDefault = candidate.isDefault;
-      entry.threadPolicy = candidate.threadPolicy;
-      entry.password = SshEnginePasswords.readFrom(
-          Lizzie.config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(i));
+    Config config = Lizzie.config;
+    synchronized (config) {
+      EngineThreadPolicy.migrateLegacyEntries(
+          candidates, config.uiConfig == null ? new JSONObject() : config.uiConfig);
+      try {
+        config.updateConfigSections(
+            (ui, leelaz) -> {
+              updateUi.accept(ui);
+              int configuredDefaultEngine =
+                  ui.optBoolean("autoload-default", false) ? ui.optInt("default-engine", -1) : -1;
+              int defaultEngineIndex =
+                  normalizeDefaultEngineFlags(candidates, configuredDefaultEngine);
+              JSONArray engineDate = new JSONArray();
+              for (EngineData candidate : candidates) {
+                engineDate.put(engineDataToJson(candidate));
+              }
+              ui.put("engine-thread-policy-migrated", true);
+              for (String key :
+                  List.of(
+                      "engine-command",
+                      "engine-command-list",
+                      "engine-name-list",
+                      "engine-preload-list",
+                      "engine-width-list",
+                      "engine-height-list",
+                      "engine-komi-list")) {
+                leelaz.remove(key);
+              }
+              leelaz.put("engine-settings-list", engineDate);
+              ui.put("default-engine", defaultEngineIndex);
+            });
+      } catch (IOException e) {
+        throw new java.io.UncheckedIOException(e);
+      }
+      for (int i = 0; i < engineData.size(); i++) {
+        EngineData candidate = candidates.get(i);
+        EngineData entry = engineData.get(i);
+        entry.id = candidate.id;
+        entry.index = candidate.index;
+        entry.isDefault = candidate.isDefault;
+        entry.threadPolicy = candidate.threadPolicy;
+        entry.password =
+            SshEnginePasswords.readFrom(
+                config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(i));
+      }
     }
   }
 

@@ -31,7 +31,6 @@ import javax.swing.event.HyperlinkEvent;
 import javax.swing.event.HyperlinkListener;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.StyleSheet;
-import org.json.JSONObject;
 
 public class AnalysisSettings extends JDialog {
   public enum Context {
@@ -642,78 +641,77 @@ public class AnalysisSettings extends JDialog {
   }
 
   public boolean saveConfig() {
-    String previousCommand = Lizzie.config.analysisEngineCommand;
-    boolean previousReuse = Lizzie.config.analysisReuseCurrentEngine;
     boolean reuseCurrentEngine = chkReuseCurrentEngine.isSelected();
     String newCommand = engineCmd.getText().trim();
     if (!reuseCurrentEngine && newCommand.isEmpty()) {
       showCommandRequired();
       return false;
     }
-    boolean newCommandCustomized =
-        commandCustomizedAfterSave(
-            Lizzie.config.analysisEngineCommandCustomized,
-            reuseCurrentEngine,
-            engineCommandExplicitlyChanged,
-            originalEngineCommand,
-            newCommand);
-    int newAnalysisMaxVisits = Lizzie.config.analysisMaxVisits;
-    int newBatchAnalysisPlayouts = Lizzie.config.batchAnalysisPlayouts;
-    if (context == Context.BATCH) {
-      newBatchAnalysisPlayouts =
-          Utils.parseTextToInt(txtMaxVisits, Lizzie.config.batchAnalysisPlayouts);
-    } else {
-      newAnalysisMaxVisits = Utils.parseTextToInt(txtMaxVisits, Lizzie.config.analysisMaxVisits);
-      if (newAnalysisMaxVisits <= 1) newAnalysisMaxVisits = 1;
-    }
-    boolean newAnalysisAutoQuit = chkAutoExit.isSelected();
-    boolean newAnalysisEnginePreLoad = chkPreLoad.isSelected();
-    boolean newAnalysisAlwaysOverride = chkAlwaysOverride.isSelected();
-    boolean newAnalysisUseCurrentRules = rdoUseCurrentRules.isSelected();
-    RemoteEngineData remoteEngineData =
-        pendingRemoteEngineData != null
-            ? pendingRemoteEngineData
-            : Utils.getAnalysisEngineRemoteEngineData();
-    remoteEngineData.useJavaSSH = chkUseJavaSSH.isSelected();
-
-    JSONObject candidateUiConfig = new JSONObject(Lizzie.config.uiConfig.toString());
-    JSONObject candidateLeelazConfig = new JSONObject(Lizzie.config.leelazConfig.toString());
-    Utils.updateAnalysisEngineRemoteEngineData(candidateLeelazConfig, remoteEngineData);
-    candidateUiConfig.put(
-        "analysis-engine-command-customized", newCommandCustomized);
-    if (context == Context.BATCH) {
-      candidateUiConfig.put("batch-analysis-playouts", newBatchAnalysisPlayouts);
-    } else {
-      candidateUiConfig.put("analysis-max-visits", newAnalysisMaxVisits);
-    }
-    //    if (Lizzie.config.analysisMaxVisits == 1)
-    //      Utils.showMsg(
-    //          Lizzie.resourceBundle.getString(
-    //              "AnalysisSettings.maxVisits1Hint")); // ("单步计算量最小为2,当前设置为1,将自动调整为2");
-    candidateUiConfig.put("analysis-auto-quit", newAnalysisAutoQuit);
-    candidateUiConfig.put("analysis-engine-preload", newAnalysisEnginePreLoad);
-    candidateUiConfig.put("analysis-reuse-current-engine", reuseCurrentEngine);
-    candidateUiConfig.put("analysis-always-override", newAnalysisAlwaysOverride);
-    candidateUiConfig.put("analysis-use-current-rules", newAnalysisUseCurrentRules);
-    candidateUiConfig.put("analysis-engine-command", newCommand);
+    Config config = Lizzie.config;
+    boolean restartAnalysisEngine;
     try {
-      Lizzie.config.saveConfigSections(candidateUiConfig, candidateLeelazConfig);
+      synchronized (config) {
+        String previousCommand = config.analysisEngineCommand;
+        boolean previousReuse = config.analysisReuseCurrentEngine;
+        boolean newCommandCustomized =
+            commandCustomizedAfterSave(
+                config.analysisEngineCommandCustomized,
+                reuseCurrentEngine,
+                engineCommandExplicitlyChanged,
+                originalEngineCommand,
+                newCommand);
+        int newAnalysisMaxVisits =
+            context == Context.BATCH
+                ? config.analysisMaxVisits
+                : Math.max(1, Utils.parseTextToInt(txtMaxVisits, config.analysisMaxVisits));
+        int newBatchAnalysisPlayouts =
+            context == Context.BATCH
+                ? Utils.parseTextToInt(txtMaxVisits, config.batchAnalysisPlayouts)
+                : config.batchAnalysisPlayouts;
+        boolean newAnalysisAutoQuit = chkAutoExit.isSelected();
+        boolean newAnalysisEnginePreLoad = chkPreLoad.isSelected();
+        boolean newAnalysisAlwaysOverride = chkAlwaysOverride.isSelected();
+        boolean newAnalysisUseCurrentRules = rdoUseCurrentRules.isSelected();
+        RemoteEngineData remoteEngineData =
+            pendingRemoteEngineData != null
+                ? pendingRemoteEngineData
+                : Utils.getAnalysisEngineRemoteEngineData();
+        remoteEngineData.useJavaSSH = chkUseJavaSSH.isSelected();
+
+        config.updateConfigSections(
+            (ui, leelaz) -> {
+              Utils.updateAnalysisEngineRemoteEngineData(leelaz, remoteEngineData);
+              ui.put("analysis-engine-command-customized", newCommandCustomized);
+              if (context == Context.BATCH) {
+                ui.put("batch-analysis-playouts", newBatchAnalysisPlayouts);
+              } else {
+                ui.put("analysis-max-visits", newAnalysisMaxVisits);
+              }
+              ui.put("analysis-auto-quit", newAnalysisAutoQuit);
+              ui.put("analysis-engine-preload", newAnalysisEnginePreLoad);
+              ui.put("analysis-reuse-current-engine", reuseCurrentEngine);
+              ui.put("analysis-always-override", newAnalysisAlwaysOverride);
+              ui.put("analysis-use-current-rules", newAnalysisUseCurrentRules);
+              ui.put("analysis-engine-command", newCommand);
+            });
+        remoteEngineData.password = Utils.getAnalysisEngineRemoteEngineData().password;
+        config.analysisEngineCommand = newCommand;
+        config.analysisEngineCommandCustomized = newCommandCustomized;
+        config.analysisMaxVisits = newAnalysisMaxVisits;
+        config.batchAnalysisPlayouts = newBatchAnalysisPlayouts;
+        config.analysisAutoQuit = newAnalysisAutoQuit;
+        config.analysisEnginePreLoad = newAnalysisEnginePreLoad;
+        config.analysisReuseCurrentEngine = reuseCurrentEngine;
+        config.analysisAlwaysOverride = newAnalysisAlwaysOverride;
+        config.analysisUseCurrentRules = newAnalysisUseCurrentRules;
+        restartAnalysisEngine =
+            !previousCommand.equals(newCommand) || previousReuse != reuseCurrentEngine;
+      }
     } catch (IOException e) {
       showSaveFailure(e);
       return false;
     }
-    remoteEngineData.password = Utils.getAnalysisEngineRemoteEngineData().password;
-    Lizzie.config.analysisEngineCommand = newCommand;
-    Lizzie.config.analysisEngineCommandCustomized = newCommandCustomized;
-    Lizzie.config.analysisMaxVisits = newAnalysisMaxVisits;
-    Lizzie.config.batchAnalysisPlayouts = newBatchAnalysisPlayouts;
-    Lizzie.config.analysisAutoQuit = newAnalysisAutoQuit;
-    Lizzie.config.analysisEnginePreLoad = newAnalysisEnginePreLoad;
-    Lizzie.config.analysisReuseCurrentEngine = reuseCurrentEngine;
-    Lizzie.config.analysisAlwaysOverride = newAnalysisAlwaysOverride;
-    Lizzie.config.analysisUseCurrentRules = newAnalysisUseCurrentRules;
-    if ((!previousCommand.equals(Lizzie.config.analysisEngineCommand)
-            || previousReuse != reuseCurrentEngine)
+    if (restartAnalysisEngine
         && Lizzie.frame != null
         && Lizzie.frame.analysisEngine != null
         && !Lizzie.frame.analysisEngine.isAnalysisInProgress()) {

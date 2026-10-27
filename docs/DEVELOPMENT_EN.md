@@ -67,6 +67,32 @@ only use it when Shift switches that IME to ASCII. It does not change production
 input handling and is not a test of Chinese composition. Leave it unset on
 ordinary ASCII-input desktops and hosted CI.
 
+### Configuration saves
+
+Use `Config.updateConfigSections` for a settings transaction. Its callback edits fresh
+UI and engine candidates under the `Config` monitor; do not pass a previously copied
+whole section or perform network/UI work inside the callback. File replacement and
+SSH credential preparation finish before any candidate changes are published. A
+failed save retains the previous settings and credential references for retry.
+
+The commit publishes only changed or removed top-level keys into the existing live
+objects. This preserves unrelated legacy UI edits waiting to call `save()`. Nested
+objects and arrays, including SSH entries and the engine list, are owned as whole
+values. Transactional writers of the same key follow commit order: the last successful
+commit wins. This is an in-process boundary, not a multi-process config-file merge.
+
+Keep runtime-field updates under the same `Config` monitor after saving succeeds.
+Engine-list operations acquire `Utils.class` before `Config`; never acquire them in
+the reverse order. Modal messages, engine lifecycle calls and worker completion UI
+belong outside the monitor. New writers must use the transaction API rather than
+directly mutating public JSON and then calling `save()`.
+
+`AnalysisSettingsSaveConfigTest` reproduces the actual analysis-settings/AutoSetup
+save interleaving. `ConfigTransactionalSaveTest` covers disjoint edits, same-key commit
+order, logging/plain saves and legacy pending UI edits. `KataGoSetupPreferencesTest`,
+`KataGoAutoSetupTransactionTest` and `SshEnginePasswordsTest` cover failure, retry,
+credential cleanup and cancellation while waiting for either persistence owner.
+
 ### AI commentary correctness
 
 `TeacherEvidence` freezes the board, KataGo candidates, recorded continuation, and optional

@@ -31,6 +31,7 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
+import java.util.function.BiConsumer;
 import javax.swing.*;
 import org.json.*;
 import org.slf4j.Logger;
@@ -1599,14 +1600,15 @@ public class Config {
                   + " 0],[0,210,210]]"));
       theme.save();
     } else {
-      JSONObject candidateUi = new JSONObject(uiConfig.toString());
-      candidateUi.put("blunder-winrate-thresholds", new JSONArray("[-24,-12,-6,-3,-1,3,100]"));
-      candidateUi.put(
-          "blunder-node-colors",
-          new JSONArray(
-              "[[155, 25, 150],[208, 16, 19],[200, 140, 50],[180, 180, 0],[140, 202, 34],[0, 220,"
-                  + " 0],[0,210,210]]"));
-      saveConfigSections(candidateUi, leelazConfig);
+      updateConfigSections(
+          (ui, leelaz) -> {
+            ui.put("blunder-winrate-thresholds", new JSONArray("[-24,-12,-6,-3,-1,3,100]"));
+            ui.put(
+                "blunder-node-colors",
+                new JSONArray(
+                    "[[155, 25, 150],[208, 16, 19],[200, 140, 50],[180, 180, 0],[140, 202, 34],[0, 220,"
+                        + " 0],[0,210,210]]"));
+          });
     }
   }
 
@@ -3656,7 +3658,7 @@ public class Config {
     chkEngineSgfStart = ui.optBoolean("engine-sgf-start", false);
   }
 
-  public void save() throws IOException {
+  public synchronized void save() throws IOException {
     try {
       writeConfig(this.config, new File(configFilename));
       logConfig("save", "config", "success", 0, null);
@@ -3676,26 +3678,35 @@ public class Config {
     }
   }
 
-  public void saveWholeGameAnalysisDeepVisits(int visits) throws IOException {
+  public synchronized void saveWholeGameAnalysisDeepVisits(int visits) throws IOException {
     WholeGameAnalysisOptions options = WholeGameAnalysisOptions.of(visits);
     int validatedVisits = options.requireValidVisits();
-    JSONObject candidateUi = new JSONObject(uiConfig.toString());
-    candidateUi.put("whole-game-analysis-deep-visits", validatedVisits);
-    saveConfigSections(candidateUi, leelazConfig);
+    updateConfigSections((ui, leelaz) -> ui.put("whole-game-analysis-deep-visits", validatedVisits));
     wholeGameAnalysisDeepVisits = validatedVisits;
   }
 
-  public void saveConfigSections(JSONObject candidateUi, JSONObject candidateLeelaz)
+  /**
+   * Applies this operation's edits to the latest settings and publishes them only after saving.
+   * Callbacks must edit only the supplied candidates, without retaining them or acquiring other
+   * owners. Callers that also own engine-list edits acquire Utils.class before this Config monitor;
+   * keep any corresponding runtime-field publication under this monitor after the save succeeds.
+   */
+  public synchronized void updateConfigSections(BiConsumer<JSONObject, JSONObject> update)
       throws IOException {
+    JSONObject previousUi = new JSONObject(this.uiConfig.toString());
+    JSONObject previousLeelaz = new JSONObject(this.leelazConfig.toString());
+    JSONObject candidateUi = new JSONObject(previousUi.toString());
+    JSONObject candidateLeelaz = new JSONObject(previousLeelaz.toString());
+    update.accept(candidateUi, candidateLeelaz);
     int changed = 0;
     if (LOG.isInfoEnabled()) {
       changed =
-          countChangedValues(this.uiConfig, candidateUi)
-              + countChangedValues(this.leelazConfig, candidateLeelaz);
+          countChangedValues(previousUi, candidateUi)
+              + countChangedValues(previousLeelaz, candidateLeelaz);
     }
     JSONObject candidateRoot = new JSONObject(this.config.toString());
-    candidateRoot.put("ui", new JSONObject(candidateUi.toString()));
-    candidateRoot.put("leelaz", new JSONObject(candidateLeelaz.toString()));
+    candidateRoot.put("ui", candidateUi);
+    candidateRoot.put("leelaz", candidateLeelaz);
     try (SshEnginePasswords.Prepared passwords =
         SshEnginePasswords.prepareForSave(candidateRoot.getJSONObject("leelaz"))) {
       writeConfig(candidateRoot, new File(configFilename));
@@ -3704,13 +3715,16 @@ public class Config {
       logConfig("save", "sections", "failed", changed, e);
       throw e;
     }
-    this.config = candidateRoot;
-    this.uiConfig = candidateRoot.getJSONObject("ui");
-    this.leelazConfig = candidateRoot.getJSONObject("leelaz");
+    // Legacy UI writers still edit the live sections before calling save(). Keep those objects
+    // and their unrelated pending edits; adopting the whole candidate would silently discard them.
+    publishChangedValues(previousUi, candidateUi, this.uiConfig);
+    publishChangedValues(previousLeelaz, candidateLeelaz, this.leelazConfig);
+    this.config.put("ui", this.uiConfig);
+    this.config.put("leelaz", this.leelazConfig);
     logConfig("save", "sections", "success", changed, null);
   }
 
-  public void saveLoggingSettings(LoggingSettings settings) throws IOException {
+  public synchronized void saveLoggingSettings(LoggingSettings settings) throws IOException {
     JSONObject candidateRoot = new JSONObject(this.config.toString());
     candidateRoot.put(LoggingSettings.CONFIG_KEY, settings.toJson());
     try {
@@ -3719,9 +3733,7 @@ public class Config {
       logConfig("save", "logging", "failed", 0, e);
       throw e;
     }
-    this.config = candidateRoot;
-    this.uiConfig = candidateRoot.getJSONObject("ui");
-    this.leelazConfig = candidateRoot.getJSONObject("leelaz");
+    this.config.put(LoggingSettings.CONFIG_KEY, candidateRoot.get(LoggingSettings.CONFIG_KEY));
     this.loggingSettings = settings;
     logConfig("save", "logging", "success", 0, null);
   }
@@ -4139,6 +4151,18 @@ public class Config {
       return "saveboard";
     }
     return "config";
+  }
+
+  private static void publishChangedValues(
+      JSONObject previous, JSONObject candidate, JSONObject current) {
+    for (String key : previous.keySet()) {
+      if (!candidate.has(key)) current.remove(key);
+    }
+    for (String key : candidate.keySet()) {
+      if (!previous.has(key) || !jsonValuesEqual(previous.opt(key), candidate.opt(key))) {
+        current.put(key, candidate.get(key));
+      }
+    }
   }
 
   private static int countChangedValues(JSONObject previous, JSONObject candidate) {

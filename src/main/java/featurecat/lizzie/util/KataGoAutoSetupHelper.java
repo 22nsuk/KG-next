@@ -923,14 +923,17 @@ public final class KataGoAutoSetupHelper {
 
   public static void rememberSelectedLocalKataGo(LocalKataGoDiscoveryResult result)
       throws IOException {
-    if (result == null || Lizzie.config == null || Lizzie.config.uiConfig == null) {
+    Config config = Lizzie.config;
+    if (result == null || config == null || config.uiConfig == null) {
       return;
     }
-    putRememberedPath("katago-auto-setup-engine-path", result.enginePath);
-    putRememberedPath("katago-auto-setup-gtp-config-path", result.gtpConfigPath);
-    putRememberedPath("katago-auto-setup-analysis-config-path", result.analysisConfigPath);
-    putRememberedPath("katago-auto-setup-weight-path", result.activeWeightPath);
-    Lizzie.config.save();
+    config.updateConfigSections(
+        (ui, leelaz) -> {
+          putRememberedPath(ui, "katago-auto-setup-engine-path", result.enginePath);
+          putRememberedPath(ui, "katago-auto-setup-gtp-config-path", result.gtpConfigPath);
+          putRememberedPath(ui, "katago-auto-setup-analysis-config-path", result.analysisConfigPath);
+          putRememberedPath(ui, "katago-auto-setup-weight-path", result.activeWeightPath);
+        });
   }
 
   public static Path repairAnalysisConfig(SetupSnapshot snapshot) throws IOException {
@@ -2055,11 +2058,14 @@ public final class KataGoAutoSetupHelper {
   }
 
   public static void rememberHumanSlModel(Path modelPath) {
-    if (modelPath == null || Lizzie.config == null || Lizzie.config.uiConfig == null) {
+    Config config = Lizzie.config;
+    if (modelPath == null || config == null || config.uiConfig == null) {
       return;
     }
-    Lizzie.config.uiConfig.put(
-        HUMAN_SL_MODEL_CONFIG_KEY, modelPath.toAbsolutePath().normalize().toString());
+    String path = modelPath.toAbsolutePath().normalize().toString();
+    synchronized (config) {
+      config.uiConfig.put(HUMAN_SL_MODEL_CONFIG_KEY, path);
+    }
   }
 
   public static QuickAnalysisModelStatus inspectQuickAnalysisModel() {
@@ -2080,7 +2086,8 @@ public final class KataGoAutoSetupHelper {
   }
 
   public static void setQuickAnalysisModelEnabled(boolean enabled) throws IOException {
-    if (Lizzie.config == null || Lizzie.config.uiConfig == null) {
+    Config config = Lizzie.config;
+    if (config == null || config.uiConfig == null) {
       return;
     }
     if (enabled && !inspectQuickAnalysisModel().isInstalled()) {
@@ -2089,9 +2096,11 @@ public final class KataGoAutoSetupHelper {
               "AutoSetup.quickAnalysisModelMissing",
               "Install the lightweight quick-curve model before enabling it."));
     }
-    Lizzie.config.quickAnalysisLightweightModelEnabled = enabled;
-    Lizzie.config.uiConfig.put("quick-analysis-lightweight-model-enabled", enabled);
-    Lizzie.config.save();
+    synchronized (config) {
+      config.updateConfigSections(
+          (ui, leelaz) -> ui.put("quick-analysis-lightweight-model-enabled", enabled));
+      config.quickAnalysisLightweightModelEnabled = enabled;
+    }
   }
 
   public static Optional<String> resolveQuickAnalysisEngineCommand() {
@@ -2122,14 +2131,19 @@ public final class KataGoAutoSetupHelper {
 
   private static void rememberQuickAnalysisModel(Path modelPath, boolean enabled)
       throws IOException {
-    if (modelPath == null || Lizzie.config == null || Lizzie.config.uiConfig == null) {
+    Config config = Lizzie.config;
+    if (modelPath == null || config == null || config.uiConfig == null) {
       return;
     }
-    Lizzie.config.uiConfig.put(
-        QUICK_ANALYSIS_MODEL_CONFIG_KEY, modelPath.toAbsolutePath().normalize().toString());
-    Lizzie.config.quickAnalysisLightweightModelEnabled = enabled;
-    Lizzie.config.uiConfig.put("quick-analysis-lightweight-model-enabled", enabled);
-    Lizzie.config.save();
+    String path = modelPath.toAbsolutePath().normalize().toString();
+    synchronized (config) {
+      config.updateConfigSections(
+          (ui, leelaz) -> {
+            ui.put(QUICK_ANALYSIS_MODEL_CONFIG_KEY, path);
+            ui.put("quick-analysis-lightweight-model-enabled", enabled);
+          });
+      config.quickAnalysisLightweightModelEnabled = enabled;
+    }
   }
 
   public static String resolveActiveWeightModelName(SetupSnapshot snapshot) {
@@ -3437,14 +3451,11 @@ public final class KataGoAutoSetupHelper {
     return Collections.unmodifiableList(new ArrayList<>(normalized));
   }
 
-  private static void putRememberedPath(String key, Path path) {
-    if (Lizzie.config == null || Lizzie.config.uiConfig == null) {
-      return;
-    }
+  private static void putRememberedPath(JSONObject ui, String key, Path path) {
     if (path == null) {
-      Lizzie.config.uiConfig.remove(key);
+      ui.remove(key);
     } else {
-      Lizzie.config.uiConfig.put(key, normalize(path).toString());
+      ui.put(key, normalize(path).toString());
     }
   }
 
