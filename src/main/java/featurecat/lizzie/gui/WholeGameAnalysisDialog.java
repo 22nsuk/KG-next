@@ -71,9 +71,9 @@ public final class WholeGameAnalysisDialog extends JDialog
   private final JLabel modeLabel = new JLabel();
   private final JLabel remainingLabel = new JLabel();
   private final JProgressBar progressBar = new JProgressBar(0, 100);
-  private final JButton startButton = new JButton();
-  private final JButton pauseButton = new JButton();
-  private final JButton stopButton = new JButton();
+  private final JButton startButton = new ActionButton();
+  private final JButton pauseButton = new ActionButton();
+  private final JButton stopButton = new ActionButton();
   private final JComboBox<PresetChoice> visitsPreset = new JComboBox<>();
   private final JComboBox<AnalysisPolicyChoice> analysisPolicy = new JComboBox<>();
   private final JSpinner customVisits =
@@ -668,9 +668,6 @@ public final class WholeGameAnalysisDialog extends JDialog
     pauseButton.setForeground(controls.resumeLabel ? Color.WHITE : TEXT);
     stopButton.setBackground(controls.closeLabel ? ACCENT : CARD);
     stopButton.setForeground(controls.closeLabel ? Color.WHITE : TEXT);
-    updateButtonSize(startButton);
-    updateButtonSize(pauseButton);
-    updateButtonSize(stopButton);
     startButton.getAccessibleContext().setAccessibleName(startButton.getText());
     pauseButton.getAccessibleContext().setAccessibleName(pauseButton.getText());
     stopButton.getAccessibleContext().setAccessibleName(stopButton.getText());
@@ -712,7 +709,6 @@ public final class WholeGameAnalysisDialog extends JDialog
     button.setBorder(new RoundedBorder(primary ? ACCENT : BORDER, 12));
     button.setBackground(primary ? ACCENT : CARD);
     button.setForeground(primary ? Color.WHITE : TEXT);
-    updateButtonSize(button);
     button.getAccessibleContext().setAccessibleName(button.getText());
   }
 
@@ -720,12 +716,6 @@ public final class WholeGameAnalysisDialog extends JDialog
     // Windows native LAF can ignore JButton background colors.
     button.setUI(new BasicButtonUI());
     button.setContentAreaFilled(true);
-  }
-
-  private static void updateButtonSize(JButton button) {
-    Dimension natural = button.getUI().getPreferredSize(button);
-    button.setPreferredSize(new Dimension(Math.max(112, natural.width + 22), 40));
-    button.setMaximumSize(button.getPreferredSize());
   }
 
   private void fitToUsableScreen() {
@@ -889,6 +879,29 @@ public final class WholeGameAnalysisDialog extends JDialog
     @Override
     public String toString() {
       return label;
+    }
+  }
+
+  /** Keeps action sizes current when fonts or localized control labels change. */
+  private static final class ActionButton extends JButton {
+    private static final long serialVersionUID = 1L;
+
+    @Override
+    public Dimension getPreferredSize() {
+      Dimension natural = super.getPreferredSize();
+      return new Dimension(Math.max(112, natural.width + 22), Math.max(40, natural.height));
+    }
+
+    @Override
+    public Dimension getMinimumSize() {
+      Dimension minimum = super.getMinimumSize();
+      // BoxLayout derives its cross-axis alignment from minimum heights.
+      return new Dimension(minimum.width, getPreferredSize().height);
+    }
+
+    @Override
+    public Dimension getMaximumSize() {
+      return getPreferredSize();
     }
   }
 

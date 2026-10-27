@@ -15,6 +15,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.image.BufferedImage;
@@ -456,12 +457,23 @@ class WholeGameAnalysisDialogLayoutTest {
 
   private static void assertButtonFits(JButton button, Locale locale) {
     assertVisibleSize(button, locale);
+    Dimension preferred = button.getPreferredSize();
+    Dimension natural = button.getUI().getPreferredSize(button);
+    String dimensions =
+        locale + " button: " + button.getText()
+            + " actual=" + button.getSize() + " preferred=" + preferred + " natural=" + natural;
     assertTrue(
-        button.getWidth() >= button.getPreferredSize().width,
-        locale + " button width: " + button.getText());
+        button.getWidth() >= preferred.width,
+        "Preferred width does not fit: " + dimensions);
     assertTrue(
-        button.getHeight() >= button.getPreferredSize().height,
-        locale + " button height: " + button.getText());
+        button.getHeight() >= preferred.height,
+        "Preferred height does not fit: " + dimensions);
+    assertTrue(
+        button.getWidth() >= natural.width,
+        "Current-font content width does not fit: " + dimensions);
+    assertTrue(
+        button.getHeight() >= natural.height,
+        "Current-font content height does not fit: " + dimensions);
   }
 
   private static void scaleFonts(Component component, float scale) {

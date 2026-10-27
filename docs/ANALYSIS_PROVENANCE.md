@@ -34,6 +34,12 @@ label. A configured display name such as “My strongest engine” is not treate
 as a model identity. Unknown values are displayed as **미확인**, including
 individual missing fields in an otherwise useful source record.
 
+![Korean whole-game analysis dialog showing the reuse policy and current-position source](images/analysis-provenance-ko.png)
+
+Example captured from the desktop regression fixture. The engine/model details
+and repeated-character hash are test values. Long source details remain
+scrollable while the analysis controls stay visible.
+
 ## Meaning of recorded fields
 
 `featurecat.lizzie.analysis.AnalysisProvenance` is an immutable value with ten
