@@ -30,6 +30,9 @@ import java.awt.GraphicsEnvironment;
 import java.awt.HeadlessException;
 import java.awt.Toolkit;
 import java.awt.Window;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.AWTEventListener;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowEvent;
@@ -1581,6 +1584,7 @@ class HumanSlGameControllerIntegrationTest {
 
         try {
           finishSavedGameCoachExit(exitWorker.get());
+          dialogs.assertOnlyExpectedFailureDialog();
         } finally {
           Lizzie.frame = frame;
         }
@@ -1596,7 +1600,6 @@ class HumanSlGameControllerIntegrationTest {
         assertEquals("current game.sgf", LizzieFrame.fileNameTitle);
         assertEquals(0, frame.hiddenSavedLists);
         assertFalse(Lizzie.board.isLoadingFile);
-        dialogs.assertOnlyExpectedFailureDialog();
       }
     }
   }
@@ -1637,6 +1640,119 @@ class HumanSlGameControllerIntegrationTest {
       assertEquals(1, frame.hiddenSavedLists, "only the accepted saved entry may finish");
       assertEquals("game1.sgf", LizzieFrame.fileNameTitle);
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void deferredExternalFileOpenKeepsOriginalTargetUntilItsAcceptedLoadCompletes(
+      boolean startup, @TempDir Path directory) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
+      Lizzie.config.saveBoardConfig = new JSONObject();
+      Path accepted = Files.writeString(
+          directory.resolve("accepted.sgf"), "(;FF[4]SZ[3]C[accepted game];B[aa])");
+      Path rejected = Files.writeString(
+          directory.resolve("rejected.sgf"), "(;FF[4]SZ[3]C[rejected game];B[cc])");
+      BoardHistoryList original = prepareCurrentSavedGame(directory);
+      java.io.File originalFile = LizzieFrame.curFile;
+      HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
+      AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+      controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
+
+      try {
+        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, accepted, startup));
+        assertNotNull(exitWorker.get());
+        assertSame(original, Lizzie.board.getHistory());
+        assertEquals(originalFile, LizzieFrame.curFile, "queued load is not a new save target");
+        assertFalse(controller.isFinished());
+
+        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, rejected, !startup));
+        assertSame(original, Lizzie.board.getHistory());
+        assertEquals(originalFile, LizzieFrame.curFile, "rejected continuation cannot claim the file");
+      } finally {
+        if (exitWorker.get() != null) finishSavedGameCoachExit(exitWorker.get());
+      }
+
+      assertTrue(controller.isFinished());
+      assertEquals("accepted game", Lizzie.board.getHistory().getStart().getData().comment);
+      assertEquals(accepted.toFile(), LizzieFrame.curFile);
+      assertEquals("accepted.sgf", LizzieFrame.fileNameTitle);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedDeferredExternalFileOpenPreservesOriginalSaveTarget(
+      boolean startup, @TempDir Path directory) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open();
+        SavedGameFailureDialogGuard dialogs = new SavedGameFailureDialogGuard()) {
+      SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
+      Lizzie.config.saveBoardConfig = new JSONObject();
+      Path malformed = Files.writeString(directory.resolve("malformed.sgf"), "not an SGF");
+      BoardHistoryList original = prepareCurrentSavedGame(directory);
+      BoardHistoryNode originalNode = original.getCurrentHistoryNode();
+      java.io.File originalFile = LizzieFrame.curFile;
+      HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
+      AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+      controller.setExitLifecycleForTesting(
+          exitWorker::set,
+          completion -> SwingUtilities.invokeLater(() -> {
+            completion.run();
+            // The queued native error notice needs a real owner or no owner.
+            Lizzie.frame = null;
+          }),
+          () -> true,
+          null);
+
+      try {
+        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, malformed, startup));
+        assertNotNull(exitWorker.get());
+        assertSame(original, Lizzie.board.getHistory());
+        assertSame(originalNode, original.getCurrentHistoryNode());
+      } finally {
+        try {
+          if (exitWorker.get() != null) {
+            finishSavedGameCoachExit(exitWorker.get());
+            dialogs.assertOnlyExpectedFailureDialog();
+          }
+        } finally {
+          Lizzie.frame = frame;
+        }
+      }
+
+      assertTrue(controller.isFinished());
+      assertSame(original, Lizzie.board.getHistory());
+      assertSame(originalNode, original.getCurrentHistoryNode());
+      assertEquals(originalFile, LizzieFrame.curFile);
+      assertEquals("current game.sgf", LizzieFrame.fileNameTitle);
+      assertEquals("not an SGF", Files.readString(malformed));
+    }
+  }
+
+  private static void openExternalFile(
+      SavedGameCompletionFrame frame, Path file, boolean startup) {
+    if (startup) {
+      frame.restoreStartupGame(new String[] {file.toString()});
+      return;
+    }
+    Transferable files = new Transferable() {
+      @Override
+      public DataFlavor[] getTransferDataFlavors() {
+        return new DataFlavor[] {DataFlavor.javaFileListFlavor};
+      }
+
+      @Override
+      public boolean isDataFlavorSupported(DataFlavor flavor) {
+        return DataFlavor.javaFileListFlavor.equals(flavor);
+      }
+
+      @Override
+      public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException {
+        if (!isDataFlavorSupported(flavor)) throw new UnsupportedFlavorException(flavor);
+        return List.of(file.toFile());
+      }
+    };
+    assertTrue(frame.importDroppedKifuFiles(files));
   }
 
   private static SavedGameCompletionFrame savedGameCompletionFrame(Path directory)
@@ -2189,6 +2305,7 @@ class HumanSlGameControllerIntegrationTest {
   private static final class SavedGameFailureDialogGuard implements AutoCloseable {
     private final List<Throwable> uncaught = new CopyOnWriteArrayList<>();
     private final AtomicInteger dialogs = new AtomicInteger();
+    private final CountDownLatch noticeAttempted = new CountDownLatch(1);
     private Thread.UncaughtExceptionHandler previousHandler;
     private final AWTEventListener closeDialog =
         event -> {
@@ -2197,6 +2314,7 @@ class HumanSlGameControllerIntegrationTest {
               && "Error".equals(((JDialog) event.getSource()).getTitle())) {
             dialogs.incrementAndGet();
             ((JDialog) event.getSource()).dispose();
+            noticeAttempted.countDown();
           }
         };
 
@@ -2205,17 +2323,25 @@ class HumanSlGameControllerIntegrationTest {
           () -> {
             Thread edt = Thread.currentThread();
             previousHandler = edt.getUncaughtExceptionHandler();
-            edt.setUncaughtExceptionHandler((thread, failure) -> uncaught.add(failure));
+            edt.setUncaughtExceptionHandler((thread, failure) -> {
+              uncaught.add(failure);
+              noticeAttempted.countDown();
+            });
             if (!GraphicsEnvironment.isHeadless()) {
               Toolkit.getDefaultToolkit().addAWTEventListener(closeDialog, AWTEvent.WINDOW_EVENT_MASK);
             }
           });
     }
 
-    private void assertOnlyExpectedFailureDialog() {
+    private void assertOnlyExpectedFailureDialog() throws InterruptedException {
+      assertTrue(noticeAttempted.await(5, TimeUnit.SECONDS),
+          "the failed file must report its error notice: " + uncaught);
       if (GraphicsEnvironment.isHeadless()) {
         assertEquals(1, uncaught.size(), "the failed file must still schedule its error notice");
         assertTrue(uncaught.get(0) instanceof HeadlessException, uncaught.toString());
+        assertTrue(Arrays.stream(uncaught.get(0).getStackTrace()).anyMatch(element ->
+            element.getClassName().equals(javax.swing.JOptionPane.class.getName())
+                && element.getMethodName().equals("showMessageDialog")), uncaught.toString());
       } else {
         assertTrue(uncaught.isEmpty(), uncaught.toString());
         assertEquals(1, dialogs.get());

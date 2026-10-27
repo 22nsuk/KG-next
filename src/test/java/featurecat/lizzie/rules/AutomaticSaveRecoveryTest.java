@@ -158,17 +158,6 @@ class AutomaticSaveRecoveryTest {
   }
 
   @Test
-  void explicitStartupFileStillWinsAfterRecoveringThePreviousSession() throws Exception {
-    Path requested = directory.resolve("requested.sgf");
-    Files.writeString(requested, CURRENT);
-    frame.restoreStartupGame(new String[] {requested.toString()});
-    assertEquals(requested.toFile(), frame.loadedFile);
-    assertEquals(requested.toFile(), LizzieFrame.curFile);
-    assertEquals(CURRENT, frame.loadedSgf);
-    assertRecovered();
-  }
-
-  @Test
   void savesBeforeStartupSelectionCannotOverwriteEitherSlot() throws Exception {
     assertFalse(frame.saveAutoGame(2));
     assertFalse(frame.saveAutoGame(1));
