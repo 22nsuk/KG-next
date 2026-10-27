@@ -25,6 +25,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -58,6 +61,68 @@ class BoardDataAnalysisCacheTraceTest {
     Lizzie.board = previousBoard;
     Lizzie.leelaz = previousLeelaz;
     Lizzie.frame = previousFrame;
+  }
+
+  @Test
+  void visibilityRefreshCannotOverwriteConcurrentlyAdoptedDeeperAnalysis() throws Exception {
+    installBoardGlobals();
+    BoardData node = primaryNode(100, 40, 1);
+    CountDownLatch copied = new CountDownLatch(1);
+    CountDownLatch releaseCopy = new CountDownLatch(1);
+    CountDownLatch adoptionStarted = new CountDownLatch(1);
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    node.bestMoves = new ArrayList<>(List.of(kataMove(100, 40, 1))) {
+      @Override
+      public Object[] toArray() {
+        Object[] snapshot = super.toArray();
+        copied.countDown();
+        try {
+          assertTrue(releaseCopy.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError(interrupted);
+        }
+        return snapshot;
+      }
+    };
+    Thread visibility = new Thread(() -> {
+      try { node.refreshFocusCandidateVisibility(); }
+      catch (Throwable thrown) { failure.compareAndSet(null, thrown); }
+    }, "candidate-visibility");
+    Thread adoption = new Thread(() -> {
+      adoptionStarted.countDown();
+      try {
+        assertEquals(BoardData.AnalysisAdoption.FULL,
+            node.adoptOrdinaryAnalysis(new ArrayList<>(List.of(kataMove(900, 65, 4))),
+                "KataGo", Lizzie.leelaz, 900, 900, List.of(0.25, -0.25),
+                new Object(), false, false));
+      } catch (Throwable thrown) { failure.compareAndSet(null, thrown); }
+    }, "deeper-analysis");
+    visibility.start();
+    try {
+      assertTrue(copied.await(5, TimeUnit.SECONDS));
+      adoption.start();
+      assertTrue(adoptionStarted.await(5, TimeUnit.SECONDS));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      // With the shared monitor adoption waits; without it adoption finishes while the old
+      // display copy is retained. Either state gives a deterministic interleaving, not a sleep.
+      while (adoption.isAlive() && adoption.getState() != Thread.State.BLOCKED
+          && System.nanoTime() < deadline) Thread.sleep(1);
+      assertTrue(!adoption.isAlive() || adoption.getState() == Thread.State.BLOCKED);
+    } finally {
+      releaseCopy.countDown();
+      visibility.join(5000);
+      adoption.join(5000);
+    }
+    assertFalse(visibility.isAlive());
+    assertFalse(adoption.isAlive());
+    if (failure.get() != null) throw new AssertionError(failure.get());
+    assertEquals(900, node.rootVisits);
+    assertEquals(900, node.bestMoves.get(0).playouts);
+    assertEquals(65, node.bestMoves.get(0).winrate);
+    assertEquals(65, node.winrate);
+    assertEquals(4, node.scoreMean);
+    assertEquals(List.of(0.25, -0.25), node.estimateArray);
   }
 
   @Test

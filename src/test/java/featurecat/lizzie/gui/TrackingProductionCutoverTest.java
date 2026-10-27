@@ -1186,14 +1186,76 @@ class TrackingProductionCutoverTest {
       assertEquals(TrackingAnalysisController.AddResult.ADDED,
           environment.frame.addTrackingPoint("A1"));
       environment.settleCommands();
+      AnalysisUiRefreshTestSupport.awaitIdle(environment.frame);
       assertEquals(0, candidate("A1").edgeVisits);
       assertEquals(10, candidate("A1").order);
       assertTrue(environment.frame.trackingDisplaySnapshot().activePoints().isEmpty());
       assertTrue(environment.frame.removeTrackingPoint("A1"));
       environment.settleCommands();
+      AnalysisUiRefreshTestSupport.awaitIdle(environment.frame);
       assertFalse(Lizzie.board.getData().bestMoves.stream().anyMatch(move -> move.coordinate.equals("A1")));
       assertTrue(Lizzie.board.getData().bestMovesOutOfRange.stream()
           .anyMatch(move -> move.coordinate.equals("A1") && move.playouts == 120));
+    }
+  }
+
+  @Test
+  void visibilityRefreshPreservesCandidateGraceWithoutRenewingIt() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      Lizzie.config.limitMaxSuggestion = 1;
+      environment.sendOrdinaryInfo(
+          "info move A1 visits 100 order 0 winrate 0.5 pv A1 rootInfo visits 100");
+      environment.sendOrdinaryInfo(
+          "info move B2 visits 200 order 0 winrate 0.6 pv B2"
+              + " info move A1 visits 120 order 1 winrate 0.5 pv A1 rootInfo visits 300");
+      MoveData retained = candidate("A1");
+      assertTrue(retained.lastTimeUnlimited);
+      // Keep the active and expired cases independent of scheduler speed at the 3-second edge.
+      long activeUntil = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(1);
+      retained.lastTimeUnlimitedTime = activeUntil;
+      BoardData data = Lizzie.board.getData();
+      for (int i = 0; i < 3; i++) data.refreshFocusCandidateVisibility();
+      assertSame(retained, candidate("A1"));
+      assertEquals(activeUntil, retained.lastTimeUnlimitedTime, "refresh must not renew grace");
+      retained.lastTimeUnlimitedTime = 0;
+      data.refreshFocusCandidateVisibility();
+      assertFalse(data.bestMoves.stream().anyMatch(move -> move.coordinate.equals("A1")));
+      assertTrue(data.bestMovesOutOfRange.contains(retained));
+      assertEquals(300, data.rootVisits);
+      assertEquals(60.0, data.winrate, 0.001);
+    }
+  }
+
+  @Test
+  void coalescedRemovalAndRetirementRefilterTheLatestAnalysisWithoutLosingItsValues()
+      throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      Lizzie.config.limitMaxSuggestion = 1;
+      environment.sendOrdinaryInfo(payload(200, 120, 130, 0.50, 0.60));
+      assertEquals(TrackingAnalysisController.AddResult.ADDED,
+          environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      AnalysisUiRefreshTestSupport.awaitIdle(environment.frame);
+      assertEquals(120, candidate("A1").playouts);
+
+      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+        assertTrue(environment.frame.removeTrackingPoint("A1"));
+        // Retire before the pending UI work runs: its latest snapshot has no context.
+        environment.frame.trackingAnalysisController().contextChanged(null);
+        assertEquals(120, candidate("A1").playouts,
+            "controller callbacks must not mutate candidate display lists off the EDT");
+      });
+      environment.settleCommands();
+      AnalysisUiRefreshTestSupport.awaitIdle(environment.frame);
+      assertTrue(environment.frame.trackingDisplaySnapshot().selectedPoints().isEmpty());
+      assertFalse(Lizzie.board.getData().bestMoves.stream()
+          .anyMatch(move -> move.coordinate.equals("A1")));
+      assertTrue(Lizzie.board.getData().bestMovesOutOfRange.stream()
+          .anyMatch(move -> move.coordinate.equals("A1") && move.playouts == 120));
+      assertEquals(200, Lizzie.board.getData().rootVisits);
+      assertEquals(60.0, Lizzie.board.getData().winrate, 0.001);
     }
   }
 
@@ -1451,6 +1513,7 @@ class TrackingProductionCutoverTest {
       frame.priorityMoveCoords = new java.util.ArrayList<>();
       frame.clickbadmove = LizzieFrame.outOfBoundCoordinate;
       frame.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
+      AnalysisUiRefreshTestSupport.install(frame);
 
       EngineManager.isEmpty = false;
       Lizzie.board = board;
@@ -1788,6 +1851,7 @@ class TrackingProductionCutoverTest {
           });
       failures.run(engine::forceQuit);
       finishWorkers(failures, true);
+      failures.run(() -> AnalysisUiRefreshTestSupport.awaitIdle(frame));
       boolean eventQueueDrained = drainEventQueue(failures);
       if (!eventQueueDrained || workers.stream().anyMatch(worker -> worker.thread.isAlive())) {
         // A still-running fixture worker must never observe another test's global state.
@@ -1886,15 +1950,11 @@ class TrackingProductionCutoverTest {
   }
 
   private static final class TrackingFrame extends LizzieFrame {
-    private int analysisRefreshRequests;
-
     @Override
     public void refresh() {}
 
     @Override
-    public void requestAnalysisRefresh() {
-      analysisRefreshRequests++;
-    }
+    public void updateTitle() {}
 
     @Override
     public void clearSelectImage() {}

@@ -359,10 +359,12 @@ public class LizzieFrame extends JFrame {
   private ProblemListSnapshot problemListSnapshot;
   private final List<Consumer<ProblemListSnapshot>> problemListListeners = new ArrayList<>();
   private boolean problemSidebarRefreshPending = false;
-  private final java.util.concurrent.atomic.AtomicBoolean analysisRepaintRequested =
-      new java.util.concurrent.atomic.AtomicBoolean(false);
-  private final SwingRefreshCoalescer analysisRefreshCoalescer =
-      new SwingRefreshCoalescer(33, this::flushAnalysisRefresh);
+  private final AnalysisUiRefresh analysisUiRefresh =
+      new AnalysisUiRefresh(
+          this::updateTitle,
+          () -> refreshAnalysisSurfaces(true),
+          () -> refreshAnalysisSurfaces(false),
+          this::refreshTrackingCandidateVisibility);
   private final SwingRefreshCoalescer analysisSidebarRefreshCoalescer =
       new SwingRefreshCoalescer(250, this::flushAnalysisSidebarRefresh);
   private JPanel kifuLoadGlassPane;
@@ -627,8 +629,6 @@ public class LizzieFrame extends JFrame {
   private BoardHistoryNode pendingManualAutoAnalysisRoot;
   private javax.swing.Timer manualAutoAnalysisEngineReadyTimer;
   private volatile TrackingAnalysisController trackingAnalysisController;
-  private TrackingAnalysisController.Context trackingVisibilityContext;
-  private java.util.Set<String> trackingVisibilityPoints = java.util.Set.of();
   private static final AtomicIntegerFieldUpdater<LizzieFrame> OFF_EVENT_THREAD_REFRESH =
       AtomicIntegerFieldUpdater.newUpdater(LizzieFrame.class, "offEventThreadRefreshQueued");
   // A primitive flag also supports frames allocated without constructors in regression tests.
@@ -8313,15 +8313,12 @@ public class LizzieFrame extends JFrame {
       return;
     }
     // 分开各部分刷新,1代表来自info move的刷新
+    refreshTrackingCandidateVisibility();
     redrawWinratePaneOnly = false;
     redrawBoardSurfacesOnly = false;
     redrawVariationTreeOnly = false;
     invalidateVariationTree();
-    if (independentSubBoard != null && independentSubBoard.isVisible())
-      independentSubBoard.refresh();
-    if (independentMainBoard != null && independentMainBoard.isVisible())
-      independentMainBoard.refresh();
-    if (floatBoard != null && floatBoard.isVisible()) floatBoard.refresh();
+    refreshIndependentBoards();
     appendComment();
     requestProblemListRefresh();
     repaint();
@@ -8330,15 +8327,7 @@ public class LizzieFrame extends JFrame {
 
   /** Repaints graph progress without rebuilding the board and suggestion surfaces. */
   public void refreshSilentAnalysisProgress() {
-    if (!SwingUtilities.isEventDispatchThread()) {
-      SwingUtilities.invokeLater(this::refreshSilentAnalysisProgress);
-      return;
-    }
-    redrawWinratePaneOnly = true;
-    if (mainPanel != null) mainPanel.repaint();
-    if (listTable != null && listTable.isVisible()) listTable.repaint();
-    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
-    notifyWebBoard(true);
+    analysisUiRefresh.requestGraph();
   }
 
   void refreshCompletedSilentAnalysisProgress() {
@@ -8365,24 +8354,34 @@ public class LizzieFrame extends JFrame {
   }
 
   public void refresh(int mode) {
-    // 分开各部分刷新,1代表来自info move的刷新
+    if (mode == 1) {
+      requestAnalysisRefresh();
+    } else if (SwingUtilities.isEventDispatchThread()) {
+      refreshIndependentBoards();
+    } else {
+      SwingUtilities.invokeLater(this::refreshIndependentBoards);
+    }
+  }
+
+  private void refreshIndependentBoards() {
     if (independentSubBoard != null && independentSubBoard.isVisible())
       independentSubBoard.refresh();
     if (independentMainBoard != null && independentMainBoard.isVisible())
       independentMainBoard.refresh();
     if (floatBoard != null && floatBoard.isVisible()) floatBoard.refresh();
-    switch (mode) {
-      case 1:
-        refreshFromInfo = true;
-        redrawWinratePaneOnly = true;
-        redrawBoardSurfacesOnly = true;
-        if (mainPanel != null) mainPanel.repaint();
-        if (listTable != null && listTable.isVisible()) listTable.repaint();
-        if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
-        notifyWebBoard(true);
-        break;
-      default:
+  }
+
+  private void refreshAnalysisSurfaces(boolean includeBoard) {
+    if (includeBoard) {
+      refreshIndependentBoards();
+      refreshFromInfo = true;
+      redrawBoardSurfacesOnly = true;
     }
+    redrawWinratePaneOnly = true;
+    if (mainPanel != null) mainPanel.repaint();
+    if (listTable != null && listTable.isVisible()) listTable.repaint();
+    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
+    notifyWebBoard(true);
   }
 
   /** Gives a locally committed move priority over comments and other secondary UI maintenance. */
@@ -8525,20 +8524,12 @@ public class LizzieFrame extends JFrame {
 
   /** Requests a bounded-rate title and board refresh from an engine output thread. */
   public void requestAnalysisRefresh() {
-    analysisRepaintRequested.set(true);
-    analysisRefreshCoalescer.request();
+    analysisUiRefresh.requestAnalysis();
   }
 
   /** Requests a bounded-rate title update without changing engine-game repaint behavior. */
   public void requestAnalysisTitleUpdate() {
-    analysisRefreshCoalescer.request();
-  }
-
-  private void flushAnalysisRefresh() {
-    updateTitle();
-    if (analysisRepaintRequested.getAndSet(false)) {
-      refresh(1);
-    }
+    analysisUiRefresh.requestTitle();
   }
 
   private void flushAnalysisSidebarRefresh() {
@@ -16709,23 +16700,21 @@ public class LizzieFrame extends JFrame {
     }
     synchronized (this) {
       if (trackingAnalysisController == null) {
-        trackingAnalysisController = new TrackingAnalysisController(this::onTrackingDisplayChanged);
+        trackingAnalysisController =
+            new TrackingAnalysisController(() -> analysisUiRefresh.requestTracking());
       }
       return trackingAnalysisController;
     }
   }
 
-  private void onTrackingDisplayChanged() {
-    TrackingAnalysisController.DisplaySnapshot snapshot = trackingAnalysisController.snapshot();
-    if (trackingVisibilityContext != snapshot.context()
-        || !snapshot.selectedPoints().equals(trackingVisibilityPoints)) {
-      trackingVisibilityContext = snapshot.context();
-      trackingVisibilityPoints = snapshot.selectedPoints();
-      if (isTrackingDisplayCurrent(snapshot)) {
-        getDisplayNode().getData().refreshFocusCandidateVisibility();
-      }
-    }
-    requestAnalysisRefresh();
+  /** Runs on the EDT at the current display boundary, including coalesced tracking notifications. */
+  private void refreshTrackingCandidateVisibility() {
+    if (trackingAnalysisController == null || Lizzie.board == null
+        || Lizzie.board.getHistory() == null) return;
+    BoardHistoryNode node = getDisplayNode();
+    if (node == null) return;
+    // Empty attention must also refilter a retained cache after retirement or navigation.
+    node.getData().refreshFocusCandidateVisibility();
   }
 
   public TrackingAnalysisController.AddResult addTrackingPoint(String coordinate) {
@@ -21532,7 +21521,6 @@ public class LizzieFrame extends JFrame {
   private boolean isTrackingStillSearchingCurrentPosition() {
     TrackingAnalysisController controller = trackingAnalysisController;
     return controller != null
-        && !controller.snapshot().selectedPoints().isEmpty()
         && controller.holdsSearchOf(currentTrackingContext());
   }
 

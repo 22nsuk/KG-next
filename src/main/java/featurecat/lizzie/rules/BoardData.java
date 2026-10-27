@@ -648,7 +648,8 @@ public class BoardData {
   }
 
   /** Reapplies only candidate visibility after attention changes; analysis values stay intact. */
-  public void refreshFocusCandidateVisibility() {
+  public synchronized void refreshFocusCandidateVisibility() {
+    List<MoveData> previouslyVisible = bestMoves;
     if (bestMovesOutOfRange != null && !bestMovesOutOfRange.isEmpty()) {
       List<MoveData> complete = new ArrayList<>(bestMoves.size() + bestMovesOutOfRange.size());
       complete.addAll(bestMoves);
@@ -659,7 +660,8 @@ public class BoardData {
       bestMoves = new ArrayList<>(bestMoves);
     }
     bestMovesOutOfRange = new ArrayList<>();
-    tryToLimitMoves(bestMoves, List.of(), true);
+    // Visibility-only refreshes must preserve the existing near-limit candidate grace period.
+    tryToLimitMoves(bestMoves, previouslyVisible, true);
   }
 
   private void tryToLimitMoves(List<MoveData> moves, List<MoveData> lastMoves, boolean isMain) {

@@ -884,7 +884,9 @@ class MoveOnlyUiGateTest {
       TrackingLizzieFrame frame = configuredFrame();
       Lizzie.frame = frame;
 
+      AnalysisUiRefreshTestSupport.install(frame);
       frame.refresh(1);
+      AnalysisUiRefreshTestSupport.awaitIdle(frame);
 
       assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
       assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawWinratePaneOnly"));
@@ -893,7 +895,55 @@ class MoveOnlyUiGateTest {
           frame.fullRefreshes,
           "engine output must not route through the full-frame refresh used for layout changes.");
     } finally {
-      env.close();
+      try { AnalysisUiRefreshTestSupport.awaitIdle(Lizzie.frame); }
+      finally { env.close(); }
+    }
+  }
+
+  @Test
+  void silentAndOrdinaryAnalysisRequestsShareTheProductionFrameRefreshBoundary() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      TrackingLizzieFrame frame = configuredFrame();
+      Lizzie.frame = frame;
+      AnalysisUiRefreshTestSupport.install(frame);
+      var paints = new java.util.concurrent.atomic.AtomicInteger();
+      var offEdt = new java.util.concurrent.atomic.AtomicBoolean();
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        frame.mainPanel = new javax.swing.JPanel() {
+          @Override public void repaint() {
+            paints.incrementAndGet();
+            if (!javax.swing.SwingUtilities.isEventDispatchThread()) offEdt.set(true);
+          }
+        };
+        paints.set(0);
+      });
+      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+        for (int i = 0; i < 1000; i++) frame.refreshSilentAnalysisProgress();
+        assertEquals(0, paints.get());
+      });
+      AnalysisUiRefreshTestSupport.awaitIdle(frame);
+      assertEquals(1, paints.get(), "silent progress must not post one repaint per result");
+      assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawWinratePaneOnly"));
+      assertFalse((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertEquals(0, frame.titleUpdates);
+
+      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+        frame.refresh(1);
+        for (int i = 0; i < 1000; i++) {
+          frame.refreshSilentAnalysisProgress();
+          frame.requestAnalysisTitleUpdate();
+        }
+      });
+      AnalysisUiRefreshTestSupport.awaitIdle(frame);
+      assertEquals(2, paints.get());
+      assertEquals(1, frame.titleUpdates);
+      assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertEquals(0, frame.fullRefreshes);
+      assertFalse(offEdt.get());
+    } finally {
+      try { AnalysisUiRefreshTestSupport.awaitIdle(Lizzie.frame); }
+      finally { env.close(); }
     }
   }
 
@@ -1961,6 +2011,10 @@ class MoveOnlyUiGateTest {
   private static final class TrackingLizzieFrame extends LizzieFrame {
     private int fullRefreshes;
     private int clearedMovePreviews;
+    private int titleUpdates;
+
+    @Override
+    public void updateTitle() { titleUpdates++; }
 
     @Override
     public boolean isInPlayMode() {
