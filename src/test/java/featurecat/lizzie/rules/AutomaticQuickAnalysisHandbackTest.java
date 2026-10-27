@@ -38,6 +38,7 @@ class AutomaticQuickAnalysisHandbackTest {
       assertEquals(BoardNodeKind.SNAPSHOT, setup.getData().getNodeKind());
       assertEquals(0, setup.getData().moveNumber);
       Lizzie.frame = RulesLayerTestHarness.allocate(QuietFrame.class);
+      featurecat.lizzie.gui.AnalysisUiRefreshTestSupport.install(Lizzie.frame);
       var previousConsole = Lizzie.gtpConsole;
       Lizzie.gtpConsole = RulesLayerTestHarness.allocate(GtpConsolePane.class);
       var previousToolbar = LizzieFrame.toolbar;
@@ -92,9 +93,13 @@ class AutomaticQuickAnalysisHandbackTest {
         assertEquals("C3", setup.getData().bestMoves.get(0).coordinate);
         assertEquals(62.0, setup.getData().winrate, 0.001);
       } finally {
-        analysis.normalQuit();
-        Lizzie.gtpConsole = previousConsole;
-        LizzieFrame.toolbar = previousToolbar;
+        try {
+          analysis.normalQuit();
+          featurecat.lizzie.gui.AnalysisUiRefreshTestSupport.awaitIdle(Lizzie.frame);
+        } finally {
+          Lizzie.gtpConsole = previousConsole;
+          LizzieFrame.toolbar = previousToolbar;
+        }
       }
     }
   }
@@ -157,6 +162,9 @@ class AutomaticQuickAnalysisHandbackTest {
   }
 
   static class QuietFrame extends LizzieFrame {
+    @Override
+    public void updateTitle() {}
+
     @Override
     public void refresh() {}
 
