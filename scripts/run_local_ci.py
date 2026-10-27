@@ -85,6 +85,17 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.SetKataEnginesHitTest", "threadCheckboxReceivesMouseAtEverySupportedFontSize"),
     ("featurecat.lizzie.gui.SetKataEnginesHitTest", "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft"),
     ("featurecat.lizzie.gui.SetKataEnginesHitTest", "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange"),
+    ("featurecat.lizzie.gui.SetKataEnginesHitTest", "dedicatedPdaControlsRemainReadableAndReachableAtEverySupportedFontSize"),
+    *tuple(
+        (
+            "featurecat.lizzie.gui.SetKataEnginesHitTest",
+            f"dedicatedPdaRejectsInvalidDraftsBeforeChangingPreferencesOrEngine(boolean)[{case}]",
+        )
+        for case in range(1, 3)
+    ),
+    ("featurecat.lizzie.gui.FunctionSearchInputTest", "koreanInputChain"),
+    ("featurecat.lizzie.gui.MessageThemeTest", "localizedMessagesFitTheirContentAndEscapeClosesTheModalAtEveryFontSize"),
+    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "koreanFieldsHaveDistinctLabelsAndSupportTabEnterAndEscape"),
     ("featurecat.lizzie.gui.NewEngineGameParametersDesktopTest", "openingDialogRejectsInvalidDraftsThenPersistsAndCapturesPositions"),
     ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused"),
     ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuHidesThePanelOutsideAnAnalysisGame"),
@@ -676,7 +687,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest",
+                    "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
                     "test",
                 ),
                 group="desktop",

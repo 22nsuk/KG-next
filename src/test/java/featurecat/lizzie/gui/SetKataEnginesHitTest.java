@@ -17,19 +17,34 @@ import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import java.awt.AWTEvent;
+import java.awt.Component;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsEnvironment;
 import java.awt.Point;
+import java.awt.Robot;
+import java.awt.Toolkit;
+import java.awt.Window;
+import java.awt.event.AWTEventListener;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
+import java.awt.event.KeyEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
@@ -560,6 +575,308 @@ class SetKataEnginesHitTest {
               Lizzie.resourceBundle = previousBundle;
             });
       }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void dedicatedPdaRejectsInvalidDraftsBeforeChangingPreferencesOrEngine(boolean dynamic)
+      throws Exception {
+    assumeFalse(GraphicsEnvironment.isHeadless());
+    Config previousConfig = Lizzie.config;
+    var previousFrame = Lizzie.frame;
+    var previousEngine = Lizzie.leelaz;
+    var previousManager = Lizzie.engineManager;
+    var previousMenu = LizzieFrame.menu;
+    var previousGame = Lizzie.engineGame.current();
+    ResourceBundle previousBundle = Lizzie.resourceBundle;
+    SetKataPDA[] dialog = new SetKataPDA[1];
+    try {
+      Files.createDirectories(root.resolve("save"));
+      Lizzie.config = ConfigTestHelper.createBootstrapped(root);
+      Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREAN);
+      Lizzie.config.AutoPDA = "dympdacap 0.4";
+      Lizzie.frame = allocate(QuietFrame.class);
+      LizzieFrame.menu = allocate(QuietMenu.class);
+      RecordingEngine engine = new RecordingEngine();
+      engine.isKataGoPda = true;
+      engine.pda = 1.25;
+      engine.pdaCap = 0.4;
+      engine.isStaticPda = true;
+      Lizzie.engineManager = null;
+      SwingUtilities.invokeAndWait(
+          () -> {
+            EngineGameSnapshotFixtures.publishIdle();
+            Lizzie.setPrimaryEngine(engine);
+            LizzieFrame.menu.txtPDA = new JFontTextField("unchanged");
+            dialog[0] = new SetKataPDA();
+            dialog[0].setVisible(true);
+            dialog[0].chkAutoPDA.setSelected(true);
+          });
+      Robot robot = new Robot();
+      if (dynamic) {
+        focus(dialog[0].chkDymPda);
+        press(robot, KeyEvent.VK_SPACE);
+        robot.waitForIdle();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertTrue(dialog[0].chkDymPda.isSelected());
+              assertTrue(dialog[0].txtDymCap.isEnabled());
+              assertFalse(field(dialog[0], "txtStaticCur", JTextField.class).isEnabled());
+            });
+      }
+      String before = Lizzie.config.uiConfig.toString();
+      String beforeDynamic = Lizzie.config.dymPDACap;
+      String beforeStatic = Lizzie.config.staticPDAcur;
+      boolean beforeDynamicSelected = Lizzie.config.chkDymPDA;
+      boolean beforeStaticSelected = Lizzie.config.chkStaticPDA;
+      boolean beforeAutoSelected = Lizzie.config.chkAutoPDA;
+      List<String> invalid = new ArrayList<>(List.of("NaN", "Infinity", "-Infinity", "1e309", "1e", ""));
+      if (dynamic) invalid.addAll(List.of("0", "-0.0"));
+      for (String draft : invalid) {
+        SwingUtilities.invokeAndWait(
+            () -> pdaField(dialog[0], dynamic).setText(draft));
+        rejectPdaDraft(dialog[0]);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertTrue(dialog[0].isVisible(), "invalid input keeps the editor open");
+              assertEquals(draft, pdaField(dialog[0], dynamic).getText());
+              assertTrue(new JSONObject(before).similar(Lizzie.config.uiConfig));
+              assertEquals("dympdacap 0.4", Lizzie.config.AutoPDA);
+              assertEquals(beforeDynamic, Lizzie.config.dymPDACap);
+              assertEquals(beforeStatic, Lizzie.config.staticPDAcur);
+              assertEquals(beforeDynamicSelected, Lizzie.config.chkDymPDA);
+              assertEquals(beforeStaticSelected, Lizzie.config.chkStaticPDA);
+              assertEquals(beforeAutoSelected, Lizzie.config.chkAutoPDA);
+              assertTrue(engine.commands.isEmpty(), engine.commands.toString());
+              assertEquals(1.25, engine.pda);
+              assertEquals(0.4, engine.pdaCap);
+              assertTrue(engine.isStaticPda);
+              assertEquals("unchanged", LizzieFrame.menu.txtPDA.getText());
+            });
+      }
+      SwingUtilities.invokeAndWait(
+          () -> {
+            // The dedicated engine's existing finite range is broader than the standard +/-3 PDA.
+            pdaField(dialog[0], dynamic).setText(dynamic ? "-4.5" : "12.5");
+            if (!dynamic) button(dialog[0], "SetKataPDA.btnApply").doClick(0);
+          });
+      if (dynamic) {
+        focus(dialog[0].txtDymCap);
+        press(robot, KeyEvent.VK_ENTER);
+        robot.waitForIdle();
+      }
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertFalse(dialog[0].isVisible());
+            assertEquals(
+                dynamic ? List.of("pda 0", "dympdacap -4.5") : List.of("pda 12.5"),
+                engine.commands);
+            assertEquals(dynamic ? "dympdacap -4.5" : "pda 12.5", Lizzie.config.AutoPDA);
+          });
+      if (dynamic) {
+        String saved = Lizzie.config.uiConfig.toString();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              dialog[0].dispose();
+              dialog[0] = new SetKataPDA();
+              dialog[0].setVisible(true);
+              dialog[0].txtDymCap.setText("-9");
+            });
+        focus(dialog[0].txtDymCap);
+        press(robot, KeyEvent.VK_ESCAPE);
+        robot.waitForIdle();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertFalse(dialog[0].isVisible(), "Escape cancels the new draft");
+              assertEquals(List.of("pda 0", "dympdacap -4.5"), engine.commands);
+              assertTrue(new JSONObject(saved).similar(Lizzie.config.uiConfig));
+              assertEquals("dympdacap -4.5", Lizzie.config.AutoPDA);
+            });
+      }
+    } finally {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            if (dialog[0] != null) dialog[0].dispose();
+            Lizzie.config = previousConfig;
+            Lizzie.frame = previousFrame;
+            LizzieFrame.menu = previousMenu;
+            Lizzie.engineManager = previousManager;
+            Lizzie.setPrimaryEngine(previousEngine);
+            Lizzie.engineGame.publishSnapshotForTest(previousGame);
+            Lizzie.resourceBundle = previousBundle;
+          });
+    }
+  }
+
+  @Test
+  void dedicatedPdaControlsRemainReadableAndReachableAtEverySupportedFontSize() throws Exception {
+    assumeFalse(GraphicsEnvironment.isHeadless());
+    Config previousConfig = Lizzie.config;
+    var previousFrame = Lizzie.frame;
+    var previousEngine = Lizzie.leelaz;
+    ResourceBundle previousBundle = Lizzie.resourceBundle;
+    int previousSize = Config.frameFontSize;
+    SetKataPDA[] dialog = new SetKataPDA[1];
+    try {
+      Files.createDirectories(root.resolve("save"));
+      Lizzie.config = ConfigTestHelper.createBootstrapped(root);
+      Lizzie.frame = allocate(QuietFrame.class);
+      RecordingEngine engine = new RecordingEngine();
+      engine.pda = 1.25;
+      engine.pdaCap = 0.4;
+      engine.isStaticPda = true;
+      Lizzie.setPrimaryEngine(engine);
+      Robot robot = new Robot();
+      for (Locale locale : List.of(Locale.KOREAN, Locale.CHINA, Locale.US)) {
+        for (int size : new int[] {12, 16, 20}) {
+          CountDownLatch focused = new CountDownLatch(1);
+          SwingUtilities.invokeAndWait(
+              () -> {
+                Config.frameFontSize = size;
+                Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", locale);
+                Lizzie.config.isChinese = Locale.CHINA.equals(locale);
+                dialog[0] = new SetKataPDA();
+                dialog[0].addWindowFocusListener(new WindowAdapter() {
+                  @Override public void windowGainedFocus(WindowEvent event) { focused.countDown(); }
+                });
+                dialog[0].setVisible(true);
+              });
+          assertTrue(focused.await(5, TimeUnit.SECONDS), "PDA editor must be mapped before layout checks");
+          SwingUtilities.invokeAndWait(
+              () -> {
+                dialog[0].validate();
+                for (Component control : dialog[0].getContentPane().getComponents()) {
+                  assertTrue(
+                      control.getWidth() >= control.getPreferredSize().width
+                          && control.getHeight() >= control.getPreferredSize().height,
+                      locale + "/" + size + " clipped control: " + control);
+                  assertTrue(
+                      control.getX() >= 0 && control.getY() >= 0
+                          && control.getX() + control.getWidth() <= dialog[0].getContentPane().getWidth()
+                          && control.getY() + control.getHeight() <= dialog[0].getContentPane().getHeight(),
+                      locale + "/" + size + " control outside editor: " + control);
+                }
+                for (Component control : List.of(
+                    dialog[0].chkDymPda, dialog[0].chkStaticPda, dialog[0].chkNoPDA,
+                    dialog[0].chkAutoPDA, dialog[0].txtDymCap,
+                    field(dialog[0], "txtStaticCur", JTextField.class))) {
+                  assertTrue(control.isFocusable(), "Keyboard cannot reach " + control);
+                  Point center = SwingUtilities.convertPoint(control,
+                      control.getWidth() / 2, control.getHeight() / 2, dialog[0].getContentPane());
+                  assertSame(control,
+                      SwingUtilities.getDeepestComponentAt(dialog[0].getContentPane(), center.x, center.y),
+                      locale + "/" + size + " input target is covered");
+                }
+                assertSame(button(dialog[0], "SetKataPDA.btnApply"), dialog[0].getRootPane().getDefaultButton());
+              });
+          if (Locale.KOREAN.equals(locale)) {
+            SwingUtilities.invokeAndWait(() -> {
+              var rootPane = dialog[0].getRootPane();
+              rootPane.paintImmediately(0, 0, rootPane.getWidth(), rootPane.getHeight());
+              Toolkit.getDefaultToolkit().sync();
+            });
+            robot.waitForIdle();
+            Path screenshots = Path.of(System.getProperty(
+                "lizzie.desktop.evidence.dir", "target/desktop-smoke/probes"));
+            Files.createDirectories(screenshots);
+            var image = robot.createScreenCapture(dialog[0].getBounds());
+            int background = image.getRGB(0, 0);
+            assertTrue(Arrays.stream(image.getRGB(0, 0, image.getWidth(), image.getHeight(),
+                    null, 0, image.getWidth())).anyMatch(pixel -> pixel != background),
+                "PDA screenshot must contain the painted controls");
+            ImageIO.write(image, "png",
+                screenshots.resolve("dedicated-pda-ko-font-" + size + "-scale-"
+                    + dialog[0].getGraphicsConfiguration().getDefaultTransform().getScaleX()
+                    + ".png").toFile());
+          }
+          SwingUtilities.invokeAndWait(dialog[0]::dispose);
+          dialog[0] = null;
+        }
+      }
+    } finally {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            if (dialog[0] != null) dialog[0].dispose();
+            Config.frameFontSize = previousSize;
+            Lizzie.config = previousConfig;
+            Lizzie.frame = previousFrame;
+            Lizzie.setPrimaryEngine(previousEngine);
+            Lizzie.resourceBundle = previousBundle;
+          });
+    }
+  }
+
+  private static JTextField pdaField(SetKataPDA dialog, boolean dynamic) {
+    return dynamic ? dialog.txtDymCap : field(dialog, "txtStaticCur", JTextField.class);
+  }
+
+  private static void focus(Component component) throws Exception {
+    CountDownLatch focused = new CountDownLatch(1);
+    Window[] window = new Window[1];
+    FocusAdapter listener = new FocusAdapter() {
+      @Override public void focusGained(FocusEvent event) { focused.countDown(); }
+    };
+    WindowAdapter activate = new WindowAdapter() {
+      @Override public void windowGainedFocus(WindowEvent event) {
+        event.getWindow().removeWindowFocusListener(this);
+        component.requestFocusInWindow();
+      }
+    };
+    SwingUtilities.invokeAndWait(() -> {
+      window[0] = SwingUtilities.getWindowAncestor(component);
+      component.addFocusListener(listener);
+      if (component.isFocusOwner()) {
+        focused.countDown();
+      } else if (window[0].isFocused()) {
+        component.requestFocusInWindow();
+      } else {
+        // setVisible and modal dismissal return before the native focus transition completes.
+        window[0].addWindowFocusListener(activate);
+      }
+    });
+    try {
+      assertTrue(focused.await(5, TimeUnit.SECONDS), "keyboard focus did not reach " + component);
+    } finally {
+      SwingUtilities.invokeAndWait(() -> {
+        component.removeFocusListener(listener);
+        window[0].removeWindowFocusListener(activate);
+      });
+    }
+  }
+
+  private static void press(Robot robot, int key) {
+    robot.keyPress(key);
+    robot.keyRelease(key);
+  }
+
+  private static void rejectPdaDraft(SetKataPDA dialog) throws Exception {
+    List<String> messages = new ArrayList<>();
+    List<Boolean> fitted = new ArrayList<>();
+    AWTEventListener dismiss =
+        event -> {
+          if (event.getID() == WindowEvent.WINDOW_OPENED
+              && event.getSource() instanceof Message message) {
+            messages.add(message.lblmessage.getText());
+            fitted.add(message.lblmessage.getWidth() >= message.lblmessage.getPreferredSize().width
+                && message.lblmessage.getHeight() >= message.lblmessage.getPreferredSize().height);
+            message.dispose();
+          }
+        };
+    Toolkit.getDefaultToolkit().addAWTEventListener(dismiss, AWTEvent.WINDOW_EVENT_MASK);
+    try {
+      FutureTask<Void> apply =
+          new FutureTask<>(
+              () -> {
+                button(dialog, "SetKataPDA.btnApply").doClick(0);
+                return null;
+              });
+      SwingUtilities.invokeLater(apply);
+      apply.get(5, TimeUnit.SECONDS);
+      assertEquals(List.of(Lizzie.resourceBundle.getString("SetKataPDA.wrongParameter")), messages);
+      assertEquals(List.of(true), fitted, "the complete validation message must be readable");
+    } finally {
+      Toolkit.getDefaultToolkit().removeAWTEventListener(dismiss);
     }
   }
 

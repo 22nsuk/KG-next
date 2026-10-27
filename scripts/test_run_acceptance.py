@@ -162,7 +162,7 @@ class AcceptanceRunnerTest(unittest.TestCase):
         selector = next(argument for argument in plan.command if argument.startswith("-Dtest="))
         self.assertEqual(
             "-Dtest="
-            "FunctionSearchInputTest#chineseInputChain+englishInputChain,"
+            "FunctionSearchInputTest#chineseInputChain+englishInputChain+koreanInputChain,"
             "ConfigPersistenceAcceptanceTest#savesSettingAcrossRestart,"
             "QuickAnalysisAcceptanceIT#resumesForegroundAfterImportedGame+preservesExplicitPauseDuringQuickAnalysis",
             selector,
@@ -314,15 +314,17 @@ class AcceptanceRunnerTest(unittest.TestCase):
                 "</testsuite>"
             ),
             "skipped": (
-                f'<testsuite tests="2" failures="0" errors="0" skipped="1">'
+                f'<testsuite tests="3" failures="0" errors="0" skipped="1">'
                 f'<testcase classname="{classname}" name="chineseInputChain"><skipped/></testcase>'
                 f'<testcase classname="{classname}" name="englishInputChain"/>'
+                f'<testcase classname="{classname}" name="koreanInputChain"/>'
                 "</testsuite>"
             ),
             "failing": (
-                f'<testsuite tests="2" failures="1" errors="0" skipped="0">'
+                f'<testsuite tests="3" failures="1" errors="0" skipped="0">'
                 f'<testcase classname="{classname}" name="chineseInputChain"><failure/></testcase>'
                 f'<testcase classname="{classname}" name="englishInputChain"/>'
+                f'<testcase classname="{classname}" name="koreanInputChain"/>'
                 "</testsuite>"
             ),
             "malformed": "<testsuite",

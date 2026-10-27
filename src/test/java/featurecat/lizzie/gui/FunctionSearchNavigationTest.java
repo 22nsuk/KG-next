@@ -4,6 +4,11 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.enginegame.EngineGamePlayMode;
+import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.enginegame.EngineGameSnapshotFixtures;
+import featurecat.lizzie.enginegame.GameActivity;
+import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.search.FunctionCatalog;
 import featurecat.lizzie.search.FunctionSearch;
@@ -126,6 +131,7 @@ public final class FunctionSearchNavigationTest {
     checkHiddenTopNavigation(controller, evidence);
     DesktopProbeProcess.phase(resultPath, "state-and-read-only-gates");
     checkBusyOwnerStateGates(controller, evidence);
+    checkGameParameterNavigation(controller, evidence);
     checkNormalizedWhitespaceBrowse(controller, evidence);
     checkDynamicActionRefresh(controller, evidence);
     checkActionPaintingIsReadOnly(controller, evidence);
@@ -499,6 +505,59 @@ public final class FunctionSearchNavigationTest {
       }
     } finally {
       runOnEdtAction(() -> Lizzie.frame.isPlayingAgainstLeelaz = previousHumanGame);
+    }
+  }
+
+  private static void checkGameParameterNavigation(
+      FunctionSearchController controller, StringBuilder evidence) throws Exception {
+    EngineGameSnapshot previous = runOnEdt(() -> Lizzie.engineGame.current());
+    EngineGameSnapshot.BatchActive analysis =
+        (EngineGameSnapshot.BatchActive) EngineGameSnapshotFixtures.playingAnalysis();
+    String beforeConfig = runOnEdt(() -> Lizzie.config.uiConfig.toString());
+    try {
+      // Only the owner's published game state is controlled; search resolves and invokes the
+      // production menu and dialog. Applying parameters is covered by the engine-game tests.
+      for (EngineGameSnapshot unavailable :
+          List.of(
+              new EngineGameSnapshot.Idle(),
+              EngineGameSnapshotFixtures.starting(),
+              EngineGameSnapshotFixtures.playing(EngineGamePlayMode.GENMOVE, RunState.RUNNING),
+              new EngineGameSnapshot.BatchActive(analysis.batch(), new GameActivity.BetweenGames()),
+              new EngineGameSnapshot.BatchActive(
+                  analysis.batch(), new GameActivity.SaveFailed(analysis.view())))) {
+        runOnEdtAction(() -> Lizzie.engineGame.publishSnapshotForTest(unavailable));
+        List<JMenuItem> path =
+            runOnEdt(() -> LizzieFrame.menu.refreshFunctionPath("game.parameters"));
+        assertTrue(path != null && !path.isEmpty(), "real game-parameter menu path");
+        assertTrue(!runOnEdt(() -> path.get(path.size() - 1).isEnabled()));
+        assertEquals(
+            "EngineGameParameters.notPlaying",
+            runOnEdt(() -> controller.unavailableReason("game.parameters")));
+        assertEquals(
+            "EngineGameParameters.notPlaying",
+            runOnEdt(() -> controller.activate("game.parameters")));
+        assertTrue(!EngineGameParametersDialog.isOpen());
+      }
+      for (RunState state : List.of(RunState.RUNNING, RunState.PAUSED)) {
+        runOnEdtAction(
+            () ->
+                Lizzie.engineGame.publishSnapshotForTest(
+                    EngineGameSnapshotFixtures.playing(EngineGamePlayMode.ANALYSIS, state)));
+        List<JMenuItem> path =
+            runOnEdt(() -> LizzieFrame.menu.refreshFunctionPath("game.parameters"));
+        assertTrue(runOnEdt(() -> path.get(path.size() - 1).isVisible()));
+        assertTrue(runOnEdt(() -> path.get(path.size() - 1).isEnabled()));
+        assertEquals(null, runOnEdt(() -> controller.unavailableReason("game.parameters")));
+        assertEquals(null, runOnEdt(() -> controller.activate("game.parameters")));
+        JDialog shown = awaitDialog(EngineGameParametersDialog.class, "game parameters", 4_000);
+        assertEquals(Lizzie.frame, runOnEdt(shown::getOwner));
+        runOnEdtAction(() -> shown.setVisible(false));
+      }
+      assertEquals(beforeConfig, runOnEdt(() -> Lizzie.config.uiConfig.toString()));
+      evidence.append("game.parameters.state-gates-and-real-navigation=true\n");
+    } finally {
+      runOnEdtAction(() -> Lizzie.engineGame.publishSnapshotForTest(previous));
+      closeVisibleDialogs();
     }
   }
 

@@ -45,6 +45,7 @@ class EngineGameParameterControlsTest {
           JMenuItem entry = EngineGameParameterControls.addMenuEntry(menu, snapshot::get);
           assertEquals(
               Lizzie.resourceBundle.getString("EngineGameParameters.entry"), entry.getText());
+          assertEquals("game.parameters", entry.getClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY));
           assertTrue(java.util.List.of(menu.getMenuComponents()).contains(entry));
 
           snapshot.set(EngineGameSnapshotFixtures.playingAnalysis());

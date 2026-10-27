@@ -13263,6 +13263,10 @@ public class LizzieFrame extends JFrame {
     switch (id) {
       case "game.ai-coach":
         return aiCoachBlockedByGame() ? "AnalysisSettings.reuseStatus.engine_game" : null;
+      case "game.parameters":
+        return EngineGameParameterControls.canOpen(EngineGamePresentation.current())
+            ? null
+            : "EngineGameParameters.notPlaying";
       case "sync.exit-web-trial":
         return Lizzie.webBoardManager != null
                 && Lizzie.webBoardManager.isRunning()
