@@ -1833,6 +1833,264 @@ class AnalysisEngineRequestTest {
   }
 
   @Test
+  void invalidatedWholeGamePositionsRemainPendingWithTheirDisplayPayloadIntact() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode firstMove = root.next().orElseThrow();
+      List<BoardHistoryNode> positions = List.of(root, firstMove);
+      for (BoardHistoryNode node : positions) {
+        installCompleteAnalysis(node.getData(), 700, true);
+      }
+      List<MoveData> oldRootMoves = root.getData().bestMoves;
+      List<MoveData> oldMoveMoves = firstMove.getData().bestMoves;
+      WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(root, 32, 500);
+      assertEquals(2, plan.completedAtLeast(500));
+      assertTrue(plan.positionsMissingAnalysis(500, true).isEmpty());
+
+      board.clearBestMovesAfterForFirstEngine(root);
+
+      for (BoardHistoryNode node : positions) {
+        assertTrue(node.getData().isChanged);
+        assertEquals(700, node.getData().getPlayouts());
+        assertTrue(node.getData().hasCompletePrimaryAnalysis(500, true));
+      }
+      assertSame(oldRootMoves, root.getData().bestMoves);
+      assertSame(oldMoveMoves, firstMove.getData().bestMoves);
+      assertEquals(positions, plan.positionsMissingAnalysis(500, true));
+      assertEquals(0, plan.completedAtLeast(500));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"500, false", "700, false", "900, false", "500, true", "700, true", "900, true"})
+  void invalidatedWholeGameCacheIsReplacedByFreshAnalysis(int freshVisits, boolean ownership)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      List<BoardHistoryNode> positions = List.of(root, root.next().orElseThrow());
+      for (BoardHistoryNode node : positions) {
+        installCompleteAnalysis(node.getData(), 700, true);
+        node.getData().bestMoves.get(0).coordinate = "A1";
+        node.getData().estimateArray = List.of(0.9);
+      }
+      board.clearBestMovesAfterForFirstEngine(root);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+
+      assertEquals(2, engine.startWholeGameRequest(positions, 500, ownership));
+
+      for (int index = 0; index < positions.size(); index++) {
+        BoardData data = positions.get(index).getData();
+        assertEquals(700, data.getPlayouts());
+        assertEquals("A1", data.bestMoves.get(0).coordinate);
+        assertEquals(List.of(0.9), data.estimateArray);
+        JSONObject request = engine.requestAt(index);
+        assertEquals(500, request.getInt("maxVisits"));
+        assertEquals(ownership, request.getBoolean("includeOwnership"));
+        int requestId = Integer.parseInt(request.getString("id"));
+        engine.parseResult(
+            ownership
+                ? analysisResultWithOwnership(requestId, freshVisits, 70.0)
+                : analysisResult(requestId, freshVisits, 70.0));
+
+        assertEquals(freshVisits, data.getPlayouts());
+        assertEquals("B2", data.bestMoves.get(0).coordinate);
+        assertEquals(70.0, data.winrate, 0.0001);
+        assertFalse(data.isChanged, "accepted fresh analysis must become reusable at every depth");
+        if (ownership) {
+          assertEquals(BOARD_AREA, data.estimateArray.size());
+          assertEquals(0.25, data.estimateArray.get(0), 0.0001);
+        } else {
+          assertNull(data.estimateArray, "ownership from invalidated analysis must not carry over");
+        }
+      }
+      WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(root, 32, 500);
+      assertTrue(plan.positionsMissingAnalysis(500, ownership).isEmpty());
+      assertEquals(2, plan.completedAtLeast(500));
+      assertFalse(engine.isAnalysisInProgress());
+    }
+  }
+
+  @Test
+  void invalidatedOwnershipCannotCompleteAFreshResponseWithoutRequestedOwnership() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      data.estimateArray = List.of(0.9);
+      BoardHistoryList history = new BoardHistoryList(data);
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      board.clearBestMovesAfterForFirstEngine(root);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger progress = new AtomicInteger(-1);
+      engine.setProgressListener((completed, total) -> progress.set(completed));
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, true));
+      engine.parseResult(analysisResult(1, 500, 70.0));
+
+      assertEquals(500, data.getPlayouts());
+      assertEquals(70.0, data.winrate, 0.0001);
+      assertNull(data.estimateArray);
+      assertFalse(data.isChanged);
+      assertEquals(0, progress.get());
+      WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(root, 32, 500);
+      assertEquals(List.of(root), plan.positionsMissingAnalysis(500, true));
+      assertTrue(plan.positionsMissingAnalysis(500, false).isEmpty());
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, true));
+      engine.parseResult(analysisResultWithOwnership(2, 500, 70.0));
+
+      assertTrue(plan.positionsMissingAnalysis(500, true).isEmpty());
+      assertEquals(BOARD_AREA, data.estimateArray.size());
+      assertEquals(0.25, data.estimateArray.get(0), 0.0001);
+    }
+  }
+
+  @Test
+  void cancelledReplacementLeavesInvalidatedAnalysisAvailableForDisplay() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      BoardHistoryList history = new BoardHistoryList(data);
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      board.clearBestMovesAfterForFirstEngine(root);
+      List<MoveData> oldMoves = data.bestMoves;
+      List<Double> oldOwnership = data.estimateArray;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, false));
+      engine.requestShutdown();
+      engine.parseResult(analysisResultWithOwnership(1, 1000, 70.0));
+
+      assertEquals(700, data.getPlayouts());
+      assertSame(oldMoves, data.bestMoves);
+      assertSame(oldOwnership, data.estimateArray);
+      assertTrue(data.isChanged);
+      assertTrue(data.hasCompletePrimaryAnalysis(500, true));
+      assertEquals(
+          List.of(root),
+          WholeGameAnalysisPlan.create(root, 32, 500).positionsMissingAnalysis(500, false));
+      assertFalse(engine.isAnalysisInProgress());
+    }
+  }
+
+  @Test
+  void repeatedInvalidationRejectsAnInFlightReplacementWithoutClearingTheOldPayload()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      BoardHistoryList history = new BoardHistoryList(data);
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      board.clearBestMovesAfterForFirstEngine(root);
+      List<MoveData> oldMoves = data.bestMoves;
+      List<Double> oldOwnership = data.estimateArray;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger failures = new AtomicInteger();
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, false));
+
+      board.clearBestMovesAfterForFirstEngine(root);
+      engine.parseResult(analysisResultWithOwnership(1, 500, 70.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(1, failures.get());
+      assertEquals(700, data.getPlayouts());
+      assertSame(oldMoves, data.bestMoves);
+      assertSame(oldOwnership, data.estimateArray);
+      assertTrue(data.isChanged, "a response from before invalidation must not revalidate the cache");
+      assertFalse(engine.isAnalysisInProgress());
+    }
+  }
+
+  @Test
+  void invalidationBeforeTheFirstAnalysisResponseRejectsItsStalePayload() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      BoardHistoryList history = new BoardHistoryList(data);
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger failures = new AtomicInteger();
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, false));
+
+      board.clearBestMovesAfterForFirstEngine(root);
+      engine.parseResult(analysisResult(1, 500, 70.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(1, failures.get());
+      assertEquals(0, data.getPlayouts());
+      assertTrue(data.bestMoves.isEmpty());
+      assertFalse(engine.isAnalysisInProgress());
+    }
+  }
+
+  @Test
+  void invalidationWhileAResponseWaitsForThePayloadLockRejectsThatResponse() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      BoardHistoryList history = new BoardHistoryList(data);
+      Board board = boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      board.clearBestMovesAfterForFirstEngine(root);
+      List<MoveData> oldMoves = data.bestMoves;
+      List<Double> oldOwnership = data.estimateArray;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 900, false));
+      FutureTask<Void> parseResponse =
+          new FutureTask<>(
+              () -> {
+                engine.parseResult(analysisResultWithOwnership(1, 1000, 70.0));
+                return null;
+              });
+      Thread parser = new Thread(parseResponse, "analysis-payload-invalidation-test");
+
+      try {
+        synchronized (data) {
+          parser.start();
+          waitUntil(
+              () -> {
+                java.lang.management.ThreadInfo blocked =
+                    java.lang.management.ManagementFactory.getThreadMXBean()
+                        .getThreadInfo(parser.getId(), 32);
+                return blocked != null
+                    && blocked.getThreadState() == Thread.State.BLOCKED
+                    && blocked.getLockInfo() != null
+                    && blocked.getLockInfo().getIdentityHashCode() == System.identityHashCode(data)
+                    && blocked.getLockOwnerId() == Thread.currentThread().getId()
+                    && java.util.Arrays.stream(blocked.getStackTrace())
+                        .anyMatch(
+                            frame ->
+                                frame.getClassName().equals(AnalysisEngine.class.getName())
+                                    && frame.getMethodName().equals("parseResult"));
+              });
+          board.clearBestMovesAfterForFirstEngine(root);
+        }
+        parseResponse.get(2, TimeUnit.SECONDS);
+
+        assertEquals(700, data.getPlayouts());
+        assertSame(oldMoves, data.bestMoves);
+        assertSame(oldOwnership, data.estimateArray);
+        assertTrue(data.isChanged);
+      } finally {
+        parser.join(2000);
+        assertFalse(parser.isAlive(), "response parsing must finish before restoring the fixture");
+      }
+    }
+  }
+
+  @Test
   void wholeGameRequestDoesNotMistakeVisitOnlyHeaderForDisplayableAnalysis() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardData rootData = BoardData.empty(BOARD_SIZE, BOARD_SIZE);

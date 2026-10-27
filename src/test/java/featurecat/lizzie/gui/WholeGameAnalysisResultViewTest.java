@@ -33,6 +33,23 @@ class WholeGameAnalysisResultViewTest {
   }
 
   @Test
+  void invalidatedAnalysisKeepsSuggestionsAndMoveEvaluationVisible() {
+    BoardHistoryNode root = analyzedNode(700);
+    BoardHistoryNode move = root.add(new BoardHistoryNode(moveData(Stone.BLACK, 1, 700)));
+    WholeGameAnalysisResultView view = new WholeGameAnalysisResultView();
+    view.activate(root);
+
+    root.getData().isChanged = true;
+    move.getData().isChanged = true;
+
+    assertTrue(view.shouldShowSuggestions(root, root, false));
+    assertTrue(view.shouldShowSuggestionWinrate(root, move, false));
+    assertTrue(view.shouldShowSuggestionPlayouts(root, move, false));
+    assertTrue(view.hasVisibleMoveEvaluation(root, move));
+    assertEquals(1, view.effectiveMoveRankLimit(root, move, -1));
+  }
+
+  @Test
   void emptyCachedPayloadDoesNotForceSuggestions() {
     BoardHistoryNode root = new BoardHistoryNode(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
     WholeGameAnalysisResultView view = new WholeGameAnalysisResultView();

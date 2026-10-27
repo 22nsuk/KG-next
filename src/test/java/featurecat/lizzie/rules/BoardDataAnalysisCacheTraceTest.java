@@ -2,6 +2,7 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ch.qos.logback.classic.Level;
@@ -28,6 +29,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 class BoardDataAnalysisCacheTraceTest {
@@ -100,6 +103,98 @@ class BoardDataAnalysisCacheTraceTest {
         node.adoptOrdinaryAnalysis(unknown.moves, "KataGo", Lizzie.leelaz,
             unknown.totalVisits(), -1, null, replacement, false, false));
     assertEquals(100, node.rootVisits);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void ordinarySameSourceRetainsOwnershipOnlyWhileItsAnalysisIsValid(boolean secondary)
+      throws Exception {
+    installBoardGlobals();
+    BoardData node = BoardData.empty(Board.boardWidth, Board.boardHeight);
+    Lizzie.board.setHistory(new BoardHistoryList(node));
+    Object source = new Object();
+    List<Double> ownership = List.of(0.5, -0.5);
+
+    assertEquals(
+        BoardData.AnalysisAdoption.FULL,
+        node.adoptOrdinaryAnalysis(
+            new ArrayList<>(List.of(kataMove(500, 40, 1))),
+            "KataGo", Lizzie.leelaz, 500, 500, ownership, source, secondary, false));
+    assertEquals(
+        BoardData.AnalysisAdoption.FULL,
+        node.adoptOrdinaryAnalysis(
+            new ArrayList<>(List.of(kataMove(600, 50, 2))),
+            "KataGo", Lizzie.leelaz, 600, 600, null, source, secondary, false));
+    assertEquals(ownership, secondary ? node.estimateArray2 : node.estimateArray);
+
+    if (secondary) {
+      Lizzie.board.clearBestMovesAfterForSecondEngine(Lizzie.board.getHistory().getStart());
+    } else {
+      Lizzie.board.clearBestMovesAfterForFirstEngine(Lizzie.board.getHistory().getStart());
+    }
+    assertTrue(secondary ? node.isChanged2 : node.isChanged);
+    assertEquals(
+        BoardData.AnalysisAdoption.FULL,
+        node.adoptOrdinaryAnalysis(
+            new ArrayList<>(List.of(kataMove(700, 60, 3))),
+            "KataGo", Lizzie.leelaz, 700, 700, null, source, secondary, false));
+
+    assertNull(secondary ? node.estimateArray2 : node.estimateArray);
+    assertFalse(secondary ? node.isChanged2 : node.isChanged);
+    assertEquals(700, secondary ? node.getPlayouts2() : node.getPlayouts());
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {400, 500, 600})
+  void freshPrimaryPayloadClearsInvalidationAtAnyAcceptedDepth(int incomingVisits)
+      throws Exception {
+    installBoardGlobals();
+    BoardData node = primaryNode(500, 40, 1);
+    MoveData previous = kataMove(500, 40, 1);
+    previous.variation = List.of("D4");
+    node.bestMoves = new ArrayList<>(List.of(previous));
+    node.invalidatePrimaryAnalysis();
+    long invalidationRevision = node.primaryAnalysisRevision();
+    assertTrue(node.hasCompletePrimaryAnalysis(500, false));
+    assertFalse(node.hasReusablePrimaryAnalysis(500, false));
+
+    assertFalse(
+        node.tryToSetBestMovesFromEngine(
+            new ArrayList<>(), "KataGo", Lizzie.leelaz, incomingVisits, null, false));
+    assertTrue(node.isChanged, "an empty response cannot validate the previous payload");
+    MoveData incoming = kataMove(incomingVisits, 60, 3);
+    incoming.variation = List.of("D4");
+    assertTrue(
+        node.tryToSetBestMovesFromEngine(
+            new ArrayList<>(List.of(incoming)),
+            "KataGo", Lizzie.leelaz, incomingVisits, null, false));
+
+    assertFalse(node.isChanged);
+    assertTrue(node.hasReusablePrimaryAnalysis(incomingVisits, false));
+    assertEquals(60, node.winrate, 0.0001);
+    assertEquals(incomingVisits, node.getPlayouts());
+    assertEquals(invalidationRevision, node.primaryAnalysisRevision());
+  }
+
+  @Test
+  void copyingOrClearingPayloadCannotRewindLiveInvalidationRevision() {
+    BoardData node = primaryNode(500, 40, 1);
+    BoardData previous = node.clone();
+    node.invalidatePrimaryAnalysis();
+    node.invalidatePrimaryAnalysis();
+    long invalidationRevision = node.primaryAnalysisRevision();
+
+    node.copyAnalysisPayloadFrom(previous);
+    assertEquals(invalidationRevision, node.primaryAnalysisRevision());
+    node.sync(previous);
+    assertEquals(invalidationRevision, node.primaryAnalysisRevision());
+    node.clearAnalysisPayloadState();
+    assertEquals(invalidationRevision, node.primaryAnalysisRevision());
+
+    node.invalidatePrimaryAnalysis();
+    assertTrue(
+        node.primaryAnalysisRevision() > invalidationRevision,
+        "an empty node still has to invalidate already dispatched work");
   }
 
   @Test
@@ -267,6 +362,7 @@ class BoardDataAnalysisCacheTraceTest {
             false));
 
     assertEquals(12.0, node.winrate, 0.0001);
+    assertFalse(node.isChanged, "accepted equal-depth analysis must clear invalidation");
     assertDecision("ACCEPT", "IS_CHANGED", 868, 12.0, 9.0, 868, 50.0, 1.5);
   }
 
@@ -302,6 +398,7 @@ class BoardDataAnalysisCacheTraceTest {
 
     assertEquals(868, node.getPlayouts());
     assertEquals("B1", node.bestMoves.get(0).coordinate);
+    assertFalse(node.isChanged);
     assertEquals(868, node.bestMoves.get(0).playouts);
     assertEquals(99.91, node.winrate, 0.0001);
     assertEquals(30.4, node.scoreMean, 0.0001);

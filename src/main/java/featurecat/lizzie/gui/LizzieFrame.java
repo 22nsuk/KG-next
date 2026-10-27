@@ -16540,11 +16540,11 @@ public class LizzieFrame extends JFrame {
       while (node != null) {
         BoardData data = node.getData();
         if (data == null
-            || !data.hasCompletePrimaryAnalysis(
+            || !data.hasReusablePrimaryAnalysis(
                 WholeGameAnalysisPlan.DEFAULT_BASELINE_VISITS, false)) {
           requiredVisits += WholeGameAnalysisPlan.DEFAULT_BASELINE_VISITS;
         }
-        if (data == null || !data.hasCompletePrimaryAnalysis(deepVisits, false)) {
+        if (data == null || !data.hasReusablePrimaryAnalysis(deepVisits, false)) {
           // Analysis requests start a fresh search for this position. Existing shallow visits are
           // useful for deciding whether to skip the position, but are not carried into maxVisits.
           requiredVisits += deepVisits;

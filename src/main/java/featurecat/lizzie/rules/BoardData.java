@@ -77,7 +77,7 @@ public class BoardData {
       return AnalysisAdoption.REJECTED;
     }
     List<Double> retainedOwnership = ownership;
-    if (sameSource && (ownership == null || ownership.isEmpty())) {
+    if (sameSource && !invalidated && (ownership == null || ownership.isEmpty())) {
       retainedOwnership = secondary ? estimateArray2 : estimateArray;
     }
     moves.sort(Comparator.comparingInt(move -> move.order));
@@ -111,6 +111,8 @@ public class BoardData {
   public int whiteCaptures;
   public boolean isChanged = false;
   public boolean isChanged2 = false;
+  // Invalidation belongs to this position's live work, not to copied or saved analysis payloads.
+  private volatile long primaryAnalysisRevision;
   public String comment = "";
   // public String comment2 = "";
   public String engineName = "";
@@ -525,8 +527,6 @@ public class BoardData {
         scoreMean,
         "ACCEPT",
         primaryFullAcceptReason(forceOverride, totalplayouts, metadataEngine));
-    // added for change bestmoves when playouts is not increased
-    if (totalplayouts < playouts) isChanged = false;
     setPlayouts(totalplayouts);
     playoutsChanged = true;
     this.estimateArray = compactEstimateArray(estimateArray);
@@ -565,6 +565,7 @@ public class BoardData {
 
     tryToLimitMoves(moves, bestMoves, true);
     bestMoves = moves;
+    isChanged = false;
     return true;
   }
 
@@ -1054,6 +1055,25 @@ public class BoardData {
         && firstMove.variation.get(0) != null
         && !firstMove.variation.get(0).trim().isEmpty()
         && (!ownershipRequested || (estimateArray != null && !estimateArray.isEmpty()));
+  }
+
+  /** Cached display payloads only satisfy current work while their analysis remains valid. */
+  public synchronized boolean hasReusablePrimaryAnalysis(
+      int targetVisits, boolean ownershipRequested) {
+    return !isChanged && hasCompletePrimaryAnalysis(targetVisits, ownershipRequested);
+  }
+
+  /** Keeps the last result visible while invalidating both reuse and already dispatched work. */
+  public synchronized void invalidatePrimaryAnalysis() {
+    if (getPlayouts() > 0) {
+      isChanged = true;
+    }
+    // Advance even before the first result, and on repeated invalidation of an unchanged payload.
+    primaryAnalysisRevision++;
+  }
+
+  public long primaryAnalysisRevision() {
+    return primaryAnalysisRevision;
   }
 
   public void clearAnalysisPayloadState() {
