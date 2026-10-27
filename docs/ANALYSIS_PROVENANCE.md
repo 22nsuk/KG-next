@@ -1,0 +1,218 @@
+# Analysis provenance and reassessment
+
+Whole-game analysis distinguishes the result currently available for display
+from the work requested by the user. Provenance describes a saved result. It is
+not, by itself, permission to count that result as completed work in a new run.
+
+## User choices and display
+
+The whole-game analysis dialog offers two policies under **기존 분석**:
+
+| Choice | Behavior |
+| --- | --- |
+| **저장된 결과 활용** (`REUSE_SAVED`, default) | Reuse a complete, valid saved result when it meets the requested visits and ownership requirements. A missing source record does not delete or disqualify otherwise reusable legacy analysis. |
+| **현재 엔진으로 다시 평가** (`REEVALUATE_CURRENT_ENGINE`) | Request fresh results for the positions in the whole-game main-line plan using the current engine and its rules. Existing visits do not satisfy the new run until that run has published a qualifying result. |
+
+Reassessment retains the previous evaluation, candidates and ownership for
+display while replacement work is pending. A newly accepted result replaces
+the relevant payload, even when the older result had more visits. Cancelling
+does not erase positions that have not received a replacement, and does not
+roll back fresh results already accepted. A pause/resume within the same plan
+keeps its run identity; starting another reassessment creates a new identity.
+
+The **현재 국면의 분석 출처** panel describes the primary analysis of the
+position currently displayed on the board. It follows board navigation and
+payload updates. It is not an assertion that every position in the game has
+the same producer. Evaluation/candidates and the ownership map have separate
+source records: a lower-visit ownership backfill may update the map while a
+stronger existing evaluation remains visible. If the two records are equal,
+the panel says that the same source information was recorded; this does not
+establish equality of all unrecorded engine settings.
+
+An old SGF can show **분석 출처 미확인** alongside its legacy engine display
+label. A configured display name such as “My strongest engine” is not treated
+as a model identity. Unknown values are displayed as **미확인**, including
+individual missing fields in an otherwise useful source record.
+
+## Meaning of recorded fields
+
+`featurecat.lizzie.analysis.AnalysisProvenance` is an immutable value with ten
+fields. Empty text and null numbers mean unknown. Numeric fields must be
+finite. The runtime collector normalizes invalid or oversized optional values
+to unknown so that missing metadata cannot stop analysis publication.
+
+| Field | What it records |
+| --- | --- |
+| `engineName` | An engine/connection name actually reported through the supported protocol path. It is separate from the user-configured display label. |
+| `engineVersion` | The version reported by that producer or adapter. An adapter's version does not establish the version of an unseen remote server. |
+| `modelName` | A model identifier available from a local model file or an explicitly known remote model identifier. |
+| `modelSha256` | SHA-256 of the actual local model file observed for the launch. For a `.bin.gz` input, this identifies the compressed file bytes. |
+| `configSha256` | SHA-256 of an unambiguous local configuration file observed for the launch. It does not describe every effective setting, included file or runtime override. |
+| `rules` | Rules known for the accepted stream or dispatched analysis request. |
+| `komi` | Komi known for that stream or request. |
+| `pda` | Observed static playout doubling advantage, when available. An unobserved or dynamic value remains unknown. |
+| `wrn` | Observed analysis wide root noise, when available. |
+| `humanSLProfile` | The HumanSL profile when it is explicitly known. Current live collection leaves this field unknown. |
+
+Local file hashes are file observations, **not attestations that the engine
+loaded those exact bytes**. A process could already have loaded a previous
+file, a wrapper could choose a different input, or a remote server could use
+another model. The UI therefore labels the model hash as a local model file
+SHA-256. The model/configuration lookup runs outside the payload-publication
+lock and does not block the engine reader. An early result may retain unknown
+file identity when the background lookup has not completed.
+
+The collector preserves uncertainty:
+
+- Remote connections do not borrow a similarly named file from the local
+  filesystem. A known remote model identifier may be recorded without a hash.
+- Indirect launch commands, unavailable files and ambiguous model inputs may
+  leave identity unknown. Multiple configuration inputs are not represented
+  by the hash of whichever path appeared last.
+- A configuration hash does not expand include files or prove the effective
+  combination of configuration, command-line options and runtime parameters.
+- Missing engine/version responses, unobserved conditions and HumanSL profile
+  state are not inferred from the current global engine or the legacy SGF
+  label. A request can have known rules/komi while producer details remain
+  unknown.
+
+The default reuse policy does not perform an automatic “same configuration”
+decision from these partial observations. Users select reassessment when they
+want every planned position evaluated again by the current engine.
+
+## Payload ownership and lifecycle
+
+`BoardData` stores four independent provenance slots:
+
+- `primaryAnalysisProvenance()` and `primaryOwnershipProvenance()`;
+- `secondaryAnalysisProvenance()` and `secondaryOwnershipProvenance()`.
+
+An accepted full payload assigns evaluation provenance from its explicit
+engine/request owner. A rejected payload changes neither result nor source.
+An ownership-only update changes only ownership provenance. If a full update
+retains an existing ownership map, it also retains that map's original source.
+A generic import without an explicit producer clears the replaced source
+instead of borrowing `Lizzie.leelaz`.
+
+Clone, sync, analysis-payload copy and setup-snapshot transfer preserve these
+immutable source values along with the result. Full payload clearing removes
+the corresponding sources. The existing “clear information” actions retain
+the ownership map; their shared `BoardData` helpers remove evaluation values
+and evaluation provenance while keeping ownership values and provenance.
+
+Three kinds of state must remain separate:
+
+| State | Scope |
+| --- | --- |
+| Persisted `AnalysisProvenance` values | Explain the displayed/saved payload; copied with it and serialized to SGF. |
+| Existing live `analysisSource` identity | Admits ordinary output from the current stream; not a durable source record. |
+| `primaryAnalysisRun` object identity | Allows a fresh result to satisfy one explicit reassessment plan; never serialized or inherited by copies. |
+
+`hasReusablePrimaryAnalysis(visits, ownership, requiredRunToken)` applies the
+usual completeness/invalidation checks and, when the token is non-null,
+requires a result marked by that run. A null token retains the default reuse
+behavior. Full replacement clears the old token; the request owner marks the
+accepted result with its own token. Copy/sync and clear boundaries remove the
+token. Updating an already accepted result's exact root visit count with
+`setPlayouts` must not silently remove that token. Provenance equality never
+substitutes for these admission and completion checks.
+
+## SGF format and compatibility
+
+The legacy analysis payload grammar remains unchanged. Root analysis uses
+`LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. Provenance is stored separately in a
+custom **`KGP`** property, as UTF-8 JSON encoded with unpadded Base64URL. This
+keeps model names, Unicode, brackets and backslashes outside the legacy
+analysis/PV grammar.
+
+The decoded version 1 structure is:
+
+```text
+app: "KG-next"
+version: 1
+primary?:
+  payloadSha256: SHA-256 of the primary LZ/LZOP property value
+  analysis?: AnalysisProvenance object
+  ownership?: AnalysisProvenance object
+secondary?:
+  payloadSha256: SHA-256 of the secondary LZ2/LZOP2 property value
+  analysis?: AnalysisProvenance object
+  ownership?: AnalysisProvenance object
+```
+
+The hash input is the unescaped SGF property value encoded in UTF-8, including
+the header, newlines, candidate detail and ownership text. The save path
+generates the payload and its metadata together under the node's publication
+lock. The parser hashes the original imported value before suggestion/PV
+limits can change its in-memory representation. These import digests are
+temporary parser bookkeeping, copied where a setup snapshot needs them; they
+are not an additional SGF property.
+
+`KGP` can appear before or after the corresponding legacy properties. The
+three parser entrypoints route it through the same pending setup-metadata
+handling as analysis, so source information follows the correct move or setup
+snapshot. Primary and secondary payload hashes are checked independently.
+
+If an older client keeps `KGP` but replaces an `LZ` value, the mismatching slot
+loads with unknown provenance. Its evaluation remains usable and visible.
+This binding detects obsolete metadata; it is not a signature or proof that
+an SGF author supplied truthful engine information.
+
+The decoder requires the expected application/version, allowed field names,
+valid field types, finite numbers and 64-character hexadecimal hashes. Text
+limits are 1,024 characters for engine/model names, 128 for engine version,
+8,192 for rules and 256 for HumanSL profile. The encoded property is limited
+to 393,216 characters (384 KiB) for decoding. Each of the four source records
+accepts at most 10,752 UTF-16 text units, including the two hashes. Allowing
+six JSON bytes per unit and 2,048 bytes for field names, punctuation, payload
+hashes and finite numbers bounds generated JSON at 260,096 bytes and padded
+Base64 at 346,796 characters. The decoding limit therefore accommodates all
+accepted source records even with maximum JSON escaping. Invalid UTF-8,
+malformed metadata and unsupported versions are ignored as source evidence
+without rejecting the legacy analysis.
+
+Opaque or unsupported raw `KGP` values are retained when possible and written
+back when no new source record supersedes them. A live payload replacement or
+information clear discards obsolete opaque metadata rather than guessing how
+to update a future schema. Recognized current source records are regenerated
+against the newly serialized payload. An analysis-free/raw export follows the
+existing analysis-export policy and need not retain provenance.
+
+Old SGFs without `KGP` require no migration. Their analysis loads as before,
+with unknown source. Clients that do not understand this optional property
+can continue to use the legacy payloads; clients that strip unknown properties
+will also strip provenance. Source records do not change this interoperability
+limit.
+
+## Validation entrypoints
+
+Run from the repository root with the project's supported JDK and Maven.
+These are verification commands and coverage descriptions, not a record that
+any particular checkout has passed them.
+
+```sh
+# Payload ownership, source preservation, SGF parser/setup/legacy compatibility
+mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
+  -Dtest=AnalysisProvenanceSgfTest,BoardDataAnalysisProvenanceTest,SGFParserSemanticRoundTripTest,BoardNodeKindHistoryPipelineTest,BoardDataAnalysisCacheTraceTest test
+
+# Reuse/reassessment planning, request publication, identity capture and display
+mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
+  -Dtest=WholeGameAnalysisOptionsTest,WholeGameAnalysisPlanTest,WholeGameAnalysisSessionTest,AnalysisEngineRequestTest,AnalysisModelIdentityTest,LeelazOrdinaryResponseSettlementTest,AnalysisProvenanceDisplayTest test
+
+# Project-wide unit/integration checks and package validation
+mvn -B -Djava.awt.headless=true verify
+```
+
+`AnalysisProvenanceSgfTest` covers separate evaluation/ownership sources,
+root/move/setup round trips, all three parser entrypoints, property ordering,
+legacy files, payload changes, suggestion limits, maximum-length escaped source
+records, malformed/future/oversized metadata and exact serialized digests.
+`BoardDataAnalysisProvenanceTest` covers full,
+rejected and ownership-only adoption, retained maps, explicit producer
+ownership, copy/sync/clear boundaries and nonpersistent run permission.
+
+Desktop checks should also open the whole-game dialog, navigate between
+positions with different sources, inspect long/unknown source values, select
+each reuse policy and cancel during reassessment. Headless storage and request
+tests do not establish desktop layout or native engine behavior on every
+platform. Report those checks separately in the PR that performs them.

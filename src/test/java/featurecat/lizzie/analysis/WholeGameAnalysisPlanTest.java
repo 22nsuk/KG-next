@@ -2,6 +2,8 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -76,6 +78,48 @@ class WholeGameAnalysisPlanTest {
     assertTrue(plan.stillMatches(root));
     assertFalse(plan.stillMatches(new BoardHistoryNode(BoardData.empty(BOARD_SIZE, BOARD_SIZE))));
     assertSame(second, plan.positions().get(2));
+    assertNull(plan.runToken());
+  }
+
+  @Test
+  void reevaluationRequiresThisRunsResultsWithoutInvalidatingSavedPayloads() {
+    BoardHistoryNode root = new BoardHistoryNode(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+    BoardHistoryNode first = root.add(new BoardHistoryNode(moveData(Stone.BLACK, 1, 700)));
+    for (BoardHistoryNode node : List.of(root, first)) {
+      installCompleteAnalysis(node.getData(), 700, true);
+    }
+    List<MoveData> savedRootMoves = root.getData().bestMoves;
+    List<Double> savedOwnership = root.getData().estimateArray;
+    WholeGameAnalysisOptions options =
+        WholeGameAnalysisOptions.of(
+            500, WholeGameAnalysisOptions.ExistingAnalysisPolicy.REEVALUATE_CURRENT_ENGINE);
+    WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(root, 32, options);
+
+    assertTrue(plan.reevaluateCurrentEngine());
+    assertEquals(List.of(root, first), plan.positionsBelow(32));
+    assertEquals(List.of(root, first), plan.positionsMissingAnalysis(500, true));
+    assertEquals(0, plan.completedAtLeast(500));
+    assertSame(savedRootMoves, root.getData().bestMoves);
+    assertSame(savedOwnership, root.getData().estimateArray);
+    assertFalse(root.getData().isChanged);
+    assertTrue(root.getData().hasReusablePrimaryAnalysis(500, true));
+
+    installCompleteAnalysis(root.getData(), 32, false);
+    root.getData().markPrimaryAnalysisRun(plan.runToken());
+    assertEquals(List.of(first), plan.positionsBelow(32));
+    assertEquals(List.of(root, first), plan.positionsBelow(500));
+
+    installCompleteAnalysis(root.getData(), 500, false);
+    root.getData().markPrimaryAnalysisRun(plan.runToken());
+    assertEquals(List.of(first), plan.positionsBelow(500));
+    assertEquals(List.of(root, first), plan.positionsMissingAnalysis(500, true));
+    root.getData().estimateArray = List.of(0.25);
+    assertEquals(List.of(first), plan.positionsMissingAnalysis(500, true));
+
+    WholeGameAnalysisPlan anotherRun = WholeGameAnalysisPlan.create(root, 32, options);
+    assertNotSame(plan.runToken(), anotherRun.runToken());
+    assertEquals(List.of(root, first), anotherRun.positionsBelow(32));
+    assertTrue(plan.stillMatches(root));
   }
 
   @Test

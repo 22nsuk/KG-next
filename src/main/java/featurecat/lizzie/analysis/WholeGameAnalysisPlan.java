@@ -19,9 +19,15 @@ public final class WholeGameAnalysisPlan {
   private final List<PositionFingerprint> positionFingerprints;
   private final int baselineVisits;
   private final int deepVisits;
+  private final WholeGameAnalysisOptions.ExistingAnalysisPolicy existingAnalysisPolicy;
+  private final Object runToken;
 
   private WholeGameAnalysisPlan(
-      BoardHistoryNode root, List<BoardHistoryNode> positions, int baselineVisits, int deepVisits) {
+      BoardHistoryNode root,
+      List<BoardHistoryNode> positions,
+      int baselineVisits,
+      int deepVisits,
+      WholeGameAnalysisOptions.ExistingAnalysisPolicy existingAnalysisPolicy) {
     this.root = root;
     this.positions = Collections.unmodifiableList(new ArrayList<BoardHistoryNode>(positions));
     List<PositionFingerprint> fingerprints = new ArrayList<PositionFingerprint>(positions.size());
@@ -31,10 +37,25 @@ public final class WholeGameAnalysisPlan {
     this.positionFingerprints = Collections.unmodifiableList(fingerprints);
     this.baselineVisits = baselineVisits;
     this.deepVisits = deepVisits;
+    this.existingAnalysisPolicy = existingAnalysisPolicy;
+    // Pausing changes the worker, not the identity of the results requested by this plan.
+    runToken = reevaluateCurrentEngine() ? new Object() : null;
   }
 
   public static WholeGameAnalysisPlan create(
       BoardHistoryNode root, int baselineVisits, int requestedDeepVisits) {
+    return create(
+        root,
+        baselineVisits,
+        requestedDeepVisits,
+        WholeGameAnalysisOptions.ExistingAnalysisPolicy.REUSE_SAVED);
+  }
+
+  private static WholeGameAnalysisPlan create(
+      BoardHistoryNode root,
+      int baselineVisits,
+      int requestedDeepVisits,
+      WholeGameAnalysisOptions.ExistingAnalysisPolicy existingAnalysisPolicy) {
     if (root == null) {
       throw new IllegalArgumentException("A game root is required");
     }
@@ -53,7 +74,8 @@ public final class WholeGameAnalysisPlan {
         Math.max(1, baselineVisits),
         Math.max(
             MINIMUM_DEEP_VISITS,
-            Math.min(WholeGameAnalysisOptions.MAXIMUM_VISITS, requestedDeepVisits)));
+            Math.min(WholeGameAnalysisOptions.MAXIMUM_VISITS, requestedDeepVisits)),
+        existingAnalysisPolicy);
   }
 
   public static WholeGameAnalysisPlan create(
@@ -61,7 +83,8 @@ public final class WholeGameAnalysisPlan {
     if (options == null) {
       throw new IllegalArgumentException("Whole-game analysis options are required");
     }
-    return create(root, baselineVisits, options.requireValidVisits());
+    return create(
+        root, baselineVisits, options.requireValidVisits(), options.existingAnalysisPolicy());
   }
 
   public static int countMainlineMoves(BoardHistoryNode root) {
@@ -103,6 +126,15 @@ public final class WholeGameAnalysisPlan {
     return deepVisits;
   }
 
+  public boolean reevaluateCurrentEngine() {
+    return existingAnalysisPolicy
+        == WholeGameAnalysisOptions.ExistingAnalysisPolicy.REEVALUATE_CURRENT_ENGINE;
+  }
+
+  public Object runToken() {
+    return runToken;
+  }
+
   public List<BoardHistoryNode> positionsBelow(int targetVisits) {
     return positionsMissingAnalysis(targetVisits, false);
   }
@@ -112,7 +144,8 @@ public final class WholeGameAnalysisPlan {
     List<BoardHistoryNode> pending = new ArrayList<BoardHistoryNode>();
     for (BoardHistoryNode node : positions) {
       BoardData data = node.getData();
-      if (data == null || !data.hasReusablePrimaryAnalysis(targetVisits, ownershipRequested)) {
+      if (data == null
+          || !data.hasReusablePrimaryAnalysis(targetVisits, ownershipRequested, runToken)) {
         pending.add(node);
       }
     }

@@ -256,6 +256,65 @@ jobs:
           path: target/local-ci/portable-desktop
           if-no-files-found: warn
 
+  analysis-provenance-ui:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Install analysis UI display dependencies
+        run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py
+          apt-config dump Acquire::Retries Acquire::http::Timeout Acquire::https::Timeout
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
+      - name: Run analysis provenance UI tests
+        timeout-minutes: 7
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        run: |
+          xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp' \
+            mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \
+              -Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports \
+              -Dtest=WholeGameAnalysisDialogLayoutTest test
+      - name: Require every analysis UI case to execute
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          from scripts.run_local_ci import collect_junit_summary
+
+          required_methods = (
+              "runningMetadataFitsTheInitialDialogWithoutAnOrdinaryScrollbar",
+              "localizedProgressAndControlsRemainVisibleAtCommonDpiScales",
+              "customVisitSelectionShowsAnEditableBoundedValue",
+              "startCommitsTypedCustomVisitsAndRejectsAnUncommittedOutOfRangeValue",
+              "selectedReusePolicyReachesStartAndRejectsAnEstimateForTheOtherPolicy",
+              "displayedPositionSourceRefreshesAndItsTimerStopsWhenHiddenOrDisposed",
+          )
+          summary = collect_junit_summary(
+              Path("target/provenance-ui"),
+              required_tests=tuple(
+                  ("featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest", method)
+                  for method in required_methods
+              ),
+          )
+          print(summary)
+          PY
+      - name: Upload analysis provenance UI artifacts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: analysis-provenance-ui
+          path: target/provenance-ui
+          if-no-files-found: warn
+
   engine-process:
     name: Engine process (${{ matrix.name }})
     strategy:
@@ -321,7 +380,7 @@ jobs:
 
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, engine-process]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -336,9 +395,10 @@ jobs:
           JAVA17_WEB: ${{ needs.java17-web.result }}
           JAVA_WINDOWS: ${{ needs.java-windows.result }}
           DESKTOP: ${{ needs.desktop-smoke.result }}
+          ANALYSIS_UI: ${{ needs.analysis-provenance-ui.result }}
           ENGINE_PROCESS: ${{ needs.engine-process.result }}
         run: |
-          printf '%s\n' "repository-checks=$REPOSITORY" "script-tests=$SCRIPTS" "windows-script-tests=$WINDOWS_SCRIPTS" "java-linux=$JAVA_LINUX" "java17-web=$JAVA17_WEB" "java-windows=$JAVA_WINDOWS" "desktop-smoke=$DESKTOP" "engine-process=$ENGINE_PROCESS"
+          printf '%s\n' "repository-checks=$REPOSITORY" "script-tests=$SCRIPTS" "windows-script-tests=$WINDOWS_SCRIPTS" "java-linux=$JAVA_LINUX" "java17-web=$JAVA17_WEB" "java-windows=$JAVA_WINDOWS" "desktop-smoke=$DESKTOP" "analysis-provenance-ui=$ANALYSIS_UI" "engine-process=$ENGINE_PROCESS"
           python3 - <<'PY'
           import os
           from scripts.run_local_ci import require_successful_job_results
@@ -352,6 +412,7 @@ jobs:
                   "java17-web": os.environ["JAVA17_WEB"],
                   "java-windows": os.environ["JAVA_WINDOWS"],
                   "desktop-smoke": os.environ["DESKTOP"],
+                  "analysis-provenance-ui": os.environ["ANALYSIS_UI"],
                   "engine-process": os.environ["ENGINE_PROCESS"],
               }
           )

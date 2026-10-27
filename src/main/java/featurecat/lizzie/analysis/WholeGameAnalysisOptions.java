@@ -1,6 +1,8 @@
 package featurecat.lizzie.analysis;
 
-/** Immutable, validated search-depth selection for whole-game analysis. */
+import java.util.Objects;
+
+/** Immutable search-depth and saved-result selection for whole-game analysis. */
 public final class WholeGameAnalysisOptions {
   public static final int MINIMUM_VISITS = 500;
   public static final int MAXIMUM_VISITS = 1_000_000;
@@ -45,12 +47,20 @@ public final class WholeGameAnalysisOptions {
     ABOVE_MAXIMUM
   }
 
+  public enum ExistingAnalysisPolicy {
+    REUSE_SAVED,
+    REEVALUATE_CURRENT_ENGINE
+  }
+
   private final int deepVisits;
   private final Preset preset;
   private final Validation validation;
+  private final ExistingAnalysisPolicy existingAnalysisPolicy;
 
-  private WholeGameAnalysisOptions(int deepVisits) {
+  private WholeGameAnalysisOptions(int deepVisits, ExistingAnalysisPolicy existingAnalysisPolicy) {
     this.deepVisits = deepVisits;
+    this.existingAnalysisPolicy =
+        Objects.requireNonNull(existingAnalysisPolicy, "An existing-analysis policy is required");
     preset = Preset.forVisits(deepVisits);
     validation =
         deepVisits < MINIMUM_VISITS
@@ -59,7 +69,12 @@ public final class WholeGameAnalysisOptions {
   }
 
   public static WholeGameAnalysisOptions of(int deepVisits) {
-    return new WholeGameAnalysisOptions(deepVisits);
+    return of(deepVisits, ExistingAnalysisPolicy.REUSE_SAVED);
+  }
+
+  public static WholeGameAnalysisOptions of(
+      int deepVisits, ExistingAnalysisPolicy existingAnalysisPolicy) {
+    return new WholeGameAnalysisOptions(deepVisits, existingAnalysisPolicy);
   }
 
   public static WholeGameAnalysisOptions fromStored(int deepVisits) {
@@ -69,6 +84,14 @@ public final class WholeGameAnalysisOptions {
 
   public int deepVisits() {
     return deepVisits;
+  }
+
+  public ExistingAnalysisPolicy existingAnalysisPolicy() {
+    return existingAnalysisPolicy;
+  }
+
+  public boolean reevaluateCurrentEngine() {
+    return existingAnalysisPolicy == ExistingAnalysisPolicy.REEVALUATE_CURRENT_ENGINE;
   }
 
   public Preset preset() {

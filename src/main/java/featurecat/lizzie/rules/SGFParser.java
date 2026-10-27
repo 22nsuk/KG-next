@@ -3,6 +3,7 @@ package featurecat.lizzie.rules;
 import static java.util.Arrays.asList;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.MoveData;
@@ -20,22 +21,34 @@ import featurecat.lizzie.util.EncodingDetector;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
 import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.Stack;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.json.JSONTokener;
 
 public class SGFParser {
   private static final int DEFAULT_BOARD_SIZE = 19;
@@ -1650,10 +1663,7 @@ public class SGFParser {
     BoardHistoryNode curNode = history.getCurrentHistoryNode();
     if (!stripRootMetadata) {
       try {
-        if (hasPrimaryAnalysisPayload(curNode.getData()))
-          builder.append(String.format(Locale.ENGLISH, "LZOP[%s]", formatNodeData(curNode)));
-        if (hasSecondaryAnalysisPayload(curNode.getData()))
-          builder.append(String.format(Locale.ENGLISH, "LZOP2[%s]", formatNodeData2(curNode)));
+        appendSerializedAnalysis(builder, curNode, saveContext, "LZOP", "LZOP2");
         if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
           BoardData data = curNode.getData();
           if (saveContext.gameBoard()) {
@@ -2167,12 +2177,21 @@ public class SGFParser {
   private static void appendSerializedAnalysis(
       StringBuilder builder, BoardHistoryNode node, SaveContext saveContext)
       throws IOException {
+    appendSerializedAnalysis(builder, node, saveContext, "LZ", "LZ2");
+  }
+
+  private static void appendSerializedAnalysis(
+      StringBuilder builder, BoardHistoryNode node, SaveContext saveContext,
+      String primaryTag, String secondaryTag)
+      throws IOException {
     try {
-      if (hasPrimaryAnalysisPayload(node.getData())) {
-        builder.append(String.format(Locale.ENGLISH, "LZ[%s]", formatNodeData(node)));
-      }
-      if (hasSecondaryAnalysisPayload(node.getData())) {
-        builder.append(String.format(Locale.ENGLISH, "LZ2[%s]", formatNodeData2(node)));
+      BoardData data = node.getData();
+      synchronized (data) {
+        String primary = hasPrimaryAnalysisPayload(data) ? formatNodeData(node) : null;
+        String secondary = hasSecondaryAnalysisPayload(data) ? formatNodeData2(node) : null;
+        if (primary != null) builder.append(nodeString(primaryTag, Escaping(primary)));
+        if (secondary != null) builder.append(nodeString(secondaryTag, Escaping(secondary)));
+        appendAnalysisProvenance(builder, data, primary, secondary);
       }
     } catch (Exception e) {
       saveContext.clearLoadingAfterSerializationFailure();
@@ -3105,6 +3124,157 @@ public class SGFParser {
     return Double.toString(value);
   }
 
+  // KGP leaves the legacy LZ grammar intact. Each slot is bound to its original LZ text so an
+  // older editor that replaces only LZ cannot silently attach an obsolete source to new analysis.
+  // Four records allow 10,752 UTF-16 text units each, at most six JSON bytes per unit.
+  // With 2 KiB for keys, digests and numbers, Base64 needs at most 346,796 characters.
+  private static final int MAX_PROVENANCE_PROPERTY_LENGTH = 393216;
+  private static final Set<String> PROVENANCE_FIELDS = Set.of(
+      "engineName", "engineVersion", "modelName", "modelSha256", "configSha256", "rules",
+      "komi", "pda", "wrn", "humanSLProfile");
+
+  private record ProvenanceSlot(
+      String payloadSha256, AnalysisProvenance analysis, AnalysisProvenance ownership) {}
+
+  private static void appendAnalysisProvenance(
+      StringBuilder builder, BoardData data, String primaryPayload, String secondaryPayload) {
+    JSONObject metadata = new JSONObject().put("app", "KG-next").put("version", 1);
+    addProvenanceSlot(metadata, "primary", primaryPayload, data.primaryAnalysisProvenance(),
+        data.estimateArray == null || data.estimateArray.isEmpty()
+            ? null : data.primaryOwnershipProvenance());
+    addProvenanceSlot(metadata, "secondary", secondaryPayload, data.secondaryAnalysisProvenance(),
+        data.estimateArray2 == null || data.estimateArray2.isEmpty()
+            ? null : data.secondaryOwnershipProvenance());
+    String property = data.getProperty("KGP");
+    if (metadata.length() > 2) {
+      property = Base64.getUrlEncoder().withoutPadding()
+          .encodeToString(metadata.toString().getBytes(StandardCharsets.UTF_8));
+    }
+    // Preserve opaque or future metadata when no new source is available, without trusting it.
+    if (property != null) builder.append(nodeString("KGP", Escaping(property)));
+  }
+
+  private static void addProvenanceSlot(
+      JSONObject metadata, String key, String payload,
+      AnalysisProvenance analysis, AnalysisProvenance ownership) {
+    if (payload == null || (analysis == null && ownership == null)) return;
+    JSONObject slot = new JSONObject().put("payloadSha256", analysisPayloadDigest(payload));
+    if (analysis != null) slot.put("analysis", provenanceJson(analysis));
+    if (ownership != null) slot.put("ownership", provenanceJson(ownership));
+    metadata.put(key, slot);
+  }
+
+  private static JSONObject provenanceJson(AnalysisProvenance provenance) {
+    return new JSONObject()
+        .put("engineName", provenance.engineName())
+        .put("engineVersion", provenance.engineVersion())
+        .put("modelName", provenance.modelName())
+        .put("modelSha256", provenance.modelSha256())
+        .put("configSha256", provenance.configSha256())
+        .put("rules", provenance.rules())
+        .put("komi", provenance.komi())
+        .put("pda", provenance.pda())
+        .put("wrn", provenance.wrn())
+        .put("humanSLProfile", provenance.humanSLProfile());
+  }
+
+  private static void restoreAnalysisProvenance(BoardData data) {
+    data.setPrimaryAnalysisProvenance(null);
+    data.setPrimaryOwnershipProvenance(null);
+    data.setSecondaryAnalysisProvenance(null);
+    data.setSecondaryOwnershipProvenance(null);
+    String property = data.getProperty("KGP");
+    if (property == null || property.length() > MAX_PROVENANCE_PROPERTY_LENGTH) return;
+    try {
+      String json = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(CodingErrorAction.REPORT)
+          .onUnmappableCharacter(CodingErrorAction.REPORT)
+          .decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(property))).toString();
+      JSONTokener tokener = new JSONTokener(json);
+      JSONObject metadata = new JSONObject(tokener);
+      if (tokener.nextClean() != 0) return;
+      requireProvenanceKeys(metadata, Set.of("app", "version", "primary", "secondary"));
+      if (!"KG-next".equals(metadata.opt("app"))
+          || !Integer.valueOf(1).equals(metadata.opt("version"))) return;
+      ProvenanceSlot primary = readProvenanceSlot(metadata, "primary");
+      ProvenanceSlot secondary = readProvenanceSlot(metadata, "secondary");
+      if (primary != null && primary.payloadSha256().equals(data.importedAnalysisDigest(false))) {
+        data.setPrimaryAnalysisProvenance(primary.analysis());
+        if (data.estimateArray != null && !data.estimateArray.isEmpty()) {
+          data.setPrimaryOwnershipProvenance(primary.ownership());
+        }
+      }
+      if (secondary != null && secondary.payloadSha256().equals(data.importedAnalysisDigest(true))) {
+        data.setSecondaryAnalysisProvenance(secondary.analysis());
+        if (data.estimateArray2 != null && !data.estimateArray2.isEmpty()) {
+          data.setSecondaryOwnershipProvenance(secondary.ownership());
+        }
+      }
+    } catch (IllegalArgumentException | JSONException | CharacterCodingException ignored) {
+      // Optional metadata must never prevent legacy analysis from loading. The raw property stays.
+    }
+  }
+
+  private static ProvenanceSlot readProvenanceSlot(JSONObject metadata, String key) {
+    if (!metadata.has(key) || metadata.isNull(key)) return null;
+    JSONObject slot = metadata.getJSONObject(key);
+    requireProvenanceKeys(slot, Set.of("payloadSha256", "analysis", "ownership"));
+    String digest = slot.getString("payloadSha256");
+    if (!digest.matches("[a-fA-F0-9]{64}")) throw new JSONException("Invalid payload digest");
+    return new ProvenanceSlot(digest.toLowerCase(Locale.ROOT),
+        readProvenance(slot, "analysis"), readProvenance(slot, "ownership"));
+  }
+
+  private static AnalysisProvenance readProvenance(JSONObject slot, String key) {
+    if (!slot.has(key) || slot.isNull(key)) return null;
+    JSONObject value = slot.getJSONObject(key);
+    requireProvenanceKeys(value, PROVENANCE_FIELDS);
+    AnalysisProvenance provenance = new AnalysisProvenance(
+        provenanceText(value, "engineName"), provenanceText(value, "engineVersion"),
+        provenanceText(value, "modelName"), provenanceText(value, "modelSha256"),
+        provenanceText(value, "configSha256"), provenanceText(value, "rules"),
+        provenanceNumber(value, "komi"), provenanceNumber(value, "pda"),
+        provenanceNumber(value, "wrn"), provenanceText(value, "humanSLProfile"));
+    JSONObject normalized = provenanceJson(provenance);
+    // Live collection drops invalid optional fields; import rejects a malformed source as a whole.
+    // This avoids showing a partially trusted source from an unsupported or corrupt schema.
+    for (String field : PROVENANCE_FIELDS) {
+      if (field.equals("komi") || field.equals("pda") || field.equals("wrn")) continue;
+      String original = provenanceText(value, field).strip();
+      if (field.endsWith("Sha256")) original = original.toLowerCase(Locale.ROOT);
+      if (!original.equals(normalized.getString(field))) {
+        throw new JSONException("Invalid provenance text");
+      }
+    }
+    return provenance;
+  }
+
+  private static String provenanceText(JSONObject value, String key) {
+    return !value.has(key) || value.isNull(key) ? "" : value.getString(key);
+  }
+
+  private static Double provenanceNumber(JSONObject value, String key) {
+    if (!value.has(key) || value.isNull(key)) return null;
+    Object raw = value.get(key);
+    if (!(raw instanceof Number number) || !Double.isFinite(number.doubleValue())) {
+      throw new JSONException("Invalid provenance number");
+    }
+    return number.doubleValue();
+  }
+
+  private static void requireProvenanceKeys(JSONObject value, Set<String> allowed) {
+    if (!allowed.containsAll(value.keySet())) throw new JSONException("Unknown provenance field");
+  }
+
+  private static String analysisPayloadDigest(String payload) {
+    try {
+      return HexFormat.of().formatHex(
+          MessageDigest.getInstance("SHA-256").digest(payload.getBytes(StandardCharsets.UTF_8)));
+    } catch (NoSuchAlgorithmException impossible) {
+      throw new IllegalStateException("SHA-256 is required by the Java runtime", impossible);
+    }
+  }
+
   public static boolean isListProperty(String key) {
     return asList(listProps).contains(key);
   }
@@ -3253,7 +3423,8 @@ public class SGFParser {
     }
     props.forEach(
         (key, value) -> {
-          if (!"CA".equals(key)) {
+          // KGP is emitted together with the exact LZ payload it describes.
+          if (!"CA".equals(key) && !"KGP".equals(key)) {
             sb.append(nodeString(key, value));
           }
         });
@@ -3440,6 +3611,10 @@ public class SGFParser {
     snapshotData.scoreMean = moveData.scoreMean;
     snapshotData.scoreStdev = moveData.scoreStdev;
     snapshotData.pda = moveData.pda;
+    snapshotData.setPrimaryAnalysisProvenance(moveData.primaryAnalysisProvenance());
+    snapshotData.setPrimaryOwnershipProvenance(moveData.primaryOwnershipProvenance());
+    snapshotData.setImportedAnalysisDigest(false, moveData.importedAnalysisDigest(false));
+    snapshotData.markPrimaryAnalysisRun(null);
     clearPrimaryAnalysisPayload(moveData);
   }
 
@@ -3462,6 +3637,9 @@ public class SGFParser {
     snapshotData.scoreMean2 = moveData.scoreMean2;
     snapshotData.scoreStdev2 = moveData.scoreStdev2;
     snapshotData.pda2 = moveData.pda2;
+    snapshotData.setSecondaryAnalysisProvenance(moveData.secondaryAnalysisProvenance());
+    snapshotData.setSecondaryOwnershipProvenance(moveData.secondaryOwnershipProvenance());
+    snapshotData.setImportedAnalysisDigest(true, moveData.importedAnalysisDigest(true));
     clearSecondaryAnalysisPayload(moveData);
   }
 
@@ -3496,6 +3674,10 @@ public class SGFParser {
     data.scoreMean = 0;
     data.scoreStdev = 0;
     data.pda = 0;
+    data.setPrimaryAnalysisProvenance(null);
+    data.setPrimaryOwnershipProvenance(null);
+    data.setImportedAnalysisDigest(false, null);
+    data.markPrimaryAnalysisRun(null);
   }
 
   private static void clearSecondaryAnalysisPayload(BoardData data) {
@@ -3512,6 +3694,9 @@ public class SGFParser {
     data.scoreMean2 = 0;
     data.scoreStdev2 = 0;
     data.pda2 = 0;
+    data.setSecondaryAnalysisProvenance(null);
+    data.setSecondaryOwnershipProvenance(null);
+    data.setImportedAnalysisDigest(true, null);
   }
 
   private static List<MoveData> copyMoveDataListAllowNull(List<MoveData> values) {
@@ -4791,7 +4976,8 @@ public class SGFParser {
   }
 
   private static boolean isAnalysisTag(String tag) {
-    return "LZ".equals(tag) || "LZOP".equals(tag) || "LZ2".equals(tag) || "LZOP2".equals(tag);
+    return "LZ".equals(tag) || "LZOP".equals(tag) || "LZ2".equals(tag) || "LZOP2".equals(tag)
+        || "KGP".equals(tag);
   }
 
   private static boolean isSecondaryEngineAnalysisTag(String tag) {
@@ -4808,9 +4994,15 @@ public class SGFParser {
 
   private static void applyAnalysisTagOnDetachedHistory(
       BoardData target, String tag, String tagContent) {
-    if (target == null || Utils.isBlank(tagContent)) {
+    if (target == null) {
       return;
     }
+    if ("KGP".equals(tag)) {
+      target.addProperty(tag, tagContent);
+      restoreAnalysisProvenance(target);
+      return;
+    }
+    if (Utils.isBlank(tagContent)) return;
     String[] lines = tagContent.split("\n", 2);
     String[] line1 = lines[0].trim().split("\\s+");
     if (line1.length < 3 || Utils.isBlank(line1[0])) {
@@ -4818,14 +5010,17 @@ public class SGFParser {
     }
     String line2 = lines.length > 1 ? lines[1] : "";
     boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
+    if (secondaryEngine) clearSecondaryAnalysisPayload(target);
+    else clearPrimaryAnalysisPayload(target);
     applyAnalysisHeader(target, line1, secondaryEngine);
     int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
-    if (numPlayouts <= 0 || Utils.isBlank(line2)) {
-      return;
+    if (numPlayouts > 0 && !Utils.isBlank(line2)) {
+      double stdev = extractAnalysisScoreStdev(line1);
+      ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
+      applyParsedAnalysisInfo(target, parsed, secondaryEngine);
     }
-    double stdev = extractAnalysisScoreStdev(line1);
-    ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
-    applyParsedAnalysisInfo(target, parsed, secondaryEngine);
+    target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
+    restoreAnalysisProvenance(target);
   }
 
   private static void applyAnalysisHeader(

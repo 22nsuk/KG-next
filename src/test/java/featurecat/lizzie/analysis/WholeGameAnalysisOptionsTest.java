@@ -49,6 +49,24 @@ class WholeGameAnalysisOptionsTest {
         WholeGameAnalysisOptions.fromStored(Integer.MAX_VALUE).deepVisits());
   }
 
+  @Test
+  void reevaluationIsAnExplicitChoiceAndStoredDepthKeepsSavedResultReuse() {
+    WholeGameAnalysisOptions reevaluation =
+        WholeGameAnalysisOptions.of(
+            3_000,
+            WholeGameAnalysisOptions.ExistingAnalysisPolicy.REEVALUATE_CURRENT_ENGINE);
+
+    assertTrue(reevaluation.reevaluateCurrentEngine());
+    assertEquals(3_000, reevaluation.requireValidVisits());
+    assertEquals(WholeGameAnalysisOptions.Preset.DEEP, reevaluation.preset());
+    assertFalse(WholeGameAnalysisOptions.of(3_000).reevaluateCurrentEngine());
+    assertFalse(WholeGameAnalysisOptions.fromStored(3_000).reevaluateCurrentEngine());
+    assertFalse(WholeGameAnalysisOptions.fromStored(0).reevaluateCurrentEngine());
+    assertEquals(
+        WholeGameAnalysisOptions.ExistingAnalysisPolicy.REUSE_SAVED,
+        WholeGameAnalysisOptions.fromStored(3_000).existingAnalysisPolicy());
+  }
+
   private static void assertPreset(int visits, WholeGameAnalysisOptions.Preset preset) {
     WholeGameAnalysisOptions options = WholeGameAnalysisOptions.of(visits);
 

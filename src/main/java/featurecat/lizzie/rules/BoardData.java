@@ -1,6 +1,7 @@
 package featurecat.lizzie.rules;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -41,6 +42,62 @@ public class BoardData {
   public int rootVisits2 = -1;
   private Object analysisSource;
   private Object analysisSource2;
+  private AnalysisProvenance primaryAnalysisProvenance;
+  private AnalysisProvenance primaryOwnershipProvenance;
+  private AnalysisProvenance secondaryAnalysisProvenance;
+  private AnalysisProvenance secondaryOwnershipProvenance;
+  // A run token grants reuse only within one explicit reassessment. Copies and SGFs never carry it.
+  private Object primaryAnalysisRun;
+  // Import-only digests use the original LZ text, before the loader limits suggestions or PVs.
+  private String importedPrimaryAnalysisDigest;
+  private String importedSecondaryAnalysisDigest;
+
+  public synchronized AnalysisProvenance primaryAnalysisProvenance() {
+    return primaryAnalysisProvenance;
+  }
+
+  public synchronized AnalysisProvenance primaryOwnershipProvenance() {
+    return primaryOwnershipProvenance;
+  }
+
+  public synchronized AnalysisProvenance secondaryAnalysisProvenance() {
+    return secondaryAnalysisProvenance;
+  }
+
+  public synchronized AnalysisProvenance secondaryOwnershipProvenance() {
+    return secondaryOwnershipProvenance;
+  }
+
+  public synchronized void setPrimaryAnalysisProvenance(AnalysisProvenance provenance) {
+    primaryAnalysisProvenance = provenance;
+  }
+
+  public synchronized void setPrimaryOwnershipProvenance(AnalysisProvenance provenance) {
+    primaryOwnershipProvenance = provenance;
+  }
+
+  public synchronized void setSecondaryAnalysisProvenance(AnalysisProvenance provenance) {
+    secondaryAnalysisProvenance = provenance;
+  }
+
+  public synchronized void setSecondaryOwnershipProvenance(AnalysisProvenance provenance) {
+    secondaryOwnershipProvenance = provenance;
+  }
+
+  String importedAnalysisDigest(boolean secondary) {
+    return secondary ? importedSecondaryAnalysisDigest : importedPrimaryAnalysisDigest;
+  }
+
+  void setImportedAnalysisDigest(boolean secondary, String digest) {
+    if (secondary) importedSecondaryAnalysisDigest = digest;
+    else importedPrimaryAnalysisDigest = digest;
+  }
+
+  private void discardImportedAnalysisMetadata(boolean secondary) {
+    setImportedAnalysisDigest(secondary, null);
+    // An opaque future schema cannot safely be retained after replacing the payload it described.
+    properties.remove("KGP");
+  }
 
   public enum AnalysisAdoption { REJECTED, OWNERSHIP_ONLY, FULL }
 
@@ -70,14 +127,24 @@ public class BoardData {
       List<Double> oldOwnership = secondary ? estimateArray2 : estimateArray;
       if (ownership != null && !ownership.isEmpty()
           && (!comparable || comparisonVisits < cached || oldOwnership == null)) {
-        if (secondary) estimateArray2 = compactEstimateArray(ownership);
-        else estimateArray = compactEstimateArray(ownership);
+        AnalysisProvenance provenance = engine.captureAnalysisProvenance();
+        if (secondary) {
+          estimateArray2 = compactEstimateArray(ownership);
+          secondaryOwnershipProvenance = provenance;
+        } else {
+          estimateArray = compactEstimateArray(ownership);
+          primaryOwnershipProvenance = provenance;
+        }
+        discardImportedAnalysisMetadata(secondary);
         return AnalysisAdoption.OWNERSHIP_ONLY;
       }
       return AnalysisAdoption.REJECTED;
     }
     List<Double> retainedOwnership = ownership;
-    if (sameSource && !invalidated && (ownership == null || ownership.isEmpty())) {
+    boolean retainsOwnership = sameSource && !invalidated && (ownership == null || ownership.isEmpty());
+    AnalysisProvenance retainedOwnershipProvenance =
+        secondary ? secondaryOwnershipProvenance : primaryOwnershipProvenance;
+    if (retainsOwnership) {
       retainedOwnership = secondary ? estimateArray2 : estimateArray;
     }
     moves.sort(Comparator.comparingInt(move -> move.order));
@@ -87,12 +154,14 @@ public class BoardData {
       rootVisits2 = exactRootVisits;
       analysisSource2 = source;
       isChanged2 = false;
+      if (retainsOwnership) secondaryOwnershipProvenance = retainedOwnershipProvenance;
     } else {
       tryToSetBestMovesFromEngine(
           moves, engineName, engine, totalVisits, retainedOwnership, true);
       rootVisits = exactRootVisits;
       analysisSource = source;
       isChanged = false;
+      if (retainsOwnership) primaryOwnershipProvenance = retainedOwnershipProvenance;
     }
     return AnalysisAdoption.FULL;
   }
@@ -500,6 +569,9 @@ public class BoardData {
               "ACCEPT",
               "OWNERSHIP_BACKFILL");
           this.estimateArray = compactEstimateArray(estimateArray);
+          primaryOwnershipProvenance =
+              sourceEngine == null ? null : sourceEngine.captureAnalysisProvenance();
+          discardImportedAnalysisMetadata(false);
           return true;
         }
         if (estimateArray == null || estimateArray.isEmpty() || this.estimateArray != null) {
@@ -566,6 +638,12 @@ public class BoardData {
     tryToLimitMoves(moves, bestMoves, true);
     bestMoves = moves;
     isChanged = false;
+    primaryAnalysisProvenance =
+        sourceEngine == null ? null : sourceEngine.captureAnalysisProvenance();
+    primaryOwnershipProvenance =
+        this.estimateArray == null || this.estimateArray.isEmpty() ? null : primaryAnalysisProvenance;
+    primaryAnalysisRun = null;
+    discardImportedAnalysisMetadata(false);
     return true;
   }
 
@@ -631,9 +709,9 @@ public class BoardData {
           n--;
         }
       }
-      if (isMain) bestMovesOutOfRange = outOfRangeMoves;
-      else bestMoves2OutOfRange = outOfRangeMoves;
     }
+    if (isMain) bestMovesOutOfRange = outOfRangeMoves;
+    else bestMoves2OutOfRange = outOfRangeMoves;
   }
 
   public void tryToSetBestMoves2(
@@ -713,6 +791,9 @@ public class BoardData {
               "ACCEPT",
               "OWNERSHIP_BACKFILL");
           this.estimateArray2 = compactEstimateArray(estimateArray);
+          secondaryOwnershipProvenance =
+              metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
+          discardImportedAnalysisMetadata(true);
           return;
         }
         if (estimateArray == null || estimateArray.isEmpty() || this.estimateArray2 != null) {
@@ -772,6 +853,11 @@ public class BoardData {
         });
     tryToLimitMoves(moves, bestMoves2, false);
     bestMoves2 = moves;
+    secondaryAnalysisProvenance =
+        metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
+    secondaryOwnershipProvenance =
+        this.estimateArray2 == null || this.estimateArray2.isEmpty() ? null : secondaryAnalysisProvenance;
+    discardImportedAnalysisMetadata(true);
   }
 
   private void traceAnalysisCacheDecision(
@@ -1030,8 +1116,7 @@ public class BoardData {
   }
 
   public void tryToClearBestMoves() {
-    clearPrimaryAnalysisPayloadState();
-    clearSecondaryAnalysisPayloadState();
+    clearAnalysisPayloadState();
   }
 
   /**
@@ -1060,7 +1145,38 @@ public class BoardData {
   /** Cached display payloads only satisfy current work while their analysis remains valid. */
   public synchronized boolean hasReusablePrimaryAnalysis(
       int targetVisits, boolean ownershipRequested) {
-    return !isChanged && hasCompletePrimaryAnalysis(targetVisits, ownershipRequested);
+    return hasReusablePrimaryAnalysis(targetVisits, ownershipRequested, null);
+  }
+
+  public synchronized boolean hasReusablePrimaryAnalysis(
+      int targetVisits, boolean ownershipRequested, Object requiredRunToken) {
+    return !isChanged
+        && (requiredRunToken == null || primaryAnalysisRun == requiredRunToken)
+        && hasCompletePrimaryAnalysis(targetVisits, ownershipRequested);
+  }
+
+  public synchronized void markPrimaryAnalysisRun(Object runToken) {
+    primaryAnalysisRun = runToken;
+  }
+
+  /** The information-clear action keeps ownership available while removing the evaluation. */
+  synchronized void clearPrimaryEvaluationState() {
+    if (getPlayouts() > 0) bestMoves = new ArrayList<>();
+    winrate = 50;
+    setPlayouts(0);
+    scoreMean = 0;
+    primaryAnalysisProvenance = null;
+    primaryAnalysisRun = null;
+    discardImportedAnalysisMetadata(false);
+  }
+
+  synchronized void clearSecondaryEvaluationState() {
+    if (getPlayouts2() > 0) bestMoves2 = new ArrayList<>();
+    winrate2 = 50;
+    setPlayouts2(0);
+    scoreMean2 = 0;
+    secondaryAnalysisProvenance = null;
+    discardImportedAnalysisMetadata(true);
   }
 
   /** Keeps the last result visible while invalidating both reuse and already dispatched work. */
@@ -1079,6 +1195,7 @@ public class BoardData {
   public void clearAnalysisPayloadState() {
     clearPrimaryAnalysisPayloadState();
     clearSecondaryAnalysisPayloadState();
+    properties.remove("KGP");
   }
 
   private void clearPrimaryAnalysisPayloadState() {
@@ -1097,6 +1214,10 @@ public class BoardData {
     scoreMean = 0;
     scoreStdev = 0;
     pda = 0;
+    primaryAnalysisProvenance = null;
+    primaryOwnershipProvenance = null;
+    primaryAnalysisRun = null;
+    importedPrimaryAnalysisDigest = null;
   }
 
   private void clearSecondaryAnalysisPayloadState() {
@@ -1114,6 +1235,9 @@ public class BoardData {
     scoreMean2 = 0;
     scoreStdev2 = 0;
     pda2 = 0;
+    secondaryAnalysisProvenance = null;
+    secondaryOwnershipProvenance = null;
+    importedSecondaryAnalysisDigest = null;
   }
 
   private static void validateNodeKind(BoardNodeKind nodeKind, Optional<int[]> lastMove) {
@@ -1151,6 +1275,15 @@ public class BoardData {
     // Copies preserve saved analysis, not permission to refresh it from a live stream.
     this.analysisSource = null;
     this.analysisSource2 = null;
+    this.primaryAnalysisRun = null;
+    this.primaryAnalysisProvenance = data.primaryAnalysisProvenance;
+    this.primaryOwnershipProvenance = data.primaryOwnershipProvenance;
+    this.secondaryAnalysisProvenance = data.secondaryAnalysisProvenance;
+    this.secondaryOwnershipProvenance = data.secondaryOwnershipProvenance;
+    this.importedPrimaryAnalysisDigest = data.importedPrimaryAnalysisDigest;
+    this.importedSecondaryAnalysisDigest = data.importedSecondaryAnalysisDigest;
+    if (data.properties.containsKey("KGP")) properties.put("KGP", data.properties.get("KGP"));
+    else properties.remove("KGP");
     this.scoreMean = data.scoreMean;
     this.scoreMean2 = data.scoreMean2;
     this.scoreStdev = data.scoreStdev;
