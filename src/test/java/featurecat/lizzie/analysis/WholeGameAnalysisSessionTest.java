@@ -26,10 +26,12 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class WholeGameAnalysisSessionTest {
   private static final int BOARD_SIZE = 3;
@@ -443,6 +445,301 @@ class WholeGameAnalysisSessionTest {
       assertEquals(WholeGameAnalysisSession.State.COMPLETE, fixture.session.state());
       assertEquals(1, fixture.frame.finishedCount);
       assertTrue(engine.quitCalled.await(2, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
+  void reevaluationRunsBothStagesOnceDespiteHigherVisitSavedResults() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      BoardHistoryList history = analyzedHistory();
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      engine.shared = true;
+      engine.completeByInstallingAnalysis = true;
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(history, () -> engine, reevaluationOptions());
+      fixture.session.publishReady();
+      drainEdt();
+      assertEquals(0, lastSnapshot(fixture).completedPositions);
+
+      fixture.session.start();
+
+      waitUntil(
+          () -> fixture.session.state() == WholeGameAnalysisSession.State.COMPLETE,
+          "reevaluation should finish after replacing both stages");
+      waitForFinished(fixture);
+      assertEquals(List.of(32, 500), engine.requestedTargets);
+      assertEquals(2, engine.requestCount);
+      assertSame(engine.requestedTokens.get(0), engine.requestedTokens.get(1));
+      for (BoardHistoryNode node :
+          List.of(history.getStart(), history.getStart().next().orElseThrow())) {
+        assertEquals(500, node.getData().getPlayouts());
+        assertTrue(
+            node.getData().hasReusablePrimaryAnalysis(500, false, engine.requestedRunToken));
+      }
+      assertEquals(100, lastSnapshot(fixture).overallPercent);
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = ForegroundRestoreResult.class,
+      names = {"SUCCEEDED", "FAILED"})
+  void reevaluationCompletesOnlyAfterTheForegroundRestoreResult(
+      ForegroundRestoreResult restoreResult) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      engine.shared = true;
+      engine.deferRestoreCompletion = true;
+      engine.completeByInstallingAnalysis = true;
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(analyzedHistory(), () -> engine, reevaluationOptions());
+
+      fixture.session.start();
+      assertTrue(engine.quitCalled.await(2, TimeUnit.SECONDS));
+      drainEdt();
+
+      assertTrue(fixture.session.isActive());
+      assertFalse(fixture.session.isTerminal());
+      assertEquals(0, fixture.frame.finishedCount);
+      assertTrue(lastSnapshot(fixture).overallPercent < 100);
+      engine.completeRestore(restoreResult);
+      waitForFinished(fixture);
+
+      assertEquals(
+          restoreResult == ForegroundRestoreResult.SUCCEEDED
+              ? WholeGameAnalysisSession.State.COMPLETE
+              : WholeGameAnalysisSession.State.FAILED,
+          fixture.session.state());
+      assertEquals(
+          restoreResult == ForegroundRestoreResult.SUCCEEDED
+              ? "WholeGameAnalysis.complete"
+              : "WholeGameAnalysis.error.request",
+          lastSnapshot(fixture).detailKey);
+      assertEquals(1, engine.quitCount);
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = ForegroundRestoreResult.class,
+      names = {"SUCCEEDED", "FAILED"})
+  void cancellationDuringPauseWaitsForTheSameForegroundRestore(
+      ForegroundRestoreResult restoreResult) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      engine.shared = true;
+      engine.deferRestoreCompletion = true;
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(analyzedHistory(), () -> engine, reevaluationOptions());
+
+      fixture.session.start();
+      waitForRequest(engine);
+      fixture.session.pause();
+      assertTrue(engine.quitCalled.await(2, TimeUnit.SECONDS));
+      fixture.session.cancel();
+      drainEdt();
+
+      assertTrue(fixture.session.isActive());
+      assertFalse(fixture.session.isTerminal());
+      assertEquals(0, fixture.frame.finishedCount);
+      assertEquals(1, engine.quitCount);
+      engine.completeRestore(restoreResult);
+      waitForFinished(fixture);
+
+      assertEquals(
+          restoreResult == ForegroundRestoreResult.SUCCEEDED
+              ? WholeGameAnalysisSession.State.CANCELLED
+              : WholeGameAnalysisSession.State.FAILED,
+          fixture.session.state());
+      assertFalse(fixture.session.isActive());
+      assertEquals(1, engine.quitCount);
+      assertTrue(
+          Lizzie.board.getHistory().getStart().getData().hasReusablePrimaryAnalysis(500, false));
+    }
+  }
+
+  @Test
+  void cancellingReevaluationPreservesSavedResultsAndTheirReuseEligibility() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      BoardHistoryList history = analyzedHistory();
+      BoardData saved = history.getStart().getData();
+      List<MoveData> savedMoves = saved.bestMoves;
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      engine.shared = true;
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(history, () -> engine, reevaluationOptions());
+
+      fixture.session.start();
+      waitForRequest(engine);
+      fixture.session.cancel();
+      waitForFinished(fixture);
+
+      assertEquals(WholeGameAnalysisSession.State.CANCELLED, fixture.session.state());
+      assertSame(savedMoves, saved.bestMoves);
+      assertEquals(700, saved.getPlayouts());
+      assertFalse(saved.isChanged);
+      assertTrue(saved.hasReusablePrimaryAnalysis(500, false));
+      assertFalse(saved.hasReusablePrimaryAnalysis(500, false, engine.requestedRunToken));
+    }
+  }
+
+  @Test
+  void reevaluationResumeKeepsTheRunAndRequestsOnlyItsUnfinishedPositions() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      BoardHistoryList history = analyzedHistory();
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode first = root.next().orElseThrow();
+      SessionAnalysisEngine original = SessionFixture.newEngine();
+      original.shared = true;
+      original.completeBaselineOnly = true;
+      SessionAnalysisEngine resumed = SessionFixture.newEngine();
+      resumed.shared = true;
+      AtomicInteger creations = new AtomicInteger();
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(
+              history,
+              () -> creations.getAndIncrement() == 0 ? original : resumed,
+              reevaluationOptions());
+
+      fixture.session.start();
+      waitUntil(() -> original.requestedVisits == 500, "deep stage should dispatch");
+      Object run = original.requestedRunToken;
+      installCompleteAnalysis(root.getData(), 500);
+      root.getData().markPrimaryAnalysisRun(run);
+      fixture.session.pause();
+      waitForState(fixture.session, WholeGameAnalysisSession.State.PAUSED);
+      drainEdt();
+      assertEquals(1, lastSnapshot(fixture).completedPositions);
+
+      fixture.session.resume();
+      waitForRequest(resumed);
+      try {
+        assertEquals(List.of(first), resumed.requestedNodes);
+        assertEquals(500, resumed.requestedVisits);
+        assertSame(run, resumed.requestedRunToken);
+        assertEquals(2, creations.get());
+      } finally {
+        fixture.session.cancel();
+        waitForFinished(fixture);
+      }
+    }
+  }
+
+  @Test
+  void reevaluationWaitsForTheCurrentLeaseEvenWhenDedicatedAnalysisIsConfigured() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      ReassessmentForeground foreground = reassessmentForeground();
+      foreground.handoffPending = true;
+      Lizzie.config.analysisReuseCurrentEngine = false;
+      SessionAnalysisEngine engine = SessionFixture.newEngine();
+      engine.shared = true;
+      AtomicInteger creations = new AtomicInteger();
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(
+              analyzedHistory(),
+              () -> {
+                creations.incrementAndGet();
+                return engine;
+              },
+              reevaluationOptions());
+
+      try {
+        fixture.session.start();
+        assertTrue(foreground.previewed.await(2, TimeUnit.SECONDS));
+        assertEquals(0, creations.get());
+        foreground.handoffPending = false;
+        waitForRequest(engine);
+        assertEquals(1, creations.get());
+        assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+      } finally {
+        foreground.handoffPending = false;
+        fixture.session.cancel();
+        waitForFinished(fixture);
+      }
+    }
+  }
+
+  @Test
+  void reevaluationWithoutACurrentEngineFailsBeforeLaunchingAnyWorker() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      AtomicInteger creations = new AtomicInteger();
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(
+              analyzedHistory(),
+              () -> {
+                creations.incrementAndGet();
+                return SessionFixture.newEngine();
+              },
+              reevaluationOptions());
+
+      fixture.session.start();
+      waitForFinished(fixture);
+
+      assertEquals(WholeGameAnalysisSession.State.FAILED, fixture.session.state());
+      assertEquals("WholeGameAnalysis.error.engine", lastSnapshot(fixture).detailKey);
+      assertEquals(0, creations.get());
+      assertEquals(0, fixture.frame.attachCount);
+      assertTrue(
+          Lizzie.board.getHistory().getStart().getData().hasReusablePrimaryAnalysis(500, false));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"engine", "incarnation", "command", "rules", "pda", "wrn", "komi", "dynamicPda"})
+  void reevaluationCannotResumeWithChangedEngineConditions(String change) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      ReassessmentForeground foreground = reassessmentForeground();
+      AtomicInteger creations = new AtomicInteger();
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(
+              analyzedHistory(),
+              () -> {
+                creations.incrementAndGet();
+                return SessionFixture.newEngine();
+              },
+              reevaluationOptions());
+      assertTrue(invokeCurrentGameMatches(fixture.session));
+      setField(fixture.session, "state", WholeGameAnalysisSession.State.PAUSED);
+      setField(fixture.session, "resumeStage", WholeGameAnalysisSession.State.DEEP);
+      switch (change) {
+        case "engine" -> reassessmentForeground();
+        case "incarnation" -> foreground.incarnation = new Object();
+        case "command" -> foreground.engineCommand = "different-engine";
+        case "rules" -> foreground.recentRulesLine = "{\"scoringRule\":\"TERRITORY\"}";
+        case "pda" -> foreground.pda += 0.5;
+        case "wrn" -> foreground.wrn += 0.5;
+        case "komi" -> foreground.komi += 0.5;
+        case "dynamicPda" -> foreground.isDymPda = !foreground.isDymPda;
+        default -> throw new AssertionError(change);
+      }
+
+      fixture.session.resume();
+      waitForFinished(fixture);
+
+      assertEquals(WholeGameAnalysisSession.State.FAILED, fixture.session.state());
+      assertEquals("WholeGameAnalysis.error.gameChanged", lastSnapshot(fixture).detailKey);
+      assertEquals(0, creations.get());
+    }
+  }
+
+  @Test
+  void reevaluationKeepsItsCurrentRulesWhenDedicatedAnalysisRulesChange() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      reassessmentForeground();
+      SessionFixture fixture =
+          SessionFixture.createWithHistory(
+              analyzedHistory(), SessionFixture::newEngine, reevaluationOptions());
+
+      Lizzie.config.analysisUseCurrentRules = false;
+      Lizzie.config.analysisSpecificRules = "{\"scoringRule\":\"TERRITORY\"}";
+
+      assertTrue(invokeCurrentGameMatches(fixture.session));
     }
   }
 
@@ -923,6 +1220,31 @@ class WholeGameAnalysisSessionTest {
     data.bestMoves = List.of(move);
   }
 
+  private static WholeGameAnalysisOptions reevaluationOptions() {
+    return WholeGameAnalysisOptions.of(
+        500, WholeGameAnalysisOptions.ExistingAnalysisPolicy.REEVALUATE_CURRENT_ENGINE);
+  }
+
+  private static BoardHistoryList analyzedHistory() {
+    BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+    BoardHistoryNode root = history.getStart();
+    BoardHistoryNode first = root.add(new BoardHistoryNode(passData(Stone.BLACK, 1)));
+    installCompleteAnalysis(root.getData(), 700);
+    installCompleteAnalysis(first.getData(), 700);
+    return history;
+  }
+
+  private static ReassessmentForeground reassessmentForeground() throws Exception {
+    ReassessmentForeground foreground = allocate(ReassessmentForeground.class);
+    foreground.incarnation = new Object();
+    foreground.previewed = new CountDownLatch(1);
+    foreground.engineCommand = "katago gtp -model current.bin.gz";
+    foreground.recentRulesLine = "{\"scoringRule\":\"AREA\"}";
+    foreground.komi = 7.5f;
+    Lizzie.leelaz = foreground;
+    return foreground;
+  }
+
   private static void drainEdt() throws Exception {
     SwingUtilities.invokeAndWait(() -> {});
   }
@@ -962,12 +1284,20 @@ class WholeGameAnalysisSessionTest {
     private static SessionFixture createWithHistory(
         BoardHistoryList history, WholeGameAnalysisSession.EngineFactory factory)
         throws Exception {
+      return createWithHistory(history, factory, WholeGameAnalysisOptions.of(500));
+    }
+
+    private static SessionFixture createWithHistory(
+        BoardHistoryList history,
+        WholeGameAnalysisSession.EngineFactory factory,
+        WholeGameAnalysisOptions options)
+        throws Exception {
       Board board = allocate(Board.class);
       board.setHistory(history);
       Lizzie.board = board;
       TrackingFrame frame = allocate(TrackingFrame.class);
       Lizzie.frame = frame;
-      WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(history.getStart(), 32, 500);
+      WholeGameAnalysisPlan plan = WholeGameAnalysisPlan.create(history.getStart(), 32, options);
       SessionAnalysisEngine engine = newEngine();
       List<WholeGameAnalysisSession.Snapshot> snapshots = new CopyOnWriteArrayList<>();
       WholeGameAnalysisSession session =
@@ -997,9 +1327,16 @@ class WholeGameAnalysisSessionTest {
     private volatile List<BoardHistoryNode> requestedNodes;
     private volatile int requestedVisits;
     private boolean completeByInstallingAnalysis;
+    private boolean completeBaselineOnly;
+    private List<Integer> requestedTargets;
+    private List<Object> requestedTokens;
+    private volatile Object requestedRunToken;
     private Integer requestResultOverride;
     private boolean loaded = true;
     private boolean shared;
+    private boolean deferRestoreCompletion;
+    private Consumer<ForegroundRestoreResult> restoreCompletion;
+    private int quitCount;
 
     private SessionAnalysisEngine() throws IOException {
       super(true);
@@ -1016,8 +1353,20 @@ class WholeGameAnalysisSessionTest {
     }
 
     @Override
-    public void normalQuit() {
+    public void normalQuitWithRestoreResult(Consumer<ForegroundRestoreResult> finished) {
+      quitCount++;
+      restoreCompletion = finished;
       quitCalled.countDown();
+      if (!deferRestoreCompletion) {
+        completeRestore(
+            shared ? ForegroundRestoreResult.SUCCEEDED : ForegroundRestoreResult.NOT_REQUIRED);
+      }
+    }
+
+    private void completeRestore(ForegroundRestoreResult result) {
+      Consumer<ForegroundRestoreResult> completion = restoreCompletion;
+      restoreCompletion = null;
+      if (completion != null) completion.accept(result);
     }
 
     @Override
@@ -1033,21 +1382,65 @@ class WholeGameAnalysisSessionTest {
     @Override
     public int startWholeGameRequest(
         List<BoardHistoryNode> requestedNodes, int targetVisits, boolean includeOwnership) {
+      return startWholeGameRequest(requestedNodes, targetVisits, includeOwnership, null);
+    }
+
+    @Override
+    public int startWholeGameRequest(
+        List<BoardHistoryNode> requestedNodes,
+        int targetVisits,
+        boolean includeOwnership,
+        Object runToken) {
       requestCount++;
+      if (requestedTargets == null) requestedTargets = new ArrayList<>();
+      if (requestedTokens == null) requestedTokens = new ArrayList<>();
+      requestedTargets.add(targetVisits);
+      requestedTokens.add(runToken);
+      requestedRunToken = runToken;
       this.requestedNodes = List.copyOf(requestedNodes);
       requestedVisits = targetVisits;
-      if (completeByInstallingAnalysis) {
+      boolean complete = completeByInstallingAnalysis || (completeBaselineOnly && targetVisits == 32);
+      if (complete) {
         for (BoardHistoryNode node : requestedNodes) {
           installCompleteAnalysis(node.getData(), targetVisits);
+          node.getData().markPrimaryAnalysisRun(runToken);
         }
       }
       if (requestResultOverride != null) {
         return requestResultOverride;
       }
-      if (completeByInstallingAnalysis) {
+      if (complete) {
         return 0;
       }
       return requestedNodes.size();
+    }
+  }
+
+  private static final class ReassessmentForeground extends Leelaz {
+    private Object incarnation;
+    private volatile boolean handoffPending;
+    private CountDownLatch previewed;
+
+    private ReassessmentForeground() throws IOException {
+      super("");
+    }
+
+    @Override
+    public Object engineIncarnationToken() {
+      return incarnation;
+    }
+
+    @Override
+    public boolean hasExclusiveGtpWorkInProgress() {
+      return handoffPending;
+    }
+
+    @Override
+    public ExclusiveGtpLeaseAvailability previewForegroundAnalysisLeaseAvailability() {
+      previewed.countDown();
+      return handoffPending
+          ? ExclusiveGtpLeaseAvailability.EXISTING_LEASE
+          : ExclusiveGtpLeaseAvailability.AVAILABLE;
     }
   }
 

@@ -531,6 +531,53 @@ class AnalysisEngineRequestTest {
   }
 
   @Test
+  void explicitReevaluationUsesTheSelectedCurrentEngineWithoutChangingSavedSettings()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Leelaz foreground = reusableForegroundEngine(true);
+      Lizzie.leelaz = foreground;
+      Lizzie.config.analysisReuseCurrentEngine = false;
+      Lizzie.config.analysisEngineCommand = "a-separate-engine analysis -model separate.bin.gz";
+      Lizzie.config.analysisUseCurrentRules = false;
+      Lizzie.config.analysisSpecificRules = "{\"scoringRule\":\"TERRITORY\"}";
+
+      AnalysisEngine engine = AnalysisEngine.createCurrentEngineWholeGame(500, foreground);
+
+      assertTrue(engine.isLoaded());
+      assertTrue(engine.usesSharedForegroundEngine());
+      assertSame(foreground, getField(AnalysisEngine.class, engine, "sharedForegroundEngine"));
+      assertNull(engine.process);
+      assertFalse(Lizzie.config.analysisReuseCurrentEngine);
+      assertEquals(
+          "a-separate-engine analysis -model separate.bin.gz", Lizzie.config.analysisEngineCommand);
+      assertEquals("{\"scoringRule\":\"TERRITORY\"}", Lizzie.config.analysisSpecificRules);
+      engine.normalQuit();
+    }
+  }
+
+  @Test
+  void explicitReevaluationDoesNotFallbackWhenTheSelectedEngineIsMissingOrReplaced()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      Leelaz selected = reusableForegroundEngine(true);
+      Leelaz replacement = reusableForegroundEngine(true);
+      Lizzie.leelaz = replacement;
+      Lizzie.config.analysisEngineCommand = "never-launch-a-dedicated-fallback";
+      for (Leelaz expected : new Leelaz[] {null, selected}) {
+        AnalysisEngine engine = AnalysisEngine.createCurrentEngineWholeGame(500, expected);
+        assertFalse(engine.isLoaded());
+        assertNull(engine.process);
+        assertEquals(
+            -1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, new Object()));
+        assertFalse(replacement.hasExclusiveGtpLease());
+        engine.normalQuit();
+      }
+    }
+  }
+
+  @Test
   void automaticQuickAnalysisRecoversMissingLocalExecutableWithoutChangingSettings(
       @TempDir Path folder) throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
@@ -1511,6 +1558,122 @@ class AnalysisEngineRequestTest {
   }
 
   @Test
+  void currentEngineReevaluationKeepsOneLeaseAcrossStagesAndRestoresOnSessionClose()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 900, true);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      DeferredRestoreLeelaz foreground =
+          reusableForegroundEngine(new DeferredRestoreLeelaz(), true);
+      ByteArrayOutputStream output = installLeelazOutput(foreground);
+      Lizzie.leelaz = foreground;
+      Lizzie.config.analysisReuseCurrentEngine = false;
+      Lizzie.config.analysisUseCurrentRules = false;
+      Lizzie.config.analysisSpecificRules = "{\"scoringRule\":\"TERRITORY\"}";
+      AnalysisEngine engine = AnalysisEngine.createCurrentEngineWholeGame(500, foreground);
+      Object run = new Object();
+      AtomicInteger completions = new AtomicInteger();
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      engine.setKeepAliveAfterCurrentRequest(true);
+      String actualRules =
+          "{\"koRule\":\"POSITIONAL\",\"scoringRule\":\"AREA\",\"taxRule\":\"NONE\"}";
+      try {
+        assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 32, false, run));
+        int leaseStopId = getExclusiveStopCommandId(foreground);
+        assertTrue(dispatchExclusiveLine(foreground, "=" + leaseStopId));
+        assertTrue(dispatchExclusiveLine(foreground, ""));
+        int rulesId = (int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedRulesCommandId");
+        assertTrue(rulesId > 0);
+        assertTrue(dispatchExclusiveLine(foreground, "=" + rulesId + " " + actualRules));
+        acknowledgeSharedSetup(engine, foreground);
+        completeSharedSearch(engine, foreground, 32, 32);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+        assertEquals(1, completions.get());
+        assertTrue(data.hasReusablePrimaryAnalysis(32, false, run));
+        assertTrue(foreground.hasExclusiveGtpLease());
+        assertNull(foreground.afterRestore, "ordinary pondering must not resume between stages");
+        assertEquals(actualRules, data.primaryAnalysisProvenance().rules());
+        assertNull(data.estimateArray);
+        assertFalse(output.toString(StandardCharsets.UTF_8).contains("TERRITORY"));
+
+        engine.setCompletionCallback(restore -> completions.incrementAndGet());
+        engine.setKeepAliveAfterCurrentRequest(true);
+        assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, run));
+        assertEquals(
+            0, getField(AnalysisEngine.class, engine, "remoteGtpExpectedRulesCommandId"));
+        acknowledgeSharedSetup(engine, foreground);
+        completeSharedSearch(engine, foreground, 120, 500);
+        javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+        assertEquals(2, completions.get());
+        assertTrue(data.hasReusablePrimaryAnalysis(500, false, run));
+        assertEquals(500, data.rootVisits);
+        assertEquals(actualRules, data.primaryAnalysisProvenance().rules());
+        assertEquals(1, output.toString(StandardCharsets.UTF_8).split("kata-get-rules", -1).length - 1);
+        assertNull(foreground.afterRestore);
+        AtomicInteger handbacks = new AtomicInteger();
+        engine.normalQuitWithRestoreResult(
+            result -> {
+              assertEquals(ForegroundRestoreResult.SUCCEEDED, result);
+              handbacks.incrementAndGet();
+            });
+        assertNotNull(foreground.afterRestore);
+        assertEquals(0, handbacks.get());
+        foreground.completeRestore();
+        assertEquals(1, handbacks.get());
+        assertFalse(engine.hasRequestLifecycleInProgress());
+      } finally {
+        engine.shutdown();
+      }
+    }
+  }
+
+  @Test
+  void currentEngineConditionChangeRejectsAReevaluationResponseWithoutChangingSavedSource()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 900, true);
+      AnalysisProvenance saved = savedProvenance("saved engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      DeferredRestoreLeelaz foreground =
+          reusableForegroundEngine(new DeferredRestoreLeelaz(), true);
+      Lizzie.leelaz = foreground;
+      AnalysisEngine engine = AnalysisEngine.createCurrentEngineWholeGame(500, foreground);
+      Object run = new Object();
+      AtomicInteger failures = new AtomicInteger();
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      try {
+        assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, run));
+        int leaseStopId = getExclusiveStopCommandId(foreground);
+        dispatchExclusiveLine(foreground, "=" + leaseStopId);
+        dispatchExclusiveLine(foreground, "");
+        int rulesId = (int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedRulesCommandId");
+        dispatchExclusiveLine(foreground, "=" + rulesId + " {\"scoringRule\":\"AREA\"}");
+        acknowledgeSharedSetup(engine, foreground);
+        foreground.wrn = 0.8;
+
+        completeSharedSearch(engine, foreground, 500, 500);
+
+        assertEquals(900, data.getPlayouts());
+        assertSame(saved, data.primaryAnalysisProvenance());
+        assertFalse(data.hasReusablePrimaryAnalysis(500, false, run));
+        assertNotNull(foreground.afterRestore);
+        foreground.completeRestore();
+        javax.swing.SwingUtilities.invokeAndWait(() -> {});
+        assertEquals(1, failures.get());
+      } finally {
+        engine.shutdown();
+      }
+    }
+  }
+
+  @Test
   void sendRequestExpressesSnapshotRootPositionWithInitialStonesAndPlayer() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history =
@@ -1829,6 +1992,179 @@ class AnalysisEngineRequestTest {
 
       assertEquals(0, requested);
       assertEquals(0, engine.requestCount());
+    }
+  }
+
+  @Test
+  void reevaluationReplacesDeeperSavedResultsAndCompletesOnlyForItsOwnRun() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      AnalysisProvenance saved = savedProvenance("saved engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      data.setPrimaryOwnershipProvenance(saved);
+      List<MoveData> savedMoves = data.bestMoves;
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      Object run = new Object();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+
+      assertEquals(0, engine.startWholeGameRequest(List.of(root), 500, true));
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 32, false, run));
+      assertSame(savedMoves, data.bestMoves);
+      assertSame(saved, data.primaryAnalysisProvenance());
+      assertTrue(data.hasReusablePrimaryAnalysis(500, true));
+      assertFalse(data.isChanged);
+
+      engine.parseResult(analysisResult(1, 32, 65.0));
+
+      assertEquals(32, data.getPlayouts());
+      assertTrue(data.hasReusablePrimaryAnalysis(32, false, run));
+      assertFalse(data.hasReusablePrimaryAnalysis(500, false, run));
+      assertNull(data.estimateArray, "reevaluation must not borrow saved ownership from another run");
+      assertNull(data.primaryOwnershipProvenance());
+      assertNotNull(data.primaryAnalysisProvenance());
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, false, run));
+
+      engine.parseResult(analysisResultWithRootVisits(2, 120, 500, 70.0));
+
+      assertEquals(500, data.getPlayouts());
+      assertEquals(500, data.rootVisits);
+      assertTrue(data.hasReusablePrimaryAnalysis(500, false, run));
+      assertEquals(0, engine.startWholeGameRequest(List.of(root), 500, false, run));
+      assertEquals(1, engine.startWholeGameRequest(List.of(root), 500, false, new Object()));
+    }
+  }
+
+  @Test
+  void cancellingReevaluationBeforeAResultPreservesReusableSavedDataAndItsSource() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      AnalysisProvenance saved = savedProvenance("saved engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      data.setPrimaryOwnershipProvenance(saved);
+      List<MoveData> savedMoves = data.bestMoves;
+      List<Double> savedOwnership = data.estimateArray;
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      Object run = new Object();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, run));
+      engine.requestShutdown();
+      engine.parseResult(analysisResult(1, 500, 70.0));
+
+      assertSame(savedMoves, data.bestMoves);
+      assertSame(savedOwnership, data.estimateArray);
+      assertSame(saved, data.primaryAnalysisProvenance());
+      assertSame(saved, data.primaryOwnershipProvenance());
+      assertTrue(data.hasReusablePrimaryAnalysis(500, true));
+      assertFalse(data.hasReusablePrimaryAnalysis(500, true, run));
+    }
+  }
+
+  @Test
+  void malformedReevaluationResponseCannotClaimSavedPayloadForItsRun() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, true);
+      AnalysisProvenance saved = savedProvenance("saved engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      Object run = new Object();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, run));
+
+      engine.parseResult(emptyAnalysisResult(1));
+
+      assertEquals(700, data.getPlayouts());
+      assertSame(saved, data.primaryAnalysisProvenance());
+      assertFalse(data.hasReusablePrimaryAnalysis(500, false, run));
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false, run));
+      engine.parseResult(analysisResult(2, 500, 70.0));
+      assertTrue(data.hasReusablePrimaryAnalysis(500, false, run));
+    }
+  }
+
+  @Test
+  void dedicatedResultRecordsDispatchedConditionsWithoutBorrowingTheForegroundProducer()
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      history.getGameInfo().setKomi(6.5);
+      Lizzie.config.analysisSpecificRules = "{\"scoringRule\":\"TERRITORY\"}";
+      Lizzie.leelaz.currentEnginename = "unrelated foreground";
+      Lizzie.leelaz.pda = 1.5;
+      Lizzie.leelaz.wrn = 0.6;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      assertTrue(engine.sendRequest(history.getStart()));
+      history.getGameInfo().setKomi(7.5);
+      Lizzie.config.analysisSpecificRules = "{\"scoringRule\":\"AREA\"}";
+
+      engine.parseResult(analysisResultWithOwnership(1, 200, 70.0));
+
+      AnalysisProvenance source = history.getStart().getData().primaryAnalysisProvenance();
+      assertNotNull(source);
+      assertEquals("TERRITORY", new JSONObject(source.rules()).getString("scoringRule"));
+      assertEquals(6.5, source.komi());
+      assertEquals("", source.engineName());
+      assertEquals("", source.engineVersion());
+      assertEquals("", source.modelName());
+      assertNull(source.pda());
+      assertNull(source.wrn());
+      assertEquals(source, history.getStart().getData().primaryOwnershipProvenance());
+    }
+  }
+
+  @Test
+  void ordinaryDedicatedOwnershipBackfillPreservesTheDeeperEvaluationsSource() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config.enableLizzieCache = true;
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 700, false);
+      AnalysisProvenance saved = savedProvenance("deeper saved engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      Object savedRun = new Object();
+      data.markPrimaryAnalysisRun(savedRun);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      assertTrue(engine.sendRequest(history.getStart()));
+
+      engine.parseResult(analysisResultWithOwnership(1, 200, 70.0));
+
+      assertEquals(700, data.getPlayouts());
+      assertSame(saved, data.primaryAnalysisProvenance());
+      assertTrue(data.hasReusablePrimaryAnalysis(500, true, savedRun));
+      assertNotNull(data.primaryOwnershipProvenance());
+      assertEquals("", data.primaryOwnershipProvenance().engineName());
+      assertEquals(BOARD_AREA, data.estimateArray.size());
+    }
+  }
+
+  @Test
+  void deeperReuseKeepsTheSourceOfOwnershipRetainedFromTheSavedResult() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      installCompleteAnalysis(data, 300, true);
+      AnalysisProvenance saved = savedProvenance("saved ownership engine");
+      data.setPrimaryAnalysisProvenance(saved);
+      data.setPrimaryOwnershipProvenance(saved);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
+      engine.parseResult(analysisResult(1, 500, 70.0));
+
+      assertEquals(500, data.getPlayouts());
+      assertEquals("", data.primaryAnalysisProvenance().engineName());
+      assertSame(saved, data.primaryOwnershipProvenance());
+      assertEquals(List.of(0.25), data.estimateArray);
     }
   }
 
@@ -3910,6 +4246,11 @@ class AnalysisEngineRequestTest {
     data.estimateArray = includeOwnership ? List.of(0.25) : null;
   }
 
+  private static AnalysisProvenance savedProvenance(String engine) {
+    return new AnalysisProvenance(
+        engine, "1.16.4", "saved model", "a".repeat(64), "b".repeat(64), "chinese", 7.5, 0.0, 0.0, "");
+  }
+
   private static BoardHistoryNode singleUnanalyzedMoveNode() throws Exception {
     BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
     history.add(
@@ -4360,6 +4701,28 @@ class AnalysisEngineRequestTest {
         engine, remoteGtpInfoLine(moveVisits, rootVisits, winrate, scoreLead));
     invokeAnalysisEngineParseLine(engine, "");
     invokeAnalysisEngineParseLine(engine, "=" + stopCommandId);
+  }
+
+  private static void acknowledgeSharedSetup(AnalysisEngine engine, Leelaz foreground)
+      throws Exception {
+    for (int count = 0; count < 12; count++) {
+      int setupId = (int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedSetupCommandId");
+      if (setupId == 0) break;
+      assertTrue(dispatchExclusiveLine(foreground, "=" + setupId));
+    }
+    assertEquals(0, getField(AnalysisEngine.class, engine, "remoteGtpExpectedSetupCommandId"));
+    assertTrue((int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedAnalyzeCommandId") > 0);
+  }
+
+  private static void completeSharedSearch(
+      AnalysisEngine engine, Leelaz foreground, int moveVisits, int rootVisits) throws Exception {
+    int analyzeId = (int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedAnalyzeCommandId");
+    assertTrue(dispatchExclusiveLine(foreground, "=" + analyzeId));
+    assertTrue(dispatchExclusiveLine(foreground, remoteGtpInfoLine(moveVisits, rootVisits, 65.0, 1.5)));
+    int stopId = (int) getField(AnalysisEngine.class, engine, "remoteGtpExpectedStopCommandId");
+    assertTrue(stopId > 0);
+    assertTrue(dispatchExclusiveLine(foreground, ""));
+    assertTrue(dispatchExclusiveLine(foreground, "=" + stopId));
   }
 
   private static int assertNumberedStopCommand(String command) {

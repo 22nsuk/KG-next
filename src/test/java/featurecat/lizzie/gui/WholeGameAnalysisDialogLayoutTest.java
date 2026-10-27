@@ -7,22 +7,36 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.WholeGameAnalysisOptions;
+import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryList;
+import featurecat.lizzie.rules.BoardHistoryNode;
 import java.awt.Component;
 import java.awt.Container;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
+import java.awt.image.BufferedImage;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BooleanSupplier;
+import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JFormattedTextField;
 import javax.swing.JLabel;
 import javax.swing.JScrollPane;
 import javax.swing.JSpinner;
+import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.Timer;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 
@@ -106,11 +120,17 @@ class WholeGameAnalysisDialogLayoutTest {
                       (JComboBox<?>) findByName(dialog.getContentPane(), "wholeGameVisitsPreset");
                   JSpinner customVisits =
                       (JSpinner) findByName(dialog.getContentPane(), "wholeGameCustomVisits");
+                  JComboBox<?> policy =
+                      (JComboBox<?>) findByName(dialog.getContentPane(), "wholeGameAnalysisPolicy");
+                  JTextArea provenance =
+                      (JTextArea) findByName(dialog.getContentPane(), "wholeGameAnalysisProvenance");
                   assertNotNull(progress, locale.toString());
                   assertNotNull(mode, locale.toString());
                   assertNotNull(remaining, locale.toString());
                   assertNotNull(visits, locale.toString());
                   assertNotNull(customVisits, locale.toString());
+                  assertNotNull(policy, locale.toString());
+                  assertNotNull(provenance, locale.toString());
                   progress.setText(
                       java.text.MessageFormat.format(
                           resources.getString("WholeGameAnalysis.progress"), 1234, 2345, 5000));
@@ -119,6 +139,9 @@ class WholeGameAnalysisDialogLayoutTest {
                       java.text.MessageFormat.format(
                           resources.getString("WholeGameAnalysis.remaining"), "12:34"));
                   scaleFonts(dialog.getContentPane(), scale);
+                  policy.setSelectedIndex(1);
+                  provenance.setText(
+                      AnalysisProvenanceDisplay.describe(longRecordedAnalysis(), resources));
                   dialog.pack();
                   layoutTree(dialog.getContentPane());
 
@@ -126,6 +149,16 @@ class WholeGameAnalysisDialogLayoutTest {
                   assertVisibleSize(mode, locale);
                   assertVisibleSize(remaining, locale);
                   assertVisibleSize(visits, locale);
+                  assertVisibleSize(policy, locale);
+                  assertVisibleSize(provenance, locale);
+                  assertTrue(policy.getWidth() >= policy.getPreferredSize().width);
+                  assertTrue(provenance.getLineWrap());
+                  JScrollPane provenanceScroll =
+                      (JScrollPane) findByName(dialog.getContentPane(), "wholeGameProvenanceScrollPane");
+                  assertEquals(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER,
+                      provenanceScroll.getHorizontalScrollBarPolicy());
+                  assertEquals(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                      provenanceScroll.getVerticalScrollBarPolicy());
                   assertTrue(
                       visits.getWidth() >= visits.getPreferredSize().width,
                       locale + " visits preset width at " + scale);
@@ -241,6 +274,171 @@ class WholeGameAnalysisDialogLayoutTest {
     }
   }
 
+  @Test
+  void selectedReusePolicyReachesStartAndRejectsAnEstimateForTheOtherPolicy() throws Exception {
+    Assumptions.assumeFalse(GraphicsEnvironment.isHeadless());
+    ResourceBundle previous = Lizzie.resourceBundle;
+    AtomicReference<Throwable> failure = new AtomicReference<>();
+    try {
+      Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREA);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            WholeGameAnalysisDialog dialog = null;
+            try {
+              dialog = new WholeGameAnalysisDialog(null);
+              RecordingFrame frame = allocate(RecordingFrame.class);
+              field(WholeGameAnalysisDialog.class, "ownerFrame").set(dialog, frame);
+              dialog.setSelectedVisits(3000);
+              JComboBox<?> policy =
+                  (JComboBox<?>) findByName(dialog.getContentPane(), "wholeGameAnalysisPolicy");
+              JTextArea hint =
+                  (JTextArea) findByName(dialog.getContentPane(), "wholeGameVisitsHint");
+              assertEquals(WholeGameAnalysisOptions.ExistingAnalysisPolicy.REUSE_SAVED,
+                  dialog.selectedOptions().existingAnalysisPolicy());
+              WholeGameAnalysisOptions savedSelection = dialog.selectedOptions();
+
+              policy.setSelectedIndex(1);
+              assertTrue(dialog.selectedOptions().reevaluateCurrentEngine());
+              String currentHint = hint.getText();
+              dialog.showPreStartEstimate(savedSelection, 90_000);
+              assertEquals(currentHint, hint.getText());
+              dialog.showPreStartEstimate(dialog.selectedOptions(), 90_000);
+              assertTrue(hint.getText().contains("01:30"));
+
+              ((JButton) findByName(dialog.getContentPane(), "wholeGameStart")).doClick();
+
+              assertNotNull(frame.startedOptions);
+              assertEquals(3000, frame.startedOptions.deepVisits());
+              assertTrue(frame.startedOptions.reevaluateCurrentEngine());
+              assertFalse(policy.isEnabled());
+            } catch (Throwable throwable) {
+              failure.set(throwable);
+            } finally {
+              if (dialog != null) dialog.dispose();
+            }
+          });
+      if (failure.get() != null) throw new AssertionError("Policy selection failed", failure.get());
+    } finally {
+      Lizzie.resourceBundle = previous;
+    }
+  }
+
+  @Test
+  void displayedPositionSourceRefreshesAndItsTimerStopsWhenHiddenOrDisposed() throws Exception {
+    Assumptions.assumeFalse(GraphicsEnvironment.isHeadless());
+    ResourceBundle previousResources = Lizzie.resourceBundle;
+    Board previousBoard = Lizzie.board;
+    AtomicReference<WholeGameAnalysisDialog> dialog = new AtomicReference<>();
+    try {
+      Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREA);
+      BoardData legacy = BoardData.empty(19, 19);
+      legacy.setPlayouts(700);
+      legacy.engineName = "Saved legacy name";
+      BoardHistoryList history = new BoardHistoryList(legacy);
+      BoardData recorded = longRecordedAnalysis();
+      recorded.moveNumber = 1;
+      history.getStart().add(new BoardHistoryNode(recorded));
+      Board board = allocate(Board.class);
+      field(Board.class, "history").set(board, history);
+      Lizzie.board = board;
+      SwingUtilities.invokeAndWait(
+          () -> {
+            dialog.set(new WholeGameAnalysisDialog(null));
+            dialog.get().showOnScreen();
+          });
+      waitOnEdt(
+          () -> provenanceText(dialog.get()).contains("Saved legacy name")
+              && provenanceText(dialog.get()).contains("분석 출처 미확인"));
+      Timer timer = (Timer) field(WholeGameAnalysisDialog.class, "provenanceRefresh").get(dialog.get());
+      waitOnEdt(timer::isRunning);
+
+      SwingUtilities.invokeAndWait(() -> history.next(true));
+
+      waitOnEdt(
+          () -> provenanceText(dialog.get()).contains("현재 국면: 1수")
+              && provenanceText(dialog.get()).contains("b18c384nbt-"));
+      Path screenshot = Path.of("target/provenance-ui/whole-game-source-ko.png");
+      Files.createDirectories(screenshot.getParent());
+      SwingUtilities.invokeAndWait(
+          () -> {
+            BufferedImage image =
+                new BufferedImage(dialog.get().getWidth(), dialog.get().getHeight(),
+                    BufferedImage.TYPE_INT_RGB);
+            java.awt.Graphics2D graphics = image.createGraphics();
+            try {
+              dialog.get().paintAll(graphics);
+              ImageIO.write(image, "png", screenshot.toFile());
+            } catch (java.io.IOException exception) {
+              throw new java.io.UncheckedIOException(exception);
+            } finally {
+              graphics.dispose();
+            }
+            dialog.get().setVisible(false);
+          });
+      waitOnEdt(() -> !timer.isRunning());
+      SwingUtilities.invokeAndWait(() -> dialog.get().showOnScreen());
+      waitOnEdt(timer::isRunning);
+      SwingUtilities.invokeAndWait(() -> dialog.get().dispose());
+      waitOnEdt(() -> !timer.isRunning());
+    } finally {
+      SwingUtilities.invokeAndWait(() -> { if (dialog.get() != null) dialog.get().dispose(); });
+      Lizzie.board = previousBoard;
+      Lizzie.resourceBundle = previousResources;
+    }
+  }
+
+  private static BoardData longRecordedAnalysis() {
+    BoardData data = BoardData.empty(19, 19);
+    data.setPlayouts(700);
+    data.setPrimaryAnalysisProvenance(
+        new AnalysisProvenance(
+            "KataGo", "1.16.0", "b18c384nbt-" + "long-recorded-model-name-".repeat(5),
+            "a".repeat(64), "b".repeat(64), "chinese", 7.5, 0.0, 0.25, "rank_5d"));
+    data.estimateArray = List.of(0.5);
+    return data;
+  }
+
+  private static String provenanceText(WholeGameAnalysisDialog dialog) {
+    return ((JTextArea) findByName(dialog.getContentPane(), "wholeGameAnalysisProvenance")).getText();
+  }
+
+  private static void waitOnEdt(BooleanSupplier condition) throws Exception {
+    long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < deadline) {
+      AtomicReference<Boolean> ready = new AtomicReference<>();
+      SwingUtilities.invokeAndWait(() -> ready.set(condition.getAsBoolean()));
+      if (Boolean.TRUE.equals(ready.get())) return;
+      Thread.sleep(20);
+    }
+    throw new AssertionError("Timed out waiting for provenance UI state");
+  }
+
+  private static Field field(Class<?> type, String name) throws NoSuchFieldException {
+    Field field = type.getDeclaredField(name);
+    field.setAccessible(true);
+    return field;
+  }
+
+  private static <T> T allocate(Class<T> type) throws Exception {
+    sun.misc.Unsafe unsafe = (sun.misc.Unsafe) field(sun.misc.Unsafe.class, "theUnsafe").get(null);
+    return type.cast(unsafe.allocateInstance(type));
+  }
+
+  private static final class RecordingFrame extends LizzieFrame {
+    private WholeGameAnalysisOptions startedOptions;
+
+    @Override
+    boolean startWholeGameDeepAnalysis(
+        WholeGameAnalysisDialog dialog, WholeGameAnalysisOptions options) {
+      startedOptions = options;
+      return true;
+    }
+
+    @Override
+    void requestWholeGameAnalysisEstimate(
+        WholeGameAnalysisDialog dialog, WholeGameAnalysisOptions options) {}
+  }
+
   private static void assertVisibleSize(Component component, Locale locale) {
     assertNotNull(component, locale.toString());
     assertTrue(component.isVisible(), locale.toString());
@@ -259,12 +457,23 @@ class WholeGameAnalysisDialogLayoutTest {
 
   private static void assertButtonFits(JButton button, Locale locale) {
     assertVisibleSize(button, locale);
+    Dimension preferred = button.getPreferredSize();
+    Dimension natural = button.getUI().getPreferredSize(button);
+    String dimensions =
+        locale + " button: " + button.getText()
+            + " actual=" + button.getSize() + " preferred=" + preferred + " natural=" + natural;
     assertTrue(
-        button.getWidth() >= button.getPreferredSize().width,
-        locale + " button width: " + button.getText());
+        button.getWidth() >= preferred.width,
+        "Preferred width does not fit: " + dimensions);
     assertTrue(
-        button.getHeight() >= button.getPreferredSize().height,
-        locale + " button height: " + button.getText());
+        button.getHeight() >= preferred.height,
+        "Preferred height does not fit: " + dimensions);
+    assertTrue(
+        button.getWidth() >= natural.width,
+        "Current-font content width does not fit: " + dimensions);
+    assertTrue(
+        button.getHeight() >= natural.height,
+        "Current-font content height does not fit: " + dimensions);
   }
 
   private static void scaleFonts(Component component, float scale) {

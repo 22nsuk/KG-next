@@ -51,6 +51,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -1305,7 +1306,10 @@ public class Leelaz {
 
   private void startEngineOwned(int index) throws IOException {
     ReaderStreamBinding previousModelBinding = readerStreamBinding;
-    if (previousModelBinding != null) previousModelBinding.speedModelLookup = null;
+    if (previousModelBinding != null) {
+      previousModelBinding.speedModelLookup = null;
+      previousModelBinding.closeAnalysisModelLookup();
+    }
     List<String> modelLaunchCommands = List.of();
     storePendingTensorRtRepairContext(null);
     EngineManager.EngineGameOwnerTransaction engineGameStartupTransaction =
@@ -1607,12 +1611,29 @@ public class Leelaz {
     // new Thread(this::read).start();
     // can stop engine for switching weights
     ReaderStreamBinding startedReaderStreamBinding = currentReaderStreamBinding();
+    AnalysisModelIdentity.Lookup provenanceLookup;
     if (startedReaderStreamBinding.remoteTransport instanceof ZhiziGtpTransport zhizi) {
       startedReaderStreamBinding.speedModelLookup =
           B11ModelNotice.known(B11ModelNotice.isZhiziB11(zhizi.modelIdentifier()));
+      provenanceLookup = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
     } else if (!useRemoteCompute && !useJavaSSH && !isSSH && !modelLaunchCommands.isEmpty()) {
       startedReaderStreamBinding.speedModelLookup =
           B11ModelNotice.local(modelLaunchCommands, startedReaderStreamBinding.processWorkingDirectory);
+      provenanceLookup =
+          AnalysisModelIdentity.local(
+              modelLaunchCommands, startedReaderStreamBinding.processWorkingDirectory);
+    } else {
+      provenanceLookup = AnalysisModelIdentity.unknown();
+    }
+    synchronized (startedReaderStreamBinding.readerExecutorLock) {
+      if (readerStreamBinding == startedReaderStreamBinding
+          && !startedReaderStreamBinding.terminated
+          && !startedReaderStreamBinding.readerShutdownRequested
+          && !startedReaderStreamBinding.analysisProvenanceRetired) {
+        startedReaderStreamBinding.analysisModelLookup = provenanceLookup;
+      } else {
+        provenanceLookup.close();
+      }
     }
     ScheduledExecutorService stdoutExecutor = Executors.newSingleThreadScheduledExecutor();
     ScheduledExecutorService stderrExecutor = Executors.newSingleThreadScheduledExecutor();
@@ -1656,6 +1677,186 @@ public class Leelaz {
         && !binding.readerShutdownRequested
         && lookup != null
         && lookup.isB11();
+  }
+
+  /**
+   * Observations from this exact process/connection. Called while publishing BoardData, so this
+   * method must never acquire an engine lock or wait for a filesystem lookup. Missing fields stay
+   * unknown; matching records do not prove that every engine setting or runtime state was equal.
+   */
+  public AnalysisProvenance captureAnalysisProvenance() {
+    ReaderStreamBinding binding = readerStreamBinding;
+    if (binding == null
+        || binding.terminated
+        || binding.readerShutdownRequested
+        || binding.analysisProvenanceRetired) return null;
+    AnalysisModelIdentity.Lookup lookup = binding.analysisModelLookup;
+    AnalysisModelIdentity.FilesIdentity files =
+        lookup == null ? AnalysisModelIdentity.UNKNOWN : lookup.snapshot();
+    AnalysisProvenance source =
+        new AnalysisProvenance(
+            binding.reportedEngineName,
+            binding.reportedEngineVersion,
+            files.modelName(),
+            files.modelSha256(),
+            files.configSha256(),
+            binding.reportedRules,
+            observedConditionValue(binding.provenanceKomi),
+            isDymPda ? null : observedConditionValue(binding.provenancePda),
+            observedConditionValue(binding.provenanceWrn),
+            "");
+    return readerStreamBinding == binding
+            && !binding.terminated
+            && !binding.readerShutdownRequested
+            && !binding.analysisProvenanceRetired
+        ? source
+        : null;
+  }
+
+  /** Changes at an ordinary physical settings write, independently of asynchronous metadata. */
+  Object analysisSettingsToken() {
+    ReaderStreamBinding binding = readerStreamBinding;
+    if (binding == null
+        || binding.terminated
+        || binding.readerShutdownRequested
+        || binding.analysisProvenanceRetired) return null;
+    Object token = binding.analysisSettingsToken;
+    return readerStreamBinding == binding
+            && !binding.terminated
+            && !binding.readerShutdownRequested
+            && !binding.analysisProvenanceRetired
+        ? token
+        : null;
+  }
+
+  private static Double observedConditionValue(AnalysisConditionObservation observation) {
+    return observation == null ? null : observation.value();
+  }
+
+  private enum AnalysisCondition {
+    KOMI,
+    PDA,
+    WRN;
+
+    private static AnalysisCondition fromCommand(String command) {
+      String[] parts = command.trim().split("\\s+");
+      if (parts.length == 2 && parts[0].equals("komi")) return KOMI;
+      if ((parts.length == 2 && parts[0].equals("kata-get-param"))
+          || (parts.length == 3 && parts[0].equals("kata-set-param"))) {
+        if (parts[1].equals("playoutDoublingAdvantage")) return PDA;
+        if (parts[1].equals("analysisWideRootNoise")) return WRN;
+      }
+      return null;
+    }
+  }
+
+  private record AnalysisConditionObservation(Object commandToken, Double value) {}
+
+  /** Forget a prior observation before the first byte of a potentially changing command. */
+  private void recordAnalysisConditionWrite(
+      PendingResponseHandler command, ReaderStreamBinding binding) {
+    if (binding == null) return;
+    String normalized = command.command.trim();
+    String verb = normalized.split("\\s+", 2)[0];
+    AnalysisCondition condition = AnalysisCondition.fromCommand(command.command);
+    boolean parameterWrite =
+        verb.equals("kata-set-param") || verb.equals("kata-set-params");
+    boolean fullRulesWrite = verb.equals("kata-set-rules");
+    boolean rulesWrite = fullRulesWrite || verb.equals("kata-set-rule") || verb.equals("kgs-rules");
+    boolean loadSgf = verb.equals("loadsgf");
+    if (condition == null && !parameterWrite && !rulesWrite && !loadSgf) return;
+    command.provenanceBinding = binding;
+    command.provenanceCondition = condition;
+    command.provenanceToken = new Object();
+    synchronized (binding) {
+      // A lease handback restores its borrowed settings even when loadsgf cleared observations.
+      // Ordinary edits and parameter writes still retire a paused reassessment's settings token.
+      boolean foregroundHandback = command.queuedCommand.foregroundRestoreCommand;
+      boolean settingsWrite =
+          (loadSgf && command.queuedCommand.restoreAdmission == null)
+              || (condition == AnalysisCondition.KOMI && !sameObservedKomi(binding, normalized))
+              || (rulesWrite && !(fullRulesWrite && sameObservedRules(binding, normalized)));
+      if (parameterWrite || (!foregroundHandback && settingsWrite)) {
+        binding.analysisSettingsToken = new Object();
+      }
+      if (condition != null) {
+        setAnalysisCondition(
+            binding, condition, new AnalysisConditionObservation(command.provenanceToken, null));
+      } else if (verb.equals("kata-set-params")) {
+        binding.provenancePda = new AnalysisConditionObservation(command.provenanceToken, null);
+        binding.provenanceWrn = new AnalysisConditionObservation(command.provenanceToken, null);
+      }
+      if (rulesWrite || loadSgf) {
+        binding.reportedRules = "";
+      }
+      if (loadSgf) {
+        binding.provenanceKomi = new AnalysisConditionObservation(command.provenanceToken, null);
+      }
+    }
+  }
+
+  private static boolean sameObservedKomi(ReaderStreamBinding binding, String command) {
+    Double observed = observedConditionValue(binding.provenanceKomi);
+    if (observed == null) return false;
+    try {
+      double requested = Double.parseDouble(command.substring("komi".length()).trim());
+      return Double.isFinite(requested) && observed.doubleValue() == requested;
+    } catch (NumberFormatException invalid) {
+      return false;
+    }
+  }
+
+  private static boolean sameObservedRules(ReaderStreamBinding binding, String command) {
+    KataGoRules observed = KataGoRules.parse(binding.reportedRules).orElse(null);
+    KataGoRules requested =
+        KataGoRules.parse(command.substring("kata-set-rules".length()).trim()).orElse(null);
+    return observed != null && observed.semanticallyEquals(requested);
+  }
+
+  private void recordAnalysisConditionResponse(PendingResponseHandler command, String line) {
+    ReaderStreamBinding binding = command.provenanceBinding;
+    AnalysisCondition condition = command.provenanceCondition;
+    if (binding == null || condition == null || line == null || !line.startsWith("=")) return;
+    Double value = null;
+    try {
+      String[] parts = command.command.trim().split("\\s+");
+      String numeric =
+          parts[0].equals("kata-get-param")
+              ? gtpResponsePayload(line)
+              : parts[parts.length - 1];
+      double parsed = Double.parseDouble(numeric);
+      if (Double.isFinite(parsed)) value = parsed;
+    } catch (NumberFormatException invalid) {
+      return;
+    }
+    synchronized (binding) {
+      if (readerStreamBinding != binding
+          || binding.terminated
+          || binding.readerShutdownRequested
+          || binding.analysisProvenanceRetired) return;
+      AnalysisConditionObservation previous =
+          switch (condition) {
+            case KOMI -> binding.provenanceKomi;
+            case PDA -> binding.provenancePda;
+            case WRN -> binding.provenanceWrn;
+          };
+      // Replies can arrive out of order. Only the latest physical command owns this field.
+      if (previous != null && previous.commandToken() == command.provenanceToken) {
+        setAnalysisCondition(
+            binding, condition, new AnalysisConditionObservation(command.provenanceToken, value));
+      }
+    }
+  }
+
+  private static void setAnalysisCondition(
+      ReaderStreamBinding binding,
+      AnalysisCondition condition,
+      AnalysisConditionObservation observation) {
+    switch (condition) {
+      case KOMI -> binding.provenanceKomi = observation;
+      case PDA -> binding.provenancePda = observation;
+      case WRN -> binding.provenanceWrn = observation;
+    }
   }
 
   public boolean hasGtpCapability() {
@@ -2035,6 +2236,7 @@ public class Leelaz {
             || startedReaderStreamBinding.terminated
             || startedReaderStreamBinding.readerShutdownRequested) {
           startedReaderStreamBinding.readerShutdownRequested = true;
+          startedReaderStreamBinding.closeAnalysisModelLookup();
           stdoutExecutor.shutdown();
           stderrExecutor.shutdown();
           return false;
@@ -2058,6 +2260,7 @@ public class Leelaz {
         } finally {
           if (!readersSubmitted) {
             startedReaderStreamBinding.readerShutdownRequested = true;
+            startedReaderStreamBinding.closeAnalysisModelLookup();
             stdoutExecutor.shutdownNow();
             stderrExecutor.shutdownNow();
             if (readerStreamBinding == startedReaderStreamBinding) {
@@ -4181,6 +4384,7 @@ public class Leelaz {
         else binding.startupDiagnostic.beforeTermination();
       }
       binding.readerShutdownRequested = true;
+      binding.closeAnalysisModelLookup();
       binding.normalExitRequested |= normalExitRequested;
       boolean ownsTransportClose = !binding.transportCloseClaimed;
       binding.transportCloseClaimed = true;
@@ -4198,6 +4402,7 @@ public class Leelaz {
       }
       binding.forceCloseClaimed = true;
       binding.readerShutdownRequested = true;
+      binding.closeAnalysisModelLookup();
       binding.normalExitRequested = true;
       // A force claimant always owns one exact escalation. It owns shared physical-close
       // bookkeeping only when no graceful/terminal claimant got there first.
@@ -4996,6 +5201,15 @@ public class Leelaz {
     private volatile Integer confirmedRuntimeSearchThreads;
     private volatile RuntimeThreadOverrideState runtimeThreadOverrideState;
     private volatile B11ModelNotice.Lookup speedModelLookup;
+    private volatile AnalysisModelIdentity.Lookup analysisModelLookup;
+    private volatile boolean analysisProvenanceRetired;
+    private volatile String reportedEngineName = "";
+    private volatile String reportedEngineVersion = "";
+    private volatile String reportedRules = "";
+    private volatile AnalysisConditionObservation provenanceKomi;
+    private volatile AnalysisConditionObservation provenancePda;
+    private volatile AnalysisConditionObservation provenanceWrn;
+    private volatile Object analysisSettingsToken = new Object();
 
     private long runtimeThreadWriteSequence;
     private long confirmedRuntimeThreadSequence;
@@ -5083,6 +5297,15 @@ public class Leelaz {
               : processWorkingDirectory.toAbsolutePath().normalize();
       this.snapshotFileAccessKind = Objects.requireNonNull(snapshotFileAccessKind);
     }
+
+    private void closeAnalysisModelLookup() {
+      synchronized (readerExecutorLock) {
+        analysisProvenanceRetired = true;
+        AnalysisModelIdentity.Lookup lookup = analysisModelLookup;
+        analysisModelLookup = null;
+        if (lookup != null) lookup.close();
+      }
+    }
   }
 
   /**
@@ -5096,6 +5319,7 @@ public class Leelaz {
     binding.analysisOutputMutationLock.lock();
     try {
       binding.terminated = true;
+      binding.closeAnalysisModelLookup();
     } finally {
       binding.analysisOutputMutationLock.unlock();
     }
@@ -6223,11 +6447,14 @@ public class Leelaz {
       long expectedPrimaryGeneration,
       Object expectedEngineIncarnation,
       EngineManager.EngineGameOwnerTransaction engineGameTransaction) {
-    // TODO Auto-generated method stub
+    if (!(expectedEngineIncarnation instanceof ReaderStreamBinding binding) || params.length < 2) {
+      return StartupCommandAction.NONE;
+    }
     boolean suppressGlobalPresentation =
         suppressesGlobalEnginePresentation(expectedEngineIncarnation);
     StartupCommandAction startupCommandAction = StartupCommandAction.NONE;
     if (isCheckingName) {
+      binding.reportedEngineName = String.join(" ", Arrays.copyOfRange(params, 1, params.length));
       noAnalyze = false;
       isKataGoPda = false;
       pkMoveStartTime = System.currentTimeMillis();
@@ -6311,6 +6538,7 @@ public class Leelaz {
       } catch (RuntimeException ignored) {
       }
     } else if (isCheckingVersion && !isLeela0110) {
+      binding.reportedEngineVersion = String.join(" ", Arrays.copyOfRange(params, 1, params.length));
       if (isKatago) {
         String[] ver = params[1].split("\\.");
         if (ver.length >= 2) {
@@ -10975,6 +11203,7 @@ public class Leelaz {
         ReaderStreamBinding binding = delivery.binding;
         if (readerStreamBinding == binding) {
           binding.terminated = true;
+          binding.closeAnalysisModelLookup();
           binding.terminalFailure = failure;
           isLoaded = false;
           isDownWithError = true;
@@ -13554,6 +13783,7 @@ public class Leelaz {
             }
             // Selection admission is short; transport IO must not hold the global primary lock.
             // normalCommandSendInProgress keeps this exact reader/output owned until completion.
+            recordAnalysisConditionWrite(pendingHandler, outputBinding);
             synchronized (currentOutputStream) {
               currentOutputStream.write((commandLine + "\n").getBytes());
               currentOutputStream.flush();
@@ -14701,6 +14931,7 @@ public class Leelaz {
         failAnalysisStateLineage(handler.queuedCommand);
       }
       try {
+        recordAnalysisConditionResponse(handler, line);
         handler.run();
       } finally {
         handler.queuedCommand.settleAnalysisStateResponse(!currentCommandResponseError);
@@ -14831,6 +15062,7 @@ public class Leelaz {
                 matchedPendingHandler.loggingCommandId,
                 line);
             matchedPendingHandler.queuedCommand.finishPositionResponse();
+            recordAnalysisConditionResponse(matchedPendingHandler, line);
             matchedPendingHandler.run();
             handlerSettled = true;
           }
@@ -16998,6 +17230,9 @@ public class Leelaz {
     private final String commandName;
     private final long sentAtNanos;
     private boolean requiresMatchingResponseCommandId;
+    private volatile ReaderStreamBinding provenanceBinding;
+    private volatile AnalysisCondition provenanceCondition;
+    private volatile Object provenanceToken;
 
     private PendingResponseHandler(
         String command,
@@ -25084,6 +25319,9 @@ public class Leelaz {
       completed = engineRulesResult.confirmed(observed);
       publishEngineRulesResultLocked(operation, completed);
       recentRulesLine = observedRulesLine;
+      if (operation.readerBinding != null) {
+        operation.readerBinding.reportedRules = observedRulesLine;
+      }
       getSuicidalAndRules();
       if (!isolated && this == Lizzie.leelaz && Lizzie.config != null) {
         Lizzie.config.currentKataGoRules = recentRulesLine;

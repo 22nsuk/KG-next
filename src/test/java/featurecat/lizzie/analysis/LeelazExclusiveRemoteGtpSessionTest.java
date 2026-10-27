@@ -1248,6 +1248,48 @@ class LeelazExclusiveRemoteGtpSessionTest {
   }
 
   @Test
+  void repeatedForegroundHandbacksPreserveReevaluationConditionsWithUnknownObservations()
+      throws Exception {
+    for (boolean inBand : List.of(false, true)) {
+      try (ProductionForegroundRestoreHarness harness = ProductionForegroundRestoreHarness.open()) {
+        Leelaz engine = harness.engine;
+        engine.useRemoteCompute = inBand;
+        engine.komi = 6.5f;
+        CurrentEngineAnalysisContext context = new CurrentEngineAnalysisContext(engine);
+        assertEquals("", engine.captureAnalysisProvenance().rules());
+        assertNull(engine.captureAnalysisProvenance().komi());
+        assertTrue(harness.lease.setRestoreRules("{\"ko\":\"SIMPLE\",\"scoring\":\"AREA\"}"));
+
+        harness.releaseThroughNameCommand();
+        harness.completeNameResponse();
+        assertTrue(context.matchesCurrentEngine(), "handback is not a user settings change");
+
+        Leelaz.ForegroundAnalysisLeaseAcquisition resumed =
+            engine.acquireForegroundAnalysisLease(line -> {}, owner -> {}, owner -> {});
+        assertEquals(Leelaz.ExclusiveGtpLeaseAvailability.AVAILABLE, resumed.availability());
+        assertTrue(dispatch(engine, "=800000002"));
+        assertTrue(dispatch(engine, ""));
+        assertTrue(resumed.lease().setRestoreRules("{\"ko\":\"SIMPLE\",\"scoring\":\"AREA\"}"));
+        assertTrue(
+            resumed.lease().release(
+                harness.completions::incrementAndGet, harness.failures::incrementAndGet));
+        assertTrue(dispatch(engine, "=800000003"));
+        assertTrue(dispatch(engine, ""));
+        waitUntil(() -> harness.output.nameCommandsWritten.get() == 2);
+        invokeResponseHandlerForLine(engine, "=");
+        waitUntil(() -> harness.completions.get() == 2);
+
+        assertEquals(0, harness.failures.get());
+        assertTrue(context.matchesCurrentEngine(), "repeated restore must preserve the run");
+        Lizzie.board.resendMoveToEngine(engine, false);
+        assertTrue(context.matchesCurrentEngine(), "owned history navigation preserves conditions");
+        invokeSendCommandWithResponse(engine, "kata-set-param analysisWideRootNoise 0.25", () -> {});
+        assertFalse(context.matchesCurrentEngine(), "a subsequent ordinary edit retires the run");
+      }
+    }
+  }
+
+  @Test
   void staleNumberedErrorDoesNotFailCurrentForegroundRestore() throws Exception {
     try (ProductionForegroundRestoreHarness harness = ProductionForegroundRestoreHarness.open()) {
       harness.releaseThroughNameCommand();
@@ -2526,6 +2568,7 @@ class LeelazExclusiveRemoteGtpSessionTest {
     private final Leelaz engine;
     private final StringBuilder currentCommand = new StringBuilder();
     private final CountDownLatch nameCommandWritten = new CountDownLatch(1);
+    private final AtomicInteger nameCommandsWritten = new AtomicInteger();
     private volatile String loadedSgf = "";
     private final String rejectedCommand;
     private volatile boolean rejected;
@@ -2548,20 +2591,21 @@ class LeelazExclusiveRemoteGtpSessionTest {
         return;
       }
       if ("name".equals(command)) {
+        nameCommandsWritten.incrementAndGet();
         nameCommandWritten.countDown();
         return;
       }
       String response = "=";
+      int firstSpace = command.indexOf(' ');
+      if (firstSpace > 0 && command.substring(0, firstSpace).chars().allMatch(Character::isDigit)) {
+        response += command.substring(0, firstSpace);
+      }
       int loadSgf = command.indexOf("loadsgf ");
       if (loadSgf >= 0) {
         try {
           loadedSgf = Files.readString(Path.of(command.substring(loadSgf + 8).trim()));
         } catch (Exception ex) {
           throw new IOException("Failed to consume exact restore SGF", ex);
-        }
-        int firstSpace = command.indexOf(' ');
-        if (firstSpace > 0 && command.substring(0, firstSpace).chars().allMatch(Character::isDigit)) {
-          response = "=" + command.substring(0, firstSpace);
         }
       }
       if (rejectedCommand != null && command.contains(rejectedCommand)) {

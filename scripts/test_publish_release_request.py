@@ -886,6 +886,7 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
              ["xvfb", "xauth", "openbox", "x11-utils", "fonts-dejavu-core",
               "fonts-noto-cjk", "fonts-thai-tlwg"]),
             ("ci.yml", "Install Linux display dependencies", [*common_packages, "fonts-thai-tlwg"]),
+            ("ci.yml", "Install analysis UI display dependencies", [*common_packages, "fonts-thai-tlwg"]),
             ("acceptance-integration.yml", "Install isolated display dependencies",
              common_packages),
         )
@@ -929,12 +930,65 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         for required in (
             "--profile portable --group desktop --require-clean",
             "--profile ${{ matrix.profile }} --group engine-process --require-clean",
-            "needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, engine-process]",
+            "needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process]",
         ):
             self.assertIn(required, ci)
         self.assertIn("'--scenario', 'sgf-ui', '--scenario', 'real-cpu-engine'", acceptance)
         from scripts import run_local_ci
         self.assertIn("scripts.test_prefer_ubuntu_apt_mirror", run_local_ci.UNITTEST_MODULES)
+
+    def test_analysis_ui_gate_requires_the_real_cases_and_rejects_missing_or_skipped_results(self):
+        from scripts import run_local_ci
+
+        root = SCRIPT_PATH.parents[1]
+        ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        job = ci.split("  analysis-provenance-ui:\n", 1)[1].split("\n  engine-process:", 1)[0]
+        self.assertIn("-screen 0 3840x2160x24", job)
+        self.assertIn("-Djava.awt.headless=false", job)
+        self.assertIn("-Dtest=WholeGameAnalysisDialogLayoutTest test", job)
+        self.assertIn("-Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports", job)
+        self.assertIn("if: always()", job)
+        self.assertNotIn("continue-on-error", job)
+        self.assertIn("ANALYSIS_UI: ${{ needs.analysis-provenance-ui.result }}", ci)
+        self.assertIn('"analysis-provenance-ui": os.environ["ANALYSIS_UI"]', ci)
+        inline = textwrap.dedent(job.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0])
+        source = (root / "src/test/java/featurecat/lizzie/gui/WholeGameAnalysisDialogLayoutTest.java").read_text(encoding="utf-8")
+        methods = re.findall(r"(?m)^  void (\w+)\(", source)
+        self.assertEqual(6, len(methods))
+        classname = "featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest"
+        expected = {(classname, method) for method in methods}
+        collector = run_local_ci.collect_junit_summary
+        with tempfile.TemporaryDirectory() as temporary:
+            report_root = Path(temporary)
+            reports = report_root / "surefire-reports"
+            reports.mkdir()
+            report = reports / "TEST-analysis-ui.xml"
+
+            def collect(required_root, required_tests):
+                self.assertEqual(Path("target/provenance-ui"), required_root)
+                self.assertEqual(expected, set(required_tests))
+                return collector(report_root, required_tests)
+
+            for status in ("passed", "skipped", "failure", "error", "missing", "absent-report"):
+                with self.subTest(status=status):
+                    cases = []
+                    for index, method in enumerate(methods):
+                        if index == 0 and status == "missing":
+                            continue
+                        outcome = f"<{status}/>" if index == 0 and status in {"skipped", "failure", "error"} else ""
+                        cases.append(f'<testcase classname="{classname}" name="{method}">{outcome}</testcase>')
+                    report.write_text(
+                        f'<testsuite tests="{len(cases)}">' + "".join(cases) + "</testsuite>",
+                        encoding="utf-8",
+                    )
+                    if status == "absent-report":
+                        report.unlink()
+                    with mock.patch.object(run_local_ci, "collect_junit_summary", side_effect=collect), mock.patch("sys.stdout", io.StringIO()):
+                        if status == "passed":
+                            exec(compile(inline, "analysis-ui-gate", "exec"), {})
+                        else:
+                            with self.assertRaises(run_local_ci.RequiredJunitExecutionError):
+                                exec(compile(inline, "analysis-ui-gate", "exec"), {})
 
     def select_ci_archive(self, releases):
         workflow = (

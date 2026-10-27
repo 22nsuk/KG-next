@@ -16512,7 +16512,7 @@ public class LizzieFrame extends JFrame {
     Thread estimator =
         new Thread(
             () -> {
-              long estimate = estimateWholeGameAnalysisMillis(root, options.deepVisits());
+              long estimate = estimateWholeGameAnalysisMillis(root, options);
               SwingUtilities.invokeLater(
                   () -> {
                     if (wholeGameAnalysisDialog == dialog
@@ -16527,7 +16527,8 @@ public class LizzieFrame extends JFrame {
     estimator.start();
   }
 
-  private long estimateWholeGameAnalysisMillis(BoardHistoryNode root, int deepVisits) {
+  private long estimateWholeGameAnalysisMillis(
+      BoardHistoryNode root, WholeGameAnalysisOptions options) {
     try {
       KataGoAutoSetupHelper.SetupSnapshot setup = KataGoAutoSetupHelper.inspectLocalSetup();
       KataGoRuntimeHelper.BenchmarkResult benchmark =
@@ -16539,15 +16540,18 @@ public class LizzieFrame extends JFrame {
       BoardHistoryNode node = root;
       while (node != null) {
         BoardData data = node.getData();
-        if (data == null
+        if (options.reevaluateCurrentEngine()
+            || data == null
             || !data.hasReusablePrimaryAnalysis(
                 WholeGameAnalysisPlan.DEFAULT_BASELINE_VISITS, false)) {
           requiredVisits += WholeGameAnalysisPlan.DEFAULT_BASELINE_VISITS;
         }
-        if (data == null || !data.hasReusablePrimaryAnalysis(deepVisits, false)) {
+        if (options.reevaluateCurrentEngine()
+            || data == null
+            || !data.hasReusablePrimaryAnalysis(options.deepVisits(), false)) {
           // Analysis requests start a fresh search for this position. Existing shallow visits are
           // useful for deciding whether to skip the position, but are not carried into maxVisits.
-          requiredVisits += deepVisits;
+          requiredVisits += options.deepVisits();
         }
         BoardHistoryNode next = node.next().orElse(null);
         while (next != null && !isRealHistoryActionNode(next.getData())) {
