@@ -10,7 +10,9 @@ import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
+import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.SidebarPanel;
+import featurecat.lizzie.gui.TempGameData;
 import java.awt.AWTEvent;
 import java.awt.Component;
 import java.awt.Container;
@@ -18,6 +20,9 @@ import java.awt.GraphicsEnvironment;
 import java.awt.HeadlessException;
 import java.awt.Insets;
 import java.awt.Toolkit;
+import java.awt.datatransfer.DataFlavor;
+import java.awt.datatransfer.Transferable;
+import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.AWTEventListener;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
@@ -57,9 +62,10 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.parallel.Isolated;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 
-/** Real saved-list listeners, SGF parsing and rollback; only native painting/analysis are stubbed. */
+/** Real file/saved-list entrypoints and SGF I/O; only native painting/analysis are stubbed. */
 @Isolated("Uses shared Lizzie state and observes the queued open-failure dialog")
 class SavedGameLoadSafetyTest {
   private static final String ORIGINAL_SGF =
@@ -93,6 +99,8 @@ class SavedGameLoadSafetyTest {
   private final List<String> synchronizedSnapshots = new CopyOnWriteArrayList<>();
 
   enum EntryPoint { BUTTON, THUMBNAIL, PREVIEW }
+
+  enum FileOpenEntry { DROP, STARTUP }
 
   enum SavedPosition {
     BRANCH(2, "1,0,w_3,3,b"),
@@ -136,6 +144,11 @@ class SavedGameLoadSafetyTest {
                     .map(loadLast -> Arguments.of(entry, position, slot, loadLast)))));
   }
 
+  static Stream<Arguments> failedExternalOpens() {
+    return Arrays.stream(FileOpenEntry.values()).flatMap(entry ->
+        Stream.of("missing", "malformed").map(input -> Arguments.of(entry, input)));
+  }
+
   @BeforeEach
   void prepare() throws Exception {
     previousResources = Lizzie.resourceBundle;
@@ -176,6 +189,7 @@ class SavedGameLoadSafetyTest {
     config = ConfigTestHelper.createForTests(directory);
     config.persisted = new JSONObject().put("filesystem", new JSONObject());
     config.uiConfig = new JSONObject();
+    config.saveBoardConfig = new JSONObject();
     config.playSound = true;
     config.readKomi = true;
     config.showComment = true;
@@ -391,6 +405,163 @@ class SavedGameLoadSafetyTest {
         () -> assertTrue((Boolean) getFrameField("canShowBigBoardImage")),
         () -> assertNull(getFrameField("kifuEngineSyncCoordinator")),
         () -> assertEquals(0, errorDialogs.get()));
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("failedExternalOpens")
+  void rejectedExternalFileCannotBecomeOriginalSaveTarget(FileOpenEntry entry, String input)
+      throws Exception {
+    Path rejected = directory.resolve("rejected.sgf");
+    String rejectedContent = "not an SGF game tree; preserve this file";
+    if (input.equals("malformed")) Files.writeString(rejected, rejectedContent);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    SwingUtilities.invokeAndWait(() -> {
+      Lizzie.board.getData().comment = "unsaved current game";
+      openExternalFile(entry, rejected.toFile());
+      Lizzie.frame = null;
+    });
+    assertTrue(errorDialogAttempted.await(5, TimeUnit.SECONDS), "the load failure must be reported");
+    SwingUtilities.invokeAndWait(() -> {
+      Lizzie.frame = frame;
+      assertSame(current, Lizzie.board.getHistory(), "a failed open must keep the current game");
+      config.showReplaceFileHint = false;
+      frame.saveOriFile();
+    });
+    SgfSaveCoordinator.pendingSaves().get(5, TimeUnit.SECONDS);
+
+    assertAll(
+        () -> assertEquals(originalFile, LizzieFrame.curFile),
+        () -> assertTrue(Files.readString(originalFile.toPath()).contains("unsaved current game"),
+            "save original must write the retained game to its original file"),
+        () -> {
+          if (input.equals("malformed")) assertEquals(rejectedContent, Files.readString(rejected));
+          else assertFalse(Files.exists(rejected), "a rejected missing file must not be created");
+        },
+        () -> assertEquals(1, errorDialogs.get()));
+  }
+
+  @ParameterizedTest
+  @EnumSource(FileOpenEntry.class)
+  void successfulExternalFileBecomesOriginalSaveTarget(FileOpenEntry entry) throws Exception {
+    File opened = directory.resolve("opened.sgf").toFile();
+    Files.writeString(opened.toPath(), SAVED_SGF);
+    SwingUtilities.invokeAndWait(() -> openExternalFile(entry, opened));
+    SwingUtilities.invokeAndWait(() -> {
+      assertEquals(opened, LizzieFrame.curFile);
+      assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+      Lizzie.board.getHistory().getStart().getData().comment = "edited opened game";
+      config.showReplaceFileHint = false;
+      frame.saveOriFile();
+    });
+    SgfSaveCoordinator.pendingSaves().get(5, TimeUnit.SECONDS);
+
+    assertAll(
+        () -> assertEquals(opened, LizzieFrame.curFile),
+        () -> assertTrue(Files.readString(opened.toPath()).contains("edited opened game")),
+        () -> assertEquals(ORIGINAL_SGF, Files.readString(originalFile.toPath())),
+        () -> assertEquals(0, errorDialogs.get()));
+  }
+
+  @Test
+  void explicitStartupFileStillWinsAfterRecoveringThePreviousSession() throws Exception {
+    String previousExit = "(;SZ[5]C[OLD_EXIT];B[aa])";
+    String previousPeriodic = "(;SZ[5]C[NEW_PERIODIC];B[aa];W[bb])";
+    Path exitSlot = directory.resolve("save/autoGame1.sgf");
+    Path periodicSlot = directory.resolve("save/autoGame2.sgf");
+    Files.writeString(exitSlot, previousExit);
+    Files.writeString(periodicSlot, previousPeriodic);
+    config.autoResume = true;
+    config.saveBoardConfig = new JSONObject()
+        .put("save-auto-game-index1", 1)
+        .put("save-auto-game-index2", -5)
+        .put("save-auto-game-time1", "old time")
+        .put("save-auto-game-time2", "new time")
+        .put("save-auto-game-move-number1", 1)
+        .put("save-auto-game-move-number2", 2)
+        .put("save-auto-game-move-list1", "old cursor")
+        .put("save-auto-game-move-list2", "new cursor");
+    config.saveBoard = new JSONObject().put("save", config.saveBoardConfig).put("other", "keep");
+    config.saveTempBoard();
+    Path requested = directory.resolve("requested.sgf");
+    Files.writeString(requested, SAVED_SGF);
+
+    SwingUtilities.invokeAndWait(() -> frame.restoreStartupGame(new String[] {requested.toString()}));
+    SwingUtilities.invokeAndWait(() -> {});
+
+    JSONObject persisted = new JSONObject(Files.readString(directory.resolve("save/save")));
+    TempGameData recovered = frame.getTempGameList().get(0);
+    assertAll(
+        () -> assertEquals(requested.toFile(), LizzieFrame.curFile),
+        () -> assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment),
+        () -> assertEquals("saved black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack()),
+        () -> assertEquals(SAVED_SGF, Files.readString(requested)),
+        () -> assertEquals(previousPeriodic, Files.readString(exitSlot)),
+        () -> assertEquals(previousPeriodic, Files.readString(periodicSlot),
+            "the previous recovery source must stay intact"),
+        () -> assertEquals("keep", persisted.getString("other")),
+        () -> assertTrue(persisted.getJSONObject("save").similar(config.saveBoardConfig)),
+        () -> assertEquals(1, config.saveBoardConfig.getInt("save-auto-game-index1")),
+        () -> assertEquals(-1, config.saveBoardConfig.getInt("save-auto-game-index2")),
+        () -> assertEquals(1, recovered.index),
+        () -> assertEquals("new time", recovered.time),
+        () -> assertEquals(2, recovered.curMoveNumer),
+        () -> assertEquals("new cursor", recovered.moves),
+        () -> assertEquals(0, errorDialogs.get()));
+    try (var files = Files.walk(directory)) {
+      assertFalse(files.anyMatch(path -> path.getFileName().toString().endsWith(".tmp")));
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(FileOpenEntry.class)
+  void queuedExternalFileCompletionCannotReplaceANewerSaveTarget(FileOpenEntry entry)
+      throws Exception {
+    File opened = directory.resolve("opened.sgf").toFile();
+    Files.writeString(opened.toPath(), SAVED_SGF);
+    File replacementFile = directory.resolve("replacement.sgf").toFile();
+    BoardHistoryList replacement = SGFParser.parseSgf("(;SZ[5]C[newer game];B[ee])", true);
+    SwingUtilities.invokeAndWait(() -> {
+      openExternalFile(entry, opened);
+      assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment,
+          "the file must parse before its queued completion is superseded");
+      Lizzie.board.setHistory(replacement);
+      LizzieFrame.curFile = replacementFile;
+    });
+    SwingUtilities.invokeAndWait(() -> {});
+
+    assertAll(
+        () -> assertSame(replacement, Lizzie.board.getHistory()),
+        () -> assertSame(replacementFile, LizzieFrame.curFile),
+        () -> assertEquals(SAVED_SGF, Files.readString(opened.toPath())),
+        () -> assertEquals(0, errorDialogs.get()));
+  }
+
+  private void openExternalFile(FileOpenEntry entry, File file) {
+    assertTrue(SwingUtilities.isEventDispatchThread());
+    Lizzie.leelaz.isLoaded = true;
+    if (entry == FileOpenEntry.STARTUP) {
+      frame.restoreStartupGame(new String[] {file.getPath()});
+      return;
+    }
+    Transferable files = new Transferable() {
+      @Override public DataFlavor[] getTransferDataFlavors() {
+        return new DataFlavor[] {DataFlavor.javaFileListFlavor};
+      }
+      @Override public boolean isDataFlavorSupported(DataFlavor flavor) {
+        return DataFlavor.javaFileListFlavor.equals(flavor);
+      }
+      @Override public Object getTransferData(DataFlavor flavor) throws UnsupportedFlavorException {
+        if (!isDataFlavorSupported(flavor)) throw new UnsupportedFlavorException(flavor);
+        return List.of(file);
+      }
+    };
+    try {
+      Method drop = LizzieFrame.class.getDeclaredMethod("importDroppedKifuFiles", Transferable.class);
+      drop.setAccessible(true);
+      drop.invoke(frame, files);
+    } catch (ReflectiveOperationException failure) {
+      throw new AssertionError(failure);
+    }
   }
 
   private void installAcknowledgingEngine() throws Exception {

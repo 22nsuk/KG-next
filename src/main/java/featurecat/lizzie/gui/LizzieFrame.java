@@ -4018,9 +4018,9 @@ public class LizzieFrame extends JFrame {
       if (resumePonder) {
         Lizzie.leelaz.togglePonder();
       }
-      if (loadFile(file[0], false, true)) {
-        curFile = file[0];
-      } else if (resumePonder && !Lizzie.leelaz.isPondering()) {
+      File selectedFile = file[0];
+      boolean accepted = loadFile(selectedFile, false, true, () -> curFile = selectedFile);
+      if (!accepted && resumePonder && !Lizzie.leelaz.isPondering()) {
         Lizzie.leelaz.ponder();
       }
     }
@@ -4061,16 +4061,20 @@ public class LizzieFrame extends JFrame {
       if (files.size() == 1) {
         boolean ponder = Lizzie.leelaz.isPondering() || !Lizzie.leelaz.isLoaded;
         File file = files.get(0);
-        loadFile(file, true, true);
-        curFile = file;
-        if (Lizzie.frame.analysisTable != null && Lizzie.frame.analysisTable.frame.isVisible()) {
-          Lizzie.frame.analysisTable.refreshTable();
-        }
-        if (ponder) {
-          Lizzie.leelaz.ponder();
-        }
-        refresh();
-        return true;
+        return loadFile(
+            file,
+            true,
+            true,
+            () -> {
+              curFile = file;
+              if (analysisTable != null && analysisTable.frame.isVisible()) {
+                analysisTable.refreshTable();
+              }
+              if (ponder) {
+                Lizzie.leelaz.ponder();
+              }
+              refresh();
+            });
       }
 
       openOrdinaryBatchAnalysis(files, true);
@@ -4736,8 +4740,7 @@ public class LizzieFrame extends JFrame {
           if (args.length == 1) {
             if (!args[0].equals("read")) {
               File file = new File(args[0]);
-              loadFile(file, true, true);
-              curFile = file;
+              loadFile(file, true, true, () -> curFile = file);
             }
           } else if (Lizzie.config.autoResume) {
             resumeFile();
@@ -5399,8 +5402,8 @@ public class LizzieFrame extends JFrame {
     } else {
       Board loadedBoard = Lizzie.board;
       BoardHistoryList loadedHistory = loadedBoard.getHistory();
-      // SGFParser finalizes last-move navigation on the next EDT turn. Restore a saved cursor
-      // after that work and before capturing the position to synchronize with the engine.
+      // SGFParser finalizes navigation on the next EDT turn. Run success work for the still-current
+      // history after that navigation and before capturing the engine synchronization position.
       SwingUtilities.invokeLater(
           () -> {
             if (Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;

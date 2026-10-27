@@ -5042,12 +5042,19 @@ class LizzieFrameRegressionTest {
     private File loadedFile;
 
     @Override
-    public boolean loadFile(File file, boolean fromTemp, boolean showHint) {
+    boolean loadFile(
+        File file,
+        boolean fromTemp,
+        boolean showHint,
+        Runnable afterSuccessfulLoad,
+        Runnable afterEngineReady) {
       if (!interceptFileLoads) {
-        return super.loadFile(file, fromTemp, showHint);
+        return super.loadFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady);
       }
       loadFileCount++;
       loadedFile = file;
+      if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
+      if (afterEngineReady != null) afterEngineReady.run();
       return true;
     }
 
