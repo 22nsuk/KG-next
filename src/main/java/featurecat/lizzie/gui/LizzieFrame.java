@@ -108,6 +108,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.imageio.ImageIO;
 import javax.swing.*;
@@ -4980,6 +4981,7 @@ public class LizzieFrame extends JFrame {
         afterFirstPaint,
         true,
         false,
+        null,
         null);
   }
 
@@ -4989,6 +4991,18 @@ public class LizzieFrame extends JFrame {
       boolean readKomi,
       boolean resetAnalysisWindows,
       Runnable afterLoad) {
+    return loadSgfString(
+        sgfContent, resumeDelayMillis, readKomi, resetAnalysisWindows, afterLoad, null);
+  }
+
+  /** Retains online request ownership across deferred AI Coach/quick-analysis teardown. */
+  boolean loadSgfString(
+      String sgfContent,
+      int resumeDelayMillis,
+      boolean readKomi,
+      boolean resetAnalysisWindows,
+      Runnable afterLoad,
+      BooleanSupplier stillCurrent) {
     return loadSgfStringInternal(
         sgfContent,
         null,
@@ -4998,7 +5012,8 @@ public class LizzieFrame extends JFrame {
         afterLoad,
         false,
         false,
-        null);
+        null,
+        stillCurrent);
   }
 
   public boolean loadDownloadedSgfString(
@@ -5037,7 +5052,8 @@ public class LizzieFrame extends JFrame {
         afterLoad,
         false,
         true,
-        singleShotCompletion);
+        singleShotCompletion,
+        null);
   }
 
   private static final class SingleShotSgfLoadCompletion implements Consumer<Boolean> {
@@ -5065,7 +5081,8 @@ public class LizzieFrame extends JFrame {
       Runnable afterLoad,
       boolean showFeedback,
       boolean forceAutoQuickAnalyzeAfterLoad,
-      Consumer<Boolean> completion) {
+      Consumer<Boolean> completion,
+      BooleanSupplier stillCurrent) {
     if (!SwingUtilities.isEventDispatchThread()) {
       final boolean[] loaded = new boolean[] {false};
       try {
@@ -5082,7 +5099,8 @@ public class LizzieFrame extends JFrame {
                         afterLoad,
                         showFeedback,
                         forceAutoQuickAnalyzeAfterLoad,
-                        completion);
+                        completion,
+                        stillCurrent);
               }
             });
       } catch (Exception e) {
@@ -5095,6 +5113,10 @@ public class LizzieFrame extends JFrame {
       }
       return loaded[0];
     }
+    if (stillCurrent != null && !stillCurrent.getAsBoolean()) {
+      notifySgfLoadCompletion(completion, false);
+      return false;
+    }
     if (deferUntilHumanSlExit(
         () ->
             loadSgfStringInternal(
@@ -5106,7 +5128,8 @@ public class LizzieFrame extends JFrame {
                 afterLoad,
                 showFeedback,
                 forceAutoQuickAnalyzeAfterLoad,
-                completion),
+                completion,
+                stillCurrent),
         () -> notifySgfLoadCompletion(completion, false))) {
       // Legacy callers treat teardown handling as true; completion distinguishes actual outcome.
       return true;
@@ -5122,7 +5145,8 @@ public class LizzieFrame extends JFrame {
                 afterLoad,
                 showFeedback,
                 forceAutoQuickAnalyzeAfterLoad,
-                completion),
+                completion,
+                stillCurrent),
         () -> notifySgfLoadCompletion(completion, false))) {
       return true;
     }
