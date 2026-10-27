@@ -62,7 +62,7 @@ final class FunctionSearchController implements KeyEventDispatcher {
     KeyboardFocusManager manager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
     Component previousFocus = manager.getFocusOwner();
     Window anchor = manager.getFocusedWindow();
-    if (anchor != owner && anchor != owner.independentMainBoard) anchor = owner;
+    if (anchor == null || (anchor != owner && anchor != owner.independentMainBoard)) anchor = owner;
     if (index == null) index = new FunctionSearch();
     FunctionSearchDialog current = new FunctionSearchDialog(owner, anchor, index, this);
     dialog = current;

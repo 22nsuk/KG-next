@@ -33,6 +33,7 @@ SCENARIOS = {
     "search": (
         ("FunctionSearchInputTest", "chineseInputChain"),
         ("FunctionSearchInputTest", "englishInputChain"),
+        ("FunctionSearchInputTest", "koreanInputChain"),
     ),
     "settings": (("ConfigPersistenceAcceptanceTest", "savesSettingAcrossRestart"),),
     "quick-analysis": (

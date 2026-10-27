@@ -67,22 +67,14 @@ public class Message extends JDialog {
   private void showMessage(String message, Window owner, boolean modal) {
     Runnable show =
         () -> {
-          int width = messageWidth(message);
           setModal(modal);
           lblmessage.setText(message);
-          setSize(width, 80);
-          Lizzie.setFrameSize(this, width, 80);
+          pack();
+          setSize(Math.max(180, getWidth()), Math.max(80, getHeight()));
           setLocationRelativeTo(owner);
           setVisible(true);
         };
     runOnEdt(show);
-  }
-
-  private static int messageWidth(String message) {
-    String regex = "[\u4e00-\u9fa5]";
-    String text = message == null ? "" : message;
-    return Math.max(
-        180, (int) (text.replaceAll(regex, "12").length() * (Config.frameFontSize / 1.6)));
   }
 
   private void closeAndDispose() {

@@ -307,8 +307,8 @@ public final class EngineGameParametersDialog extends JDialog {
     private final JFontLabel position;
     private final JFontLabel engine = new JFontLabel("");
     private final JFontLabel color = new JFontLabel("");
-    private final ParameterCell wrn = new ParameterCell("EngineGameParameters.wrn");
-    private final ParameterCell pda = new ParameterCell("EngineGameParameters.pda");
+    private final ParameterCell wrn;
+    private final ParameterCell pda;
 
     PositionRow(boolean firstPosition) {
       this.firstPosition = firstPosition;
@@ -319,6 +319,8 @@ public final class EngineGameParametersDialog extends JDialog {
                       ? "EngineGameParameters.position1"
                       : "EngineGameParameters.position2"));
       position.setFont(position.getFont().deriveFont(Font.BOLD));
+      wrn = new ParameterCell("EngineGameParameters.wrn", position.getText());
+      pda = new ParameterCell("EngineGameParameters.pda", position.getText());
     }
 
     void addTo(JPanel panel, int row) {
@@ -369,9 +371,12 @@ public final class EngineGameParametersDialog extends JDialog {
 
     private boolean loading;
 
-    ParameterCell(String nameKey) {
+    ParameterCell(String nameKey, String positionName) {
       this.nameKey = nameKey;
       field.setColumns(6);
+      confirmed.setLabelFor(field);
+      AccessibilitySupport.named(
+          field, positionName + " " + Lizzie.resourceBundle.getString(nameKey), null);
       field.getDocument().addDocumentListener(this);
     }
 

@@ -3,14 +3,11 @@ package featurecat.lizzie.gui;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
 import featurecat.lizzie.enginegame.EngineGameView;
-import java.awt.Component;
 import java.awt.Insets;
-import java.awt.Window;
 import java.util.function.Supplier;
 import javax.swing.JComponent;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
-import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
 import javax.swing.event.MenuEvent;
 import javax.swing.event.MenuListener;
@@ -43,8 +40,10 @@ final class EngineGameParameterControls {
   static JMenuItem addMenuEntry(JMenu menu, Supplier<EngineGameSnapshot> snapshot) {
     JFontMenuItem item =
         new JFontMenuItem(Lizzie.resourceBundle.getString("EngineGameParameters.entry"));
+    item.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "game.parameters");
     item.setVisible(false);
-    item.addActionListener(event -> EngineGameParametersDialog.open(ownerWindow(item)));
+    // The custom menu's source tree may be detached when search invokes it directly.
+    item.addActionListener(event -> EngineGameParametersDialog.open(Lizzie.frame));
     menu.add(item);
     menu.addMenuListener(
         new MenuListener() {
@@ -63,17 +62,6 @@ final class EngineGameParameterControls {
   }
 
   /**
-   * The window a menu item was chosen in: popups are followed back to the menu that opened them.
-   */
-  private static Window ownerWindow(Component component) {
-    for (Component c = component; c != null; ) {
-      if (c instanceof Window window) return window;
-      c = c instanceof JPopupMenu popup ? popup.getInvoker() : c.getParent();
-    }
-    return null;
-  }
-
-  /**
    * Shows the button for an analysis-mode engine game and enables it while a game is running or
    * paused. Between games the snapshot carries no play mode, so the batch keeps its visibility.
    */
@@ -82,7 +70,13 @@ final class EngineGameParameterControls {
     EngineGameView view = snapshot.view();
     if (view != null) button.setVisible(!view.genmove());
     else if (!snapshot.betweenGames()) button.setVisible(false);
-    button.setEnabled(button.isVisible() && snapshot.playing());
+    button.setEnabled(canOpen(snapshot));
+  }
+
+  /** Shared admission for the existing menu/toolbar entry and function-search navigation. */
+  static boolean canOpen(EngineGameSnapshot snapshot) {
+    EngineGameView view = snapshot.view();
+    return snapshot.playing() && view != null && !view.genmove();
   }
 
   /**

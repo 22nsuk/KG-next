@@ -1101,6 +1101,13 @@ public final class FunctionCatalog {
               "Menu.game",
               "Menu.pauseEngineGame"),
           menuEntry(
+              "game.parameters",
+              "EngineGameParameters.entry",
+              "FunctionSearch.category.game",
+              TargetType.WINDOW,
+              "Menu.game",
+              "EngineGameParameters.entry"),
+          menuEntry(
               "menu.changeEngineGameNumbers",
               "Menu.changeEngineGameNumbers",
               "FunctionSearch.category.game",

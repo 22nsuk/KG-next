@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 
@@ -20,6 +21,9 @@ import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.GraphicsEnvironment;
+import java.awt.Robot;
+import java.awt.event.FocusAdapter;
+import java.awt.event.FocusEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -31,6 +35,7 @@ import java.util.Locale;
 import java.util.ResourceBundle;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import javax.imageio.ImageIO;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JTextArea;
@@ -86,6 +91,69 @@ class EngineGameParametersDialogTest {
       Lizzie.config = previousConfig;
       Lizzie.resourceBundle = previousBundle;
     }
+  }
+
+  @Test
+  void koreanFieldsHaveDistinctLabelsAndSupportTabEnterAndEscape() throws Exception {
+    edt(
+        () -> {
+          dialog.dispose();
+          Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREAN);
+          dialog = new EngineGameParametersDialog(null, game);
+          game.dialog = dialog;
+        });
+    presentAndAwaitFocus();
+    List<JTextField> fields = new ArrayList<>();
+    edt(
+        () -> {
+          fields.addAll(components(JTextField.class));
+          assertEquals(
+              List.of("엔진 1 탐색 폭", "엔진 1 공격성", "엔진 2 탐색 폭", "엔진 2 공격성"),
+              fields.stream().map(field -> field.getAccessibleContext().getAccessibleName()).toList());
+          List<JLabel> labels =
+              components(JLabel.class).stream().filter(label -> label.getLabelFor() != null).toList();
+          assertEquals(4, labels.size());
+          for (int i = 0; i < fields.size(); i++) {
+            assertSame(fields.get(i), labels.get(i).getLabelFor());
+          }
+        });
+
+    Robot robot = new Robot();
+    awaitFocus(fields.get(0), () -> edt(() -> fields.get(0).requestFocusInWindow()));
+    for (int i = 1; i < fields.size(); i++) {
+      JTextField next = fields.get(i);
+      awaitFocus(next, () -> press(robot, KeyEvent.VK_TAB));
+    }
+    awaitFocus(dialog.getRootPane().getDefaultButton(), () -> press(robot, KeyEvent.VK_TAB));
+
+    Path screenshots =
+        Path.of(System.getProperty("lizzie.desktop.evidence.dir", "target/desktop-smoke/probes"));
+    Files.createDirectories(screenshots);
+    ImageIO.write(
+        robot.createScreenCapture(dialog.getBounds()),
+        "png",
+        screenshots.resolve(
+            "game-parameters-ko-scale-"
+                + dialog.getGraphicsConfiguration().getDefaultTransform().getScaleX()
+                + "-requested-" + System.getProperty("sun.java2d.uiScale", "1") + ".png").toFile());
+
+    awaitFocus(fields.get(2), () -> edt(() -> fields.get(2).requestFocusInWindow()));
+    edt(() -> fields.get(2).setText("0.45"));
+    press(robot, KeyEvent.VK_ENTER);
+    robot.waitForIdle();
+    edt(
+        () -> {
+          assertEquals(1, game.requests.size(), "Enter submits the current draft once");
+          assertEquals(0.45, game.requests.get(0).secondWrn());
+          assertTrue(dialog.isVisible(), "submission still waits for engine confirmation");
+        });
+    press(robot, KeyEvent.VK_ESCAPE);
+    robot.waitForIdle();
+    edt(
+        () -> {
+          assertFalse(dialog.isVisible());
+          assertEquals(1, game.requests.size(), "Escape does not submit another change");
+        });
   }
 
   @Test
@@ -248,6 +316,33 @@ class EngineGameParametersDialogTest {
 
   private void ok() {
     dialog.getRootPane().getDefaultButton().doClick();
+  }
+
+  private static void awaitFocus(Component component, ThrowingRunnable action) throws Exception {
+    CountDownLatch focused = new CountDownLatch(1);
+    FocusAdapter listener =
+        new FocusAdapter() {
+          @Override
+          public void focusGained(FocusEvent event) {
+            focused.countDown();
+          }
+        };
+    edt(
+        () -> {
+          component.addFocusListener(listener);
+          if (component.isFocusOwner()) focused.countDown();
+        });
+    try {
+      action.run();
+      assertTrue(focused.await(5, TimeUnit.SECONDS), "keyboard focus did not reach " + component);
+    } finally {
+      edt(() -> component.removeFocusListener(listener));
+    }
+  }
+
+  private static void press(Robot robot, int key) {
+    robot.keyPress(key);
+    robot.keyRelease(key);
   }
 
   private void escape() {

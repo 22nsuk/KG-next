@@ -133,6 +133,39 @@ class FunctionSearchTest {
   }
 
   @Test
+  void koreanDailyQueriesFindTheirIntendedDestinations() {
+    FunctionSearch search = new FunctionSearch();
+    Map<String, String> queries =
+        Map.ofEntries(
+            Map.entry("대국 파라미터", "game.parameters"),
+            Map.entry("엔진 대국 파라미터", "game.parameters"),
+            Map.entry("engine game parameters", "game.parameters"),
+            Map.entry("탐색 폭", "game.parameters"),
+            Map.entry("공격성", "game.parameters"),
+            Map.entry("정밀 분석", "whole-game-deep-analysis"),
+            Map.entry("기보 열기", "files.open"),
+            Map.entry("SGF 열기", "files.open"),
+            Map.entry("기보 저장", "files.save"),
+            Map.entry("SGF 저장", "files.save"),
+            Map.entry("기보 다른 이름으로 저장", "files.save-as"),
+            Map.entry("기보 복사", "menu.copySgf"),
+            Map.entry("기보 붙여넣기", "menu.pasteSgf"));
+    queries.forEach(
+        (query, expected) -> {
+          List<FunctionSearch.Match> matches = search.search(query, Locale.KOREA);
+          assertTrue(!matches.isEmpty(), query);
+          assertEquals(expected, matches.get(0).id(), query);
+        });
+    assertEquals(
+        "engine.parameters", search.search("engine parameters", Locale.KOREA).get(0).id());
+    assertEquals("Alt+D", FunctionCatalog.entry("engine.parameters").shortcut());
+    assertEquals(
+        FunctionCatalog.TargetType.WINDOW, FunctionCatalog.entry("game.parameters").targetType());
+    assertEquals(
+        FunctionCatalog.TargetType.NAVIGATION, FunctionCatalog.entry("menu.pasteSgf").targetType());
+  }
+
+  @Test
   void saveAsAndWholeGameAnalysisAdvertiseTheirExistingKeyboardCommands() {
     assertEquals("S", FunctionCatalog.entry("files.save-as").shortcut());
     assertEquals("Ctrl+Shift+B", FunctionCatalog.entry("whole-game-deep-analysis").shortcut());

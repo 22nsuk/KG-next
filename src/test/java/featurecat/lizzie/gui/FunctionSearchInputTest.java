@@ -6,6 +6,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.AppLocale;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.enginegame.EngineGameSnapshotFixtures;
 import featurecat.lizzie.search.FunctionCatalog;
 import java.awt.Component;
 import java.awt.Container;
@@ -16,11 +18,13 @@ import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.event.InputEvent;
+import java.awt.event.InputMethodEvent;
 import java.awt.event.KeyEvent;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.text.AttributedString;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -32,6 +36,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.imageio.ImageIO;
 import javax.swing.AbstractButton;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -73,6 +78,11 @@ public final class FunctionSearchInputTest {
     runLocale("en_US", "custom", 2, "en", "US");
   }
 
+  @Test
+  void koreanInputChain() throws Exception {
+    runLocale("ko_KR", "custom", 3, "ko", "KR");
+  }
+
   private static void runLocale(
       String locale, String presentation, int configValue, String language, String country)
       throws Exception {
@@ -92,6 +102,11 @@ public final class FunctionSearchInputTest {
     assertEquals(TARGET, values.get("target"), values.toString());
     for (String key : REQUIRED_RESULTS) {
       assertEquals("true", values.get(key), "Missing or failed result " + key + ": " + values);
+    }
+    if ("ko_KR".equals(locale)) {
+      assertEquals("true", values.get("korean.composition-enter-retained"), values.toString());
+      assertEquals("game.parameters", values.get("korean.query.target"), values.toString());
+      assertEquals("true", values.get("korean.query.real-dialog"), values.toString());
     }
     for (String path : List.of("toolbar", "shortcut")) {
       String settingBefore = required(values, path + ".setting.before");
@@ -142,13 +157,14 @@ public final class FunctionSearchInputTest {
       String localeName, String presentation, int configValue, Path work, Evidence evidence)
       throws Exception {
     Locale requestedLocale = requestedLocale(localeName);
+    Locale bundleLocale = Locale.KOREA.equals(requestedLocale) ? Locale.KOREAN : requestedLocale;
     ResourceBundle expectedBundle =
         ResourceBundle.getBundle("l10n.DisplayStrings", requestedLocale);
     ResourceBundle englishBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.US);
-    if (!requestedLocale.equals(expectedBundle.getLocale())) {
+    if (!bundleLocale.equals(expectedBundle.getLocale())) {
       throw new AssertionError(
           "requested bundle locale mismatch: "
-              + requestedLocale
+              + bundleLocale
               + " != "
               + expectedBundle.getLocale());
     }
@@ -183,12 +199,12 @@ public final class FunctionSearchInputTest {
             throw new AssertionError(
                 "effective locale mismatch: " + effective + " != " + requestedLocale);
           }
-          if (!requestedLocale.equals(Lizzie.resourceBundle.getLocale())) {
+          if (!bundleLocale.equals(Lizzie.resourceBundle.getLocale())) {
             throw new AssertionError(
                 "live bundle locale mismatch: "
                     + Lizzie.resourceBundle.getLocale()
                     + " != "
-                    + requestedLocale);
+                    + bundleLocale);
           }
           if (!title.equals(Lizzie.resourceBundle.getString("FunctionSearch.title"))) {
             throw new AssertionError("live search title does not match independent locale oracle");
@@ -228,6 +244,11 @@ public final class FunctionSearchInputTest {
           sendShortcut(robot);
         });
 
+    if (Locale.KOREA.equals(requestedLocale)) {
+      DesktopProbeProcess.phase(evidence.path(), "korean-game-parameter-search");
+      exerciseKoreanGameParameters(robot, evidence);
+    }
+
     DesktopProbeProcess.phase(evidence.path(), "input-ownership");
     exerciseTextOwnership(robot, evidence);
     exerciseModalOwnership(robot, evidence);
@@ -239,6 +260,96 @@ public final class FunctionSearchInputTest {
     evidence.put("board.unchanged", Boolean.toString(boardUnchanged));
     if (!boardUnchanged) {
       throw new AssertionError("input chain changed the current board node or configuration");
+    }
+  }
+
+  private static void exerciseKoreanGameParameters(Robot robot, Evidence evidence) throws Exception {
+    EngineGameSnapshot beforeGame = runOnEdt(() -> Lizzie.engineGame.current());
+    Object beforeNode = currentBoardNode();
+    String beforeConfig = currentConfig();
+    try {
+      // The game owner is controlled; the input component, menu action and destination are real.
+      runOnEdtAction(EngineGameSnapshotFixtures::publishPlaying);
+      focusMainPanel();
+      sendShortcut(robot);
+      FunctionSearchDialog dialog = awaitSearch("Korean game-parameter search");
+      JTextField input = searchInput(dialog);
+      await(input::isFocusOwner, "Korean search input focus", UI_TIMEOUT_MILLIS);
+
+      // Exercise Swing's composition/commit delivery, not an installed OS input method.
+      String query = "대국 파라미터";
+      runOnEdtAction(
+          () ->
+              input.dispatchEvent(
+                  new InputMethodEvent(
+                      input,
+                      InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                      new AttributedString(query).getIterator(),
+                      query.length() - 1,
+                      null,
+                      null)));
+      press(robot, KeyEvent.VK_ENTER);
+      robot.waitForIdle();
+      if (!runOnEdt(dialog::isShowing)) {
+        throw new AssertionError("composition Enter activated Korean search prematurely");
+      }
+      evidence.put("korean.composition-enter-retained", "true");
+      runOnEdtAction(
+          () ->
+              input.dispatchEvent(
+                  new InputMethodEvent(
+                      input,
+                      InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                      new AttributedString("터").getIterator(),
+                      1,
+                      null,
+                      null)));
+      await(
+          () -> query.equals(runOnEdtUnchecked(input::getText)),
+          "Korean committed query",
+          UI_TIMEOUT_MILLIS);
+      JList<?> results = resultList(dialog);
+      await(
+          () -> "game.parameters".equals(selectedTarget(results)),
+          "Korean game-parameter result",
+          UI_TIMEOUT_MILLIS);
+      evidence.put("korean.query.target", selectedTarget(results));
+      robot.waitForIdle();
+      if (!ImageIO.write(
+          robot.createScreenCapture(runOnEdt(dialog::getBounds)),
+          "png",
+          evidence.path().getParent().resolve("korean-game-parameters-search.png").toFile())) {
+        throw new AssertionError("cannot write Korean search screenshot");
+      }
+      press(robot, KeyEvent.VK_ENTER);
+      await(() -> !dialog.isShowing(), "Korean search activation", UI_TIMEOUT_MILLIS);
+      await(EngineGameParametersDialog::isOpen, "real game-parameter dialog", UI_TIMEOUT_MILLIS);
+      EngineGameParametersDialog parameters =
+          runOnEdt(
+              () -> {
+                for (Window window : Window.getWindows()) {
+                  if (window instanceof EngineGameParametersDialog candidate
+                      && candidate.isShowing())
+                    return candidate;
+                }
+                throw new AssertionError("game-parameter dialog was not attached");
+              });
+      assertEquals(
+          Lizzie.resourceBundle.getString("EngineGameParameters.title"),
+          runOnEdt(parameters::getTitle));
+      evidence.put("korean.query.real-dialog", "true");
+      assertBoardAndConfigUnchanged(beforeNode, beforeConfig, "Korean game-parameter navigation");
+      await(parameters::isFocused, "game-parameter dialog focus", UI_TIMEOUT_MILLIS);
+      press(robot, KeyEvent.VK_ESCAPE);
+      await(() -> !parameters.isShowing(), "game-parameter Escape", UI_TIMEOUT_MILLIS);
+    } finally {
+      runOnEdtAction(() -> Lizzie.engineGame.publishSnapshotForTest(beforeGame));
+      runOnEdtAction(
+          () -> {
+            for (Window window : Window.getWindows()) {
+              if (window instanceof EngineGameParametersDialog) window.setVisible(false);
+            }
+          });
     }
   }
 
@@ -764,6 +875,7 @@ public final class FunctionSearchInputTest {
     return switch (localeName) {
       case "zh_CN" -> Locale.CHINA;
       case "en_US" -> Locale.US;
+      case "ko_KR" -> Locale.KOREA;
       default -> throw new IllegalArgumentException("unsupported probe locale: " + localeName);
     };
   }

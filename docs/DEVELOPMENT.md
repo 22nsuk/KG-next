@@ -49,7 +49,7 @@ python3 scripts/run_acceptance.py --scenario search --scenario settings
 python3 scripts/run_acceptance.py --scenario quick-analysis --engine /absolute/path/to/katago --model /absolute/path/to/model.bin.gz
 ```
 
-省略 `--scenario` 只运行默认的 `search`、`settings`、`quick-analysis`，需要同时提供真实 Linux KataGo 与模型。`search` 复用中英文真实输入链；`settings` 点击生产设置保存按钮，再用新 JVM 读取同一隔离配置；`quick-analysis` 从已可用的前台引擎导入 SGF，验证自动快析完成、共享引擎交回后的 visits 增长，以及快析期间用户暂停的保持。它不覆盖启动期间导入竞态或 Windows 原生文件选择器。
+省略 `--scenario` 只运行默认的 `search`、`settings`、`quick-analysis`，需要同时提供真实 Linux KataGo 与模型。`search` 复用中、英、韩文真实输入链；韩文场景还向生产 Swing 输入框发送受控组合与确认事件，验证确认输入不会提前打开功能，再通过 Enter 打开真实对局参数窗口。它不代表 Windows 原生韩文 IME 验收。`settings` 点击生产设置保存按钮，再用新 JVM 读取同一隔离配置；`quick-analysis` 从已可用的前台引擎导入 SGF，验证自动快析完成、共享引擎交回后的 visits 增长，以及快析期间用户暂停的保持。它不覆盖启动期间导入竞态或 Windows 原生文件选择器。
 
 以下两个场景必须显式选择，不随默认场景运行：
 
@@ -171,6 +171,10 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `EngineProcessSmokeTest.restoresSnapshotAnalyzesAndQuits`
 - `FunctionSearchInputTest.chineseInputChain`
 - `FunctionSearchInputTest.englishInputChain`
+- `FunctionSearchInputTest.koreanInputChain`
+- `EngineGameParametersDialogTest` 的韩文输入标签、Tab/Enter/Esc、确认等待与失败重试场景
+- `SetKataEnginesHitTest` 的专用 PDA 字体布局、键盘操作、非有限数拒绝、原配置和引擎状态保留场景
+- `MessageThemeTest` 的韩文、中文、英文和 HTML 提示完整显示及 Esc 关闭场景
 - `TeacherDialogRequestOwnershipTest` 的全部解说请求、修正、取消和 SGF 保存场景
 - `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
 - `HumanSlStrengthDialogTest` 的手动选择、设置重启保留、显式补充、取消和换谱结果隔离场景

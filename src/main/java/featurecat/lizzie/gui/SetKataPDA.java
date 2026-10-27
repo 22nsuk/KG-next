@@ -5,10 +5,12 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.enginegame.EngineGameSnapshot;
+import featurecat.lizzie.util.Utils;
 import java.awt.Color;
-import java.awt.Dimension;
 import java.awt.Font;
-import java.awt.Toolkit;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.Insets;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.IOException;
@@ -16,8 +18,12 @@ import java.util.Locale;
 import java.util.ResourceBundle;
 import javax.imageio.ImageIO;
 import javax.swing.ButtonGroup;
+import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.border.EmptyBorder;
 
 public class SetKataPDA extends JDialog {
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
@@ -30,23 +36,13 @@ public class SetKataPDA extends JDialog {
   public JFontTextField txtDymCap;
 
   public SetKataPDA() {
-    // this.setModal(true);
-    // setType(Type.POPUP);
     setResizable(false);
     setTitle(
         resourceBundle.getString("SetKataPDA.title")); // ("KataGo 激进参数PDA设置(仅支持KataGo PDA引擎)");
     setAlwaysOnTop(true);
-    setLocationRelativeTo(Lizzie.frame);
-    getContentPane().setLayout(null);
-
-    //    this.addWindowListener(
-    //        new WindowAdapter() {
-    //          public void windowClosing(WindowEvent e) {
-    //
-    //            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-    //            setVisible(false);
-    //          }
-    //        });
+    JPanel content = new JPanel(new GridBagLayout());
+    content.setBorder(new EmptyBorder(6, 6, 6, 6));
+    setContentPane(content);
 
     JFontButton btnCancel =
         new JFontButton(resourceBundle.getString("SetKataPDA.btnCancel")); // ("取消");
@@ -56,12 +52,7 @@ public class SetKataPDA extends JDialog {
             setVisible(false);
           }
         });
-    btnCancel.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 255 : (Lizzie.config.isFrameFontMiddle() ? 320 : 380),
-        Lizzie.config.isChinese ? 205 : 153,
-        80,
-        25);
-    getContentPane().add(btnCancel);
+    addControl(btnCancel, 5, 7, 1);
 
     JFontButton btnApply =
         new JFontButton(resourceBundle.getString("SetKataPDA.btnApply")); // ("确定");
@@ -77,19 +68,13 @@ public class SetKataPDA extends JDialog {
               double dymCap;
               try {
                 dymCap = Double.parseDouble(txtDymCap.getText().trim());
-              } catch (Exception es) {
-                Message msg = new Message();
-                msg.setMessage(
-                    resourceBundle.getString("SetKataPDA.wrongParameter")); // ("输入参数有误 ");
-                msg.setVisible(true);
+              } catch (NumberFormatException es) {
+                invalidParameter(txtDymCap);
                 return;
               }
 
-              if (dymCap == 0) {
-                Message msg = new Message();
-                msg.setMessage(
-                    resourceBundle.getString("SetKataPDA.wrongParameter")); // ("输入参数有误 ");
-                msg.setVisible(true);
+              if (!Double.isFinite(dymCap) || dymCap == 0) {
+                invalidParameter(txtDymCap);
                 return;
               }
               if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "dympdacap " + dymCap;
@@ -107,11 +92,12 @@ public class SetKataPDA extends JDialog {
               try {
                 staticCur = Double.parseDouble(txtStaticCur.getText().trim());
 
-              } catch (Exception es) {
-                Message msg = new Message();
-                msg.setMessage(
-                    resourceBundle.getString("SetKataPDA.wrongParameter")); // ("输入参数有误 ");
-                msg.setVisible(true);
+              } catch (NumberFormatException es) {
+                invalidParameter(txtStaticCur);
+                return;
+              }
+              if (!Double.isFinite(staticCur)) {
+                invalidParameter(txtStaticCur);
                 return;
               }
               if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "pda " + staticCur;
@@ -149,41 +135,21 @@ public class SetKataPDA extends JDialog {
             setVisible(false);
           }
         });
-    btnApply.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 167 : (Lizzie.config.isFrameFontMiddle() ? 225 : 290),
-        Lizzie.config.isChinese ? 205 : 153,
-        80,
-        25);
-    getContentPane().add(btnApply);
+    addControl(btnApply, 4, 7, 1);
+    getRootPane().setDefaultButton(btnApply);
+    AccessibilitySupport.installEscapeAction(getRootPane(), this, () -> setVisible(false));
 
     chkDymPda = new JFontCheckBox(resourceBundle.getString("SetKataPDA.chkDymPda")); // ("动态PDA");
-    chkDymPda.setBounds(
-        6,
-        45,
-        Lizzie.config.isFrameFontSmall() ? 75 : (Lizzie.config.isFrameFontMiddle() ? 95 : 115),
-        23);
-    getContentPane().add(chkDymPda);
+    addControl(chkDymPda, 0, 1, 1);
 
     chkStaticPda =
         new JFontCheckBox(resourceBundle.getString("SetKataPDA.chkStaticPda")); // ("固定PDA");
-    chkStaticPda.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 243 : (Lizzie.config.isFrameFontMiddle() ? 287 : 330),
-        45,
-        Lizzie.config.isFrameFontSmall() ? 75 : (Lizzie.config.isFrameFontMiddle() ? 95 : 115),
-        23);
-    getContentPane().add(chkStaticPda);
-
-    chkDymPda.setFocusable(false);
-    chkStaticPda.setFocusable(false);
+    addControl(chkStaticPda, 3, 1, 1);
 
     txtStaticCur = new JFontTextField();
-    txtStaticCur.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 323 : (Lizzie.config.isFrameFontMiddle() ? 390 : 445),
-        44,
-        66,
-        24);
-    getContentPane().add(txtStaticCur);
-    txtStaticCur.setColumns(10);
+    txtStaticCur.setColumns(6);
+    addControl(txtStaticCur, 4, 1, 1);
+    AccessibilitySupport.named(txtStaticCur, chkStaticPda.getText(), null);
 
     txtStaticCur.setEnabled(false);
 
@@ -191,30 +157,22 @@ public class SetKataPDA extends JDialog {
         new JFontLabel(
             resourceBundle.getString(
                 "SetKataPDA.lblTip")); // "注:动态变化系数修改后,会自动按让子数计算PDA,并设为当前值,不推荐序盘以后修改");
-    lblTip.setBounds(10, 72, 831, 23);
-    getContentPane().add(lblTip);
+    addControl(lblTip, 0, 2, 6);
 
     JLabel lblCurPDA = new JLabel(resourceBundle.getString("SetKataPDA.lblCurPDA")); // ("当前PDA:");
     lblCurPDA.setFont(new Font("Song", Font.PLAIN, Math.max(Config.frameFontSize, 14)));
-    lblCurPDA.setBounds(10, 10, 210, 24);
-    getContentPane().add(lblCurPDA);
+    addControl(lblCurPDA, 0, 0, 1);
 
     curPDA = new JLabel("0.0");
     curPDA.setFont(new Font("Song", Font.PLAIN, Math.max(Config.frameFontSize, 15)));
-    curPDA.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 132 : (Lizzie.config.isFrameFontMiddle() ? 145 : 175),
-        13,
-        60,
-        20);
-    getContentPane().add(curPDA);
+    addControl(curPDA, 1, 0, 5);
     curPDA.setText(String.format(Locale.ENGLISH, "%.3f", Lizzie.leelaz.pda));
 
     chkAutoPDA =
         new JFontCheckBox(
             resourceBundle.getString(
                 "SetKataPDA.chkAutoPDA")); // ("自动加载此PDA设置(每次对局开始时,包括人机对局和引擎对局)");
-    chkAutoPDA.setBounds(6, 96, 812, 23);
-    getContentPane().add(chkAutoPDA);
+    addControl(chkAutoPDA, 0, 3, 6);
 
     chkDymPda.addActionListener(
         new ActionListener() {
@@ -233,10 +191,7 @@ public class SetKataPDA extends JDialog {
           }
         });
 
-    chkAutoPDA.setFocusable(false);
-
     chkNoPDA = new JFontCheckBox(resourceBundle.getString("SetKataPDA.chkNoPDA")); // ("不启用PDA");
-    chkNoPDA.setFocusable(false);
     chkNoPDA.addActionListener(
         new ActionListener() {
           @Override
@@ -251,44 +206,28 @@ public class SetKataPDA extends JDialog {
     bg.add(chkStaticPda);
     bg.add(chkNoPDA);
 
-    chkNoPDA.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 406 : (Lizzie.config.isFrameFontMiddle() ? 480 : 540),
-        45,
-        171,
-        23);
-
-    getContentPane().add(chkNoPDA);
+    addControl(chkNoPDA, 5, 1, 1);
 
     JFontLabel lblDymRatio =
         new JFontLabel(resourceBundle.getString("SetKataPDA.lblDymRatio")); // ("动态PDA系数:");
-    lblDymRatio.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 87 : (Lizzie.config.isFrameFontMiddle() ? 107 : 127),
-        46,
-        130,
-        20);
-    getContentPane().add(lblDymRatio);
+    addControl(lblDymRatio, 1, 1, 1);
 
     txtDymCap = new JFontTextField();
-    txtDymCap.setBounds(
-        Lizzie.config.isFrameFontSmall() ? 154 : (Lizzie.config.isFrameFontMiddle() ? 190 : 230),
-        44,
-        66,
-        24);
-    getContentPane().add(txtDymCap);
+    txtDymCap.setColumns(6);
+    addControl(txtDymCap, 2, 1, 1);
     txtDymCap.setEnabled(false);
+    AccessibilitySupport.labelFor(lblDymRatio, txtDymCap, chkDymPda.getText());
 
     JFontLabel lblpdakatagopdapda =
         new JFontLabel(
             resourceBundle.getString(
                 "SetKataPDA.lblpdakatagopdapda")); // ("注:PDA为KataGo控制行棋激进/消极程度的参数,分先一般不需开启,让子需要激进(PDA为正)");
     lblpdakatagopdapda.setForeground(Color.RED);
-    lblpdakatagopdapda.setBounds(10, 125, 835, 23);
-    getContentPane().add(lblpdakatagopdapda);
+    addControl(lblpdakatagopdapda, 0, 4, 6);
 
     JFontLabel lblpdapda = new JFontLabel("被让子需要消极(PDA为负,如默认为白视角,则黑方需设置PDA为正才是消极)");
     lblpdapda.setForeground(Color.RED);
-    lblpdapda.setBounds(6, 150, 872, 23);
-    if (Lizzie.config.isChinese) getContentPane().add(lblpdapda);
+    if (Lizzie.config.isChinese) addControl(lblpdapda, 0, 5, 6);
 
     if (!Lizzie.leelaz.isStaticPda) {
       chkDymPda.setSelected(true);
@@ -299,16 +238,12 @@ public class SetKataPDA extends JDialog {
     }
 
     chkAutoPDA.setSelected(Lizzie.config.chkAutoPDA);
-    // if(!Lizzie.config.dymPDACap.equals(""))
-    // txtDymCap.setText(Lizzie.config.dymPDACap);
-    // else
     txtDymCap.setText(String.valueOf(Lizzie.leelaz.pdaCap));
     txtStaticCur.setText(String.valueOf(Lizzie.leelaz.pda));
 
     JFontLabel label = new JFontLabel("一般默认为白方视角,也可修改配置文件改为黑方视角,或无视角(轮谁下是谁的视角)");
     label.setForeground(Color.RED);
-    label.setBounds(6, 174, 872, 23);
-    if (Lizzie.config.isChinese) getContentPane().add(label);
+    if (Lizzie.config.isChinese) addControl(label, 0, 6, 6);
     if (chkDymPda.isSelected()) {
       txtDymCap.setEnabled(true);
       txtStaticCur.setEnabled(false);
@@ -321,21 +256,35 @@ public class SetKataPDA extends JDialog {
       txtStaticCur.setEnabled(false);
     }
 
-    // setSize(957, 467);
-    Lizzie.setFrameSize(
-        this,
-        Lizzie.config.isFrameFontSmall() ? 517 : (Lizzie.config.isFrameFontMiddle() ? 680 : 840),
-        Lizzie.config.isChinese ? 267 : 217);
+    pack();
+    setLocationRelativeTo(Lizzie.frame);
     try {
       this.setIconImage(ImageIO.read(MoreEngines.class.getResourceAsStream("/assets/logo.png")));
-      Dimension screensize = Toolkit.getDefaultToolkit().getScreenSize();
-      int x = (int) screensize.getWidth() / 2 - this.getWidth() / 2;
-      int y = (int) screensize.getHeight() / 2 - this.getHeight() / 2;
-      setLocation(x, y);
     } catch (IOException e1) {
       // TODO Auto-generated catch block
       e1.printStackTrace();
     }
+  }
+
+  private void addControl(JComponent component, int column, int row, int columns) {
+    GridBagConstraints constraints = new GridBagConstraints();
+    constraints.gridx = column;
+    constraints.gridy = row;
+    constraints.gridwidth = columns;
+    constraints.insets = new Insets(4, 4, 4, 4);
+    constraints.anchor =
+        component instanceof JFontButton ? GridBagConstraints.LINE_END : GridBagConstraints.LINE_START;
+    if (component instanceof JTextField) {
+      constraints.fill = GridBagConstraints.HORIZONTAL;
+      constraints.weightx = 1.0;
+    }
+    getContentPane().add(component, constraints);
+  }
+
+  private void invalidParameter(JFontTextField field) {
+    Utils.showMsg(resourceBundle.getString("SetKataPDA.wrongParameter"), this);
+    field.requestFocusInWindow();
+    field.selectAll();
   }
 
   private static Leelaz kataGoPdaEngineGameParticipantOrPrimary() {
