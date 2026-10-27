@@ -4913,6 +4913,7 @@ class AnalysisEngineRequestTest {
   }
 
   private static final class TestEnvironment implements AutoCloseable {
+    private final LizzieFrame ownedFrame;
     private final int previousBoardWidth;
     private final int previousBoardHeight;
     private final Config previousConfig;
@@ -4927,7 +4928,9 @@ class AnalysisEngineRequestTest {
         Config previousConfig,
         Board previousBoard,
         LizzieFrame previousFrame,
-        Leelaz previousLeelaz) {
+        Leelaz previousLeelaz,
+        LizzieFrame ownedFrame) {
+      this.ownedFrame = ownedFrame;
       this.previousBoardWidth = previousBoardWidth;
       this.previousBoardHeight = previousBoardHeight;
       this.previousConfig = previousConfig;
@@ -4972,6 +4975,7 @@ class AnalysisEngineRequestTest {
       frame.clickbadmove = LizzieFrame.outOfBoundCoordinate;
       frame.mouseOverCoordinate = LizzieFrame.outOfBoundCoordinate;
       frame.suggestionclick = LizzieFrame.outOfBoundCoordinate;
+      featurecat.lizzie.gui.AnalysisUiRefreshTestSupport.install(frame);
       Lizzie.frame = frame;
       Lizzie.leelaz = allocate(Leelaz.class);
 
@@ -4981,7 +4985,8 @@ class AnalysisEngineRequestTest {
           previousConfig,
           previousBoard,
           previousFrame,
-          previousLeelaz);
+          previousLeelaz,
+          frame);
     }
 
     @Override
@@ -5015,6 +5020,7 @@ class AnalysisEngineRequestTest {
           }
           try {
             drained.get(Math.max(0L, remaining), TimeUnit.NANOSECONDS);
+            featurecat.lizzie.gui.AnalysisUiRefreshTestSupport.awaitIdle(ownedFrame);
             break;
           } catch (InterruptedException error) {
             interrupted = true;
@@ -5047,6 +5053,9 @@ class AnalysisEngineRequestTest {
     private int retainedModeConflictCount;
 
     private TrackingLizzieFrame() {}
+
+    @Override
+    public void updateTitle() {}
 
     @Override
     public void requestProblemListRefresh() {}

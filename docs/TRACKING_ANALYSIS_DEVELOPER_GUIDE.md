@@ -16,6 +16,28 @@
   只额外叠加关注质量圈和独立进度指示。
 - `ReadBoard` 管理 accepted evidence 与当前请求准入；其 listener 退休 context，不执行用户 clear。
 
+## 分析复用与显示更新
+
+前台交回仍由 `TrackingAnalysisController.holdsSearchOf` 判断是否保留当前搜索：除了完整
+context，还必须通过 `Leelaz` 的即时搜索退休与 incarnation 检查。不要仅凭选点仍然显示就
+跳过棋盘同步，也不要新增一份分析结果缓存来保存关注点。
+
+`AnalysisUiRefresh` 只合并需要更新的显示部分，不保存引擎 payload 或历史 snapshot。
+普通分析、标题、选点通知和后台图表进度共用现有 `SwingRefreshCoalescer` 的 33ms 间隔；
+棋盘请求包含图表更新，单独的标题或图表请求不会升级为全窗口刷新。评论与问题侧栏继续
+使用 250ms 合并器。刷新期间的新请求保留到后续 EDT 轮次，沿用合并器让出用户输入的行为。
+
+选点通知只请求更新；EDT 执行时读取当前显示节点和 controller snapshot。即使添加、移除和
+退休通知合并后只剩空 snapshot，也必须重新应用候选显示限制。导航的完整刷新同样重新应用
+当前节点的限制，避免复用缓存时保留已退休的关注候选。`BoardData.refreshFocusCandidateVisibility`
+与普通分析采纳共用该节点的 monitor，不能让旧的显示列表副本覆盖并发到达的更深分析。
+这一步只重排可见/隐藏候选，不改 visits、胜率、目差、ownership 或分析来源。
+
+`AnalysisUiRefreshTest` 验证合并优先级与刷新期间的新请求；`MoveOnlyUiGateTest` 从实际 frame
+入口验证批量进度只触发一次 EDT 更新；`TrackingProductionCutoverTest` 覆盖关注撤销与退休
+合并、原搜索交回及失效后同步；`BoardDataAnalysisCacheTraceTest` 用受控交错验证候选显示与
+更深分析采纳不会互相覆盖。实际进度窗口和曲线绘制继续由 `AnalysisProgressDesktopTest` 验证。
+
 ## 准入与能力探针
 
 能力探针由初始化完成、位置已确认的生产入口调用 `startMoveFocusProbeAfterInitialization`。
