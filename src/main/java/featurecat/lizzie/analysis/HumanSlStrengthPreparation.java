@@ -98,9 +98,7 @@ public final class HumanSlStrengthPreparation implements AutoCloseable {
   }
 
   public static void saveBackgroundEnabled(boolean enabled) throws IOException {
-    JSONObject ui = new JSONObject(Lizzie.config.uiConfig.toString());
-    ui.put(BACKGROUND_KEY, enabled);
-    Lizzie.config.saveConfigSections(ui, Lizzie.config.leelazConfig);
+    Lizzie.config.updateConfigSections((ui, leelaz) -> ui.put(BACKGROUND_KEY, enabled));
   }
 
   public Status status() {

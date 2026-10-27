@@ -59,10 +59,7 @@ class ConfigLoggingTest {
     config.leelazConfig = leelaz;
     config.save();
 
-    JSONObject candidateUi = new JSONObject(ui.toString());
-    JSONObject candidateLeelaz = new JSONObject(leelaz.toString());
-    candidateUi.put("show-status", true);
-    config.saveConfigSections(candidateUi, candidateLeelaz);
+    config.updateConfigSections((candidateUi, candidateLeelaz) -> candidateUi.put("show-status", true));
 
     Path configFile = Path.of(config.getConfigFilePath());
     Files.delete(configFile);
@@ -71,9 +68,8 @@ class ConfigLoggingTest {
     assertThrows(
         IOException.class,
         () ->
-            config.saveConfigSections(
-                new JSONObject().put("show-status", false),
-                new JSONObject(candidateLeelaz.toString())));
+            config.updateConfigSections(
+                (candidateUi, candidateLeelaz) -> candidateUi.put("show-status", false)));
     assertSame(previousRoot, config.config);
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
 
@@ -205,10 +201,11 @@ class ConfigLoggingTest {
     config.config = root;
     config.uiConfig = ui;
     config.leelazConfig = leelaz;
-    JSONObject candidateUi = new JSONObject();
-    candidateUi.put("watch", 2);
-    candidateUi.put("show-status", true);
-    config.saveConfigSections(candidateUi, leelaz);
+    config.updateConfigSections(
+        (candidateUi, candidateLeelaz) -> {
+          candidateUi.put("watch", 2);
+          candidateUi.put("show-status", true);
+        });
     assertEquals(0, optCalls.get());
   }
 
@@ -244,7 +241,7 @@ class ConfigLoggingTest {
   }
 
   @Test
-  void saveConfigSectionsCountsOnlyChangedScalarWhenNestedJsonUnchanged() throws Exception {
+  void updateConfigSectionsCountsOnlyChangedScalarWhenNestedJsonUnchanged() throws Exception {
     LoggingRuntime.initialize(
         new WorkDirectoryResolution(tempDir, List.of()),
         new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 256_000));
@@ -261,9 +258,7 @@ class ConfigLoggingTest {
     config.uiConfig = ui;
     config.leelazConfig = leelaz;
 
-    JSONObject candidateUi = new JSONObject(ui.toString());
-    candidateUi.put("flag", true);
-    config.saveConfigSections(candidateUi, new JSONObject(leelaz.toString()));
+    config.updateConfigSections((candidateUi, candidateLeelaz) -> candidateUi.put("flag", true));
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
 
     String app = Files.readString(tempDir.resolve("logs/app.log"));

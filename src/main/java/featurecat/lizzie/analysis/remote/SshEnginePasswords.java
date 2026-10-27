@@ -127,13 +127,20 @@ public final class SshEnginePasswords {
   /** Existing settings are adopted only after the same transactional file save used by editors. */
   public static boolean migrateLegacyPasswords(Config config) throws IOException {
     synchronized (Utils.class) {
-      JSONObject candidate = new JSONObject(config.leelazConfig.toString());
-      try (Prepared prepared = new Prepared(RemoteComputeConfig.credentialStore())) {
-        prepared.prepare(candidate, true);
-        if (!prepared.changed) return false;
-        config.saveConfigSections(config.uiConfig, candidate);
-        prepared.commit();
-        return true;
+      synchronized (config) {
+        JSONObject candidate = new JSONObject(config.leelazConfig.toString());
+        try (Prepared prepared = new Prepared(RemoteComputeConfig.credentialStore())) {
+          prepared.prepare(candidate, true);
+          if (!prepared.changed) return false;
+          config.updateConfigSections(
+              (ui, leelaz) -> {
+                for (String key : List.of(ENGINE_LIST_KEY, ANALYSIS_ENGINE_KEY, CONTRIBUTE_ENGINE_KEY)) {
+                  if (candidate.has(key)) leelaz.put(key, candidate.get(key));
+                }
+              });
+          prepared.commit();
+          return true;
+        }
       }
     }
   }

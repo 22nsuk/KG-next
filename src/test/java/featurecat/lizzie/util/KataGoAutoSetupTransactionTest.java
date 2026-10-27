@@ -69,7 +69,7 @@ class KataGoAutoSetupTransactionTest {
                   // Setup has read its engine list. Give the competing commit the next turn:
                   // it either finishes now (old code), or blocks on the transaction owner.
                   benchmark.start();
-                  awaitCommitTurn(benchmark, benchmarkCommit, attemptingCommit);
+                  awaitCommitTurn(benchmark, benchmarkCommit, attemptingCommit, Utils.class);
                 }
                 return super.has(key);
               }
@@ -145,7 +145,7 @@ class KataGoAutoSetupTransactionTest {
       String analysis = "previous analysis command";
       config.analysisEngineCommand = analysis;
       config.uiConfig.put("analysis-engine-command", analysis);
-      config.saveConfigSections(config.uiConfig, config.leelazConfig);
+      config.updateConfigSections((ui, leelaz) -> {});
       JSONObject originalRoot = config.config;
       JSONObject originalUi = config.uiConfig;
       JSONObject originalLeelaz = config.leelazConfig;
@@ -174,14 +174,16 @@ class KataGoAutoSetupTransactionTest {
     }
   }
 
-  @Test
-  void interruptedSetupWaitingForPersistenceOwnerDoesNotCommit() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void interruptedSetupWaitingForPersistenceOwnerDoesNotCommit(boolean waitForConfig)
+      throws Exception {
     Config previousConfig = Lizzie.config;
     try {
       Config config = isolatedConfig();
       Lizzie.config = config;
       SetupSnapshot snapshot = snapshot(true);
-      config.saveConfigSections(config.uiConfig, config.leelazConfig);
+      config.updateConfigSections((ui, leelaz) -> {});
       String before = config.config.toString();
       String beforeDisk = Files.readString(Path.of(config.getConfigFilePath()));
       CountDownLatch started = new CountDownLatch(1);
@@ -193,9 +195,10 @@ class KataGoAutoSetupTransactionTest {
                 return null;
               });
       Thread worker = new Thread(setup, "setup-regression-interrupted-owner");
-      synchronized (Utils.class) {
+      Object persistenceOwner = waitForConfig ? config : Utils.class;
+      synchronized (persistenceOwner) {
         worker.start();
-        awaitCommitTurn(worker, setup, started);
+        awaitCommitTurn(worker, setup, started, persistenceOwner);
         worker.interrupt();
       }
 
@@ -277,7 +280,10 @@ class KataGoAutoSetupTransactionTest {
   }
 
   private static void awaitCommitTurn(
-      Thread benchmark, FutureTask<Void> commit, CountDownLatch attemptingCommit) {
+      Thread benchmark,
+      FutureTask<Void> commit,
+      CountDownLatch attemptingCommit,
+      Object persistenceOwner) {
     try {
       assertTrue(attemptingCommit.await(5, TimeUnit.SECONDS));
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -286,7 +292,8 @@ class KataGoAutoSetupTransactionTest {
         if (info != null
             && info.getThreadState() == Thread.State.BLOCKED
             && info.getLockInfo() != null
-            && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(Utils.class)) {
+            && info.getLockInfo().getIdentityHashCode()
+                == System.identityHashCode(persistenceOwner)) {
           return;
         }
         assertTrue(

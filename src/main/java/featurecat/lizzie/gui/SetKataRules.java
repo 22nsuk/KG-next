@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.EngineRulesResult;
@@ -271,20 +272,20 @@ public class SetKataRules extends JDialog {
     }
     KataGoRules requested = rulesFromEditor();
     boolean autoLoad = chkbxAutoLoadRules.isSelected();
-    JSONObject candidateUi = new JSONObject(Lizzie.config.uiConfig.toString());
-    candidateUi.put("auto-load-kata-rules", autoLoad);
-    if (autoLoad) {
-      candidateUi.put("kata-rules", requested.toGtpArgument());
-    }
+    Config config = Lizzie.config;
     try {
-      Lizzie.config.saveConfigSections(candidateUi, Lizzie.config.leelazConfig);
+      synchronized (config) {
+        config.updateConfigSections(
+            (ui, leelaz) -> {
+              ui.put("auto-load-kata-rules", autoLoad);
+              if (autoLoad) ui.put("kata-rules", requested.toGtpArgument());
+            });
+        config.autoLoadKataRules = autoLoad;
+        if (autoLoad) config.kataRules = requested.toGtpArgument();
+      }
     } catch (IOException failure) {
       Utils.showMsg(resourceBundle.getString("Lizzie.save.error") + failure.getLocalizedMessage());
       return;
-    }
-    Lizzie.config.autoLoadKataRules = autoLoad;
-    if (autoLoad) {
-      Lizzie.config.kataRules = requested.toGtpArgument();
     }
     Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     BoardHistoryList history = Lizzie.board.getHistory();

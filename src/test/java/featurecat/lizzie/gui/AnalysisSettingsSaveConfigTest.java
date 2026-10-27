@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -13,15 +14,25 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.remote.CredentialStore;
 import featurecat.lizzie.analysis.remote.SshCredentialTestStore;
 import featurecat.lizzie.analysis.remote.SshEnginePasswords;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.util.KataGoAutoSetupHelper.LocalKataGoDiscoveryResult;
 import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.JOptionPane;
 import javax.swing.JRadioButton;
@@ -29,8 +40,77 @@ import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisSettingsSaveConfigTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void successfulAnalysisAndRememberedEngineSavesPreserveBothChanges(
+      boolean overlap, @TempDir Path directory) throws Exception {
+    Config previousConfig = Lizzie.config;
+    LizzieFrame previousFrame = Lizzie.frame;
+    Config config = ConfigTestHelper.createForTests(directory);
+    initializeConfig(config);
+    config.analysisEngineCommand = "katago analysis";
+    AtomicBoolean started = new AtomicBoolean();
+    FutureTask<Void> remember = null;
+    try {
+      Lizzie.config = config;
+      Lizzie.frame = null;
+      LocalKataGoDiscoveryResult selected = localSelection(directory);
+      CountDownLatch attemptingSave = new CountDownLatch(1);
+      remember =
+          new FutureTask<>(
+              () -> {
+                attemptingSave.countDown();
+                KataGoAutoSetupHelper.rememberSelectedLocalKataGo(selected);
+                return null;
+              });
+      FutureTask<Void> result = remember;
+      Thread worker = new Thread(remember, "analysis-settings-remember-engine");
+      if (overlap) {
+        config.uiConfig =
+            new JSONObject(config.uiConfig.toString()) {
+              @Override
+              public String toString() {
+                String captured = super.toString();
+                if (started.compareAndSet(false, true)) {
+                  // The UI has captured its candidate. The helper either commits now (old code)
+                  // or waits for the same configuration transaction to finish.
+                  worker.start();
+                  awaitCommitTurn(config, worker, result, attemptingSave);
+                }
+                return captured;
+              }
+            };
+        config.config.put("ui", config.uiConfig);
+      }
+      SilentAnalysisSettings settings = settingsWithRemoteDraft(new RemoteEngineData());
+
+      SwingUtilities.invokeAndWait(() -> assertTrue(settings.saveConfig()));
+      if (!overlap) {
+        started.set(true);
+        worker.start();
+      }
+      remember.get(5, TimeUnit.SECONDS);
+
+      assertTrue(started.get(), "both production save paths must execute");
+      assertRememberedSelection(config, selected);
+      assertEquals(20, config.analysisMaxVisits);
+      assertEquals(20, config.uiConfig.getInt("analysis-max-visits"));
+      assertEquals(20, readConfig(config).getJSONObject("ui").getInt("analysis-max-visits"));
+    } finally {
+      try {
+        if (started.get() && remember != null) remember.get(5, TimeUnit.SECONDS);
+      } finally {
+        Lizzie.config = previousConfig;
+        Lizzie.frame = previousFrame;
+      }
+    }
+  }
+
   @Test
   void parentSaveCommitsRemotePasswordDraftOnceAndKeepsThePreviousReferenceUsable() throws Exception {
     Config previousConfig = Lizzie.config;
@@ -81,17 +161,43 @@ class AnalysisSettingsSaveConfigTest {
     remote.password = SshEnginePasswords.draft("replacement");
     String draft = remote.password;
     SilentAnalysisSettings settings = settingsWithRemoteDraft(remote);
-    Path configFile = Path.of(config.getConfigFilePath());
-    Files.delete(configFile);
-    Files.createDirectory(configFile);
-    JSONObject originalRoot = config.config;
     try {
       Lizzie.config = config;
       Lizzie.frame = null;
+      LocalKataGoDiscoveryResult selected = localSelection(directory);
+      KataGoAutoSetupHelper.rememberSelectedLocalKataGo(selected);
+      assertRememberedSelection(config, selected);
+      JSONObject originalRoot = config.config;
+      JSONObject originalUi = config.uiConfig;
+      JSONObject originalLeelaz = config.leelazConfig;
+      Path configFile = Path.of(config.getConfigFilePath());
+      byte[] saved = Files.readAllBytes(configFile);
+      Path preservedFile = directory.resolve("saved-config.txt");
+      Files.move(configFile, preservedFile);
+      Files.createDirectory(configFile);
+      Path sentinel = Files.writeString(configFile.resolve("keep"), "keep");
+
       SwingUtilities.invokeAndWait(() -> assertFalse(settings.saveConfig()));
+
       assertSame(originalRoot, config.config);
+      assertSame(originalUi, config.uiConfig);
+      assertSame(originalLeelaz, config.leelazConfig);
+      assertEquals(
+          selected.enginePath.toString(),
+          config.uiConfig.getString("katago-auto-setup-engine-path"));
+      assertArrayEquals(saved, Files.readAllBytes(preservedFile));
+      assertEquals("keep", Files.readString(sentinel));
       assertEquals(draft, remote.password);
       assertEquals(existing, store.values);
+
+      Files.delete(sentinel);
+      Files.delete(configFile);
+      Files.move(preservedFile, configFile);
+      SwingUtilities.invokeAndWait(() -> assertTrue(settings.saveConfig()));
+      assertRememberedSelection(config, selected);
+      assertEquals(20, readConfig(config).getJSONObject("ui").getInt("analysis-max-visits"));
+      assertEquals("replacement", SshEnginePasswords.reveal(remote.password));
+      assertEquals("previous password", SshEnginePasswords.reveal("vault:existing-shared"));
     } finally {
       SshCredentialTestStore.reset();
       Lizzie.config = previousConfig;
@@ -306,6 +412,61 @@ class AnalysisSettingsSaveConfigTest {
     config.uiConfig = ui;
     config.leelazConfig = leelaz;
     config.save();
+  }
+
+  private static LocalKataGoDiscoveryResult localSelection(Path directory) throws IOException {
+    Path engine = Files.writeString(directory.resolve("selected-katago"), "");
+    Path gtp = Files.writeString(directory.resolve("gtp.cfg"), "");
+    Files.writeString(directory.resolve("analysis.cfg"), "");
+    Path weight = Files.writeString(directory.resolve("selected.bin.gz"), "");
+    return KataGoAutoSetupHelper.inspectSelectedLocalKataGo(engine, gtp, weight);
+  }
+
+  private static JSONObject readConfig(Config config) throws IOException {
+    return new JSONObject(Files.readString(Path.of(config.getConfigFilePath())));
+  }
+
+  private static void assertRememberedSelection(Config config, LocalKataGoDiscoveryResult selected)
+      throws IOException {
+    JSONObject savedUi = readConfig(config).getJSONObject("ui");
+    Map<String, Path> expected =
+        Map.of(
+            "katago-auto-setup-engine-path", selected.enginePath,
+            "katago-auto-setup-gtp-config-path", selected.gtpConfigPath,
+            "katago-auto-setup-analysis-config-path", selected.analysisConfigPath,
+            "katago-auto-setup-weight-path", selected.activeWeightPath);
+    expected.forEach(
+        (key, path) -> {
+          assertEquals(path.toString(), config.uiConfig.optString(key), "live " + key);
+          assertEquals(path.toString(), savedUi.optString(key), "persisted " + key);
+        });
+  }
+
+  private static void awaitCommitTurn(
+      Config config, Thread worker, FutureTask<Void> result, CountDownLatch attemptingSave) {
+    try {
+      assertTrue(attemptingSave.await(5, TimeUnit.SECONDS));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (!result.isDone()) {
+        ThreadInfo info = ManagementFactory.getThreadMXBean().getThreadInfo(worker.getId());
+        if (info != null
+            && info.getThreadState() == Thread.State.BLOCKED
+            && info.getLockInfo() != null
+            && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(config)) {
+          return;
+        }
+        assertTrue(
+            System.nanoTime() < deadline,
+            "the helper must commit or wait for the analysis settings transaction");
+        Thread.onSpinWait();
+      }
+      result.get(5, TimeUnit.SECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(e);
+    } catch (ExecutionException | TimeoutException e) {
+      throw new AssertionError(e);
+    }
   }
 
   private static JFontCheckBox selectedCheckBox(boolean selected) {
