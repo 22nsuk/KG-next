@@ -59,6 +59,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -118,6 +119,7 @@ public class OnlineDialog extends JDialog {
   private String lastYikeGeometryClearReason = "none";
   private String lastYikeSessionSwitchReason = "none";
   private String lastYikeDebugEventSummary = "none";
+  // proc() advances this generation for every sync, including ordinary SGF URLs.
   private int yikeLiveSessionId = 0;
   private long userId = -1000000;
   private long roomId = 0;
@@ -909,7 +911,7 @@ public class OnlineDialog extends JDialog {
         req0();
         break;
       case 99:
-        get();
+        get(syncAjaxUrl, syncType, syncSessionId);
         break;
       default:
         break;
@@ -1063,8 +1065,18 @@ public class OnlineDialog extends JDialog {
     return data != null && (data.isMoveNode() || (data.isPassNode() && !data.dummy));
   }
 
-  @SuppressWarnings("deprecation")
   public void parseSgf(String data, String format, int num, boolean decode, boolean first) {
+    parseSgf(data, format, num, decode, first, null);
+  }
+
+  @SuppressWarnings("deprecation")
+  private void parseSgf(
+      String data,
+      String format,
+      int num,
+      boolean decode,
+      boolean first,
+      BooleanSupplier stillCurrent) {
     YikeSyncDebugLog.log(
         "OnlineDialog.parseSgf entry edt="
             + SwingUtilities.isEventDispatchThread()
@@ -1080,9 +1092,12 @@ public class OnlineDialog extends JDialog {
       SwingUtilities.invokeLater(
           new Runnable() {
             public void run() {
-              parseSgf(data, format, num, decode, first);
+              parseSgf(data, format, num, decode, first, stillCurrent);
             }
           });
+      return;
+    }
+    if (stillCurrent != null && !stillCurrent.getAsBoolean()) {
       return;
     }
     JSONObject o = null;
@@ -1126,7 +1141,7 @@ public class OnlineDialog extends JDialog {
         }
       } else {
         sgf = data;
-        Lizzie.frame.loadSgfString(sgf, 0, Lizzie.config.readKomi, false, null);
+        Lizzie.frame.loadSgfString(sgf, 0, Lizzie.config.readKomi, false, null, stillCurrent);
         return;
       }
     }
@@ -1428,10 +1443,18 @@ public class OnlineDialog extends JDialog {
   }
 
   public void get() throws IOException {
+    get(ajaxUrl, type, yikeLiveSessionId);
+  }
+
+  private void get(String requestAjaxUrl, int expectedType, int requestSessionId) throws IOException {
+    BooleanSupplier stillCurrent =
+        () ->
+            shouldAcceptYikeLiveFetchResult(
+                isStoped, LizzieFrame.urlSgf, type, expectedType, yikeLiveSessionId, requestSessionId);
     new Thread() {
       public void run() {
         try {
-          URL url = URI.create(ajaxUrl).toURL();
+          URL url = URI.create(requestAjaxUrl).toURL();
           HttpURLConnection con = (HttpURLConnection) NetworkProxy.openConnection(url);
 
           con.setRequestMethod("GET");
@@ -1452,7 +1475,7 @@ public class OnlineDialog extends JDialog {
           }
           in.close();
           String sgf = response.toString();
-          parseSgf(sgf, "", 0, false, true);
+          parseSgf(sgf, "", 0, false, true, stillCurrent);
         } catch (IOException e) {
           // TODO Auto-generated catch block
           e.printStackTrace();
