@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.Stone;
+import featurecat.lizzie.util.AtomicTextFileWriter;
 import featurecat.lizzie.util.Utils;
 import java.awt.Component;
 import java.awt.Container;
@@ -53,7 +54,8 @@ public class ContributionLocalClearDesktopTest {
       return;
     }
     if (args[0].equals("contribution")) {
-      Files.writeString(Path.of(args[1]), Long.toString(ProcessHandle.current().pid()));
+      // The observer treats path existence as readiness, so publish only a complete PID.
+      AtomicTextFileWriter.write(Path.of(args[1]), Long.toString(ProcessHandle.current().pid()));
       // Keep both streams open until the application's public stop destroys this owned process.
       while (System.in.read() != -1) {}
       return;
