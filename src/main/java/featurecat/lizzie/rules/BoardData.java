@@ -7,6 +7,7 @@ import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.EngineObservation;
 import java.util.*;
+import java.util.function.Supplier;
 
 public class BoardData {
   public int moveNumber;
@@ -452,15 +453,27 @@ public class BoardData {
     return SGFParser.propertiesString(properties);
   }
 
-  /** Publishes analysis display text without turning its changing metrics into a user edit. */
-  public synchronized void setGeneratedComment(String generated) {
-    commentBeforeGeneration = authoredComment();
+  /** Authored writes share the same owner as analysis comment generation and publication. */
+  public synchronized void setAuthoredComment(String text) {
+    // Opening and closing the editor without an edit must retain the generated comment's origin.
+    if (Objects.equals(comment, text)) return;
+    comment = text;
+    hasGeneratedComment = false;
+    lastGeneratedComment = null;
+    commentBeforeGeneration = null;
+  }
+
+  /** Captures the authored origin, formats and publishes under one payload monitor. */
+  public synchronized void setGeneratedComment(Supplier<String> formatter) {
+    String authored = authoredComment();
+    String generated = formatter.get();
+    commentBeforeGeneration = authored;
     lastGeneratedComment = generated;
     hasGeneratedComment = true;
     comment = generated;
   }
 
-  /** Direct comment assignments remain authored edits unless they still equal our publication. */
+  /** Also recognizes legacy/import assignments; live authored writers use setAuthoredComment. */
   synchronized String authoredComment() {
     return hasGeneratedComment && Objects.equals(comment, lastGeneratedComment)
         ? commentBeforeGeneration : comment;

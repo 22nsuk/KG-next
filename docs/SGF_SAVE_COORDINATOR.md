@@ -60,6 +60,13 @@ that action merely by making the result valid again. These revisions and comment
 ownership are runtime state; they do not change the SGF format or restore live
 permissions from imported analysis.
 
+Live authored comment writes and generated comment formatting share the node's
+payload monitor. A generated comment supplies its formatter to that owner, so
+reading the authored origin, formatting the displayed text and publishing both
+cannot straddle an editor commit. Reapplying the unchanged displayed comment is
+a no-op and retains its generated origin. This also protects a pending save when
+the user commits a comment while a whole-game response is generating its text.
+
 If an edit arrives after the final autosave capture, shutdown is cancelled and
 the current game stays open. A fresh close saves that retained state and can
 then exit. An ordinary analysis response alone does not require another close or
@@ -130,6 +137,8 @@ waiters retain interruption status after receiving the actual result.
   invalidation received during the final write, including invalidation followed
   by a fresh engine result. Primary/secondary updates at root and move positions,
   including replacement of an already-invalid result, permit normal shutdown.
+  An editor commit blocked behind a generated comment retains its text and
+  cancels shutdown; a fresh close persists that exact edited record.
 - `GameEditSnapshotTest`: authored state and generated analysis comments have
   separate ownership; direct comment edits, topology, metadata and explicit
   analysis-edit revisions are retained without copying analysis payloads.

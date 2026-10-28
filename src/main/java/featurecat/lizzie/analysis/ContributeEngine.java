@@ -1262,8 +1262,8 @@ public class ContributeEngine {
                   false,
                   MoveData.getPlayouts(move.candidates));
         if (Lizzie.board.getHistory().getMainEnd().getData().getPlayouts() > 0) {
-          Lizzie.board.getHistory().getMainEnd().getData().comment =
-              SGFParser.formatCommentPk(Lizzie.board.getHistory().getMainEnd());
+          var node = Lizzie.board.getHistory().getMainEnd();
+          node.getData().setGeneratedComment(() -> SGFParser.formatCommentPk(node));
         }
       }
       if (i < (holdLastMove ? remainList.size() - 1 : remainList.size())) {

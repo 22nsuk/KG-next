@@ -11536,7 +11536,7 @@ public class LizzieFrame extends JFrame {
       sidebarPanel.syncCommentVisibility();
       String text = commentEditTextPane.getText();
       if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
-      Lizzie.board.getHistory().getCurrentHistoryNode().getData().comment = text;
+      Lizzie.board.getHistory().getCurrentHistoryNode().getData().setAuthoredComment(text);
       appendComment();
     }
   }

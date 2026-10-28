@@ -172,6 +172,8 @@ class RunLocalCiTest(unittest.TestCase):
                      f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]")
                     for invocation in range(1, 7)
                 ),
+                ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                 "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown"),
                 ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
                 ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
                 *tuple(

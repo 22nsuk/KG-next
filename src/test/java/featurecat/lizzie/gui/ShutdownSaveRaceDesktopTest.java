@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.KataGoAnalysisPayload;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.BoardData;
@@ -12,10 +13,13 @@ import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import java.awt.Window;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
@@ -25,7 +29,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 import java.util.function.IntConsumer;
 import javax.swing.JDialog;
+import javax.swing.JScrollPane;
 import javax.swing.SwingUtilities;
+import javax.swing.text.JTextComponent;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -63,6 +70,14 @@ class ShutdownSaveRaceDesktopTest {
     assertEquals("PASS", Files.readString(result));
   }
 
+  @Test
+  void commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path result = DesktopProbeProcess.run(getClass(), "shutdown-comment-analysis-overlap",
+        List.of(), List.of("comment-analysis-overlap"));
+    assertEquals("PASS", Files.readString(result));
+  }
+
   public static void main(String[] args) throws Exception {
     String change = args[0];
     Path work = Path.of(args[1]);
@@ -86,6 +101,12 @@ class ShutdownSaveRaceDesktopTest {
         return null;
       });
       SgfSaveTestSupport.awaitPending();
+      if (change.equals("comment-analysis-overlap")) {
+        verifyCommentEditDuringGeneratedComment(work);
+        Files.writeString(result, "PASS");
+        System.exit(0);
+        return;
+      }
       if (change.startsWith("analysis-")) {
         verifyAnalysisDuringSave(change, work);
         Files.writeString(result, "PASS");
@@ -249,6 +270,140 @@ class ShutdownSaveRaceDesktopTest {
       assertEquals(frozen, Files.readString(exitSgf),
           "shutdown must not recapture its completed save after each analysis response");
     }
+  }
+
+  private static void verifyCommentEditDuringGeneratedComment(Path work) throws Exception {
+    String original = "original authored note";
+    String edited = "comment edited while analysis was generating its display text";
+    Leelaz source = new Leelaz("");
+    source.isKatago = true;
+    source.isLoaded = true;
+    source.Pondering();
+    Field interval = frameField("autoIntervalCom");
+    Field lastAppend = frameField("lastAutocomTime");
+    BoardHistoryNode node = onEdt(() -> {
+      Lizzie.setPrimaryEngine(source);
+      EngineManager.isEmpty = false;
+      Lizzie.config.showComment = true;
+      Lizzie.config.appendWinrateToComment = true;
+      interval.setInt(Lizzie.frame, Integer.MAX_VALUE);
+      lastAppend.setLong(Lizzie.frame, System.currentTimeMillis());
+      BoardHistoryNode selected = Lizzie.board.getHistory().getCurrentHistoryNode();
+      BoardData data = selected.getData();
+      adoptAnalysis(data, source, new Object(), false, 100);
+      data.setAuthoredComment(original);
+      data.setGeneratedComment(() -> SGFParser.formatComment(selected));
+      return selected;
+    });
+    BoardData data = node.getData();
+    Thread edt = onEdt(Thread::currentThread);
+    CompletableFuture<Integer> exited = new CompletableFuture<>();
+    Path exitSgf = work.resolve("save/autoGame1.sgf");
+    String frozen;
+    String current;
+    try (var held = SgfSaveTestSupport.holdNextPublication()) {
+      onEdt(() -> { shutdown(exited::complete); return null; });
+      held.awaitWritten();
+      frozen = Files.readString(exitSgf);
+      assertTrue(frozen.contains(original));
+      assertFalse(frozen.contains(edited));
+      assertFalse(exited.isDone());
+      onEdt(() -> {
+        Lizzie.frame.setCommentEditable(true);
+        ((JTextComponent) frameField("commentEditTextPane").get(Lizzie.frame)).setText(edited);
+        return null;
+      });
+
+      CountDownLatch formatted = new CountDownLatch(1);
+      CountDownLatch releaseGeneration = new CountDownLatch(1);
+      FutureTask<Void> generation = new FutureTask<>(() -> {
+        data.setGeneratedComment(() -> {
+          String generated = SGFParser.formatComment(node);
+          formatted.countDown();
+          try {
+            assertTrue(releaseGeneration.await(10, TimeUnit.SECONDS),
+                "generated comment was not released");
+          } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(failure);
+          }
+          return generated;
+        });
+        return null;
+      });
+      Thread generator = new Thread(generation, "shutdown-comment-generation");
+      FutureTask<Void> edit = new FutureTask<>(() -> {
+        // Keep painting from taking the data lock before this actual UI commit reaches it.
+        generator.start();
+        assertTrue(formatted.await(5, TimeUnit.SECONDS), "analysis formatter did not run");
+        interval.setInt(Lizzie.frame, 1);
+        lastAppend.setLong(Lizzie.frame, 0);
+        Lizzie.frame.setCommentEditable(false);
+        return null;
+      });
+      try {
+        SwingUtilities.invokeLater(edit);
+        assertTrue(formatted.await(5, TimeUnit.SECONDS), "analysis formatter did not run");
+        // Establish the actual overlap: the UI commit waits on the generator's BoardData lock.
+        ThreadInfo blocked = awaitCommentEditBlocked(edt, generator, data);
+        Files.writeString(work.resolve("comment-edit-blocked-stack.txt"), blocked.toString());
+      } finally {
+        releaseGeneration.countDown();
+      }
+      generation.get(5, TimeUnit.SECONDS);
+      edit.get(5, TimeUnit.SECONDS);
+      current = onEdt(() -> {
+        assertSame(data, Lizzie.board.getData());
+        assertTrue(data.comment.contains(edited));
+        JScrollPane comments = (JScrollPane) frameField("commentScrollPane").get(Lizzie.frame);
+        assertTrue(((JTextComponent) comments.getViewport().getView()).getText().contains(edited),
+            "the displayed comment must retain the UI edit after generated text is published");
+        String saved = SGFParser.captureSave(Lizzie.board, true);
+        assertTrue(saved.contains(edited));
+        return saved;
+      });
+      assertEquals(frozen, Files.readString(exitSgf));
+      held.release();
+    }
+    awaitEdt(() -> !shutdownWaiting());
+    onEdt(() -> {
+      assertFalse(exited.isDone(), "shutdown discarded a comment edited during analysis publication");
+      assertTrue(Lizzie.frame.isShowing());
+      assertEquals(current, SGFParser.captureSave(Lizzie.board, true));
+      dismissDialogs();
+      return null;
+    });
+    assertEquals(frozen, Files.readString(exitSgf));
+    onEdt(() -> { shutdown(exited::complete); return null; });
+    assertEquals(0, exited.get(10, TimeUnit.SECONDS));
+    assertEquals(current, Files.readString(exitSgf));
+    assertTrue(Files.readString(exitSgf).contains(edited));
+  }
+
+  private static ThreadInfo awaitCommentEditBlocked(Thread edt, Thread generator, BoardData data)
+      throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    ThreadInfo observed = null;
+    while (System.nanoTime() < deadline) {
+      observed = ManagementFactory.getThreadMXBean().getThreadInfo(edt.getId(), 100);
+      if (observed != null && observed.getThreadState() == Thread.State.BLOCKED
+          && observed.getLockOwnerId() == generator.getId()
+          && observed.getLockInfo().getClassName().equals(BoardData.class.getName())
+          && observed.getLockInfo().getIdentityHashCode() == System.identityHashCode(data)
+          && Arrays.stream(observed.getStackTrace()).anyMatch(frame ->
+              frame.getClassName().equals(LizzieFrame.class.getName())
+                  && frame.getMethodName().equals("setCommentEditable"))) {
+        return observed;
+      }
+      Thread.sleep(1);
+    }
+    throw new AssertionError("UI comment commit did not wait for the analysis data lock: " + observed);
+  }
+
+  private static Field frameField(String name) throws Exception {
+    Field field = LizzieFrame.class.getDeclaredField(name);
+    field.setAccessible(true);
+    return field;
   }
 
   private static void invalidateAnalysis(boolean secondary) {

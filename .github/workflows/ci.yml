@@ -210,7 +210,7 @@ jobs:
         timeout-minutes: 5
         run: mvn -B -Dfmt.skip=true test-compile
       - name: Run Linux desktop smoke verification
-        # All three passes include the ten additional shutdown analysis scenarios.
+        # All three passes include the shutdown analysis and comment concurrency scenarios.
         timeout-minutes: 16
         env:
           LANG: C.UTF-8

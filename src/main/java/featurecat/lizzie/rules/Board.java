@@ -1015,20 +1015,11 @@ public class Board {
    * @param comment the comment of stone
    */
   public void comment(String comment) {
+    BoardData data;
     synchronized (this) {
-      //      String[] params = comment.split("\n");
-      //      comment = "";
-      //      boolean first = true;
-      //      for (int i = 0; i < params.length; i++) {
-      //        if (!params[i].startsWith("贴目")) {
-      //          if (first) {
-      //            comment += params[i];
-      //            first = false;
-      //          } else comment += "\n" + params[i];
-      //        }
-      //      }
-      history.getData().comment = comment;
+      data = history.getData();
     }
+    data.setAuthoredComment(comment);
   }
 
   /**

@@ -4,7 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
+import java.lang.management.ManagementFactory;
+import java.lang.management.ThreadInfo;
+import java.lang.management.ThreadMXBean;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -12,6 +16,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -142,19 +147,127 @@ class GameEditSnapshotTest {
         String original = "  winrate: 50%\nscoreMean: 0\nreviewer's note  \n";
         data.comment = original;
         GameEditSnapshot saved = GameEditSnapshot.capture(board);
-        data.setGeneratedComment("analysis 100 visits\n" + original.trim());
-        data.setGeneratedComment("analysis 200 visits\n" + original.trim());
+        data.setGeneratedComment(() -> "analysis 100 visits\n" + original.trim());
+        data.setGeneratedComment(() -> "analysis 200 visits\n" + original.trim());
         assertEquals(original, data.authoredComment());
         assertTrue(saved.isCurrent(board), "formatting must not trim the authored-state identity");
 
         data.comment = original + " ";
-        data.setGeneratedComment("analysis 300 visits\n" + original.trim());
+        data.setGeneratedComment(() -> "analysis 300 visits\n" + original.trim());
         assertEquals(original + " ", data.authoredComment());
         assertFalse(saved.isCurrent(board), "even a whitespace edit must survive regeneration");
 
         GameEditSnapshot changed = GameEditSnapshot.capture(board);
         data.comment = "analysis 400 visits";
         assertFalse(changed.isCurrent(board), "analysis-looking authored text is still an edit");
+        return null;
+      });
+    }
+  }
+
+  @Test
+  void acceptingAnUnchangedDisplayedCommentKeepsItsAuthoredOrigin() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        BoardHistoryNode node = fixture.current();
+        BoardData data = node.getData();
+        String original = "annotation before automatic analysis text";
+        data.setAuthoredComment(original);
+        adopt(data, false, 100);
+        data.setGeneratedComment(() -> SGFParser.formatComment(node));
+        String displayed = data.comment;
+        GameEditSnapshot saved = GameEditSnapshot.capture(board);
+
+        // Opening and accepting the editor supplies equal text, often as a different String.
+        data.setAuthoredComment(new String(displayed));
+        assertEquals(displayed, data.comment);
+        assertEquals(original, data.authoredComment());
+        assertTrue(saved.isCurrent(board), "an unchanged editor must not author the generated block");
+
+        adopt(data, false, 200);
+        data.setGeneratedComment(() -> SGFParser.formatComment(node));
+        assertNotEquals(displayed, data.comment, "the next result must actually refresh the display");
+        assertEquals(original, data.authoredComment());
+        assertTrue(saved.isCurrent(board), "a no-op editor must not corrupt later comment origins");
+        return null;
+      });
+    }
+  }
+
+  @Test
+  void boardCommentWaitsForGenerationAndRetainsTheEditInIdentityAndSgf() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = fixture.board();
+      String original = "original annotation before the save";
+      String edited = "authored text accepted while the save is pending";
+      BoardHistoryNode node = onEdt(() -> {
+        BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[aa])", true);
+        board.setHistory(history);
+        BoardHistoryNode selected = history.getStart().next().orElseThrow();
+        history.setHead(selected);
+        board.comment(original);
+        adopt(selected.getData(), false, 100);
+        selected.getData().setGeneratedComment(() -> SGFParser.formatComment(selected));
+        return selected;
+      });
+      BoardData data = node.getData();
+      GameEditSnapshot saved = onEdt(() -> GameEditSnapshot.capture(board));
+      String frozenSgf = onEdt(() -> SGFParser.saveSnapshot(board, true, true, false));
+      assertFalse(frozenSgf.contains(edited));
+      Thread eventThread = onEdt(Thread::currentThread);
+      CountDownLatch formatted = new CountDownLatch(1);
+      CountDownLatch releaseGeneration = new CountDownLatch(1);
+      FutureTask<Void> publication = new FutureTask<>(() -> {
+        adopt(data, false, 200);
+        data.setGeneratedComment(() -> {
+          assertTrue(Thread.holdsLock(data), "formatting and origin publication share one monitor");
+          String generated = SGFParser.formatComment(node);
+          assertTrue(generated.contains(original));
+          assertFalse(generated.contains(edited));
+          formatted.countDown();
+          await(releaseGeneration);
+          return generated;
+        });
+        return null;
+      });
+      Thread generationThread = new Thread(publication, "generated-comment-publication-test");
+      FutureTask<Void> edit = new FutureTask<>(() -> {
+        board.comment(edited);
+        // The real automatic formatter also runs after the accepted authored edit.
+        SGFParser.appendComment();
+        return null;
+      });
+      boolean editSubmitted = false;
+      generationThread.start();
+      try {
+        assertTrue(formatted.await(5, TimeUnit.SECONDS), "analysis must reach its formatted result");
+        SwingUtilities.invokeLater(edit);
+        editSubmitted = true;
+        awaitAuthoredWriterBlocked(eventThread, data, generationThread);
+      } finally {
+        releaseGeneration.countDown();
+        try {
+          try {
+            publication.get(5, TimeUnit.SECONDS);
+          } finally {
+            if (editSubmitted) edit.get(5, TimeUnit.SECONDS);
+          }
+        } finally {
+          generationThread.join(TimeUnit.SECONDS.toMillis(5));
+          assertFalse(generationThread.isAlive(), "the controlled publisher must finish");
+        }
+      }
+
+      onEdt(() -> {
+        assertEquals(200, data.getPlayouts());
+        assertEquals(edited, data.authoredComment());
+        assertTrue(data.comment.contains(edited));
+        assertFalse(data.comment.contains(original));
+        assertFalse(saved.isCurrent(board), "the pending-save guard must retain the authored edit");
+        String currentSgf = SGFParser.saveSnapshot(board, true, true, false);
+        assertTrue(currentSgf.contains(edited), "the actual SGF must retain the authored text");
+        assertTrue(SGFParser.parseSgf(currentSgf, true).getEnd().getData().comment.contains(edited));
         return null;
       });
     }
@@ -172,7 +285,7 @@ class GameEditSnapshotTest {
         BoardData data = node.getData();
         data.comment = "original annotation";
         adopt(data, false, 100);
-        data.setGeneratedComment(SGFParser.formatComment(node));
+        data.setGeneratedComment(() -> SGFParser.formatComment(node));
         GameEditSnapshot saved = GameEditSnapshot.capture(board);
 
         BoardData incoming = data.clone();
@@ -193,7 +306,7 @@ class GameEditSnapshotTest {
     try (var ignored = RulesLayerTestHarness.open()) {
       BoardData source = BoardData.empty(5, 5);
       source.comment = "  original note\n";
-      source.setGeneratedComment("generated source display");
+      source.setGeneratedComment(() -> "generated source display");
       source.invalidatePrimaryAnalysis();
 
       BoardData clone = source.clone();
@@ -202,18 +315,18 @@ class GameEditSnapshotTest {
       for (BoardData copy : List.of(clone, synced)) {
         assertEquals("generated source display", copy.comment);
         assertEquals("  original note\n", copy.authoredComment());
-        copy.setGeneratedComment("regenerated copy display");
+        copy.setGeneratedComment(() -> "regenerated copy display");
         assertEquals("  original note\n", copy.authoredComment());
         assertEquals(0, copy.analysisEditRevision(), "an edit generation belongs to its live node");
       }
 
       BoardData payloadOnly = BoardData.empty(5, 5);
       payloadOnly.comment = "destination note";
-      payloadOnly.setGeneratedComment("destination display");
+      payloadOnly.setGeneratedComment(() -> "destination display");
       payloadOnly.copyAnalysisPayloadFrom(source);
       assertEquals("destination display", payloadOnly.comment);
       assertEquals("destination note", payloadOnly.authoredComment());
-      payloadOnly.setGeneratedComment("new destination display");
+      payloadOnly.setGeneratedComment(() -> "new destination display");
       assertEquals("destination note", payloadOnly.authoredComment());
     }
   }
@@ -359,6 +472,25 @@ class GameEditSnapshotTest {
     FutureTask<T> task = new FutureTask<>(action);
     SwingUtilities.invokeLater(task);
     return task.get(5, TimeUnit.SECONDS);
+  }
+
+  private static void awaitAuthoredWriterBlocked(Thread writer, BoardData data, Thread owner) {
+    ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    ThreadInfo observed = null;
+    while (System.nanoTime() < deadline) {
+      observed = threads.getThreadInfo(writer.getId(), 32);
+      if (observed != null && observed.getThreadState() == Thread.State.BLOCKED
+          && observed.getLockInfo() != null
+          && observed.getLockInfo().getIdentityHashCode() == System.identityHashCode(data)
+          && observed.getLockInfo().getClassName().equals(BoardData.class.getName())
+          && observed.getLockOwnerId() == owner.getId()
+          && Arrays.stream(observed.getStackTrace()).anyMatch(frame ->
+              frame.getClassName().equals(BoardData.class.getName())
+                  && frame.getMethodName().equals("setAuthoredComment"))) return;
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+    }
+    fail("Board.comment must wait for the generator's BoardData monitor; observed: " + observed);
   }
 
   private static void await(CountDownLatch latch) {
