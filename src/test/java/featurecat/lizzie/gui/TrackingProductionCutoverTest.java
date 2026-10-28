@@ -191,12 +191,10 @@ class TrackingProductionCutoverTest {
               return null;
             },
             "tracking-fixture-close-owner");
-    CountDownLatch closing = new CountDownLatch(1);
     AtomicBoolean interruptRestored = new AtomicBoolean();
     FixtureWorker<Void> cleanup =
         new FixtureWorker<>(
             () -> {
-              closing.countDown();
               try {
                 environment.close();
                 return null;
@@ -209,13 +207,11 @@ class TrackingProductionCutoverTest {
       worker.thread.start();
       assertTrue(entered.await(2, TimeUnit.SECONDS));
       cleanup.thread.start();
-      assertTrue(closing.await(2, TimeUnit.SECONDS));
+      // A join lasts only 1 ms, so its transient Thread.State cannot synchronize this check.
+      assertTrue(
+          environment.workerDrainStarted.await(2, TimeUnit.SECONDS),
+          "cleanup must reach its live worker before the test interrupts or releases it");
       if (mode == CleanupFailure.INTERRUPTED_CLOSE) {
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (cleanup.thread.getState() != Thread.State.TIMED_WAITING
-            && cleanup.thread.isAlive()
-            && System.nanoTime() < deadline) Thread.sleep(1);
-        assertEquals(Thread.State.TIMED_WAITING, cleanup.thread.getState());
         cleanup.thread.interrupt();
       }
       assertThrows(TimeoutException.class, () -> cleanup.result.get(1, TimeUnit.SECONDS));
@@ -1419,6 +1415,7 @@ class TrackingProductionCutoverTest {
     private final ByteArrayOutputStream output;
     private final LizzieFrame frame;
     private final List<FixtureWorker<?>> workers = new ArrayList<>();
+    private final CountDownLatch workerDrainStarted = new CountDownLatch(1);
     private boolean closed;
 
     private TestEnvironment(
@@ -1779,9 +1776,11 @@ class TrackingProductionCutoverTest {
           }
           try {
             long remaining = deadline - System.nanoTime();
-            if (remaining > 0)
+            if (remaining > 0) {
+              workerDrainStarted.countDown();
               TimeUnit.NANOSECONDS.timedJoin(
                   worker.thread, Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(1)));
+            }
           } catch (InterruptedException interrupted) {
             failures.interrupted(interrupted);
           }
