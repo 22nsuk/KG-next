@@ -15722,17 +15722,21 @@ public class LizzieFrame extends JFrame {
   private void openSavedGame(
       boolean isAutoSave,
       int index,
-      int moveNumber,
-      String moveList,
       boolean originalShowListPane,
       boolean originalShowVariationGraph) {
-    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        () ->
-            openSavedGame(
-                isAutoSave, index, moveNumber, moveList,
-                originalShowListPane, originalShowVariationGraph))) {
+    Runnable reopen = () ->
+        openSavedGame(isAutoSave, index, originalShowListPane, originalShowVariationGraph);
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(reopen)
+        || deferUntilHumanSlExit(reopen)) {
       return;
     }
+    // SGF replacement precedes metadata publication. Every saved-list entrypoint must wait
+    // until those writes settle, and old controls/previews must resolve the published cursor.
+    if (!SgfSaveCoordinator.pendingSaves().isDone()) return;
+    TempGameData saved = getTempGameList().stream()
+        .filter(record -> record.isAutoSave == isAutoSave && record.index == index)
+        .findFirst().orElse(null);
+    if (saved == null) return;
     // A deferred loadFile return is only an acknowledgement, not a successful load. Keep
     // position restoration and closing the saved list inside the actual success continuation.
     loadFile(
@@ -15746,12 +15750,12 @@ public class LizzieFrame extends JFrame {
           board.isLoadingFile = true;
           Lizzie.config.playSound = false;
           try {
-            if (!moveList.isEmpty()) {
+            if (!saved.moves.isEmpty()) {
               // Saved paths start at the root, even when "load last move" is enabled.
               board.goToMoveNumber(0);
-              board.playList(moveList);
+              board.playList(saved.moves);
             } else {
-              board.goToMoveNumber(moveNumber);
+              board.goToMoveNumber(saved.curMoveNumer);
             }
           } finally {
             board.isLoadingFile = originalLoading;
@@ -15823,7 +15827,7 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             openSavedGame(
-                isAutoSave, index, moveNumber, moveList,
+                isAutoSave, index,
                 oriShowListPane, OriShowVariationGraph);
           }
         });
@@ -16351,7 +16355,7 @@ public class LizzieFrame extends JFrame {
               if (data.x < x && (data.x + 300) > x)
                 if (data.y < y && (data.y + 300) > y) {
                   openSavedGame(
-                      data.isAutoSave, data.index, data.curMoveNumer, data.moves,
+                      data.isAutoSave, data.index,
                       oriShowListPane, OriShowVariationGraph);
                   break;
                 }
@@ -16401,7 +16405,7 @@ public class LizzieFrame extends JFrame {
           public void mouseClicked(MouseEvent e) {
             if (e.getX() == 0 && e.getY() == 0) {
               openSavedGame(
-                  isAutoSave, index, moveNumber, moveList,
+                  isAutoSave, index,
                   oriShowListPane, OriShowVariationGraph);
             }
           }

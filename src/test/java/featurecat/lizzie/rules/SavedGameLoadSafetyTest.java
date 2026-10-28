@@ -383,6 +383,76 @@ class SavedGameLoadSafetyTest {
     if (entry == EntryPoint.PREVIEW) assertFalse(preview.isVisible());
   }
 
+  static Stream<Arguments> overwrittenItems() {
+    return Arrays.stream(EntryPoint.values()).flatMap(entry ->
+        Arrays.stream(Slot.values()).map(slot -> Arguments.of(entry, slot)));
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("overwrittenItems")
+  void overwrittenItemCannotOpenBeforePublicationAndUsesLatestPositionAfterwards(
+      EntryPoint entry, Slot slot) throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, slot);
+    config.saveBoard = new JSONObject().put("save", config.saveBoardConfig);
+    Files.writeString(savedFile(slot), SAVED_SGF);
+    setFrameField("autoSaveStartupPrepared", true);
+    setFrameField("autoSaveRecoveryComplete", true);
+    Lizzie.setPrimaryEngine(null);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    BoardHistoryNode selected = current.getCurrentHistoryNode();
+    String metadata = config.saveBoardConfig.toString();
+    AtomicReference<CompletableFuture<Boolean>> save = new AtomicReference<>();
+
+    try (var held = SgfSaveTestSupport.holdNextPublication()) {
+      SwingUtilities.invokeAndWait(() -> {
+        if (slot.automatic) {
+          save.set(frame.saveAutoGameAsync(1));
+        } else {
+          try {
+            Method overwrite = LizzieFrame.class.getDeclaredMethod(
+                "saveTemporaryGameAsync", int.class, String.class, boolean.class);
+            overwrite.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            CompletableFuture<Boolean> completion =
+                (CompletableFuture<Boolean>) overwrite.invoke(frame, 1, "replacement", false);
+            save.set(completion);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        }
+      });
+      held.awaitWritten();
+      // Real SGF/manifest/preview writes finished; the old row still owns the previous path.
+      assertTrue(Files.readString(savedFile(slot)).contains(";B[aa]"));
+      assertEquals(metadata, config.saveBoardConfig.toString());
+      assertFalse(save.get().isDone());
+      SwingUtilities.invokeAndWait(() -> {
+        click(entry, SavedPosition.BRANCH, slot);
+        assertSame(current, Lizzie.board.getHistory(), "pending overwrite must not open a mixed record");
+        assertSame(selected, current.getCurrentHistoryNode());
+        assertEquals(0, frame.listCloses);
+        assertTrue(listContainer.isVisible());
+      });
+      held.release();
+    }
+    assertTrue(save.get().get(5, TimeUnit.SECONDS));
+    // Keep the old controls/preview alive: opening must resolve the published record, not its closure.
+    SwingUtilities.invokeAndWait(() -> click(entry, SavedPosition.BRANCH, slot));
+    SwingUtilities.invokeAndWait(() -> {});
+    SwingUtilities.invokeAndWait(() -> {
+      BoardHistoryList loaded = Lizzie.board.getHistory();
+      assertNotSame(current, loaded);
+      assertEquals(1, loaded.getStart().numberOfChildren(), "old moves must not create a new variation");
+      assertEquals(2, loaded.getStart().next().orElseThrow().numberOfChildren());
+      assertEquals(2, loaded.getMoveNumber());
+      assertEquals("original selected", loaded.getData().comment);
+      assertEquals(Stone.BLACK, rules.stoneAt(0, 0));
+      assertEquals(Stone.WHITE, rules.stoneAt(1, 1));
+      assertEquals(Stone.EMPTY, rules.stoneAt(3, 3));
+      assertFalse(listContainer.isVisible());
+    });
+  }
+
   @Test
   void queuedSavedItemCompletionCannotChangeAReplacementGame() throws Exception {
     prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
@@ -733,6 +803,11 @@ class SavedGameLoadSafetyTest {
     BoardHistoryNode nodeWhenResumeScheduled;
     CountDownLatch resumeScheduled;
     List<String> loadedPlayers;
+
+    @Override
+    public java.awt.Image saveMainBoardToImageOri() {
+      return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+    }
 
     @Override
     public void setPlayers(String white, String black) {

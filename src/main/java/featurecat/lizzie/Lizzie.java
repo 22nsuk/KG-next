@@ -27,7 +27,9 @@ import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.logging.WorkDirectoryResolver;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
@@ -1473,32 +1475,60 @@ public class Lizzie {
     java.util.concurrent.CompletableFuture<Void> pendingSaves =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
     if (deferShutdownForSave(pendingSaves, exit)) return;
+    ShutdownGameState savedGame = null;
     try {
       pendingSaves.join();
       if (config.autoSaveOnExit) {
+        savedGame = ShutdownGameState.capture();
         java.util.concurrent.CompletableFuture<Boolean> finalSave = frame.saveAutoGameAsync(1);
-        if (deferShutdownForSave(finalSave, () -> finishShutdownAfterSaves(exit))) return;
+        ShutdownGameState captured = savedGame;
+        if (deferShutdownForSave(finalSave, () -> finishShutdownAfterSaves(exit, captured))) return;
         if (!finalSave.join()) {
           cancelShutdownAfterSaveFailure(null);
           return;
         }
       }
-    } catch (RuntimeException failure) {
+    } catch (IOException | RuntimeException failure) {
       cancelShutdownAfterSaveFailure(failure);
       return;
     }
-    finishShutdownAfterSaves(exit);
+    finishShutdownAfterSaves(exit, savedGame);
   }
 
-  private static void finishShutdownAfterSaves(IntConsumer exit) {
+  private record ShutdownGameState(
+      Board board, BoardHistoryList history, BoardHistoryNode root, BoardHistoryNode cursor,
+      long revision, String sgf) {
+    static ShutdownGameState capture() throws IOException {
+      Board board = Lizzie.board;
+      if (board == null) return null;
+      BoardHistoryList history = board.getHistory();
+      return new ShutdownGameState(board, history, history.getStart(),
+          history.getCurrentHistoryNode(), board.getContextRevision(),
+          SGFParser.saveSnapshot(board, true, true, false));
+    }
+
+    boolean isCurrent() throws IOException {
+      // Cursor/revision alone miss comments and edits to branches followed by undo.
+      return Lizzie.board == board && board.getHistory() == history && history.getStart() == root
+          && history.getCurrentHistoryNode() == cursor && board.getContextRevision() == revision
+          && sgf.equals(SGFParser.saveSnapshot(board, true, true, false));
+    }
+  }
+
+  private static void finishShutdownAfterSaves(IntConsumer exit, ShutdownGameState savedGame) {
     // A later accepted save may have joined while final autosave was writing. Drain it without
     // resubmitting final autosave on every continuation.
     java.util.concurrent.CompletableFuture<Void> pending =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
-    if (deferShutdownForSave(pending, () -> finishShutdownAfterSaves(exit))) return;
+    if (deferShutdownForSave(pending, () -> finishShutdownAfterSaves(exit, savedGame))) return;
     try {
       pending.join();
-    } catch (RuntimeException failure) {
+      if (savedGame != null && !savedGame.isCurrent()) {
+        APP.info("Shutdown cancelled because the game changed during the final save");
+        Utils.showMsg(resourceBundle.getString("Lizzie.shutdown.gameChanged"));
+        return;
+      }
+    } catch (IOException | RuntimeException failure) {
       cancelShutdownAfterSaveFailure(failure);
       return;
     }
