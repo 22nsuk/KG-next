@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.KataGoAnalysisPayload;
+import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.analysis.WholeGameAnalysisPlan;
 import featurecat.lizzie.util.AtomicSgfFileWriter;
 import java.nio.file.Path;
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisInvalidationSgfTest {
   private static final String PRIMARY = "KataGo 40.0 700 2.5 1.25 0 rootVisits=700\n"
@@ -158,6 +161,56 @@ class AnalysisInvalidationSgfTest {
         assertEquals(SOURCE, data.secondaryAnalysisProvenance());
         assertEquals(SOURCE, data.secondaryOwnershipProvenance());
         assertValidity(history.getStart(), false, true);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {600, 800, 1000})
+  void freshLegacySecondaryResultRestoresCacheProtectionAcrossReopens(int incomingVisits)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + analysisTags(true) + ")", true);
+      recordSources(history.getStart().getData());
+      Lizzie.board.setHistory(history);
+      Lizzie.board.clearbestmoves();
+      Lizzie.board.clearbestmoves2();
+      history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      Lizzie.board.setHistory(history);
+      Lizzie.config.enableLizzieCache = true;
+      assertValidity(history.getStart(), true, true);
+      Leelaz secondary = new Leelaz("");
+      assertFalse(secondary.isKatago);
+      List<MoveData> incoming = secondary.parseInfo(
+          "move B2 visits " + incomingVisits + " winrate 6500 prior 1000 order 0 pv B2 C3");
+      BoardData reopened = history.getStart().getData();
+      // Non-KataGo display publication uses this setter without adoptOrdinaryAnalysis.
+      reopened.tryToSetBestMoves2FromEngine(
+          incoming, "LeelaZero", secondary, MoveData.getPlayouts(incoming), null, false);
+
+      for (int round = 0; round < 3; round++) {
+        BoardData data = history.getStart().getData();
+        assertValidity(history.getStart(), true, false);
+        List<MoveData> restarted = secondary.parseInfo(
+            "move A1 visits 10 winrate 3000 prior 1000 order 0 pv A1 B1");
+        data.tryToSetBestMoves2FromEngine(
+            restarted, "LeelaZero", secondary, MoveData.getPlayouts(restarted), null, false);
+        assertEquals(incomingVisits, data.getPlayouts2(),
+            "cache protection must reject a shallower restart after fresh adoption");
+        assertEquals("B2", data.bestMoves2.get(0).coordinate);
+        assertEquals(65.0, data.winrate2);
+        assertEquals(List.of("B2", "C3"), data.bestMoves2.get(0).variation);
+        assertFalse(data.isKataData2);
+        assertEquals(700, data.getPlayouts());
+        assertEquals("C3", data.bestMoves.get(0).coordinate);
+        assertEquals(List.of(0.25, -0.25), data.estimateArray);
+        assertEquals(SOURCE, data.primaryAnalysisProvenance());
+        assertEquals(SOURCE, data.primaryOwnershipProvenance());
+        assertValidity(history.getStart(), true, false);
+        if (round < 2) {
+          history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+          Lizzie.board.setHistory(history);
+        }
       }
     }
   }
