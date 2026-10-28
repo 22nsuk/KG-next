@@ -798,7 +798,7 @@ public class BoardHistoryNode {
         cur.extraStones = cloneExtraStones(node.extraStones);
         cur.hasRemovedStone = node.hasRemovedStone;
         if (sData.getPlayouts() > 0 && !sData.isSnapshotNode()) {
-          sData.comment = SGFParser.formatComment(cur);
+          sData.setGeneratedComment(SGFParser.formatComment(cur));
         }
       }
       cur.syncVariationsFrom(node);

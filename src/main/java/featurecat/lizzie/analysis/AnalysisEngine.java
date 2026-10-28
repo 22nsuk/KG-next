@@ -1265,7 +1265,7 @@ public class AnalysisEngine {
         if (Double.isFinite(rootInfo.scoreLead)) data.scoreMean = rootInfo.scoreLead;
         data.setPlayouts(rootInfo.visits);
         data.rootVisits = rootInfo.visits;
-        data.comment = SGFParser.formatComment(job.node);
+        data.setGeneratedComment(SGFParser.formatComment(job.node));
         Lizzie.board.updateMovelist(job.node);
       }
     }
@@ -1367,7 +1367,7 @@ public class AnalysisEngine {
         }
         data.estimateArray = new ArrayList<Double>(ownershipArray);
         data.setPrimaryOwnershipProvenance(provenance);
-        data.comment = SGFParser.formatComment(node);
+        data.setGeneratedComment(SGFParser.formatComment(node));
         Lizzie.board.updateMovelist(node);
         return data.hasReusablePrimaryAnalysis(
             explicitRequestTargetVisits, true, requiredAnalysisRun);
@@ -1405,7 +1405,7 @@ public class AnalysisEngine {
       }
       data.setPrimaryOwnershipProvenance(
           ownershipToApply == null || ownershipToApply.isEmpty() ? null : ownershipProvenance);
-      data.comment = SGFParser.formatComment(node);
+      data.setGeneratedComment(SGFParser.formatComment(node));
       Lizzie.board.updateMovelist(node);
       return explicitRequestTargetVisits <= 0
           || data.hasReusablePrimaryAnalysis(

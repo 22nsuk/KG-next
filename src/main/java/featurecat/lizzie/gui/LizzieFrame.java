@@ -47,6 +47,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.EngineCountDown;
 import featurecat.lizzie.rules.GIBParser;
+import featurecat.lizzie.rules.GameEditSnapshot;
 import featurecat.lizzie.rules.GroupInfo;
 import featurecat.lizzie.rules.MoveLinkedList;
 import featurecat.lizzie.rules.Movelist;
@@ -4787,13 +4788,9 @@ public class LizzieFrame extends JFrame {
             new java.util.concurrent.CancellationException("Startup game selection was superseded")))) return;
     Config config = Lizzie.config;
     Board board = Lizzie.board;
-    BoardHistoryList history = board.getHistory();
-    BoardHistoryNode root = history.getStart();
-    BoardHistoryNode current = history.getCurrentHistoryNode();
-    long revision = board.getContextRevision();
     boolean recoveryPending = !autoSaveRecoveryComplete
         && (autoSaveRecovery != null || config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5);
-    String startupSnapshot = recoveryPending ? captureStartupGameSnapshot(board) : null;
+    GameEditSnapshot startupSnapshot = recoveryPending ? captureStartupGameSnapshot(board) : null;
     recoverAutoSaveAsync().whenComplete((recovered, failure) -> {
       try {
         if (selection != startupGameSelection) {
@@ -4803,10 +4800,9 @@ public class LizzieFrame extends JFrame {
         }
         // Recovery yields the event thread: retain games opened, played, or edited meanwhile.
         if (Lizzie.frame == this && Lizzie.config == config
-            && Lizzie.board == board && board.getHistory() == history && history.getStart() == root
-            && history.getCurrentHistoryNode() == current && board.getContextRevision() == revision
+            && Lizzie.board == board
             && (!recoveryPending || (startupSnapshot != null
-                && startupSnapshot.equals(captureStartupGameSnapshot(board))))) {
+                && startupSnapshot.isCurrent(board)))) {
           if (args.length == 1) {
             if (!args[0].equals("read")) {
               File file = new File(args[0]);
@@ -4824,10 +4820,10 @@ public class LizzieFrame extends JFrame {
     });
   }
 
-  private static String captureStartupGameSnapshot(Board board) {
+  private static GameEditSnapshot captureStartupGameSnapshot(Board board) {
     try {
-      return SGFParser.saveSnapshot(board, true, true, false);
-    } catch (IOException | RuntimeException failure) {
+      return GameEditSnapshot.capture(board);
+    } catch (RuntimeException failure) {
       org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
           .warn("Could not capture current game during startup; keeping it after recovery", failure);
       return null;

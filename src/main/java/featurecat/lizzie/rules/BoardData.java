@@ -182,7 +182,12 @@ public class BoardData {
   public boolean isChanged2 = false;
   // Invalidation belongs to this position's live work, not to copied or saved analysis payloads.
   private volatile long primaryAnalysisRevision;
+  // Explicit analysis edits survive a later normal result clearing isChanged/isChanged2.
+  private long analysisEditRevision;
   public String comment = "";
+  private boolean hasGeneratedComment;
+  private String lastGeneratedComment;
+  private String commentBeforeGeneration;
   // public String comment2 = "";
   public String engineName = "";
   public String engineName2 = "";
@@ -445,6 +450,24 @@ public class BoardData {
    */
   public String propertiesString() {
     return SGFParser.propertiesString(properties);
+  }
+
+  /** Publishes analysis display text without turning its changing metrics into a user edit. */
+  public synchronized void setGeneratedComment(String generated) {
+    commentBeforeGeneration = authoredComment();
+    lastGeneratedComment = generated;
+    hasGeneratedComment = true;
+    comment = generated;
+  }
+
+  /** Direct comment assignments remain authored edits unless they still equal our publication. */
+  synchronized String authoredComment() {
+    return hasGeneratedComment && Objects.equals(comment, lastGeneratedComment)
+        ? commentBeforeGeneration : comment;
+  }
+
+  synchronized long analysisEditRevision() {
+    return analysisEditRevision;
   }
 
   public double getWinrate() {
@@ -1163,6 +1186,7 @@ public class BoardData {
 
   /** The information-clear action keeps ownership available while removing the evaluation. */
   synchronized void clearPrimaryEvaluationState() {
+    analysisEditRevision++;
     if (getPlayouts() > 0) bestMoves = new ArrayList<>();
     winrate = 50;
     setPlayouts(0);
@@ -1173,6 +1197,7 @@ public class BoardData {
   }
 
   synchronized void clearSecondaryEvaluationState() {
+    analysisEditRevision++;
     if (getPlayouts2() > 0) bestMoves2 = new ArrayList<>();
     winrate2 = 50;
     setPlayouts2(0);
@@ -1188,6 +1213,12 @@ public class BoardData {
     }
     // Advance even before the first result, and on repeated invalidation of an unchanged payload.
     primaryAnalysisRevision++;
+    analysisEditRevision++;
+  }
+
+  public synchronized void invalidateSecondaryAnalysis() {
+    if (getPlayouts2() > 0) isChanged2 = true;
+    analysisEditRevision++;
   }
 
   public long primaryAnalysisRevision() {
@@ -1298,6 +1329,9 @@ public class BoardData {
     this.isChanged2 = data.isChanged2;
     if (includeComment) {
       this.comment = data.comment;
+      this.hasGeneratedComment = data.hasGeneratedComment;
+      this.lastGeneratedComment = data.lastGeneratedComment;
+      this.commentBeforeGeneration = data.commentBeforeGeneration;
     }
     this.engineName = data.engineName;
     this.engineName2 = data.engineName2;

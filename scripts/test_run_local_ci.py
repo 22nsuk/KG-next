@@ -162,6 +162,16 @@ class RunLocalCiTest(unittest.TestCase):
                      f"editsDuringExitSaveCancelShutdownAndRetrySavesCurrentGame(String)[{invocation}]")
                     for invocation in range(1, 6)
                 ),
+                *tuple(
+                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                     f"explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String)[{invocation}]")
+                    for invocation in range(1, 5)
+                ),
+                *tuple(
+                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                     f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]")
+                    for invocation in range(1, 7)
+                ),
                 ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
                 ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
                 *tuple(

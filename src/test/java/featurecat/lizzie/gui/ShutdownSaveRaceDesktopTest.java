@@ -2,8 +2,13 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.KataGoAnalysisPayload;
+import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import java.awt.Window;
@@ -35,6 +40,29 @@ class ShutdownSaveRaceDesktopTest {
     assertEquals("PASS", Files.readString(result));
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "primary", "secondary", "primary-then-analysis", "secondary-then-analysis"
+  })
+  void explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String change) throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path result = DesktopProbeProcess.run(getClass(), "shutdown-invalidate-" + change,
+        List.of(), List.of("analysis-invalidate-" + change));
+    assertEquals("PASS", Files.readString(result));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "primary-root", "primary-move", "secondary-root", "secondary-move",
+      "primary-invalidated", "secondary-invalidated"
+  })
+  void ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String change) throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path result = DesktopProbeProcess.run(getClass(), "shutdown-analysis-" + change,
+        List.of(), List.of("analysis-update-" + change));
+    assertEquals("PASS", Files.readString(result));
+  }
+
   public static void main(String[] args) throws Exception {
     String change = args[0];
     Path work = Path.of(args[1]);
@@ -58,6 +86,12 @@ class ShutdownSaveRaceDesktopTest {
         return null;
       });
       SgfSaveTestSupport.awaitPending();
+      if (change.startsWith("analysis-")) {
+        verifyAnalysisDuringSave(change, work);
+        Files.writeString(result, "PASS");
+        System.exit(0);
+        return;
+      }
       CompletableFuture<Integer> exited = new CompletableFuture<>();
       CountDownLatch laterStarted = new CountDownLatch(1);
       CountDownLatch releaseLater = new CountDownLatch(1);
@@ -133,6 +167,104 @@ class ShutdownSaveRaceDesktopTest {
       failure.printStackTrace();
       System.exit(1);
     }
+  }
+
+  private static void verifyAnalysisDuringSave(String change, Path work) throws Exception {
+    boolean secondary = change.contains("secondary");
+    boolean invalidateDuringSave = change.startsWith("analysis-invalidate-");
+    boolean thenAnalysis = change.endsWith("-then-analysis");
+    boolean alreadyInvalidated = change.endsWith("-invalidated");
+    // Exercise real publication without launching a native engine. Its process lifecycle is
+    // orthogonal to whether the accepted BoardData update changes the user's game edits.
+    Leelaz source = new Leelaz("");
+    source.isKatago = true;
+    Object stream = new Object();
+    BoardData data = onEdt(() -> {
+      Lizzie.setPrimaryEngine(source);
+      if (secondary) {
+        Lizzie.config.toggleExtraMode(Lizzie.config.getExtraModeValue(ExtraMode.Double_Engine));
+      }
+      if (change.endsWith("-root")) Lizzie.board.goToMoveNumber(0);
+      BoardData selected = Lizzie.board.getData();
+      adoptAnalysis(selected, source, stream, secondary, 100);
+      if (alreadyInvalidated) invalidateAnalysis(secondary);
+      assertEquals(alreadyInvalidated, secondary ? selected.isChanged2 : selected.isChanged);
+      return selected;
+    });
+    BoardHistoryList history = onEdt(() -> Lizzie.board.getHistory());
+    BoardHistoryNode cursor = onEdt(history::getCurrentHistoryNode);
+    long revision = onEdt(() -> Lizzie.board.getContextRevision());
+    CompletableFuture<Integer> exited = new CompletableFuture<>();
+    Path exitSgf = work.resolve("save/autoGame1.sgf");
+    String frozen;
+    String current;
+    try (var held = SgfSaveTestSupport.holdNextPublication()) {
+      onEdt(() -> { shutdown(exited::complete); return null; });
+      held.awaitWritten();
+      frozen = Files.readString(exitSgf);
+      assertFalse(exited.isDone());
+      current = onEdt(() -> {
+        assertTrue(Lizzie.frame.isShowing());
+        if (invalidateDuringSave) invalidateAnalysis(secondary);
+        if (!invalidateDuringSave || thenAnalysis) {
+          adoptAnalysis(data, source, stream, secondary, 200);
+        }
+        assertSame(history, Lizzie.board.getHistory());
+        assertSame(cursor, history.getCurrentHistoryNode());
+        if (!invalidateDuringSave) {
+          assertEquals(revision, Lizzie.board.getContextRevision(),
+              "normal publication must not introduce a move, history replacement or navigation");
+        }
+        assertEquals(invalidateDuringSave && !thenAnalysis,
+            secondary ? data.isChanged2 : data.isChanged);
+        return SGFParser.captureSave(Lizzie.board, true);
+      });
+      // The accepted write remains frozen even while a new analysis result arrives.
+      assertEquals(frozen, Files.readString(exitSgf));
+      if (!invalidateDuringSave || thenAnalysis) assertNotEquals(frozen, current);
+      held.release();
+    }
+
+    if (invalidateDuringSave) {
+      // The explicit action still counts when a subsequent engine result resets isChanged.
+      awaitEdt(() -> !shutdownWaiting());
+      onEdt(() -> {
+        assertFalse(exited.isDone(), "shutdown discarded an explicit analysis invalidation");
+        assertTrue(Lizzie.frame.isShowing());
+        assertSame(history, Lizzie.board.getHistory());
+        assertSame(cursor, history.getCurrentHistoryNode());
+        assertEquals(current, SGFParser.captureSave(Lizzie.board, true));
+        assertEquals(!thenAnalysis, secondary ? data.isChanged2 : data.isChanged);
+        dismissDialogs();
+        return null;
+      });
+      assertEquals(frozen, Files.readString(exitSgf));
+      // A fresh close with no further edit saves exactly the retained current state.
+      onEdt(() -> { shutdown(exited::complete); return null; });
+      assertEquals(0, exited.get(10, TimeUnit.SECONDS));
+      assertEquals(current, Files.readString(exitSgf));
+    } else {
+      assertEquals(0, exited.get(10, TimeUnit.SECONDS),
+          "normal engine publication must not require a second close");
+      assertEquals(frozen, Files.readString(exitSgf),
+          "shutdown must not recapture its completed save after each analysis response");
+    }
+  }
+
+  private static void invalidateAnalysis(boolean secondary) {
+    if (secondary) Lizzie.board.clearbestmoves2();
+    else Lizzie.board.clearbestmoves();
+  }
+
+  private static void adoptAnalysis(
+      BoardData data, Leelaz source, Object stream, boolean secondary, int visits) {
+    KataGoAnalysisPayload payload = KataGoAnalysisPayload.parse(
+        "info move C3 visits " + visits + " winrate " + (visits == 100 ? "0.51" : "0.52")
+            + " scoreMean 1.0 scoreStdev 0.5 pv C3 D4 rootInfo visits " + visits);
+    assertEquals(BoardData.AnalysisAdoption.FULL,
+        data.adoptOrdinaryAnalysis(payload.moves, "shutdown-test-engine", source,
+            payload.totalVisits(), payload.rootVisits, payload.ownership, stream, secondary, false));
+    assertEquals(visits, secondary ? data.getPlayouts2() : data.getPlayouts());
   }
 
   private static void shutdown(IntConsumer exit) throws Exception {
