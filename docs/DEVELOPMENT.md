@@ -245,24 +245,50 @@ pwsh -NoProfile -File scripts/run_local_ci.ps1 -Profile Windows -Group EnginePro
 设置 `java.awt.headless=false` 不会替代可用显示；显示不可用时 runner 必须失败，不能以 skip 通过。
 
 
-Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）和 main push 执行原有七个 job，另有
-`engine-process` 的 Linux/Xvfb 与原生 Windows matrix：`repository-checks`、`script-tests`、
-`windows-script-tests`、`java-linux`、`java17-web`、`java-windows`、`desktop-smoke`，以及两个进程 matrix leg。
+Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）和 main push 执行
+`repository-checks`、`script-tests`、`windows-script-tests`、`java-linux`、`java17-web`、
+`java-windows`、`desktop-smoke`、`analysis-provenance-ui`，以及 `engine-process` 的
+Linux/Xvfb 与原生 Windows 两个 matrix leg。
 Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘要独立上传。
 两平台 Java job 保留全量测试、`LoggingProviderSmokeIT`、shaded JAR 和 JaCoCo；
 验证成功但 coverage artifact 缺失仍失败。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
-`ci-required` 是 `ci.yml` 的汇总检查，要求原有七项和 `engine-process` matrix 全部成功，拒绝失败、取消、
+`ci-required` 是 `ci.yml` 的汇总检查，要求上述八项和 `engine-process` matrix 全部成功，拒绝失败、取消、
 跳过、缺失或未知结果。发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
 该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
 不会自动启用分支保护。fork 的设置需要单独确认，不能从上游仓库的保护状态或检查名称推断。
 
-建议维护者为 main 将 GitHub Actions 来源的 `ci-required` 配置为必需检查，并在合并前确认
-实际生效的 required checks。回退 workflow 时必须保留可运行且真实验证七项和 `engine-process`
-matrix 执行结果的 `ci-required`；不能直接回退到缺少该检查的版本。调整 required checks 时，
-由维护者协调仓库保护设置与 workflow。
+建议采用以下 main 合并策略；这是待仓库维护者单独启用的设置，不会随文档或 workflow 合并自动生效：
+
+- 为 `main` 要求 `ci-required`，检查来源限定为 GitHub Actions；启用合并前与最新 main 同步的严格检查。
+- 将规则同时应用于管理员，不配置日常绕过。要求通过 PR 合并；本提案不增加审批人数、签名或线性历史要求。
+- 先确认修复后的 PR 在当前 head/测试合并提交上通过，再合并修复并等待该 main SHA 的 push CI 成功，然后启用规则。
+- 启用前后重新读取 [main 状态](https://api.github.com/repos/22nsuk/KG-next/branches/main) 和
+  [ruleset 列表](https://api.github.com/repos/22nsuk/KG-next/rulesets)，在仓库设置和 PR 合并框确认
+  目标、检查来源、严格模式和管理员适用范围。权限错误或无法读取不能解释为“没有保护”。
+- `Fox Search Regression` 等按路径触发的独立 workflow 不属于 `ci-required` 汇总；触发时仍须核对
+  同一提交上的结果。不要直接把可能不触发的检查设为所有 PR 的必需检查，以免无关 PR 一直等待。
+
+2026-10-28 检查 `22nsuk/KG-next` 的 main `23a648d5` 时，`protected=false`，ruleset 列表为空；
+这是当时的状态记录，实际启用前必须重查。设置语义参见 GitHub 的
+[分支保护说明](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)。
+
+回退 workflow 时必须保留可运行且真实验证上述八项和两个进程 leg 的 `ci-required`；不能直接回退到
+缺少该检查的版本。偶发准备失败先保留失败日志，再重跑失败 job；不能用跳过测试、扩大超时或关闭保护代替定位。
+若 workflow 与保护设置确实需要协调变更，先记录原设置、原因和恢复条件，由维护者单独处理。
+
+### Fox Linux 依赖下载
+
+Fox 与基础 CI 共用 `scripts/prefer_ubuntu_apt_mirror.py`，仅在 GitHub-hosted Ubuntu x64 上调整
+现有官方镜像的显式优先级，保留 Azure 与 security fallback；不新增源或绕过 APT 校验。
+helper 失败时准备步骤直接失败。helper 及其回归测试变更也会触发 Fox 的 Linux/Windows 两个平台检查。
+
+准备日志输出实际 `Acquire::Retries`、HTTP/HTTPS timeout，继承 runner 的下载策略，不另外增加重试循环。
+2026-10-28 的托管 runner 配置为重试 1 次、HTTP/HTTPS 超时各 15 秒；以当次日志为准。
+通信超时不等于整个下载的总时长，因此 Fox 为准备步骤另设 5 分钟总预算，保留原有 15 分钟 job 上限，
+为编译和实际 UI 探针留出时间。包列表、Windows 原生执行和拒绝 skipped 探针的规则均保持不变。
 
 本地预检用于在推送前尽早发现问题，不能代替 GitHub Actions 上的干净 Windows 和
 Ubuntu runner，也不能代替 macOS 签名、公证与多平台发布资产审计。
