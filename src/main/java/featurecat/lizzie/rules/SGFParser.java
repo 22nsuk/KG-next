@@ -566,7 +566,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -735,7 +736,7 @@ public class SGFParser {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
                       Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -748,7 +749,8 @@ public class SGFParser {
                 boolean newBranch =
                     Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -771,7 +773,8 @@ public class SGFParser {
                 boolean newBranch =
                     Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -843,7 +846,8 @@ public class SGFParser {
                   boolean newBranch =
                       Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -898,7 +902,8 @@ public class SGFParser {
                   boolean newBranch =
                       Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -3494,10 +3499,15 @@ public class SGFParser {
   }
 
   private static final class PendingSetupMetadata {
+    private final AnalysisImport analysisImport;
     private String comment;
     private final Map<String, String> properties = new LinkedHashMap<String, String>();
     private final List<PendingAnalysisPayload> analysisPayloads =
         new ArrayList<PendingAnalysisPayload>();
+
+    private PendingSetupMetadata(AnalysisImport analysisImport) {
+      this.analysisImport = analysisImport;
+    }
 
     private boolean isEmpty() {
       return Utils.isBlank(comment) && properties.isEmpty() && analysisPayloads.isEmpty();
@@ -3560,7 +3570,7 @@ public class SGFParser {
       return;
     }
     pendingSetupMetadata.analysisPayloads.forEach(
-        payload -> applyAnalysisTagOnDetachedHistory(target, payload.tag, payload.content));
+        payload -> pendingSetupMetadata.analysisImport.applyTag(target, payload.tag, payload.content));
   }
 
   private static void flushPendingSetupMetadataToCurrentNode(
@@ -3593,7 +3603,8 @@ public class SGFParser {
     pendingSetupMetadata.clear();
   }
 
-  private static void moveLeadingSetupMetadataToSnapshot(BoardHistoryList history) {
+  private static void moveLeadingSetupMetadataToSnapshot(
+      BoardHistoryList history, AnalysisImport analysisImport) {
     BoardHistoryNode snapshotNode = history.getCurrentHistoryNode();
     if (!snapshotNode.getData().isSnapshotNode() || !snapshotNode.previous().isPresent()) {
       return;
@@ -3606,6 +3617,7 @@ public class SGFParser {
       moveData.comment = "";
     }
     moveLeadingAnalysisPayloadToSnapshot(moveData, snapshotData);
+    analysisImport.moveToSnapshot(moveData, snapshotData);
     if (moveData.getProperties().isEmpty()) {
       return;
     }
@@ -4065,7 +4077,8 @@ public class SGFParser {
       BoardHistoryList history,
       boolean newBranch,
       Map<String, String> pendingProps,
-      boolean transferLeadingMoveMetadata) {
+      boolean transferLeadingMoveMetadata,
+      AnalysisImport analysisImport) {
     BoardData current = history.getData();
     int snapshotPlayouts = transferLeadingMoveMetadata ? current.getPlayouts() : 0;
     double snapshotWinrate = transferLeadingMoveMetadata ? current.winrate : 50;
@@ -4089,7 +4102,7 @@ public class SGFParser {
     snapshot.moveMNNumber = current.moveMNNumber;
     history.addOrGoto(snapshot, newBranch);
     if (transferLeadingMoveMetadata) {
-      moveLeadingSetupMetadataToSnapshot(history);
+      moveLeadingSetupMetadataToSnapshot(history, analysisImport);
     }
     if (newBranch) {
       processPendingPros(history, pendingProps);
@@ -4319,7 +4332,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4480,7 +4494,7 @@ public class SGFParser {
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -4490,7 +4504,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4508,7 +4523,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4553,7 +4569,8 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4594,7 +4611,8 @@ public class SGFParser {
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4703,7 +4721,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4849,7 +4868,7 @@ public class SGFParser {
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -4859,7 +4878,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4877,7 +4897,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4912,7 +4933,8 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4951,7 +4973,8 @@ public class SGFParser {
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -5019,43 +5042,50 @@ public class SGFParser {
     return "LZ2".equals(tag) || "LZOP2".equals(tag);
   }
 
-  private static void applyAnalysisTagOnDetachedHistory(
-      BoardHistoryList history, String tag, String tagContent) {
-    if (history == null) {
-      return;
-    }
-    applyAnalysisTagOnDetachedHistory(history.getData(), tag, tagContent);
-  }
+  private static final class AnalysisImport {
+    // A matching digest can belong to an earlier import. Only payloads replaced by this parser
+    // call permit KGP to restore invalidation; metadata alone cannot validate live analysis.
+    private final Set<BoardData> primaryReplacements =
+        Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<BoardData> secondaryReplacements =
+        Collections.newSetFromMap(new IdentityHashMap<>());
 
-  private static void applyAnalysisTagOnDetachedHistory(
-      BoardData target, String tag, String tagContent) {
-    if (target == null) {
-      return;
+    private void moveToSnapshot(BoardData source, BoardData snapshot) {
+      if (primaryReplacements.remove(source)) primaryReplacements.add(snapshot);
+      if (secondaryReplacements.remove(source)) secondaryReplacements.add(snapshot);
     }
-    if ("KGP".equals(tag)) {
-      target.addProperty(tag, tagContent);
-      restoreAnalysisMetadata(target, true, true);
-      return;
+
+    private void applyTag(BoardData target, String tag, String tagContent) {
+      if (target == null) {
+        return;
+      }
+      if ("KGP".equals(tag)) {
+        target.addProperty(tag, tagContent);
+        restoreAnalysisMetadata(target,
+            primaryReplacements.contains(target), secondaryReplacements.contains(target));
+        return;
+      }
+      if (Utils.isBlank(tagContent)) return;
+      String[] lines = tagContent.split("\n", 2);
+      String[] line1 = lines[0].trim().split("\\s+");
+      if (line1.length < 3 || Utils.isBlank(line1[0])) {
+        return;
+      }
+      String line2 = lines.length > 1 ? lines[1] : "";
+      boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
+      if (secondaryEngine) clearSecondaryAnalysisPayload(target);
+      else clearPrimaryAnalysisPayload(target);
+      applyAnalysisHeader(target, line1, secondaryEngine);
+      int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
+      if (numPlayouts > 0 && !Utils.isBlank(line2)) {
+        double stdev = extractAnalysisScoreStdev(line1);
+        ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
+        applyParsedAnalysisInfo(target, parsed, secondaryEngine);
+      }
+      target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
+      (secondaryEngine ? secondaryReplacements : primaryReplacements).add(target);
+      restoreAnalysisMetadata(target, !secondaryEngine, secondaryEngine);
     }
-    if (Utils.isBlank(tagContent)) return;
-    String[] lines = tagContent.split("\n", 2);
-    String[] line1 = lines[0].trim().split("\\s+");
-    if (line1.length < 3 || Utils.isBlank(line1[0])) {
-      return;
-    }
-    String line2 = lines.length > 1 ? lines[1] : "";
-    boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
-    if (secondaryEngine) clearSecondaryAnalysisPayload(target);
-    else clearPrimaryAnalysisPayload(target);
-    applyAnalysisHeader(target, line1, secondaryEngine);
-    int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
-    if (numPlayouts > 0 && !Utils.isBlank(line2)) {
-      double stdev = extractAnalysisScoreStdev(line1);
-      ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
-      applyParsedAnalysisInfo(target, parsed, secondaryEngine);
-    }
-    target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
-    restoreAnalysisMetadata(target, !secondaryEngine, secondaryEngine);
   }
 
   private static void applyAnalysisHeader(

@@ -168,8 +168,13 @@ are not an additional SGF property.
 three parser entrypoints route it through the same pending setup-metadata
 handling as analysis, so sources and invalidation follow the correct move or
 setup snapshot. Primary and secondary payload hashes are checked independently.
-Replacing `KGP` replaces the whole metadata record. Importing only one legacy
-analysis property restores validity only for that payload slot.
+Replacing `KGP` replaces the whole provenance record, but restores invalidation
+only for payload slots replaced in the current parser call. Importing one
+legacy analysis property, with or without `KGP`, preserves the other slot's live
+invalidation even when its old payload hash matches the incoming metadata.
+Metadata alone cannot override live invalidation. This import scope follows
+payloads transferred to setup snapshots and ends when parsing returns; it is
+not retained on the board or reused by a later import.
 
 If an older client keeps `KGP` but replaces an `LZ` value, the mismatching slot
 loads with unknown provenance and without the old payload's invalidation flag.

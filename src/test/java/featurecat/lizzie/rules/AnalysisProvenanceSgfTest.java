@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.WholeGameAnalysisPlan;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -19,6 +20,7 @@ import java.util.regex.Pattern;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisProvenanceSgfTest {
@@ -360,6 +362,105 @@ class AnalysisProvenanceSgfTest {
       assertEquals(120, data.getPlayouts());
       assertEquals(80, data.getPlayouts2());
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "false,false,1,false", "false,true,1,false", "true,false,1,false", "true,true,1,false",
+      "false,false,2,false", "false,true,2,false", "true,false,2,false", "true,true,2,false",
+      "false,false,2,true", "false,true,2,true", "true,false,2,true", "true,true,2,true"
+  })
+  void singleSlotImportWithMetadataPreservesUntouchedInvalidationAcrossReopens(
+      boolean secondary, boolean metadataFirst, int version, boolean importedInvalidated)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+          + "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "])", true);
+      Lizzie.board.setHistory(history);
+      Lizzie.board.clearBestMovesAfterForFirstEngine(history.getStart());
+      Lizzie.board.clearBestMovesAfterForSecondEngine(history.getStart());
+      JSONObject imported = metadata(PRIMARY, SECONDARY).put("version", version);
+      imported.remove(secondary ? "primary" : "secondary");
+      if (version == 2) {
+        imported.getJSONObject(secondary ? "secondary" : "primary")
+            .put("invalidated", importedInvalidated);
+      }
+      String kgp = "KGP[" + encode(imported) + "]";
+      String payload = secondary ? "LZ2[" + SECONDARY + "]" : "LZ[" + PRIMARY + "]";
+      SGFParser.parseBranch(history, ";" + (metadataFirst ? kgp + payload : payload + kgp));
+
+      for (int round = 0; round < 3; round++) {
+        BoardData data = history.getStart().getData();
+        assertInvalidation(history, secondary || importedInvalidated,
+            !secondary || importedInvalidated);
+        assertEquals(120, data.getPlayouts());
+        assertEquals(80, data.getPlayouts2());
+        assertEquals("C3", data.bestMoves.get(0).coordinate);
+        assertEquals("D4", data.bestMoves2.get(0).coordinate);
+        assertEquals(List.of("C3", "D4"), data.bestMoves.get(0).variation);
+        assertEquals(List.of("D4", "C3"), data.bestMoves2.get(0).variation);
+        assertEquals(List.of(0.2, -0.2), data.estimateArray);
+        assertEquals(List.of(0.3, -0.3), data.estimateArray2);
+        // KGP still replaces the complete provenance record, independently of live validity.
+        assertEquals(secondary ? null : ANALYSIS, data.primaryAnalysisProvenance());
+        assertEquals(secondary ? OWNERSHIP : null, data.secondaryAnalysisProvenance());
+        if (round < 2) {
+          Lizzie.board.setHistory(history);
+          history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void metadataWithoutReplacementPayloadCannotOverrideLiveInvalidation(boolean primaryInvalidated)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      BoardData data = history.getData();
+      data.isChanged = primaryInvalidated;
+      data.isChanged2 = !primaryInvalidated;
+      JSONObject contradictory = metadata(PRIMARY, SECONDARY).put("version", 2);
+      contradictory.getJSONObject("primary").put("invalidated", !primaryInvalidated);
+      contradictory.getJSONObject("secondary").put("invalidated", primaryInvalidated);
+      for (String property : List.of(encode(contradictory),
+          encode(metadata(PRIMARY, SECONDARY)),
+          encode(new JSONObject().put("app", "KG-next").put("version", 2)),
+          encode(metadata(PRIMARY, SECONDARY).put("version", 3)), "not base64!")) {
+        SGFParser.parseBranch(history, ";KGP[" + property + "]");
+        assertInvalidation(history, primaryInvalidated, !primaryInvalidated);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void laterImportDoesNotReuseEarlierImportsReplacementScope(boolean metadataFirst) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      String kgp = "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "]";
+      SGFParser.parseBranch(history, ";LZ2[" + SECONDARY + "]" + kgp);
+      BoardData data = history.getData();
+      data.isChanged = true;
+      data.isChanged2 = true;
+      String primary = "LZ[" + PRIMARY + "]";
+      SGFParser.parseBranch(history, ";" + (metadataFirst ? kgp + primary : primary + kgp));
+      assertInvalidation(history, false, true);
+      assertSources(data);
+    }
+  }
+
+  private static void assertInvalidation(
+      BoardHistoryList history, boolean primaryInvalidated, boolean secondaryInvalidated) {
+    BoardHistoryNode root = history.getStart();
+    BoardData data = root.getData();
+    assertEquals(primaryInvalidated, data.isChanged, "primary invalidation");
+    assertEquals(secondaryInvalidated, data.isChanged2, "secondary invalidation");
+    assertTrue(data.hasCompletePrimaryAnalysis(120, true));
+    assertEquals(!primaryInvalidated, data.hasReusablePrimaryAnalysis(120, true));
+    assertEquals(primaryInvalidated ? List.of(root) : List.of(),
+        WholeGameAnalysisPlan.create(root, 32, 120).positionsMissingAnalysis(120, true));
   }
 
   @Test
