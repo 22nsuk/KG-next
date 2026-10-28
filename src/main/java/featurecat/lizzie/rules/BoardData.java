@@ -455,7 +455,7 @@ public class BoardData {
 
   /** Authored writes share the same owner as analysis comment generation and publication. */
   public synchronized void setAuthoredComment(String text) {
-    // Opening and closing the editor without an edit must retain the generated comment's origin.
+    // Reapplying the current display text must retain the generated comment's origin.
     if (Objects.equals(comment, text)) return;
     comment = text;
     hasGeneratedComment = false;

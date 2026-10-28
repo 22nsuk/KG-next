@@ -10,6 +10,7 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.GameEditSnapshot;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import java.awt.Window;
@@ -101,6 +102,12 @@ class ShutdownSaveRaceDesktopTest {
         return null;
       });
       SgfSaveTestSupport.awaitPending();
+      if (change.equals("unchanged-comment-analysis-update")) {
+        verifyUnchangedEditorDuringAnalysis(work);
+        Files.writeString(result, "PASS");
+        System.exit(0);
+        return;
+      }
       if (change.equals("comment-analysis-overlap")) {
         verifyCommentEditDuringGeneratedComment(work);
         Files.writeString(result, "PASS");
@@ -188,6 +195,72 @@ class ShutdownSaveRaceDesktopTest {
       failure.printStackTrace();
       System.exit(1);
     }
+  }
+
+  @Test
+  void unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path result = DesktopProbeProcess.run(getClass(), "shutdown-unchanged-comment-analysis",
+        List.of(), List.of("unchanged-comment-analysis-update"));
+    assertEquals("PASS", Files.readString(result));
+  }
+
+  private static void verifyUnchangedEditorDuringAnalysis(Path work) throws Exception {
+    Leelaz source = new Leelaz("");
+    source.isKatago = true;
+    source.isLoaded = true;
+    Object stream = new Object();
+    BoardHistoryNode node = onEdt(() -> {
+      Lizzie.setPrimaryEngine(source);
+      Lizzie.config.showComment = true;
+      // Drive each analysis publication explicitly instead of waiting for UI timers.
+      frameField("autoIntervalCom").setInt(Lizzie.frame, Integer.MAX_VALUE);
+      frameField("lastAutocomTime").setLong(Lizzie.frame, System.currentTimeMillis());
+      BoardHistoryNode selected = Lizzie.board.getHistory().getCurrentHistoryNode();
+      BoardData data = selected.getData();
+      data.setAuthoredComment("  original authored note\n");
+      adoptAnalysis(data, source, stream, false, 100);
+      data.setGeneratedComment(() -> SGFParser.formatComment(selected));
+      return selected;
+    });
+    BoardData data = node.getData();
+    GameEditSnapshot edits = onEdt(() -> GameEditSnapshot.capture(Lizzie.board));
+    CompletableFuture<Integer> exited = new CompletableFuture<>();
+    Path exitSgf = work.resolve("save/autoGame1.sgf");
+    String frozen;
+    try (var held = SgfSaveTestSupport.holdNextPublication()) {
+      onEdt(() -> { shutdown(exited::complete); return null; });
+      held.awaitWritten();
+      frozen = Files.readString(exitSgf);
+      assertFalse(exited.isDone());
+      onEdt(() -> {
+        Lizzie.frame.setCommentEditable(true);
+        assertTrue(Lizzie.frame.commentEditPane.isVisible());
+        JTextComponent editor = (JTextComponent) frameField("commentEditTextPane").get(Lizzie.frame);
+        String opened = editor.getText();
+        String previousDisplay = data.comment;
+        adoptAnalysis(data, source, stream, false, 200);
+        data.setGeneratedComment(() -> SGFParser.formatComment(node));
+        String latestDisplay = data.comment;
+        assertNotEquals(previousDisplay, latestDisplay);
+        assertEquals(opened, editor.getText(), "analysis must leave the open editor untouched");
+        Lizzie.frame.setCommentEditable(false);
+        assertFalse(Lizzie.frame.commentEditPane.isVisible());
+        assertEquals(latestDisplay, data.comment,
+            "closing an unchanged editor must not restore stale generated text");
+        assertTrue(edits.isCurrent(Lizzie.board), "an unchanged editor must preserve authored text");
+        // Subsequent generation must retain the original authored identity too.
+        adoptAnalysis(data, source, stream, false, 300);
+        data.setGeneratedComment(() -> SGFParser.formatComment(node));
+        assertTrue(edits.isCurrent(Lizzie.board));
+        return null;
+      });
+      assertEquals(frozen, Files.readString(exitSgf));
+      held.release();
+    }
+    assertEquals(0, exited.get(10, TimeUnit.SECONDS),
+        "normal analysis and closing an unchanged editor must not require a second close");
+    assertEquals(frozen, Files.readString(exitSgf), "the accepted exit save must remain frozen");
   }
 
   private static void verifyAnalysisDuringSave(String change, Path work) throws Exception {

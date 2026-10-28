@@ -48,6 +48,8 @@ DESKTOP_REQUIRED_TESTS = (
     ),
     ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
      "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown"),
+    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+     "unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown"),
     ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
     ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
     *tuple(

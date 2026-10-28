@@ -599,6 +599,7 @@ public class LizzieFrame extends JFrame {
   private JScrollPane varTreeScrollPane;
 
   private JIMSendTextPane commentEditTextPane;
+  private String commentEditInitialText;
   public JScrollPane commentEditPane;
 
   public String enginePkTitile;
@@ -11526,6 +11527,7 @@ public class LizzieFrame extends JFrame {
       String text = Lizzie.board.getHistory().getCurrentHistoryNode().getData().comment;
       if (text.length() > 0) text = text + '\n';
       commentEditTextPane.setText(text);
+      commentEditInitialText = commentEditTextPane.getText();
       commentEditPane.setVisible(true);
       commentEditTextPane.requestFocus(true);
       commentScrollPane.setVisible(false);
@@ -11535,8 +11537,12 @@ public class LizzieFrame extends JFrame {
       commentEditPane.setVisible(false);
       sidebarPanel.syncCommentVisibility();
       String text = commentEditTextPane.getText();
-      if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
-      Lizzie.board.getHistory().getCurrentHistoryNode().getData().setAuthoredComment(text);
+      // Analysis may have refreshed the node's comment while this editor was open.
+      if (!text.equals(commentEditInitialText)) {
+        if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
+        Lizzie.board.getHistory().getCurrentHistoryNode().getData().setAuthoredComment(text);
+      }
+      commentEditInitialText = null;
       appendComment();
     }
   }
