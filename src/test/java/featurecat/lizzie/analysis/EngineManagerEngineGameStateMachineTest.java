@@ -732,6 +732,9 @@ class EngineManagerEngineGameStateMachineTest {
       EngineManager.EngineGameOwnerTransaction owner =
           activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
       session.applyOpening(owner);
+      if (source.equals("manual")) {
+        pauseAndAwaitStopCommands(owner);
+      }
       CountDownLatch resuming = new CountDownLatch(1);
       CountDownLatch releaseResume = new CountDownLatch(1);
       black.beforePonder = () -> {
@@ -761,10 +764,7 @@ class EngineManagerEngineGameStateMachineTest {
               owner, featurecat.lizzie.enginegame.EngineGameParameterRequest.wrn(0.8, null),
               () -> {});
           case "komi" -> assertTrue(EngineManager.reviseEngineGameKomi(owner, 8.5, () -> {}));
-          case "manual" -> {
-            EngineManager.pauseEngineGame(owner);
-            manualResume.start();
-          }
+          case "manual" -> manualResume.start();
           default -> throw new AssertionError(source);
         }
         assertTrue(resuming.await(2, TimeUnit.SECONDS));
@@ -780,8 +780,16 @@ class EngineManagerEngineGameStateMachineTest {
       assertFalse(pause.isAlive());
       assertFalse(manualResume.isAlive());
       assertNull(failure.get());
-      awaitCondition(() -> black.commandText().substring(blackStart).stripTrailing().endsWith("stop")
-          && white.commandText().substring(whiteStart).stripTrailing().endsWith("stop"));
+      // Queued commands have no physical leases yet. Observe each expected write before
+      // waiting for those leases and checking the final analysis/stop order.
+      awaitCondition(() -> {
+        String blackCommands = black.commandText().substring(blackStart);
+        String whiteCommands = white.commandText().substring(whiteStart);
+        return commandLineCount(blackCommands, "kata-analyze") >= 1
+            && commandLineCount(whiteCommands, "kata-analyze") >= (ponderBoth ? 1 : 0)
+            && commandLineCount(blackCommands, "stop") >= 1
+            && commandLineCount(whiteCommands, "stop") >= 1;
+      });
       awaitOperationsReleased(owner);
       assertTrue(owner.paused());
       assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
@@ -1398,8 +1406,7 @@ class EngineManagerEngineGameStateMachineTest {
       if (restoring) {
         EngineManager.resetEngineGameTransactionStateForTest();
       } else {
-        EngineManager.pauseEngineGame(owner);
-        awaitOperationsReleased(owner);
+        pauseAndAwaitStopCommands(owner);
       }
       AtomicBoolean replaced = new AtomicBoolean();
       white.beforeLiveIncarnationAction =
@@ -3663,8 +3670,7 @@ class EngineManagerEngineGameStateMachineTest {
           activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
       session.applyOpening(owner);
       if (source.equals("manual")) {
-        EngineManager.pauseEngineGame(owner);
-        awaitOperationsReleased(owner);
+        pauseAndAwaitStopCommands(owner);
       }
       output.beforeBlockedCommand = kata::hold;
       output.armed = true;
@@ -7085,6 +7091,17 @@ class EngineManagerEngineGameStateMachineTest {
             + Arrays.toString(expectedStates)
             + "; observed "
             + observed);
+  }
+
+  private void pauseAndAwaitStopCommands(EngineManager.EngineGameOwnerTransaction owner)
+      throws InterruptedException {
+    int blackStops = commandLineCount(black.commandText(), "stop");
+    int whiteStops = commandLineCount(white.commandText(), "stop");
+    EngineManager.pauseEngineGame(owner);
+    // A zero operation count before these writes does not mean the queued stops completed.
+    awaitCondition(() -> commandLineCount(black.commandText(), "stop") > blackStops
+        && commandLineCount(white.commandText(), "stop") > whiteStops);
+    awaitOperationsReleased(owner);
   }
 
   private static void awaitOperationsReleased(
