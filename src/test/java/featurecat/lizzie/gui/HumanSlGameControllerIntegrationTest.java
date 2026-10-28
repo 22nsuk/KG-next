@@ -60,6 +60,7 @@ import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -1504,9 +1505,10 @@ class HumanSlGameControllerIntegrationTest {
     }
   }
 
-  @Test
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void savedGamePositionWaitsForDeferredCoachTeardownAndParserFinalization(
-      @TempDir Path directory) throws Exception {
+      boolean overwrittenDuringTeardown, @TempDir Path directory) throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
       writeSavedGame(
@@ -1529,6 +1531,14 @@ class HumanSlGameControllerIntegrationTest {
       assertFalse(controller.isFinished());
       assertNotNull(exitWorker.get());
 
+      if (overwrittenDuringTeardown) {
+        // Simulate a completed overwrite while the accepted open still waits for coach teardown.
+        // The displayed row/accepted continuation must not retain the previous path.
+        writeSavedGame(directory, 1,
+            "(;FF[4]SZ[3]C[saved root];B[bb](;W[aa];B[bc])(;W[cc]C[saved variation]))");
+        SwingUtilities.invokeAndWait(() -> Lizzie.config.saveBoardConfig
+            .getJSONArray("save-game-move-list").put(0, "2,2,w_1,1,b"));
+      }
       finishSavedGameCoachExit(exitWorker.get());
 
       assertTrue(controller.isFinished());
@@ -1536,9 +1546,12 @@ class HumanSlGameControllerIntegrationTest {
       assertEquals("saved root", loaded.getStart().getData().comment);
       assertEquals("saved variation", loaded.getData().comment);
       assertEquals(2, loaded.getMoveNumber());
-      assertEquals(Stone.BLACK, loaded.getData().stones[Board.getIndex(0, 0)]);
+      int black = overwrittenDuringTeardown ? 1 : 0;
+      int empty = overwrittenDuringTeardown ? 0 : 1;
+      assertEquals(Stone.BLACK, loaded.getData().stones[Board.getIndex(black, black)]);
       assertEquals(Stone.WHITE, loaded.getData().stones[Board.getIndex(2, 2)]);
-      assertEquals(Stone.EMPTY, loaded.getData().stones[Board.getIndex(1, 1)]);
+      assertEquals(Stone.EMPTY, loaded.getData().stones[Board.getIndex(empty, empty)]);
+      assertEquals(1, loaded.getStart().numberOfChildren(), "old paths must not create a root variation");
       assertEquals(2, loaded.getStart().next().orElseThrow().numberOfChildren());
       assertSame(loaded.getCurrentHistoryNode(), frame.positionWhenSavedListHidden);
       assertEquals(1, frame.hiddenSavedLists);
@@ -1767,6 +1780,7 @@ class HumanSlGameControllerIntegrationTest {
     Config config = ConfigTestHelper.createForTests(directory);
     config.persisted = new JSONObject().put("filesystem", new JSONObject());
     config.uiConfig = new JSONObject();
+    config.saveBoardConfig = new JSONObject();
     config.playSound = false;
     config.readKomi = true;
     config.showComment = true;
@@ -1807,6 +1821,17 @@ class HumanSlGameControllerIntegrationTest {
   private static JButton savedGameLoadButton(
       SavedGameCompletionFrame frame, int index, int moveNumber, String moveList) {
     try {
+      // Production rows come from this published manifest; the UI arguments are only a view.
+      JSONObject metadata = Lizzie.config.saveBoardConfig;
+      for (String key : List.of("save-game-index", "save-game-name", "save-game-time",
+          "save-game-move-number", "save-game-move-list")) {
+        if (!metadata.has(key)) metadata.put(key, new JSONArray());
+      }
+      metadata.getJSONArray("save-game-index").put(index);
+      metadata.getJSONArray("save-game-name").put("saved game");
+      metadata.getJSONArray("save-game-time").put("saved date");
+      metadata.getJSONArray("save-game-move-number").put(moveNumber);
+      metadata.getJSONArray("save-game-move-list").put(moveList);
       java.lang.reflect.Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
       panelField.setAccessible(true);
       JPanel panel = (JPanel) panelField.get(frame);
