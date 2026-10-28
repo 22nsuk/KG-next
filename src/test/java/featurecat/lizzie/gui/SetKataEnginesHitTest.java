@@ -41,13 +41,15 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
-import java.util.concurrent.FutureTask;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JDialog;
+import javax.swing.JFrame;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
@@ -591,6 +593,7 @@ class SetKataEnginesHitTest {
     var previousGame = Lizzie.engineGame.current();
     ResourceBundle previousBundle = Lizzie.resourceBundle;
     SetKataPDA[] dialog = new SetKataPDA[1];
+    JFrame[] owner = new JFrame[1];
     try {
       Files.createDirectories(root.resolve("save"));
       Lizzie.config = ConfigTestHelper.createBootstrapped(root);
@@ -604,12 +607,14 @@ class SetKataEnginesHitTest {
       engine.pdaCap = 0.4;
       engine.isStaticPda = true;
       Lizzie.engineManager = null;
+      owner[0] = showPdaOwner();
       SwingUtilities.invokeAndWait(
           () -> {
             EngineGameSnapshotFixtures.publishIdle();
             Lizzie.setPrimaryEngine(engine);
             LizzieFrame.menu.txtPDA = new JFontTextField("unchanged");
-            dialog[0] = new SetKataPDA();
+            dialog[0] = new SetKataPDA(owner[0]);
+            assertSame(owner[0], dialog[0].getOwner());
             dialog[0].setVisible(true);
             dialog[0].chkAutoPDA.setSelected(true);
           });
@@ -636,7 +641,7 @@ class SetKataEnginesHitTest {
       for (String draft : invalid) {
         SwingUtilities.invokeAndWait(
             () -> pdaField(dialog[0], dynamic).setText(draft));
-        rejectPdaDraft(dialog[0]);
+        rejectPdaDraft(dialog[0], robot);
         SwingUtilities.invokeAndWait(
             () -> {
               assertTrue(dialog[0].isVisible(), "invalid input keeps the editor open");
@@ -679,7 +684,7 @@ class SetKataEnginesHitTest {
         SwingUtilities.invokeAndWait(
             () -> {
               dialog[0].dispose();
-              dialog[0] = new SetKataPDA();
+              dialog[0] = new SetKataPDA(owner[0]);
               dialog[0].setVisible(true);
               dialog[0].txtDymCap.setText("-9");
             });
@@ -698,6 +703,7 @@ class SetKataEnginesHitTest {
       SwingUtilities.invokeAndWait(
           () -> {
             if (dialog[0] != null) dialog[0].dispose();
+            if (owner[0] != null) owner[0].dispose();
             Lizzie.config = previousConfig;
             Lizzie.frame = previousFrame;
             LizzieFrame.menu = previousMenu;
@@ -718,6 +724,7 @@ class SetKataEnginesHitTest {
     ResourceBundle previousBundle = Lizzie.resourceBundle;
     int previousSize = Config.frameFontSize;
     SetKataPDA[] dialog = new SetKataPDA[1];
+    JFrame[] owner = new JFrame[1];
     try {
       Files.createDirectories(root.resolve("save"));
       Lizzie.config = ConfigTestHelper.createBootstrapped(root);
@@ -728,6 +735,7 @@ class SetKataEnginesHitTest {
       engine.isStaticPda = true;
       Lizzie.setPrimaryEngine(engine);
       Robot robot = new Robot();
+      owner[0] = showPdaOwner();
       for (Locale locale : List.of(Locale.KOREAN, Locale.CHINA, Locale.US)) {
         for (int size : new int[] {12, 16, 20}) {
           CountDownLatch focused = new CountDownLatch(1);
@@ -736,7 +744,7 @@ class SetKataEnginesHitTest {
                 Config.frameFontSize = size;
                 Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", locale);
                 Lizzie.config.isChinese = Locale.CHINA.equals(locale);
-                dialog[0] = new SetKataPDA();
+                dialog[0] = new SetKataPDA(owner[0]);
                 dialog[0].addWindowFocusListener(new WindowAdapter() {
                   @Override public void windowGainedFocus(WindowEvent event) { focused.countDown(); }
                 });
@@ -798,6 +806,7 @@ class SetKataEnginesHitTest {
       SwingUtilities.invokeAndWait(
           () -> {
             if (dialog[0] != null) dialog[0].dispose();
+            if (owner[0] != null) owner[0].dispose();
             Config.frameFontSize = previousSize;
             Lizzie.config = previousConfig;
             Lizzie.frame = previousFrame;
@@ -809,6 +818,33 @@ class SetKataEnginesHitTest {
 
   private static JTextField pdaField(SetKataPDA dialog, boolean dynamic) {
     return dynamic ? dialog.txtDymCap : field(dialog, "txtStaticCur", JTextField.class);
+  }
+
+  private static JFrame showPdaOwner() throws Exception {
+    JFrame[] owner = new JFrame[1];
+    CountDownLatch focused = new CountDownLatch(1);
+    WindowAdapter listener = new WindowAdapter() {
+      @Override public void windowGainedFocus(WindowEvent event) { focused.countDown(); }
+    };
+    try {
+      SwingUtilities.invokeAndWait(() -> {
+        owner[0] = new JFrame("PDA editor owner");
+        owner[0].addWindowFocusListener(listener);
+        owner[0].setBounds(200, 160, 500, 350);
+        owner[0].setVisible(true);
+      });
+      assertTrue(focused.await(5, TimeUnit.SECONDS), "the application frame must be mapped first");
+      return owner[0];
+    } catch (Exception | AssertionError failure) {
+      SwingUtilities.invokeAndWait(() -> {
+        if (owner[0] != null) owner[0].dispose();
+      });
+      throw failure;
+    } finally {
+      SwingUtilities.invokeAndWait(() -> {
+        if (owner[0] != null) owner[0].removeWindowFocusListener(listener);
+      });
+    }
   }
 
   private static void focus(Component component) throws Exception {
@@ -850,33 +886,71 @@ class SetKataEnginesHitTest {
     robot.keyRelease(key);
   }
 
-  private static void rejectPdaDraft(SetKataPDA dialog) throws Exception {
-    List<String> messages = new ArrayList<>();
-    List<Boolean> fitted = new ArrayList<>();
-    AWTEventListener dismiss =
+  private static void rejectPdaDraft(SetKataPDA dialog, Robot robot) throws Exception {
+    List<Message> messages = new ArrayList<>();
+    CompletableFuture<Message> opened = new CompletableFuture<>();
+    CountDownLatch editorFocused = new CountDownLatch(1);
+    WindowAdapter restoreFocus = new WindowAdapter() {
+      @Override public void windowGainedFocus(WindowEvent event) { editorFocused.countDown(); }
+    };
+    AWTEventListener capture =
         event -> {
           if (event.getID() == WindowEvent.WINDOW_OPENED
               && event.getSource() instanceof Message message) {
-            messages.add(message.lblmessage.getText());
-            fitted.add(message.lblmessage.getWidth() >= message.lblmessage.getPreferredSize().width
-                && message.lblmessage.getHeight() >= message.lblmessage.getPreferredSize().height);
-            message.dispose();
+            messages.add(message);
+            opened.complete(message);
           }
         };
-    Toolkit.getDefaultToolkit().addAWTEventListener(dismiss, AWTEvent.WINDOW_EVENT_MASK);
+    Toolkit.getDefaultToolkit().addAWTEventListener(capture, AWTEvent.WINDOW_EVENT_MASK);
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    FutureTask<Void> apply =
+        new FutureTask<>(
+            () -> {
+              button(dialog, "SetKataPDA.btnApply").doClick(0);
+              return null;
+            });
     try {
-      FutureTask<Void> apply =
-          new FutureTask<>(
-              () -> {
-                button(dialog, "SetKataPDA.btnApply").doClick(0);
-                return null;
-              });
       SwingUtilities.invokeLater(apply);
-      apply.get(5, TimeUnit.SECONDS);
-      assertEquals(List.of(Lizzie.resourceBundle.getString("SetKataPDA.wrongParameter")), messages);
-      assertEquals(List.of(true), fitted, "the complete validation message must be readable");
+      Message message = opened.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      boolean[] fitted = new boolean[1];
+      String[] layout = new String[1];
+      // WINDOW_OPENED can precede the native decoration resize and its Swing layout.
+      do {
+        SwingUtilities.invokeAndWait(() -> {
+          fitted[0] = message.isFocused()
+              && message.lblmessage.getWidth() >= message.lblmessage.getPreferredSize().width
+              && message.lblmessage.getHeight() >= message.lblmessage.getPreferredSize().height;
+          layout[0] = "actual=" + message.lblmessage.getSize() + ", preferred="
+              + message.lblmessage.getPreferredSize() + ", insets=" + message.getInsets()
+              + ", focused=" + message.isFocused();
+        });
+        if (fitted[0]) break;
+        Thread.sleep(10);
+      } while (System.nanoTime() < deadline);
+      assertTrue(fitted[0], "the complete validation message must be readable: " + layout[0]);
+      SwingUtilities.invokeAndWait(() -> dialog.addWindowFocusListener(restoreFocus));
+      press(robot, KeyEvent.VK_ESCAPE);
+      apply.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      assertTrue(editorFocused.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS),
+          "keyboard focus must return to the PDA editor after dismissing the validation message");
+      SwingUtilities.invokeAndWait(() -> {
+          assertTrue(dialog.isFocused());
+          assertFalse(message.isDisplayable(), "Escape must dispose the validation message");
+          assertEquals(List.of(Lizzie.resourceBundle.getString("SetKataPDA.wrongParameter")),
+              messages.stream().map(value -> value.lblmessage.getText()).toList());
+        });
     } finally {
-      Toolkit.getDefaultToolkit().removeAWTEventListener(dismiss);
+      apply.cancel(false);
+      try {
+        SwingUtilities.invokeAndWait(() -> {
+          dialog.removeWindowFocusListener(restoreFocus);
+          messages.forEach(value -> {
+            if (value.isDisplayable()) value.dispose();
+          });
+        });
+      } finally {
+        Toolkit.getDefaultToolkit().removeAWTEventListener(capture);
+      }
     }
   }
 
@@ -894,6 +968,7 @@ class SetKataEnginesHitTest {
     ResourceBundle previousBundle = Lizzie.resourceBundle;
     RecordingEngine[] engines = new RecordingEngine[2];
     SetKataPDA[] dialogs = new SetKataPDA[2];
+    JFrame[] owner = new JFrame[1];
     try {
       Files.createDirectories(root.resolve("save"));
       Lizzie.config = ConfigTestHelper.createBootstrapped(root);
@@ -907,13 +982,14 @@ class SetKataEnginesHitTest {
       }
       engines[participant].isKataGoPda = true;
       Lizzie.engineManager = new EngineManager(List.of(engines[0], engines[1]));
+      owner[0] = showPdaOwner();
       SwingUtilities.invokeAndWait(
           () -> {
             LizzieFrame.menu.txtPDA = new JFontTextField();
             Lizzie.setPrimaryEngine(engines[1 - participant]);
             Lizzie.engineGame.publishSnapshotForTest(
                 EngineGameSnapshotFixtures.playing(EngineGamePlayMode.GENMOVE, RunState.PAUSED));
-            dialogs[0] = new SetKataPDA();
+            dialogs[0] = new SetKataPDA(owner[0]);
             dialogs[0].setVisible(true);
             dialogs[0].chkStaticPda.doClick(0);
             field(dialogs[0], "txtStaticCur", JTextField.class).setText("1.25");
@@ -927,7 +1003,7 @@ class SetKataEnginesHitTest {
 
             engines[participant].commands.clear();
             EngineGameSnapshotFixtures.publishPlaying();
-            dialogs[1] = new SetKataPDA();
+            dialogs[1] = new SetKataPDA(owner[0]);
             dialogs[1].setVisible(true);
             dialogs[1].chkDymPda.setSelected(true);
             dialogs[1].txtDymCap.setText("0.8");
@@ -943,6 +1019,7 @@ class SetKataEnginesHitTest {
       SwingUtilities.invokeAndWait(
           () -> {
             for (SetKataPDA dialog : dialogs) if (dialog != null) dialog.dispose();
+            if (owner[0] != null) owner[0].dispose();
             Lizzie.config = previousConfig;
             Lizzie.frame = previousFrame;
             LizzieFrame.menu = previousMenu;

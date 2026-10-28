@@ -6004,14 +6004,9 @@ public class Menu extends JMenuBar {
     more2.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            if (setPda == null) {
-              setPda = new SetKataPDA();
-              setPda.setVisible(true);
-            } else {
-              setPda.dispose();
-              setPda = new SetKataPDA();
-              setPda.setVisible(true);
-            }
+            if (setPda != null) setPda.dispose();
+            setPda = new SetKataPDA(Lizzie.frame);
+            setPda.setVisible(true);
           }
         });
 

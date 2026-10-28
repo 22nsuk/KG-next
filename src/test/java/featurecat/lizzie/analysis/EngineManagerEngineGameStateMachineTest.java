@@ -1495,6 +1495,77 @@ class EngineManagerEngineGameStateMachineTest {
     assertTrue(condition.getAsBoolean());
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "false,version,id", "true,version,id",
+      "false,version,payload", "true,version,payload",
+      "false,parameter,value", "true,parameter,value",
+      "false,parameter,newline", "true,parameter,newline"
+  })
+  void parameterResponderWaitsForTheCompleteNumberedCommand(
+      boolean whiteParticipant, String operation, String split) throws Exception {
+    CountDownLatch prefixWritten = new CountDownLatch(1);
+    CountDownLatch releaseSuffix = new CountDownLatch(1);
+    AtomicBoolean paused = new AtomicBoolean();
+    ByteArrayOutputStream output = new ByteArrayOutputStream() {
+      @Override
+      public void write(int value) {
+        String prefix = toString();
+        boolean splitHere = switch (split) {
+          case "id" -> prefix.length() == 1;
+          case "payload" -> prefix.endsWith(" vers");
+          case "value" -> prefix.endsWith(" 0.8");
+          case "newline" -> value == '\n';
+          default -> throw new AssertionError(split);
+        };
+        if (splitHere && paused.compareAndSet(false, true)) {
+          prefixWritten.countDown();
+          await(releaseSuffix);
+        }
+        super.write(value);
+      }
+    };
+    StateMachineLeelaz engine = whiteParticipant ? white : black;
+    engine.bindLiveRuntime(output);
+    engine.komiTimeoutMillis = 1000L;
+    ImmediateUiEngineManager manager = installManager();
+    EngineManager.EngineGameOwnerTransaction owner =
+        activeTransaction(manager, breadthPlan(0, 1, 0.0, 0.0), black, 0);
+    boolean version = operation.equals("version");
+    String command = version ? "version" : "kata-set-param " + WRN + " 0.85";
+    java.util.concurrent.FutureTask<Void> confirmation = new java.util.concurrent.FutureTask<>(() -> {
+      EngineGameParticipantCommands.confirmAll(owner, List.of(
+          new EngineGameParticipantCommands.Leg(
+              "participant", engine, engine.currentEngineIncarnation(), command,
+              reply -> !version || reply.equals("1.18.2") ? null : "invalid version: " + reply)));
+      return null;
+    });
+    Thread sender = new Thread(confirmation, "split-parameter-command");
+    try (FakeKataParameters kata = new FakeKataParameters(0.3, 0.7, 0.0, 0.0, false)) {
+      sender.start();
+      try {
+        assertTrue(prefixWritten.await(2, TimeUnit.SECONDS));
+        kata.answer(engine);
+        kata.answer(engine);
+        kata.answer(engine);
+        assertEquals(whiteParticipant ? 0.7 : 0.3, kata.of(engine),
+            "an unterminated command must not change the peer's parameters");
+        assertFalse(confirmation.isDone(), "an unterminated request cannot be confirmed");
+      } finally {
+        releaseSuffix.countDown();
+        kata.responder.start();
+        sender.join(2000L);
+        if (sender.isAlive()) {
+          confirmation.cancel(true);
+          sender.join(2000L);
+        }
+      }
+      assertFalse(sender.isAlive());
+      confirmation.get(2, TimeUnit.SECONDS);
+      if (!version) assertEquals(0.85, kata.of(engine));
+    }
+  }
+
   /** Answers numbered GTP commands like KataGo, keeping each process's breadth and PDA. */
   private final class FakeKataParameters implements AutoCloseable {
     private final java.util.Map<StateMachineLeelaz, String> versions =
@@ -1507,7 +1578,6 @@ class EngineManagerEngineGameStateMachineTest {
         new java.util.concurrent.ConcurrentHashMap<>();
     private volatile boolean ignoreDeletes;
     private final java.util.Map<StateMachineLeelaz, Integer> answered = new java.util.HashMap<>();
-    private final java.util.Map<StateMachineLeelaz, Integer> seen = new java.util.HashMap<>();
     private final AtomicReference<Throwable> responderFailure = new AtomicReference<>();
     private final java.util.Set<String> rejected =
         java.util.concurrent.ConcurrentHashMap.newKeySet();
@@ -1525,6 +1595,11 @@ class EngineManagerEngineGameStateMachineTest {
     }
 
     private FakeKataParameters(double blackWrn, double whiteWrn, double blackPda, double whitePda) {
+      this(blackWrn, whiteWrn, blackPda, whitePda, true);
+    }
+
+    private FakeKataParameters(
+        double blackWrn, double whiteWrn, double blackPda, double whitePda, boolean startResponder) {
       values.put(black, new java.util.concurrent.ConcurrentHashMap<>());
       values.put(white, new java.util.concurrent.ConcurrentHashMap<>());
       values.get(black).put(WRN, blackWrn);
@@ -1556,7 +1631,7 @@ class EngineManagerEngineGameStateMachineTest {
               },
               "fake-katago-parameters");
       responder.setDaemon(true);
-      responder.start();
+      if (startResponder) responder.start();
     }
 
     private double of(StateMachineLeelaz engine) {
@@ -1600,13 +1675,14 @@ class EngineManagerEngineGameStateMachineTest {
       return (engine == black ? "black " : "white ") + parameter;
     }
 
-    /** Answers lines already seen on the previous scan: a reply cannot precede its request. */
     private void answer(StateMachineLeelaz engine) {
       String text = engine.commandText();
-      String[] lines = text.isEmpty() ? new String[0] : text.split("\\R");
+      // A writer can pause inside an ID or value; only a newline completes its request.
+      int completeLength = text.lastIndexOf('\n') + 1;
+      String[] lines = completeLength == 0
+          ? new String[0] : text.substring(0, completeLength).split("\\R");
       int from = answered.getOrDefault(engine, 0);
-      int until = Math.min(seen.getOrDefault(engine, 0), lines.length);
-      seen.put(engine, lines.length);
+      int until = lines.length;
       if (from > until) from = 0;
       for (int index = from; index < until; index++) {
         String line = lines[index].trim();
@@ -1671,7 +1747,7 @@ class EngineManagerEngineGameStateMachineTest {
           engine.processCommandResponseLineForTest(reply);
         }
       }
-      answered.put(engine, Math.max(from, until));
+      answered.put(engine, until);
     }
 
     @Override
