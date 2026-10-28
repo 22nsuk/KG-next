@@ -106,13 +106,15 @@ the corresponding sources. The existing “clear information” actions retain
 the ownership map; their shared `BoardData` helpers remove evaluation values
 and evaluation provenance while keeping ownership values and provenance.
 
-Three kinds of state must remain separate:
+Saved payload state and live execution permissions must remain separate:
 
 | State | Scope |
 | --- | --- |
 | Persisted `AnalysisProvenance` values | Explain the displayed/saved payload; copied with it and serialized to SGF. |
+| Persisted `isChanged` / `isChanged2` flags | Mark the corresponding saved payload as invalidated; retain it for display while excluding primary analysis from reuse. A fresh accepted replacement clears that slot's invalidation. |
 | Existing live `analysisSource` identity | Admits ordinary output from the current stream; not a durable source record. |
 | `primaryAnalysisRun` object identity | Allows a fresh result to satisfy one explicit reassessment plan; never serialized or inherited by copies. |
+| `primaryAnalysisRevision` counter | Invalidates already dispatched work when the live position changes; never restored from SGF. |
 
 `hasReusablePrimaryAnalysis(visits, ownership, requiredRunToken)` applies the
 usual completeness/invalidation checks and, when the token is non-null,
@@ -126,24 +128,32 @@ substitutes for these admission and completion checks.
 ## SGF format and compatibility
 
 The legacy analysis payload grammar remains unchanged. Root analysis uses
-`LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. Provenance is stored separately in a
-custom **`KGP`** property, as UTF-8 JSON encoded with unpadded Base64URL. This
-keeps model names, Unicode, brackets and backslashes outside the legacy
-analysis/PV grammar.
+`LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. Provenance and invalidation state are
+stored separately in a custom **`KGP`** property, as UTF-8 JSON encoded with
+unpadded Base64URL. This keeps model names, Unicode, brackets and backslashes
+outside the legacy analysis/PV grammar.
 
-The decoded version 1 structure is:
+The reader accepts versions 1 and 2. The writer uses version 2 when a serialized
+payload is invalidated, including when its provenance is unknown. Valid-only
+source records continue to use version 1 so existing v1 readers can display
+their provenance. Version 2 adds a per-slot `invalidated` Boolean; absent flags
+and version 1 retain legacy validity behavior.
+
+The decoded structure is:
 
 ```text
 app: "KG-next"
-version: 1
+version: 1 or 2
 primary?:
   payloadSha256: SHA-256 of the primary LZ/LZOP property value
   analysis?: AnalysisProvenance object
   ownership?: AnalysisProvenance object
+  invalidated?: Boolean (version 2 only)
 secondary?:
   payloadSha256: SHA-256 of the secondary LZ2/LZOP2 property value
   analysis?: AnalysisProvenance object
   ownership?: AnalysisProvenance object
+  invalidated?: Boolean (version 2 only)
 ```
 
 The hash input is the unescaped SGF property value encoded in UTF-8, including
@@ -156,17 +166,21 @@ are not an additional SGF property.
 
 `KGP` can appear before or after the corresponding legacy properties. The
 three parser entrypoints route it through the same pending setup-metadata
-handling as analysis, so source information follows the correct move or setup
-snapshot. Primary and secondary payload hashes are checked independently.
+handling as analysis, so sources and invalidation follow the correct move or
+setup snapshot. Primary and secondary payload hashes are checked independently.
+Replacing `KGP` replaces the whole metadata record. Importing only one legacy
+analysis property restores validity only for that payload slot.
 
 If an older client keeps `KGP` but replaces an `LZ` value, the mismatching slot
-loads with unknown provenance. Its evaluation remains usable and visible.
+loads with unknown provenance and without the old payload's invalidation flag.
+Its evaluation remains usable and visible.
 This binding detects obsolete metadata; it is not a signature or proof that
 an SGF author supplied truthful engine information.
 
 The decoder requires the expected application/version, allowed field names,
-valid field types, finite numbers and 64-character hexadecimal hashes. Text
-limits are 1,024 characters for engine/model names, 128 for engine version,
+valid field types, finite numbers, strict Boolean invalidation flags and
+64-character hexadecimal hashes. Text limits are 1,024 characters for
+engine/model names, 128 for engine version,
 8,192 for rules and 256 for HumanSL profile. The encoded property is limited
 to 393,216 characters (384 KiB) for decoding. Each of the four source records
 accepts at most 10,752 UTF-16 text units, including the two hashes. Allowing
@@ -174,21 +188,26 @@ six JSON bytes per unit and 2,048 bytes for field names, punctuation, payload
 hashes and finite numbers bounds generated JSON at 260,096 bytes and padded
 Base64 at 346,796 characters. The decoding limit therefore accommodates all
 accepted source records even with maximum JSON escaping. Invalid UTF-8,
-malformed metadata and unsupported versions are ignored as source evidence
+malformed metadata and unsupported versions are ignored as analysis metadata
 without rejecting the legacy analysis.
 
 Opaque or unsupported raw `KGP` values are retained when possible and written
-back when no new source record supersedes them. A live payload replacement or
-information clear discards obsolete opaque metadata rather than guessing how
-to update a future schema. Recognized current source records are regenerated
-against the newly serialized payload. An analysis-free/raw export follows the
-existing analysis-export policy and need not retain provenance.
+back when no current source or invalidation record supersedes them. A live
+payload replacement or information clear discards obsolete opaque metadata
+rather than guessing how to update a future schema. Recognized metadata is regenerated from the current
+slot state against the newly serialized payload, or omitted when no source or
+invalidation remains. This prevents a previously rejected digest from matching
+again merely because saving normalizes the payload text. An analysis-free/raw
+export follows the existing analysis-export policy and need not retain provenance.
 
 Old SGFs without `KGP` require no migration. Their analysis loads as before,
 with unknown source. Clients that do not understand this optional property
 can continue to use the legacy payloads; clients that strip unknown properties
-will also strip provenance. Source records do not change this interoperability
-limit.
+will also strip provenance and invalidation. Older clients cannot enforce the
+version 2 invalidation state and may show its payload as valid; their v1-only
+reader also treats v2 source records as unknown. Invalidation that was already
+lost when saving in an older version cannot be reconstructed from visits or
+source records alone.
 
 ## Validation entrypoints
 
@@ -199,7 +218,7 @@ any particular checkout has passed them.
 ```sh
 # Payload ownership, source preservation, SGF parser/setup/legacy compatibility
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
-  -Dtest=AnalysisProvenanceSgfTest,BoardDataAnalysisProvenanceTest,SGFParserSemanticRoundTripTest,BoardNodeKindHistoryPipelineTest,BoardDataAnalysisCacheTraceTest test
+  -Dtest=AnalysisInvalidationSgfTest,AnalysisProvenanceSgfTest,BoardDataAnalysisProvenanceTest,SGFParserSemanticRoundTripTest,BoardNodeKindHistoryPipelineTest,BoardDataAnalysisCacheTraceTest test
 
 # Reuse/reassessment planning, request publication, identity capture and display
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
@@ -212,7 +231,12 @@ mvn -B -Djava.awt.headless=true verify
 `AnalysisProvenanceSgfTest` covers separate evaluation/ownership sources,
 root/move/setup round trips, all three parser entrypoints, property ordering,
 legacy files, payload changes, suggestion limits, maximum-length escaped source
-records, malformed/future/oversized metadata and exact serialized digests.
+records, malformed/future/oversized metadata, strict invalidation flags and exact
+serialized digests. It also covers slot-specific imports and prevents recognized
+metadata from reviving after payload normalization. `AnalysisInvalidationSgfTest`
+covers repeated save/reopen, independent slot validity, subtree invalidation,
+the real whole-game reuse plan and snapshot/file-save entrypoints while retaining
+the previous displayed result.
 `BoardDataAnalysisProvenanceTest` covers full,
 rejected and ownership-only adoption, retained maps, explicit producer
 ownership, copy/sync/clear boundaries and nonpersistent run permission.
