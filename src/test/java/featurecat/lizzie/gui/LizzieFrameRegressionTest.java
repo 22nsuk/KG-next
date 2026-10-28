@@ -197,11 +197,11 @@ class LizzieFrameRegressionTest {
   }
 
   @Test
-  void autoSaveFilesUseConfiguredWorkDirectoryInsteadOfProcessCwd(@TempDir Path workDir) {
+  void autoSavePathsUseConfiguredWorkDirectoryWithoutCreatingDirectories(@TempDir Path workDir) {
     File autoSave = LizzieFrame.autoSaveFile(workDir.toFile(), 2, "sgf");
 
     assertEquals(workDir.resolve("save").resolve("autoGame2.sgf").toFile(), autoSave);
-    assertTrue(autoSave.getParentFile().isDirectory());
+    assertFalse(autoSave.getParentFile().exists(), "path capture must not perform disk I/O");
   }
 
   @Test

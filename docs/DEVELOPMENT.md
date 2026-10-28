@@ -179,6 +179,7 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `OfficialStrongestModelDesktopTest` 的真实模型目录刷新、手动选择、失效响应回退和已有引擎配置保留场景
 - `HumanSlStrengthDialogTest` 的手动选择、设置重启保留、显式补充、取消和换谱结果隔离场景
 - `SavedGameLoadDesktopTest` 的保存列表按钮、缩略图和放大预览打开失败保留当前棋谱、原位置与注释，并在修复同一文件后成功重试的场景
+- `SavedGameSaveDesktopTest` 的真实保存按钮在磁盘任务等待期间保持窗口响应、完成后才发布 SGF/缩略图/索引并刷新列表的场景
 - `ThemeSaveDesktopTest` 的主题保存与颜色重置失败保留窗口、编辑值和原文件，并在恢复写入权限后成功重试的场景
 - `AnalysisProgressDesktopTest` 的分析进度窗口仍打开时实时绘制胜率与目差曲线，并在最后结果到达后完成窗口收尾的场景
 
@@ -193,6 +194,10 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 保存列表用例在独立子 JVM 中运行实际应用，使用真实 SGF 文件、有效缩略图及生产错误对话框。
 它覆盖缺失和无效 SGF，确认失败后列表仍可操作，成功后才恢复保存位置并关闭列表。
 韩文失败与重试成功截图保存在 `target/desktop-smoke/probes/saved-game-load-*/`。
+
+保存写入用例通过阻塞共享保存 worker 控制慢磁盘时序，保留生产按钮、SGF/缩略图/索引写入和 EDT 完成处理。
+它确认等待期间按钮禁用、列表与文件不提前更新，释放后才发布成功；韩文等待与完成截图保存在
+`target/desktop-smoke/probes/saved-game-save-*/`。该检查验证线程与完成顺序，不是磁盘吞吐基准。
 
 官方最强模型用例通过本地 HTTP 服务返回受控元数据，点击生产窗口的刷新按钮并等待真实异步回调。
 它覆盖新增模型和命中已固定模型两种显示，验证当前模型、推荐卡片及配置文件不变；不下载或运行模型。

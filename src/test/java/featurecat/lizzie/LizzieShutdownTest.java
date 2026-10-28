@@ -245,6 +245,106 @@ class LizzieShutdownTest {
     }
   }
 
+  @Test
+  void repeatedShutdownJoinsOneAsynchronousExitAutosaveBeforeCleanup() throws Exception {
+    try (Harness harness = Harness.open()) {
+      CompletableFuture<Boolean> save = new CompletableFuture<>();
+      harness.frame.autoSaveAttempt = save;
+      AtomicInteger exits = new AtomicInteger();
+      FutureTask<Void> shutdown = new FutureTask<>(() -> {
+        Lizzie.shutdown(status -> exits.incrementAndGet());
+        return null;
+      });
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        SwingUtilities.invokeLater(shutdown);
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS),
+            "waiting for the final automatic save must not block the EDT");
+        shutdown.get(5, TimeUnit.SECONDS);
+        FutureTask<Void> repeated = new FutureTask<>(() -> {
+          Lizzie.shutdown(status -> exits.incrementAndGet());
+          return null;
+        });
+        SwingUtilities.invokeLater(repeated);
+        repeated.get(5, TimeUnit.SECONDS);
+
+        assertEquals(1, harness.frame.autoSaveCalls);
+        assertEquals(0, exits.get());
+        assertFalse(harness.config.persistCalled);
+        assertFalse(harness.config.saveCalled);
+        assertEquals(0, harness.frame.strengthShutdownCalls);
+        assertEquals(0, harness.engine.forceQuitCount);
+
+        SwingUtilities.invokeAndWait(() -> {
+          save.complete(true);
+          // The already queued completion still owns this close request.
+          Lizzie.shutdown(status -> exits.incrementAndGet());
+          assertEquals(1, harness.frame.autoSaveCalls);
+          assertEquals(0, exits.get());
+        });
+        SwingUtilities.invokeAndWait(() -> {});
+
+        assertEquals(1, harness.frame.autoSaveCalls,
+            "resuming shutdown must not enqueue another final automatic save");
+        assertTrue(harness.config.persistCalled);
+        assertTrue(harness.config.saveCalled);
+        assertEquals(1, harness.frame.strengthShutdownCalls);
+        assertEquals(1, harness.engine.forceQuitCount);
+        assertEquals(1, exits.get());
+      } finally {
+        save.complete(false);
+        SwingUtilities.invokeAndWait(() -> {});
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void asynchronousExitAutosaveFailureLeavesExitRetryable(boolean exceptional) throws Exception {
+    try (Harness harness = Harness.open()) {
+      CompletableFuture<Boolean> save = new CompletableFuture<>();
+      harness.frame.autoSaveAttempt = save;
+      AtomicInteger exits = new AtomicInteger();
+      try {
+        FutureTask<Void> shutdown = new FutureTask<>(() -> {
+          Lizzie.shutdown(status -> exits.incrementAndGet());
+          return null;
+        });
+        SwingUtilities.invokeLater(shutdown);
+        shutdown.get(5, TimeUnit.SECONDS);
+        assertEquals(1, harness.frame.autoSaveCalls);
+        assertFalse(harness.config.persistCalled);
+        assertEquals(0, exits.get());
+
+        SwingUtilities.invokeAndWait(() -> {
+          if (exceptional) save.completeExceptionally(new IOException("automatic write failed"));
+          else save.complete(false);
+        });
+        SwingUtilities.invokeAndWait(() -> {});
+
+        assertEquals(1, harness.frame.autoSaveCalls);
+        assertFalse(harness.config.persistCalled);
+        assertFalse(harness.config.saveCalled);
+        assertEquals(0, harness.frame.strengthShutdownCalls);
+        assertEquals(0, harness.engine.forceQuitCount);
+        assertEquals(0, exits.get());
+
+        harness.frame.autoSaveAttempt = null;
+        SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(status -> exits.incrementAndGet()));
+        assertEquals(2, harness.frame.autoSaveCalls);
+        assertTrue(harness.config.persistCalled);
+        assertTrue(harness.config.saveCalled);
+        assertEquals(1, harness.frame.strengthShutdownCalls);
+        assertEquals(1, harness.engine.forceQuitCount);
+        assertEquals(1, exits.get());
+      } finally {
+        save.complete(false);
+        SwingUtilities.invokeAndWait(() -> {});
+      }
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"true, false", "true, true", "false, false", "false, true"})
   void failedSettingsSavePreservesAppAndSuccessfulRetryCanExit(
@@ -791,15 +891,18 @@ class LizzieShutdownTest {
     int strengthShutdownCalls;
     boolean autoSaveResult;
     RuntimeException autoSaveFailure;
+    CompletableFuture<Boolean> autoSaveAttempt;
     CompletableFuture<Void> strengthShutdown;
 
     @Override
-    public boolean saveAutoGame(int index) {
+    public CompletableFuture<Boolean> saveAutoGameAsync(int index) {
       autoSaveCalls++;
+      assertEquals(1, index, "shutdown must save the exit recovery slot");
       if (autoSaveFailure != null) {
         throw autoSaveFailure;
       }
-      return autoSaveResult;
+      return autoSaveAttempt == null
+          ? CompletableFuture.completedFuture(autoSaveResult) : autoSaveAttempt;
     }
 
     @Override

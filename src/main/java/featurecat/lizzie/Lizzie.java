@@ -1045,13 +1045,18 @@ public class Lizzie {
                 e1.printStackTrace();
               }
             }
-            frame.restoreStartupGame(mainArgs);
-            Lizzie.frame.setMainPanelFocus();
-            if (Lizzie.config.analysisEnginePreLoad) {
-              frame.preloadConfiguredAnalysisEngineAfterStartup();
-            }
-            KataGoRuntimeHelper.startAppleSiliconAutoOptimizationAsync();
-            KataGoRuntimeHelper.startFirstRunBenchmarkAsync();
+            LizzieFrame startupFrame = frame;
+            startupFrame.restoreStartupGameAsync(mainArgs).whenComplete(
+                (ignored, failure) -> SwingUtilities.invokeLater(() -> {
+                  if (frame != startupFrame) return;
+                  if (failure != null) APP.warn("Startup game restoration failed", failure);
+                  startupFrame.setMainPanelFocus();
+                  if (Lizzie.config.analysisEnginePreLoad) {
+                    startupFrame.preloadConfiguredAnalysisEngineAfterStartup();
+                  }
+                  KataGoRuntimeHelper.startAppleSiliconAutoOptimizationAsync();
+                  KataGoRuntimeHelper.startFirstRunBenchmarkAsync();
+                }));
           }
         });
   }
@@ -1468,16 +1473,33 @@ public class Lizzie {
     java.util.concurrent.CompletableFuture<Void> pendingSaves =
         featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
     if (deferShutdownForSave(pendingSaves, exit)) return;
-    boolean saved;
     try {
       pendingSaves.join();
-      saved = !config.autoSaveOnExit || frame.saveAutoGame(1);
+      if (config.autoSaveOnExit) {
+        java.util.concurrent.CompletableFuture<Boolean> finalSave = frame.saveAutoGameAsync(1);
+        if (deferShutdownForSave(finalSave, () -> finishShutdownAfterSaves(exit))) return;
+        if (!finalSave.join()) {
+          cancelShutdownAfterSaveFailure(null);
+          return;
+        }
+      }
     } catch (RuntimeException failure) {
       cancelShutdownAfterSaveFailure(failure);
       return;
     }
-    if (!saved) {
-      cancelShutdownAfterSaveFailure(null);
+    finishShutdownAfterSaves(exit);
+  }
+
+  private static void finishShutdownAfterSaves(IntConsumer exit) {
+    // A later accepted save may have joined while final autosave was writing. Drain it without
+    // resubmitting final autosave on every continuation.
+    java.util.concurrent.CompletableFuture<Void> pending =
+        featurecat.lizzie.gui.SgfSaveCoordinator.pendingSaves();
+    if (deferShutdownForSave(pending, () -> finishShutdownAfterSaves(exit))) return;
+    try {
+      pending.join();
+    } catch (RuntimeException failure) {
+      cancelShutdownAfterSaveFailure(failure);
       return;
     }
     if (Lizzie.config.uiConfig.optBoolean("autoload-last", false)) {
@@ -1581,12 +1603,17 @@ public class Lizzie {
 
   private static boolean deferShutdownForSave(
       java.util.concurrent.CompletableFuture<?> save, IntConsumer exit) {
+    return deferShutdownForSave(save, () -> shutdown(exit));
+  }
+
+  private static boolean deferShutdownForSave(
+      java.util.concurrent.CompletableFuture<?> save, Runnable continuation) {
     if (save.isDone()) return false;
     if (shutdownSaveWait.compareAndSet(null, save)) {
       save.whenComplete((result, failure) -> SwingUtilities.invokeLater(() -> {
         if (!shutdownSaveWait.compareAndSet(save, null)) return;
         if (failure != null || Boolean.FALSE.equals(result)) cancelShutdownAfterSaveFailure(failure);
-        else shutdown(exit);
+        else continuation.run();
       }));
     }
     return true;

@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.ResourceBundle;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -1660,13 +1661,16 @@ class HumanSlGameControllerIntegrationTest {
       controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
 
       try {
-        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, accepted, startup));
+        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, accepted, startup)));
+        request.get().get(5, TimeUnit.SECONDS);
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "queued load is not a new save target");
         assertFalse(controller.isFinished());
 
-        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, rejected, !startup));
+        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, rejected, !startup)));
+        request.get().get(5, TimeUnit.SECONDS);
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "rejected continuation cannot claim the file");
       } finally {
@@ -1705,7 +1709,9 @@ class HumanSlGameControllerIntegrationTest {
           null);
 
       try {
-        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, malformed, startup));
+        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, malformed, startup)));
+        request.get().get(5, TimeUnit.SECONDS);
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertSame(originalNode, original.getCurrentHistoryNode());
@@ -1729,11 +1735,11 @@ class HumanSlGameControllerIntegrationTest {
     }
   }
 
-  private static void openExternalFile(
+  private static CompletableFuture<Void> openExternalFile(
       SavedGameCompletionFrame frame, Path file, boolean startup) {
+    assertTrue(SwingUtilities.isEventDispatchThread());
     if (startup) {
-      frame.restoreStartupGame(new String[] {file.toString()});
-      return;
+      return frame.restoreStartupGameAsync(new String[] {file.toString()});
     }
     Transferable files = new Transferable() {
       @Override
@@ -1753,6 +1759,7 @@ class HumanSlGameControllerIntegrationTest {
       }
     };
     assertTrue(frame.importDroppedKifuFiles(files));
+    return CompletableFuture.completedFuture(null);
   }
 
   private static SavedGameCompletionFrame savedGameCompletionFrame(Path directory)

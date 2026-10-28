@@ -111,8 +111,9 @@ class PlayedGameSaveSafetyTest {
             assertFalse(pending.get().isDone(), "accepted I/O must remain visible to shutdown");
             assertTrue(LizzieFrame.isSavingRaw);
             assertFalse(LizzieFrame.isSavingRawComment);
-            assertEquals(1, savedGames().size());
-            assertEquals(0, Files.size(savedGames().get(0)), "the writer is still blocked");
+            assertTrue(savedGames().isEmpty(), "a blocked worker must not reserve a file on EDT");
+            assertFalse(Files.exists(directory.resolve("MyGames")),
+                "directory creation also belongs to the worker");
 
             completedHistory.getGameInfo().setPlayerBlack("edited after capture");
             completedHistory.getStart().getData().comment = "edited root";
@@ -173,10 +174,7 @@ class PlayedGameSaveSafetyTest {
               frame.autoSavePlayedGame();
             }
             assertFalse(SgfSaveCoordinator.pendingSaves().isDone());
-            assertEquals(4, savedGames().size(), "each request must reserve its own target");
-            for (Path target : savedGames()) {
-              if (!target.equals(existing)) assertEquals(0, Files.size(target));
-            }
+            assertEquals(List.of(existing), savedGames(), "queued requests have not touched disk");
             Lizzie.board.getHistory().getStart().getData().comment = "later edit";
           });
       paused.release();
@@ -204,8 +202,14 @@ class PlayedGameSaveSafetyTest {
     Path blockingFile = directory.resolve("MyGames");
     byte[] original = "this is a user file".getBytes(StandardCharsets.UTF_8);
     Files.write(blockingFile, original);
-    onEdt(frame::autoSavePlayedGame);
-    awaitPendingSaves();
+    AtomicReference<CompletableFuture<Void>> failedSave = new AtomicReference<>();
+    onEdt(() -> {
+      frame.autoSavePlayedGame();
+      failedSave.set(SgfSaveCoordinator.pendingSaves());
+    });
+    ExecutionException failure = assertThrows(ExecutionException.class,
+        () -> failedSave.get().get(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+    assertInstanceOf(IOException.class, failure.getCause());
     assertFailureReported();
     assertTrue(Files.isRegularFile(blockingFile));
     assertArrayEquals(original, Files.readAllBytes(blockingFile));
@@ -213,7 +217,7 @@ class PlayedGameSaveSafetyTest {
   }
 
   @Test
-  void fullRealSaveQueueReportsRejectionAndRemovesOnlyItsEmptyReservation() throws Exception {
+  void fullRealSaveQueueReportsRejectionWithoutCreatingAReservation() throws Exception {
     Path existing = directory.resolve("MyGames/existing.sgf");
     Files.createDirectories(existing.getParent());
     byte[] original = "(;SZ[5]C[keep this SGF])".getBytes(StandardCharsets.UTF_8);
@@ -229,7 +233,7 @@ class PlayedGameSaveSafetyTest {
               frame.autoSavePlayedGame();
               rejectedSave.set(SgfSaveCoordinator.pendingSaves());
               assertFalse(rejectedSave.get().isDone());
-              assertEquals(2, savedGames().size(), "rejected submission still has a reservation");
+              assertEquals(List.of(existing), savedGames(), "rejection must not touch disk");
             });
         // Rejection completion is owned by the EDT and must not wait for the busy disk worker.
         ExecutionException rejection =

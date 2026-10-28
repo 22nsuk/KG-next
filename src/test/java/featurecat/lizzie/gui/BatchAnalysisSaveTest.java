@@ -12,12 +12,16 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Zobrist;
 import java.io.File;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.ResourceBundle;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
@@ -28,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Real toolbar completion, SGF persistence failure, and the existing start action used for retry. */
 class BatchAnalysisSaveTest {
@@ -88,6 +93,7 @@ class BatchAnalysisSaveTest {
 
   @AfterEach
   void restore() throws Exception {
+    awaitSaves();
     SwingUtilities.invokeAndWait(() -> {});
     Lizzie.config = previousConfig;
     Lizzie.board = previousBoard;
@@ -114,6 +120,7 @@ class BatchAnalysisSaveTest {
     Lizzie.config.isAutoAna = true;
 
     SwingUtilities.invokeAndWait(() -> toolbar.stopAutoAna(false, !completed));
+    awaitSaves();
 
     assertEquals(0, frame.nextLoads, "failed save must not advance to the next game");
     assertEquals(0, frame.finishes, "failed save must not report batch completion or discard it");
@@ -129,11 +136,13 @@ class BatchAnalysisSaveTest {
 
     // The normal start control retries the save before trying to reload or reanalyze the game.
     SwingUtilities.invokeAndWait(toolbar::startAutoAna);
+    awaitSaves();
     assertEquals(2, frame.saveFailures);
     assertEquals(0, frame.nextLoads);
     assertEquals(0, frame.finishes);
     restoreOutputDirectory();
     SwingUtilities.invokeAndWait(toolbar::startAutoAna);
+    awaitSaves();
 
     boolean advance = completed && index == 0;
     assertEquals(advance ? 1 : 0, frame.nextLoads);
@@ -165,12 +174,14 @@ class BatchAnalysisSaveTest {
           assertTrue(frame.isBatchAnalysisMode);
           saved.incrementAndGet();
         }));
+    awaitSaves();
     assertFalse(frame.isBatchAnalysisMode);
     assertEquals(0, saved.get());
     assertTrue(frame.hasPendingBatchAnalysisSave());
 
     restoreOutputDirectory();
     SwingUtilities.invokeAndWait(() -> assertTrue(frame.retryBatchAnalysisSave()));
+    awaitSaves();
     assertEquals(1, saved.get());
     SwingUtilities.invokeAndWait(() -> assertFalse(frame.retryBatchAnalysisSave()));
     assertEquals(1, saved.get());
@@ -182,6 +193,7 @@ class BatchAnalysisSaveTest {
     AtomicInteger saved = new AtomicInteger();
     blockOutputDirectory();
     SwingUtilities.invokeAndWait(() -> frame.saveBatchAnalysisResult(saved::incrementAndGet));
+    awaitSaves();
     assertEquals(1, frame.saveFailures);
     restoreOutputDirectory();
     switch (changed) {
@@ -211,6 +223,194 @@ class BatchAnalysisSaveTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void pendingBatchSaveLeavesEdtResponsiveAndAdvancesOnlyAfterItsFrozenResultCommits(
+      boolean completed) throws Exception {
+    LizzieFrame.curFile = frame.Batchfiles.get(0);
+    try (BlockedSave ignored = new BlockedSave()) {
+      Lizzie.config.isAutoAna = true;
+      SwingUtilities.invokeAndWait(() -> toolbar.stopAutoAna(false, !completed));
+      // This second EDT dispatch must remain available while disk work is deliberately blocked.
+      SwingUtilities.invokeAndWait(() -> {
+        assertTrue(frame.hasPendingBatchAnalysisSave());
+        assertEquals(0, frame.nextLoads);
+        assertEquals(0, frame.finishes);
+        Lizzie.board.getHistory().getStart().getData().comment = "edited after capture";
+        toolbar.startAutoAna();
+        toolbar.startAutoAna();
+      });
+      try (var files = Files.list(sourceDirectory)) {
+        assertEquals(0, files.count(), "accepted saves must wait for the serial writer");
+      }
+      assertEquals(0, frame.nextLoads);
+      assertEquals(0, frame.finishes);
+    }
+
+    assertEquals(completed ? 1 : 0, frame.nextLoads);
+    assertEquals(completed ? 0 : 1, frame.finishes);
+    assertEquals(0, frame.saveFailures);
+    assertFalse(frame.hasPendingBatchAnalysisSave());
+    try (var files = Files.list(sourceDirectory)) {
+      List<Path> saved = files.toList();
+      assertEquals(1, saved.size());
+      String sgf = Files.readString(saved.get(0));
+      assertTrue(sgf.contains("current result"));
+      assertFalse(sgf.contains("edited after capture"));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "board,false", "history,false", "files,false", "index,false", "source,false", "frame,false",
+      "board,true", "history,true", "files,true", "index,true", "source,true", "frame,true"
+  })
+  void lateBatchSaveCannotAffectAReplacement(String changed, boolean failWrite) throws Exception {
+    AtomicInteger saved = new AtomicInteger();
+    try (BlockedSave ignored = new BlockedSave()) {
+      SwingUtilities.invokeAndWait(() -> frame.saveBatchAnalysisResult(saved::incrementAndGet));
+      if (failWrite) blockOutputDirectory();
+      SwingUtilities.invokeAndWait(() -> {
+        switch (changed) {
+          case "board":
+            try {
+              Board replacement = allocate(Board.class);
+              replacement.setHistory(Lizzie.board.getHistory());
+              Lizzie.board = replacement;
+            } catch (Exception failure) {
+              throw new AssertionError(failure);
+            }
+            break;
+          case "history":
+            Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[replacement];B[ee])", true));
+            break;
+          case "files":
+            frame.Batchfiles = new ArrayList<>(frame.Batchfiles);
+            break;
+          case "index":
+            frame.BatchAnaNum++;
+            break;
+          case "source":
+            frame.Batchfiles.set(0, sourceDirectory.resolve("replacement.sgf").toFile());
+            break;
+          case "frame":
+            try {
+              Lizzie.frame = allocate(RecordingFrame.class);
+            } catch (Exception failure) {
+              throw new AssertionError(failure);
+            }
+            break;
+          default:
+            fail("unknown replacement");
+        }
+        frame.isBatchAnalysisMode = true;
+      });
+    }
+
+    assertEquals(0, saved.get());
+    assertEquals(0, frame.saveFailures, "an obsolete failure cannot pause the replacement");
+    assertTrue(frame.isBatchAnalysisMode);
+    assertFalse(frame.hasPendingBatchAnalysisSave());
+    if (failWrite) {
+      assertEquals("unrelated file", Files.readString(sourceDirectory));
+    } else {
+      try (var files = Files.list(sourceDirectory)) {
+        List<Path> output = files.toList();
+        assertEquals(1, output.size());
+        assertTrue(Files.readString(output.get(0)).contains("current result"));
+      }
+    }
+  }
+
+  @Test
+  void discardedInFlightSaveCannotCompleteANewRequestWithTheSameGameIdentity() throws Exception {
+    AtomicInteger oldSaved = new AtomicInteger();
+    AtomicInteger newSaved = new AtomicInteger();
+    try (BlockedSave ignored = new BlockedSave()) {
+      SwingUtilities.invokeAndWait(() -> {
+        frame.isBatchAnalysisMode = true;
+        frame.saveBatchAnalysisResult(oldSaved::incrementAndGet);
+        frame.discardPendingBatchAnalysisSave();
+        frame.isBatchAnalysisMode = false;
+        Lizzie.board.getHistory().getStart().getData().comment = "new request";
+        frame.saveBatchAnalysisResult(newSaved::incrementAndGet);
+      });
+    }
+    assertEquals(0, oldSaved.get());
+    assertEquals(1, newSaved.get());
+    assertFalse(frame.isBatchAnalysisMode);
+    assertFalse(frame.hasPendingBatchAnalysisSave());
+    try (var files = Files.list(sourceDirectory)) {
+      List<Path> output = files.toList();
+      assertFalse(output.isEmpty());
+      assertTrue(output.stream().anyMatch(path -> {
+        try {
+          return Files.readString(path).contains("new request");
+        } catch (IOException failure) {
+          throw new AssertionError(failure);
+        }
+      }));
+    }
+  }
+
+  @Test
+  void failedWriteRetryUsesTheOriginalSnapshotAfterTheLiveGameChanges() throws Exception {
+    AtomicInteger saved = new AtomicInteger();
+    blockOutputDirectory();
+    SwingUtilities.invokeAndWait(() -> frame.saveBatchAnalysisResult(saved::incrementAndGet));
+    awaitSaves();
+    assertEquals(1, frame.saveFailures);
+    SwingUtilities.invokeAndWait(
+        () -> Lizzie.board.getHistory().getStart().getData().comment = "edited after failure");
+    restoreOutputDirectory();
+    SwingUtilities.invokeAndWait(() -> assertTrue(frame.retryBatchAnalysisSave()));
+    awaitSaves();
+    assertEquals(1, saved.get());
+    try (var files = Files.list(sourceDirectory)) {
+      List<Path> output = files.toList();
+      assertEquals(1, output.size());
+      String sgf = Files.readString(output.get(0));
+      assertTrue(sgf.contains("current result"));
+      assertFalse(sgf.contains("edited after failure"));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void singleAutoAnalysisQueuesAFrozenResultAndSuppressesAReplacedGamesNotice(boolean replaceGame)
+      throws Exception {
+    frame.isBatchAna = false;
+    set(BottomToolbar.class, toolbar, "autoAnalysisBatch", null);
+    toolbar.chkAnaAutoSave.setSelected(true);
+    Lizzie.leelaz.autoAnalysed = true;
+    LizzieFrame.curFile = sourceDirectory.resolve("single.sgf").toFile();
+    VisibleMessage message = (VisibleMessage) toolbar.msg;
+    try (BlockedSave ignored = new BlockedSave()) {
+      Lizzie.config.isAutoAna = true;
+      SwingUtilities.invokeAndWait(() -> toolbar.stopAutoAna(false, false));
+      SwingUtilities.invokeAndWait(() -> {
+        assertEquals(0, message.visibilityChecks, "success notice must wait for the actual write");
+        Lizzie.board.getHistory().getStart().getData().comment = "edited after capture";
+        if (replaceGame) {
+          Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[replacement])", true));
+        }
+      });
+      try (var files = Files.list(sourceDirectory)) {
+        assertEquals(0, files.count());
+      }
+    }
+    assertEquals(replaceGame ? 0 : 1, message.visibilityChecks);
+    try (var files = Files.list(sourceDirectory)) {
+      List<Path> output = files.toList();
+      assertEquals(1, output.size());
+      assertTrue(output.get(0).getFileName().toString().startsWith("single_"));
+      String sgf = Files.readString(output.get(0));
+      assertTrue(sgf.contains("current result"));
+      assertFalse(sgf.contains("edited after capture"));
+      assertFalse(sgf.contains("replacement"));
+    }
+  }
+
   @Test
   void allSupportedLocalesOfferAnExplicitSaveRetry() {
     for (String suffix : List.of("", "en_US", "ko", "zh_CN", "zh_TW", "zh_HK", "ja_JP", "th_TH")) {
@@ -230,6 +430,40 @@ class BatchAnalysisSaveTest {
   private void restoreOutputDirectory() throws Exception {
     Files.delete(sourceDirectory);
     Files.createDirectory(sourceDirectory);
+  }
+
+  private static void awaitSaves() throws Exception {
+    SgfSaveCoordinator.pendingSaves().handle((ignored, failure) -> null).get(5, TimeUnit.SECONDS);
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
+  private static final class BlockedSave implements AutoCloseable {
+    private final CountDownLatch release = new CountDownLatch(1);
+    private final CompletableFuture<Void> completion;
+
+    private BlockedSave() throws Exception {
+      CountDownLatch started = new CountDownLatch(1);
+      completion = SgfSaveCoordinator.submitSave(
+          () -> {
+            assertFalse(SwingUtilities.isEventDispatchThread());
+            started.countDown();
+            try {
+              if (!release.await(10, TimeUnit.SECONDS)) throw new IOException("Blocked writer timed out");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new IOException(failure);
+            }
+            return null;
+          }, () -> true, ignored -> {}, failure -> fail(failure));
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+    }
+
+    @Override
+    public void close() throws Exception {
+      release.countDown();
+      completion.get(5, TimeUnit.SECONDS);
+      awaitSaves();
+    }
   }
 
   private static final class RecordingFrame extends LizzieFrame {
@@ -258,8 +492,11 @@ class BatchAnalysisSaveTest {
   }
 
   private static final class VisibleMessage extends Message {
+    private int visibilityChecks;
+
     @Override
     public boolean isVisible() {
+      visibilityChecks++;
       return true;
     }
   }
