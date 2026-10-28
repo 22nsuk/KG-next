@@ -99,9 +99,11 @@ public class MessageThemeTest {
                 () -> size + " requested message size is smaller than 180x80: " + requestedBounds
                     + ", mapped=" + messageBounds + ", text=" + text);
             assertTrue(labelSize.width >= labelPreferredSize.width,
-                size + " clipped message width: " + text);
+                size + " clipped message width: " + text + "; actual=" + labelSize
+                    + ", preferred=" + labelPreferredSize + ", insets=" + message.getInsets());
             assertTrue(labelSize.height >= labelPreferredSize.height,
-                size + " clipped message height: " + text);
+                size + " clipped message height: " + text + "; actual=" + labelSize
+                    + ", preferred=" + labelPreferredSize + ", insets=" + message.getInsets());
             assertTrue(Math.abs((requestedBounds.x + requestedBounds.width / 2)
                 - (ownerBounds.x + ownerBounds.width / 2)) <= 1,
                 () -> "message must request centering on the supplied owner: requested="

@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.Toolkit;
 import java.awt.Window;
@@ -22,6 +23,7 @@ public class Message extends JDialog {
     // this.setModal(true);
     // setType(Type.POPUP);
     this.setResizable(false);
+    setMinimumSize(new Dimension(180, 80));
     setTitle(resourceBundle.getString("Message.title")); // "消息提醒");
     setAlwaysOnTop(true);
     setDefaultCloseOperation(DISPOSE_ON_CLOSE);
@@ -69,8 +71,8 @@ public class Message extends JDialog {
         () -> {
           setModal(modal);
           lblmessage.setText(message);
+          // Keep pack's client sizing when native decoration insets arrive later.
           pack();
-          setSize(Math.max(180, getWidth()), Math.max(80, getHeight()));
           setLocationRelativeTo(owner);
           setVisible(true);
         };

@@ -11,6 +11,7 @@ import java.awt.Font;
 import java.awt.GridBagConstraints;
 import java.awt.GridBagLayout;
 import java.awt.Insets;
+import java.awt.Window;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.IOException;
@@ -35,7 +36,8 @@ public class SetKataPDA extends JDialog {
   public JLabel curPDA;
   public JFontTextField txtDymCap;
 
-  public SetKataPDA() {
+  public SetKataPDA(Window owner) {
+    super(owner);
     setResizable(false);
     setTitle(
         resourceBundle.getString("SetKataPDA.title")); // ("KataGo 激进参数PDA设置(仅支持KataGo PDA引擎)");
@@ -257,7 +259,7 @@ public class SetKataPDA extends JDialog {
     }
 
     pack();
-    setLocationRelativeTo(Lizzie.frame);
+    setLocationRelativeTo(owner);
     try {
       this.setIconImage(ImageIO.read(MoreEngines.class.getResourceAsStream("/assets/logo.png")));
     } catch (IOException e1) {

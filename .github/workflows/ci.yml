@@ -205,9 +205,11 @@ jobs:
           apt-config dump Acquire::Retries Acquire::http::Timeout Acquire::https::Timeout
           sudo apt-get update
           sudo apt-get install -y xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
+      - name: Compile desktop smoke tests
+        # Cold compilation must not consume the three full desktop passes' shared budget.
+        timeout-minutes: 5
+        run: mvn -B -Dfmt.skip=true test-compile
       - name: Run Linux desktop smoke verification
-        # Two runs measured ~5m40s for the build/first pass and ~3m30s for the second.
-        # Budget the third full pass and cleanup too; retain every test and per-test deadline.
         timeout-minutes: 14
         env:
           LANG: C.UTF-8
