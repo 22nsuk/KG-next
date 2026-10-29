@@ -15794,7 +15794,7 @@ public class LizzieFrame extends JFrame {
     }
     // SGF replacement precedes metadata publication. Every saved-list entrypoint must wait
     // until those writes settle, and old controls/previews must resolve the published cursor.
-    if (!SgfSaveCoordinator.pendingSaves().isDone()) return;
+    if (deferSavedGameOpenUntilWritesComplete(reopen)) return;
     TempGameData saved = getTempGameList().stream()
         .filter(record -> record.isAutoSave == isAutoSave && record.index == index)
         .findFirst().orElse(null);
