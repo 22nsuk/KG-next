@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
@@ -17,9 +18,18 @@ jobs:
   repository-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      acceptance_required: ${{ steps.acceptance.outputs.acceptance_required }}
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Verify CI acceptance policy
+        run: python3 -m unittest discover -s scripts -p test_ci_acceptance.py
+      - name: Select supplemental acceptance from the complete PR diff
+        id: acceptance
+        run: python3 scripts/ci_acceptance.py plan
       - name: Run repository checks
         run: python3 scripts/run_local_ci.py --profile portable --group repository --require-clean --summary-dir target/local-ci/portable-repository
       - name: Upload local CI summary
@@ -62,6 +72,9 @@ jobs:
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.x'
+      - name: Verify CI acceptance policy on Windows
+        shell: pwsh
+        run: python -m unittest discover -s scripts -p test_ci_acceptance.py
       - name: Run Windows repository checks
         shell: pwsh
         run: python scripts/run_local_ci.py --profile windows --group repository --require-clean --summary-dir target/local-ci/windows-repository
@@ -381,9 +394,30 @@ jobs:
           path: target/local-ci/${{ matrix.summary }}
           if-no-files-found: warn
 
+  fox-search:
+    needs: repository-checks
+    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
+    uses: ./.github/workflows/fox-search.yml
+
+  b11-speed-notice:
+    needs: repository-checks
+    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
+    uses: ./.github/workflows/b11-speed-notice.yml
+
+  native-windows:
+    needs: repository-checks
+    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
+    uses: ./.github/workflows/move-focus-acceptance.yml
+
+  sgf-cpu-acceptance:
+    needs: repository-checks
+    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
+    uses: ./.github/workflows/acceptance-integration.yml
+
+  # Server-side enforcement is configured separately; see docs/CI_MERGE_POLICY.md.
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process, fox-search, b11-speed-notice, native-windows, sgf-cpu-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -420,3 +454,7 @@ jobs:
               }
           )
           PY
+      - name: Require every selected acceptance lane
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_acceptance.py check

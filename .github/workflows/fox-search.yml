@@ -1,27 +1,14 @@
 name: Fox Search Regression
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/fox-search.yml'
-      - 'scripts/prefer_ubuntu_apt_mirror.py'
-      - 'scripts/test_prefer_ubuntu_apt_mirror.py'
-      - 'scripts/test_publish_release_request.py'
-      - 'pom.xml'
-      - 'src/main/java/featurecat/lizzie/Config.java'
-      - 'src/main/java/featurecat/lizzie/analysis/GetFoxRequest.java'
-      - 'src/main/java/featurecat/lizzie/gui/**'
-      - 'src/main/resources/l10n/**'
-      - 'src/test/java/featurecat/lizzie/analysis/GetFoxRequestTest.java'
-      - 'src/test/java/featurecat/lizzie/gui/FoxKifuDownload*Test.java'
-      - 'src/test/java/featurecat/lizzie/gui/DesktopProbeProcess.java'
-      - 'src/test/java/**/LocalizationResourceParityTest.java'
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: fox-search-${{ github.ref }}
+  group: fox-search-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

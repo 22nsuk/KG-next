@@ -928,13 +928,14 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         workflow = (
             SCRIPT_PATH.parents[1] / ".github/workflows/fox-search.yml"
         ).read_text(encoding="utf-8")
-        paths = workflow.split("    paths:\n", 1)[1].split("\npermissions:", 1)[0]
+        from scripts.ci_acceptance import documentation_only
+        self.assertIn("  workflow_call:\n", workflow)
         for path in (
             "scripts/prefer_ubuntu_apt_mirror.py",
             "scripts/test_prefer_ubuntu_apt_mirror.py",
             "scripts/test_publish_release_request.py",
         ):
-            self.assertIn(f"      - '{path}'", paths)
+            self.assertFalse(documentation_only([path]), path)
         step = workflow.split("      - name: Install Linux display dependencies\n", 1)[1]
         step = step.split("\n      - ", 1)[0]
         self.assertIn("        if: ${{ runner.os == 'Linux' }}", step)
@@ -952,9 +953,16 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         for required in (
             "--profile portable --group desktop --require-clean",
             "--profile ${{ matrix.profile }} --group engine-process --require-clean",
-            "needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process]",
         ):
             self.assertIn(required, ci)
+        gate = ci.split("\n  ci-required:\n", 1)[1]
+        needs = set(re.search(r"needs: \[([^\]]+)\]", gate).group(1).split(", "))
+        self.assertEqual(needs, {
+            "repository-checks", "script-tests", "windows-script-tests", "java-linux",
+            "java17-web", "java-windows", "desktop-smoke", "analysis-provenance-ui",
+            "engine-process", "fox-search", "b11-speed-notice", "native-windows",
+            "sgf-cpu-acceptance",
+        })
         self.assertIn("'--scenario', 'sgf-ui', '--scenario', 'real-cpu-engine'", acceptance)
         from scripts import run_local_ci
         self.assertIn("scripts.test_prefer_ubuntu_apt_mirror", run_local_ci.UNITTEST_MODULES)
