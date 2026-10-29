@@ -45,6 +45,7 @@ class SavedGameSaveDesktopTest {
     assertEquals("PASS", evidence.getString("result"));
     assertTrue(evidence.getBoolean("edtRespondedWhilePending"));
     assertTrue(evidence.getBoolean("filesAndListUnchangedWhilePending"));
+    assertTrue(evidence.getBoolean("pendingOpenResumedWithoutSecondClick"));
     assertEquals(1, evidence.getInt("savedRecords"));
     for (String image : List.of("pending-save-ko.png", "completed-save-ko.png")) {
       assertNotNull(ImageIO.read(result.resolveSibling(image).toFile()));
