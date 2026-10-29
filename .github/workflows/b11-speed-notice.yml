@@ -1,24 +1,14 @@
 name: B11 Speed Notice UI
 
 on:
-  pull_request:
-    paths:
-      - '.github/workflows/b11-speed-notice.yml'
-      - 'src/main/java/featurecat/lizzie/util/B11ModelNotice.java'
-      - 'src/main/java/featurecat/lizzie/analysis/Leelaz.java'
-      - 'src/main/java/featurecat/lizzie/analysis/remote/ZhiziGtpTransport.java'
-      - 'src/main/java/featurecat/lizzie/gui/B11SpeedNoticePanel.java'
-      - 'src/main/java/featurecat/lizzie/gui/KataGoAutoSetupDialog.java'
-      - 'src/main/java/featurecat/lizzie/gui/LizzieFrame.java'
-      - 'src/main/resources/l10n/**'
-      - 'src/test/java/featurecat/lizzie/**/B11*Test.java'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: b11-speed-notice-${{ github.ref }}
+  group: b11-speed-notice-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

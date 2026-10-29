@@ -5,6 +5,7 @@ on:
     branches:
       - main
   pull_request:
+  merge_group:
 
 permissions:
   contents: read
@@ -14,6 +15,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  change-scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fox-search: ${{ steps.scope.outputs.fox-search }}
+      b11-speed-notice: ${{ steps.scope.outputs.b11-speed-notice }}
+      native-focus: ${{ steps.scope.outputs.native-focus }}
+      acceptance-integration: ${{ steps.scope.outputs.acceptance-integration }}
+    steps:
+      - name: Checkout the tested merge and its parents
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Select supplemental checks
+        id: scope
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: python3 scripts/ci_merge_gate.py plan --event "$CI_EVENT" --output "$GITHUB_OUTPUT"
+
   repository-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -381,9 +402,29 @@ jobs:
           path: target/local-ci/${{ matrix.summary }}
           if-no-files-found: warn
 
+  fox-search:
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.fox-search == 'true' }}
+    uses: ./.github/workflows/fox-search.yml
+
+  b11-speed-notice:
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.b11-speed-notice == 'true' }}
+    uses: ./.github/workflows/b11-speed-notice.yml
+
+  native-focus:
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.native-focus == 'true' }}
+    uses: ./.github/workflows/move-focus-acceptance.yml
+
+  acceptance-integration:
+    needs: change-scope
+    if: ${{ needs.change-scope.outputs.acceptance-integration == 'true' }}
+    uses: ./.github/workflows/acceptance-integration.yml
+
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process, change-scope, fox-search, b11-speed-notice, native-focus, acceptance-integration]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -420,3 +461,7 @@ jobs:
               }
           )
           PY
+      - name: Require applicable supplemental checks
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python3 scripts/ci_merge_gate.py check
