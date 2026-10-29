@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.WholeGameAnalysisPlan;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -18,6 +19,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisProvenanceSgfTest {
   private static final String PRIMARY = "KataGo 45.0 120 2.5 1.2 0 rootVisits=120\n"
@@ -63,10 +67,16 @@ class AnalysisProvenanceSgfTest {
     }
   }
 
-  @Test
-  void metadataOrderAndSetupTransfersWorkThroughAllParserEntrypoints() throws Exception {
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  void metadataOrderAndSetupTransfersWorkThroughAllParserEntrypoints(int version) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
-      String kgp = "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "]";
+      JSONObject metadata = metadata(PRIMARY, SECONDARY).put("version", version);
+      if (version == 2) {
+        metadata.getJSONObject("primary").put("invalidated", true);
+        metadata.getJSONObject("secondary").put("invalidated", false);
+      }
+      String kgp = "KGP[" + encode(metadata) + "]";
       String analysis = legacyTags(false);
       for (String node : List.of(
           "B[aa]" + kgp + analysis + "AB[bb]PL[W]",
@@ -90,11 +100,18 @@ class AnalysisProvenanceSgfTest {
           assertTrue(move.isMoveNode(), context);
           assertNull(move.primaryAnalysisProvenance(), context);
           assertNull(move.secondaryAnalysisProvenance(), context);
+          assertFalse(move.isChanged, context);
+          assertFalse(move.isChanged2, context);
           assertTrue(setup.isSnapshotNode(), context);
           assertSources(setup);
+          assertEquals(version == 2, setup.isChanged, context);
+          assertFalse(setup.isChanged2, context);
           Lizzie.board.setHistory(history);
           BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
-          assertSources(reopened.getStart().next().orElseThrow().next().orElseThrow().getData());
+          BoardData savedSetup = reopened.getStart().next().orElseThrow().next().orElseThrow().getData();
+          assertSources(savedSetup);
+          assertEquals(version == 2, savedSetup.isChanged, context);
+          assertFalse(savedSetup.isChanged2, context);
         }
       }
     }
@@ -137,8 +154,10 @@ class AnalysisProvenanceSgfTest {
     }
   }
 
-  @Test
-  void allFourMaximumLengthSourceRecordsSurviveJsonEscapingAndRoundTrips() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void allFourMaximumLengthSourceRecordsSurviveJsonEscapingAndRoundTrips(boolean invalidated)
+      throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       String escaped = "\u200b";
       AnalysisProvenance maximum = new AnalysisProvenance(
@@ -151,6 +170,10 @@ class AnalysisProvenanceSgfTest {
       data.setPrimaryOwnershipProvenance(maximum);
       data.setSecondaryAnalysisProvenance(maximum);
       data.setSecondaryOwnershipProvenance(maximum);
+      if (invalidated) {
+        data.invalidatePrimaryAnalysis();
+        data.isChanged2 = true;
+      }
 
       for (int round = 0; round < 2; round++) {
         Lizzie.board.setHistory(history);
@@ -162,6 +185,8 @@ class AnalysisProvenanceSgfTest {
         assertEquals(maximum, data.primaryOwnershipProvenance());
         assertEquals(maximum, data.secondaryAnalysisProvenance());
         assertEquals(maximum, data.secondaryOwnershipProvenance());
+        assertEquals(invalidated, data.isChanged);
+        assertEquals(invalidated, data.isChanged2);
       }
     }
   }
@@ -176,7 +201,7 @@ class AnalysisProvenanceSgfTest {
       properties.add(Base64.getUrlEncoder().withoutPadding()
           .encodeToString(oversizedJson.getBytes(StandardCharsets.UTF_8)));
       List<Consumer<JSONObject>> invalid = List.of(
-          json -> json.put("version", 2),
+          json -> json.put("version", 3),
           json -> json.put("app", "AnotherApp"),
           json -> json.put("futureField", true),
           json -> json.getJSONObject("primary").put("payloadSha256", "bad digest"),
@@ -204,6 +229,238 @@ class AnalysisProvenanceSgfTest {
         assertEquals(property, SGFParser.parseSgf(saved, true).getData().getProperty("KGP"));
       }
     }
+  }
+
+  @Test
+  void versionTwoFlagsAreOptionalStrictBooleansAndVersionOneRejectsThem() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      JSONObject valid = metadata(PRIMARY, SECONDARY).put("version", 2);
+      valid.getJSONObject("secondary").put("invalidated", false);
+      BoardData data = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+          + "KGP[" + encode(valid) + "])", true).getData();
+      assertSources(data);
+      assertFalse(data.isChanged);
+      assertFalse(data.isChanged2);
+      assertTrue(data.hasReusablePrimaryAnalysis(120, true));
+
+      for (Object invalid : List.of("true", 1, JSONObject.NULL, new JSONObject())) {
+        JSONObject metadata = metadata(PRIMARY, SECONDARY).put("version", 2);
+        metadata.getJSONObject("primary").put("invalidated", true);
+        metadata.getJSONObject("secondary").put("invalidated", invalid);
+        String property = encode(metadata);
+        BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+            + "KGP[" + property + "])", true);
+        data = history.getData();
+        assertEquals(120, data.getPlayouts());
+        assertEquals(80, data.getPlayouts2());
+        assertNull(data.primaryAnalysisProvenance());
+        assertNull(data.secondaryAnalysisProvenance());
+        assertFalse(data.isChanged);
+        assertFalse(data.isChanged2);
+        Lizzie.board.setHistory(history);
+        assertEquals(property, property(SGFParser.saveToString(false), "KGP"));
+      }
+
+      JSONObject versionOne = metadata(PRIMARY, SECONDARY);
+      versionOne.getJSONObject("primary").put("invalidated", true);
+      data = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+          + "KGP[" + encode(versionOne) + "])", true).getData();
+      assertNull(data.primaryAnalysisProvenance());
+      assertFalse(data.isChanged);
+    }
+  }
+
+  @Test
+  void replacementPayloadAndMetadataClearOnlyApplicableInvalidation() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      JSONObject invalidated = metadata(PRIMARY, SECONDARY).put("version", 2);
+      invalidated.getJSONObject("primary").put("invalidated", true);
+      invalidated.getJSONObject("secondary").put("invalidated", true);
+      String prefix = "(;SZ[5]" + legacyTags(true) + "KGP[" + encode(invalidated) + "]";
+      BoardData both = SGFParser.parseSgf(prefix + ")", true).getData();
+      assertTrue(both.isChanged);
+      assertTrue(both.isChanged2);
+
+      BoardData primaryReplaced = SGFParser.parseSgf(prefix + "LZOP["
+          + PRIMARY.replace("rootVisits=120", "rootVisits=121") + "])", true).getData();
+      assertFalse(primaryReplaced.isChanged);
+      assertTrue(primaryReplaced.isChanged2);
+      assertNull(primaryReplaced.primaryAnalysisProvenance());
+      assertEquals(OWNERSHIP, primaryReplaced.secondaryAnalysisProvenance());
+
+      BoardData secondaryReplaced = SGFParser.parseSgf(prefix + "LZOP2["
+          + SECONDARY.replace("rootVisits=80", "rootVisits=81") + "])", true).getData();
+      assertTrue(secondaryReplaced.isChanged);
+      assertFalse(secondaryReplaced.isChanged2);
+      assertEquals(ANALYSIS, secondaryReplaced.primaryAnalysisProvenance());
+      assertNull(secondaryReplaced.secondaryAnalysisProvenance());
+
+      for (String replacement : List.of(
+          encode(metadata(PRIMARY, SECONDARY)),
+          encode(metadata(PRIMARY, SECONDARY).put("version", 2)),
+          encode(metadata(PRIMARY, SECONDARY).put("version", 3)), "not base64!")) {
+        BoardData replaced = SGFParser.parseSgf(prefix + "KGP[" + replacement + "])", true).getData();
+        assertFalse(replaced.isChanged);
+        assertFalse(replaced.isChanged2);
+        assertTrue(replaced.hasReusablePrimaryAnalysis(120, true));
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {1, 2})
+  void canonicalizingReplacedPayloadDoesNotResurrectRecognizedMetadata(int version) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList original = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      if (version == 1) {
+        installSources(original.getData());
+      } else {
+        original.getData().invalidatePrimaryAnalysis();
+        original.getData().isChanged2 = true;
+      }
+      Lizzie.board.setHistory(original);
+      String saved = SGFParser.saveToString(false);
+      String replaced = saved.replace("rootVisits=120", "rootVisits=0120")
+          .replace("rootVisits=80", "rootVisits=080");
+      assertFalse(saved.equals(replaced));
+      BoardHistoryList history = SGFParser.parseSgf(replaced, true);
+      for (int round = 0; round < 2; round++) {
+        BoardData data = history.getData();
+        assertEquals(120, data.getPlayouts());
+        assertEquals(80, data.getPlayouts2());
+        assertTrue(data.hasReusablePrimaryAnalysis(120, true));
+        assertFalse(data.isChanged2);
+        assertNull(data.primaryAnalysisProvenance());
+        assertNull(data.secondaryAnalysisProvenance());
+        Lizzie.board.setHistory(history);
+        String normalized = SGFParser.saveToString(false);
+        assertFalse(normalized.contains("KGP["), "rejected known metadata must not revive later");
+        history = SGFParser.parseSgf(normalized, true);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void importingOneAnalysisSlotPreservesTheOtherSlotsRuntimeInvalidation(boolean secondary)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+          + "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "])", true);
+      BoardData data = history.getData();
+      Lizzie.board.setHistory(history);
+      Lizzie.board.clearBestMovesAfterForFirstEngine(history.getStart());
+      Lizzie.board.clearBestMovesAfterForSecondEngine(history.getStart());
+      assertTrue(data.isChanged);
+      assertTrue(data.isChanged2);
+
+      SGFParser.parseBranch(history, ";" + (secondary ? "LZ2[" + SECONDARY : "LZ[" + PRIMARY) + "]");
+      assertEquals(secondary, data.isChanged,
+          "importing secondary analysis must not validate untouched primary analysis");
+      assertEquals(!secondary, data.isChanged2,
+          "importing primary analysis must not validate untouched secondary analysis");
+      assertEquals(120, data.getPlayouts());
+      assertEquals(80, data.getPlayouts2());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "false,false,1,false", "false,true,1,false", "true,false,1,false", "true,true,1,false",
+      "false,false,2,false", "false,true,2,false", "true,false,2,false", "true,true,2,false",
+      "false,false,2,true", "false,true,2,true", "true,false,2,true", "true,true,2,true"
+  })
+  void singleSlotImportWithMetadataPreservesUntouchedInvalidationAcrossReopens(
+      boolean secondary, boolean metadataFirst, int version, boolean importedInvalidated)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+          + "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "])", true);
+      Lizzie.board.setHistory(history);
+      Lizzie.board.clearBestMovesAfterForFirstEngine(history.getStart());
+      Lizzie.board.clearBestMovesAfterForSecondEngine(history.getStart());
+      JSONObject imported = metadata(PRIMARY, SECONDARY).put("version", version);
+      imported.remove(secondary ? "primary" : "secondary");
+      if (version == 2) {
+        imported.getJSONObject(secondary ? "secondary" : "primary")
+            .put("invalidated", importedInvalidated);
+      }
+      String kgp = "KGP[" + encode(imported) + "]";
+      String payload = secondary ? "LZ2[" + SECONDARY + "]" : "LZ[" + PRIMARY + "]";
+      SGFParser.parseBranch(history, ";" + (metadataFirst ? kgp + payload : payload + kgp));
+
+      for (int round = 0; round < 3; round++) {
+        BoardData data = history.getStart().getData();
+        assertInvalidation(history, secondary || importedInvalidated,
+            !secondary || importedInvalidated);
+        assertEquals(120, data.getPlayouts());
+        assertEquals(80, data.getPlayouts2());
+        assertEquals("C3", data.bestMoves.get(0).coordinate);
+        assertEquals("D4", data.bestMoves2.get(0).coordinate);
+        assertEquals(List.of("C3", "D4"), data.bestMoves.get(0).variation);
+        assertEquals(List.of("D4", "C3"), data.bestMoves2.get(0).variation);
+        assertEquals(List.of(0.2, -0.2), data.estimateArray);
+        assertEquals(List.of(0.3, -0.3), data.estimateArray2);
+        // KGP still replaces the complete provenance record, independently of live validity.
+        assertEquals(secondary ? null : ANALYSIS, data.primaryAnalysisProvenance());
+        assertEquals(secondary ? OWNERSHIP : null, data.secondaryAnalysisProvenance());
+        if (round < 2) {
+          Lizzie.board.setHistory(history);
+          history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void metadataWithoutReplacementPayloadCannotOverrideLiveInvalidation(boolean primaryInvalidated)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      BoardData data = history.getData();
+      data.isChanged = primaryInvalidated;
+      data.isChanged2 = !primaryInvalidated;
+      JSONObject contradictory = metadata(PRIMARY, SECONDARY).put("version", 2);
+      contradictory.getJSONObject("primary").put("invalidated", !primaryInvalidated);
+      contradictory.getJSONObject("secondary").put("invalidated", primaryInvalidated);
+      for (String property : List.of(encode(contradictory),
+          encode(metadata(PRIMARY, SECONDARY)),
+          encode(new JSONObject().put("app", "KG-next").put("version", 2)),
+          encode(metadata(PRIMARY, SECONDARY).put("version", 3)), "not base64!")) {
+        SGFParser.parseBranch(history, ";KGP[" + property + "]");
+        assertInvalidation(history, primaryInvalidated, !primaryInvalidated);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void laterImportDoesNotReuseEarlierImportsReplacementScope(boolean metadataFirst) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      String kgp = "KGP[" + encode(metadata(PRIMARY, SECONDARY)) + "]";
+      SGFParser.parseBranch(history, ";LZ2[" + SECONDARY + "]" + kgp);
+      BoardData data = history.getData();
+      data.isChanged = true;
+      data.isChanged2 = true;
+      String primary = "LZ[" + PRIMARY + "]";
+      SGFParser.parseBranch(history, ";" + (metadataFirst ? kgp + primary : primary + kgp));
+      assertInvalidation(history, false, true);
+      assertSources(data);
+    }
+  }
+
+  private static void assertInvalidation(
+      BoardHistoryList history, boolean primaryInvalidated, boolean secondaryInvalidated) {
+    BoardHistoryNode root = history.getStart();
+    BoardData data = root.getData();
+    assertEquals(primaryInvalidated, data.isChanged, "primary invalidation");
+    assertEquals(secondaryInvalidated, data.isChanged2, "secondary invalidation");
+    assertTrue(data.hasCompletePrimaryAnalysis(120, true));
+    assertEquals(!primaryInvalidated, data.hasReusablePrimaryAnalysis(120, true));
+    assertEquals(primaryInvalidated ? List.of(root) : List.of(),
+        WholeGameAnalysisPlan.create(root, 32, 120).positionsMissingAnalysis(120, true));
   }
 
   @Test

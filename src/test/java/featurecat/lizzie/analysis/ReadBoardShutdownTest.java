@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -13,6 +14,8 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.net.ServerSocket;
@@ -24,6 +27,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 
@@ -31,6 +35,149 @@ class ReadBoardShutdownTest {
   private static final long MAX_EDT_RESTART_BLOCK_MS = 150L;
   private static final long SHUTDOWN_WAIT_BLOCK_MS = 300L;
   private static final long RESTART_TIMEOUT_MS = 2L;
+
+  @Test
+  void updateWaitsForActualExitAfterForcedTermination() throws Exception {
+    ReadBoard readBoard = initializedReadBoardForRetirement();
+    UpdateProcess process = new UpdateProcess();
+    process.exitAfterForce = true;
+    readBoard.process = process;
+
+    readBoard.shutdownForUpdate();
+
+    assertTrue(process.forced);
+    assertFalse(process.isAlive());
+    assertEquals(3, process.waits, "forced termination still needs a completed exit wait");
+    assertNull(readBoard.process, "normal shutdown should still detach the public process");
+  }
+
+  @Test
+  void updateRejectsSurvivingProcessAndMissingProcessIdentity() throws Exception {
+    ReadBoard readBoard = initializedReadBoardForRetirement();
+    UpdateProcess process = new UpdateProcess();
+    readBoard.process = process;
+
+    assertThrows(IOException.class, readBoard::shutdownForUpdate);
+    assertTrue(process.isAlive());
+    assertTrue(process.forced);
+    assertThrows(IOException.class, initializedReadBoardForRetirement()::shutdownForUpdate);
+  }
+
+  @Test
+  void updatePreservesInterruptionAndDoesNotConfirmExit() throws Exception {
+    ReadBoard readBoard = initializedReadBoardForRetirement();
+    UpdateProcess process = new UpdateProcess();
+    process.interruptWait = true;
+    readBoard.process = process;
+    try {
+      IOException failure = assertThrows(IOException.class, readBoard::shutdownForUpdate);
+      assertTrue(failure.getCause() instanceof InterruptedException);
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+  }
+
+  @Test
+  void updateStillWaitsWhenReaderAlreadyDetachedPublicProcess() throws Exception {
+    ReadBoard readBoard = initializedReadBoardForRetirement();
+    CountDownLatch readerClosing = new CountDownLatch(1);
+    CountDownLatch releaseReader = new CountDownLatch(1);
+    UpdateProcess process = new UpdateProcess();
+    readBoard.process = process;
+    setField(
+        readBoard,
+        "inputStream",
+        new InputStreamReader(InputStream.nullInputStream()) {
+          @Override
+          public void close() {
+            readerClosing.countDown();
+            try {
+              assertTrue(releaseReader.await(5, TimeUnit.SECONDS));
+            } catch (InterruptedException failure) {
+              throw new AssertionError(failure);
+            }
+          }
+        });
+    AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+    Thread reader =
+        new Thread(
+            () -> {
+              try {
+                readBoard.shutdownAfterProcessEnd();
+              } catch (Throwable failure) {
+                readerFailure.set(failure);
+              }
+            });
+    reader.start();
+    try {
+      assertTrue(readerClosing.await(5, TimeUnit.SECONDS));
+      assertNull(readBoard.process);
+      assertThrows(IOException.class, readBoard::shutdownForUpdate);
+      assertEquals(1, process.waits, "update must wait for the retained process, not trust null");
+    } finally {
+      releaseReader.countDown();
+      reader.join(5000);
+    }
+    assertFalse(reader.isAlive());
+    assertNull(readerFailure.get());
+  }
+
+  private static final class UpdateProcess extends Process {
+    private volatile boolean alive = true;
+    private boolean forced;
+    private boolean exitAfterForce;
+    private boolean interruptWait;
+    private int waits;
+
+    @Override
+    public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+      waits++;
+      if (interruptWait) throw new InterruptedException("controlled update interruption");
+      if (forced && exitAfterForce) alive = false;
+      return !alive;
+    }
+
+    @Override
+    public Process destroyForcibly() {
+      forced = true;
+      return this;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return alive;
+    }
+
+    @Override
+    public void destroy() {}
+
+    @Override
+    public int waitFor() {
+      throw new AssertionError("unbounded process wait");
+    }
+
+    @Override
+    public int exitValue() {
+      if (alive) throw new IllegalThreadStateException();
+      return 0;
+    }
+
+    @Override
+    public OutputStream getOutputStream() {
+      return OutputStream.nullOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return InputStream.nullInputStream();
+    }
+  }
 
   @Test
   void shutdownReleasesHostedReadBoardResources() throws Exception {

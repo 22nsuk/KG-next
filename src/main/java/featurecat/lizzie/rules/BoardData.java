@@ -859,7 +859,6 @@ public class BoardData {
         scoreMean2,
         "ACCEPT",
         secondaryFullAcceptReason(totalplayouts, metadataEngine));
-    if (totalplayouts < playouts2) isChanged2 = false;
     setPlayouts2(totalplayouts);
     this.estimateArray2 = compactEstimateArray(estimateArray);
     winrate2 = moves.get(0).winrate;
@@ -891,6 +890,7 @@ public class BoardData {
         });
     tryToLimitMoves(moves, bestMoves2, false);
     bestMoves2 = moves;
+    isChanged2 = false;
     secondaryAnalysisProvenance =
         metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
     secondaryOwnershipProvenance =

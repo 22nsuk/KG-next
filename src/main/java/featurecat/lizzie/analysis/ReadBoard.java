@@ -113,6 +113,8 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
   }
 
   public Process process;
+  // Retained under LOCAL_MOVE_CONFIRMATION_LOCK when shutdown detaches the public handle.
+  private Process shutdownProcess;
   private InputStreamReader inputStream;
   private BufferedOutputStream outputStream;
   private ScheduledExecutorService executor;
@@ -6098,6 +6100,31 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
     shutdown(true);
   }
 
+  public void shutdownForUpdate() throws IOException {
+    try {
+      shutdown();
+    } catch (RuntimeException failure) {
+      throw new IOException("ReadBoard shutdown failed before update.", failure);
+    }
+    Process currentProcess;
+    synchronized (LOCAL_MOVE_CONFIRMATION_LOCK) {
+      currentProcess = shutdownProcess;
+    }
+    if (currentProcess == null) {
+      throw new IOException("Cannot confirm ReadBoard process exit before update.");
+    }
+    try {
+      // destroyForcibly() and a concurrent reader shutdown can both return before exit.
+      if (!currentProcess.waitFor(PROCESS_EXIT_WAIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+        throw new IOException("ReadBoard process has not exited; update was not installed.");
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IOException(
+          "Interrupted while waiting for ReadBoard to exit before update.", interrupted);
+    }
+  }
+
   void shutdownAfterProcessEnd() {
     shutdown(false);
   }
@@ -6130,6 +6157,7 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
       if (shutdownStarted) {
         return false;
       }
+      shutdownProcess = process;
       shutdownStarted = true;
       return true;
     }

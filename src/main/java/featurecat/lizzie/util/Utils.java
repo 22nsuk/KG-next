@@ -969,7 +969,7 @@ public class Utils {
   }
 
   public static void showMsg(String message, Window owner) {
-    Message msg = new Message();
+    Message msg = new Message(owner);
     msg.setMessage(message, owner);
   }
 
