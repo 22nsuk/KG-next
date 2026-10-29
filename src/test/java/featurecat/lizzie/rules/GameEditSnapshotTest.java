@@ -24,6 +24,32 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class GameEditSnapshotTest {
   @ParameterizedTest
+  @ValueSource(strings = {"comment", "cursor", "history", "rules", "analysisEdit"})
+  void fallbackIdentitySurvivesEngineAlignmentButStillDetectsEdits(String change) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[aa])", true);
+        board.setHistory(history);
+        GameEditSnapshot snapshot = GameEditSnapshot.capture(board);
+        board.requireEngineAlignment();
+        assertFalse(snapshot.isCurrent(board), "existing context-sensitive callers stay strict");
+        assertTrue(snapshot.hasSameGame(board), "engine alignment does not edit the fallback");
+        switch (change) {
+          case "comment" -> board.getData().comment = "user edit";
+          case "cursor" -> history.next();
+          case "history" -> board.setHistory(SGFParser.parseSgf("(;SZ[5];B[aa])", true));
+          case "rules" -> history.publishExternalRules("Japanese");
+          case "analysisEdit" -> board.getData().invalidatePrimaryAnalysis();
+          default -> throw new AssertionError(change);
+        }
+        assertFalse(snapshot.hasSameGame(board));
+        return null;
+      });
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void ordinaryPublicationAndImportedMetadataCleanupAreNotEdits(boolean secondary) throws Exception {
     try (var fixture = RulesLayerTestHarness.open()) {

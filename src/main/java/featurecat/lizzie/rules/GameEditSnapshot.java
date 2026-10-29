@@ -59,11 +59,21 @@ public final class GameEditSnapshot {
   }
 
   public boolean isCurrent(Board currentBoard) {
+    return matches(currentBoard, true);
+  }
+
+  /** Authored game and cursor identity, even when engine alignment renews the context revision. */
+  public boolean hasSameGame(Board currentBoard) {
+    return matches(currentBoard, false);
+  }
+
+  private boolean matches(Board currentBoard, boolean requireContextRevision) {
     requireEventThread();
     if (currentBoard != board || board.getHistory() != history
-        || board.getContextRevision() != revision) return false;
+        || (requireContextRevision && board.getContextRevision() != revision)) return false;
     GameEditSnapshot current = capture(board);
-    return current.root == root && current.cursor == cursor && current.revision == revision
+    return current.root == root && current.cursor == cursor
+        && (!requireContextRevision || current.revision == revision)
         && current.width == width && current.height == height
         && Objects.equals(current.metadata, metadata) && current.rules == rules
         && current.nodes.equals(nodes);

@@ -52,11 +52,12 @@ class B11SpeedNoticeDesktopTest {
   void realWindowsShowTheNoticeAndKeepModelTargetsSeparate(String scale) throws Exception {
     DesktopProbeProcess.requireDisplay();
     Path result =
-        DesktopProbeProcess.run(
+        DesktopProbeProcess.runWithStartupTimeout(
             getClass(),
             "b11-notice-" + scale,
             List.of("-Dsun.java2d.uiScale=" + scale),
             List.of("probe"),
+            120,
             120);
     assertEquals("PASS", new JSONObject(Files.readString(result)).getString("status"));
   }
@@ -70,6 +71,7 @@ class B11SpeedNoticeDesktopTest {
           "{\"leelaz\":{\"engine-settings-list\":[]},\"logging\":{\"diagnostics-enabled\":false},"
               + "\"ui\":{\"autoload-empty\":true,\"first-time-load\":false,\"use-language\":1}}");
       System.setProperty("lizzie.work.dir", work.toString());
+      DesktopProbeProcess.phase(result, "application-starting");
       Lizzie.main(new String[0]);
       await(() -> Lizzie.frame != null && Lizzie.frame.isShowing());
       SwingUtilities.invokeAndWait(
@@ -77,6 +79,8 @@ class B11SpeedNoticeDesktopTest {
             for (Window window : Window.getWindows())
               if (window instanceof JDialog) window.dispose();
           });
+      // Application startup must not consume the locale assertions' budget.
+      DesktopProbeProcess.applicationReady(result);
       Path b11 = writeModel(work.resolve("default.bin.gz"), "kata1-tf3-b11c768-s12002M-d6304M");
       Path b10 = writeModel(work.resolve("other.bin.gz"), "b10c512h8nbt3tflrs-fson-silu-rsnh");
       Path executable = Files.writeString(work.resolve("katago"), "metadata-only test fixture");
@@ -123,6 +127,7 @@ class B11SpeedNoticeDesktopTest {
       } finally {
         SwingUtilities.invokeAndWait(() -> boundaryDialog.get().dispose());
       }
+      DesktopProbeProcess.phase(result, "model-boundaries-checked");
       entry.commands = command(executable, b11, config);
       entry.threadPolicy = new JSONObject().put("source", "CFG");
       SetupSnapshot b11Snapshot =
@@ -169,6 +174,7 @@ class B11SpeedNoticeDesktopTest {
           });
 
       for (String language : List.of("zh-CN", "en-US", "zh-TW", "zh-HK", "ja-JP", "ko", "th-TH")) {
+        DesktopProbeProcess.phase(result, "locale-starting " + language);
         Lizzie.resourceBundle =
             ResourceBundle.getBundle("l10n.DisplayStrings", Locale.forLanguageTag(language));
         Lizzie.config.useLanguage =
@@ -276,6 +282,7 @@ class B11SpeedNoticeDesktopTest {
               Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
               dialog.dispose();
             });
+        DesktopProbeProcess.phase(result, "locale-checked " + language);
       }
       SwingUtilities.invokeAndWait(
           () -> {
