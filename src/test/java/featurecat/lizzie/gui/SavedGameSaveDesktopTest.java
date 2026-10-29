@@ -158,12 +158,38 @@ class SavedGameSaveDesktopTest {
             return null;
           });
       capture(result.resolveSibling("completed-save-ko.png"));
+      onEdt(() -> {
+        Lizzie.board.getHistory().getStart().getData().setAuthoredComment("저장본과 구분할 현재 주석");
+        return null;
+      });
+      DesktopProbeProcess.phase(result, "open-while-save-pending");
+      try (var blocked = SgfSaveTestSupport.blockWorker()) {
+        onEdt(() -> {
+          button("LizzieFrame.saveAndLoad.load", 50).doClick(0);
+          assertTrue(savedList().isShowing());
+          assertEquals("저장본과 구분할 현재 주석", Lizzie.board.getHistory().getStart().getData().comment);
+          return null;
+        });
+        onEdt(() -> {
+          Lizzie.frame.showTempGamePanel();
+          assertTrue(savedList().isShowing());
+          return null;
+        });
+        blocked.release();
+      }
+      awaitEdt(() -> !savedList().isVisible());
+      onEdt(() -> {
+        assertEquals("저장할 루트 메모", Lizzie.board.getHistory().getStart().getData().comment);
+        assertEquals(expectedMove, Lizzie.board.getCurrentMovenumber());
+        return null;
+      });
       Files.writeString(
           result,
           new JSONObject()
               .put("result", "PASS")
               .put("edtRespondedWhilePending", true)
               .put("filesAndListUnchangedWhilePending", true)
+              .put("pendingOpenResumedWithoutSecondClick", true)
               .put("savedRecords", 1)
               .put("savedIndex", saved.index)
               .put("savedMove", expectedMove)
