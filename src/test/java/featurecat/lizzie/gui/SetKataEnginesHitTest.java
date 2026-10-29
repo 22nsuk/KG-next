@@ -21,6 +21,7 @@ import java.awt.AWTEvent;
 import java.awt.Component;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsEnvironment;
+import java.awt.KeyboardFocusManager;
 import java.awt.Point;
 import java.awt.Robot;
 import java.awt.Toolkit;
@@ -619,8 +620,9 @@ class SetKataEnginesHitTest {
             dialog[0].chkAutoPDA.setSelected(true);
           });
       Robot robot = new Robot();
+      // setVisible returns before native activation; applying must begin from a focused editor.
+      focus(dynamic ? dialog[0].chkDymPda : dialog[0].chkStaticPda);
       if (dynamic) {
-        focus(dialog[0].chkDymPda);
         press(robot, KeyEvent.VK_SPACE);
         robot.waitForIdle();
         SwingUtilities.invokeAndWait(
@@ -641,7 +643,7 @@ class SetKataEnginesHitTest {
       for (String draft : invalid) {
         SwingUtilities.invokeAndWait(
             () -> pdaField(dialog[0], dynamic).setText(draft));
-        rejectPdaDraft(dialog[0], robot);
+        rejectPdaDraft(dialog[0], pdaField(dialog[0], dynamic), robot);
         SwingUtilities.invokeAndWait(
             () -> {
               assertTrue(dialog[0].isVisible(), "invalid input keeps the editor open");
@@ -886,12 +888,17 @@ class SetKataEnginesHitTest {
     robot.keyRelease(key);
   }
 
-  private static void rejectPdaDraft(SetKataPDA dialog, Robot robot) throws Exception {
+  private static void rejectPdaDraft(SetKataPDA dialog, JTextField rejectedField, Robot robot)
+      throws Exception {
     List<Message> messages = new ArrayList<>();
     CompletableFuture<Message> opened = new CompletableFuture<>();
     CountDownLatch editorFocused = new CountDownLatch(1);
+    CountDownLatch fieldFocused = new CountDownLatch(1);
     WindowAdapter restoreFocus = new WindowAdapter() {
       @Override public void windowGainedFocus(WindowEvent event) { editorFocused.countDown(); }
+    };
+    FocusAdapter restoreFieldFocus = new FocusAdapter() {
+      @Override public void focusGained(FocusEvent event) { fieldFocused.countDown(); }
     };
     AWTEventListener capture =
         event -> {
@@ -930,13 +937,33 @@ class SetKataEnginesHitTest {
         Thread.sleep(10);
       } while (System.nanoTime() < deadline);
       assertTrue(fitted[0], "the complete validation message must be readable: " + layout[0]);
-      SwingUtilities.invokeAndWait(() -> dialog.addWindowFocusListener(restoreFocus));
+      SwingUtilities.invokeAndWait(() -> {
+        dialog.addWindowFocusListener(restoreFocus);
+        rejectedField.addFocusListener(restoreFieldFocus);
+      });
       press(robot, KeyEvent.VK_ESCAPE);
       apply.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
-      assertTrue(editorFocused.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS),
-          "keyboard focus must return to the PDA editor after dismissing the validation message");
+      boolean editorRestored =
+          editorFocused.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      boolean fieldRestored =
+          fieldFocused.await(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      String[] focusState = new String[1];
+      SwingUtilities.invokeAndWait(() -> {
+        KeyboardFocusManager manager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+        focusState[0] = "draft=" + rejectedField.getText() + ", editorShowing=" + dialog.isShowing()
+            + ", editorFocused=" + dialog.isFocused() + ", ownerFocused=" + dialog.getOwner().isFocused()
+            + ", messageDisplayable=" + message.isDisplayable()
+            + ", focusedWindow=" + manager.getFocusedWindow() + ", focusOwner=" + manager.getFocusOwner();
+      });
+      assertTrue(editorRestored,
+          "keyboard focus must return to the PDA editor after dismissing the validation message: "
+              + focusState[0]);
+      assertTrue(fieldRestored, "the rejected PDA field must receive keyboard focus: " + focusState[0]);
       SwingUtilities.invokeAndWait(() -> {
           assertTrue(dialog.isFocused());
+          assertTrue(rejectedField.isFocusOwner());
+          assertEquals(0, rejectedField.getSelectionStart());
+          assertEquals(rejectedField.getText().length(), rejectedField.getSelectionEnd());
           assertFalse(message.isDisplayable(), "Escape must dispose the validation message");
           assertEquals(List.of(Lizzie.resourceBundle.getString("SetKataPDA.wrongParameter")),
               messages.stream().map(value -> value.lblmessage.getText()).toList());
@@ -946,6 +973,7 @@ class SetKataEnginesHitTest {
       try {
         SwingUtilities.invokeAndWait(() -> {
           dialog.removeWindowFocusListener(restoreFocus);
+          rejectedField.removeFocusListener(restoreFieldFocus);
           messages.forEach(value -> {
             if (value.isDisplayable()) value.dispose();
           });
