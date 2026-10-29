@@ -129,8 +129,14 @@ optional and may be discarded after repair.
 If unreadable evidence caused startup to display an older fallback, retry must
 not overwrite the recovered record with a previously captured fallback. The
 original configuration and explicit-edit snapshot identify that case. Recovery
-reloads only an unchanged fallback and retires every already captured fallback
+compares authored game and cursor identity without treating an engine-alignment
+context revision as a user edit; context-sensitive snapshot callers stay strict.
+It reloads only an unchanged fallback and retires every already captured fallback
 request, including concurrent ones; a fresh request captures the recovered game.
+If AI Coach still owns the board, the retry retains fallback protection and
+waits for successful Coach teardown before reloading. The continuation checks
+the original configuration and unchanged game again; a stop request, pending
+cleanup or failed cleanup does not permit fallback writes or cursor changes.
 User edits and newly opened games retain their normal ownership. Failure to
 capture that protective state does not enable automatic saving.
 
@@ -174,6 +180,9 @@ waiters retain interruption status after receiving the actual result.
   metadata/preview state, restart, unreadable evidence, failure/retry, concurrent
   stale captures, authored edits and configuration ownership. Ordinary saved-list
   orphan/cursor behavior is characterized without claiming automatic repair.
+- `HumanSlGameControllerIntegrationTest`: automatic recovery uses the real
+  Coach teardown and file loader to check blocked fallback writes, failed
+  teardown/retry, and edits or configuration replacement during deferred reload.
 - `PlayedGameSaveSafetyTest` / `ContributeSaveTest`: directory/reservation work
   stays off the event thread, unique played-game files, contribution batches
   larger than the queue, version-aware publication and failed-save retry.

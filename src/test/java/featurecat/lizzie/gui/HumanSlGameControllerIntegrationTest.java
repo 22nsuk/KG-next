@@ -1,6 +1,7 @@
 package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -1748,6 +1749,84 @@ class HumanSlGameControllerIntegrationTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"UNCHANGED", "EXIT_FAILURE", "EDITED", "CONFIG_CHANGED"})
+  void automaticRecoveryRetainsFallbackProtectionUntilCoachActuallyExits(
+      String change, @TempDir Path directory) throws Exception {
+    try (CoachEnvironment env = CoachEnvironment.open()) {
+      SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
+      Config config = Lizzie.config;
+      config.autoResume = true;
+      config.saveBoardConfig.put("save-auto-game-index1", 1)
+          .put("save-auto-game-index2", -5);
+      config.saveBoard = new JSONObject().put("save", config.saveBoardConfig);
+      Path save = Files.createDirectories(directory.resolve("save"));
+      config.saveTempBoard();
+      String recovered = "(;FF[4]SZ[3]C[RECOVERED_EXIT];B[aa];W[bb])";
+      Files.writeString(save.resolve("autoGame1.sgf"), recovered);
+      Files.writeString(save.resolve("autoGame2.sgf"), "(;FF[4]SZ[3]C[OLD_FALLBACK];B[cc])");
+      JSONObject intended = new JSONObject().put("save-auto-game-time1", "latest")
+          .put("save-auto-game-move-number1", 2).put("save-auto-game-move-list1", "");
+      featurecat.lizzie.util.AutomaticSaveIntent.write(directory, 1, recovered, intended);
+      Path marker = save.resolve("automatic-save-intent.json");
+      String validIntent = Files.readString(marker);
+      Files.writeString(marker, "{unreadable");
+      frame.restoreStartupGameAsync(new String[0]).get(10, TimeUnit.SECONDS);
+      assertTrue(awaitCondition(() -> !Lizzie.board.isLoadingFile, Duration.ofSeconds(5)));
+      assertEquals("OLD_FALLBACK", Lizzie.board.getHistory().getStart().getData().comment);
+      BoardHistoryList fallback = Lizzie.board.getHistory();
+      BoardHistoryNode fallbackPosition = fallback.getCurrentHistoryNode();
+      HumanSlGameController controller = env.startLiveAnalysisCoach();
+      AtomicReference<Runnable> exitWorker = new AtomicReference<>();
+      AtomicBoolean allowExit = new AtomicBoolean(!change.equals("EXIT_FAILURE"));
+      controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, allowExit::get, null);
+      Files.writeString(marker, validIntent);
+
+      assertFalse(frame.saveAutoGameAsync(1).get(10, TimeUnit.SECONDS));
+      assertNotNull(exitWorker.get());
+      assertFalse(controller.isFinished());
+      assertSame(fallback, Lizzie.board.getHistory());
+      boolean periodicSaved = frame.saveAutoGameAsync(2).get(10, TimeUnit.SECONDS);
+      boolean exitSaved = frame.saveAutoGameAsync(1).get(10, TimeUnit.SECONDS);
+      assertAll(
+          () -> assertSame(fallbackPosition, fallback.getCurrentHistoryNode(),
+              "deferred recovery must not navigate the fallback as if it had loaded the new SGF"),
+          () -> assertFalse(periodicSaved, "periodic writes must remain blocked during teardown"),
+          () -> assertFalse(exitSaved, "exit writes must remain blocked during teardown"),
+          () -> assertEquals(recovered, Files.readString(save.resolve("autoGame1.sgf"))));
+
+      if (change.equals("EXIT_FAILURE")) {
+        // Suppress only the error dialog; run the real failed cleanup and retain its continuation.
+        Lizzie.frame = null;
+        finishSavedGameCoachExit(exitWorker.get());
+        Lizzie.frame = frame;
+        assertTrue(controller.isExitRecoveryPending());
+        assertFalse(frame.saveAutoGameAsync(1).get(10, TimeUnit.SECONDS));
+        assertEquals(recovered, Files.readString(save.resolve("autoGame1.sgf")));
+        allowExit.set(true);
+      } else if (change.equals("EDITED")) {
+        SwingUtilities.invokeAndWait(() -> fallback.getStart().getData().comment = "USER_EDIT");
+      } else if (change.equals("CONFIG_CHANGED")) {
+        Lizzie.config = ConfigTestHelper.createForTests(directory.resolve("other"));
+      }
+      finishSavedGameCoachExit(exitWorker.get());
+      assertTrue(controller.isFinished());
+      if (change.equals("EDITED") || change.equals("CONFIG_CHANGED")) {
+        assertSame(fallback, Lizzie.board.getHistory(), "a delayed reload must recheck ownership");
+        assertEquals(recovered, Files.readString(save.resolve("autoGame1.sgf")));
+        Lizzie.config = config;
+      } else {
+        assertTrue(awaitCondition(() -> !Lizzie.board.isLoadingFile
+            && "RECOVERED_EXIT".equals(Lizzie.board.getHistory().getStart().getData().comment)
+            && Lizzie.board.getHistory().getMoveNumber() == 2, Duration.ofSeconds(5)));
+        assertTrue(frame.saveAutoGameAsync(1).get(10, TimeUnit.SECONDS));
+        assertEquals("RECOVERED_EXIT", featurecat.lizzie.rules.SGFParser.parseSgf(
+            Files.readString(save.resolve("autoGame1.sgf")), true).getStart().getData().comment);
+      }
+      SgfSaveTestSupport.awaitPending();
+    }
+  }
+
   private static CompletableFuture<Void> openExternalFile(
       SavedGameCompletionFrame frame, Path file, boolean startup) {
     assertTrue(SwingUtilities.isEventDispatchThread());
@@ -2276,6 +2355,14 @@ class HumanSlGameControllerIntegrationTest {
   private static final class SavedGameCompletionFrame extends CoachFrame {
     private int hiddenSavedLists;
     private BoardHistoryNode positionWhenSavedListHidden;
+
+    @Override
+    protected void savedGameEditFailed(IOException failure) {}
+
+    @Override
+    public java.awt.Image saveMainBoardToImageOri() {
+      return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+    }
 
     @Override
     public void setVisible(boolean visible) {}

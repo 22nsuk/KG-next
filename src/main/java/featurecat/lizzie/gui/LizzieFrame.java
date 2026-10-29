@@ -15651,22 +15651,12 @@ public class LizzieFrame extends JFrame {
           }
           UnresolvedAutomaticResume unresolvedResume = autoSaveUnresolvedResume;
           boolean capturedFallback = unresolvedResume != null && unresolvedResume.config() == config
-              && unresolvedResume.game().isCurrent(Lizzie.board);
+              && unresolvedResume.game().hasSameGame(Lizzie.board);
           return recoverAutoSaveAsync().thenCompose(
               recovered -> {
                 if (!recovered) return java.util.concurrent.CompletableFuture.completedFuture(false);
                 if (capturedFallback) {
-                  if (autoSaveUnresolvedResume == unresolvedResume
-                      && Lizzie.frame == this && Lizzie.config == config
-                      && unresolvedResume.config() == config
-                      && unresolvedResume.game().isCurrent(Lizzie.board)) {
-                    // A failed startup may have resumed an older fallback. Once recovery is
-                    // repaired, do not save that unchanged fallback over the recovered game.
-                    if (!resumeRecoveredAutomaticGame()) {
-                      return java.util.concurrent.CompletableFuture.completedFuture(false);
-                    }
-                  }
-                  if (autoSaveUnresolvedResume == unresolvedResume) autoSaveUnresolvedResume = null;
+                  resumeUnchangedAutomaticFallback(unresolvedResume);
                   // Retire every request which captured the fallback, including concurrent
                   // retries. A fresh request captures the recovered or user-edited game.
                   return java.util.concurrent.CompletableFuture.completedFuture(false);
@@ -15701,6 +15691,18 @@ public class LizzieFrame extends JFrame {
                     .thenApply(metadata -> true);
               });
         });
+  }
+
+  private void resumeUnchangedAutomaticFallback(UnresolvedAutomaticResume unresolvedResume) {
+    if (autoSaveUnresolvedResume != unresolvedResume
+        || Lizzie.frame != this || Lizzie.config != unresolvedResume.config()
+        || !unresolvedResume.game().hasSameGame(Lizzie.board)) return;
+    // loadFile's boolean also accepts a deferred Coach exit. Defer the entire recovery
+    // continuation instead, retaining protection and rechecking ownership after teardown.
+    if (deferUntilHumanSlExit(() -> resumeUnchangedAutomaticFallback(unresolvedResume))) return;
+    if (resumeRecoveredAutomaticGame() && autoSaveUnresolvedResume == unresolvedResume) {
+      autoSaveUnresolvedResume = null;
+    }
   }
 
   private static <T> java.util.concurrent.CompletableFuture<T> onSavedGameOwner(
