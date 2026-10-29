@@ -98,7 +98,9 @@ final class KifuEngineSyncCoordinator {
     AttemptResult result;
     RuntimeException terminalFailure = null;
     try {
-      result = request.synchronize();
+      try (var phase = new featurecat.lizzie.logging.SgfPhase("engine-sync-attempt")) {
+        result = request.synchronize();
+      }
     } catch (RuntimeException failure) {
       if (ExactSnapshotEngineRestore.isPermanentPositionRestoreFailure(failure)) {
         terminalFailure = failure;

@@ -4039,15 +4039,8 @@ public class LizzieFrame extends JFrame {
             false);
 
     if (file.length > 0) {
-      boolean resumePonder = Lizzie.leelaz.isLoaded && Lizzie.leelaz.isPondering();
-      if (resumePonder) {
-        Lizzie.leelaz.togglePonder();
-      }
       File selectedFile = file[0];
-      boolean accepted = loadFile(selectedFile, false, true, () -> curFile = selectedFile);
-      if (!accepted && resumePonder && !Lizzie.leelaz.isPondering()) {
-        Lizzie.leelaz.ponder();
-      }
+      openFileAsync(selectedFile, false, true, () -> curFile = selectedFile);
     }
     if (Lizzie.leelaz.isheatmap) Lizzie.leelaz.setHeatmap();
     this.setAlwaysOnTop(Lizzie.config.mainsalwaysontop);
@@ -4055,38 +4048,47 @@ public class LizzieFrame extends JFrame {
   }
 
   boolean importDroppedKifuFiles(Transferable transferable) {
+    return importDroppedKifuFilesAsync(transferable).getNow(true);
+  }
+
+  java.util.concurrent.CompletableFuture<Boolean> importDroppedKifuFilesAsync(
+      Transferable transferable) {
     List<File> capturedFiles = new ArrayList<>();
     try {
       Object transferData = transferable.getTransferData(DataFlavor.javaFileListFlavor);
       if (!(transferData instanceof List<?>)) {
-        return false;
+        return java.util.concurrent.CompletableFuture.completedFuture(false);
       }
       for (Object entry : (List<?>) transferData) {
         if (!(entry instanceof File)) {
-          return false;
+          return java.util.concurrent.CompletableFuture.completedFuture(false);
         }
         capturedFiles.add((File) entry);
       }
     } catch (Exception e) {
       e.printStackTrace();
-      return false;
+      return java.util.concurrent.CompletableFuture.completedFuture(false);
     }
     if (capturedFiles.isEmpty()) {
-      return false;
+      return java.util.concurrent.CompletableFuture.completedFuture(false);
     }
-    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        () -> finishDroppedKifuImport(capturedFiles))) {
-      return true;
+    var result = new java.util.concurrent.CompletableFuture<Boolean>();
+    Runnable open = () -> finishDroppedKifuImport(capturedFiles).whenComplete((loaded, failure) -> {
+      if (failure == null) result.complete(loaded);
+      else result.completeExceptionally(failure);
+    });
+    if (!deferKifuOpenUntilAutomaticQuickAnalysisRestored(open, () -> result.complete(false))) {
+      open.run();
     }
-    return finishDroppedKifuImport(capturedFiles);
+    return result;
   }
 
-  private boolean finishDroppedKifuImport(List<File> files) {
+  private java.util.concurrent.CompletableFuture<Boolean> finishDroppedKifuImport(List<File> files) {
     try {
       if (files.size() == 1) {
         boolean ponder = Lizzie.leelaz.isPondering() || !Lizzie.leelaz.isLoaded;
         File file = files.get(0);
-        return loadFile(
+        return openFileAsync(
             file,
             true,
             true,
@@ -4103,10 +4105,10 @@ public class LizzieFrame extends JFrame {
       }
 
       openOrdinaryBatchAnalysis(files, true);
-      return true;
+      return java.util.concurrent.CompletableFuture.completedFuture(true);
     } catch (Exception e) {
       e.printStackTrace();
-      return false;
+      return java.util.concurrent.CompletableFuture.completedFuture(false);
     }
   }
 
@@ -4789,6 +4791,7 @@ public class LizzieFrame extends JFrame {
   public java.util.concurrent.CompletableFuture<Void> restoreStartupGameAsync(String[] args) {
     String[] requestedArgs = args.clone();
     return onSavedGameOwner(() -> {
+      localSgfOpenRequest++;
       java.util.concurrent.CompletableFuture<Void> restored = new java.util.concurrent.CompletableFuture<>();
       restoreStartupGameOnEdt(requestedArgs, ++startupGameSelection, restored);
       return restored;
@@ -5248,6 +5251,7 @@ public class LizzieFrame extends JFrame {
       notifySgfLoadCompletion(completion, false);
       return false;
     }
+    localSgfOpenRequest++;
     if (deferUntilHumanSlExit(
         () ->
             loadSgfStringInternal(
@@ -5460,6 +5464,120 @@ public class LizzieFrame extends JFrame {
     }
   }
 
+  private volatile long localSgfOpenRequest;
+  private volatile boolean localSgfOpenClosed;
+
+  /** Interactive opening: true means parsed/applied, not that engine synchronization finished. */
+  public java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
+      File file, boolean fromTemp, boolean showHint) {
+    return openFileAsync(file, fromTemp, showHint, null);
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad) {
+    var result = new java.util.concurrent.CompletableFuture<Boolean>();
+    Runnable request = () -> {
+      long selection = ++localSgfOpenRequest;
+      Config config = Lizzie.config;
+      Board board = Lizzie.board;
+      boolean displayed = isDisplayable();
+      try {
+        GameEditSnapshot edit;
+        try (var phase = new featurecat.lizzie.logging.SgfPhase("open-edit-capture")) {
+          edit = GameEditSnapshot.capture(board);
+        }
+        BooleanSupplier current = () -> !result.isCancelled() && !localSgfOpenClosed
+            && selection == localSgfOpenRequest && Lizzie.frame == this
+            && Lizzie.config == config && Lizzie.board == board
+            && (!displayed || isDisplayable()) && edit.isCurrent(board);
+        prepareInteractiveFileOpen(file, fromTemp, showHint, afterSuccessfulLoad, current, result);
+      } catch (RuntimeException failure) {
+        SgfObservation.record("open", "failed", file.getPath(), failure);
+        result.complete(false);
+        showOpenFileFailedMessageLater();
+      }
+    };
+    if (SwingUtilities.isEventDispatchThread()) request.run();
+    else SwingUtilities.invokeLater(request);
+    return result;
+  }
+
+  private void prepareInteractiveFileOpen(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
+      BooleanSupplier current, java.util.concurrent.CompletableFuture<Boolean> result) {
+    if (!current.getAsBoolean()) {
+      result.complete(false);
+      return;
+    }
+    Runnable retry = () -> prepareInteractiveFileOpen(
+        file, fromTemp, showHint, afterSuccessfulLoad, current, result);
+    Runnable retired = () -> result.complete(false);
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(retry, retired)
+        || deferUntilHumanSlExit(retry, retired)) return;
+    // Opening immediately after Save must see its disk completion and metadata publication.
+    var saves = SgfSaveCoordinator.pendingSaves();
+    if (!saves.isDone()) {
+      saves.whenComplete((ignored, failure) -> SwingUtilities.invokeLater(() -> {
+        if (failure == null) retry.run();
+        else finishInteractiveFileRead(
+            file, fromTemp, showHint, afterSuccessfulLoad, current, result, null, failure);
+      }));
+      return;
+    }
+    if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".gib")) {
+      finishInteractiveFileRead(
+          file, fromTemp, showHint, afterSuccessfulLoad, current, result, null, null);
+      return;
+    }
+    SgfReadQueue.SHARED.read(file.toPath()).whenComplete((content, failure) ->
+        finishInteractiveFileRead(
+            file, fromTemp, showHint, afterSuccessfulLoad, current, result, content, failure));
+  }
+
+  private void finishInteractiveFileRead(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
+      BooleanSupplier current, java.util.concurrent.CompletableFuture<Boolean> result,
+      String content, Throwable failure) {
+    try {
+      if (!current.getAsBoolean() || failure instanceof java.util.concurrent.CancellationException) {
+        result.complete(false);
+        return;
+      }
+      if (failure != null) {
+        SgfObservation.record("open", "failed", file.getPath(), failure);
+        showOpenFileFailedMessageLater();
+        result.complete(false);
+        return;
+      }
+      // A game/analysis mode may have acquired the foreground while bytes were being read.
+      if (EngineGamePresentation.current().startingOrPlaying()
+          || isPlayingAgainstLeelaz || isAnaPlayingAgainstLeelaz
+          || (humanSlGame != null && !humanSlGame.isFinished())
+          || kifuOpenWaitingForQuickAnalysisRestore || analysisControlCleanupInProgress
+          || (hasActiveAutomaticQuickAnalysis()
+              && automaticQuickAnalysisTask.requiresForegroundRestore())) {
+        result.complete(false);
+        return;
+      }
+      Leelaz primary = Lizzie.leelaz;
+      long generation = Lizzie.capturePrimaryEngineGeneration(primary);
+      boolean ponder = primary != null && primary.isLoaded && primary.isPondering();
+      if (ponder) primary.togglePonder();
+      boolean loaded;
+      try (var phase = new featurecat.lizzie.logging.SgfPhase("file-apply")) {
+        loaded = applyFile(file, fromTemp, showHint, afterSuccessfulLoad, null, content);
+      }
+      if (!loaded && ponder && Lizzie.leelaz == primary
+          && Lizzie.capturePrimaryEngineGeneration(primary) == generation
+          && !primary.isPondering()) primary.ponder();
+      result.complete(loaded);
+    } catch (RuntimeException failureDuringApply) {
+      SgfObservation.record("open", "failed", file.getPath(), failureDuringApply);
+      result.complete(false);
+      showOpenFileFailedMessageLater();
+    }
+  }
+
   public boolean loadFile(File file, boolean fromTemp, boolean showHint) {
     return loadFile(file, fromTemp, showHint, null);
   }
@@ -5475,6 +5593,13 @@ public class LizzieFrame extends JFrame {
       boolean showHint,
       Runnable afterSuccessfulLoad,
       Runnable afterEngineReady) {
+    localSgfOpenRequest++;
+    return applyFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady, null);
+  }
+
+  private boolean applyFile(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
+      Runnable afterEngineReady, String decodedSgf) {
     if (EngineGamePresentation.current().startingOrPlaying()
         || isPlayingAgainstLeelaz
         || isAnaPlayingAgainstLeelaz) {
@@ -5503,7 +5628,9 @@ public class LizzieFrame extends JFrame {
         loaded = GIBParser.load(file.getPath());
       } else {
         rollbackState = KifuLoadRollbackState.capture();
-        loaded = SGFParser.load(file.getPath(), showHint, false);
+        loaded = decodedSgf == null
+            ? SGFParser.load(file.getPath(), showHint, false)
+            : SGFParser.loadFileContent(decodedSgf, showHint, false);
       }
       if (!loaded) {
         if (rollbackState != null) {
@@ -5553,12 +5680,14 @@ public class LizzieFrame extends JFrame {
       }
     } else {
       Board loadedBoard = Lizzie.board;
+      Config loadedConfig = Lizzie.config;
       BoardHistoryList loadedHistory = loadedBoard.getHistory();
       // SGFParser finalizes navigation on the next EDT turn. Run success work for the still-current
       // history after that navigation and before capturing the engine synchronization position.
       SwingUtilities.invokeLater(
           () -> {
-            if (Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
+            if (Lizzie.frame != this || Lizzie.config != loadedConfig || localSgfOpenClosed
+                || Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
             if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
             if (afterEngineReady != null) {
               scheduleKifuEngineReadyAfterLoad(afterEngineReady);
@@ -6616,6 +6745,8 @@ public class LizzieFrame extends JFrame {
   }
 
   public synchronized void shutdownKifuEngineSyncCoordinator() {
+    localSgfOpenClosed = true;
+    localSgfOpenRequest++;
     pendingKifuRulesConsent = null;
     pendingKifuEngineSyncRoot = null;
     failedKifuPositionRetry = null;
@@ -15786,6 +15917,7 @@ public class LizzieFrame extends JFrame {
       int index,
       boolean originalShowListPane,
       boolean originalShowVariationGraph) {
+    localSgfOpenRequest++;
     Runnable reopen = () ->
         openSavedGame(isAutoSave, index, originalShowListPane, originalShowVariationGraph);
     if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(reopen)

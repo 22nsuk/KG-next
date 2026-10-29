@@ -169,3 +169,8 @@ changed to accommodate the probe.
 No throughput improvement is claimed. Disk I/O has moved off the event thread;
 tree capture and serialization remain on it to preserve the existing serializer's
 board, rules and formatting context.
+
+The subsequent [SGF measurement and interactive read path](SGF_PERFORMANCE.md)
+records these phases separately. Chooser, single-file drop and recent-file SGF
+reads/decode run on a bounded worker; parsing and serialization retain their
+existing context. Opening immediately after a save waits for its publication.
