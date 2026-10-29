@@ -250,7 +250,7 @@ pwsh -NoProfile -File scripts/run_local_ci.ps1 -Profile Windows -Group EnginePro
 设置 `java.awt.headless=false` 不会替代可用显示；显示不可用时 runner 必须失败，不能以 skip 通过。
 
 
-Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）和 main push 执行
+Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）、main push 和 merge_group 执行
 `repository-checks`、`script-tests`、`windows-script-tests`、`java-linux`、`java17-web`、
 `java-windows`、`desktop-smoke`、`analysis-provenance-ui`，以及 `engine-process` 的
 Linux/Xvfb 与原生 Windows 两个 matrix leg。
@@ -259,8 +259,9 @@ Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘
 验证成功但 coverage artifact 缺失仍失败。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
-`ci-required` 是 `ci.yml` 的汇总检查，要求上述八项和 `engine-process` matrix 全部成功，拒绝失败、取消、
-跳过、缺失或未知结果。发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
+`ci-required` 要求上述八项、`engine-process` matrix 及选中的 Fox/B11/native Windows/SGF-CPU 补充检查成功。
+失败、取消、必需执行的跳过、缺失或未知结果均不能通过；只有成功的文档专用判定允许补充检查跳过。
+发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
 该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
 不会自动启用分支保护。fork 的设置需要单独确认，不能从上游仓库的保护状态或检查名称推断。
@@ -273,14 +274,16 @@ Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘
 - 启用前后重新读取 [main 状态](https://api.github.com/repos/22nsuk/KG-next/branches/main) 和
   [ruleset 列表](https://api.github.com/repos/22nsuk/KG-next/rulesets)，在仓库设置和 PR 合并框确认
   目标、检查来源、严格模式和管理员适用范围。权限错误或无法读取不能解释为“没有保护”。
-- `Fox Search Regression` 等按路径触发的独立 workflow 不属于 `ci-required` 汇总；触发时仍须核对
-  同一提交上的结果。不要直接把可能不触发的检查设为所有 PR 的必需检查，以免无关 PR 一直等待。
+- Fox、B11、Native Windows Engine Acceptance 和 Acceptance integration 通过 workflow_call 接入 CI，不再独立按 PR 路径触发。
+  仅常规文档文本 PR 可跳过这四个补充检查；其他变更及 main push/merge_group 全部执行。
+  不要将可跳过的补充检查单独设为必需状态。规则模板、启用与回退步骤见
+  [CI 合并策略](CI_MERGE_POLICY.md)。提交模板不会自动启用服务器规则。
 
 2026-10-28 检查 `22nsuk/KG-next` 的 main `23a648d5` 时，`protected=false`，ruleset 列表为空；
 这是当时的状态记录，实际启用前必须重查。设置语义参见 GitHub 的
 [分支保护说明](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches)。
 
-回退 workflow 时必须保留可运行且真实验证上述八项和两个进程 leg 的 `ci-required`；不能直接回退到
+回退 workflow 时必须保留实际验证基础组、两个进程 leg 及所需补充检查的 `ci-required`；不能直接回退到
 缺少该检查的版本。偶发准备失败先保留失败日志，再重跑失败 job；不能用跳过测试、扩大超时或关闭保护代替定位。
 若 workflow 与保护设置确实需要协调变更，先记录原设置、原因和恢复条件，由维护者单独处理。
 
