@@ -1673,23 +1673,23 @@ class HumanSlGameControllerIntegrationTest {
       AtomicReference<Runnable> exitWorker = new AtomicReference<>();
       controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
 
+      AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
       try {
-        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
         SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, accepted, startup)));
-        request.get().get(5, TimeUnit.SECONDS);
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "queued load is not a new save target");
         assertFalse(controller.isFinished());
 
-        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, rejected, !startup)));
-        request.get().get(5, TimeUnit.SECONDS);
+        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, rejected, !startup));
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "rejected continuation cannot claim the file");
       } finally {
         if (exitWorker.get() != null) finishSavedGameCoachExit(exitWorker.get());
       }
 
+      request.get().get(5, TimeUnit.SECONDS);
+      SwingUtilities.invokeAndWait(() -> {});
       assertTrue(controller.isFinished());
       assertEquals("accepted game", Lizzie.board.getHistory().getStart().getData().comment);
       assertEquals(accepted.toFile(), LizzieFrame.curFile);
@@ -1716,15 +1716,17 @@ class HumanSlGameControllerIntegrationTest {
           completion -> SwingUtilities.invokeLater(() -> {
             completion.run();
             // The queued native error notice needs a real owner or no owner.
-            Lizzie.frame = null;
+            if (startup) Lizzie.frame = null;
           }),
           () -> true,
           null);
 
+      AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
       try {
-        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
-        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, malformed, startup)));
-        request.get().get(5, TimeUnit.SECONDS);
+        SwingUtilities.invokeAndWait(() -> {
+          CompletableFuture<Void> opened = openExternalFile(frame, malformed, startup);
+          request.set(startup ? opened : opened.thenRun(() -> Lizzie.frame = null));
+        });
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertSame(originalNode, original.getCurrentHistoryNode());
@@ -1732,6 +1734,7 @@ class HumanSlGameControllerIntegrationTest {
         try {
           if (exitWorker.get() != null) {
             finishSavedGameCoachExit(exitWorker.get());
+            request.get().get(5, TimeUnit.SECONDS);
             dialogs.assertOnlyExpectedFailureDialog();
           }
         } finally {
@@ -1771,8 +1774,7 @@ class HumanSlGameControllerIntegrationTest {
         return List.of(file.toFile());
       }
     };
-    assertTrue(frame.importDroppedKifuFiles(files));
-    return CompletableFuture.completedFuture(null);
+    return frame.importDroppedKifuFilesAsync(files).thenApply(loaded -> null);
   }
 
   private static SavedGameCompletionFrame savedGameCompletionFrame(Path directory)

@@ -2,7 +2,9 @@
 
 Interactive SGF opening from the chooser, a single dropped file, and the recent
 file menu reads and decodes on `lizzie-sgf-read`. There is one active read and at
-most one waiting selection. A newer selection retires earlier results. Before
+most one waiting selection. A newer accepted selection retires earlier results. Existing quick-analysis and
+AI Coach teardown admission runs first; a rejected continuation cannot retire
+the first accepted open. The read/edit snapshot is captured after admission. Before
 applying text on the EDT, the frame checks the selection, original frame/config,
 window lifetime, explicit game edits and foreground game/analysis ownership.
 Ordinary engine analysis is not an authored edit. An immediate Open after Save
@@ -101,20 +103,23 @@ a throughput guarantee.
 
 | Workload (input bytes) | File read | Detect/decode | Parse/tree | Save capture | Serialize |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Wide variations (1,551,041) | 0.58 | 2.15 | 44.36 | 54.80 | 51.73 |
-| Candidates + ownership (1,603,477) | 0.47 | 1.90 | 64.52 | 1.02 | 27.79 |
-| Long multilingual comments (4,825,457) | 1.68 | 6.05 | 51.62 | 0.76 | 45.78 |
+| Wide variations (1,551,041) | 0.73 | 1.99 | 44.33 | 42.54 | 42.81 |
+| Candidates + ownership (1,603,477) | 0.48 | 1.96 | 77.84 | 1.33 | 29.42 |
+| Long multilingual comments (4,825,457) | 1.54 | 5.31 | 51.05 | 0.55 | 40.96 |
 
-Open wall-time median/maximum was respectively 132.74/200.81, 97.48/118.31 and
-92.16/109.36 ms. Immediate reopen medians were 129.58, 92.33 and 104.94 ms.
-The wide-tree explicit-edit snapshot alone took a median 16.02 ms before reading;
+Open wall-time median/maximum was respectively 121.51/140.43, 119.16/176.45 and
+79.41/86.78 ms. Immediate reopen medians were 129.31, 113.61 and 83.10 ms.
+The wide-tree explicit-edit snapshot alone took a median 11.22 ms before reading;
 its completion checks also traverse the authored state. This is a cost to keep
 visible when deciding the next optimization. Save EDT queue-delay maxima reached
-115.43 ms for that tree, while parse/application also continued to delay EDT
-callbacks. These are observed queue delays, not rendered frame durations.
+83.56 ms for that tree, while parse/application also continued to delay EDT
+callbacks. These are observed queue delays, not rendered frame durations. The wide-tree
+save also spent a median 106.85 ms in the worker-side atomic write, showing why
+save wall time (200.78 ms) must be separated from EDT time. Filesystem flush
+latency varied between runs; three samples are not a stable disk benchmark.
 
-The isolated old/current reader algorithm medians were 59.54/2.84, 69.39/2.62 and
-155.34/8.16 ms. This comparison includes the old extra detection pass and
+The isolated old/current reader algorithm medians were 48.75/2.55, 68.68/3.19 and
+132.14/7.57 ms. This comparison includes the old extra detection pass and
 character-at-a-time loop, and uses warm caches. It does not compare complete
 old/new application opening. All fixtures passed node/branch, authored-comment,
 candidate/ownership and save/reopen semantic checks; raw per-sample JFRs and
