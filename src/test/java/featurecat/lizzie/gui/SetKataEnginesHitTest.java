@@ -912,6 +912,8 @@ class SetKataEnginesHitTest {
     try {
       SwingUtilities.invokeLater(apply);
       Message message = opened.get(Math.max(0, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
+      SwingUtilities.invokeAndWait(() -> assertSame(dialog, message.getOwner(),
+          "validation messages must belong to the editor that regains focus on dismissal"));
       boolean[] fitted = new boolean[1];
       String[] layout = new String[1];
       // WINDOW_OPENED can precede the native decoration resize and its Swing layout.

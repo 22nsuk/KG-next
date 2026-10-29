@@ -566,7 +566,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -735,7 +736,7 @@ public class SGFParser {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
                       Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -748,7 +749,8 @@ public class SGFParser {
                 boolean newBranch =
                     Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -771,7 +773,8 @@ public class SGFParser {
                 boolean newBranch =
                     Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -843,7 +846,8 @@ public class SGFParser {
                   boolean newBranch =
                       Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -898,7 +902,8 @@ public class SGFParser {
                   boolean newBranch =
                       Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps, currentNodeHasMove);
+                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -2191,7 +2196,7 @@ public class SGFParser {
         String secondary = hasSecondaryAnalysisPayload(data) ? formatNodeData2(node) : null;
         if (primary != null) builder.append(nodeString(primaryTag, Escaping(primary)));
         if (secondary != null) builder.append(nodeString(secondaryTag, Escaping(secondary)));
-        appendAnalysisProvenance(builder, data, primary, secondary);
+        appendAnalysisMetadata(builder, data, primary, secondary);
       }
     } catch (Exception e) {
       saveContext.clearLoadingAfterSerializationFailure();
@@ -3133,34 +3138,45 @@ public class SGFParser {
       "engineName", "engineVersion", "modelName", "modelSha256", "configSha256", "rules",
       "komi", "pda", "wrn", "humanSLProfile");
 
-  private record ProvenanceSlot(
-      String payloadSha256, AnalysisProvenance analysis, AnalysisProvenance ownership) {}
+  private record AnalysisMetadataSlot(
+      String payloadSha256, AnalysisProvenance analysis, AnalysisProvenance ownership,
+      boolean invalidated) {}
 
-  private static void appendAnalysisProvenance(
+  private record AnalysisMetadata(AnalysisMetadataSlot primary, AnalysisMetadataSlot secondary) {}
+
+  private static void appendAnalysisMetadata(
       StringBuilder builder, BoardData data, String primaryPayload, String secondaryPayload) {
-    JSONObject metadata = new JSONObject().put("app", "KG-next").put("version", 1);
-    addProvenanceSlot(metadata, "primary", primaryPayload, data.primaryAnalysisProvenance(),
+    boolean invalidated = (primaryPayload != null && data.isChanged)
+        || (secondaryPayload != null && data.isChanged2);
+    // Keep valid-only files readable by clients that understand version 1 provenance.
+    JSONObject metadata = new JSONObject().put("app", "KG-next")
+        .put("version", invalidated ? 2 : 1);
+    addAnalysisMetadataSlot(metadata, "primary", primaryPayload, data.primaryAnalysisProvenance(),
         data.estimateArray == null || data.estimateArray.isEmpty()
-            ? null : data.primaryOwnershipProvenance());
-    addProvenanceSlot(metadata, "secondary", secondaryPayload, data.secondaryAnalysisProvenance(),
+            ? null : data.primaryOwnershipProvenance(), data.isChanged);
+    addAnalysisMetadataSlot(metadata, "secondary", secondaryPayload, data.secondaryAnalysisProvenance(),
         data.estimateArray2 == null || data.estimateArray2.isEmpty()
-            ? null : data.secondaryOwnershipProvenance());
+            ? null : data.secondaryOwnershipProvenance(), data.isChanged2);
     String property = data.getProperty("KGP");
     if (metadata.length() > 2) {
       property = Base64.getUrlEncoder().withoutPadding()
           .encodeToString(metadata.toString().getBytes(StandardCharsets.UTF_8));
+    } else if (readAnalysisMetadata(property) != null) {
+      // A rejected digest must not match again merely because saving normalizes the LZ text.
+      property = null;
     }
-    // Preserve opaque or future metadata when no new source is available, without trusting it.
+    // Preserve opaque or future metadata when no current state supersedes it, without trusting it.
     if (property != null) builder.append(nodeString("KGP", Escaping(property)));
   }
 
-  private static void addProvenanceSlot(
+  private static void addAnalysisMetadataSlot(
       JSONObject metadata, String key, String payload,
-      AnalysisProvenance analysis, AnalysisProvenance ownership) {
-    if (payload == null || (analysis == null && ownership == null)) return;
+      AnalysisProvenance analysis, AnalysisProvenance ownership, boolean invalidated) {
+    if (payload == null || (analysis == null && ownership == null && !invalidated)) return;
     JSONObject slot = new JSONObject().put("payloadSha256", analysisPayloadDigest(payload));
     if (analysis != null) slot.put("analysis", provenanceJson(analysis));
     if (ownership != null) slot.put("ownership", provenanceJson(ownership));
+    if (invalidated) slot.put("invalidated", true);
     metadata.put(key, slot);
   }
 
@@ -3178,13 +3194,37 @@ public class SGFParser {
         .put("humanSLProfile", provenance.humanSLProfile());
   }
 
-  private static void restoreAnalysisProvenance(BoardData data) {
+  private static void restoreAnalysisMetadata(
+      BoardData data, boolean restorePrimaryInvalidation, boolean restoreSecondaryInvalidation) {
     data.setPrimaryAnalysisProvenance(null);
     data.setPrimaryOwnershipProvenance(null);
     data.setSecondaryAnalysisProvenance(null);
     data.setSecondaryOwnershipProvenance(null);
-    String property = data.getProperty("KGP");
-    if (property == null || property.length() > MAX_PROVENANCE_PROPERTY_LENGTH) return;
+    // A branch import can replace one engine's payload on an already invalidated live node.
+    if (restorePrimaryInvalidation) data.isChanged = false;
+    if (restoreSecondaryInvalidation) data.isChanged2 = false;
+    AnalysisMetadata metadata = readAnalysisMetadata(data.getProperty("KGP"));
+    if (metadata == null) return;
+    AnalysisMetadataSlot primary = metadata.primary();
+    AnalysisMetadataSlot secondary = metadata.secondary();
+    if (primary != null && primary.payloadSha256().equals(data.importedAnalysisDigest(false))) {
+      data.setPrimaryAnalysisProvenance(primary.analysis());
+      if (restorePrimaryInvalidation) data.isChanged = primary.invalidated();
+      if (data.estimateArray != null && !data.estimateArray.isEmpty()) {
+        data.setPrimaryOwnershipProvenance(primary.ownership());
+      }
+    }
+    if (secondary != null && secondary.payloadSha256().equals(data.importedAnalysisDigest(true))) {
+      data.setSecondaryAnalysisProvenance(secondary.analysis());
+      if (restoreSecondaryInvalidation) data.isChanged2 = secondary.invalidated();
+      if (data.estimateArray2 != null && !data.estimateArray2.isEmpty()) {
+        data.setSecondaryOwnershipProvenance(secondary.ownership());
+      }
+    }
+  }
+
+  private static AnalysisMetadata readAnalysisMetadata(String property) {
+    if (property == null || property.length() > MAX_PROVENANCE_PROPERTY_LENGTH) return null;
     try {
       String json = StandardCharsets.UTF_8.newDecoder()
           .onMalformedInput(CodingErrorAction.REPORT)
@@ -3192,37 +3232,37 @@ public class SGFParser {
           .decode(ByteBuffer.wrap(Base64.getUrlDecoder().decode(property))).toString();
       JSONTokener tokener = new JSONTokener(json);
       JSONObject metadata = new JSONObject(tokener);
-      if (tokener.nextClean() != 0) return;
+      if (tokener.nextClean() != 0) return null;
       requireProvenanceKeys(metadata, Set.of("app", "version", "primary", "secondary"));
+      boolean supportsInvalidation = Integer.valueOf(2).equals(metadata.opt("version"));
       if (!"KG-next".equals(metadata.opt("app"))
-          || !Integer.valueOf(1).equals(metadata.opt("version"))) return;
-      ProvenanceSlot primary = readProvenanceSlot(metadata, "primary");
-      ProvenanceSlot secondary = readProvenanceSlot(metadata, "secondary");
-      if (primary != null && primary.payloadSha256().equals(data.importedAnalysisDigest(false))) {
-        data.setPrimaryAnalysisProvenance(primary.analysis());
-        if (data.estimateArray != null && !data.estimateArray.isEmpty()) {
-          data.setPrimaryOwnershipProvenance(primary.ownership());
-        }
+          || (!supportsInvalidation && !Integer.valueOf(1).equals(metadata.opt("version")))) {
+        return null;
       }
-      if (secondary != null && secondary.payloadSha256().equals(data.importedAnalysisDigest(true))) {
-        data.setSecondaryAnalysisProvenance(secondary.analysis());
-        if (data.estimateArray2 != null && !data.estimateArray2.isEmpty()) {
-          data.setSecondaryOwnershipProvenance(secondary.ownership());
-        }
-      }
+      return new AnalysisMetadata(
+          readAnalysisMetadataSlot(metadata, "primary", supportsInvalidation),
+          readAnalysisMetadataSlot(metadata, "secondary", supportsInvalidation));
     } catch (IllegalArgumentException | JSONException | CharacterCodingException ignored) {
       // Optional metadata must never prevent legacy analysis from loading. The raw property stays.
+      return null;
     }
   }
 
-  private static ProvenanceSlot readProvenanceSlot(JSONObject metadata, String key) {
+  private static AnalysisMetadataSlot readAnalysisMetadataSlot(
+      JSONObject metadata, String key, boolean supportsInvalidation) {
     if (!metadata.has(key) || metadata.isNull(key)) return null;
     JSONObject slot = metadata.getJSONObject(key);
-    requireProvenanceKeys(slot, Set.of("payloadSha256", "analysis", "ownership"));
+    requireProvenanceKeys(slot, supportsInvalidation
+        ? Set.of("payloadSha256", "analysis", "ownership", "invalidated")
+        : Set.of("payloadSha256", "analysis", "ownership"));
     String digest = slot.getString("payloadSha256");
     if (!digest.matches("[a-fA-F0-9]{64}")) throw new JSONException("Invalid payload digest");
-    return new ProvenanceSlot(digest.toLowerCase(Locale.ROOT),
-        readProvenance(slot, "analysis"), readProvenance(slot, "ownership"));
+    if (slot.has("invalidated") && !(slot.get("invalidated") instanceof Boolean)) {
+      throw new JSONException("Invalid analysis invalidation flag");
+    }
+    return new AnalysisMetadataSlot(digest.toLowerCase(Locale.ROOT),
+        readProvenance(slot, "analysis"), readProvenance(slot, "ownership"),
+        Boolean.TRUE.equals(slot.opt("invalidated")));
   }
 
   private static AnalysisProvenance readProvenance(JSONObject slot, String key) {
@@ -3459,10 +3499,15 @@ public class SGFParser {
   }
 
   private static final class PendingSetupMetadata {
+    private final AnalysisImport analysisImport;
     private String comment;
     private final Map<String, String> properties = new LinkedHashMap<String, String>();
     private final List<PendingAnalysisPayload> analysisPayloads =
         new ArrayList<PendingAnalysisPayload>();
+
+    private PendingSetupMetadata(AnalysisImport analysisImport) {
+      this.analysisImport = analysisImport;
+    }
 
     private boolean isEmpty() {
       return Utils.isBlank(comment) && properties.isEmpty() && analysisPayloads.isEmpty();
@@ -3525,7 +3570,7 @@ public class SGFParser {
       return;
     }
     pendingSetupMetadata.analysisPayloads.forEach(
-        payload -> applyAnalysisTagOnDetachedHistory(target, payload.tag, payload.content));
+        payload -> pendingSetupMetadata.analysisImport.applyTag(target, payload.tag, payload.content));
   }
 
   private static void flushPendingSetupMetadataToCurrentNode(
@@ -3558,7 +3603,8 @@ public class SGFParser {
     pendingSetupMetadata.clear();
   }
 
-  private static void moveLeadingSetupMetadataToSnapshot(BoardHistoryList history) {
+  private static void moveLeadingSetupMetadataToSnapshot(
+      BoardHistoryList history, AnalysisImport analysisImport) {
     BoardHistoryNode snapshotNode = history.getCurrentHistoryNode();
     if (!snapshotNode.getData().isSnapshotNode() || !snapshotNode.previous().isPresent()) {
       return;
@@ -3571,6 +3617,7 @@ public class SGFParser {
       moveData.comment = "";
     }
     moveLeadingAnalysisPayloadToSnapshot(moveData, snapshotData);
+    analysisImport.moveToSnapshot(moveData, snapshotData);
     if (moveData.getProperties().isEmpty()) {
       return;
     }
@@ -4030,7 +4077,8 @@ public class SGFParser {
       BoardHistoryList history,
       boolean newBranch,
       Map<String, String> pendingProps,
-      boolean transferLeadingMoveMetadata) {
+      boolean transferLeadingMoveMetadata,
+      AnalysisImport analysisImport) {
     BoardData current = history.getData();
     int snapshotPlayouts = transferLeadingMoveMetadata ? current.getPlayouts() : 0;
     double snapshotWinrate = transferLeadingMoveMetadata ? current.winrate : 50;
@@ -4054,7 +4102,7 @@ public class SGFParser {
     snapshot.moveMNNumber = current.moveMNNumber;
     history.addOrGoto(snapshot, newBranch);
     if (transferLeadingMoveMetadata) {
-      moveLeadingSetupMetadataToSnapshot(history);
+      moveLeadingSetupMetadataToSnapshot(history, analysisImport);
     }
     if (newBranch) {
       processPendingPros(history, pendingProps);
@@ -4284,7 +4332,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4445,7 +4494,7 @@ public class SGFParser {
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -4455,7 +4504,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4473,7 +4523,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4518,7 +4569,8 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4559,7 +4611,8 @@ public class SGFParser {
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = history.getCurrentHistoryNode().hasVariations();
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4668,7 +4721,8 @@ public class SGFParser {
     // Game properties
     Map<String, String> gameProperties = new HashMap<String, String>();
     Map<String, String> pendingProps = new HashMap<String, String>();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata();
+    AnalysisImport analysisImport = new AnalysisImport();
+    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4814,7 +4868,7 @@ public class SGFParser {
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              applyAnalysisTagOnDetachedHistory(target.getData(), tag, tagContent);
+              analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
             int[] move = convertSgfPosToCoord(tagContent);
@@ -4824,7 +4878,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4842,7 +4897,8 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                appendSetupSnapshot(
+                    history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
@@ -4877,7 +4933,8 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4916,7 +4973,8 @@ public class SGFParser {
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
-                  appendSetupSnapshot(history, newBranch, pendingProps, currentNodeHasMove);
+                  appendSetupSnapshot(
+                      history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
@@ -4984,43 +5042,50 @@ public class SGFParser {
     return "LZ2".equals(tag) || "LZOP2".equals(tag);
   }
 
-  private static void applyAnalysisTagOnDetachedHistory(
-      BoardHistoryList history, String tag, String tagContent) {
-    if (history == null) {
-      return;
-    }
-    applyAnalysisTagOnDetachedHistory(history.getData(), tag, tagContent);
-  }
+  private static final class AnalysisImport {
+    // A matching digest can belong to an earlier import. Only payloads replaced by this parser
+    // call permit KGP to restore invalidation; metadata alone cannot validate live analysis.
+    private final Set<BoardData> primaryReplacements =
+        Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<BoardData> secondaryReplacements =
+        Collections.newSetFromMap(new IdentityHashMap<>());
 
-  private static void applyAnalysisTagOnDetachedHistory(
-      BoardData target, String tag, String tagContent) {
-    if (target == null) {
-      return;
+    private void moveToSnapshot(BoardData source, BoardData snapshot) {
+      if (primaryReplacements.remove(source)) primaryReplacements.add(snapshot);
+      if (secondaryReplacements.remove(source)) secondaryReplacements.add(snapshot);
     }
-    if ("KGP".equals(tag)) {
-      target.addProperty(tag, tagContent);
-      restoreAnalysisProvenance(target);
-      return;
+
+    private void applyTag(BoardData target, String tag, String tagContent) {
+      if (target == null) {
+        return;
+      }
+      if ("KGP".equals(tag)) {
+        target.addProperty(tag, tagContent);
+        restoreAnalysisMetadata(target,
+            primaryReplacements.contains(target), secondaryReplacements.contains(target));
+        return;
+      }
+      if (Utils.isBlank(tagContent)) return;
+      String[] lines = tagContent.split("\n", 2);
+      String[] line1 = lines[0].trim().split("\\s+");
+      if (line1.length < 3 || Utils.isBlank(line1[0])) {
+        return;
+      }
+      String line2 = lines.length > 1 ? lines[1] : "";
+      boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
+      if (secondaryEngine) clearSecondaryAnalysisPayload(target);
+      else clearPrimaryAnalysisPayload(target);
+      applyAnalysisHeader(target, line1, secondaryEngine);
+      int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
+      if (numPlayouts > 0 && !Utils.isBlank(line2)) {
+        double stdev = extractAnalysisScoreStdev(line1);
+        ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
+        applyParsedAnalysisInfo(target, parsed, secondaryEngine);
+      }
+      target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
+      (secondaryEngine ? secondaryReplacements : primaryReplacements).add(target);
+      restoreAnalysisMetadata(target, !secondaryEngine, secondaryEngine);
     }
-    if (Utils.isBlank(tagContent)) return;
-    String[] lines = tagContent.split("\n", 2);
-    String[] line1 = lines[0].trim().split("\\s+");
-    if (line1.length < 3 || Utils.isBlank(line1[0])) {
-      return;
-    }
-    String line2 = lines.length > 1 ? lines[1] : "";
-    boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
-    if (secondaryEngine) clearSecondaryAnalysisPayload(target);
-    else clearPrimaryAnalysisPayload(target);
-    applyAnalysisHeader(target, line1, secondaryEngine);
-    int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
-    if (numPlayouts > 0 && !Utils.isBlank(line2)) {
-      double stdev = extractAnalysisScoreStdev(line1);
-      ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
-      applyParsedAnalysisInfo(target, parsed, secondaryEngine);
-    }
-    target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
-    restoreAnalysisProvenance(target);
   }
 
   private static void applyAnalysisHeader(

@@ -20,6 +20,15 @@ public class Message extends JDialog {
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
 
   public Message() {
+    initializeDialog();
+  }
+
+  public Message(Window owner) {
+    super(owner);
+    initializeDialog();
+  }
+
+  private void initializeDialog() {
     // this.setModal(true);
     // setType(Type.POPUP);
     this.setResizable(false);
