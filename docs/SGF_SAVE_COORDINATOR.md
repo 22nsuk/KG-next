@@ -91,15 +91,56 @@ pending, and only the original, still-open panel is refreshed after success.
 
 SGF, manifest and preview are separate atomic replacements, not a multi-file
 crash transaction. SGF failure preserves the previous metadata and preview.
-Manifest failure preserves in-memory metadata and leaves the complete SGF for
-manual recovery. A missing or failed optional preview does not undo a committed
-record; its obsolete preview is removed. Deletion commits the manifest before
-cleanup, so cleanup failure leaves an orphan rather than reviving the record.
+Manifest failure preserves in-memory metadata and leaves the complete SGF.
+Automatic slots additionally retain the recovery information described below;
+ordinary saved-list records still require manual recovery after a manifest
+failure. A missing or failed optional preview does not undo a committed record;
+its obsolete preview is removed where possible. Deletion commits the manifest
+before cleanup, so cleanup failure leaves an orphan rather than reviving the record.
 
 Startup recovery uses the same queue for reading/promoting the periodic slot and
 committing its metadata. SGF validation remains on the event thread. Autosave is
 gated until startup selection has completed, and a failed recovery retains the
 source slot for retry. Engine preload follows the startup completion future.
+
+### Automatic save interruption recovery
+
+Forced-process-stop tests exposed two overwrite sequences: a first periodic SGF
+written before its manifest marker was ignored on restart and overwritten by the
+next autosave of the older resumed game; an exit SGF written before clearing an
+older periodic marker was replaced by that older periodic record during recovery.
+
+Before replacing either automatic slot, the shared worker atomically writes
+`save/automatic-save-intent.json`. Version 1 records only the slot, intended UTF-8
+SGF SHA-256, time, move number and cursor path. The manifest and preview work
+follow the existing order. The intent is removed after completion. It contains
+no SGF copy or full manifest snapshot and cannot select an arbitrary file path.
+
+Startup and failed-save retry settle this record before legacy periodic-slot
+promotion. A matching SGF is validated on the EDT; its slot metadata is merged
+into the latest manifest without reverting unrelated saved-list edits. An exit
+intent clears the older periodic marker. A nonmatching/absent SGF means the
+intended content is not present; the old files are left in place. Malformed or
+unreadable evidence, metadata failure and cleanup failure retain recovery state
+and suspend automatic writes. A validated intended slot remains the resume
+choice even if its metadata repair or subsequent promotion fails. Previews are
+optional and may be discarded after repair.
+
+If unreadable evidence caused startup to display an older fallback, retry must
+not overwrite the recovered record with a previously captured fallback. The
+original configuration and explicit-edit snapshot identify that case. Recovery
+reloads only an unchanged fallback and retires every already captured fallback
+request, including concurrent ones; a fresh request captures the recovered game.
+User edits and newly opened games retain their normal ownership. Failure to
+capture that protective state does not enable automatic saving.
+
+No migration is needed when the intent is absent. A background existence check
+keeps legacy startup from waiting behind unrelated queued saves; operations
+which can repair files still use the shared save queue. This evidence does not
+identify the age of orphaned files created by older versions. An older KG-next
+version ignores a pending intent and does not provide this recovery guarantee.
+The tests cover abrupt JVM termination between replacements, not power loss,
+filesystem crash durability, or a transaction across all record files.
 
 Batch analysis retains one frozen SGF through a failed-save retry and advances
 only after disk success. Duplicate starts/retries during a pending write are
@@ -128,6 +169,11 @@ waiters retain interruption status after receiving the actual result.
 - `AutomaticSaveSafetyTest` / `AutomaticSaveRecoveryTest`: record and manifest
   failure, ordered saved-list edits, frozen captures, optional previews and
   recovery-slot preservation.
+- `AutomaticSaveInterruptionTest` / `AutomaticSaveIntentTest`: abrupt child-JVM
+  termination at actual replacement boundaries, both overwrite regressions,
+  metadata/preview state, restart, unreadable evidence, failure/retry, concurrent
+  stale captures, authored edits and configuration ownership. Ordinary saved-list
+  orphan/cursor behavior is characterized without claiming automatic repair.
 - `PlayedGameSaveSafetyTest` / `ContributeSaveTest`: directory/reservation work
   stays off the event thread, unique played-game files, contribution batches
   larger than the queue, version-aware publication and failed-save retry.

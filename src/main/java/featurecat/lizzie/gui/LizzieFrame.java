@@ -4777,6 +4777,8 @@ public class LizzieFrame extends JFrame {
   // session is recovered. Never save an empty board before startup opens its game.
   private boolean autoSaveStartupPrepared;
   private boolean autoSaveRecoveryComplete;
+  private int autoSaveIntentIndex;
+  private UnresolvedAutomaticResume autoSaveUnresolvedResume;
   private boolean autoSaveRecoveryFailureReported;
   private java.util.concurrent.CompletableFuture<Boolean> autoSaveRecovery;
   private long startupGameSelection;
@@ -4808,8 +4810,7 @@ public class LizzieFrame extends JFrame {
             new java.util.concurrent.CancellationException("Startup game selection was superseded")))) return;
     Config config = Lizzie.config;
     Board board = Lizzie.board;
-    boolean recoveryPending = !autoSaveRecoveryComplete
-        && (autoSaveRecovery != null || config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5);
+    boolean recoveryPending = !autoSaveRecoveryComplete;
     GameEditSnapshot startupSnapshot = recoveryPending ? captureStartupGameSnapshot(board) : null;
     recoverAutoSaveAsync().whenComplete((recovered, failure) -> {
       try {
@@ -4830,6 +4831,8 @@ public class LizzieFrame extends JFrame {
             }
           } else if (config.autoResume) {
             resumeFile();
+            autoSaveUnresolvedResume = Boolean.TRUE.equals(recovered) || autoSaveIntentIndex != 0
+                ? null : new UnresolvedAutomaticResume(config, GameEditSnapshot.capture(board));
           }
         }
         autoSaveStartupPrepared = true;
@@ -4854,6 +4857,95 @@ public class LizzieFrame extends JFrame {
     if (autoSaveRecoveryComplete) return java.util.concurrent.CompletableFuture.completedFuture(true);
     if (autoSaveRecovery != null) return autoSaveRecovery;
     Config config = Lizzie.config;
+    java.util.concurrent.CompletableFuture<Boolean> operation = recoverAutomaticSaveIntentAsync(config)
+        .thenCompose(ignored -> recoverPeriodicSaveAsync(config)).handle((recovered, failure) -> {
+          if (failure == null) {
+            autoSaveIntentIndex = 0;
+            autoSaveRecoveryFailureReported = false;
+            return recovered;
+          }
+          org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+              .warn("Automatic save recovery remains pending; automatic saves are suspended", failure);
+          if (!autoSaveRecoveryFailureReported) {
+            autoSaveRecoveryFailureReported = true;
+            savedGameEditFailed(new IOException(
+                "Automatic save recovery failed; automatic saves suspended. Records: "
+                    + config.getWorkDirectory().toPath().resolve("save"), failure));
+          }
+          return false;
+        });
+    autoSaveRecovery = operation;
+    operation.whenComplete((ignored, failure) -> {
+      if (autoSaveRecovery == operation) autoSaveRecovery = null;
+    });
+    return operation;
+  }
+
+  private record AutomaticSaveIntentRead(
+      featurecat.lizzie.util.AutomaticSaveIntent intent, String sgf) {}
+
+  private record UnresolvedAutomaticResume(Config config, GameEditSnapshot game) {}
+
+  private java.util.concurrent.CompletableFuture<Void> recoverAutomaticSaveIntentAsync(Config config) {
+    Path directory = config.getWorkDirectory().toPath();
+    java.util.concurrent.CompletableFuture<Boolean> present = new java.util.concurrent.CompletableFuture<>();
+    // A legacy startup with no intent must not queue behind an unrelated pending save.
+    // Probe off the EDT; all reads which can lead to a repair still use the shared save queue.
+    java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+      try {
+        return featurecat.lizzie.util.AutomaticSaveIntent.exists(directory);
+      } catch (IOException failure) {
+        throw new java.util.concurrent.CompletionException(failure);
+      }
+    }).whenComplete((exists, failure) -> SwingUtilities.invokeLater(() -> {
+      if (failure == null) present.complete(exists);
+      else present.completeExceptionally(failure);
+    }));
+    return present.thenCompose(exists -> {
+      if (!exists) return java.util.concurrent.CompletableFuture.completedFuture(null);
+      return SgfSaveCoordinator.<AutomaticSaveIntentRead>submitSave(
+        () -> {
+          var intent = featurecat.lizzie.util.AutomaticSaveIntent.read(directory);
+          if (intent == null) return null;
+          String sgf = intent.readMatchingSgf();
+          if (sgf == null) {
+            // The intended SGF never replaced its destination. Preserve the old record.
+            intent.clear();
+            return null;
+          }
+          return new AutomaticSaveIntentRead(intent, sgf);
+        }, () -> true, ignored -> {}, ignored -> {}).thenCompose(pending -> {
+          if (pending == null) return java.util.concurrent.CompletableFuture.completedFuture(null);
+          if (SGFParser.parseSgf(pending.sgf(), true) == null) {
+            return java.util.concurrent.CompletableFuture.failedFuture(
+                new IOException("Invalid SGF for pending automatic save"));
+          }
+          // Even if the metadata repair fails, resume the validated intended slot instead of
+          // loading an older periodic record which could replace the only newer exit SGF.
+          autoSaveIntentIndex = pending.intent().index();
+          return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
+              () -> {
+                Config.SavedBoardSave metadata =
+                    config.prepareTempBoardSave(pending.intent().mergeInto(config.saveBoardConfig));
+                return () -> {
+                  metadata.write();
+                  // The image may belong to the previous SGF. It is optional, so discard it.
+                  try {
+                    Files.deleteIfExists(savedGameFile(directory.toFile(), true,
+                        pending.intent().index(), "bmp").toPath());
+                  } catch (IOException previewFailure) {
+                    org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+                        .warn("Could not remove obsolete automatic-save preview", previewFailure);
+                  }
+                  pending.intent().clear();
+                  return metadata;
+                };
+              }, () -> true, Config.SavedBoardSave::publish, ignored -> {}).thenApply(ignored -> null);
+        });
+    });
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> recoverPeriodicSaveAsync(Config config) {
     if (config.saveBoardConfig.optInt("save-auto-game-index2", -1) != -5) {
       autoSaveRecoveryComplete = true;
       return java.util.concurrent.CompletableFuture.completedFuture(true);
@@ -4869,7 +4961,7 @@ public class LizzieFrame extends JFrame {
             return savedGameFileExists(source) ? Files.readString(source) : null;
           };
         }, () -> true, ignored -> {}, ignored -> {});
-    java.util.concurrent.CompletableFuture<Boolean> operation = read.thenCompose(sgf -> {
+    return read.thenCompose(sgf -> {
       if (sgf == null) {
         autoSaveRecoveryComplete = true;
         return java.util.concurrent.CompletableFuture.completedFuture(true);
@@ -4909,22 +5001,7 @@ public class LizzieFrame extends JFrame {
                 autoSaveRecoveryComplete = true;
               }, ignored -> {})
           .thenApply(prepared -> true);
-    }).handle((recovered, failure) -> {
-      if (failure == null) return recovered;
-      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
-          .warn("Automatic save recovery remains pending; automatic saves are suspended", failure);
-      if (!autoSaveRecoveryFailureReported) {
-        autoSaveRecoveryFailureReported = true;
-        savedGameEditFailed(new IOException(
-            "Automatic save recovery failed; automatic saves suspended. Original: " + source, failure));
-      }
-      return false;
     });
-    autoSaveRecovery = operation;
-    operation.whenComplete((ignored, failure) -> {
-      if (autoSaveRecovery == operation) autoSaveRecovery = null;
-    });
-    return operation;
   }
 
   private static void recoverAutoSavePreview(Path source, Path target) {
@@ -4959,6 +5036,7 @@ public class LizzieFrame extends JFrame {
 
 
   private int previousAutoSaveIndex() {
+    if (autoSaveIntentIndex != 0) return autoSaveIntentIndex;
     return !autoSaveRecoveryComplete
             && Lizzie.config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5
             && resolveAutoSaveFile(2, "sgf").isFile()
@@ -4970,16 +5048,18 @@ public class LizzieFrame extends JFrame {
     if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(this::resumeFile)) {
       return;
     }
+    resumeRecoveredAutomaticGame();
+  }
+
+  private boolean resumeRecoveredAutomaticGame() {
     File file = resolveAutoSaveFile(previousAutoSaveIndex(), "sgf");
-    if (file.exists()) loadFile(file, true, true);
-    else {
-      File file2 = resolveAutoSaveFile(2, "sgf");
-      if (file2.exists()) loadFile(file2, true, true);
-    }
+    if (!file.exists()) file = resolveAutoSaveFile(2, "sgf");
+    if (!file.exists() || !loadFile(file, true, true)) return false;
     while (Lizzie.board.nextMove(false))
       ;
     Lizzie.board.clearAfterMove();
     refresh();
+    return true;
   }
 
   public String kifuLoadText(String key, String chineseText, String englishText) {
@@ -15569,9 +15649,29 @@ public class LizzieFrame extends JFrame {
                 .warn("Could not capture automatic save", failure);
             return java.util.concurrent.CompletableFuture.completedFuture(false);
           }
+          UnresolvedAutomaticResume unresolvedResume = autoSaveUnresolvedResume;
+          boolean capturedFallback = unresolvedResume != null && unresolvedResume.config() == config
+              && unresolvedResume.game().isCurrent(Lizzie.board);
           return recoverAutoSaveAsync().thenCompose(
               recovered -> {
                 if (!recovered) return java.util.concurrent.CompletableFuture.completedFuture(false);
+                if (capturedFallback) {
+                  if (autoSaveUnresolvedResume == unresolvedResume
+                      && Lizzie.frame == this && Lizzie.config == config
+                      && unresolvedResume.config() == config
+                      && unresolvedResume.game().isCurrent(Lizzie.board)) {
+                    // A failed startup may have resumed an older fallback. Once recovery is
+                    // repaired, do not save that unchanged fallback over the recovered game.
+                    if (!resumeRecoveredAutomaticGame()) {
+                      return java.util.concurrent.CompletableFuture.completedFuture(false);
+                    }
+                  }
+                  if (autoSaveUnresolvedResume == unresolvedResume) autoSaveUnresolvedResume = null;
+                  // Retire every request which captured the fallback, including concurrent
+                  // retries. A fresh request captures the recovered or user-edited game.
+                  return java.util.concurrent.CompletableFuture.completedFuture(false);
+                }
+                if (autoSaveUnresolvedResume == unresolvedResume) autoSaveUnresolvedResume = null;
                 return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
                         () -> {
                           JSONObject candidate = new JSONObject(config.saveBoardConfig.toString());
@@ -15582,16 +15682,22 @@ public class LizzieFrame extends JFrame {
                           if (index == 1) candidate.put("save-auto-game-index2", -1);
                           Config.SavedBoardSave metadata = config.prepareTempBoardSave(candidate);
                           return () -> {
+                            var intent = featurecat.lizzie.util.AutomaticSaveIntent.write(
+                                directory.toPath(), index, capture.sgf(), candidate);
                             writeGameRecord(
                                 savedGameFile(directory, true, index, "sgf").toPath(),
                                 savedGameFile(directory, true, index, "bmp").toPath(), capture, metadata);
+                            intent.clear();
                             return metadata;
                           };
                         },
                         () -> true,
                         Config.SavedBoardSave::publish,
-                        failure -> org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
-                            .warn("Could not save automatic game record", failure))
+                        failure -> {
+                          autoSaveRecoveryComplete = false;
+                          org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+                              .warn("Could not save automatic game record", failure);
+                        })
                     .thenApply(metadata -> true);
               });
         });
