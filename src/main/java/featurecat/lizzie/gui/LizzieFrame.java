@@ -15712,6 +15712,47 @@ public class LizzieFrame extends JFrame {
 
 
   private long savedGamePanelSession;
+  private long savedGameOpenRequest;
+
+  private boolean deferSavedGameOpenUntilWritesComplete(Runnable reopen) {
+    long request = ++savedGameOpenRequest;
+    java.util.concurrent.CompletableFuture<Void> pending = SgfSaveCoordinator.pendingSaves();
+    if (pending.isDone()) return false;
+    Config config = Lizzie.config;
+    Board board = Lizzie.board;
+    JLayeredPane panel = tempGamePanelAll;
+    long session = savedGamePanelSession;
+    GameEditSnapshot snapshot;
+    try {
+      snapshot = GameEditSnapshot.capture(board);
+    } catch (RuntimeException failure) {
+      savedGameEditFailed(savedGameFailure(failure));
+      return true;
+    }
+    BooleanSupplier stillCurrent = () ->
+        request == savedGameOpenRequest
+            && Lizzie.frame == this && Lizzie.config == config && Lizzie.board == board
+            && savedGamePanelSession == session && tempGamePanelAll == panel
+            && panel != null && panel.isVisible() && snapshot.isCurrent(board);
+    resumeSavedGameOpenAfterWrites(pending, stillCurrent, reopen);
+    return true;
+  }
+
+  private void resumeSavedGameOpenAfterWrites(
+      java.util.concurrent.CompletableFuture<Void> pending,
+      BooleanSupplier stillCurrent, Runnable reopen) {
+    pending.whenComplete((ignored, failure) -> SwingUtilities.invokeLater(() -> {
+      if (!stillCurrent.getAsBoolean()) return;
+      if (failure != null) {
+        savedGameEditFailed(savedGameFailure(failure));
+        return;
+      }
+      // A barrier covers only the writes accepted when it was captured.
+      java.util.concurrent.CompletableFuture<Void> remaining = SgfSaveCoordinator.pendingSaves();
+      if (remaining.isDone()) reopen.run();
+      else resumeSavedGameOpenAfterWrites(remaining, stillCurrent, reopen);
+    }));
+  }
 
   private void finishSavedGamePanelAction(
       java.util.concurrent.CompletableFuture<Boolean> operation, javax.swing.AbstractButton button,
