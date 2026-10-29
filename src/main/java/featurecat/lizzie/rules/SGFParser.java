@@ -2455,12 +2455,8 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", scoreStdev),
                 engine,
                 playouts,
-                data.pda != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                        + " "
-                        + Lizzie.resourceBundle.getString("SGFParse.pda")
-                        + data.pda
-                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
       }
     } else {
       String wf =
@@ -2654,12 +2650,8 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", scoreStdev),
                 engine,
                 playouts,
-                data.pda != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                        + " "
-                        + Lizzie.resourceBundle.getString("SGFParse.pda")
-                        + data.pda
-                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
       }
     } else {
       String wf =
@@ -2799,7 +2791,7 @@ public class SGFParser {
                 engine,
                 playouts,
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                    + getPdaWrnString(data.pda, data.wrn));
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
       }
     } else {
       String wf =
@@ -2836,10 +2828,10 @@ public class SGFParser {
     return nc;
   }
 
-  private static String getPdaWrnString(double pda, double wrn) {
-    // TODO Auto-generated method stub
+  private static String getPdaWrnString(double pda, AnalysisProvenance provenance) {
     String line = pda != 0 ? " " + Lizzie.resourceBundle.getString("SGFParse.pda") + pda : "";
-    line += wrn != 0 ? " " + Lizzie.resourceBundle.getString("SGFParse.wrn") + wrn : "";
+    Double wrn = provenance == null ? null : provenance.wrn();
+    line += wrn != null ? " " + Lizzie.resourceBundle.getString("SGFParse.wrn") + wrn : "";
     return line;
   }
 
@@ -2975,12 +2967,8 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", scoreStdev),
                 engine,
                 playouts,
-                data.pda2 != 0
-                    ? String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                        + " "
-                        + Lizzie.resourceBundle.getString("SGFParse.pda")
-                        + data.pda2
-                    : String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
+                String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
+                    + getPdaWrnString(data.pda2, data.secondaryAnalysisProvenance()));
       }
     } else {
       String wf =
@@ -3045,7 +3033,7 @@ public class SGFParser {
         data.scoreStdev,
         data.pda,
         data.bestMovesToString(),
-        data.estimateArray, data.rootVisits);
+        data.estimateArray, data.rootVisits, data.primaryAnalysisProvenance());
   }
 
   private static String formatNodeData2(BoardHistoryNode node) {
@@ -3075,7 +3063,7 @@ public class SGFParser {
         data.scoreStdev2,
         data.pda2,
         data.bestMovesToString2(),
-        data.estimateArray2, data.rootVisits2);
+        data.estimateArray2, data.rootVisits2, data.secondaryAnalysisProvenance());
   }
 
   private static String formatAnalysisPayload(
@@ -3088,13 +3076,16 @@ public class SGFParser {
       double scoreStdev,
       double pda,
       String bestMoves,
-      List<Double> estimateArray, int rootVisits) {
+      List<Double> estimateArray, int rootVisits, AnalysisProvenance provenance) {
+    Double wrn = provenance == null ? null : provenance.wrn();
+    boolean includeWrn = isHeaderWrn(wrn);
     StringBuilder header = new StringBuilder();
     header.append(engineName).append(" ").append(curWinrate).append(" ").append(playouts);
-    if (kataData || rootVisits >= 0) {
-      boolean hasExplicitHeaderSlots = rootVisits < 0 && headerSlots > 0;
+    if (kataData || rootVisits >= 0 || includeWrn) {
+      // Named extensions follow all six numeric/label slots, including in short legacy headers.
+      boolean hasExplicitHeaderSlots = rootVisits < 0 && !includeWrn && headerSlots > 0;
       boolean includeScoreStdev = !hasExplicitHeaderSlots || headerSlots >= 5;
-      boolean includePda = rootVisits >= 0
+      boolean includePda = rootVisits >= 0 || includeWrn
           || (hasExplicitHeaderSlots ? headerSlots >= 6 : Double.compare(pda, 0) != 0);
       header.append(" ").append(formatAnalysisScalar(scoreMean));
       if (includeScoreStdev) {
@@ -3105,6 +3096,7 @@ public class SGFParser {
       }
     }
     if (rootVisits >= 0) header.append(" rootVisits=").append(rootVisits);
+    if (includeWrn) header.append(" wrn=").append(wrn);
 
     String detailLine = formatAnalysisDetailLine(bestMoves, estimateArray);
     if (Utils.isBlank(detailLine)) {
@@ -3174,7 +3166,10 @@ public class SGFParser {
   private static void addAnalysisMetadataSlot(
       JSONObject metadata, String key, String payload,
       AnalysisProvenance analysis, AnalysisProvenance ownership, boolean invalidated) {
-    if (payload == null || (analysis == null && ownership == null && !invalidated)) return;
+    // A header-only source needs no new KGP. Preserve opaque metadata unless richer source or
+    // invalidation state supersedes it. Slots with ownership/invalidation still carry their source.
+    if (payload == null || (ownership == null && !invalidated
+        && (analysis == null || analysis.equals(headerWrnProvenance(analysis.wrn()))))) return;
     JSONObject slot = new JSONObject().put("payloadSha256", analysisPayloadDigest(payload));
     if (analysis != null) slot.put("analysis", provenanceJson(analysis));
     if (ownership != null) slot.put("ownership", provenanceJson(ownership));
@@ -3198,9 +3193,9 @@ public class SGFParser {
 
   private static void restoreAnalysisMetadata(
       BoardData data, boolean restorePrimaryInvalidation, boolean restoreSecondaryInvalidation) {
-    data.setPrimaryAnalysisProvenance(null);
+    data.setPrimaryAnalysisProvenance(headerWrnProvenance(data.importedAnalysisWrn(false)));
     data.setPrimaryOwnershipProvenance(null);
-    data.setSecondaryAnalysisProvenance(null);
+    data.setSecondaryAnalysisProvenance(headerWrnProvenance(data.importedAnalysisWrn(true)));
     data.setSecondaryOwnershipProvenance(null);
     // A branch import can replace one engine's payload on an already invalidated live node.
     if (restorePrimaryInvalidation) data.isChanged = false;
@@ -3662,7 +3657,7 @@ public class SGFParser {
     snapshotData.pda = moveData.pda;
     snapshotData.setPrimaryAnalysisProvenance(moveData.primaryAnalysisProvenance());
     snapshotData.setPrimaryOwnershipProvenance(moveData.primaryOwnershipProvenance());
-    snapshotData.setImportedAnalysisDigest(false, moveData.importedAnalysisDigest(false));
+    snapshotData.copyImportedAnalysisFrom(moveData, false);
     snapshotData.markPrimaryAnalysisRun(null);
     clearPrimaryAnalysisPayload(moveData);
   }
@@ -3688,7 +3683,7 @@ public class SGFParser {
     snapshotData.pda2 = moveData.pda2;
     snapshotData.setSecondaryAnalysisProvenance(moveData.secondaryAnalysisProvenance());
     snapshotData.setSecondaryOwnershipProvenance(moveData.secondaryOwnershipProvenance());
-    snapshotData.setImportedAnalysisDigest(true, moveData.importedAnalysisDigest(true));
+    snapshotData.copyImportedAnalysisFrom(moveData, true);
     clearSecondaryAnalysisPayload(moveData);
   }
 
@@ -3725,7 +3720,7 @@ public class SGFParser {
     data.pda = 0;
     data.setPrimaryAnalysisProvenance(null);
     data.setPrimaryOwnershipProvenance(null);
-    data.setImportedAnalysisDigest(false, null);
+    data.setImportedAnalysis(false, null, null);
     data.markPrimaryAnalysisRun(null);
   }
 
@@ -3745,7 +3740,7 @@ public class SGFParser {
     data.pda2 = 0;
     data.setSecondaryAnalysisProvenance(null);
     data.setSecondaryOwnershipProvenance(null);
-    data.setImportedAnalysisDigest(true, null);
+    data.setImportedAnalysis(true, null, null);
   }
 
   private static List<MoveData> copyMoveDataListAllowNull(List<MoveData> values) {
@@ -5084,10 +5079,35 @@ public class SGFParser {
         ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
         applyParsedAnalysisInfo(target, parsed, secondaryEngine);
       }
-      target.setImportedAnalysisDigest(secondaryEngine, analysisPayloadDigest(tagContent));
+      target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent), parseHeaderWrn(line1));
       (secondaryEngine ? secondaryReplacements : primaryReplacements).add(target);
       restoreAnalysisMetadata(target, !secondaryEngine, secondaryEngine);
     }
+  }
+
+  private static boolean isHeaderWrn(Double value) {
+    // KataGo's engine range (0..5), not the more restrictive GUI editing range (0..2).
+    // KGP retains its existing finite-number contract independently of this named extension.
+    return value != null && Double.isFinite(value) && value >= 0 && value <= 5;
+  }
+
+  private static AnalysisProvenance headerWrnProvenance(Double wrn) {
+    return isHeaderWrn(wrn)
+        ? new AnalysisProvenance("", "", "", "", "", "", null, null, wrn, "") : null;
+  }
+
+  private static Double parseHeaderWrn(String[] header) {
+    Double wrn = null;
+    boolean seen = false;
+    for (int i = 6; i < header.length; i++) {
+      if (!header[i].startsWith("wrn=")) continue;
+      // Conflicting or repeated values are ambiguous, even if one occurrence is valid.
+      if (seen) return null;
+      seen = true;
+      double parsed = parseDoubleOrDefault(header[i].substring("wrn=".length()), Double.NaN);
+      if (isHeaderWrn(parsed)) wrn = parsed;
+    }
+    return wrn;
   }
 
   private static void applyAnalysisHeader(

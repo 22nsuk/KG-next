@@ -2,6 +2,7 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -118,7 +119,8 @@ class BoardNodeKindHistoryPipelineTest {
       assertEquals("primary-explicit-owner", primaryRefresh.engineName);
       assertEquals(61.0, primaryRefresh.winrate, 0.0001);
       assertEquals(2.0, primaryRefresh.pda, 0.0001);
-      assertEquals(0.7, primaryRefresh.wrn, 0.0001);
+      assertNull(primaryRefresh.primaryAnalysisProvenance().wrn(),
+          "mutable engine settings alone do not establish an observed source");
 
       BoardData estimateRefresh = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
       estimateRefresh.setPlayouts2(100);

@@ -181,7 +181,7 @@ class AnalysisWrnSgfTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {" wrn=NaN", " wrn=Infinity", " wrn=-0.1", " wrn=2.01", " wrn=",
+  @ValueSource(strings = {" wrn=NaN", " wrn=Infinity", " wrn=-0.1", " wrn=5.01", " wrn=",
       " wrn=text", " wrn=0.5 wrn=1.0", " wrn=0 wrn=0"})
   void malformedOrDuplicateWrnDoesNotDamageAnalysisOrInventZero(String extension) throws Exception {
     BoardHistoryList history = parse(tags(true, extension, " wrn=0.75"));
@@ -198,19 +198,50 @@ class AnalysisWrnSgfTest {
   }
 
   @ParameterizedTest
-  @ValueSource(doubles = {0, 0.75, 2, 0.12345678912345678})
+  @ValueSource(doubles = {0, 0.75, 2, 2.01, 3, 5, 0.12345678912345678})
   void headerOnlyMetadataRoundTripsWithoutKgpOrBorrowedProducerIdentity(double wrn) throws Exception {
-    BoardHistoryList history = parse(tags(true, " future=value wrn=" + wrn, ""));
-    for (int round = 0; round < 3; round++) {
-      BoardData data = history.getStart().getData();
-      assertHeaderSource(data.primaryAnalysisProvenance(), wrn);
-      assertNull(data.primaryOwnershipProvenance());
-      assertNull(data.secondaryAnalysisProvenance());
-      String saved = save(history);
-      assertFalse(saved.contains("KGP["));
-      assertTrue(property(saved, "LZOP").split("\n", 2)[0].contains(" wrn=" + wrn));
-      history = SGFParser.parseSgf(saved, true);
+    for (boolean secondary : new boolean[] {false, true}) {
+      String extension = " future=value wrn=" + wrn;
+      BoardHistoryList history = parse(tags(true, secondary ? "" : extension, secondary ? extension : ""));
+      for (int round = 0; round < 3; round++) {
+        BoardData data = history.getStart().getData();
+        assertHeaderSource(evaluation(data, secondary), wrn);
+        assertNull(ownership(data, secondary));
+        assertNull(evaluation(data, !secondary));
+        String saved = save(history);
+        assertFalse(saved.contains("KGP["));
+        assertTrue(property(saved, secondary ? "LZOP2" : "LZOP").split("\n", 2)[0].contains(" wrn=" + wrn));
+        history = SGFParser.parseSgf(saved, true);
+      }
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(doubles = {2.01, 3, 5})
+  void engineRecordedWrnUsesEngineRangeRatherThanTheEditableUiRange(double wrn) throws Exception {
+    for (boolean secondary : new boolean[] {false, true}) {
+      BoardHistoryList history = parse("");
+      Lizzie.board.setHistory(history);
+      ObservedEngine engine = new ObservedEngine(source(wrn));
+      engine.wrn = 0.5;
+      assertEquals(BoardData.AnalysisAdoption.FULL,
+          history.getData().adoptOrdinaryAnalysis(moves(500), "display label", engine,
+              500, 500, null, new Object(), secondary, true));
+      String saved = save(history);
+      assertTrue(property(saved, secondary ? "LZOP2" : "LZOP").split("\n", 2)[0].contains(" wrn=" + wrn));
+      assertEquals(source(wrn), evaluation(SGFParser.parseSgf(saved, true).getData(), secondary));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(doubles = {-0.1, 5.01})
+  void existingKgpFiniteNumberContractDoesNotInheritNamedHeaderLimits(double wrn) throws Exception {
+    String payload = payload(false, " wrn=0.25");
+    BoardHistoryList history = parse("LZOP[" + payload + "]KGP[" + metadata(payload, source(wrn), false) + "]");
+    assertEquals(source(wrn), history.getData().primaryAnalysisProvenance());
+    String saved = save(history);
+    assertFalse(property(saved, "LZOP").contains("wrn="));
+    assertEquals(source(wrn), SGFParser.parseSgf(saved, true).getData().primaryAnalysisProvenance());
   }
 
   @ParameterizedTest
@@ -232,7 +263,7 @@ class AnalysisWrnSgfTest {
   @Test
   void matchingKgpWinsIncludingExplicitlyUnknownWrnWhileMismatchesFallBackToHeaderOnly() throws Exception {
     String payload = payload(false, " wrn=0.25");
-    for (Double boundWrn : new Double[] {0.0, 1.5, null}) {
+    for (Double boundWrn : new Double[] {0.0, 1.5, 2.01, 3.0, 5.0, null}) {
       AnalysisProvenance expected = source(boundWrn);
       String kgp = metadata(payload, expected, true);
       for (boolean first : new boolean[] {false, true}) {

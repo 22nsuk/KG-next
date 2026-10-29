@@ -49,9 +49,11 @@ public class BoardData {
   private AnalysisProvenance secondaryOwnershipProvenance;
   // A run token grants reuse only within one explicit reassessment. Copies and SGFs never carry it.
   private Object primaryAnalysisRun;
-  // Import-only digests use the original LZ text, before the loader limits suggestions or PVs.
-  private String importedPrimaryAnalysisDigest;
-  private String importedSecondaryAnalysisDigest;
+  // Keep the original header fallback with its digest, before KGP or candidate limits are applied.
+  // A later KGP-only import must not mistake the preceding KGP's WRN for the header's value.
+  private record ImportedAnalysis(String digest, Double wrn) {}
+  private ImportedAnalysis importedPrimaryAnalysis;
+  private ImportedAnalysis importedSecondaryAnalysis;
 
   public synchronized AnalysisProvenance primaryAnalysisProvenance() {
     return primaryAnalysisProvenance;
@@ -86,16 +88,32 @@ public class BoardData {
   }
 
   String importedAnalysisDigest(boolean secondary) {
-    return secondary ? importedSecondaryAnalysisDigest : importedPrimaryAnalysisDigest;
+    ImportedAnalysis imported = importedAnalysis(secondary);
+    return imported == null ? null : imported.digest();
   }
 
-  void setImportedAnalysisDigest(boolean secondary, String digest) {
-    if (secondary) importedSecondaryAnalysisDigest = digest;
-    else importedPrimaryAnalysisDigest = digest;
+  Double importedAnalysisWrn(boolean secondary) {
+    ImportedAnalysis imported = importedAnalysis(secondary);
+    return imported == null ? null : imported.wrn();
+  }
+
+  private ImportedAnalysis importedAnalysis(boolean secondary) {
+    return secondary ? importedSecondaryAnalysis : importedPrimaryAnalysis;
+  }
+
+  void setImportedAnalysis(boolean secondary, String digest, Double wrn) {
+    ImportedAnalysis imported = digest == null ? null : new ImportedAnalysis(digest, wrn);
+    if (secondary) importedSecondaryAnalysis = imported;
+    else importedPrimaryAnalysis = imported;
+  }
+
+  void copyImportedAnalysisFrom(BoardData source, boolean secondary) {
+    if (secondary) importedSecondaryAnalysis = source.importedSecondaryAnalysis;
+    else importedPrimaryAnalysis = source.importedPrimaryAnalysis;
   }
 
   private void discardImportedAnalysisMetadata(boolean secondary) {
-    setImportedAnalysisDigest(secondary, null);
+    setImportedAnalysis(secondary, null, null);
     // An opaque future schema cannot safely be retained after replacing the payload it described.
     properties.remove("KGP");
   }
@@ -205,7 +223,6 @@ public class BoardData {
   public double pda = 0;
   public double pda2 = 0;
   public double komi = -999;
-  public double wrn = 0;
   public List<Double> estimateArray;
   public List<Double> estimateArray2;
   public boolean playoutsChanged;
@@ -652,9 +669,6 @@ public class BoardData {
       if (sourceEngine.isDymPda || sourceEngine.pda != 0) {
         pda = sourceEngine.pda;
       } else pda = 0;
-    }
-    if (!Lizzie.engineGame.current().playingGenmove() && metadataEngine != null) {
-      wrn = metadataEngine.wrn;
     }
     analysisHeaderSlots = 0;
     // 排序
@@ -1263,7 +1277,7 @@ public class BoardData {
     primaryAnalysisProvenance = null;
     primaryOwnershipProvenance = null;
     primaryAnalysisRun = null;
-    importedPrimaryAnalysisDigest = null;
+    importedPrimaryAnalysis = null;
   }
 
   private void clearSecondaryAnalysisPayloadState() {
@@ -1283,7 +1297,7 @@ public class BoardData {
     pda2 = 0;
     secondaryAnalysisProvenance = null;
     secondaryOwnershipProvenance = null;
-    importedSecondaryAnalysisDigest = null;
+    importedSecondaryAnalysis = null;
   }
 
   private static void validateNodeKind(BoardNodeKind nodeKind, Optional<int[]> lastMove) {
@@ -1326,8 +1340,8 @@ public class BoardData {
     this.primaryOwnershipProvenance = data.primaryOwnershipProvenance;
     this.secondaryAnalysisProvenance = data.secondaryAnalysisProvenance;
     this.secondaryOwnershipProvenance = data.secondaryOwnershipProvenance;
-    this.importedPrimaryAnalysisDigest = data.importedPrimaryAnalysisDigest;
-    this.importedSecondaryAnalysisDigest = data.importedSecondaryAnalysisDigest;
+    this.importedPrimaryAnalysis = data.importedPrimaryAnalysis;
+    this.importedSecondaryAnalysis = data.importedSecondaryAnalysis;
     if (data.properties.containsKey("KGP")) properties.put("KGP", data.properties.get("KGP"));
     else properties.remove("KGP");
     this.scoreMean = data.scoreMean;
@@ -1359,7 +1373,6 @@ public class BoardData {
     this.pda = data.pda;
     this.pda2 = data.pda2;
     this.komi = data.komi;
-    this.wrn = data.wrn;
     this.estimateArray = copyDoubleList(data.estimateArray);
     this.estimateArray2 = copyDoubleList(data.estimateArray2);
     this.playoutsChanged = data.playoutsChanged;

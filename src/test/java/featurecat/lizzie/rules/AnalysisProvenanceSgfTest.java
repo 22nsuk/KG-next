@@ -330,8 +330,14 @@ class AnalysisProvenanceSgfTest {
         assertEquals(80, data.getPlayouts2());
         assertTrue(data.hasReusablePrimaryAnalysis(120, true));
         assertFalse(data.isChanged2);
-        assertNull(data.primaryAnalysisProvenance());
+        // The replaced payload still contains a WRN header, but none of the rejected KGP's
+        // engine/model/ownership identity or invalidation may be restored from that value.
+        AnalysisProvenance headerSource = version == 1
+            ? new AnalysisProvenance("", "", "", "", "", "", null, null, 0.75, "") : null;
+        assertEquals(headerSource, data.primaryAnalysisProvenance());
         assertNull(data.secondaryAnalysisProvenance());
+        assertNull(data.primaryOwnershipProvenance());
+        assertNull(data.secondaryOwnershipProvenance());
         Lizzie.board.setHistory(history);
         String normalized = SGFParser.saveToString(false);
         assertFalse(normalized.contains("KGP["), "rejected known metadata must not revive later");

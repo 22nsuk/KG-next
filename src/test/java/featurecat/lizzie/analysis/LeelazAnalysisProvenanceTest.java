@@ -20,6 +20,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LeelazAnalysisProvenanceTest {
   private static final String RULES =
@@ -128,8 +130,10 @@ class LeelazAnalysisProvenanceTest {
     }
   }
 
-  @Test
-  void runtimeConditionsRequireSuccessfulResponsesAndDynamicPdaRemainsUnknown() throws Exception {
+  @ParameterizedTest
+  @ValueSource(doubles = {0.25, 2.01, 3, 5})
+  void runtimeConditionsRequireSuccessfulResponsesAndDynamicPdaRemainsUnknown(double wrnValue)
+      throws Exception {
     try (Environment env = new Environment()) {
       int komi = env.send("komi 6.5");
       assertNull(env.source().komi());
@@ -137,11 +141,11 @@ class LeelazAnalysisProvenanceTest {
       assertEquals(6.5, env.source().komi());
 
       int pda = env.send("kata-get-param playoutDoublingAdvantage");
-      int wrn = env.send("kata-set-param analysisWideRootNoise 0.25");
+      int wrn = env.send("kata-set-param analysisWideRootNoise " + wrnValue);
       env.reply(pda, "1.75");
       env.reply(wrn, "");
       assertEquals(1.75, env.source().pda());
-      assertEquals(0.25, env.source().wrn());
+      assertEquals(wrnValue, env.source().wrn());
       env.engine.isDymPda = true;
       assertNull(env.source().pda());
       env.engine.isDymPda = false;
