@@ -436,8 +436,8 @@ class SavedGameLoadSafetyTest {
       held.release();
     }
     assertTrue(save.get().get(5, TimeUnit.SECONDS));
-    // Keep the old controls/preview alive: opening must resolve the published record, not its closure.
-    SwingUtilities.invokeAndWait(() -> click(entry, SavedPosition.BRANCH, slot));
+    // The original click must resume after publication without another click.
+    SwingUtilities.invokeAndWait(() -> {});
     SwingUtilities.invokeAndWait(() -> {});
     SwingUtilities.invokeAndWait(() -> {
       BoardHistoryList loaded = Lizzie.board.getHistory();
