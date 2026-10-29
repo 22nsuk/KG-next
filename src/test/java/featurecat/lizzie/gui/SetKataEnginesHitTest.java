@@ -29,6 +29,7 @@ import java.awt.Window;
 import java.awt.event.AWTEventListener;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
@@ -740,19 +741,20 @@ class SetKataEnginesHitTest {
       owner[0] = showPdaOwner();
       for (Locale locale : List.of(Locale.KOREAN, Locale.CHINA, Locale.US)) {
         for (int size : new int[] {12, 16, 20}) {
-          CountDownLatch focused = new CountDownLatch(1);
+          CountDownLatch opened = new CountDownLatch(1);
           SwingUtilities.invokeAndWait(
               () -> {
                 Config.frameFontSize = size;
                 Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", locale);
                 Lizzie.config.isChinese = Locale.CHINA.equals(locale);
                 dialog[0] = new SetKataPDA(owner[0]);
-                dialog[0].addWindowFocusListener(new WindowAdapter() {
-                  @Override public void windowGainedFocus(WindowEvent event) { focused.countDown(); }
+                dialog[0].addWindowListener(new WindowAdapter() {
+                  @Override public void windowOpened(WindowEvent event) { opened.countDown(); }
                 });
                 dialog[0].setVisible(true);
               });
-          assertTrue(focused.await(5, TimeUnit.SECONDS), "PDA editor must be mapped before layout checks");
+          assertTrue(opened.await(5, TimeUnit.SECONDS), "PDA editor must open before layout checks");
+          robot.waitForIdle();
           SwingUtilities.invokeAndWait(
               () -> {
                 dialog[0].validate();
@@ -824,18 +826,40 @@ class SetKataEnginesHitTest {
 
   private static JFrame showPdaOwner() throws Exception {
     JFrame[] owner = new JFrame[1];
+    CountDownLatch opened = new CountDownLatch(1);
     CountDownLatch focused = new CountDownLatch(1);
     WindowAdapter listener = new WindowAdapter() {
+      @Override public void windowOpened(WindowEvent event) { opened.countDown(); }
       @Override public void windowGainedFocus(WindowEvent event) { focused.countDown(); }
     };
     try {
       SwingUtilities.invokeAndWait(() -> {
         owner[0] = new JFrame("PDA editor owner");
+        // Fixture activation is our responsibility, not the window manager's focus-new policy.
+        owner[0].setAutoRequestFocus(false);
+        owner[0].setAlwaysOnTop(true);
+        owner[0].addWindowListener(listener);
         owner[0].addWindowFocusListener(listener);
         owner[0].setBounds(200, 160, 500, 350);
         owner[0].setVisible(true);
       });
-      assertTrue(focused.await(5, TimeUnit.SECONDS), "the application frame must be mapped first");
+      assertTrue(opened.await(5, TimeUnit.SECONDS), "the application frame must open first");
+      Point[] activationPoint = new Point[1];
+      SwingUtilities.invokeAndWait(() -> {
+        owner[0].toFront();
+        activationPoint[0] = owner[0].getContentPane().getLocationOnScreen();
+        activationPoint[0].translate(
+            owner[0].getContentPane().getWidth() / 2, owner[0].getContentPane().getHeight() / 2);
+      });
+      Robot robot = new Robot();
+      robot.waitForIdle();
+      // Native user activation also works when the WM declines programmatic focus requests.
+      robot.mouseMove(activationPoint[0].x, activationPoint[0].y);
+      robot.mousePress(InputEvent.BUTTON1_DOWN_MASK);
+      robot.mouseRelease(InputEvent.BUTTON1_DOWN_MASK);
+      assertTrue(focused.await(5, TimeUnit.SECONDS),
+          () -> "the fixture frame did not receive requested focus: " + focusState(owner[0]));
+      SwingUtilities.invokeAndWait(() -> owner[0].setAlwaysOnTop(false));
       return owner[0];
     } catch (Exception | AssertionError failure) {
       SwingUtilities.invokeAndWait(() -> {
@@ -844,8 +868,26 @@ class SetKataEnginesHitTest {
       throw failure;
     } finally {
       SwingUtilities.invokeAndWait(() -> {
-        if (owner[0] != null) owner[0].removeWindowFocusListener(listener);
+        if (owner[0] != null) {
+          owner[0].removeWindowListener(listener);
+          owner[0].removeWindowFocusListener(listener);
+        }
       });
+    }
+  }
+
+  private static String focusState(Window window) {
+    String[] state = new String[1];
+    try {
+      SwingUtilities.invokeAndWait(() -> {
+        KeyboardFocusManager manager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+        state[0] = "showing=" + window.isShowing() + ", focused=" + window.isFocused()
+            + ", activeWindow=" + manager.getActiveWindow()
+            + ", focusedWindow=" + manager.getFocusedWindow() + ", focusOwner=" + manager.getFocusOwner();
+      });
+      return state[0];
+    } catch (Exception failure) {
+      return "focus diagnostics unavailable: " + failure;
     }
   }
 

@@ -16,10 +16,52 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Exercises lifecycle failures with real JVMs, not production navigation acceptance. */
 class DesktopProbeProcessTest {
+  @Test
+  @Timeout(30)
+  void coldStartupDoesNotSpendTheVerificationBudget() throws Exception {
+    long started = System.nanoTime();
+    Path result = DesktopProbeProcess.runWithStartupTimeout(
+        Fixture.class, "cold-startup", List.of(), List.of("slow-stages"), 5, 5);
+    assertEquals("PASS", Files.readString(result));
+    assertTrue(System.nanoTime() - started > TimeUnit.SECONDS.toNanos(5),
+        "The fixture must exceed the old shared budget to exercise the regression");
+    String phases = Files.readString(result.resolveSibling("phases.log"));
+    assertTrue(phases.contains("application-ready"), phases);
+    assertTrue(phases.contains("passed"), phases);
+  }
+
+  @ParameterizedTest
+  @Timeout(30)
+  @ValueSource(strings = {"startup-hang", "verification-hang"})
+  void bothStagesRemainBoundedAndRepeatedReadinessCannotExtendThem(String mode) throws Exception {
+    AssertionError hung = assertThrows(AssertionError.class,
+        () -> DesktopProbeProcess.runWithStartupTimeout(
+            Fixture.class, mode, List.of(), List.of(mode), 2, 2));
+    assertTrue(hung.getMessage().contains("timed out"), hung.getMessage());
+    assertEquals(mode.equals("startup-hang"), hung.getMessage().contains("startup timed out"));
+    Path directory = Path.of(hung.getMessage().split(": ", 2)[1]);
+    String lifecycle = Files.readString(directory.resolve("lifecycle.txt"));
+    assertTrue(lifecycle.contains("survivors=[]"), lifecycle);
+    long descendant = Long.parseLong(Files.readString(directory.resolve("work/descendant.pid")));
+    assertFalse(ProcessHandle.of(descendant).map(ProcessHandle::isAlive).orElse(false));
+    assertTrue(Files.isRegularFile(directory.resolve("thread-stacks.log")));
+  }
+
+  @Test
+  void successfulExitCannotBypassStartupReadiness() throws Exception {
+    AssertionError failed = assertThrows(AssertionError.class,
+        () -> DesktopProbeProcess.runWithStartupTimeout(
+            Fixture.class, "missing-ready", List.of(), List.of("missing-ready"), 5, 5));
+    assertTrue(failed.getMessage().contains("omitted readiness signal"), failed.getMessage());
+  }
+
   @Test
   void failedAndHungChildrenRetainIsolatedEvidenceAndCannotOutliveDeadline() throws Exception {
     long started = System.nanoTime();
@@ -232,6 +274,19 @@ class DesktopProbeProcessTest {
         return;
       }
       Path work = Path.of(args[1]);
+      Path result = Path.of(args[2]);
+      if ("slow-stages".equals(args[0])) {
+        // Controlled startup and verification work, each below 5s but together above it.
+        Thread.sleep(3000);
+        DesktopProbeProcess.applicationReady(result);
+        Thread.sleep(3000);
+        Files.writeString(result, "PASS");
+        return;
+      }
+      if ("missing-ready".equals(args[0])) {
+        Files.writeString(result, "PASS");
+        return;
+      }
       Files.writeString(work.resolve("config.txt"), "fixture config");
       Files.createDirectories(work.resolve("logs"));
       Files.writeString(work.resolve("logs/app.log"), "fixture application log");
@@ -248,6 +303,21 @@ class DesktopProbeProcessTest {
               .inheritIO()
               .start();
       Files.writeString(work.resolve("descendant.pid"), Long.toString(descendant.pid()));
+      if ("verification-hang".equals(args[0])) {
+        DesktopProbeProcess.applicationReady(result);
+        Thread repeatedReady = new Thread(() -> {
+          try {
+            while (true) {
+              Thread.sleep(25);
+              DesktopProbeProcess.applicationReady(result);
+            }
+          } catch (Exception failure) {
+            throw new AssertionError(failure);
+          }
+        });
+        repeatedReady.setDaemon(true);
+        repeatedReady.start();
+      }
       javax.swing.SwingUtilities.invokeAndWait(
           () -> {
             while (true) java.util.concurrent.locks.LockSupport.park();

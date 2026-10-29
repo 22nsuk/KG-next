@@ -48,6 +48,21 @@ final class DesktopProbeProcess {
     return run(entry, name, vmArgs, args, Map.of(), timeoutSeconds);
   }
 
+  static Path runWithStartupTimeout(
+      Class<?> entry,
+      String name,
+      List<String> vmArgs,
+      List<String> args,
+      long startupTimeoutSeconds,
+      long timeoutSeconds)
+      throws Exception {
+    if (startupTimeoutSeconds <= 0 || timeoutSeconds <= 0) {
+      throw new IllegalArgumentException("Startup and verification deadlines must be positive");
+    }
+    return run(
+        entry, name, vmArgs, args, Map.of(), timeoutSeconds, null, null, startupTimeoutSeconds);
+  }
+
   static Path run(
       Class<?> entry,
       String name,
@@ -67,6 +82,21 @@ final class DesktopProbeProcess {
       long timeoutSeconds,
       Path workRoot,
       Path processDirectory)
+      throws Exception {
+    return run(
+        entry, name, vmArgs, args, environment, timeoutSeconds, workRoot, processDirectory, 0);
+  }
+
+  private static Path run(
+      Class<?> entry,
+      String name,
+      List<String> vmArgs,
+      List<String> args,
+      Map<String, String> environment,
+      long timeoutSeconds,
+      Path workRoot,
+      Path processDirectory,
+      long startupTimeoutSeconds)
       throws Exception {
     Path root =
         Path.of(System.getProperty("lizzie.desktop.evidence.dir", "target/desktop-smoke/probes"))
@@ -104,19 +134,30 @@ final class DesktopProbeProcess {
           lifecycle,
           "pid=" + child.pid() + "\nstarted=" + Instant.now() + "\n",
           StandardOpenOption.APPEND);
-      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+      boolean starting = startupTimeoutSeconds > 0;
+      long deadline = System.nanoTime()
+          + TimeUnit.SECONDS.toNanos(starting ? startupTimeoutSeconds : timeoutSeconds);
       while (child.isAlive() && System.nanoTime() < deadline) {
+        // Only the first readiness signal changes the deadline; progress cannot extend it.
+        if (starting && Files.isRegularFile(evidence.resolve("application-ready"))) {
+          starting = false;
+          deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
+        }
         rememberOwnedDescendants(child.toHandle(), owned, protectedPids);
         child.waitFor(100, TimeUnit.MILLISECONDS);
       }
       if (child.isAlive()) {
-        phase(result, "timeout");
+        phase(result, starting ? "startup-timeout" : "timeout");
         capture(child, evidence);
-        throw new AssertionError("Desktop probe timed out: " + evidence);
+        throw new AssertionError("Desktop probe " + (starting ? "startup " : "") + "timed out: " + evidence);
       }
       Files.writeString(lifecycle, "exit=" + child.exitValue() + "\n", StandardOpenOption.APPEND);
       if (child.exitValue() != 0) {
         throw new AssertionError("Desktop probe exited " + child.exitValue() + ": " + evidence);
+      }
+      if (startupTimeoutSeconds > 0
+          && !Files.isRegularFile(evidence.resolve("application-ready"))) {
+        throw new AssertionError("Desktop probe omitted readiness signal: " + evidence);
       }
       if (!Files.isRegularFile(result)) {
         throw new AssertionError("Desktop probe omitted result: " + evidence);
@@ -203,6 +244,11 @@ final class DesktopProbeProcess {
         Instant.now() + " " + phase + "\n",
         StandardOpenOption.CREATE,
         StandardOpenOption.APPEND);
+  }
+
+  static void applicationReady(Path result) throws IOException {
+    phase(result, "application-ready");
+    Files.writeString(result.resolveSibling("application-ready"), "ready");
   }
 
   private static List<String> javaCommand(Class<?> entry) {
