@@ -8,6 +8,7 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.SgfSaveTestSupport;
 import featurecat.lizzie.gui.TempGameData;
 import java.awt.AWTEvent;
 import java.awt.Component;
@@ -29,16 +30,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JLabel;
+import javax.swing.JLayeredPane;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
@@ -77,6 +78,7 @@ class AutomaticSaveSafetyTest {
 
   @BeforeEach
   void prepare() throws Exception {
+    SgfSaveTestSupport.awaitPending();
     rules = RulesLayerTestHarness.open();
     Lizzie.board.setHistory(
         SGFParser.parseSgf("(;SZ[5]C[original];B[aa](;W[bb])(;W[dd]C[branch]))", true));
@@ -104,8 +106,12 @@ class AutomaticSaveSafetyTest {
   }
 
   @AfterEach
-  void restore() {
-    if (rules != null) rules.close();
+  void restore() throws Exception {
+    try {
+      SgfSaveTestSupport.awaitPending();
+    } finally {
+      if (rules != null) rules.close();
+    }
   }
 
   @Test
@@ -217,6 +223,7 @@ class AutomaticSaveSafetyTest {
           }
         });
 
+    SgfSaveTestSupport.awaitPending();
     assertFalse(timedOut.get(), "overwrite dialog was not answered before the deadline");
     assertTrue(answered.get(), "the actual save button must open the confirmation dialog");
     assertFalse(showingPreview.getBoolean(frame), "all decisions must release the preview guard");
@@ -225,7 +232,7 @@ class AutomaticSaveSafetyTest {
     assertEquals(savedSuccessfully, config.showListPane);
     assertEquals(savedSuccessfully, config.showVariationGraph);
     assertEquals(savedSuccessfully ? 1 : 0, frame.panelRefreshes);
-    assertEquals(savedSuccessfully ? 1 : 0, frame.previewCalls);
+    assertEquals(confirmed ? 1 : 0, frame.previewCalls);
     if (savedSuccessfully) {
       assertTrue(Files.readString(sgf).contains(";W[dd]"));
       JSONObject saved = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
@@ -450,6 +457,7 @@ class AutomaticSaveSafetyTest {
               .orElseThrow()
               .doClick(0);
         });
+    SgfSaveTestSupport.awaitPending();
     assertTemporaryIndices(List.of(1, 3));
     assertEquals("third file", record(3).name);
     assertEquals("record 1", record(1).name);
@@ -610,32 +618,28 @@ class AutomaticSaveSafetyTest {
   @ValueSource(booleans = {false, true})
   void editsSerializeWithAnInFlightAutomaticSave(boolean deletion) throws Exception {
     seedTemporaryRecords(1, 2, 3);
-    frame.previewEntered = new CountDownLatch(1);
-    frame.releasePreview = new CountDownLatch(1);
-    var workers = Executors.newFixedThreadPool(2);
-    CountDownLatch editStarted = new CountDownLatch(1);
-    try {
-      var automatic = workers.submit(() -> frame.saveAutoGame(2));
-      assertTrue(frame.previewEntered.await(5, TimeUnit.SECONDS));
-      var edit =
-          workers.submit(
-              () -> {
-                editStarted.countDown();
-                if (deletion) frame.deleteTempGame(2);
-                else frame.renameTempGame(2, "queued rename");
-              });
-      assertTrue(editStarted.await(5, TimeUnit.SECONDS));
-      assertThrows(TimeoutException.class, () -> edit.get(100, TimeUnit.MILLISECONDS));
-      frame.releasePreview.countDown();
-      automatic.get(5, TimeUnit.SECONDS);
-      edit.get(5, TimeUnit.SECONDS);
+    AtomicReference<CompletableFuture<Boolean>> automatic = new AtomicReference<>();
+    AtomicBoolean responsive = new AtomicBoolean();
+    Map<Path, byte[]> originalFiles = temporaryFiles();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            automatic.set(frame.saveAutoGameAsync(2));
+            if (deletion) frame.deleteTempGame(2);
+            else frame.renameTempGame(2, "queued rename");
+          });
+      SwingUtilities.invokeAndWait(() -> responsive.set(true));
+      assertTrue(responsive.get(), "queued writes must leave the event thread available");
+      assertFalse(automatic.get().isDone());
+      assertEquals(oldMetadata, Files.readString(metadataFile()));
+      assertFilesUnchanged(originalFiles);
+      assertEquals("record 2", record(2).name);
+      blocked.release();
+      assertTrue(automatic.get().get(5, TimeUnit.SECONDS));
+      SgfSaveTestSupport.awaitPending();
       assertTemporaryIndices(deletion ? List.of(1, 3) : List.of(1, 2, 3));
       if (!deletion) assertEquals("queued rename", record(2).name);
       assertEquals(2, config.saveBoardConfig.getInt("save-auto-game-move-number2"));
-    } finally {
-      frame.releasePreview.countDown();
-      workers.shutdownNow();
-      assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
     }
   }
 
@@ -754,6 +758,7 @@ class AutomaticSaveSafetyTest {
               .orElseThrow()
               .doClick(0);
         });
+    SgfSaveTestSupport.awaitPending();
   }
 
   @ParameterizedTest
@@ -802,7 +807,7 @@ class AutomaticSaveSafetyTest {
     assertEquals(oldMetadata, Files.readString(metadataFile()));
     assertEquals("old preview", Files.readString(slot(kind, "bmp")));
     assertEquals("unreplaceable destination", Files.readString(target.resolve("keep")));
-    assertEquals(0, frame.previewCalls);
+    assertEquals(1, frame.previewCalls);
     assertNoStagingFiles();
   }
 
@@ -846,7 +851,7 @@ class AutomaticSaveSafetyTest {
     assertEquals(oldMetadata, Files.readString(metadataFile()));
     assertEquals("keep", Files.readString(blocked.resolve("keep")));
     assertTrue(Files.readString(slot(kind, "sgf")).contains(";W[dd]"));
-    assertEquals(0, frame.previewCalls);
+    assertEquals(1, frame.previewCalls);
     assertNoStagingFiles();
     // A failed metadata attempt neither poisons the next save nor loses the recovered SGF.
     filename.set(config, metadataFile().toString());
@@ -871,17 +876,33 @@ class AutomaticSaveSafetyTest {
   @EnumSource(SaveKind.class)
   void eventThreadReceivesFailedAndSuccessfulSaveResults(SaveKind kind) throws Exception {
     Field filename = blockMetadataDestination();
-    AtomicBoolean saved = new AtomicBoolean(true);
-    SwingUtilities.invokeAndWait(() -> saved.set(save(kind)));
-    assertFalse(saved.get());
+    assertFalse(saveFromEventThread(kind).get(5, TimeUnit.SECONDS));
     assertEquals(oldMetadata, Files.readString(metadataFile()));
     filename.set(config, metadataFile().toString());
 
-    SwingUtilities.invokeAndWait(() -> saved.set(save(kind)));
-    assertTrue(saved.get());
+    assertTrue(saveFromEventThread(kind).get(5, TimeUnit.SECONDS));
     JSONObject persisted = new JSONObject(Files.readString(metadataFile())).getJSONObject("save");
     assertTrue(persisted.similar(config.saveBoardConfig));
     assertNoStagingFiles();
+  }
+
+  private CompletableFuture<Boolean> saveFromEventThread(SaveKind kind) throws Exception {
+    AtomicReference<CompletableFuture<Boolean>> observed = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(
+        () -> observed.set(saveAsync(kind).handle(
+            (saved, failure) -> {
+              assertTrue(SwingUtilities.isEventDispatchThread(), "save completion owns UI publication");
+              return failure == null && Boolean.TRUE.equals(saved);
+            })));
+    return observed.get();
+  }
+
+  @ParameterizedTest
+  @EnumSource(SaveKind.class)
+  void synchronousSaveCannotWaitForDiskOnTheEventThread(SaveKind kind) throws Exception {
+    SwingUtilities.invokeAndWait(() -> assertThrows(IllegalStateException.class, () -> save(kind)));
+    assertEquals(oldMetadata, Files.readString(metadataFile()));
+    assertFalse(Files.exists(slot(kind, "sgf")));
   }
 
   @ParameterizedTest
@@ -918,6 +939,7 @@ class AutomaticSaveSafetyTest {
                   .orElseThrow());
           saveButton.get().doClick(0);
         });
+    SgfSaveTestSupport.awaitPending();
     assertEquals(1, frame.editFailures);
     assertEquals(0, frame.panelRefreshes);
     assertFalse(config.showListPane);
@@ -927,6 +949,7 @@ class AutomaticSaveSafetyTest {
 
     filename.set(config, metadataFile().toString());
     SwingUtilities.invokeAndWait(() -> saveButton.get().doClick(0));
+    SgfSaveTestSupport.awaitPending();
     assertEquals(1, frame.panelRefreshes);
     assertTrue(config.showListPane);
     assertTrue(config.showVariationGraph);
@@ -935,6 +958,55 @@ class AutomaticSaveSafetyTest {
     assertEquals("retry this record", record(3).name);
     assertTrue(Files.readString(temporarySlot(2, "sgf")).contains(";W[dd]"));
     assertNoStagingFiles();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void delayedSaveDoesNotReopenAClosedPanelOrChangeTheNextGamesLayout(boolean closePanel)
+      throws Exception {
+    config.showListPane = false;
+    config.showVariationGraph = false;
+    AtomicReference<JButton> button = new AtomicReference<>();
+    JLayeredPane layer = new JLayeredPane();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            JPanel panel = new JPanel();
+            try {
+              Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
+              panelField.setAccessible(true);
+              panelField.set(frame, panel);
+              Field layerField = LizzieFrame.class.getDeclaredField("tempGamePanelAll");
+              layerField.setAccessible(true);
+              layerField.set(frame, layer);
+            } catch (ReflectiveOperationException failure) {
+              throw new AssertionError(failure);
+            }
+            frame.addTempGameNew(2, 0, 0, true, true);
+            button.set(Arrays.stream(panel.getComponents())
+                .filter(JButton.class::isInstance).map(JButton.class::cast)
+                .filter(candidate -> candidate.getWidth() == 80).findFirst().orElseThrow());
+            button.get().doClick(0);
+            assertFalse(button.get().isEnabled());
+          });
+      SwingUtilities.invokeAndWait(
+          () -> {
+            if (closePanel) layer.setVisible(false);
+            else Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[next game];B[ee])", true));
+          });
+      assertEquals(0, frame.panelRefreshes);
+      assertEquals(oldMetadata, Files.readString(metadataFile()));
+      blocked.release();
+      SgfSaveTestSupport.awaitPending();
+    }
+    assertTrue(button.get().isEnabled(), "the old control is released after completion");
+    assertEquals(0, frame.panelRefreshes, "stale completion must not refresh another panel or game");
+    assertFalse(config.showListPane);
+    assertFalse(config.showVariationGraph);
+    if (closePanel) assertFalse(layer.isVisible());
+    else assertTrue(SGFParser.saveToString(false).contains("next game"));
+    assertTemporaryIndices(List.of(1, 2));
+    assertTrue(Files.readString(temporarySlot(2, "sgf")).contains("original"));
   }
 
   @Test
@@ -955,26 +1027,63 @@ class AutomaticSaveSafetyTest {
 
   @Test
   void backgroundAutosaveWaitsForUiSaveAndCannotOverwriteItsMetadata() throws Exception {
-    frame.previewEntered = new CountDownLatch(1);
-    frame.releasePreview = new CountDownLatch(1);
-    var workers = Executors.newFixedThreadPool(2);
-    try {
-      var temporary = workers.submit(() -> frame.addTempGame(2, "새 기록"));
-      assertTrue(frame.previewEntered.await(5, TimeUnit.SECONDS));
-      assertThrows(TimeoutException.class, () -> temporary.get(100, TimeUnit.MILLISECONDS));
-      var automatic = workers.submit(() -> frame.saveAutoGame(1));
-      assertThrows(TimeoutException.class, () -> automatic.get(100, TimeUnit.MILLISECONDS));
-      frame.releasePreview.countDown();
-      assertTrue(temporary.get(5, TimeUnit.SECONDS));
+    AtomicReference<CompletableFuture<Boolean>> temporary = new AtomicReference<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> temporary.set(saveAsync(SaveKind.ADD)));
+      CompletableFuture<Boolean> automatic = frame.saveAutoGameAsync(1);
+      SwingUtilities.invokeAndWait(() -> {});
+      assertFalse(temporary.get().isDone());
+      assertFalse(automatic.isDone());
+      assertEquals(oldMetadata, Files.readString(metadataFile()));
+      blocked.release();
+      assertTrue(temporary.get().get(5, TimeUnit.SECONDS));
       assertTrue(automatic.get(5, TimeUnit.SECONDS));
       assertRecordPublished(SaveKind.ADD);
       assertRecordPublished(SaveKind.EXIT);
       assertEquals(2, frame.previewCalls);
-    } finally {
-      frame.releasePreview.countDown();
-      workers.shutdownNow();
-      assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
     }
+  }
+
+  @ParameterizedTest
+  @EnumSource(SaveKind.class)
+  void queuedSaveFreezesTheGameCursorAndPreviewWhileTheEventThreadRemainsResponsive(SaveKind kind)
+      throws Exception {
+    AtomicReference<CompletableFuture<Boolean>> saved = new AtomicReference<>();
+    AtomicReference<String> capturedCursor = new AtomicReference<>();
+    AtomicBoolean responsive = new AtomicBoolean();
+    frame.previewColor = 0x1256ab;
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(
+          () -> {
+            capturedCursor.set(Lizzie.board.moveListToString(
+                kind == SaveKind.ADD ? Lizzie.board.getMoveList() : Lizzie.board.getmovelistForSaveLoad()));
+            saved.set(saveAsync(kind));
+          });
+      SwingUtilities.invokeAndWait(
+          () -> {
+            responsive.set(true);
+            frame.previewColor = 0xeeddaa;
+            Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[next game];B[ee])", true));
+          });
+      assertTrue(responsive.get());
+      assertFalse(saved.get().isDone(), "accepting the request must not report disk completion");
+      assertFalse(Files.exists(slot(kind, "sgf")));
+      assertEquals(oldMetadata, Files.readString(metadataFile()));
+      blocked.release();
+      assertTrue(saved.get().get(5, TimeUnit.SECONDS));
+    }
+    String persisted = Files.readString(slot(kind, "sgf"));
+    assertTrue(persisted.contains("original"));
+    assertTrue(persisted.contains(";W[dd]"));
+    assertFalse(persisted.contains("next game"));
+    assertRecordPublished(kind);
+    String cursor = kind == SaveKind.EXIT || kind == SaveKind.PERIODIC
+        ? config.saveBoardConfig.getString("save-auto-game-move-list" + kind.index)
+        : config.saveBoardConfig.getJSONArray("save-game-move-list").getString(kind.index - 1);
+    assertEquals(capturedCursor.get(), cursor);
+    assertEquals(0x1256ab, ImageIO.read(slot(kind, "bmp").toFile()).getRGB(0, 0) & 0xffffff);
+    assertTrue(SGFParser.saveToString(false).contains("next game"), "completion must preserve the new live game");
+    assertNoStagingFiles();
   }
 
   @Test
@@ -1004,6 +1113,19 @@ class AutomaticSaveSafetyTest {
       case REPLACE -> frame.saveTempGame(1, "새 기록");
       case ADD -> frame.addTempGame(2, "새 기록");
     };
+  }
+
+  @SuppressWarnings("unchecked")
+  private CompletableFuture<Boolean> saveAsync(SaveKind kind) {
+    if (kind == SaveKind.EXIT || kind == SaveKind.PERIODIC) return frame.saveAutoGameAsync(kind.index);
+    try {
+      var method = LizzieFrame.class.getDeclaredMethod(
+          "saveTemporaryGameAsync", int.class, String.class, boolean.class);
+      method.setAccessible(true);
+      return (CompletableFuture<Boolean>) method.invoke(frame, kind.index, "새 기록", kind == SaveKind.ADD);
+    } catch (ReflectiveOperationException failure) {
+      throw new AssertionError(failure);
+    }
   }
 
   private void assertRecordPublished(SaveKind kind) throws IOException {
@@ -1053,6 +1175,7 @@ class AutomaticSaveSafetyTest {
 
     @Override
     protected void savedGameEditFailed(IOException failure) {
+      assertTrue(SwingUtilities.isEventDispatchThread());
       editFailures++;
     }
 
@@ -1064,25 +1187,17 @@ class AutomaticSaveSafetyTest {
 
     int previewCalls;
     int failureMode;
-    CountDownLatch previewEntered;
-    CountDownLatch releasePreview;
+    int previewColor;
 
     @Override
     public Image saveMainBoardToImageOri() {
       assertTrue(SwingUtilities.isEventDispatchThread());
       previewCalls++;
-      if (previewEntered != null) {
-        previewEntered.countDown();
-        try {
-          assertTrue(releasePreview.await(5, TimeUnit.SECONDS));
-        } catch (InterruptedException failure) {
-          Thread.currentThread().interrupt();
-          throw new AssertionError(failure);
-        }
-      }
       if (failureMode == 1) throw new IllegalStateException("board not painted yet");
-      return new BufferedImage(
+      BufferedImage preview = new BufferedImage(
           8, 8, failureMode == 2 ? BufferedImage.TYPE_INT_ARGB : BufferedImage.TYPE_INT_RGB);
+      preview.setRGB(0, 0, previewColor);
+      return preview;
     }
   }
 }

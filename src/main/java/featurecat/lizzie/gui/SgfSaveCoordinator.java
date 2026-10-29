@@ -22,6 +22,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.JFileChooser;
 import javax.swing.JOptionPane;
@@ -67,6 +68,36 @@ public final class SgfSaveCoordinator {
           AtomicSgfFileWriter::write);
 
   private SgfSaveCoordinator() {}
+
+  static <T> CompletableFuture<T> submitSave(
+      SgfSaveQueue.IOOperation<T> operation,
+      BooleanSupplier stillCurrent,
+      Consumer<T> success,
+      Consumer<Throwable> failure) {
+    return SAVES.submit(operation, stillCurrent, success, failure);
+  }
+
+  static <T> CompletableFuture<T> submitPreparedSave(
+      SgfSaveQueue.Preparation<T> preparation,
+      BooleanSupplier stillCurrent,
+      Consumer<T> success,
+      Consumer<Throwable> failure) {
+    return SAVES.submitPrepared(preparation, stillCurrent, success, failure);
+  }
+
+  /** Saves an already captured automatic result; only immutable payloads cross to the worker. */
+  public static CompletableFuture<Path> saveCaptured(
+      Path target, String snapshot, BooleanSupplier stillCurrent,
+      Consumer<Path> success, Consumer<Throwable> failure) {
+    Path destination = target.toAbsolutePath().normalize();
+    return submitSave(
+        () -> {
+          Files.createDirectories(destination.getParent());
+          AtomicSgfFileWriter.write(destination, snapshot);
+          return destination;
+        },
+        stillCurrent, success, failure);
+  }
 
   static void chooseAndSave(Mode mode) {
     if (!SwingUtilities.isEventDispatchThread()) {
@@ -126,31 +157,36 @@ public final class SgfSaveCoordinator {
       safeName = safeName.substring(0, safeName.offsetByCodePoints(0, nameLength));
       String prefix = timestamp + (safeName.isEmpty() ? "" : "(" + safeName + ")") + "-";
       Path directory = Lizzie.config.getWorkDirectory().toPath().resolve("MyGames");
-      Files.createDirectories(directory);
-      // Reserve a distinct file even for simultaneous saves of identically named games.
-      // The queue only replaces this request's own reservation; existing SGFs stay untouched.
-      Path target = Files.createTempFile(directory, prefix, ".sgf");
-      SAVES.submit(
-          target,
-          snapshot,
+      submitSave(
+          () -> writePlayedGame(directory, prefix, snapshot),
           () -> true,
-          () -> {},
-          failure -> {
-            try {
-              BasicFileAttributes attributes =
-                  Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-              // A post-commit error can follow a successful atomic replacement. Keep any
-              // completed SGF; only the still-empty reservation belongs to failure cleanup.
-              if (attributes.isRegularFile() && attributes.size() == 0) Files.deleteIfExists(target);
-            } catch (NoSuchFileException absent) {
-              // There is no reservation left to remove.
-            } catch (IOException cleanupFailure) {
-              failure.addSuppressed(cleanupFailure);
-            }
-            playedGameSaveFailed(onFailure, failure);
-          });
+          ignored -> {},
+          failure -> playedGameSaveFailed(onFailure, failure));
     } catch (IOException | RuntimeException failure) {
       playedGameSaveFailed(onFailure, failure);
+    }
+  }
+
+  private static Path writePlayedGame(Path directory, String prefix, String snapshot)
+      throws IOException {
+    Files.createDirectories(directory);
+    // Reservation and cleanup are disk operations too. They must never run on the event thread.
+    Path target = Files.createTempFile(directory, prefix, ".sgf");
+    try {
+      AtomicSgfFileWriter.write(target, snapshot);
+      return target;
+    } catch (IOException | RuntimeException failure) {
+      try {
+        BasicFileAttributes attributes =
+            Files.readAttributes(target, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        // Preserve a completed SGF after any post-commit error; only remove our empty reservation.
+        if (attributes.isRegularFile() && attributes.size() == 0) Files.deleteIfExists(target);
+      } catch (NoSuchFileException absent) {
+        // There is no reservation left to remove.
+      } catch (IOException cleanupFailure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+      throw failure;
     }
   }
 

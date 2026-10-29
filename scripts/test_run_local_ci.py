@@ -147,7 +147,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -156,6 +156,26 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedThemeSavePreservesFilesAndAllowsRetry"),
                 ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedColorResetKeepsDialogOpenAndAllowsRetry"),
                 ("featurecat.lizzie.gui.SavedGameLoadDesktopTest", "failedSavedListOpensPreserveCurrentGameAndAllowRetry"),
+                ("featurecat.lizzie.gui.SavedGameSaveDesktopTest", "pendingSaveKeepsTheListResponsiveAndPublishesAfterDiskCompletion"),
+                *tuple(
+                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                     f"editsDuringExitSaveCancelShutdownAndRetrySavesCurrentGame(String)[{invocation}]")
+                    for invocation in range(1, 6)
+                ),
+                *tuple(
+                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                     f"explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String)[{invocation}]")
+                    for invocation in range(1, 5)
+                ),
+                *tuple(
+                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                     f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]")
+                    for invocation in range(1, 7)
+                ),
+                ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                 "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown"),
+                ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
+                 "unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown"),
                 ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
                 ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
                 *tuple(

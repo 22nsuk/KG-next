@@ -12,11 +12,14 @@ import featurecat.lizzie.enginegame.StartFailure;
 import featurecat.lizzie.enginegame.StartObserver;
 import featurecat.lizzie.enginegame.EngineGamePresentation;
 
+import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.theme.MorandiPalette;
+import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.awt.Color;
@@ -47,6 +50,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Random;
 import java.util.ResourceBundle;
+import java.util.function.BooleanSupplier;
 import javax.imageio.ImageIO;
 import javax.swing.BorderFactory;
 import javax.swing.ImageIcon;
@@ -2819,27 +2823,44 @@ public class BottomToolbar extends JPanel {
     }
   }
 
-  private boolean saveAutoAnalyzeResult(boolean completed, File sourceFile) {
-    Path output;
+  private void saveAutoAnalyzeResult(boolean completed, File sourceFile) {
+    LizzieFrame frame = Lizzie.frame;
+    Board board = Lizzie.board;
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    File workDirectory = Lizzie.config.getWorkDirectory();
+    String analyzedLabel = resourceBundle.getString("Leelaz.analyzed");
+    String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
+    BooleanSupplier current =
+        () -> Lizzie.frame == frame && LizzieFrame.toolbar == this && Lizzie.board == board
+            && board.getHistory() == history && history.getStart() == root;
     try {
-      output =
-          resolveAutoAnalyzeOutput(
-              sourceFile,
-              Lizzie.config.getWorkDirectory(),
-              resourceBundle.getString("Leelaz.analyzed"),
-              new SimpleDateFormat("yyyyMMddHHmmss").format(new Date()));
-      SGFParser.save(Lizzie.board, output.toString());
+      String snapshot = SGFParser.captureSave(board, history, false);
+      SgfSaveCoordinator.submitSave(
+          () -> {
+            Path output = resolveAutoAnalyzeOutput(sourceFile, workDirectory, analyzedLabel, timestamp);
+            AtomicSgfFileWriter.write(output, snapshot);
+            return output;
+          },
+          current,
+          output -> {
+            if (msg == null || !msg.isVisible()) {
+              msg = new Message();
+              msg.setMessageNoModal(
+                  resourceBundle.getString(autoAnalyzeSavedStatusKey(completed)) + output.getParent());
+            }
+          },
+          failure -> {
+            if (current.getAsBoolean()) autoAnalyzeSaveFailed(failure);
+          });
     } catch (IOException | RuntimeException failure) {
-      failure.printStackTrace();
-      Utils.showMsgNoModal(resourceBundle.getString("LizzieFrame.saveFileFailed"));
-      return false;
+      autoAnalyzeSaveFailed(failure);
     }
-    if (msg == null || !msg.isVisible()) {
-      msg = new Message();
-      msg.setMessageNoModal(
-          resourceBundle.getString(autoAnalyzeSavedStatusKey(completed)) + output.getParent());
-    }
-    return true;
+  }
+
+  private void autoAnalyzeSaveFailed(Throwable failure) {
+    failure.printStackTrace();
+    Utils.showMsgNoModal(resourceBundle.getString("LizzieFrame.saveFileFailed"));
   }
 
   static Path resolveAutoAnalyzeOutput(

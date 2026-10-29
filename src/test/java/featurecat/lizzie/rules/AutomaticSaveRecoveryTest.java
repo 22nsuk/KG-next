@@ -6,6 +6,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.SgfSaveTestSupport;
 import featurecat.lizzie.gui.TempGameData;
 import java.awt.Image;
 import java.awt.image.BufferedImage;
@@ -14,6 +15,11 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import javax.imageio.ImageIO;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
@@ -37,6 +43,7 @@ class AutomaticSaveRecoveryTest {
 
   @BeforeEach
   void prepare() throws Exception {
+    SgfSaveTestSupport.awaitPending();
     rules = RulesLayerTestHarness.open();
     previousCurFile = LizzieFrame.curFile;
     config = ConfigTestHelper.createForTests(directory);
@@ -68,9 +75,13 @@ class AutomaticSaveRecoveryTest {
   }
 
   @AfterEach
-  void restore() {
-    LizzieFrame.curFile = previousCurFile;
-    if (rules != null) rules.close();
+  void restore() throws Exception {
+    try {
+      SgfSaveTestSupport.awaitPending();
+    } finally {
+      LizzieFrame.curFile = previousCurFile;
+      if (rules != null) rules.close();
+    }
   }
 
   @Test
@@ -178,7 +189,9 @@ class AutomaticSaveRecoveryTest {
             throw new AssertionError(failure);
           }
         });
-    frame.restoreStartupGame(new String[0]);
+    CompletableFuture<Void> startup = frame.restoreStartupGameAsync(new String[0]);
+    SwingUtilities.invokeAndWait(() -> {});
+    assertFalse(startup.isDone());
     assertFalse(frame.saveAutoGame(2));
     assertFalse(frame.saveAutoGame(1));
     assertNull(frame.loadedFile);
@@ -197,9 +210,175 @@ class AutomaticSaveRecoveryTest {
             throw new AssertionError(failure);
           }
         });
+    startup.get(5, TimeUnit.SECONDS);
     assertRecovered();
     assertTrue(frame.saveAutoGame(1));
     assertTrue(Files.readString(slot(1, "sgf")).contains("NEW_PERIODIC"));
+  }
+
+  @Test
+  void supersededStartupSettlesItsFutureAndProtectsRecoveryUntilSelectionIsRetried() throws Exception {
+    Field cleanup = LizzieFrame.class.getDeclaredField("analysisControlCleanupInProgress");
+    cleanup.setAccessible(true);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            cleanup.setBoolean(frame, true);
+          } catch (IllegalAccessException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+    CompletableFuture<Void> startup = frame.restoreStartupGameAsync(new String[0]);
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            var defer = LizzieFrame.class.getDeclaredMethod(
+                "deferKifuOpenUntilAutomaticQuickAnalysisRestored", Runnable.class);
+            defer.setAccessible(true);
+            assertEquals(true, defer.invoke(frame, (Runnable) this::setCurrentBoard));
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+    assertThrows(CancellationException.class, () -> startup.get(5, TimeUnit.SECONDS));
+    assertFalse(frame.saveAutoGame(1));
+    assertFalse(frame.saveAutoGame(2));
+    assertEquals(OLD, Files.readString(slot(1, "sgf")));
+    assertEquals(NEW, Files.readString(slot(2, "sgf")));
+    assertEquals(originalMetadata, Files.readString(metadataFile()));
+    SwingUtilities.invokeAndWait(
+        () -> {
+          try {
+            cleanup.setBoolean(frame, false);
+            var finish = LizzieFrame.class.getDeclaredMethod("finishDeferredKifuOpenAfterQuickAnalysisRestore");
+            finish.setAccessible(true);
+            assertEquals(true, finish.invoke(frame));
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+    frame.restoreStartupGameAsync(new String[] {"read"}).get(5, TimeUnit.SECONDS);
+    assertRecovered();
+    assertTrue(SGFParser.saveToString(false).contains("CURRENT_SESSION"));
+    assertTrue(frame.saveAutoGame(2));
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+    assertTrue(Files.readString(slot(2, "sgf")).contains("CURRENT_SESSION"));
+  }
+
+  @Test
+  void blockedRecoveryLeavesTheEventThreadResponsiveAndBothSlotsProtected() throws Exception {
+    AtomicBoolean responsive = new AtomicBoolean();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      CompletableFuture<Void> startup = frame.restoreStartupGameAsync(new String[0]);
+      SwingUtilities.invokeAndWait(() -> responsive.set(true));
+      assertTrue(responsive.get());
+      assertFalse(startup.isDone());
+      assertFalse(frame.saveAutoGameAsync(1).get(5, TimeUnit.SECONDS));
+      assertFalse(frame.saveAutoGameAsync(2).get(5, TimeUnit.SECONDS));
+      assertNull(frame.loadedFile);
+      assertEquals(OLD, Files.readString(slot(1, "sgf")));
+      assertEquals(NEW, Files.readString(slot(2, "sgf")));
+      assertEquals(originalMetadata, Files.readString(metadataFile()));
+      blocked.release();
+      startup.get(5, TimeUnit.SECONDS);
+    }
+    assertRecovered();
+    assertEquals(NEW, frame.loadedSgf);
+  }
+
+  @Test
+  void startupWithoutAPendingRecoveryDoesNotWaitForTheSaveWorker() throws Exception {
+    config.autoResume = false;
+    config.saveBoardConfig.put("save-auto-game-index2", -1);
+    config.saveTempBoard();
+    String metadata = Files.readString(metadataFile());
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      frame.restoreStartupGameAsync(new String[] {"read"}).get(5, TimeUnit.SECONDS);
+      assertEquals(OLD, Files.readString(slot(1, "sgf")));
+      assertEquals(NEW, Files.readString(slot(2, "sgf")));
+      assertEquals(metadata, Files.readString(metadataFile()));
+    }
+  }
+
+  @Test
+  void recoveryCompletesWithoutReplacingAGameOpenedWhileItsIoWasPending() throws Exception {
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      CompletableFuture<Void> startup = frame.restoreStartupGameAsync(new String[0]);
+      SwingUtilities.invokeAndWait(
+          () -> Lizzie.board.setHistory(SGFParser.parseSgf("(;SZ[5]C[user selection];B[ee])", true)));
+      BoardHistoryNode selected = Lizzie.board.getHistory().getStart();
+      assertFalse(startup.isDone());
+      blocked.release();
+      startup.get(5, TimeUnit.SECONDS);
+      assertSame(selected, Lizzie.board.getHistory().getStart());
+    }
+    assertRecovered();
+    assertNull(frame.loadedFile, "startup completion must not open an older selection");
+    assertTrue(SGFParser.saveToString(false).contains("user selection"));
+    assertTrue(frame.saveAutoGame(2), "the selected game is usable after recovery completion");
+    assertEquals(NEW, Files.readString(slot(1, "sgf")));
+    assertTrue(Files.readString(slot(2, "sgf")).contains("user selection"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"move", "moveThenBack", "comment"})
+  void recoveryPreservesEditsWithinTheSameHistoryWhileItsIoIsPending(String edit) throws Exception {
+    Board board = Lizzie.board;
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    config.playSound = false;
+    SwingUtilities.invokeAndWait(() -> history.setHead(history.getEnd()));
+    BoardHistoryNode original = history.getCurrentHistoryNode();
+    long originalRevision = board.getContextRevision();
+    AtomicReference<String> editedGame = new AtomicReference<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      CompletableFuture<Void> startup = frame.restoreStartupGameAsync(new String[0]);
+      SwingUtilities.invokeAndWait(() -> {
+        if (edit.equals("comment")) {
+          board.comment("user comment while recovery waits");
+          assertSame(original, history.getCurrentHistoryNode());
+          assertEquals(originalRevision, board.getContextRevision(), "comment edits are unversioned");
+        } else {
+          board.place(4, 4);
+          assertNotSame(original, history.getCurrentHistoryNode(), "the real placement must commit");
+          assertEquals(Stone.WHITE, board.getData().stones[Board.getIndex(4, 4)]);
+          if (edit.equals("moveThenBack")) {
+            assertTrue(board.previousMove(false));
+            assertSame(original, history.getCurrentHistoryNode());
+            assertNotEquals(originalRevision, board.getContextRevision());
+          }
+        }
+        assertSame(history, board.getHistory());
+        assertSame(root, history.getStart(), "these edits do not replace the history root");
+        try {
+          editedGame.set(SGFParser.saveSnapshot(board, true, true, false));
+        } catch (IOException failure) {
+          throw new AssertionError(failure);
+        }
+      });
+      BoardHistoryNode selected = history.getCurrentHistoryNode();
+      assertFalse(startup.isDone());
+      assertEquals(originalMetadata, Files.readString(metadataFile()));
+      blocked.release();
+      startup.get(5, TimeUnit.SECONDS);
+      assertSame(history, board.getHistory());
+      assertSame(root, history.getStart());
+      assertSame(selected, history.getCurrentHistoryNode());
+    }
+    assertRecovered();
+    assertNull(frame.loadedFile, "recovery completion must not replace the edited live game");
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        assertEquals(editedGame.get(), SGFParser.saveSnapshot(board, true, true, false));
+      } catch (IOException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+    assertTrue(frame.saveAutoGame(2));
+    assertEquals(NEW, Files.readString(slot(1, "sgf")), "the previous session remains recoverable");
+    String saved = Files.readString(slot(2, "sgf"));
+    assertTrue(saved.contains("CURRENT_SESSION"));
+    assertTrue(saved.contains(edit.equals("comment") ? "user comment while recovery waits" : ";W[ee]"));
   }
 
   @Test
@@ -388,6 +567,7 @@ class AutomaticSaveRecoveryTest {
 
     @Override
     protected void savedGameEditFailed(IOException failure) {
+      assertTrue(SwingUtilities.isEventDispatchThread());
       recoveryFailures++;
     }
 

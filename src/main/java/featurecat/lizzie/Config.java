@@ -3744,12 +3744,45 @@ public class Config {
 
   /** Publish saved-game metadata only after its complete replacement reaches disk. */
   public void saveTempBoard(JSONObject candidateSave) throws IOException {
-    JSONObject candidateRoot = new JSONObject(this.saveBoard.toString());
-    candidateRoot.put("save", new JSONObject(candidateSave.toString()));
-    // A non-atomic fallback could discard the only record of the last successful save.
-    writeConfig(candidateRoot, new File(saveBoardFilename), true);
-    this.saveBoard = candidateRoot;
-    this.saveBoardConfig = candidateRoot.getJSONObject("save");
+    SavedBoardSave prepared = prepareTempBoardSave(candidateSave);
+    prepared.write();
+    prepared.publish();
+  }
+
+  /** Capture metadata and its destination before handing disk work to the save worker. */
+  public SavedBoardSave prepareTempBoardSave(JSONObject candidateSave) {
+    JSONObject root = new JSONObject(saveBoard.toString());
+    root.put("save", new JSONObject(candidateSave.toString()));
+    return new SavedBoardSave(root, new File(saveBoardFilename));
+  }
+
+  /** One request owns this detached record; publication belongs to its UI completion. */
+  public final class SavedBoardSave {
+    private final JSONObject root;
+    private final File target;
+
+    private SavedBoardSave(JSONObject root, File target) {
+      this.root = root;
+      this.target = target;
+    }
+
+    /** New records allocate their unused file identifier on the worker before writing metadata. */
+    public SavedBoardSave withSave(JSONObject candidateSave) {
+      JSONObject updated = new JSONObject(root.toString());
+      updated.put("save", new JSONObject(candidateSave.toString()));
+      return new SavedBoardSave(updated, target);
+    }
+
+    public void write() throws IOException {
+      Files.createDirectories(target.toPath().toAbsolutePath().getParent());
+      // A non-atomic fallback could discard the only record of the last successful save.
+      writeConfig(root, target, true);
+    }
+
+    public void publish() {
+      saveBoard = root;
+      saveBoardConfig = root.getJSONObject("save");
+    }
   }
 
   public boolean isFrameFontSmall() {

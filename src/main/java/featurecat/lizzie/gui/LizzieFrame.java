@@ -47,6 +47,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.EngineCountDown;
 import featurecat.lizzie.rules.GIBParser;
+import featurecat.lizzie.rules.GameEditSnapshot;
 import featurecat.lizzie.rules.GroupInfo;
 import featurecat.lizzie.rules.MoveLinkedList;
 import featurecat.lizzie.rules.Movelist;
@@ -280,6 +281,8 @@ public class LizzieFrame extends JFrame {
     private final String analyzedLabel = Lizzie.resourceBundle.getString("Leelaz.analyzed");
     private final String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
     private boolean quickMode;
+    private String snapshot;
+    private boolean inFlight;
     private final Runnable saved;
 
     private PendingBatchAnalysisSave(LizzieFrame frame, Runnable saved) {
@@ -291,7 +294,8 @@ public class LizzieFrame extends JFrame {
     }
 
     private boolean isCurrent(LizzieFrame frame) {
-      return frame.isBatchAna
+      return Lizzie.frame == frame
+          && frame.isBatchAna
           && frame.Batchfiles == files
           && frame.BatchAnaNum == index
           && index < files.size()
@@ -595,6 +599,7 @@ public class LizzieFrame extends JFrame {
   private JScrollPane varTreeScrollPane;
 
   private JIMSendTextPane commentEditTextPane;
+  private String commentEditInitialText;
   public JScrollPane commentEditPane;
 
   public String enginePkTitile;
@@ -4162,7 +4167,7 @@ public class LizzieFrame extends JFrame {
     quickAnalysisAdapter().invalidateStartup();
   }
 
-  /** Saves the current batch result before its owner advances or reports completion. Runs on EDT. */
+  /** Captures on EDT; only a committed background save may advance or complete its batch. */
   void saveBatchAnalysisResult(Runnable saved) {
     if (!isBatchAna || BatchAnaNum < 0 || BatchAnaNum >= Batchfiles.size()) return;
     if (pendingBatchAnalysisSave != null && retryBatchAnalysisSave()) return;
@@ -4178,23 +4183,47 @@ public class LizzieFrame extends JFrame {
       discardPendingBatchAnalysisSave();
       return false;
     }
+    if (pending.inFlight) return true;
     try {
-      Path output =
-          BottomToolbar.resolveAutoAnalyzeOutput(
-              pending.source, pending.workDirectory, pending.analyzedLabel, pending.timestamp);
-      SGFParser.save(pending.board, output.toString());
-    } catch (IOException | RuntimeException failure) {
-      isBatchAnalysisMode = false;
-      if (analysisTable != null) {
-        analysisTable.resetAnalysisMode();
+      if (pending.snapshot == null) {
+        pending.snapshot = SGFParser.captureSave(pending.board, pending.history, false);
       }
-      showBatchAnalysisSaveFailure(pending.source, failure);
+    } catch (IOException | RuntimeException failure) {
+      batchAnalysisSaveFailed(pending, failure);
       return true;
     }
-    discardPendingBatchAnalysisSave();
-    isBatchAnalysisMode = pending.quickMode;
-    pending.saved.run();
+    String snapshot = pending.snapshot;
+    pending.inFlight = true;
+    SgfSaveCoordinator.submitSave(
+        () -> {
+          Path output =
+              BottomToolbar.resolveAutoAnalyzeOutput(
+                  pending.source, pending.workDirectory, pending.analyzedLabel, pending.timestamp);
+          AtomicSgfFileWriter.write(output, snapshot);
+          return output;
+        },
+        () -> true,
+        output -> {
+          pending.inFlight = false;
+          if (pendingBatchAnalysisSave != pending || !pending.isCurrent(this)) return;
+          discardPendingBatchAnalysisSave();
+          isBatchAnalysisMode = pending.quickMode;
+          pending.saved.run();
+        },
+        failure -> batchAnalysisSaveFailed(pending, failure));
     return true;
+  }
+
+  private void batchAnalysisSaveFailed(PendingBatchAnalysisSave pending, Throwable failure) {
+    pending.inFlight = false;
+    if (pendingBatchAnalysisSave != pending || !pending.isCurrent(this)) return;
+    isBatchAnalysisMode = false;
+    if (analysisTable != null) analysisTable.resetAnalysisMode();
+    showBatchAnalysisSaveFailure(
+        pending.source,
+        failure instanceof Exception
+            ? (Exception) failure
+            : new IOException("Could not save the batch analysis", failure));
   }
 
   void discardPendingBatchAnalysisSave() {
@@ -4749,79 +4778,158 @@ public class LizzieFrame extends JFrame {
   private boolean autoSaveStartupPrepared;
   private boolean autoSaveRecoveryComplete;
   private boolean autoSaveRecoveryFailureReported;
+  private java.util.concurrent.CompletableFuture<Boolean> autoSaveRecovery;
+  private long startupGameSelection;
 
+  /** Compatibility entry; UI startup uses the explicit completion API. */
   public void restoreStartupGame(String[] args) {
-    runSavedGameAction(
-        () -> {
-          if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(() -> restoreStartupGame(args))) {
-            return;
-          }
-          recoverAutoSaveOnEdt();
+    waitForSavedGameAction(restoreStartupGameAsync(args));
+  }
+
+  public java.util.concurrent.CompletableFuture<Void> restoreStartupGameAsync(String[] args) {
+    String[] requestedArgs = args.clone();
+    return onSavedGameOwner(() -> {
+      java.util.concurrent.CompletableFuture<Void> restored = new java.util.concurrent.CompletableFuture<>();
+      restoreStartupGameOnEdt(requestedArgs, ++startupGameSelection, restored);
+      return restored;
+    });
+  }
+
+  private void restoreStartupGameOnEdt(
+      String[] args, long selection, java.util.concurrent.CompletableFuture<Void> restored) {
+    if (selection != startupGameSelection) {
+      restored.completeExceptionally(
+          new java.util.concurrent.CancellationException("Startup game selection was superseded"));
+      return;
+    }
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
+        () -> restoreStartupGameOnEdt(args, selection, restored),
+        () -> restored.completeExceptionally(
+            new java.util.concurrent.CancellationException("Startup game selection was superseded")))) return;
+    Config config = Lizzie.config;
+    Board board = Lizzie.board;
+    boolean recoveryPending = !autoSaveRecoveryComplete
+        && (autoSaveRecovery != null || config.saveBoardConfig.optInt("save-auto-game-index2", -1) == -5);
+    GameEditSnapshot startupSnapshot = recoveryPending ? captureStartupGameSnapshot(board) : null;
+    recoverAutoSaveAsync().whenComplete((recovered, failure) -> {
+      try {
+        if (selection != startupGameSelection) {
+          restored.completeExceptionally(
+              new java.util.concurrent.CancellationException("Startup game selection was superseded"));
+          return;
+        }
+        // Recovery yields the event thread: retain games opened, played, or edited meanwhile.
+        if (Lizzie.frame == this && Lizzie.config == config
+            && Lizzie.board == board
+            && (!recoveryPending || (startupSnapshot != null
+                && startupSnapshot.isCurrent(board)))) {
           if (args.length == 1) {
             if (!args[0].equals("read")) {
               File file = new File(args[0]);
               loadFile(file, true, true, () -> curFile = file);
             }
-          } else if (Lizzie.config.autoResume) {
+          } else if (config.autoResume) {
             resumeFile();
           }
-          autoSaveStartupPrepared = true;
-        });
+        }
+        autoSaveStartupPrepared = true;
+        restored.complete(null);
+      } catch (RuntimeException caught) {
+        restored.completeExceptionally(caught);
+      }
+    });
   }
 
-  private boolean recoverAutoSaveOnEdt() {
-    if (autoSaveRecoveryComplete) return true;
-    JSONObject metadata = Lizzie.config.saveBoardConfig;
-    if (metadata.optInt("save-auto-game-index2", -1) != -5) {
-      autoSaveRecoveryComplete = true;
-      return true;
-    }
-    Path source = resolveAutoSaveFile(2, "sgf").toPath();
+  private static GameEditSnapshot captureStartupGameSnapshot(Board board) {
     try {
-      // Missing recovery data must never cause deletion of the last exit save.
-      // Attribute/access errors, unlike genuine absence, leave recovery pending.
-      if (!savedGameFileExists(source)) {
-        autoSaveRecoveryComplete = true;
-        return true;
-      }
-      String sgf = Files.readString(source);
-      if (SGFParser.parseSgf(sgf, true) == null) {
-        throw new IOException("Invalid automatic recovery SGF: " + source);
-      }
-      AtomicSgfFileWriter.write(resolveAutoSaveFile(1, "sgf").toPath(), sgf);
-      recoverAutoSavePreview();
-      JSONObject candidate = new JSONObject(metadata.toString());
-      candidate.put("save-auto-game-index1", 1);
-      for (String field : List.of("time", "move-number", "move-list")) {
-        String key = "save-auto-game-" + field;
-        candidate.remove(key + "1");
-        if (metadata.has(key + "2")) candidate.put(key + "1", metadata.get(key + "2"));
-      }
-      candidate.put("save-auto-game-index2", -1);
-      Lizzie.config.saveTempBoard(candidate);
-      // Keep source2 intact even after commit. It is inactive now and can be reused
-      // by the next periodic save. A failure before commit can safely retry it.
+      return GameEditSnapshot.capture(board);
+    } catch (RuntimeException failure) {
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Could not capture current game during startup; keeping it after recovery", failure);
+      return null;
+    }
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> recoverAutoSaveAsync() {
+    if (autoSaveRecoveryComplete) return java.util.concurrent.CompletableFuture.completedFuture(true);
+    if (autoSaveRecovery != null) return autoSaveRecovery;
+    Config config = Lizzie.config;
+    if (config.saveBoardConfig.optInt("save-auto-game-index2", -1) != -5) {
       autoSaveRecoveryComplete = true;
-      return true;
-    } catch (IOException | RuntimeException failure) {
+      return java.util.concurrent.CompletableFuture.completedFuture(true);
+    }
+    File directory = config.getWorkDirectory();
+    Path source = savedGameFile(directory, true, 2, "sgf").toPath();
+    Path destination = savedGameFile(directory, true, 1, "sgf").toPath();
+    java.util.concurrent.CompletableFuture<String> read = SgfSaveCoordinator.submitPreparedSave(
+        () -> {
+          if (config.saveBoardConfig.optInt("save-auto-game-index2", -1) != -5) return () -> null;
+          return () -> {
+            // Access errors leave recovery pending; genuine absence preserves the exit save.
+            return savedGameFileExists(source) ? Files.readString(source) : null;
+          };
+        }, () -> true, ignored -> {}, ignored -> {});
+    java.util.concurrent.CompletableFuture<Boolean> operation = read.thenCompose(sgf -> {
+      if (sgf == null) {
+        autoSaveRecoveryComplete = true;
+        return java.util.concurrent.CompletableFuture.completedFuture(true);
+      }
+      // Parsing uses application board/engine configuration and therefore remains on the EDT.
+      if (SGFParser.parseSgf(sgf, true) == null) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+            new IOException("Invalid automatic recovery SGF: " + source));
+      }
+      return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
+              () -> {
+                JSONObject metadata = config.saveBoardConfig;
+                if (metadata.optInt("save-auto-game-index2", -1) != -5) return () -> null;
+                JSONObject candidate = new JSONObject(metadata.toString());
+                candidate.put("save-auto-game-index1", 1);
+                for (String field : List.of("time", "move-number", "move-list")) {
+                  String key = "save-auto-game-" + field;
+                  candidate.remove(key + "1");
+                  if (metadata.has(key + "2")) candidate.put(key + "1", metadata.get(key + "2"));
+                }
+                candidate.put("save-auto-game-index2", -1);
+                Config.SavedBoardSave prepared = config.prepareTempBoardSave(candidate);
+                return () -> {
+                  Files.createDirectories(destination.toAbsolutePath().getParent());
+                  AtomicSgfFileWriter.write(destination, sgf);
+                  recoverAutoSavePreview(
+                      savedGameFile(directory, true, 2, "bmp").toPath(),
+                      savedGameFile(directory, true, 1, "bmp").toPath());
+                  prepared.write();
+                  return prepared;
+                };
+              },
+              () -> true,
+              prepared -> {
+                if (prepared != null) prepared.publish();
+                // Keep source2 intact. It becomes reusable only after the metadata commit.
+                autoSaveRecoveryComplete = true;
+              }, ignored -> {})
+          .thenApply(prepared -> true);
+    }).handle((recovered, failure) -> {
+      if (failure == null) return recovered;
       org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
           .warn("Automatic save recovery remains pending; automatic saves are suspended", failure);
       if (!autoSaveRecoveryFailureReported) {
         autoSaveRecoveryFailureReported = true;
-        savedGameEditFailed(
-            new IOException(
-                "Automatic save recovery failed; automatic saves suspended. Original: " + source,
-                failure));
+        savedGameEditFailed(new IOException(
+            "Automatic save recovery failed; automatic saves suspended. Original: " + source, failure));
       }
       return false;
-    }
+    });
+    autoSaveRecovery = operation;
+    operation.whenComplete((ignored, failure) -> {
+      if (autoSaveRecovery == operation) autoSaveRecovery = null;
+    });
+    return operation;
   }
 
-  private void recoverAutoSavePreview() {
-    Path target = resolveAutoSaveFile(1, "bmp").toPath();
+  private static void recoverAutoSavePreview(Path source, Path target) {
     Path staged = null;
     try {
-      Path source = resolveAutoSaveFile(2, "bmp").toPath();
       if (Files.isRegularFile(source)) {
         staged = Files.createTempFile(target.getParent(), ".lizzie-preview-", ".tmp");
         Files.copy(source, staged, StandardCopyOption.REPLACE_EXISTING);
@@ -4848,6 +4956,7 @@ public class LizzieFrame extends JFrame {
       }
     }
   }
+
 
   private int previousAutoSaveIndex() {
     return !autoSaveRecoveryComplete
@@ -11143,7 +11252,7 @@ public class LizzieFrame extends JFrame {
       autosaveTime++;
       if (autosaveTime >= 60) {
         autosaveTime = 0;
-        saveAutoGame(2);
+        saveAutoGameAsync(2);
       }
     }
   }
@@ -11437,6 +11546,7 @@ public class LizzieFrame extends JFrame {
       String text = Lizzie.board.getHistory().getCurrentHistoryNode().getData().comment;
       if (text.length() > 0) text = text + '\n';
       commentEditTextPane.setText(text);
+      commentEditInitialText = commentEditTextPane.getText();
       commentEditPane.setVisible(true);
       commentEditTextPane.requestFocus(true);
       commentScrollPane.setVisible(false);
@@ -11446,8 +11556,12 @@ public class LizzieFrame extends JFrame {
       commentEditPane.setVisible(false);
       sidebarPanel.syncCommentVisibility();
       String text = commentEditTextPane.getText();
-      if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
-      Lizzie.board.getHistory().getCurrentHistoryNode().getData().comment = text;
+      // Analysis may have refreshed the node's comment while this editor was open.
+      if (!text.equals(commentEditInitialText)) {
+        if (text.endsWith("\n")) text = text.substring(0, text.length() - 1);
+        Lizzie.board.getHistory().getCurrentHistoryNode().getData().setAuthoredComment(text);
+      }
+      commentEditInitialText = null;
       appendComment();
     }
   }
@@ -15210,33 +15324,78 @@ public class LizzieFrame extends JFrame {
   }
 
   public void deleteTempGame(int index) {
-    runSavedGameAction(
-        () -> {
-          ArrayList<TempGameData> data = getSaveGameList();
-          TempGameData removed = findTemporaryGame(data, index);
-          if (removed == null) return; // A stale panel action must not delete another record.
-          data.remove(removed);
-          if (persistTemporaryGameList(data)) cleanupTemporaryGameFiles(List.of(removed));
+    waitForSavedGameAction(deleteTempGameAsync(index));
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> deleteTempGameAsync(int index) {
+    return editSavedGames(
+        (candidate, removed) -> {
+          ArrayList<TempGameData> data = getSaveGameList(candidate);
+          TempGameData record = findTemporaryGame(data, index);
+          if (record == null) return false;
+          data.remove(record);
+          removed.add(record);
+          putTempGameList(candidate, data);
+          return true;
         });
   }
 
   public void deleteAllTempGame() {
-    runSavedGameAction(
-        () -> {
-          ArrayList<TempGameData> removed = getSaveGameList();
-          if (removed.isEmpty()) return;
-          if (persistTemporaryGameList(new ArrayList<>())) cleanupTemporaryGameFiles(removed);
+    waitForSavedGameAction(deleteAllTempGameAsync());
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> deleteAllTempGameAsync() {
+    return editSavedGames(
+        (candidate, removed) -> {
+          removed.addAll(getSaveGameList(candidate));
+          if (removed.isEmpty()) return false;
+          putTempGameList(candidate, new ArrayList<>());
+          return true;
         });
   }
 
   public void renameTempGame(int index, String name) {
-    runSavedGameAction(
-        () -> {
-          ArrayList<TempGameData> data = getSaveGameList();
+    waitForSavedGameAction(renameTempGameAsync(index, name));
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> renameTempGameAsync(int index, String name) {
+    return editSavedGames(
+        (candidate, removed) -> {
+          ArrayList<TempGameData> data = getSaveGameList(candidate);
           TempGameData record = findTemporaryGame(data, index);
-          if (record == null) return;
+          if (record == null) return false;
           record.name = name;
-          persistTemporaryGameList(data);
+          putTempGameList(candidate, data);
+          return true;
+        });
+  }
+
+  @FunctionalInterface
+  private interface SavedGameEdit {
+    boolean apply(JSONObject candidate, ArrayList<TempGameData> removed);
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> editSavedGames(SavedGameEdit edit) {
+    return onSavedGameOwner(
+        () -> {
+          Config config = Lizzie.config;
+          File directory = config.getWorkDirectory();
+          return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
+                  () -> {
+                    JSONObject candidate = new JSONObject(config.saveBoardConfig.toString());
+                    ArrayList<TempGameData> removed = new ArrayList<>();
+                    if (!edit.apply(candidate, removed)) return () -> null;
+                    Config.SavedBoardSave metadata = config.prepareTempBoardSave(candidate);
+                    return () -> {
+                      metadata.write();
+                      cleanupTemporaryGameFiles(directory, removed);
+                      return metadata;
+                    };
+                  },
+                  () -> true,
+                  metadata -> { if (metadata != null) metadata.publish(); },
+                  failure -> savedGameEditFailed(savedGameFailure(failure)))
+              .thenApply(metadata -> metadata != null);
         });
   }
 
@@ -15245,22 +15404,6 @@ public class LizzieFrame extends JFrame {
       if (record.index == index) return record;
     }
     return null;
-  }
-
-  private boolean persistTemporaryGameList(ArrayList<TempGameData> data) {
-    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
-    putTempGameList(candidate, data);
-    return persistSavedGameConfig(candidate);
-  }
-
-  private boolean persistSavedGameConfig(JSONObject candidate) {
-    try {
-      Lizzie.config.saveTempBoard(candidate);
-      return true;
-    } catch (IOException failure) {
-      savedGameEditFailed(failure);
-      return false;
-    }
   }
 
   protected void savedGameEditFailed(IOException failure) {
@@ -15274,13 +15417,11 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private void cleanupTemporaryGameFiles(List<TempGameData> removed) {
-    // The manifest is already committed. Only unreferenced files are touched; survivors
-    // keep their identifiers and paths. Cleanup failure leaves an orphan, never a rollback
-    // to a manifest whose files may already have been removed.
+  private static void cleanupTemporaryGameFiles(File directory, List<TempGameData> removed) {
+    // The manifest is committed. Cleanup failure leaves an orphan, never a rollback.
     for (TempGameData record : removed) {
       for (String extension : List.of("sgf", "bmp")) {
-        Path file = resolveSavedGameFile(false, record.index, extension).toPath();
+        Path file = savedGameFile(directory, false, record.index, extension).toPath();
         try {
           Files.deleteIfExists(file);
         } catch (IOException failure) {
@@ -15291,18 +15432,16 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private int allocateTemporaryGameIndex(int requestedIndex, List<TempGameData> data)
+  private static int allocateTemporaryGameIndex(
+      File directory, int requestedIndex, JSONObject metadata, List<TempGameData> data)
       throws IOException {
-    long next =
-        Math.max(
-            Math.max(1L, requestedIndex), nextTemporaryGameIndex(Lizzie.config.saveBoardConfig));
+    long next = Math.max(Math.max(1L, requestedIndex), nextTemporaryGameIndex(metadata));
     for (TempGameData record : data) next = Math.max(next, (long) record.index + 1L);
     while (next <= Integer.MAX_VALUE) {
-      Path sgf = resolveSavedGameFile(false, (int) next, "sgf").toPath();
-      Path preview = resolveSavedGameFile(false, (int) next, "bmp").toPath();
+      Path sgf = savedGameFile(directory, false, (int) next, "sgf").toPath();
+      Path preview = savedGameFile(directory, false, (int) next, "bmp").toPath();
       Files.createDirectories(sgf.getParent());
-      // Even orphan previews and dangling links reserve their slot. Attribute read errors
-      // must abort the save, rather than be mistaken for absence or cause an unbounded scan.
+      // Orphans and dangling links reserve their slot; access errors must abort the save.
       if (!savedGameFileExists(sgf) && !savedGameFileExists(preview)) return (int) next;
       next++;
     }
@@ -15329,169 +15468,337 @@ public class LizzieFrame extends JFrame {
     return next;
   }
 
+  /** Synchronous compatibility entry; UI actions use the completion API below. */
   public boolean saveTempGame(int index, String name) {
-    return callSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, false));
+    requireBackgroundSaveWait();
+    return Boolean.TRUE.equals(awaitSavedGameAction(saveTemporaryGameAsync(index, name, false)));
   }
 
   public boolean addTempGame(int index, String name) {
-    return callSavedGameAction(() -> saveTemporaryGameOnEdt(index, name, true));
+    requireBackgroundSaveWait();
+    return Boolean.TRUE.equals(awaitSavedGameAction(saveTemporaryGameAsync(index, name, true)));
   }
 
-  private boolean saveTemporaryGameOnEdt(int index, String name, boolean add) {
-    ArrayList<TempGameData> data = getSaveGameList();
-    TempGameData saved;
-    if (add) {
-      try {
-        index = allocateTemporaryGameIndex(index, data);
-      } catch (IOException failure) {
-        savedGameEditFailed(failure);
-        return false;
-      }
-      saved = new TempGameData();
-      saved.index = index;
-    } else {
-      saved = findTemporaryGame(data, index);
-      if (saved == null) return false;
+  private record SavedGameCapture(
+      String sgf, RenderedImage preview, String time, int moveNumber, String moves) {}
+
+  private SavedGameCapture captureSavedGame(boolean automatic, boolean add) throws IOException {
+    Board board = Lizzie.board;
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    int moveNumber = board.getCurrentMovenumber();
+    String moves = board.moveListToString(add ? board.getMoveList() : board.getmovelistForSaveLoad());
+    String sgf = SGFParser.captureSave(board, history, automatic);
+    RenderedImage preview = null;
+    try {
+      preview = (RenderedImage) saveMainBoardToImageOri();
+    } catch (RuntimeException failure) {
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Saved-game preview could not be captured", failure);
     }
-    saved.name = name;
-    saved.time = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date());
-    saved.curMoveNumer = Lizzie.board.getCurrentMovenumber();
-    saved.moves =
-        Lizzie.board.moveListToString(
-            add ? Lizzie.board.getMoveList() : Lizzie.board.getmovelistForSaveLoad());
-    if (add) data.add(saved);
-    return saveTemporaryGame(index, data);
+    if (Lizzie.board != board || board.getHistory() != history || history.getStart() != root) {
+      throw new IOException("The game changed before its save could be captured");
+    }
+    return new SavedGameCapture(
+        sgf, preview, new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()), moveNumber, moves);
   }
 
-  private boolean saveTemporaryGame(int index, ArrayList<TempGameData> data) {
-    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
-    putTempGameList(candidate, data);
-    return saveGameRecord(
-        resolveSavedGameFile(false, index, "sgf"),
-        resolveSavedGameFile(false, index, "bmp"),
-        false,
-        candidate);
-  }
-
-  public boolean saveAutoGame(int index) {
-    return callSavedGameAction(() -> saveAutoGameOnEdt(index));
-  }
-
-  private boolean saveAutoGameOnEdt(int index) {
-    if (!autoSaveStartupPrepared || !recoverAutoSaveOnEdt()) return false;
-    JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
-    candidate.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
-    candidate.put(
-        "save-auto-game-time" + index,
-        new SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(new Date()));
-    candidate.put("save-auto-game-move-number" + index, Lizzie.board.getCurrentMovenumber());
-    candidate.put(
-        "save-auto-game-move-list" + index,
-        Lizzie.board.moveListToString(Lizzie.board.getmovelistForSaveLoad()));
-    if (index == 1) candidate.put("save-auto-game-index2", -1);
-    return saveGameRecord(
-        resolveAutoSaveFile(index, "sgf"), resolveAutoSaveFile(index, "bmp"), true, candidate);
-  }
-
-  private static void runSavedGameAction(Runnable action) {
-    callSavedGameAction(
+  private java.util.concurrent.CompletableFuture<Boolean> saveTemporaryGameAsync(
+      int index, String name, boolean add) {
+    return onSavedGameOwner(
         () -> {
-          action.run();
-          return null;
+          Config config = Lizzie.config;
+          File directory = config.getWorkDirectory();
+          SavedGameCapture capture;
+          try {
+            capture = captureSavedGame(false, add);
+          } catch (IOException | RuntimeException failure) {
+            savedGameEditFailed(savedGameFailure(failure));
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
+          }
+          return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
+                  () -> {
+                    JSONObject candidate = new JSONObject(config.saveBoardConfig.toString());
+                    ArrayList<TempGameData> data = getSaveGameList(candidate);
+                    TempGameData record = add ? new TempGameData() : findTemporaryGame(data, index);
+                    if (record == null) return () -> null;
+                    record.name = name;
+                    record.time = capture.time();
+                    record.curMoveNumer = capture.moveNumber();
+                    record.moves = capture.moves();
+                    Config.SavedBoardSave base = config.prepareTempBoardSave(candidate);
+                    return () -> {
+                      record.index = add
+                          ? allocateTemporaryGameIndex(directory, index, candidate, data) : index;
+                      if (add) data.add(record);
+                      putTempGameList(candidate, data);
+                      Config.SavedBoardSave metadata = base.withSave(candidate);
+                      writeGameRecord(
+                          savedGameFile(directory, false, record.index, "sgf").toPath(),
+                          savedGameFile(directory, false, record.index, "bmp").toPath(),
+                          capture, metadata);
+                      return metadata;
+                    };
+                  },
+                  () -> true,
+                  metadata -> { if (metadata != null) metadata.publish(); },
+                  failure -> savedGameEditFailed(savedGameFailure(failure)))
+              .thenApply(metadata -> metadata != null);
         });
   }
 
-  private static <T> T callSavedGameAction(java.util.function.Supplier<T> action) {
+  /** Synchronous compatibility entry; never wait for disk completion on the event thread. */
+  public boolean saveAutoGame(int index) {
+    requireBackgroundSaveWait();
+    return Boolean.TRUE.equals(awaitSavedGameAction(saveAutoGameAsync(index)));
+  }
+
+  public java.util.concurrent.CompletableFuture<Boolean> saveAutoGameAsync(int index) {
+    return onSavedGameOwner(
+        () -> {
+          if (!autoSaveStartupPrepared) {
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
+          }
+          Config config = Lizzie.config;
+          File directory = config.getWorkDirectory();
+          SavedGameCapture capture;
+          try {
+            capture = captureSavedGame(true, false);
+          } catch (IOException | RuntimeException failure) {
+            org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+                .warn("Could not capture automatic save", failure);
+            return java.util.concurrent.CompletableFuture.completedFuture(false);
+          }
+          return recoverAutoSaveAsync().thenCompose(
+              recovered -> {
+                if (!recovered) return java.util.concurrent.CompletableFuture.completedFuture(false);
+                return SgfSaveCoordinator.<Config.SavedBoardSave>submitPreparedSave(
+                        () -> {
+                          JSONObject candidate = new JSONObject(config.saveBoardConfig.toString());
+                          candidate.put("save-auto-game-index" + index, index == 2 ? -5 : 1);
+                          candidate.put("save-auto-game-time" + index, capture.time());
+                          candidate.put("save-auto-game-move-number" + index, capture.moveNumber());
+                          candidate.put("save-auto-game-move-list" + index, capture.moves());
+                          if (index == 1) candidate.put("save-auto-game-index2", -1);
+                          Config.SavedBoardSave metadata = config.prepareTempBoardSave(candidate);
+                          return () -> {
+                            writeGameRecord(
+                                savedGameFile(directory, true, index, "sgf").toPath(),
+                                savedGameFile(directory, true, index, "bmp").toPath(), capture, metadata);
+                            return metadata;
+                          };
+                        },
+                        () -> true,
+                        Config.SavedBoardSave::publish,
+                        failure -> org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+                            .warn("Could not save automatic game record", failure))
+                    .thenApply(metadata -> true);
+              });
+        });
+  }
+
+  private static <T> java.util.concurrent.CompletableFuture<T> onSavedGameOwner(
+      java.util.function.Supplier<java.util.concurrent.CompletableFuture<T>> action) {
+    java.util.concurrent.CompletableFuture<T> result = new java.util.concurrent.CompletableFuture<>();
+    Runnable start = () -> {
+      try {
+        action.get().whenComplete((value, failure) -> {
+          if (failure == null) result.complete(value);
+          else result.completeExceptionally(failure);
+        });
+      } catch (RuntimeException failure) {
+        result.completeExceptionally(failure);
+      }
+    };
+    if (SwingUtilities.isEventDispatchThread()) start.run();
+    else SwingUtilities.invokeLater(start);
+    return result;
+  }
+
+  private static void requireBackgroundSaveWait() {
     if (SwingUtilities.isEventDispatchThread()) {
-      return action.get();
+      throw new IllegalStateException("Use the asynchronous saved-game operation on the event thread");
     }
-    // The periodic caller is a scheduler thread. Serialize it with UI saves/exports and
-    // their raw flags; keep the synchronous contract required by shutdown's final save.
-    java.util.concurrent.FutureTask<T> task = new java.util.concurrent.FutureTask<>(action::get);
-    SwingUtilities.invokeLater(task);
+  }
+
+  private static void waitForSavedGameAction(java.util.concurrent.CompletableFuture<?> operation) {
+    if (!SwingUtilities.isEventDispatchThread()) awaitSavedGameAction(operation);
+  }
+
+  private static <T> T awaitSavedGameAction(java.util.concurrent.CompletableFuture<T> operation) {
+    requireBackgroundSaveWait();
     boolean interrupted = false;
     try {
       while (true) {
         try {
-          return task.get();
+          return operation.get();
         } catch (InterruptedException failure) {
           interrupted = true;
         }
       }
     } catch (java.util.concurrent.ExecutionException failure) {
-      throw new IllegalStateException("Saved-game action failed", failure.getCause());
+      Throwable cause = failure.getCause();
+      while (cause instanceof java.util.concurrent.CompletionException && cause.getCause() != null) {
+        cause = cause.getCause();
+      }
+      if (cause instanceof IOException
+          || cause instanceof java.util.concurrent.RejectedExecutionException) return null;
+      if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+      throw new IllegalStateException("Saved-game action failed", cause);
     } finally {
       if (interrupted) Thread.currentThread().interrupt();
     }
   }
 
-  private boolean saveGameRecord(
-      File sgfFile, File imageFile, boolean autoSave, JSONObject candidate) {
-    try {
-      SGFParser.save(Lizzie.board, sgfFile.getPath(), autoSave);
-      // Never advertise a failed SGF write or hide the previous crash-recovery slot.
-      // These are individual atomic replacements, not a multi-file crash transaction:
-      // a later metadata failure leaves the complete new SGF available for manual recovery.
-      Lizzie.config.saveTempBoard(candidate);
-    } catch (IOException | RuntimeException failure) {
-      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
-          .warn("Could not save game record: {}", sgfFile, failure);
-      if (!autoSave) {
-        savedGameEditFailed(new IOException("Could not save game record: " + sgfFile, failure));
-      }
-      return false;
-    }
-    // A thumbnail is optional. Its failure must not make the successfully saved SGF undiscoverable.
-    saveGamePreview(imageFile);
-    return true;
+  private static void runSavedGameAction(Runnable action) {
+    callSavedGameAction(() -> { action.run(); return null; });
   }
 
-  private void saveGamePreview(File imageFile) {
+  private static <T> T callSavedGameAction(java.util.function.Supplier<T> action) {
+    if (SwingUtilities.isEventDispatchThread()) return action.get();
+    return awaitSavedGameAction(onSavedGameOwner(
+        () -> java.util.concurrent.CompletableFuture.completedFuture(action.get())));
+  }
+
+  private static IOException savedGameFailure(Throwable failure) {
+    return failure instanceof IOException ? (IOException) failure
+        : new IOException("Could not save game record", failure);
+  }
+
+  private static void writeGameRecord(
+      Path sgfFile, Path imageFile, SavedGameCapture capture, Config.SavedBoardSave metadata)
+      throws IOException {
+    try {
+      Files.createDirectories(sgfFile.toAbsolutePath().getParent());
+      AtomicSgfFileWriter.write(sgfFile, capture.sgf());
+      // These are individual atomic replacements, not a multi-file crash transaction.
+      // A failed metadata write leaves the complete new SGF available for manual recovery.
+      metadata.write();
+    } catch (RuntimeException failure) {
+      throw savedGameFailure(failure);
+    }
+    writeGamePreview(imageFile, capture.preview());
+  }
+
+  private static void writeGamePreview(Path imageFile, RenderedImage image) {
     Path staged = null;
     try {
-      RenderedImage image = (RenderedImage) saveMainBoardToImageOri();
-      Path target = imageFile.toPath().toAbsolutePath();
+      if (image == null) throw new IOException("No saved-game preview was captured");
+      Path target = imageFile.toAbsolutePath();
       staged = Files.createTempFile(target.getParent(), ".lizzie-preview-", ".tmp");
       if (!ImageIO.write(image, "bmp", staged.toFile())) {
         throw new IOException("No BMP writer for saved-game preview");
       }
-      Files.move(
-          staged,
-          target,
-          StandardCopyOption.ATOMIC_MOVE,
-          StandardCopyOption.REPLACE_EXISTING);
+      Files.move(staged, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
     } catch (IOException | RuntimeException failure) {
       try {
-        Files.deleteIfExists(imageFile.toPath());
+        Files.deleteIfExists(imageFile);
       } catch (IOException cleanupFailure) {
         failure.addSuppressed(cleanupFailure);
       }
-      failure.printStackTrace();
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Saved SGF has no usable preview", failure);
     } finally {
       if (staged != null) {
         try {
           Files.deleteIfExists(staged);
         } catch (IOException cleanupFailure) {
-          cleanupFailure.printStackTrace();
+          org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+              .warn("Could not remove preview staging file", cleanupFailure);
         }
       }
     }
   }
 
+
+  private long savedGamePanelSession;
+  private long savedGameOpenRequest;
+
+  private boolean deferSavedGameOpenUntilWritesComplete(Runnable reopen) {
+    long request = ++savedGameOpenRequest;
+    java.util.concurrent.CompletableFuture<Void> pending = SgfSaveCoordinator.pendingSaves();
+    if (pending.isDone()) return false;
+    Config config = Lizzie.config;
+    Board board = Lizzie.board;
+    JLayeredPane panel = tempGamePanelAll;
+    long session = savedGamePanelSession;
+    GameEditSnapshot snapshot;
+    try {
+      snapshot = GameEditSnapshot.capture(board);
+    } catch (RuntimeException failure) {
+      savedGameEditFailed(savedGameFailure(failure));
+      return true;
+    }
+    BooleanSupplier stillCurrent = () ->
+        request == savedGameOpenRequest
+            && Lizzie.frame == this && Lizzie.config == config && Lizzie.board == board
+            && savedGamePanelSession == session && tempGamePanelAll == panel
+            && panel != null && panel.isVisible() && snapshot.isCurrent(board);
+    resumeSavedGameOpenAfterWrites(pending, stillCurrent, reopen);
+    return true;
+  }
+
+  private void resumeSavedGameOpenAfterWrites(
+      java.util.concurrent.CompletableFuture<Void> pending,
+      BooleanSupplier stillCurrent, Runnable reopen) {
+    pending.whenComplete((ignored, failure) -> SwingUtilities.invokeLater(() -> {
+      if (!stillCurrent.getAsBoolean()) return;
+      if (failure != null) {
+        savedGameEditFailed(savedGameFailure(failure));
+        return;
+      }
+      // A barrier covers only the writes accepted when it was captured.
+      java.util.concurrent.CompletableFuture<Void> remaining = SgfSaveCoordinator.pendingSaves();
+      if (remaining.isDone()) reopen.run();
+      else resumeSavedGameOpenAfterWrites(remaining, stillCurrent, reopen);
+    }));
+  }
+
+  private void finishSavedGamePanelAction(
+      java.util.concurrent.CompletableFuture<Boolean> operation, javax.swing.AbstractButton button,
+      boolean originalListPane, boolean originalVariationGraph) {
+    Config config = Lizzie.config;
+    Board board = Lizzie.board;
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode root = history.getStart();
+    long session = savedGamePanelSession;
+    JLayeredPane panel = tempGamePanelAll;
+    button.setEnabled(false);
+    operation.whenComplete((saved, failure) -> {
+      Runnable completion = () -> {
+        button.setEnabled(true);
+        if (failure != null || !Boolean.TRUE.equals(saved)
+            || Lizzie.frame != this || Lizzie.config != config || Lizzie.board != board
+            || board.getHistory() != history || history.getStart() != root
+            || savedGamePanelSession != session || tempGamePanelAll != panel
+            || (panel != null && !panel.isVisible())) return;
+        config.showListPane = originalListPane;
+        config.showVariationGraph = originalVariationGraph;
+        showTempGamePanel();
+      };
+      if (SwingUtilities.isEventDispatchThread()) completion.run();
+      else SwingUtilities.invokeLater(completion);
+    });
+  }
+
   private void openSavedGame(
       boolean isAutoSave,
       int index,
-      int moveNumber,
-      String moveList,
       boolean originalShowListPane,
       boolean originalShowVariationGraph) {
-    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        () ->
-            openSavedGame(
-                isAutoSave, index, moveNumber, moveList,
-                originalShowListPane, originalShowVariationGraph))) {
+    Runnable reopen = () ->
+        openSavedGame(isAutoSave, index, originalShowListPane, originalShowVariationGraph);
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(reopen)
+        || deferUntilHumanSlExit(reopen)) {
       return;
     }
+    // SGF replacement precedes metadata publication. Every saved-list entrypoint must wait
+    // until those writes settle, and old controls/previews must resolve the published cursor.
+    if (deferSavedGameOpenUntilWritesComplete(reopen)) return;
+    TempGameData saved = getTempGameList().stream()
+        .filter(record -> record.isAutoSave == isAutoSave && record.index == index)
+        .findFirst().orElse(null);
+    if (saved == null) return;
     // A deferred loadFile return is only an acknowledgement, not a successful load. Keep
     // position restoration and closing the saved list inside the actual success continuation.
     loadFile(
@@ -15505,12 +15812,12 @@ public class LizzieFrame extends JFrame {
           board.isLoadingFile = true;
           Lizzie.config.playSound = false;
           try {
-            if (!moveList.isEmpty()) {
+            if (!saved.moves.isEmpty()) {
               // Saved paths start at the root, even when "load last move" is enabled.
               board.goToMoveNumber(0);
-              board.playList(moveList);
+              board.playList(saved.moves);
             } else {
-              board.goToMoveNumber(moveNumber);
+              board.goToMoveNumber(saved.curMoveNumer);
             }
           } finally {
             board.isLoadingFile = originalLoading;
@@ -15582,7 +15889,7 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             openSavedGame(
-                isAutoSave, index, moveNumber, moveList,
+                isAutoSave, index,
                 oriShowListPane, OriShowVariationGraph);
           }
         });
@@ -15619,12 +15926,9 @@ public class LizzieFrame extends JFrame {
               return;
             }
             isShowingBigBoardPanel = false;
-            if (!saveTempGame(index, Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
-              return;
-            }
-            Lizzie.config.showListPane = oriShowListPane;
-            Lizzie.config.showVariationGraph = OriShowVariationGraph;
-            showTempGamePanel();
+            finishSavedGamePanelAction(
+                saveTemporaryGameAsync(index, Lizzie.board.getHistory().getGameInfo().getSaveFileName(), false),
+                btnSave, oriShowListPane, OriShowVariationGraph);
           }
         });
 
@@ -15636,16 +15940,13 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
-            if (isAutoSave) {
-              JSONObject candidate = new JSONObject(Lizzie.config.saveBoardConfig.toString());
-              candidate.put("save-auto-game-index" + index, -2);
-              if (!persistSavedGameConfig(candidate)) return;
-            } else {
-              deleteTempGame(index);
-            }
-            Lizzie.config.showListPane = oriShowListPane;
-            Lizzie.config.showVariationGraph = OriShowVariationGraph;
-            showTempGamePanel();
+            java.util.concurrent.CompletableFuture<Boolean> deletion = isAutoSave
+                ? editSavedGames((candidate, removed) -> {
+                    candidate.put("save-auto-game-index" + index, -2);
+                    return true;
+                  })
+                : deleteTempGameAsync(index);
+            finishSavedGamePanelAction(deletion, btnDelete, oriShowListPane, OriShowVariationGraph);
           }
         });
 
@@ -15661,10 +15962,9 @@ public class LizzieFrame extends JFrame {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            renameTempGame(index, txtName.getText());
-            Lizzie.config.showListPane = oriShowListPane;
-            Lizzie.config.showVariationGraph = OriShowVariationGraph;
-            showTempGamePanel();
+            finishSavedGamePanelAction(
+                renameTempGameAsync(index, txtName.getText()), btnRename,
+                oriShowListPane, OriShowVariationGraph);
           }
         });
     lblIndex.setBounds(x + 5, y + 300, 65, 20);
@@ -15710,16 +16010,12 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
-            if (!addTempGame(
-                index,
-                txtName.getText().length() > 0
-                    ? txtName.getText()
-                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
-              return;
-            }
-            Lizzie.config.showListPane = oriShowListPane;
-            Lizzie.config.showVariationGraph = OriShowVariationGraph;
-            showTempGamePanel();
+            finishSavedGamePanelAction(
+                saveTemporaryGameAsync(index,
+                    txtName.getText().length() > 0
+                        ? txtName.getText()
+                        : Lizzie.board.getHistory().getGameInfo().getSaveFileName(), true),
+                btnSave, oriShowListPane, OriShowVariationGraph);
           }
         });
     boardImage.addActionListener(
@@ -15727,16 +16023,12 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             // TBD未完成
-            if (!addTempGame(
-                index,
-                txtName.getText().length() > 0
-                    ? txtName.getText()
-                    : Lizzie.board.getHistory().getGameInfo().getSaveFileName())) {
-              return;
-            }
-            Lizzie.config.showListPane = oriShowListPane;
-            Lizzie.config.showVariationGraph = OriShowVariationGraph;
-            showTempGamePanel();
+            finishSavedGamePanelAction(
+                saveTemporaryGameAsync(index,
+                    txtName.getText().length() > 0
+                        ? txtName.getText()
+                        : Lizzie.board.getHistory().getGameInfo().getSaveFileName(), true),
+                boardImage, oriShowListPane, OriShowVariationGraph);
           }
         });
 
@@ -15751,7 +16043,13 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean saveTempGame(ArrayList<TempGameData> tempGameList) {
-    return callSavedGameAction(() -> persistTemporaryGameList(tempGameList));
+    requireBackgroundSaveWait();
+    JSONObject frozen = new JSONObject();
+    putTempGameList(frozen, tempGameList);
+    return Boolean.TRUE.equals(awaitSavedGameAction(editSavedGames((candidate, removed) -> {
+      putTempGameList(candidate, getSaveGameList(frozen));
+      return true;
+    })));
   }
 
   private static void putTempGameList(JSONObject target, ArrayList<TempGameData> tempGameList) {
@@ -15783,17 +16081,21 @@ public class LizzieFrame extends JFrame {
   }
 
   public ArrayList<TempGameData> getSaveGameList() {
+    return getSaveGameList(Lizzie.config.saveBoardConfig);
+  }
+
+  private static ArrayList<TempGameData> getSaveGameList(JSONObject metadata) {
     ArrayList<TempGameData> tempGameList = new ArrayList<TempGameData>();
     Optional<JSONArray> saveIndex =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-index"));
+        Optional.ofNullable(metadata.optJSONArray("save-game-index"));
     Optional<JSONArray> saveName =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-name"));
+        Optional.ofNullable(metadata.optJSONArray("save-game-name"));
     Optional<JSONArray> saveTime =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-time"));
+        Optional.ofNullable(metadata.optJSONArray("save-game-time"));
     Optional<JSONArray> saveMoveNumber =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-number"));
+        Optional.ofNullable(metadata.optJSONArray("save-game-move-number"));
     Optional<JSONArray> saveMoveList =
-        Optional.ofNullable(Lizzie.config.saveBoardConfig.optJSONArray("save-game-move-list"));
+        Optional.ofNullable(metadata.optJSONArray("save-game-move-list"));
     Set<Integer> seen = new HashSet<>();
     for (int s = 0; s < (saveIndex.isPresent() ? saveIndex.get().length() : 0); s++) {
       TempGameData data = new TempGameData();
@@ -15836,6 +16138,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void hideTempGamePanel(boolean oriShowListPane, boolean OriShowVariationGraph) {
+    savedGamePanelSession++;
     Lizzie.config.showListPane = oriShowListPane;
     Lizzie.config.showVariationGraph = OriShowVariationGraph;
     if (Lizzie.config.showListPane()) setHideListScrollpane(true);
@@ -15850,6 +16153,7 @@ public class LizzieFrame extends JFrame {
   public void showTempGamePanel() {
     canShowBigBoardImage = true;
     if (!tempGamePanelAll.isVisible()) {
+      savedGamePanelSession++;
       oriShowListPane = Lizzie.config.showListPane();
       OriShowVariationGraph = Lizzie.config.showVariationGraph;
     }
@@ -15956,8 +16260,8 @@ public class LizzieFrame extends JFrame {
                     if (ret == JOptionPane.CANCEL_OPTION || ret == -1) {
                       return;
                     }
-                    deleteAllTempGame();
-                    showTempGamePanel();
+                    finishSavedGamePanelAction(
+                        deleteAllTempGameAsync(), btnDeleteAll, oriShowListPane, OriShowVariationGraph);
                   }
                 });
           }
@@ -16113,7 +16417,7 @@ public class LizzieFrame extends JFrame {
               if (data.x < x && (data.x + 300) > x)
                 if (data.y < y && (data.y + 300) > y) {
                   openSavedGame(
-                      data.isAutoSave, data.index, data.curMoveNumer, data.moves,
+                      data.isAutoSave, data.index,
                       oriShowListPane, OriShowVariationGraph);
                   break;
                 }
@@ -16163,7 +16467,7 @@ public class LizzieFrame extends JFrame {
           public void mouseClicked(MouseEvent e) {
             if (e.getX() == 0 && e.getY() == 0) {
               openSavedGame(
-                  isAutoSave, index, moveNumber, moveList,
+                  isAutoSave, index,
                   oriShowListPane, OriShowVariationGraph);
             }
           }
@@ -17239,9 +17543,6 @@ public class LizzieFrame extends JFrame {
   private static File savedGameFile(
       File workDirectory, boolean autoSave, int index, String extension) {
     File saveDirectory = new File(workDirectory, "save");
-    if (!saveDirectory.isDirectory()) {
-      saveDirectory.mkdirs();
-    }
     return new File(saveDirectory, (autoSave ? "autoGame" : "game") + index + "." + extension);
   }
 

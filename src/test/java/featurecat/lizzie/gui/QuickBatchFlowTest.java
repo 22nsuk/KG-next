@@ -98,6 +98,7 @@ class QuickBatchFlowTest {
 
   @AfterEach
   void restore() throws Exception {
+    awaitSaves();
     SwingUtilities.invokeAndWait(frame::shutdownKifuEngineSyncCoordinator);
     SwingUtilities.invokeAndWait(() -> {});
     Lizzie.config = previousConfig;
@@ -290,6 +291,7 @@ class QuickBatchFlowTest {
     Files.delete(sourceDirectory);
     Files.writeString(sourceDirectory, "blocking file");
     SwingUtilities.invokeAndWait(() -> completed.completion.accept(ForegroundRestoreResult.SUCCEEDED));
+    awaitSaves();
 
     assertTrue(frame.hasPendingBatchAnalysisSave());
     assertFalse(frame.isBatchAnalysisMode);
@@ -302,6 +304,7 @@ class QuickBatchFlowTest {
     Files.createDirectory(sourceDirectory);
 
     SwingUtilities.invokeAndWait(frame::openFlashBatchAnalysisSettings);
+    awaitSaves();
 
     assertFalse(frame.hasPendingBatchAnalysisSave());
     assertTrue(frame.isBatchAnalysisMode);
@@ -358,12 +361,14 @@ class QuickBatchFlowTest {
     RecordingEngine engine = startRequest();
     blockOutputDirectory();
     SwingUtilities.invokeAndWait(() -> engine.completion.accept(ForegroundRestoreResult.SUCCEEDED));
+    awaitSaves();
     assertTrue(frame.hasPendingBatchAnalysisSave());
 
     SwingUtilities.invokeAndWait(frame::stopFlashBatchAnalysis);
     assertTrue(frame.hasPendingBatchAnalysisSave(), "stopping must retain the unsaved result");
     restoreOutputDirectory();
     SwingUtilities.invokeAndWait(frame::openFlashBatchAnalysisSettings);
+    awaitSaves();
 
     assertFalse(frame.hasPendingBatchAnalysisSave());
     assertFalse(frame.isBatchAnalysisMode);
@@ -393,6 +398,7 @@ class QuickBatchFlowTest {
     blockOutputDirectory();
 
     SwingUtilities.invokeAndWait(() -> engine.completion.accept(ForegroundRestoreResult.SUCCEEDED));
+    awaitSaves();
 
     String summary = Lizzie.board.getHistory().getStart().getData().comment;
     for (String key : List.of("SGFParse.blackAiScore", "SGFParse.whiteAiScore",
@@ -401,12 +407,58 @@ class QuickBatchFlowTest {
     }
     assertTrue(frame.hasPendingBatchAnalysisSave());
     SwingUtilities.invokeAndWait(frame::openFlashBatchAnalysisSettings);
+    awaitSaves();
     restoreOutputDirectory();
     SwingUtilities.invokeAndWait(frame::openFlashBatchAnalysisSettings);
+    awaitSaves();
 
     assertEquals(summary, Lizzie.board.getHistory().getStart().getData().comment);
     assertTrue(savedPayload().contains(summary), savedPayload());
     assertEquals(frame.Batchfiles.get(1), frame.attempted);
+  }
+
+  @Test
+  void stoppedBatchCannotResumeWhenItsPendingWriteCompletes() throws Exception {
+    RecordingEngine engine = startRequest();
+    CountDownLatch started = new CountDownLatch(1);
+    CountDownLatch release = new CountDownLatch(1);
+    var blocker = SgfSaveCoordinator.submitSave(
+        () -> {
+          started.countDown();
+          try {
+            if (!release.await(10, TimeUnit.SECONDS)) throw new IOException("Blocked writer timed out");
+          } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new IOException(failure);
+          }
+          return null;
+        }, () -> true, ignored -> {}, ignored -> {});
+    try {
+      assertTrue(started.await(5, TimeUnit.SECONDS));
+      SwingUtilities.invokeAndWait(() -> engine.completion.accept(ForegroundRestoreResult.SUCCEEDED));
+      SwingUtilities.invokeAndWait(() -> {
+        assertTrue(frame.hasPendingBatchAnalysisSave());
+        assertNull(frame.attempted, "the next file must wait for the write");
+        frame.stopFlashBatchAnalysis();
+      });
+      assertFalse(frame.isBatchAnalysisMode);
+    } finally {
+      release.countDown();
+      blocker.get(5, TimeUnit.SECONDS);
+      awaitSaves();
+    }
+
+    assertFalse(frame.hasPendingBatchAnalysisSave());
+    assertFalse(frame.isBatchAnalysisMode);
+    assertNull(frame.attempted);
+    assertEquals(0, frame.BatchAnaNum);
+    assertEquals(2, frame.Batchfiles.size());
+    assertTrue(savedPayload().contains("current result"));
+  }
+
+  private static void awaitSaves() throws Exception {
+    SgfSaveCoordinator.pendingSaves().handle((ignored, failure) -> null).get(5, TimeUnit.SECONDS);
+    SwingUtilities.invokeAndWait(() -> {});
   }
 
   private void assertNoSavedResultOrAdvance() throws IOException {

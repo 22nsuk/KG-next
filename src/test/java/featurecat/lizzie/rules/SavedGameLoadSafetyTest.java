@@ -11,6 +11,7 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
+import featurecat.lizzie.gui.SgfSaveTestSupport;
 import featurecat.lizzie.gui.SidebarPanel;
 import featurecat.lizzie.gui.TempGameData;
 import java.awt.AWTEvent;
@@ -38,10 +39,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import javax.imageio.ImageIO;
 import javax.swing.JButton;
@@ -151,6 +155,7 @@ class SavedGameLoadSafetyTest {
 
   @BeforeEach
   void prepare() throws Exception {
+    SgfSaveTestSupport.awaitPending();
     previousResources = Lizzie.resourceBundle;
     previousManager = Lizzie.engineManager;
     previousSecondary = Lizzie.leelaz2;
@@ -243,6 +248,7 @@ class SavedGameLoadSafetyTest {
   @AfterEach
   void restore() throws Exception {
     try {
+      SgfSaveTestSupport.awaitPending();
       if (frame != null) {
         SwingUtilities.invokeAndWait(() -> {});
         Object coordinator = getFrameField("kifuEngineSyncCoordinator");
@@ -377,6 +383,261 @@ class SavedGameLoadSafetyTest {
     if (entry == EntryPoint.PREVIEW) assertFalse(preview.isVisible());
   }
 
+  static Stream<Arguments> overwrittenItems() {
+    return Arrays.stream(EntryPoint.values()).flatMap(entry ->
+        Arrays.stream(Slot.values()).map(slot -> Arguments.of(entry, slot)));
+  }
+
+  @ParameterizedTest(name = "{0}, {1}")
+  @MethodSource("overwrittenItems")
+  void overwrittenItemCannotOpenBeforePublicationAndUsesLatestPositionAfterwards(
+      EntryPoint entry, Slot slot) throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, slot);
+    config.saveBoard = new JSONObject().put("save", config.saveBoardConfig);
+    Files.writeString(savedFile(slot), SAVED_SGF);
+    setFrameField("autoSaveStartupPrepared", true);
+    setFrameField("autoSaveRecoveryComplete", true);
+    Lizzie.setPrimaryEngine(null);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    BoardHistoryNode selected = current.getCurrentHistoryNode();
+    String metadata = config.saveBoardConfig.toString();
+    AtomicReference<CompletableFuture<Boolean>> save = new AtomicReference<>();
+
+    try (var held = SgfSaveTestSupport.holdNextPublication()) {
+      SwingUtilities.invokeAndWait(() -> {
+        if (slot.automatic) {
+          save.set(frame.saveAutoGameAsync(1));
+        } else {
+          try {
+            Method overwrite = LizzieFrame.class.getDeclaredMethod(
+                "saveTemporaryGameAsync", int.class, String.class, boolean.class);
+            overwrite.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            CompletableFuture<Boolean> completion =
+                (CompletableFuture<Boolean>) overwrite.invoke(frame, 1, "replacement", false);
+            save.set(completion);
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+        }
+      });
+      held.awaitWritten();
+      // Real SGF/manifest/preview writes finished; the old row still owns the previous path.
+      assertTrue(Files.readString(savedFile(slot)).contains(";B[aa]"));
+      assertEquals(metadata, config.saveBoardConfig.toString());
+      assertFalse(save.get().isDone());
+      SwingUtilities.invokeAndWait(() -> {
+        click(entry, SavedPosition.BRANCH, slot);
+        assertSame(current, Lizzie.board.getHistory(), "pending overwrite must not open a mixed record");
+        assertSame(selected, current.getCurrentHistoryNode());
+        assertEquals(0, frame.listCloses);
+        assertTrue(listContainer.isVisible());
+      });
+      held.release();
+    }
+    assertTrue(save.get().get(5, TimeUnit.SECONDS));
+    // The original click must resume after publication without another click.
+    SwingUtilities.invokeAndWait(() -> {});
+    SwingUtilities.invokeAndWait(() -> {});
+    SwingUtilities.invokeAndWait(() -> {
+      BoardHistoryList loaded = Lizzie.board.getHistory();
+      assertNotSame(current, loaded);
+      assertEquals(1, loaded.getStart().numberOfChildren(), "old moves must not create a new variation");
+      assertEquals(2, loaded.getStart().next().orElseThrow().numberOfChildren());
+      assertEquals(2, loaded.getMoveNumber());
+      assertEquals("original selected", loaded.getData().comment);
+      assertEquals(Stone.BLACK, rules.stoneAt(0, 0));
+      assertEquals(Stone.WHITE, rules.stoneAt(1, 1));
+      assertEquals(Stone.EMPTY, rules.stoneAt(3, 3));
+      assertFalse(listContainer.isVisible());
+    });
+  }
+
+  @Test
+  void queuedSavedItemOpenSurvivesListRefreshAndOrdinaryAnalysis() throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Lizzie.setPrimaryEngine(null);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> {
+        click(EntryPoint.BUTTON, SavedPosition.BRANCH, Slot.MANUAL);
+        assertSame(current, Lizzie.board.getHistory());
+        Lizzie.board.getData().winrate = 61;
+        Lizzie.board.getData().setPlayouts(42);
+        Lizzie.board.getData().setGeneratedComment(() -> "ordinary analysis update");
+        frame.showTempGamePanel();
+        assertTrue(listContainer.isVisible());
+      });
+      blocked.release();
+    }
+    drainSavedOpen();
+    assertEquals("saved black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack());
+    assertEquals(1, frame.listCloses);
+    assertFalse(listContainer.isVisible());
+  }
+
+  static Stream<String> pendingOpenRetirements() {
+    return Stream.of("history", "comment", "cursor", "closed", "reopened", "frame", "config",
+        "primary-invalidation", "secondary-invalidation");
+  }
+
+  @ParameterizedTest
+  @MethodSource("pendingOpenRetirements")
+  void queuedSavedItemOpenDoesNotReplaceNewerUserState(String change) throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Lizzie.setPrimaryEngine(null);
+    BoardHistoryList replacement = SGFParser.parseSgf("(;SZ[5]C[newer game];B[ee])", true);
+    Config replacementConfig = change.equals("config")
+        ? ConfigTestHelper.createForTests(directory.resolve("replacement")) : null;
+    frame.loadedPlayers = new CopyOnWriteArrayList<>();
+    AtomicReference<BoardHistoryList> retainedHistory = new AtomicReference<>();
+    AtomicReference<BoardHistoryNode> retainedPosition = new AtomicReference<>();
+    AtomicReference<String> retainedComment = new AtomicReference<>();
+    AtomicInteger closesAfterChange = new AtomicInteger();
+    try {
+      try (var blocked = SgfSaveTestSupport.blockWorker()) {
+        SwingUtilities.invokeAndWait(() -> {
+          click(EntryPoint.BUTTON, SavedPosition.BRANCH, Slot.MANUAL);
+          switch (change) {
+            case "history" -> Lizzie.board.setHistory(replacement);
+            case "comment" -> Lizzie.board.getData().setAuthoredComment("newer authored comment");
+            case "cursor" -> Lizzie.board.getHistory().setHead(Lizzie.board.getHistory().getStart());
+            case "closed" -> frame.hideTempGamePanel(true, true);
+            case "reopened" -> {
+              frame.hideTempGamePanel(true, true);
+              frame.showTempGamePanel();
+            }
+            case "frame" -> Lizzie.frame = null;
+            case "config" -> Lizzie.config = replacementConfig;
+            case "primary-invalidation" -> Lizzie.board.getData().invalidatePrimaryAnalysis();
+            case "secondary-invalidation" -> Lizzie.board.getData().invalidateSecondaryAnalysis();
+            default -> throw new AssertionError(change);
+          }
+          retainedHistory.set(Lizzie.board.getHistory());
+          retainedPosition.set(Lizzie.board.getHistory().getCurrentHistoryNode());
+          retainedComment.set(Lizzie.board.getData().comment);
+          closesAfterChange.set(frame.listCloses);
+        });
+        blocked.release();
+      }
+      drainSavedOpen();
+      SwingUtilities.invokeAndWait(() -> {
+        assertSame(retainedHistory.get(), Lizzie.board.getHistory());
+        assertSame(retainedPosition.get(), Lizzie.board.getHistory().getCurrentHistoryNode());
+        assertEquals(retainedComment.get(), Lizzie.board.getData().comment);
+        assertEquals(closesAfterChange.get(), frame.listCloses);
+        assertTrue(frame.loadedPlayers.isEmpty(), "a retired request must never parse its file");
+        assertEquals(0, errorDialogs.get());
+      });
+    } finally {
+      SwingUtilities.invokeAndWait(() -> {
+        Lizzie.frame = frame;
+        Lizzie.config = config;
+      });
+    }
+  }
+
+  @Test
+  void latestSavedItemOpenWinsWhileWritesArePending() throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Files.writeString(savedFile(Slot.AUTO), SAVED_SGF.replace("saved black", "latest black"));
+    Files.copy(directory.resolve("save/game1.bmp"), directory.resolve("save/autoGame1.bmp"));
+    config.saveBoardConfig.put("save-auto-game-index1", 1);
+    config.saveBoardConfig.put("save-auto-game-move-number1", 1);
+    config.saveBoardConfig.put("save-auto-game-move-list1", "");
+    Lizzie.setPrimaryEngine(null);
+    frame.loadedPlayers = new CopyOnWriteArrayList<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> {
+        frame.showTempGamePanel();
+        requestSavedOpen(false, 1);
+        requestSavedOpen(true, 1);
+      });
+      blocked.release();
+    }
+    drainSavedOpen();
+    assertEquals("latest black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack());
+    assertEquals(1, Lizzie.board.getCurrentMovenumber());
+    assertEquals(1, frame.listCloses);
+    assertFalse(listContainer.isVisible());
+    assertFalse(frame.loadedPlayers.contains("saved black"), "the superseded file must not be parsed");
+  }
+
+  @Test
+  void queuedSavedItemOpenAlsoWaitsForWritesAcceptedAfterItsFirstBarrier() throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Lizzie.setPrimaryEngine(null);
+    AtomicReference<CompletableFuture<Path>> laterSave = new AtomicReference<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> {
+        click(EntryPoint.BUTTON, SavedPosition.BRANCH, Slot.MANUAL);
+        laterSave.set(SgfSaveCoordinator.saveCaptured(
+            savedFile(Slot.MANUAL), SAVED_SGF.replace("saved black", "latest disk black"),
+            () -> true, ignored -> {}, failure -> {}));
+      });
+      blocked.release();
+    }
+    laterSave.get().get(5, TimeUnit.SECONDS);
+    drainSavedOpen();
+    assertEquals("latest disk black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack());
+    assertEquals(1, frame.listCloses);
+    assertFalse(listContainer.isVisible());
+  }
+
+  @Test
+  void failedPendingWriteKeepsCurrentGameAndAllowsANewOpenRequest() throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Lizzie.setPrimaryEngine(null);
+    BoardHistoryList current = Lizzie.board.getHistory();
+    Path invalidTarget = Files.createDirectory(directory.resolve("not-a-file.sgf"));
+    Files.writeString(invalidTarget.resolve("keep"), "preserve");
+    AtomicReference<CompletableFuture<Path>> failedSave = new AtomicReference<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> {
+        failedSave.set(SgfSaveCoordinator.saveCaptured(
+            invalidTarget, SAVED_SGF, () -> true, ignored -> {}, failure -> {}));
+        click(EntryPoint.BUTTON, SavedPosition.BRANCH, Slot.MANUAL);
+      });
+      blocked.release();
+    }
+    drainSavedOpen();
+    assertTrue(failedSave.get().isCompletedExceptionally());
+    SwingUtilities.invokeAndWait(() -> {
+      assertSame(current, Lizzie.board.getHistory());
+      assertTrue(listContainer.isVisible());
+      assertEquals(0, frame.listCloses);
+      assertNotNull(frame.reportedSaveFailure, "the deferred open must report the save failure");
+      click(EntryPoint.BUTTON, SavedPosition.BRANCH, Slot.MANUAL);
+    });
+    drainSavedOpen();
+    assertEquals("saved black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack());
+    assertEquals(1, frame.listCloses);
+    assertEquals("preserve", Files.readString(invalidTarget.resolve("keep")));
+  }
+
+  private void drainSavedOpen() throws Exception {
+    SgfSaveTestSupport.awaitPending();
+    SwingUtilities.invokeAndWait(() -> {});
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
+  private void requestSavedOpen(boolean automatic, int index) {
+    assertTrue(SwingUtilities.isEventDispatchThread());
+    try {
+      Method open = LizzieFrame.class.getDeclaredMethod(
+          "openSavedGame", boolean.class, int.class, boolean.class, boolean.class);
+      open.setAccessible(true);
+      open.invoke(frame, automatic, index, true, true);
+    } catch (ReflectiveOperationException failure) {
+      throw new AssertionError(failure);
+    }
+  }
+
   @Test
   void queuedSavedItemCompletionCannotChangeAReplacementGame() throws Exception {
     prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
@@ -415,11 +676,12 @@ class SavedGameLoadSafetyTest {
     String rejectedContent = "not an SGF game tree; preserve this file";
     if (input.equals("malformed")) Files.writeString(rejected, rejectedContent);
     BoardHistoryList current = Lizzie.board.getHistory();
+    AtomicReference<CompletableFuture<Void>> opened = new AtomicReference<>();
     SwingUtilities.invokeAndWait(() -> {
       Lizzie.board.getData().comment = "unsaved current game";
-      openExternalFile(entry, rejected.toFile());
-      Lizzie.frame = null;
+      opened.set(openExternalFile(entry, rejected.toFile()).thenRun(() -> Lizzie.frame = null));
     });
+    opened.get().get(5, TimeUnit.SECONDS);
     assertTrue(errorDialogAttempted.await(5, TimeUnit.SECONDS), "the load failure must be reported");
     SwingUtilities.invokeAndWait(() -> {
       Lizzie.frame = frame;
@@ -445,7 +707,9 @@ class SavedGameLoadSafetyTest {
   void successfulExternalFileBecomesOriginalSaveTarget(FileOpenEntry entry) throws Exception {
     File opened = directory.resolve("opened.sgf").toFile();
     Files.writeString(opened.toPath(), SAVED_SGF);
-    SwingUtilities.invokeAndWait(() -> openExternalFile(entry, opened));
+    AtomicReference<CompletableFuture<Void>> requested = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> requested.set(openExternalFile(entry, opened)));
+    requested.get().get(5, TimeUnit.SECONDS);
     SwingUtilities.invokeAndWait(() -> {
       assertEquals(opened, LizzieFrame.curFile);
       assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
@@ -485,7 +749,7 @@ class SavedGameLoadSafetyTest {
     Path requested = directory.resolve("requested.sgf");
     Files.writeString(requested, SAVED_SGF);
 
-    SwingUtilities.invokeAndWait(() -> frame.restoreStartupGame(new String[] {requested.toString()}));
+    frame.restoreStartupGameAsync(new String[] {requested.toString()}).get(5, TimeUnit.SECONDS);
     SwingUtilities.invokeAndWait(() -> {});
 
     JSONObject persisted = new JSONObject(Files.readString(directory.resolve("save/save")));
@@ -512,6 +776,50 @@ class SavedGameLoadSafetyTest {
     }
   }
 
+  @Test
+  void newestStartupRequestWinsWhilePreviousSessionRecoveryIsPending() throws Exception {
+    String recovery = "(;SZ[5]C[previous periodic];B[aa];W[bb])";
+    Files.writeString(directory.resolve("save/autoGame1.sgf"), "(;SZ[5]C[previous exit])");
+    Files.writeString(directory.resolve("save/autoGame2.sgf"), recovery);
+    config.saveBoardConfig = new JSONObject()
+        .put("save-auto-game-index1", 1)
+        .put("save-auto-game-index2", -5);
+    config.saveBoard = new JSONObject().put("save", config.saveBoardConfig);
+    config.saveTempBoard();
+    String metadata = Files.readString(directory.resolve("save/save"));
+    String supersededSgf = "(;SZ[5]PB[superseded black]PW[superseded white]C[superseded game];B[ee])";
+    Path superseded = Files.writeString(directory.resolve("superseded.sgf"), supersededSgf);
+    Path requested = Files.writeString(directory.resolve("requested.sgf"), SAVED_SGF);
+    frame.loadedPlayers = new CopyOnWriteArrayList<>();
+    AtomicReference<CompletableFuture<Void>> oldRequest = new AtomicReference<>();
+    AtomicReference<CompletableFuture<Void>> newRequest = new AtomicReference<>();
+    try (var blocked = SgfSaveTestSupport.blockWorker()) {
+      SwingUtilities.invokeAndWait(() -> {
+        oldRequest.set(frame.restoreStartupGameAsync(new String[] {superseded.toString()}));
+        newRequest.set(frame.restoreStartupGameAsync(new String[] {requested.toString()}));
+      });
+      assertFalse(oldRequest.get().isDone());
+      assertFalse(newRequest.get().isDone());
+      assertEquals(originalFile, LizzieFrame.curFile);
+      assertTrue(frame.loadedPlayers.isEmpty());
+      assertEquals(metadata, Files.readString(directory.resolve("save/save")));
+      blocked.release();
+      newRequest.get().get(5, TimeUnit.SECONDS);
+      assertThrows(CancellationException.class, () -> oldRequest.get().get(5, TimeUnit.SECONDS));
+    }
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals(requested.toFile(), LizzieFrame.curFile);
+    assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+    assertTrue(frame.loadedPlayers.contains("saved black"), "the winning file must run the actual parser");
+    assertFalse(frame.loadedPlayers.contains("superseded black"), "the older request must never publish a game");
+    assertEquals(supersededSgf, Files.readString(superseded));
+    assertEquals(SAVED_SGF, Files.readString(requested));
+    assertEquals(recovery, Files.readString(directory.resolve("save/autoGame1.sgf")));
+    assertEquals(recovery, Files.readString(directory.resolve("save/autoGame2.sgf")));
+    assertEquals(-1, config.saveBoardConfig.getInt("save-auto-game-index2"));
+    assertEquals(0, errorDialogs.get());
+  }
+
   @ParameterizedTest
   @EnumSource(FileOpenEntry.class)
   void queuedExternalFileCompletionCannotReplaceANewerSaveTarget(FileOpenEntry entry)
@@ -520,13 +828,15 @@ class SavedGameLoadSafetyTest {
     Files.writeString(opened.toPath(), SAVED_SGF);
     File replacementFile = directory.resolve("replacement.sgf").toFile();
     BoardHistoryList replacement = SGFParser.parseSgf("(;SZ[5]C[newer game];B[ee])", true);
-    SwingUtilities.invokeAndWait(() -> {
-      openExternalFile(entry, opened);
+    AtomicReference<CompletableFuture<Void>> requested = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> requested.set(openExternalFile(entry, opened).thenRun(() -> {
+      assertTrue(SwingUtilities.isEventDispatchThread());
       assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment,
           "the file must parse before its queued completion is superseded");
       Lizzie.board.setHistory(replacement);
       LizzieFrame.curFile = replacementFile;
-    });
+    })));
+    requested.get().get(5, TimeUnit.SECONDS);
     SwingUtilities.invokeAndWait(() -> {});
 
     assertAll(
@@ -536,12 +846,11 @@ class SavedGameLoadSafetyTest {
         () -> assertEquals(0, errorDialogs.get()));
   }
 
-  private void openExternalFile(FileOpenEntry entry, File file) {
+  private CompletableFuture<Void> openExternalFile(FileOpenEntry entry, File file) {
     assertTrue(SwingUtilities.isEventDispatchThread());
     Lizzie.leelaz.isLoaded = true;
     if (entry == FileOpenEntry.STARTUP) {
-      frame.restoreStartupGame(new String[] {file.getPath()});
-      return;
+      return frame.restoreStartupGameAsync(new String[] {file.getPath()});
     }
     Transferable files = new Transferable() {
       @Override public DataFlavor[] getTransferDataFlavors() {
@@ -559,6 +868,7 @@ class SavedGameLoadSafetyTest {
       Method drop = LizzieFrame.class.getDeclaredMethod("importDroppedKifuFiles", Transferable.class);
       drop.setAccessible(true);
       drop.invoke(frame, files);
+      return CompletableFuture.completedFuture(null);
     } catch (ReflectiveOperationException failure) {
       throw new AssertionError(failure);
     }
@@ -677,6 +987,25 @@ class SavedGameLoadSafetyTest {
     BoardHistoryNode nodeWhenListClosed;
     BoardHistoryNode nodeWhenResumeScheduled;
     CountDownLatch resumeScheduled;
+    List<String> loadedPlayers;
+    java.io.IOException reportedSaveFailure;
+
+    @Override
+    protected void savedGameEditFailed(java.io.IOException failure) {
+      assertTrue(SwingUtilities.isEventDispatchThread());
+      reportedSaveFailure = failure;
+    }
+
+    @Override
+    public java.awt.Image saveMainBoardToImageOri() {
+      return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+    }
+
+    @Override
+    public void setPlayers(String white, String black) {
+      super.setPlayers(white, black);
+      if (loadedPlayers != null) loadedPlayers.add(black);
+    }
 
     @Override
     public void hideTempGamePanel(boolean showList, boolean showVariation) {

@@ -776,9 +776,7 @@ public class Board {
     stack.push(node);
     while (!stack.isEmpty()) {
       BoardHistoryNode cur = stack.pop();
-      if (cur.getData().getPlayouts2() > 0) {
-        cur.getData().isChanged2 = true;
-      }
+      cur.getData().invalidateSecondaryAnalysis();
       if (cur.numberOfChildren() >= 1) {
         for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
           stack.push(cur.getVariations().get(i));
@@ -792,8 +790,7 @@ public class Board {
   }
 
   public void clearbestmoves2() {
-    if (history.getCurrentHistoryNode().getData().getPlayouts2() > 0)
-      history.getCurrentHistoryNode().getData().isChanged2 = true;
+    history.getCurrentHistoryNode().getData().invalidateSecondaryAnalysis();
   }
 
   public void savelistforswitch() {
@@ -1018,20 +1015,11 @@ public class Board {
    * @param comment the comment of stone
    */
   public void comment(String comment) {
+    BoardData data;
     synchronized (this) {
-      //      String[] params = comment.split("\n");
-      //      comment = "";
-      //      boolean first = true;
-      //      for (int i = 0; i < params.length; i++) {
-      //        if (!params[i].startsWith("贴目")) {
-      //          if (first) {
-      //            comment += params[i];
-      //            first = false;
-      //          } else comment += "\n" + params[i];
-      //        }
-      //      }
-      history.getData().comment = comment;
+      data = history.getData();
     }
+    data.setAuthoredComment(comment);
   }
 
   /**

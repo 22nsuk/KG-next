@@ -4,6 +4,8 @@ The four Save As modes use the same chooser, owned by the main window. Existing
 extension normalization and overwrite cancellation are retained. The filename
 field uses the normal chooser behavior; no hidden frame or delayed focus thread
 is created. Saving over the current original file uses the same write pipeline.
+Batch analysis, single-file automatic analysis, played games, contribution games,
+periodic/exit saves and saved-list edits also use that worker.
 
 ## Snapshot and publication
 
@@ -24,9 +26,14 @@ replaying, navigating or pruning the live tree. Other export modes retain every
 variation. Temporary raw/comment flags are restored even when serialization
 fails.
 
-A single worker writes accepted requests in order (at most 16 waiting writes).
-It flushes a temporary UTF-8 file in the destination directory, then atomically
-replaces the destination. There is deliberately no destructive fallback on a
+A single worker writes accepted requests in order (one active request and at most
+16 waiting requests). Each request includes event-thread preparation, worker I/O
+and event-thread publication. The next request cannot prepare its metadata until
+the previous publication finishes. Rejection and write failure complete the
+request exceptionally and do not stop subsequent requests.
+
+SGF replacement flushes a temporary UTF-8 file in the destination directory,
+then atomically replaces the destination. There is deliberately no destructive fallback on a
 filesystem that cannot perform atomic replacement. A failed save reports the
 existing save error and retains the original file.
 
@@ -36,9 +43,76 @@ editing does not alter an already captured save. An export does not rename the
 current document. Engine pause/resume is confined to the chooser/capture phase
 and never resumes an engine that was replaced while the dialog was open.
 
-Shutdown defers through completion futures, including event-thread completion,
-before persisting configuration and exiting. It never waits synchronously on
-the event thread.
+Shutdown defers through completion futures, including event-thread publication,
+before persisting configuration and exiting. Final autosave runs once; the
+continuation drains any later accepted writes without starting another final
+autosave. A failed write cancels shutdown and leaves it retryable. No shutdown
+continuation waits synchronously for disk work on the event thread.
+
+Shutdown and delayed startup recovery compare the game's explicit edit state,
+not an SGF export. The state includes the original board/history/cursor, tree
+structure, setup stones, game information, node properties and exact authored
+comments. Normal engine visits, candidates, ownership, provenance and generated
+analysis comments may continue changing without being mistaken for a user edit.
+Explicit primary/secondary invalidation and information-clear actions advance a
+live node's analysis-edit revision. A subsequent engine response cannot erase
+that action merely by making the result valid again. These revisions and comment
+ownership are runtime state; they do not change the SGF format or restore live
+permissions from imported analysis.
+
+Live authored comment writes and generated comment formatting share the node's
+payload monitor. A generated comment supplies its formatter to that owner, so
+reading the authored origin, formatting the displayed text and publishing both
+cannot straddle an editor commit. Reapplying the unchanged displayed comment is
+a no-op and retains its generated origin. This also protects a pending save when
+the user commits a comment while a whole-game response is generating its text.
+
+If an edit arrives after the final autosave capture, shutdown is cancelled and
+the current game stays open. A fresh close saves that retained state and can
+then exit. An ordinary analysis response alone does not require another close or
+another final autosave. Capturing edit state follows the save snapshot's lock
+ordering: freeze topology under the history monitor, release it, then read each
+node's small state under its payload monitor.
+
+## Automatic records and batches
+
+The requesting event captures SGF, cursor metadata, name, destination and a
+detached preview image. Directory creation, unused-ID lookup/reservation, atomic
+SGF and manifest replacement, preview encoding/replacement and file cleanup run
+on the worker. A new saved record cannot claim an orphaned SGF/preview or a
+dangling link. Failed played-game saves remove only their own empty reservation.
+
+Saved-list edits and autosaves share one manifest. Their preparation reads the
+latest published metadata when each request reaches the front of the queue;
+capturing the entire manifest at click time would lose intervening renames,
+deletions or additions. Disk success publishes the detached manifest on the
+event thread. The clicked list button stays disabled while its operation is
+pending, and only the original, still-open panel is refreshed after success.
+
+SGF, manifest and preview are separate atomic replacements, not a multi-file
+crash transaction. SGF failure preserves the previous metadata and preview.
+Manifest failure preserves in-memory metadata and leaves the complete SGF for
+manual recovery. A missing or failed optional preview does not undo a committed
+record; its obsolete preview is removed. Deletion commits the manifest before
+cleanup, so cleanup failure leaves an orphan rather than reviving the record.
+
+Startup recovery uses the same queue for reading/promoting the periodic slot and
+committing its metadata. SGF validation remains on the event thread. Autosave is
+gated until startup selection has completed, and a failed recovery retains the
+source slot for retry. Engine preload follows the startup completion future.
+
+Batch analysis retains one frozen SGF through a failed-save retry and advances
+only after disk success. Duplicate starts/retries during a pending write are
+ignored; stop, game replacement or frame replacement prevents a late completion
+from advancing the current batch. Contribution batches capture the games and
+restore the watched position before I/O, then submit one write at a time so a
+large batch cannot exhaust the bounded queue. A completed contribution game is
+marked saved only if the written version still matches it.
+
+Swing callers use completion futures. The legacy boolean saved-game entry points
+wait for actual completion only when called off the event thread; they reject
+EDT calls rather than returning a misleading queued-as-success value. Background
+waiters retain interruption status after receiving the actual result.
 
 ## Validation
 
@@ -47,7 +121,30 @@ the event thread.
   parent directories and temporary-file cleanup.
 - `SgfSaveQueueTest`: blocked disk I/O leaves the event thread responsive,
   snapshot-only worker input, retired-board completion, ordered repeated saves,
-  write/rejection failure and shutdown completion.
+  fresh-metadata preparation after publication, bounded queue rejection and
+  recovery after preparation/write failures.
+- `BatchAnalysisSaveTest` / `QuickBatchFlowTest`: frozen batch retry, no early
+  progress, stop during a queued save and stale completion isolation.
+- `AutomaticSaveSafetyTest` / `AutomaticSaveRecoveryTest`: record and manifest
+  failure, ordered saved-list edits, frozen captures, optional previews and
+  recovery-slot preservation.
+- `PlayedGameSaveSafetyTest` / `ContributeSaveTest`: directory/reservation work
+  stays off the event thread, unique played-game files, contribution batches
+  larger than the queue, version-aware publication and failed-save retry.
+- `LizzieShutdownTest`: repeated close requests share the final save, configuration
+  and resource cleanup wait for completion, and failure leaves shutdown retryable.
+- `ShutdownSaveRaceDesktopTest`: the real application retains edits and explicit
+  invalidation received during the final write, including invalidation followed
+  by a fresh engine result. Primary/secondary updates at root and move positions,
+  including replacement of an already-invalid result, permit normal shutdown.
+  An editor commit blocked behind a generated comment retains its text and
+  cancels shutdown; a fresh close persists that exact edited record.
+- `GameEditSnapshotTest`: authored state and generated analysis comments have
+  separate ownership; direct comment edits, topology, metadata and explicit
+  analysis-edit revisions are retained without copying analysis payloads.
+- `SavedGameSaveDesktopTest`: the actual Korean saved-list new-record action
+  remains responsive while the shared worker is blocked, then publishes the SGF,
+  preview and manifest and refreshes the list after release.
 - `SGFSaveSnapshotTest`: selected branches, setup/pass round trips, mode/flag
   restoration, continued edits, a deliberately interrupted analysis commit, and
   concurrent engine moves during both structure capture and payload copying.
@@ -55,11 +152,9 @@ the event thread.
   engine replacement checks, plus all four successful chooser flows, actual
   main-window ownership, Chinese filenames and preservation of the live tree.
 
-The final focused headless run passed 176 tests, with no failures, errors or
-skips, including the detached-payload tests and analysis-engine regressions.
-Windows/Linux desktop acceptance and native filename typing are recorded
-separately by the integration task; programmatic chooser approval is not evidence
-of real keyboard input.
+Current execution results belong to the PR's CI run. Windows/Linux desktop
+acceptance and native filename typing are separate from headless coverage;
+programmatic chooser approval is not evidence of real keyboard input.
 
 The first Linux SGF/real-CPU acceptance run on 2026-09-23 passed the real engine
 case, but exposed a stale test dependency: `SgfUiAcceptanceIT` still waited for

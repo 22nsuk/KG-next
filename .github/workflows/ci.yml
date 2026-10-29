@@ -189,7 +189,7 @@ jobs:
 
   desktop-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 17
+    timeout-minutes: 19
     steps:
       - name: Checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -210,7 +210,8 @@ jobs:
         timeout-minutes: 5
         run: mvn -B -Dfmt.skip=true test-compile
       - name: Run Linux desktop smoke verification
-        timeout-minutes: 14
+        # All three passes include the shutdown analysis and comment concurrency scenarios.
+        timeout-minutes: 16
         env:
           LANG: C.UTF-8
           LC_ALL: C.UTF-8

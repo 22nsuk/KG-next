@@ -2,8 +2,10 @@ package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.EngineFailedMessage;
+import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.RemoteEngineData;
+import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.rules.Board;
@@ -20,11 +22,16 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
+import java.nio.file.Path;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -44,6 +51,29 @@ public class ContributeEngine {
   private int changeWatchingGameIndex = -1;
   private Thread watchGameThread;
   private ContributeGameInfo currentWatchGame;
+  private Map<ContributeGameInfo, PendingGameSave> pendingGameSaves;
+  private CompletableFuture<Void> allGamesSave;
+
+  private record GameSaveVersion(
+      boolean complete, String result,
+      List<ContributeMoveInfo> initial, List<ContributeMoveInfo> moves) {
+    static GameSaveVersion capture(ContributeGameInfo game) {
+      return new GameSaveVersion(game.complete, game.gameResult,
+          game.initMoveList == null ? List.of() : List.copyOf(game.initMoveList),
+          game.moveList == null ? List.of() : List.copyOf(game.moveList));
+    }
+
+    boolean matches(ContributeGameInfo game) {
+      return complete == game.complete && Objects.equals(result, game.gameResult)
+          && initial.equals(game.initMoveList == null ? List.of() : game.initMoveList)
+          && moves.equals(game.moveList == null ? List.of() : game.moveList);
+    }
+  }
+
+  private record CapturedGameSave(
+      ContributeGameInfo game, int index, Path target, String snapshot, GameSaveVersion version) {}
+
+  private record PendingGameSave(CapturedGameSave request, CompletableFuture<Path> completion) {}
 
   private Process process;
   private boolean isNormalEnd = false;
@@ -1034,74 +1064,147 @@ public class ContributeEngine {
   }
 
   public void saveAllGames() {
+    LizzieFrame owner = Lizzie.frame;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(() -> saveAllGamesOnEdt(owner));
+      return;
+    }
+    saveAllGamesOnEdt(owner);
+  }
+
+  private synchronized void saveAllGamesOnEdt(LizzieFrame owner) {
+    if (!ownsSaveUi(owner)) return;
+    if (allGamesSave != null && !allGamesSave.isDone()) return;
     if (contributeGames == null || contributeGames.isEmpty()) {
       Utils.showMsg(Lizzie.resourceBundle.getString("Contribute.tips.noGameToSave"));
       return;
     }
+    ContributeGameInfo watched = currentWatchGame;
+    int watchedIndex = watchingGameIndex;
     int moveNumber = Lizzie.board.getCurrentMovenumber();
-    for (int i = 0; i < contributeGames.size(); i++) {
-      saveGame(contributeGames.get(i), i);
-    }
-    setGameToBoard(currentWatchGame, watchingGameIndex, false);
-    Lizzie.board.goToMoveNumber(moveNumber);
-    File file = new File("");
-    String courseFile = "";
+    Path directory = contributionSaveDirectory();
+    CompletableFuture<Void> completion = new CompletableFuture<>();
+    allGamesSave = completion;
+    completion.whenComplete((ignored, failure) -> {
+      if (!ownsSaveUi(owner)) return;
+      Utils.showMsg(failure == null
+          ? Lizzie.resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos") + directory
+          : Lizzie.resourceBundle.getString("LizzieFrame.saveFileFailed"));
+    });
+    List<CapturedGameSave> saves = new ArrayList<>();
+    Throwable failure = null;
     try {
-      courseFile = file.getCanonicalPath();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
+      for (int i = 0; i < contributeGames.size(); i++) {
+        saves.add(captureGameSave(contributeGames.get(i), i));
+      }
+    } catch (IOException | RuntimeException caught) {
+      failure = caught;
+      logSaveFailure(directory, caught);
+    } finally {
+      restoreWatchedGame(watched, watchedIndex, moveNumber);
     }
-    Utils.showMsg(
-        Lizzie.resourceBundle.getString("EngineGameInfo.engineGameEndHintKifuPos")
-            + courseFile
-            + File.separator
-            + "ContributeGames"
-            + File.separator
-            + timeStamp);
+    saveNextCapturedGame(saves, 0, owner, completion, failure);
   }
 
   private void saveGame(ContributeGameInfo game, int index) {
-    if (game != currentWatchGame) {
-      setGameToBoard(game, index, true);
+    LizzieFrame owner = Lizzie.frame;
+    if (!SwingUtilities.isEventDispatchThread()) {
+      // The watch thread owns the engine monitor; never wait for the EDT while holding it.
+      SwingUtilities.invokeLater(() -> saveGameOnEdt(game, index, owner));
+      return;
     }
-    File file = new File("");
-    String courseFile = "";
+    saveGameOnEdt(game, index, owner);
+  }
+
+  private synchronized void saveGameOnEdt(ContributeGameInfo game, int index, LizzieFrame owner) {
+    if (!ownsSaveUi(owner)) return;
+    PendingGameSave pending = pendingGameSaves == null ? null : pendingGameSaves.get(game);
+    if (pending != null && !pending.completion().isDone()) return;
+    ContributeGameInfo watched = currentWatchGame;
+    int watchedIndex = watchingGameIndex;
+    int moveNumber = Lizzie.board.getCurrentMovenumber();
     try {
-      courseFile = file.getCanonicalPath();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
+      submitCapturedGame(captureGameSave(game, index), owner);
+    } catch (IOException | RuntimeException failure) {
+      logSaveFailure(contributionSaveDirectory(), failure);
+    } finally {
+      restoreWatchedGame(watched, watchedIndex, moveNumber);
     }
-    File autoSaveFile =
-        new File(
-            courseFile
-                + File.separator
-                + "ContributeGames"
-                + File.separator
-                + timeStamp
-                + File.separator
-                + (index + 1)
-                + "_"
-                + game.gameId
-                + "_"
-                + getShortName(Lizzie.board.getHistory().getGameInfo().getPlayerBlack())
-                + "_VS_"
-                + getShortName(Lizzie.board.getHistory().getGameInfo().getPlayerWhite())
-                + "("
-                + Lizzie.board.getHistory().getGameInfo().getResult()
-                + ").sgf");
-    File fileParent = autoSaveFile.getParentFile();
-    if (!fileParent.exists()) {
-      fileParent.mkdirs();
+  }
+
+  private CapturedGameSave captureGameSave(ContributeGameInfo game, int index) throws IOException {
+    if (game != currentWatchGame) setGameToBoard(game, index, true);
+    var info = Lizzie.board.getHistory().getGameInfo();
+    // A watched game can finish without rebuilding its board or updating GameInfo's result.
+    if (game.complete) info.setResultNoUI(game.gameResult);
+    Path target = contributionSaveDirectory().resolve(
+        (index + 1) + "_" + game.gameId + "_" + getShortName(info.getPlayerBlack())
+            + "_VS_" + getShortName(info.getPlayerWhite()) + "(" + info.getResult() + ").sgf");
+    return new CapturedGameSave(game, index, target,
+        SGFParser.saveSnapshot(Lizzie.board, false, false, false), GameSaveVersion.capture(game));
+  }
+
+  private Path contributionSaveDirectory() {
+    // The filesystem resolves the same working-directory path without an EDT canonical lookup.
+    return Path.of("").toAbsolutePath().normalize().resolve("ContributeGames").resolve(timeStamp);
+  }
+
+  private void restoreWatchedGame(ContributeGameInfo watched, int index, int moveNumber) {
+    if (watched != null && currentWatchGame != watched) setGameToBoard(watched, index, true);
+    Lizzie.board.goToMoveNumber(moveNumber);
+  }
+
+  private boolean ownsSaveUi(LizzieFrame owner) {
+    return !stopped && Lizzie.frame == owner && owner != null && owner.contributeEngine == this;
+  }
+
+  private CompletableFuture<Path> submitCapturedGame(CapturedGameSave save, LizzieFrame owner) {
+    if (pendingGameSaves == null) pendingGameSaves = new IdentityHashMap<>();
+    PendingGameSave existing = pendingGameSaves.get(save.game());
+    if (existing != null && !existing.completion().isDone()) {
+      if (existing.request().target().equals(save.target())
+          && existing.request().snapshot().equals(save.snapshot())) return existing.completion();
+      return existing.completion().handle((ignored, failure) -> null)
+          .thenCompose(ignored -> submitCapturedGame(save, owner));
     }
-    try {
-      SGFParser.save(Lizzie.board, autoSaveFile.getPath());
-      if (game.complete) game.saved = true;
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
+    CompletableFuture<Path> completion = SgfSaveCoordinator.saveCaptured(
+        save.target(), save.snapshot(), () -> ownsSaveUi(owner),
+        path -> {
+          if (save.version().complete() && save.version().matches(save.game())) {
+            save.game().saved = true;
+          }
+        }, failure -> logSaveFailure(save.target(), failure));
+    PendingGameSave pending = new PendingGameSave(save, completion);
+    pendingGameSaves.put(save.game(), pending);
+    completion.whenComplete((ignored, failure) -> {
+      if (pendingGameSaves.remove(save.game(), pending) && failure == null && ownsSaveUi(owner)
+          && Lizzie.config.contributeAutoSave && save.game().complete && !save.game().saved
+          && !save.version().matches(save.game())) {
+        // A completed game must not inherit the saved flag from an older partial snapshot.
+        saveGame(save.game(), save.index());
+      }
+    });
+    return completion;
+  }
+
+  private void saveNextCapturedGame(
+      List<CapturedGameSave> saves, int index, LizzieFrame owner,
+      CompletableFuture<Void> completion, Throwable failure) {
+    if (index == saves.size()) {
+      if (failure == null) completion.complete(null);
+      else completion.completeExceptionally(failure);
+      return;
     }
+    // Submit the next write synchronously from completion, before shutdown can miss it.
+    // One write at a time also keeps arbitrarily large batches within the bounded save queue.
+    submitCapturedGame(saves.get(index), owner).whenComplete((ignored, writeFailure) ->
+        saveNextCapturedGame(saves, index + 1, owner, completion,
+            failure == null ? writeFailure : failure));
+  }
+
+  private static void logSaveFailure(Path target, Throwable failure) {
+    org.slf4j.LoggerFactory.getLogger(ContributeEngine.class)
+        .warn("Could not save contribution SGF: {}", target, failure);
   }
 
   private String getShortName(String name) {
@@ -1159,8 +1262,8 @@ public class ContributeEngine {
                   false,
                   MoveData.getPlayouts(move.candidates));
         if (Lizzie.board.getHistory().getMainEnd().getData().getPlayouts() > 0) {
-          Lizzie.board.getHistory().getMainEnd().getData().comment =
-              SGFParser.formatCommentPk(Lizzie.board.getHistory().getMainEnd());
+          var node = Lizzie.board.getHistory().getMainEnd();
+          node.getData().setGeneratedComment(() -> SGFParser.formatCommentPk(node));
         }
       }
       if (i < (holdLastMove ? remainList.size() - 1 : remainList.size())) {
