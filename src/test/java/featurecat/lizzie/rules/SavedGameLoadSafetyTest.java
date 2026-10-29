@@ -988,6 +988,13 @@ class SavedGameLoadSafetyTest {
     BoardHistoryNode nodeWhenResumeScheduled;
     CountDownLatch resumeScheduled;
     List<String> loadedPlayers;
+    java.io.IOException reportedSaveFailure;
+
+    @Override
+    protected void savedGameEditFailed(java.io.IOException failure) {
+      assertTrue(SwingUtilities.isEventDispatchThread());
+      reportedSaveFailure = failure;
+    }
 
     @Override
     public java.awt.Image saveMainBoardToImageOri() {
