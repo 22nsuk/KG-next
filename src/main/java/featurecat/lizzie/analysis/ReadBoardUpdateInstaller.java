@@ -2,8 +2,10 @@ package featurecat.lizzie.analysis;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.UncheckedIOException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
@@ -29,6 +31,17 @@ public final class ReadBoardUpdateInstaller {
           "readboard.runtimeconfig.json",
           "readboard.deps.json",
           "language_cn.txt");
+  private static final List<String> USER_CONFIG_FILES =
+      List.of("config.readboard.json", "config_readboard.txt", "config_readboard_others.txt");
+  private final FileOperations fileOperations;
+
+  public ReadBoardUpdateInstaller() {
+    this(new FileOperations());
+  }
+
+  ReadBoardUpdateInstaller(FileOperations fileOperations) {
+    this.fileOperations = fileOperations;
+  }
 
   public void validateRequest(ReadBoardUpdateRequest request) throws IOException {
     inspectPackage(request);
@@ -45,27 +58,47 @@ public final class ReadBoardUpdateInstaller {
     String operationSuffix = OPERATION_SUFFIX_FORMAT.format(LocalDateTime.now());
     Path stagingDirectory = parentDirectory.resolve("readboard.staging-" + operationSuffix);
     Path backupDirectory = parentDirectory.resolve("readboard.backup-" + operationSuffix);
-    extractPackage(layout, stagingDirectory);
-
     boolean movedCurrentDirectory = false;
     try {
+      extractPackage(layout, stagingDirectory);
+      preserveUserConfig(targetDirectory, stagingDirectory);
       if (Files.exists(targetDirectory)) {
-        moveDirectory(targetDirectory, backupDirectory);
+        fileOperations.moveDirectory(targetDirectory, backupDirectory);
         movedCurrentDirectory = true;
       }
-      moveDirectory(stagingDirectory, targetDirectory);
+      fileOperations.moveDirectory(stagingDirectory, targetDirectory);
     } catch (IOException installFailure) {
-      deleteRecursively(stagingDirectory);
       if (movedCurrentDirectory
           && !Files.exists(targetDirectory)
           && Files.exists(backupDirectory)) {
         try {
-          moveDirectory(backupDirectory, targetDirectory);
+          fileOperations.moveDirectory(backupDirectory, targetDirectory);
         } catch (IOException rollbackFailure) {
           installFailure.addSuppressed(rollbackFailure);
         }
       }
+      try {
+        fileOperations.deleteRecursively(stagingDirectory);
+      } catch (IOException cleanupFailure) {
+        installFailure.addSuppressed(cleanupFailure);
+      }
       throw installFailure;
+    }
+  }
+
+  private static void preserveUserConfig(Path currentDirectory, Path stagingDirectory)
+      throws IOException {
+    // The caller must confirm helper exit first: shutdown can persist its final settings.
+    // Preserve bytes, including legacy encodings; migration belongs to the new helper.
+    for (String fileName : USER_CONFIG_FILES) {
+      Path source = currentDirectory.resolve(fileName);
+      if (Files.notExists(source, LinkOption.NOFOLLOW_LINKS)) {
+        continue;
+      }
+      if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+        throw new IOException("ReadBoard configuration is not a regular file: " + source);
+      }
+      Files.copy(source, stagingDirectory.resolve(fileName), StandardCopyOption.REPLACE_EXISTING);
     }
   }
 
@@ -127,7 +160,7 @@ public final class ReadBoardUpdateInstaller {
   }
 
   private void extractPackage(PackageLayout layout, Path stagingDirectory) throws IOException {
-    deleteRecursively(stagingDirectory);
+    fileOperations.deleteRecursively(stagingDirectory);
     Files.createDirectories(stagingDirectory);
     try (ZipFile zipFile = new ZipFile(layout.zipPath().toFile())) {
       for (ZipEntry entry : layout.entries()) {
@@ -153,14 +186,6 @@ public final class ReadBoardUpdateInstaller {
           Files.copy(entryStream, targetPath, StandardCopyOption.REPLACE_EXISTING);
         }
       }
-    }
-  }
-
-  private static void moveDirectory(Path source, Path target) throws IOException {
-    try {
-      Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
-    } catch (AtomicMoveNotSupportedException unsupported) {
-      Files.move(source, target);
     }
   }
 
@@ -223,16 +248,28 @@ public final class ReadBoardUpdateInstaller {
         || (WEBVIEW2_PACKAGE_PREFIX + versionTag + PACKAGE_SUFFIX).equals(fileName);
   }
 
-  private static void deleteRecursively(Path directory) throws IOException {
-    if (!Files.exists(directory)) {
-      return;
+  static class FileOperations {
+    void moveDirectory(Path source, Path target) throws IOException {
+      try {
+        Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+      } catch (AtomicMoveNotSupportedException unsupported) {
+        Files.move(source, target);
+      }
     }
-    List<Path> paths = new ArrayList<Path>();
-    try (var stream = Files.walk(directory)) {
-      stream.forEach(paths::add);
-    }
-    for (int index = paths.size() - 1; index >= 0; index--) {
-      Files.deleteIfExists(paths.get(index));
+
+    void deleteRecursively(Path directory) throws IOException {
+      if (!Files.exists(directory)) {
+        return;
+      }
+      List<Path> paths = new ArrayList<Path>();
+      try (var stream = Files.walk(directory)) {
+        stream.forEach(paths::add);
+      } catch (UncheckedIOException traversalFailure) {
+        throw traversalFailure.getCause();
+      }
+      for (int index = paths.size() - 1; index >= 0; index--) {
+        Files.deleteIfExists(paths.get(index));
+      }
     }
   }
 

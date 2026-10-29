@@ -2923,29 +2923,48 @@ public class LizzieFrame extends JFrame {
     sourceReadBoard.sendCommand("readboardUpdateInstalling");
     File installDirectory = ReadBoard.nativeReadBoardDirectoryForDiagnostics();
     try {
-      shutdownReadBoard(sourceReadBoard);
-      readBoardUpdateInstaller.install(request, installDirectory.toPath());
+      sourceReadBoard.shutdownForUpdate();
+    } catch (IOException shutdownFailure) {
+      shutdownFailure.printStackTrace();
       SwingUtilities.invokeLater(
           () ->
-              restartReadBoardAfterHostedUpdate(
-                  sourceReadBoard, request, "ReadBoard.updateInstallSucceeded", null));
-    } catch (IOException installFailure) {
-      SwingUtilities.invokeLater(
-          () ->
-              restartReadBoardAfterHostedUpdate(
+              completeHostedReadBoardUpdate(
                   sourceReadBoard,
                   request,
                   "ReadBoard.updateInstallFailed",
-                  installFailure.getMessage()));
+                  shutdownFailure.getMessage(),
+                  false));
+      return;
+    }
+    try {
+      readBoardUpdateInstaller.install(request, installDirectory.toPath());
+      SwingUtilities.invokeLater(
+          () ->
+              completeHostedReadBoardUpdate(
+                  sourceReadBoard, request, "ReadBoard.updateInstallSucceeded", null, true));
+    } catch (IOException installFailure) {
+      installFailure.printStackTrace();
+      SwingUtilities.invokeLater(
+          () ->
+              completeHostedReadBoardUpdate(
+                  sourceReadBoard,
+                  request,
+                  "ReadBoard.updateInstallFailed",
+                  installFailure.getMessage(),
+                  true));
     }
   }
 
-  private void restartReadBoardAfterHostedUpdate(
-      ReadBoard sourceReadBoard, ReadBoardUpdateRequest request, String messageKey, String detail) {
+  private void completeHostedReadBoardUpdate(
+      ReadBoard sourceReadBoard,
+      ReadBoardUpdateRequest request,
+      String messageKey,
+      String detail,
+      boolean restart) {
     boolean restarted = false;
     try {
       ReadBoardFactory nextFactory = finishReadBoardRestart(sourceReadBoard);
-      if (nextFactory != null) {
+      if (restart && nextFactory != null) {
         restarted = startReadBoard(nextFactory);
       }
     } finally {
