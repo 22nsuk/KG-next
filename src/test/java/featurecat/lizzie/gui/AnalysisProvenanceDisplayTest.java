@@ -71,7 +71,6 @@ class AnalysisProvenanceDisplayTest {
     BoardData data = BoardData.empty(19, 19);
     data.setPlayouts(700);
     data.pda = 12.0;
-    data.wrn = 13.0;
     data.komi = 6.5;
     data.setPrimaryAnalysisProvenance(
         new AnalysisProvenance("recorded engine", "", "", "", "", "", null, null, null, ""));

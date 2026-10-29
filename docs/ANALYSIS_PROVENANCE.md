@@ -127,8 +127,26 @@ substitutes for these admission and completion checks.
 
 ## SGF format and compatibility
 
-The legacy analysis payload grammar remains unchanged. Root analysis uses
-`LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. Provenance and invalidation state are
+Root analysis uses `LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. The six legacy
+header slots retain their positions. A known evaluation WRN is also written
+as the optional named extension `wrn=<number>` after those slots, alongside
+`rootVisits` when known. Short headers are padded before a named WRN; padding
+does not invent a root visit count. Readers without this extension still read
+the legacy analysis payload.
+
+The named WRN extension accepts finite values from **0 through 5**, matching
+KataGo's `analysisWideRootNoise` range, rather than the GUI editor's narrower
+0 through 2 range. Zero is known, not absent. Malformed, out-of-range or
+duplicate WRN extensions are treated as unknown without discarding the
+evaluation, candidates or ownership values. Other named extensions are ignored.
+See the engine's [GTP parameter loading](https://github.com/22nsuk/KataGo/blob/8463d80da8ecdeb86a30ab76df93dde8b4b0186b/cpp/command/gtp.cpp#L2139-L2140).
+
+WRN in generated primary/secondary, game and engine-game summaries comes from
+the corresponding evaluation provenance, not the current engine's editable
+settings or the ownership source. Known zero is displayed; unknown is omitted.
+The existing source panel continues to distinguish known zero from unknown.
+
+Provenance and invalidation state are
 stored separately in a custom **`KGP`** property, as UTF-8 JSON encoded with
 unpadded Base64URL. This keeps model names, Unicode, brackets and backslashes
 outside the legacy analysis/PV grammar.
@@ -176,9 +194,27 @@ Metadata alone cannot override live invalidation. This import scope follows
 payloads transferred to setup snapshots and ends when parsing returns; it is
 not retained on the board or reused by a later import.
 
+A matching KGP source takes precedence over a named WRN, including when that
+source's WRN is explicitly unknown. The original header WRN is retained with
+its import digest so that a later invalid or nonmatching KGP replacement can
+fall back to the header, not to the previously applied KGP value. Payload
+replacement and clearing retire that fallback together with the digest.
+KGP keeps its existing finite-number schema; it is not narrowed to the named
+extension's range. A recorded KGP value outside that range remains in KGP and
+is not emitted as a named WRN extension.
+
+A header-only WRN supplies only that parameter: it does not establish the
+engine, model, rules, komi, PDA or ownership producer. When there is no richer
+source, ownership provenance or invalidation state to save, this partial
+source is written in the header without creating a new KGP. In particular,
+reading it does not by itself replace opaque/future KGP data. A slot that also
+needs ownership provenance or invalidation metadata keeps its partial
+evaluation source in KGP as well, preserving both on reopen.
+
 If an older client keeps `KGP` but replaces an `LZ` value, the mismatching slot
-loads with unknown provenance and without the old payload's invalidation flag.
-Its evaluation remains usable and visible.
+does not inherit the rejected source identity or the old payload's invalidation
+flag. A valid header WRN can still supply that one parameter. The evaluation
+remains usable and visible.
 This binding detects obsolete metadata; it is not a signature or proof that
 an SGF author supplied truthful engine information.
 
@@ -206,7 +242,8 @@ again merely because saving normalizes the payload text. An analysis-free/raw
 export follows the existing analysis-export policy and need not retain provenance.
 
 Old SGFs without `KGP` require no migration. Their analysis loads as before,
-with unknown source. Clients that do not understand this optional property
+with unknown source except for a valid named WRN when present. Clients that
+do not understand this optional property
 can continue to use the legacy payloads; clients that strip unknown properties
 will also strip provenance and invalidation. Older clients cannot enforce the
 version 2 invalidation state and may show its payload as valid; their v1-only
@@ -223,7 +260,7 @@ any particular checkout has passed them.
 ```sh
 # Payload ownership, source preservation, SGF parser/setup/legacy compatibility
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
-  -Dtest=AnalysisInvalidationSgfTest,AnalysisProvenanceSgfTest,BoardDataAnalysisProvenanceTest,SGFParserSemanticRoundTripTest,BoardNodeKindHistoryPipelineTest,BoardDataAnalysisCacheTraceTest test
+  -Dtest=AnalysisWrnSgfTest,AnalysisInvalidationSgfTest,AnalysisProvenanceSgfTest,BoardDataAnalysisProvenanceTest,SGFParserSemanticRoundTripTest,BoardNodeKindHistoryPipelineTest,BoardDataAnalysisCacheTraceTest test
 
 # Reuse/reassessment planning, request publication, identity capture and display
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
