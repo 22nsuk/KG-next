@@ -1667,9 +1667,10 @@ public class SGFParser {
         if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
           BoardData data = curNode.getData();
           if (saveContext.gameBoard()) {
+            BoardHistoryNode commentSource = curNode;
             if (data.getPlayouts() > 0 && curNode.next().isPresent())
-              curNode.next().get().getData().comment = formatCommentForGame(curNode, saveContext);
-            else if (curNode.next().isPresent()) curNode.next().get().getData().comment = "";
+              curNode.next().get().getData().setGeneratedComment(() -> formatCommentForGame(commentSource, saveContext));
+            else if (curNode.next().isPresent()) curNode.next().get().getData().setGeneratedComment(() -> "");
           }
         }
       } catch (Exception e) {
@@ -1726,19 +1727,20 @@ public class SGFParser {
   /** Generates a comment, optionally using the PK formatter for an exact retired game owner. */
   public static void appendComment(boolean forceEngineGame) {
     // if (!Lizzie.config.showComment) return;
-    // if (!Lizzie.leelaz.isLoaded()) return;
+    BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
+    BoardData data = node.getData();
     if (forceEngineGame || isEngineGameHistory()) {
-      if (Lizzie.board.getHistory().getCurrentHistoryNode().getData().getPlayouts() > 0) {
-        Lizzie.board.getHistory().getData().comment =
-            formatCommentPk(Lizzie.board.getHistory().getCurrentHistoryNode());
+      if (data.getPlayouts() > 0) {
+        data.setGeneratedComment(
+            () -> formatCommentPk(node));
       }
-    } else if (Lizzie.board.getHistory().getCurrentHistoryNode().getData().getPlayouts() > 0) {
+    } else if (data.getPlayouts() > 0) {
       if (Lizzie.board.isGameBoard) {
-        Lizzie.board.getHistory().getData().comment =
-            formatCommentForGame(Lizzie.board.getHistory().getCurrentHistoryNode());
+        data.setGeneratedComment(
+            () -> formatCommentForGame(node));
       } else {
-        Lizzie.board.getHistory().getData().comment =
-            formatComment(Lizzie.board.getHistory().getCurrentHistoryNode());
+        data.setGeneratedComment(
+            () -> formatComment(node));
       }
     }
   }
@@ -2091,9 +2093,9 @@ public class SGFParser {
           if (data.isSnapshotNode()) {
             return;
           }
-          if (data.getPlayouts() > 0) data.comment = formatComment(node, saveContext);
+          if (data.getPlayouts() > 0) data.setGeneratedComment(() -> formatComment(node, saveContext));
           if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
-            data.comment = formatComment2(node, saveContext);
+            data.setGeneratedComment(() -> formatComment2(node, saveContext));
           }
         }
       }
@@ -2107,9 +2109,9 @@ public class SGFParser {
   private static void updateGameComment(
       BoardHistoryNode node, BoardData data, SaveContext saveContext) throws IOException {
     if (data.getPlayouts() > 0 && node.next().isPresent()) {
-      node.next().get().getData().comment = formatCommentForGame(node, saveContext);
+      node.next().get().getData().setGeneratedComment(() -> formatCommentForGame(node, saveContext));
     } else if (node.next().isPresent()) {
-      node.next().get().getData().comment = "";
+      node.next().get().getData().setGeneratedComment(() -> "");
     }
   }
 
@@ -2158,9 +2160,9 @@ public class SGFParser {
       if (data.isSnapshotNode()) {
         curComment = formatSnapshotCommentForExport(node, saveContext);
       } else {
-        if (data.getPlayouts() > 0) data.comment = formatComment(node, saveContext);
+        if (data.getPlayouts() > 0) data.setGeneratedComment(() -> formatComment(node, saveContext));
         if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
-          data.comment = formatComment2(node, saveContext);
+          data.setGeneratedComment(() -> formatComment2(node, saveContext));
         }
         curComment = data.comment;
       }

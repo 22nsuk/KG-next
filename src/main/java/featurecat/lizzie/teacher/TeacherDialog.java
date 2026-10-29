@@ -549,14 +549,15 @@ public final class TeacherDialog extends JDialog {
     String rendered = withVerifierNotes(result, context.positions);
     if (writeToSgf.isSelected()) {
       BoardData target = context.owner.target.getData();
-      String updatedComment;
       try {
-        updatedComment = TeacherCommentCodec.upsert(target.comment, result, request.model);
+        synchronized (target) {
+          target.setAuthoredComment(
+              TeacherCommentCodec.upsert(target.comment, result, request.model));
+        }
       } catch (IllegalArgumentException invalidComment) {
         failRequest(request, invalidComment);
         return;
       }
-      target.comment = updatedComment;
       if (Lizzie.frame != null) {
         Lizzie.frame.refresh();
       }

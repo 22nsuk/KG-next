@@ -22,6 +22,7 @@ import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.GameEditSnapshot;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
@@ -1801,6 +1802,62 @@ class AnalysisEngineRequestTest {
       assertFalse(rootRequest.getBoolean("includeOwnership"));
       assertEquals(List.of(0), rootRequest.getJSONArray("analyzeTurns").toList());
       assertEquals(List.of(1), moveRequest.getJSONArray("analyzeTurns").toList());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void wholeGameGeneratedCommentsPreserveEditIdentityWithoutHidingAuthoredChanges(boolean move)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      if (move) {
+        history.add(
+            moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      }
+      Board board = boardWithHistory(history);
+      BoardHistoryNode node = history.getCurrentHistoryNode();
+      BoardData data = node.getData();
+      String originalComment = "reviewer's original annotation";
+      data.comment = originalComment;
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      FutureTask<GameEditSnapshot> capture = new FutureTask<>(() -> GameEditSnapshot.capture(board));
+      javax.swing.SwingUtilities.invokeLater(capture);
+      GameEditSnapshot beforeAnalysis = capture.get(5, TimeUnit.SECONDS);
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(node), 200, false));
+      int firstId = Integer.parseInt(engine.requestAt(0).getString("id"));
+      engine.parseResult(analysisResult(firstId, 200, 62.0));
+
+      assertEquals(200, data.getPlayouts(), "the actual response must publish its analysis");
+      assertFalse(originalComment.equals(data.comment), "publication must update the displayed comment");
+      assertTrue(data.comment.contains(originalComment));
+      FutureTask<Boolean> afterAnalysis = new FutureTask<>(() -> beforeAnalysis.isCurrent(board));
+      javax.swing.SwingUtilities.invokeLater(afterAnalysis);
+      assertTrue(afterAnalysis.get(5, TimeUnit.SECONDS),
+          "whole-game analysis comments must not become authored edits at root or move nodes");
+
+      String editedComment = "annotation edited while a save is pending";
+      FutureTask<Void> edit = new FutureTask<>(() -> {
+        data.comment = editedComment;
+        return null;
+      });
+      javax.swing.SwingUtilities.invokeLater(edit);
+      edit.get(5, TimeUnit.SECONDS);
+      // Do not sample edit identity between the authored edit and another engine publication.
+      assertEquals(1, engine.startWholeGameRequest(List.of(node), 400, false));
+      int secondId = Integer.parseInt(engine.requestAt(1).getString("id"));
+      engine.parseResult(analysisResult(secondId, 400, 68.0));
+
+      assertEquals(400, data.getPlayouts());
+      assertFalse(editedComment.equals(data.comment), "the later response must regenerate the comment");
+      assertTrue(data.comment.contains(editedComment));
+      FutureTask<Boolean> afterEditedAnalysis =
+          new FutureTask<>(() -> beforeAnalysis.isCurrent(board));
+      javax.swing.SwingUtilities.invokeLater(afterEditedAnalysis);
+      assertFalse(afterEditedAnalysis.get(5, TimeUnit.SECONDS),
+          "automatic publication must retain the authored change for the pending save guard");
+      waitForMovelistRefreshThreads();
     }
   }
 

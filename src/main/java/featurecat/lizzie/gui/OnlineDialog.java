@@ -1252,8 +1252,10 @@ public class OnlineDialog extends JDialog {
                   live.optString("game_result"),
                   live.optString("resultDesc"));
           if (!Utils.isBlank(result)) {
-            Lizzie.board.getHistory().getData().comment =
-                result + "\n" + Lizzie.board.getHistory().getData().comment;
+            BoardData commentData = Lizzie.board.getHistory().getData();
+            synchronized (commentData) {
+              commentData.setAuthoredComment(result + "\n" + commentData.comment);
+            }
             Lizzie.board.previousMove(false);
             Lizzie.board.nextMove(true);
           }
@@ -1330,8 +1332,10 @@ public class OnlineDialog extends JDialog {
               live.optString("game_result"),
               live.optString("resultDesc"));
       if (!Utils.isBlank(result)) {
-        Lizzie.board.getHistory().getData().comment =
-            result + "\n" + Lizzie.board.getHistory().getData().comment;
+        BoardData commentData = Lizzie.board.getHistory().getData();
+        synchronized (commentData) {
+          commentData.setAuthoredComment(result + "\n" + commentData.comment);
+        }
       }
     }
     firstTime = false;
@@ -3352,8 +3356,10 @@ public class OnlineDialog extends JDialog {
         //   sio.close();
         String result = info.optString("resultDesc");
         if (!Utils.isBlank(result)) {
-          Lizzie.board.getHistory().getEnd().getData().comment =
-              result + "\n" + Lizzie.board.getHistory().getEnd().getData().comment;
+          BoardData commentData = Lizzie.board.getHistory().getEnd().getData();
+          synchronized (commentData) {
+            commentData.setAuthoredComment(result + "\n" + commentData.comment);
+          }
           Lizzie.frame.setResult(result);
           Lizzie.board.getHistory().getGameInfo().setResult(result);
           Lizzie.board.previousMove(false);
@@ -4428,8 +4434,10 @@ public class OnlineDialog extends JDialog {
       if (!Utils.isBlank(result)) {
         while (Lizzie.board.getHistory().next().isPresent())
           ;
-        Lizzie.board.getHistory().getEnd().getData().comment =
-            result + "\n" + Lizzie.board.getHistory().getEnd().getData().comment;
+        BoardData commentData = Lizzie.board.getHistory().getEnd().getData();
+        synchronized (commentData) {
+          commentData.setAuthoredComment(result + "\n" + commentData.comment);
+        }
         Lizzie.frame.setResult(result);
         Lizzie.board.getHistory().getGameInfo().setResult(result);
         Lizzie.board.previousMove(false);

@@ -49,6 +49,31 @@ continuation drains any later accepted writes without starting another final
 autosave. A failed write cancels shutdown and leaves it retryable. No shutdown
 continuation waits synchronously for disk work on the event thread.
 
+Shutdown and delayed startup recovery compare the game's explicit edit state,
+not an SGF export. The state includes the original board/history/cursor, tree
+structure, setup stones, game information, node properties and exact authored
+comments. Normal engine visits, candidates, ownership, provenance and generated
+analysis comments may continue changing without being mistaken for a user edit.
+Explicit primary/secondary invalidation and information-clear actions advance a
+live node's analysis-edit revision. A subsequent engine response cannot erase
+that action merely by making the result valid again. These revisions and comment
+ownership are runtime state; they do not change the SGF format or restore live
+permissions from imported analysis.
+
+Live authored comment writes and generated comment formatting share the node's
+payload monitor. A generated comment supplies its formatter to that owner, so
+reading the authored origin, formatting the displayed text and publishing both
+cannot straddle an editor commit. Reapplying the unchanged displayed comment is
+a no-op and retains its generated origin. This also protects a pending save when
+the user commits a comment while a whole-game response is generating its text.
+
+If an edit arrives after the final autosave capture, shutdown is cancelled and
+the current game stays open. A fresh close saves that retained state and can
+then exit. An ordinary analysis response alone does not require another close or
+another final autosave. Capturing edit state follows the save snapshot's lock
+ordering: freeze topology under the history monitor, release it, then read each
+node's small state under its payload monitor.
+
 ## Automatic records and batches
 
 The requesting event captures SGF, cursor metadata, name, destination and a
@@ -108,6 +133,15 @@ waiters retain interruption status after receiving the actual result.
   larger than the queue, version-aware publication and failed-save retry.
 - `LizzieShutdownTest`: repeated close requests share the final save, configuration
   and resource cleanup wait for completion, and failure leaves shutdown retryable.
+- `ShutdownSaveRaceDesktopTest`: the real application retains edits and explicit
+  invalidation received during the final write, including invalidation followed
+  by a fresh engine result. Primary/secondary updates at root and move positions,
+  including replacement of an already-invalid result, permit normal shutdown.
+  An editor commit blocked behind a generated comment retains its text and
+  cancels shutdown; a fresh close persists that exact edited record.
+- `GameEditSnapshotTest`: authored state and generated analysis comments have
+  separate ownership; direct comment edits, topology, metadata and explicit
+  analysis-edit revisions are retained without copying analysis payloads.
 - `SavedGameSaveDesktopTest`: the actual Korean saved-list new-record action
   remains responsive while the shared worker is blocked, then publishes the SGF,
   preview and manifest and refreshes the list after release.
