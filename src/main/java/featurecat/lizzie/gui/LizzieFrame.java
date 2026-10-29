@@ -5487,6 +5487,10 @@ public class LizzieFrame extends JFrame {
       result.complete(false);
       return;
     }
+    if (rejectFileOpenWhilePlaying()) {
+      result.complete(false);
+      return;
+    }
     Runnable retry = () -> beginInteractiveFileOpen(
         file, fromTemp, showHint, afterSuccessfulLoad, expectedConfig, result);
     Runnable retired = () -> result.complete(false);
@@ -5606,15 +5610,17 @@ public class LizzieFrame extends JFrame {
     return applyFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady, null);
   }
 
+  private boolean rejectFileOpenWhilePlaying() {
+    if (!EngineGamePresentation.current().startingOrPlaying()
+        && !isPlayingAgainstLeelaz && !isAnaPlayingAgainstLeelaz) return false;
+    Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.openFileFailed.inGame"));
+    return true;
+  }
+
   private boolean applyFile(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
       Runnable afterEngineReady, String decodedSgf) {
-    if (EngineGamePresentation.current().startingOrPlaying()
-        || isPlayingAgainstLeelaz
-        || isAnaPlayingAgainstLeelaz) {
-      Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.openFileFailed.inGame"));
-      return false;
-    }
+    if (rejectFileOpenWhilePlaying()) return false;
     if (deferUntilHumanSlExit(
         () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady))) {
       return true;

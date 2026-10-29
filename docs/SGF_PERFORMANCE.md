@@ -95,7 +95,8 @@ belong with any reported measurement so results cannot silently outlive changes.
 
 ## Interpretation and next boundary
 
-On 2026-10-30, the actual offline window was measured with Ubuntu Java
+On 2026-10-30, revision `8b5f27d9f2363485b26e9e9f243cb426be560ea8`
+was measured in the actual offline window with Ubuntu Java
 21.0.12.1, WSL2/Xvfb/Openbox, 24 logical processors and a 2 GiB heap. One warmup
 was excluded and three samples retained per workload. Values below are medians
 in milliseconds, from the opt-in JFR phases; these are synthetic workloads, not
