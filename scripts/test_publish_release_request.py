@@ -889,6 +889,7 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
             ("ci.yml", "Install analysis UI display dependencies", [*common_packages, "fonts-thai-tlwg"]),
             ("acceptance-integration.yml", "Install isolated display dependencies",
              common_packages),
+            ("fox-search.yml", "Install Linux display dependencies", common_packages),
         )
         for filename, name, packages in cases:
             workflow = (
@@ -899,7 +900,7 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
             step = workflow.split(marker, 1)[1].split("\n      - ", 1)[0]
             run = textwrap.dedent(step.split("        run: |\n", 1)[1])
             commands = [line.split() for line in run.replace("\\\n", " ").splitlines()
-                        if line.strip()]
+                        if line.strip() and not line.lstrip().startswith("#")]
             yield name, step, commands, packages
 
     def test_linux_display_installs_prefer_the_existing_official_mirror(self):
@@ -922,6 +923,27 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
                 self.assertEqual(1, len(installs))
                 arguments = installs[0][installs[0].index("install") + 1:]
                 self.assertEqual(["-y", *packages], arguments)
+
+    def test_fox_preparation_is_bounded_and_helper_changes_trigger_both_platforms(self):
+        workflow = (
+            SCRIPT_PATH.parents[1] / ".github/workflows/fox-search.yml"
+        ).read_text(encoding="utf-8")
+        paths = workflow.split("    paths:\n", 1)[1].split("\npermissions:", 1)[0]
+        for path in (
+            "scripts/prefer_ubuntu_apt_mirror.py",
+            "scripts/test_prefer_ubuntu_apt_mirror.py",
+            "scripts/test_publish_release_request.py",
+        ):
+            self.assertIn(f"      - '{path}'", paths)
+        step = workflow.split("      - name: Install Linux display dependencies\n", 1)[1]
+        step = step.split("\n      - ", 1)[0]
+        self.assertIn("        if: ${{ runner.os == 'Linux' }}", step)
+        self.assertIn("        timeout-minutes: 5\n", step)
+        self.assertIn("    timeout-minutes: 15\n", workflow)
+        self.assertIn("        os: [ubuntu-latest, windows-latest]", workflow)
+        self.assertEqual(2, workflow.count("-Dlizzie.desktop.required=true"))
+        self.assertIn("Fox keyboard traversal probe did not execute successfully", workflow)
+        self.assertNotIn("continue-on-error", workflow)
 
     def test_mirror_preference_keeps_native_execution_and_required_gate_wiring(self):
         root = SCRIPT_PATH.parents[1]

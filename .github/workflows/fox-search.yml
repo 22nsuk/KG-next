@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - '.github/workflows/fox-search.yml'
+      - 'scripts/prefer_ubuntu_apt_mirror.py'
+      - 'scripts/test_prefer_ubuntu_apt_mirror.py'
+      - 'scripts/test_publish_release_request.py'
       - 'pom.xml'
       - 'src/main/java/featurecat/lizzie/Config.java'
       - 'src/main/java/featurecat/lizzie/analysis/GetFoxRequest.java'
@@ -45,7 +48,12 @@ jobs:
           python-version: '3.x'
       - name: Install Linux display dependencies
         if: ${{ runner.os == 'Linux' }}
+        # Bound the whole preparation, including downloads that keep making slow progress.
+        # Leave the rest of the 15-minute job budget for compilation and real UI probes.
+        timeout-minutes: 5
         run: |
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py
+          apt-config dump Acquire::Retries Acquire::http::Timeout Acquire::https::Timeout
           sudo apt-get update
           sudo apt-get install -y xvfb xauth fonts-dejavu-core fonts-noto-cjk
       # The full Java lanes are headless and the desktop lane has an explicit test list.
