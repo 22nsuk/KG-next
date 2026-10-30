@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.Stack;
+import java.util.StringTokenizer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
@@ -57,6 +58,8 @@ public class SGFParser {
   private static final Pattern BOARD_SIZE_PATTERN =
       Pattern.compile("(?s).*?SZ\\[([\\d:]+)\\](?s).*");
   private static final Pattern RECT_BOARD_SIZE_PATTERN = Pattern.compile("([\\d]+):([\\d]+)");
+  // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
+  private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final String[] listProps =
       new String[] {"LB", "CR", "SQ", "MA", "TR", "AB", "AW", "AE"};
@@ -589,9 +592,7 @@ public class SGFParser {
     StringBuilder tagContentBuilder = new StringBuilder();
     // MultiGo 's branch: (Main Branch (Main Branch) (Branch) )
     // Other 's branch: (Main Branch (Branch) Main Branch)
-    if (value.matches("(?s).*\\)\\s*\\)")) {
-      isMultiGo = true;
-    }
+    isMultiGo = hasMultiGoBranchSuffix(value);
 
     String blackPlayer = "", whitePlayer = "";
     String result = "";
@@ -1674,7 +1675,7 @@ public class SGFParser {
               removeWinrateComment(
                   history.getData().isKataData, history.getData().isSaiData, coment);
         }
-        builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(coment)));
+        builder.append("C[").append(Escaping(coment)).append(']');
       }
       BoardHistoryNode curNode = history.getCurrentHistoryNode();
       if (!stripRootMetadata) {
@@ -1879,7 +1880,7 @@ public class SGFParser {
         builder.append("DD[true]");
       } else {
         String sgfMove = data.isPassNode() ? passPos() : saveContext.asCoord(data.lastMove.get());
-        builder.append(String.format("%s[%s]", stone, sgfMove));
+        builder.append(stone).append('[').append(sgfMove).append(']');
       }
 
       // Node properties
@@ -2092,7 +2093,7 @@ public class SGFParser {
           removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment);
     }
     if (!curComment.isEmpty()) {
-      builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(curComment)));
+      builder.append("C[").append(Escaping(curComment)).append(']');
     }
     if (includeAnalysisData) {
       appendSerializedAnalysis(builder, node, saveContext);
@@ -2189,7 +2190,7 @@ public class SGFParser {
           removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment);
     }
     if (!curComment.isEmpty()) {
-      builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(curComment)));
+      builder.append("C[").append(Escaping(curComment)).append(']');
     }
   }
 
@@ -3152,6 +3153,9 @@ public class SGFParser {
 
   private static void appendAnalysisMetadata(
       StringBuilder builder, BoardData data, String primaryPayload, String secondaryPayload) {
+    if (primaryPayload == null && secondaryPayload == null && data.getProperty("KGP") == null) {
+      return;
+    }
     boolean invalidated = (primaryPayload != null && data.isChanged)
         || (secondaryPayload != null && data.isChanged2);
     // Keep valid-only files readable by clients that understand version 1 provenance.
@@ -4119,8 +4123,7 @@ public class SGFParser {
   }
 
   public static String Escaping(String in) {
-    String out = in.replaceAll("\\\\", "\\\\\\\\");
-    return out.replaceAll("\\]", "\\\\]");
+    return in.replace("\\", "\\\\").replace("]", "\\]");
   }
 
   public static BoardHistoryList parseSgf(String value, boolean first) {
@@ -4359,9 +4362,7 @@ public class SGFParser {
     StringBuilder tagContentBuilder = new StringBuilder();
     // MultiGo 's branch: (Main Branch (Main Branch) (Branch) )
     // Other 's branch: (Main Branch (Branch) Main Branch)
-    if (value.matches("(?s).*\\)\\s*\\)")) {
-      isMultiGo = true;
-    }
+    isMultiGo = hasMultiGoBranchSuffix(value);
     if (isBranch) {
       subTreeDepth += 1;
       // Initialize the step count
@@ -4747,9 +4748,7 @@ public class SGFParser {
     StringBuilder tagContentBuilder = new StringBuilder();
     // MultiGo 's branch: (Main Branch (Main Branch) (Branch) )
     // Other 's branch: (Main Branch (Branch) Main Branch)
-    if (value.matches("(?s).*\\)\\s*\\)")) {
-      isMultiGo = true;
-    }
+    isMultiGo = hasMultiGoBranchSuffix(value);
     subTreeDepth += 1;
     // Initialize the step count
     subTreeStepMap.put(subTreeDepth, 0);
@@ -5047,6 +5046,22 @@ public class SGFParser {
         || "KGP".equals(tag);
   }
 
+  /** The existing branch-format heuristic only needs the final two non-whitespace characters. */
+  private static boolean hasMultiGoBranchSuffix(String value) {
+    int last = value.length() - 1;
+    if (last < 1 || value.charAt(last) != ')') return false;
+    int previous = last - 1;
+    while (previous >= 0 && SGF_WHITESPACE.indexOf(value.charAt(previous)) >= 0) previous--;
+    return previous >= 0 && value.charAt(previous) == ')';
+  }
+
+  private static String[] analysisFields(String value) {
+    StringTokenizer tokenizer = new StringTokenizer(value.trim(), SGF_WHITESPACE);
+    String[] fields = new String[tokenizer.countTokens()];
+    for (int i = 0; i < fields.length; i++) fields[i] = tokenizer.nextToken();
+    return fields;
+  }
+
   private static boolean isSecondaryEngineAnalysisTag(String tag) {
     return "LZ2".equals(tag) || "LZOP2".equals(tag);
   }
@@ -5076,7 +5091,7 @@ public class SGFParser {
       }
       if (Utils.isBlank(tagContent)) return;
       String[] lines = tagContent.split("\n", 2);
-      String[] line1 = lines[0].trim().split("\\s+");
+      String[] line1 = analysisFields(lines[0]);
       if (line1.length < 3 || Utils.isBlank(line1[0])) {
         return;
       }
@@ -5184,6 +5199,17 @@ public class SGFParser {
     if (Utils.isBlank(rawValue)) {
       return 0;
     }
+    // Saved candidates normally contain plain nonnegative integers. Leave abbreviations,
+    // decimals, signs and overflow to the existing tolerant import path below.
+    int integer = 0;
+    int cursor = 0;
+    while (cursor < rawValue.length()) {
+      int digit = rawValue.charAt(cursor) - '0';
+      if (digit < 0 || digit > 9 || integer > (Integer.MAX_VALUE - digit) / 10) break;
+      integer = integer * 10 + digit;
+      cursor++;
+    }
+    if (cursor == rawValue.length()) return integer;
     String normalized = rawValue.trim().toLowerCase(Locale.ENGLISH).replace(",", "");
     double multiplier = 1;
     if (normalized.endsWith("m")) {
@@ -5253,7 +5279,7 @@ public class SGFParser {
   private static MoveData parseMoveDataFromAnalysis(String variation, List<MoveData> bestMoves) {
     MoveData result = new MoveData();
     result.order = bestMoves.size();
-    String[] data = variation.trim().split("\\s+");
+    String[] data = analysisFields(variation);
     for (int i = 0; i < data.length - 1; i++) {
       String key = data[i];
       if ("pv".equals(key)) {
@@ -5324,7 +5350,7 @@ public class SGFParser {
       return null;
     }
     ArrayList<Double> estimateArray = new ArrayList<>();
-    String[] params = lineInfo[1].trim().split("\\s+");
+    String[] params = analysisFields(lineInfo[1]);
     for (String param : params) {
       try {
         estimateArray.add(Double.parseDouble(param));

@@ -848,6 +848,77 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"0,0", "12345,12345", "000123,123", "2147483647,2147483647",
+      "12.3k,12300", "1.25M,1250000", "'1,234',1234", "+25,25", "-25,0",
+      "12.6,13", "visits:123,123", "invalid,0", "１２３,0",
+      // Preserve the existing overflow fallback in this performance-only change.
+      "2147483648,-2147483648"})
+  void analysisNumbersKeepIntegerAndLegacyImportSemantics(String text, int expected)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      for (String tag : List.of("LZ", "LZOP", "LZ2", "LZOP2")) {
+        boolean secondary = tag.endsWith("2");
+        BoardData header = SGFParser.parseSgf(
+            "(;SZ[5]" + tag + "[KataGo 45 " + text + "])", true).getStart().getData();
+        assertEquals(expected, secondary ? header.getPlayouts2() : header.getPlayouts(), tag);
+        BoardData data = SGFParser.parseSgf("(;SZ[5]" + tag
+            + "[KataGo 45 100\nmove C3 visits " + text + " winrate " + text
+            + " pv C3 D4])", true).getStart().getData();
+        MoveData move = (secondary ? data.bestMoves2 : data.bestMoves).get(0);
+        assertEquals(expected, move.playouts, tag);
+        assertEquals(expected / 100.0, move.winrate, tag);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
+  void analysisWhitespaceKeepsCandidatesPvVisitsAndOwnership(String tag) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.limitMaxSuggestion = 0;
+      Lizzie.config.limitBranchLength = 2;
+      boolean secondary = tag.endsWith("2");
+      BoardData data = SGFParser.parseSgf("(;SZ[5]" + tag
+          + "[KataGo\t45   100\t2.5 1.2 0\n"
+          + "move\tC3   visits\t100\fwinrate\t5500 prior\u000B1000 pv C3\tD4 E5 pvVisits 100\t90 80"
+          + " info move D4 visits 50 winrate 4500 pv D4 C3"
+          + " ownership\t0.25  -0.5\t1.0 trailing])", true).getStart().getData();
+      List<MoveData> moves = secondary ? data.bestMoves2 : data.bestMoves;
+      assertEquals(2, moves.size());
+      assertEquals("C3", moves.get(0).coordinate);
+      assertEquals(100, moves.get(0).playouts);
+      assertEquals(55, moves.get(0).winrate);
+      assertEquals(10, moves.get(0).policy);
+      assertEquals(1.2, moves.get(0).scoreStdev);
+      assertEquals(List.of("C3", "D4"), moves.get(0).variation);
+      assertEquals(List.of("100", "90", "80"), moves.get(0).pvVisits);
+      assertEquals("D4", moves.get(1).coordinate);
+      assertEquals(50, moves.get(1).playouts);
+      assertEquals(List.of(0.25, -0.5, 1.0), secondary ? data.estimateArray2 : data.estimateArray);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", " ", "\t", "\r\n", "\f", "\u000B", " \t\n\r\f\u000B"})
+  void branchSuffixWhitespacePreservesBothVariationsAcrossEntryPoints(String gap) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      String branches = "(;W[bb]C[first])(;W[cc]C[second])" + gap + ")";
+      String sgf = "(;SZ[5];B[aa]" + branches;
+      BoardHistoryList expected = SGFParser.parseSgf(sgf, true);
+      BoardHistoryNode fork = expected.getStart().next().orElseThrow();
+      assertEquals(2, fork.numberOfChildren());
+      assertEquals("first", fork.getVariation(0).orElseThrow().getData().comment);
+      assertEquals("second", fork.getVariation(1).orElseThrow().getData().comment);
+      assertTrue(SGFParser.loadFromString(sgf, false));
+      assertTreeSemanticsEqual(expected, Lizzie.board.getHistory());
+      BoardHistoryList imported = SGFParser.parseSgf("(;SZ[5];B[aa])", true);
+      imported.setHead(imported.getEnd());
+      SGFParser.parseBranch(imported, branches);
+      assertTreeSemanticsEqual(expected, imported);
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
   void headerOnlyExactRootAndDowngradedLegacyRemainDistinct(String tag) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {

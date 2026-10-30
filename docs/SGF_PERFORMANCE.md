@@ -137,3 +137,64 @@ investigating a specific slow opening.
 Automatic-save interruption and recovery are a separate correctness question.
 Individual SGF/manifest/preview replacement does not establish a multi-file
 transaction; throughput measurements do not validate crash recovery.
+
+## Tree capture and analysis parsing follow-up
+
+The follow-up at `fb432640504d35780d6e1ac5b47b937f049ad3a3` reduces repeated
+work in the existing context:
+
+- `BoardData.clone()` lets the constructor detach the core arrays once instead
+  of copying them before construction and again afterward. The per-node payload
+  lock and existing property/analysis copies remain unchanged. Topology capture
+  still releases the original history lock before copying node payloads.
+- Move/comment output uses literal appends and literal escaping. Nodes without
+  either analysis or an opaque `KGP` property need no metadata JSON.
+- Analysis headers, candidates and ownership use the same six ASCII whitespace
+  delimiters without regex tokenization. Ordinary nonnegative integer visits
+  take a bounded direct path; legacy abbreviations, decimals, signs, formatted
+  values and overflow retain their previous fallback.
+- The existing MultiGo branch-format heuristic inspects the suffix instead of
+  matching the complete SGF. All three parser entry implementations retain the
+  same final-parenthesis and whitespace conditions.
+
+The parser and serializer still run in their original global/EDT context. This
+does not change file-open ownership, the save queue, completion/retry rules or
+automatic-save recovery. The save snapshot still contains detached arrays; it
+does not share the live stones or move-number arrays to obtain these savings.
+
+On 2026-10-30, the unchanged manual probe compared main
+`e37c87ed883046daf8d72f9eec4f241fb6252951` with the follow-up revision above.
+Both used Ubuntu OpenJDK 21.0.12.1 on WSL2, Xvfb/Openbox, 24 logical processors,
+`-Xmx2g`, no engine and warm filesystem caches. Each workload had five excluded
+warmups followed by ten retained samples. Production class, probe and dependency
+classpath hashes were checked against the corresponding known builds before
+each run. All 45 saved files, including warmups, were byte-identical between
+revisions; the probe's tree/comment/candidate/ownership/reopen checks also passed.
+
+| Phase / workload | Before median (min–max), ms | After median (min–max), ms |
+| --- | ---: | ---: |
+| Capture / wide variations | 39.69 (33.17–45.39) | 21.54 (20.71–22.75) |
+| Serialize / wide variations | 35.87 (32.09–53.48) | 20.88 (13.16–23.25) |
+| Parse/tree / candidates + ownership | 56.37 (53.02–82.88) | 34.32 (29.14–48.91) |
+| Reopen parse/tree / candidates + ownership | 56.08 (53.39–64.67) | 34.12 (29.45–42.77) |
+| Serialize / long multilingual comments | 34.10 (32.18–54.75) | 5.95 (5.65–9.64) |
+
+Wide-tree save EDT CPU fell from a median 76.10 to 43.36 ms. Its maximum observed
+queued-callback delay was 87.64 before and 50.23 ms after; these are finite-sample
+queue delays, not frame-rate or worst-case latency guarantees. Save wall time
+still includes variable filesystem flush time. Parsing, explicit-edit snapshots,
+capture and serialization can still occupy the EDT.
+
+Separate JFR profiling at the same source revisions estimated wide-tree capture
+allocation at 216.26 → 91.18 MiB per operation, serialization at 86.92 → 26.55 MiB,
+and dense-analysis parsing at 78.59 → 47.78 MiB. These estimates sum new-TLAB sizes
+and outside-TLAB allocation sizes within each phase; they are neither exact
+object counts nor retained heap measurements. Profiling was separate from the
+timing runs.
+
+The earlier two-warmup/five-sample final run had wide-tree capture values of
+21.17–69.69 ms. The longer warmup/sample protocol was fixed before the paired
+rerun, and all ten samples were retained. One attempted paired baseline reused
+stale Maven classes after archive restoration; it was rejected as an invalid
+build before reporting the valid pair above. Source/class preflight, raw results,
+fixture hashes and that exclusion were retained with the measurement evidence.

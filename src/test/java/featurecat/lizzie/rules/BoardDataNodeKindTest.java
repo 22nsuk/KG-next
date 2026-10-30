@@ -2,10 +2,13 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 class BoardDataNodeKindTest {
   private static final int BOARD_AREA = 9;
@@ -84,6 +87,49 @@ class BoardDataNodeKindTest {
     assertEquals("AB[aa]AW[bb]AE[cc]LB[aa:X]", clone.propertiesString());
     assertEquals("setup", clone.comment);
     assertFalse(clone.getProperties().containsKey("TR"));
+  }
+
+  @ParameterizedTest
+  @EnumSource(BoardNodeKind.class)
+  void cloneKeepsCoreMetadataAndDetachesArraysForEveryNodeKind(BoardNodeKind kind) {
+    BoardData source = switch (kind) {
+      case MOVE -> moveData(new int[] {1, 2}, Stone.BLACK, false, 63);
+      case PASS -> passData(Stone.WHITE, true, 63);
+      case SNAPSHOT -> snapshotData(Optional.of(new int[] {1, 2}), Stone.BLACK, false, 63);
+    };
+    source.moveMNNumber = 17;
+    source.dummy = true;
+    source.verify = true;
+    source.blackCaptures = 3;
+    source.whiteCaptures = 4;
+    source.moveNumberList[0] = 7;
+    source.zobrist = new Zobrist(12345);
+
+    BoardData copy = source.clone();
+
+    assertEquals(kind, copy.getNodeKind());
+    assertEquals(63, copy.moveNumber);
+    assertEquals(17, copy.moveMNNumber);
+    assertTrue(copy.dummy);
+    assertTrue(copy.verify);
+    assertEquals(source.lastMoveColor, copy.lastMoveColor);
+    assertEquals(source.blackToPlay, copy.blackToPlay);
+    assertEquals(3, copy.blackCaptures);
+    assertEquals(4, copy.whiteCaptures);
+    assertEquals(new Zobrist(12345), copy.zobrist);
+    assertNotSame(source.zobrist, copy.zobrist);
+    assertNotSame(source.stones, copy.stones);
+    assertNotSame(source.moveNumberList, copy.moveNumberList);
+    source.stones[0] = Stone.WHITE;
+    source.moveNumberList[0] = 99;
+    assertEquals(Stone.EMPTY, copy.stones[0]);
+    assertEquals(7, copy.moveNumberList[0]);
+    if (source.lastMove.isPresent()) {
+      source.lastMove.get()[0] = 0;
+      assertEquals(1, copy.lastMove.orElseThrow()[0]);
+    } else {
+      assertTrue(copy.lastMove.isEmpty());
+    }
   }
 
   private static BoardData moveData(

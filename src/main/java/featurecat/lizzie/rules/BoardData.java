@@ -1119,8 +1119,14 @@ public class BoardData {
 
   /** Shares the short payload-commit lock so a save cannot mix visits and candidates from updates. */
   public synchronized BoardData clone() {
-    BoardData data = copyCoreData();
-    data.copyCoreStateFrom(this);
+    // The constructor already detaches the mutable core arrays. Do not pre-copy them or
+    // overwrite them through copyCoreStateFrom: a large save visits every node in the tree.
+    BoardData data = new BoardData(
+        nodeKind, stones, lastMove, lastMoveColor, blackToPlay, zobrist, moveNumber,
+        moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
+    data.moveMNNumber = moveMNNumber;
+    data.dummy = dummy;
+    data.verify = verify;
     data.copyAnalysisStateFrom(this, true);
     data.properties = copyProperties(this.properties);
     return data;
@@ -1377,52 +1383,6 @@ public class BoardData {
     this.estimateArray2 = copyDoubleList(data.estimateArray2);
     this.playoutsChanged = data.playoutsChanged;
     this.lastMoveMatchCandidteNo = data.lastMoveMatchCandidteNo;
-  }
-
-  private BoardData copyCoreData() {
-    Stone[] stonesCopy = copyStones(this.stones);
-    Optional<int[]> lastMoveCopy = copyLastMove(this.lastMove);
-    int[] moveNumberListCopy = copyIntArray(this.moveNumberList);
-    Zobrist zobristCopy = this.zobrist == null ? null : this.zobrist.clone();
-    if (this.nodeKind == BoardNodeKind.MOVE) {
-      return BoardData.move(
-          stonesCopy,
-          lastMoveCopy.orElseThrow(),
-          this.lastMoveColor,
-          this.blackToPlay,
-          zobristCopy,
-          this.moveNumber,
-          moveNumberListCopy,
-          this.blackCaptures,
-          this.whiteCaptures,
-          this.winrate,
-          this.playouts);
-    }
-    if (this.nodeKind == BoardNodeKind.PASS) {
-      return BoardData.pass(
-          stonesCopy,
-          this.lastMoveColor,
-          this.blackToPlay,
-          zobristCopy,
-          this.moveNumber,
-          moveNumberListCopy,
-          this.blackCaptures,
-          this.whiteCaptures,
-          this.winrate,
-          this.playouts);
-    }
-    return BoardData.snapshot(
-        stonesCopy,
-        lastMoveCopy,
-        this.lastMoveColor,
-        this.blackToPlay,
-        zobristCopy,
-        this.moveNumber,
-        moveNumberListCopy,
-        this.blackCaptures,
-        this.whiteCaptures,
-        this.winrate,
-        this.playouts);
   }
 
   private static Optional<int[]> copyLastMove(Optional<int[]> move) {
