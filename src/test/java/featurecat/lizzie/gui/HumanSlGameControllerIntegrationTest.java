@@ -1658,9 +1658,9 @@ class HumanSlGameControllerIntegrationTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
+  @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
   void deferredExternalFileOpenKeepsOriginalTargetUntilItsAcceptedLoadCompletes(
-      boolean startup, @TempDir Path directory) throws Exception {
+      boolean startup, boolean rejectedStartup, @TempDir Path directory) throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
       Lizzie.config.saveBoardConfig = new JSONObject();
@@ -1674,23 +1674,28 @@ class HumanSlGameControllerIntegrationTest {
       AtomicReference<Runnable> exitWorker = new AtomicReference<>();
       controller.setExitLifecycleForTesting(exitWorker::set, Runnable::run, () -> true, null);
 
+      AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
       try {
-        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
         SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, accepted, startup)));
-        request.get().get(5, TimeUnit.SECONDS);
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "queued load is not a new save target");
         assertFalse(controller.isFinished());
+        assertFalse(request.get().isDone(), "admission is not completion of the deferred load");
 
-        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, rejected, !startup)));
-        request.get().get(5, TimeUnit.SECONDS);
+        SwingUtilities.invokeAndWait(() -> {
+          CompletableFuture<Void> denied = openExternalFile(frame, rejected, rejectedStartup);
+          assertTrue(denied.isDone(), "the teardown owner must reject before disk recovery starts");
+          if (rejectedStartup) assertTrue(denied.isCompletedExceptionally());
+        });
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "rejected continuation cannot claim the file");
       } finally {
         if (exitWorker.get() != null) finishSavedGameCoachExit(exitWorker.get());
       }
 
+      request.get().get(5, TimeUnit.SECONDS);
+      SwingUtilities.invokeAndWait(() -> {});
       assertTrue(controller.isFinished());
       assertEquals("accepted game", Lizzie.board.getHistory().getStart().getData().comment);
       assertEquals(accepted.toFile(), LizzieFrame.curFile);
@@ -1714,18 +1719,18 @@ class HumanSlGameControllerIntegrationTest {
       AtomicReference<Runnable> exitWorker = new AtomicReference<>();
       controller.setExitLifecycleForTesting(
           exitWorker::set,
-          completion -> SwingUtilities.invokeLater(() -> {
-            completion.run();
-            // The queued native error notice needs a real owner or no owner.
-            Lizzie.frame = null;
-          }),
+          SwingUtilities::invokeLater,
           () -> true,
           null);
 
+      AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
       try {
-        AtomicReference<CompletableFuture<Void>> request = new AtomicReference<>();
-        SwingUtilities.invokeAndWait(() -> request.set(openExternalFile(frame, malformed, startup)));
-        request.get().get(5, TimeUnit.SECONDS);
+        SwingUtilities.invokeAndWait(() -> {
+          CompletableFuture<Void> opened = openExternalFile(frame, malformed, startup);
+          // Keep the owner through asynchronous recovery and parsing. Only the error
+          // notice queued after the completed failure needs a real owner or no owner.
+          request.set(opened.thenRun(() -> Lizzie.frame = null));
+        });
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());
         assertSame(originalNode, original.getCurrentHistoryNode());
@@ -1733,6 +1738,7 @@ class HumanSlGameControllerIntegrationTest {
         try {
           if (exitWorker.get() != null) {
             finishSavedGameCoachExit(exitWorker.get());
+            request.get().get(5, TimeUnit.SECONDS);
             dialogs.assertOnlyExpectedFailureDialog();
           }
         } finally {
@@ -1850,8 +1856,7 @@ class HumanSlGameControllerIntegrationTest {
         return List.of(file.toFile());
       }
     };
-    assertTrue(frame.importDroppedKifuFiles(files));
-    return CompletableFuture.completedFuture(null);
+    return frame.importDroppedKifuFilesAsync(files).thenApply(loaded -> null);
   }
 
   private static SavedGameCompletionFrame savedGameCompletionFrame(Path directory)

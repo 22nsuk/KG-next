@@ -5059,6 +5059,16 @@ class LizzieFrameRegressionTest {
     }
 
     @Override
+    java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
+        File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad) {
+      if (!interceptFileLoads) return super.openFileAsync(file, fromTemp, showHint, afterSuccessfulLoad);
+      loadFileCount++;
+      loadedFile = file;
+      if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
+      return java.util.concurrent.CompletableFuture.completedFuture(true);
+    }
+
+    @Override
     public void refresh() {
       refreshCount++;
     }

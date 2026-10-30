@@ -16,8 +16,10 @@ import featurecat.lizzie.enginegame.MatchRulesSnapshot;
 import featurecat.lizzie.enginegame.MatchRulesTexts;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.SgfObservation;
+import featurecat.lizzie.logging.SgfPhase;
 import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.EncodingDetector;
+import featurecat.lizzie.util.SgfFileReader;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
 import java.lang.reflect.Field;
@@ -72,35 +74,30 @@ public class SGFParser {
 
   public static boolean load(String filename, boolean showHint, boolean syncPrimaryEngine)
       throws IOException {
+    if (!java.nio.file.Files.isReadable(Path.of(filename))) {
+      SgfObservation.record("open", "unreadable", filename, null);
+      return false;
+    }
+    return loadFileContent(SgfFileReader.read(Path.of(filename)), showHint, syncPrimaryEngine);
+  }
+
+  /** Applies already decoded file content with the same navigation/hint contract as load(). */
+  public static boolean loadFileContent(
+      String value, boolean showHint, boolean syncPrimaryEngine) {
     isExtraMode2 = false;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
     boolean finalizerScheduled = false;
     Lizzie.board.isLoadingFile = true;
     try {
-      if (syncPrimaryEngine) {
-        Lizzie.board.clear(false);
-      } else {
-        Lizzie.board.clearWithoutPrimaryEngineForwarding();
-      }
-      File file = new File(filename);
-      if (!file.exists() || !file.canRead()) {
-        SgfObservation.record("open", "unreadable", filename, null);
-        return false;
-      }
-
-      String encoding = EncodingDetector.detect(filename);
-      String value;
-      try (FileInputStream fp = new FileInputStream(file);
-          InputStreamReader reader =
-              new InputStreamReader(fp, encoding.equals("WINDOWS-1252") ? "GB18030" : encoding)) {
-        StringBuilder builder = new StringBuilder();
-        while (reader.ready()) {
-          builder.append((char) reader.read());
+      try (var phase = new SgfPhase("board-clear")) {
+        if (syncPrimaryEngine) {
+          Lizzie.board.clear(false);
+        } else {
+          Lizzie.board.clearWithoutPrimaryEngineForwarding();
         }
-        value = builder.toString();
       }
       if (value.isEmpty()) {
-        SgfObservation.record("open", "empty", filename, null);
+        SgfObservation.record("open", "empty", null, null);
         return false;
       }
 
@@ -108,12 +105,12 @@ public class SGFParser {
       try {
         value = normalizeStructuralNewlines(value);
         if (value == null) {
-          SgfObservation.record("open", "failed", filename, null);
+          SgfObservation.record("open", "failed", null, null);
           return false;
         }
         returnValue = parse(value);
       } catch (RuntimeException invalidSgf) {
-        SgfObservation.record("open", "failed", filename, invalidSgf);
+        SgfObservation.record("open", "failed", null, invalidSgf);
         return false;
       }
       if (!returnValue) {
@@ -132,7 +129,7 @@ public class SGFParser {
               if (Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) {
                 return;
               }
-              try {
+              try (var phase = new SgfPhase("board-finalize")) {
                 if (Lizzie.config.loadSgfLast)
                   while (Lizzie.board.nextMove(false))
                     ;
@@ -538,6 +535,13 @@ public class SGFParser {
   }
 
   private static boolean parse(String value) {
+    try (var phase = new SgfPhase("parse-build-tree")) {
+      return parseIntoCurrentBoard(value);
+    }
+  }
+
+  // Token parsing and live history construction are interleaved in this legacy parser.
+  private static boolean parseIntoCurrentBoard(String value) {
     // Drop anything outside "(;...)"
     boolean oriPlaySound = Lizzie.config.playSound;
     Lizzie.config.playSound = false;
@@ -1066,6 +1070,12 @@ public class SGFParser {
   }
 
   private static BoardHistoryList captureSaveHistory(BoardHistoryList source) {
+    try (var phase = new SgfPhase("save-capture")) {
+      return copySaveHistory(source);
+    }
+  }
+
+  private static BoardHistoryList copySaveHistory(BoardHistoryList source) {
     BoardHistoryList copy;
     BoardHistoryNode current;
     Map<BoardHistoryNode, List<BoardHistoryNode>> topology = new IdentityHashMap<>();
@@ -1522,206 +1532,208 @@ public class SGFParser {
     }
     BoardHistoryList history =
         captureSnapshot ? captureSaveHistory(sourceHistory) : sourceHistory.shallowCopy();
-    SaveContext saveContext = SaveContext.capture(board, sourceHistory, history);
-    String boardSizeTag = formatBoardSizeTag(saveContext.boardWidth(), saveContext.boardHeight());
+    try (var phase = new SgfPhase("save-serialize")) {
+      SaveContext saveContext = SaveContext.capture(board, sourceHistory, history);
+      String boardSizeTag = formatBoardSizeTag(saveContext.boardWidth(), saveContext.boardHeight());
 
-    // collect game info
-    GameInfo gameInfo = history.getGameInfo();
-    EngineGameRecordContext engineContext = engineGameContext(gameInfo);
-    boolean engineGameHistory = gameInfo != null && gameInfo.hasEngineGameHistory();
-    String playerB = gameInfo.getPlayerBlack();
-    String playerW = gameInfo.getPlayerWhite();
-    String result = gameInfo.getResult();
-    Double komi = gameInfo.getKomi();
-    Integer handicap = gameInfo.getHandicap();
-    String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
+      // collect game info
+      GameInfo gameInfo = history.getGameInfo();
+      EngineGameRecordContext engineContext = engineGameContext(gameInfo);
+      boolean engineGameHistory = gameInfo != null && gameInfo.hasEngineGameHistory();
+      String playerB = gameInfo.getPlayerBlack();
+      String playerW = gameInfo.getPlayerWhite();
+      String result = gameInfo.getResult();
+      Double komi = gameInfo.getKomi();
+      Integer handicap = gameInfo.getHandicap();
+      String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
 
-    // add SGF header
-    StringBuilder builder = new StringBuilder("(;");
-    StringBuilder generalProps = new StringBuilder("");
-    if (handicap != 0) generalProps.append(String.format(Locale.ENGLISH, "HA[%s]", handicap));
-    if (LizzieFrame.isSavingRaw) {
-      generalProps.append(
-          String.format(
-              "KM[%s]PW[%s]PB[%s]DT[%s]RE[%s]SZ[%s]CA[UTF-8]",
-              komi, playerW, playerB, date, result, boardSizeTag));
-    } else {
-      if (engineGameHistory) {
-        if (!captureSnapshot && saveContext.ownsCurrentHistory()) board.updateWinrate();
-        appendTime(gameInfo, history);
-        appendMatchRulesComment(history, gameInfo, engineContext);
+      // add SGF header
+      StringBuilder builder = new StringBuilder("(;");
+      StringBuilder generalProps = new StringBuilder("");
+      if (handicap != 0) generalProps.append(String.format(Locale.ENGLISH, "HA[%s]", handicap));
+      if (LizzieFrame.isSavingRaw) {
+        generalProps.append(
+            String.format(
+                "KM[%s]PW[%s]PB[%s]DT[%s]RE[%s]SZ[%s]CA[UTF-8]",
+                komi, playerW, playerB, date, result, boardSizeTag));
       } else {
-        if (saveContext.ownsCurrentHistory()
-            && Lizzie.leelaz != null && Lizzie.leelaz.isKatago && !fromAutoSave) {
-          String rules = rulesLabel(Lizzie.leelaz.rulesSummary);
-          if (!rules.isEmpty()) {
-            if (history.getStart().getData().comment.equals(""))
-              history.getStart().getData().comment +=
-                  Lizzie.resourceBundle.getString("SGFParse.rules") + rules;
-            else if (!history
-                .getStart()
-                .getData()
-                .comment
-                .contains(Lizzie.resourceBundle.getString("SGFParse.rules")))
-              history.getStart().getData().comment =
-                  Lizzie.resourceBundle.getString("SGFParse.rules")
-                      + rules
-                      + "\n\n"
-                      + history.getStart().getData().comment;
-            else {
-              String oldComment = history.getStart().getData().comment;
-              int leftIndex =
-                  oldComment.indexOf(
-                      "\n",
-                      oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")));
-              history.getStart().getData().comment =
-                  oldComment.substring(
-                          0,
-                          oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")))
-                      + Lizzie.resourceBundle.getString("SGFParse.rules")
-                      + rules
-                      + (leftIndex > 0 ? oldComment.substring(leftIndex) : "");
+        if (engineGameHistory) {
+          if (!captureSnapshot && saveContext.ownsCurrentHistory()) board.updateWinrate();
+          appendTime(gameInfo, history);
+          appendMatchRulesComment(history, gameInfo, engineContext);
+        } else {
+          if (saveContext.ownsCurrentHistory()
+              && Lizzie.leelaz != null && Lizzie.leelaz.isKatago && !fromAutoSave) {
+            String rules = rulesLabel(Lizzie.leelaz.rulesSummary);
+            if (!rules.isEmpty()) {
+              if (history.getStart().getData().comment.equals(""))
+                history.getStart().getData().comment +=
+                    Lizzie.resourceBundle.getString("SGFParse.rules") + rules;
+              else if (!history
+                  .getStart()
+                  .getData()
+                  .comment
+                  .contains(Lizzie.resourceBundle.getString("SGFParse.rules")))
+                history.getStart().getData().comment =
+                    Lizzie.resourceBundle.getString("SGFParse.rules")
+                        + rules
+                        + "\n\n"
+                        + history.getStart().getData().comment;
+              else {
+                String oldComment = history.getStart().getData().comment;
+                int leftIndex =
+                    oldComment.indexOf(
+                        "\n",
+                        oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")));
+                history.getStart().getData().comment =
+                    oldComment.substring(
+                            0,
+                            oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")))
+                        + Lizzie.resourceBundle.getString("SGFParse.rules")
+                        + rules
+                        + (leftIndex > 0 ? oldComment.substring(leftIndex) : "");
+              }
             }
           }
         }
-      }
 
-      generalProps.append(
-          String.format(
-              "KM[%s]PW[%s]PB[%s]DT[%s]%sAP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-              komi, playerW, playerB, date,
-              saveContext.dataType().isEmpty() ? "" : "DZ[" + saveContext.dataType() + "]",
-              Lizzie.nextVersion, result, boardSizeTag));
-    }
-    // To append the winrate to the comment of sgf we might need to update the
-    // Winrate
-    // if (Lizzie.config.appendWinrateToComment) {
-    // Lizzie.board.updateWinrate();
-    // }
+        generalProps.append(
+            String.format(
+                "KM[%s]PW[%s]PB[%s]DT[%s]%sAP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
+                komi, playerW, playerB, date,
+                saveContext.dataType().isEmpty() ? "" : "DZ[" + saveContext.dataType() + "]",
+                Lizzie.nextVersion, result, boardSizeTag));
+      }
+      // To append the winrate to the comment of sgf we might need to update the
+      // Winrate
+      // if (Lizzie.config.appendWinrateToComment) {
+      // Lizzie.board.updateWinrate();
+      // }
 
-    // move to the first move
-    Map<BoardHistoryNode, BoardHistoryNode> selectedBranch = new IdentityHashMap<>();
-    if (mainTrunkOnly) {
-      BoardHistoryNode selected = history.getCurrentHistoryNode();
-      while (selected.previous().isPresent()) {
-        BoardHistoryNode parent = selected.previous().get();
-        selectedBranch.put(parent, selected);
-        selected = parent;
-      }
-    }
-    history.toStart();
-
-    // Game properties
-    BoardData rootData = history.getData().clone();
-    rootData.addProperties(generalProps.toString());
-    if (gameInfo.getDate() == null) {
-      rootData.getProperties().remove("DT");
-    }
-    if (rootData.isSnapshotNode()) {
-      builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
-    } else {
-      builder.append(rootData.propertiesString());
-      if (handicap != 0) {
-        builder.append("AB");
-        Stone[] stones = history.getStones();
-        for (int i = 0; i < stones.length; i++) {
-          Stone stone = stones[i];
-          if (stone.isBlack()) {
-            // i = x * Board.BOARD_SIZE + y;
-            builder.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
-          }
-        }
-      } else {
-        // Process the AW/AB stone
-        Stone[] stones = history.getStones();
-        StringBuilder abStone = new StringBuilder();
-        StringBuilder awStone = new StringBuilder();
-        for (int i = 0; i < stones.length; i++) {
-          Stone stone = stones[i];
-          if (stone.isBlack() || stone.isWhite()) {
-            if (stone.isBlack()) {
-              abStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
-            } else {
-              awStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
-            }
-          }
-        }
-        if (abStone.length() > 0) {
-          builder.append("AB").append(abStone);
-        }
-        if (awStone.length() > 0) {
-          builder.append("AW").append(awStone);
-        }
-      }
-    }
-
-    // The AW/AB Comment
-    if (!stripRootMetadata && !history.getData().comment.isEmpty()) {
-      String coment = history.getData().comment;
-      if (forUpload) {
-        coment =
-            removeWinrateComment(
-                history.getData().isKataData, history.getData().isSaiData, coment);
-      }
-      builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(coment)));
-    }
-    BoardHistoryNode curNode = history.getCurrentHistoryNode();
-    if (!stripRootMetadata) {
-      try {
-        appendSerializedAnalysis(builder, curNode, saveContext, "LZOP", "LZOP2");
-        if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
-          BoardData data = curNode.getData();
-          if (saveContext.gameBoard()) {
-            BoardHistoryNode commentSource = curNode;
-            if (data.getPlayouts() > 0 && curNode.next().isPresent())
-              curNode.next().get().getData().setGeneratedComment(() -> formatCommentForGame(commentSource, saveContext));
-            else if (curNode.next().isPresent()) curNode.next().get().getData().setGeneratedComment(() -> "");
-          }
-        }
-      } catch (Exception e) {
-        saveContext.clearLoadingAfterSerializationFailure();
-      }
-    }
-    // replay moves, and convert them to tags.
-    // * format: ";B[xy]" or ";W[xy]"
-    // * with 'xy' = coordinates ; or 'tt' for pass.
-
-    // Write variation tree
-    BoardHistoryNode makerBeg = new BoardHistoryNode(null);
-    BoardHistoryNode makerEnd = new BoardHistoryNode(null);
-    BoardHistoryNode rootNode = history.getStart();
-    Stack<BoardHistoryNode> stack = new Stack<>();
-    stack.push(curNode);
-    while (!stack.isEmpty()) {
-      BoardHistoryNode cur = stack.pop();
-      if (cur == makerBeg) {
-        builder.append("(");
-        continue;
-      }
-      if (cur == makerEnd) {
-        builder.append(")");
-        continue;
-      }
-      if (cur != rootNode) {
-        builder = generateNode(saveContext, cur, forUpload, builder);
-      }
+      // move to the first move
+      Map<BoardHistoryNode, BoardHistoryNode> selectedBranch = new IdentityHashMap<>();
       if (mainTrunkOnly) {
-        BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
-        if (next != null) stack.push(next);
+        BoardHistoryNode selected = history.getCurrentHistoryNode();
+        while (selected.previous().isPresent()) {
+          BoardHistoryNode parent = selected.previous().get();
+          selectedBranch.put(parent, selected);
+          selected = parent;
+        }
+      }
+      history.toStart();
+
+      // Game properties
+      BoardData rootData = history.getData().clone();
+      rootData.addProperties(generalProps.toString());
+      if (gameInfo.getDate() == null) {
+        rootData.getProperties().remove("DT");
+      }
+      if (rootData.isSnapshotNode()) {
+        builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
       } else {
-        boolean hasBrothers = (cur.numberOfChildren() > 1);
-        if (cur.numberOfChildren() >= 1) {
-          for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
-            if (hasBrothers) stack.push(makerEnd);
-            stack.push(cur.getVariations().get(i));
-            if (hasBrothers) stack.push(makerBeg);
+        builder.append(rootData.propertiesString());
+        if (handicap != 0) {
+          builder.append("AB");
+          Stone[] stones = history.getStones();
+          for (int i = 0; i < stones.length; i++) {
+            Stone stone = stones[i];
+            if (stone.isBlack()) {
+              // i = x * Board.BOARD_SIZE + y;
+              builder.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+            }
+          }
+        } else {
+          // Process the AW/AB stone
+          Stone[] stones = history.getStones();
+          StringBuilder abStone = new StringBuilder();
+          StringBuilder awStone = new StringBuilder();
+          for (int i = 0; i < stones.length; i++) {
+            Stone stone = stones[i];
+            if (stone.isBlack() || stone.isWhite()) {
+              if (stone.isBlack()) {
+                abStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+              } else {
+                awStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+              }
+            }
+          }
+          if (abStone.length() > 0) {
+            builder.append("AB").append(abStone);
+          }
+          if (awStone.length() > 0) {
+            builder.append("AW").append(awStone);
           }
         }
       }
+
+      // The AW/AB Comment
+      if (!stripRootMetadata && !history.getData().comment.isEmpty()) {
+        String coment = history.getData().comment;
+        if (forUpload) {
+          coment =
+              removeWinrateComment(
+                  history.getData().isKataData, history.getData().isSaiData, coment);
+        }
+        builder.append(String.format(Locale.ENGLISH, "C[%s]", Escaping(coment)));
+      }
+      BoardHistoryNode curNode = history.getCurrentHistoryNode();
+      if (!stripRootMetadata) {
+        try {
+          appendSerializedAnalysis(builder, curNode, saveContext, "LZOP", "LZOP2");
+          if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
+            BoardData data = curNode.getData();
+            if (saveContext.gameBoard()) {
+              BoardHistoryNode commentSource = curNode;
+              if (data.getPlayouts() > 0 && curNode.next().isPresent())
+                curNode.next().get().getData().setGeneratedComment(() -> formatCommentForGame(commentSource, saveContext));
+              else if (curNode.next().isPresent()) curNode.next().get().getData().setGeneratedComment(() -> "");
+            }
+          }
+        } catch (Exception e) {
+          saveContext.clearLoadingAfterSerializationFailure();
+        }
+      }
+      // replay moves, and convert them to tags.
+      // * format: ";B[xy]" or ";W[xy]"
+      // * with 'xy' = coordinates ; or 'tt' for pass.
+
+      // Write variation tree
+      BoardHistoryNode makerBeg = new BoardHistoryNode(null);
+      BoardHistoryNode makerEnd = new BoardHistoryNode(null);
+      BoardHistoryNode rootNode = history.getStart();
+      Stack<BoardHistoryNode> stack = new Stack<>();
+      stack.push(curNode);
+      while (!stack.isEmpty()) {
+        BoardHistoryNode cur = stack.pop();
+        if (cur == makerBeg) {
+          builder.append("(");
+          continue;
+        }
+        if (cur == makerEnd) {
+          builder.append(")");
+          continue;
+        }
+        if (cur != rootNode) {
+          builder = generateNode(saveContext, cur, forUpload, builder);
+        }
+        if (mainTrunkOnly) {
+          BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
+          if (next != null) stack.push(next);
+        } else {
+          boolean hasBrothers = (cur.numberOfChildren() > 1);
+          if (cur.numberOfChildren() >= 1) {
+            for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
+              if (hasBrothers) stack.push(makerEnd);
+              stack.push(cur.getVariations().get(i));
+              if (hasBrothers) stack.push(makerBeg);
+            }
+          }
+        }
+      }
+      // close file
+      builder.append(')');
+      writer.append(builder.toString());
     }
-    // close file
-    builder.append(')');
-    writer.append(builder.toString());
   }
 
   /** Generate node with variations */

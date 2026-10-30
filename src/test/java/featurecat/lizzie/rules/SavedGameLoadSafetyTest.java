@@ -846,6 +846,25 @@ class SavedGameLoadSafetyTest {
         () -> assertEquals(0, errorDialogs.get()));
   }
 
+  @Test
+  void droppedFileCompletionCannotRenameTheDocumentAfterFrameReplacement() throws Exception {
+    File opened = directory.resolve("opened.sgf").toFile();
+    Files.writeString(opened.toPath(), SAVED_SGF);
+    File replacementFile = directory.resolve("replacement-owner.sgf").toFile();
+    AtomicReference<CompletableFuture<Void>> requested = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> requested.set(
+        openExternalFile(FileOpenEntry.DROP, opened).thenRun(() -> {
+          assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+          // Keep the loaded board, but give the window to a new owner before the queued callback.
+          Lizzie.frame = RulesLayerTestHarness.allocate(SavedListFrame.class);
+          LizzieFrame.curFile = replacementFile;
+        })));
+    requested.get().get(5, TimeUnit.SECONDS);
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals(replacementFile, LizzieFrame.curFile);
+    assertEquals(0, errorDialogs.get());
+  }
+
   private CompletableFuture<Void> openExternalFile(FileOpenEntry entry, File file) {
     assertTrue(SwingUtilities.isEventDispatchThread());
     Lizzie.leelaz.isLoaded = true;
@@ -865,10 +884,11 @@ class SavedGameLoadSafetyTest {
       }
     };
     try {
-      Method drop = LizzieFrame.class.getDeclaredMethod("importDroppedKifuFiles", Transferable.class);
+      Method drop = LizzieFrame.class.getDeclaredMethod("importDroppedKifuFilesAsync", Transferable.class);
       drop.setAccessible(true);
-      drop.invoke(frame, files);
-      return CompletableFuture.completedFuture(null);
+      @SuppressWarnings("unchecked")
+      CompletableFuture<Boolean> requested = (CompletableFuture<Boolean>) drop.invoke(frame, files);
+      return requested.thenApply(loaded -> null);
     } catch (ReflectiveOperationException failure) {
       throw new AssertionError(failure);
     }

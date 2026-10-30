@@ -6915,7 +6915,7 @@ public class Menu extends JMenuBar {
                           () -> actionPerformed(e))) {
                         return;
                       }
-                      Lizzie.frame.loadFile(recentF, true, false);
+                      Lizzie.frame.openFileAsync(recentF, true, false);
                     }
                   });
               openRecent.add(recentFile);
