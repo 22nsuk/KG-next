@@ -182,6 +182,16 @@ limits can change its in-memory representation. These import digests are
 temporary parser bookkeeping, copied where a setup snapshot needs them; they
 are not an additional SGF property.
 
+The live, detached and branch parsers remove SGF escape backslashes once from
+`LZ`, `LZOP`, `LZ2` and `LZOP2` while reading the property. Engine names containing
+`]`, literal backslashes or a literal backslash followed by `n` therefore retain
+their saved text and match the same payload digest after reopening. This does
+not change the existing escaped-newline convention or the raw escape handling
+of opaque `KGP` and unrelated properties. The reader does not repeatedly
+unescape names from older resaved files or guess at missing provenance: extra
+literal backslashes may be intentional, and previously discarded metadata is
+not recoverable from the analysis text alone.
+
 `KGP` can appear before or after the corresponding legacy properties. The
 three parser entrypoints route it through the same pending setup-metadata
 handling as analysis, so sources and invalidation follow the correct move or

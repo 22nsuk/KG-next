@@ -77,7 +77,13 @@ class SGFOwnershipSerializationTest {
       String digest = metadataDigest(saved, tag);
       assertEquals(digest(expected), digest, "KGP must describe the decoded legacy payload");
       assertNotEquals(digest(escape(expected)), digest, "SGF escaping is outside the digest");
-      // Existing analysis import retains SGF escapes in engine names; this checks the save boundary.
+      BoardData reopened = target(SGFParser.parseSgf(saved, true), tag);
+      assertEquals(engineName, secondary(tag) ? reopened.engineName2 : reopened.engineName);
+      assertEquals(values, ownership(reopened, tag));
+      assertEquals(ANALYSIS,
+          secondary(tag) ? reopened.secondaryAnalysisProvenance() : reopened.primaryAnalysisProvenance());
+      assertEquals(OWNER,
+          secondary(tag) ? reopened.secondaryOwnershipProvenance() : reopened.primaryOwnershipProvenance());
     }
   }
 
@@ -86,7 +92,7 @@ class SGFOwnershipSerializationTest {
   void longUnicodePayloadAndProvenanceRoundTrip(String tag) throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       BoardHistoryList history = historyFor(tag);
-      String engineName = "엔진v2," + "長".repeat(2048) + "😀";
+      String engineName = "엔진]경로\\net\\n\\\\[v2," + "長".repeat(2048) + "😀";
       List<Double> values = List.of(-0.0, 0.25, -0.5, 1.0e-7);
       BoardData data = target(history, tag);
       install(data, tag, engineName, values, true);

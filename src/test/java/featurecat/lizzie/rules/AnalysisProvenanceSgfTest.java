@@ -35,6 +35,70 @@ class AnalysisProvenanceSgfTest {
       "{\"koRule\":\"SIMPLE\",\"scoringRule\":\"TERRITORY\"}", 6.5, 0.5, 0.75, "rank_8d");
   private static final AnalysisProvenance OWNERSHIP = new AnalysisProvenance(
       "Remote KataGo", "", "remote-model-id", "", "", "chinese", 7.5, null, null, "");
+  private static final String ESCAPED_PRIMARY_NAME = "엔진]경로\\net\\n\\\\[v2(;,)]😀";
+  private static final String ESCAPED_SECONDARY_NAME = "Other\\]끝\\";
+
+  @ParameterizedTest
+  @ValueSource(strings = {"detached", "live", "edit", "branch"})
+  void escapedNamesKeepPayloadSourcesAndInvalidationAcrossParserEntrypoints(String entrypoint)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+      for (boolean invalidated : List.of(false, true)) {
+        BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true)
+            + ";B[aa]" + legacyTags(false) + ";AB[bb]PL[W]" + legacyTags(false) + ")", true);
+        Object oldRun = new Object();
+        for (BoardData data : mainLine(history)) {
+          data.engineName = ESCAPED_PRIMARY_NAME;
+          data.engineName2 = ESCAPED_SECONDARY_NAME;
+          installSources(data);
+          data.isChanged = invalidated;
+          data.isChanged2 = !invalidated;
+          data.markPrimaryAnalysisRun(oldRun);
+        }
+        for (int round = 0; round < 2; round++) {
+          Lizzie.board.setHistory(history);
+          String saved = SGFParser.saveToString(false);
+          if (entrypoint.equals("detached")) {
+            history = SGFParser.parseSgf(saved, true);
+          } else if (entrypoint.equals("branch")) {
+            // Branch import receives moves below an existing root, not the game header.
+            int branchStart = saved.indexOf(";B[aa]");
+            assertTrue(branchStart > 0);
+            history = SGFParser.parseSgf(saved.substring(0, branchStart) + ")", true);
+            SGFParser.parseBranch(history, saved.substring(branchStart, saved.length() - 1));
+          } else {
+            if (entrypoint.equals("live")) assertTrue(SGFParser.loadFromString(saved, false));
+            else assertTrue(SGFParser.loadFromStringforedit(saved));
+            history = Lizzie.board.getHistory();
+          }
+          List<BoardData> nodes = mainLine(history);
+          assertEquals(3, nodes.size());
+          assertTrue(nodes.get(1).isMoveNode());
+          assertTrue(nodes.get(2).isSnapshotNode());
+          for (BoardData data : nodes) {
+            assertEquals(ESCAPED_PRIMARY_NAME, data.engineName);
+            assertEquals(ESCAPED_SECONDARY_NAME, data.engineName2);
+            assertSources(data);
+            assertEquals(120, data.getPlayouts());
+            assertEquals(80, data.getPlayouts2());
+            assertEquals(List.of("C3", "D4"), data.bestMoves.get(0).variation);
+            assertEquals(List.of("D4", "C3"), data.bestMoves2.get(0).variation);
+            assertEquals(List.of(0.2, -0.2), data.estimateArray);
+            assertEquals(List.of(0.3, -0.3), data.estimateArray2);
+            assertEquals(invalidated, data.isChanged);
+            assertEquals(!invalidated, data.isChanged2);
+            assertEquals(!invalidated, data.hasReusablePrimaryAnalysis(120, true));
+            assertFalse(data.hasReusablePrimaryAnalysis(120, true, oldRun));
+          }
+          // Whole-game analysis selects the root and moves, excluding setup snapshots.
+          assertEquals(invalidated ? 2 : 0,
+              WholeGameAnalysisPlan.create(history.getStart(), 32, 120)
+                  .positionsMissingAnalysis(120, true).size());
+        }
+      }
+    }
+  }
 
   @Test
   void rootMoveAndSetupRoundTripsKeepSeparateSourcesAndForgetRunTokens() throws Exception {
@@ -71,13 +135,15 @@ class AnalysisProvenanceSgfTest {
   @ValueSource(ints = {1, 2})
   void metadataOrderAndSetupTransfersWorkThroughAllParserEntrypoints(int version) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
-      JSONObject metadata = metadata(PRIMARY, SECONDARY).put("version", version);
+      String primary = PRIMARY.replace("KataGo", ESCAPED_PRIMARY_NAME);
+      String secondary = SECONDARY.replace("Other", ESCAPED_SECONDARY_NAME);
+      JSONObject metadata = metadata(primary, secondary).put("version", version);
       if (version == 2) {
         metadata.getJSONObject("primary").put("invalidated", true);
         metadata.getJSONObject("secondary").put("invalidated", false);
       }
       String kgp = "KGP[" + encode(metadata) + "]";
-      String analysis = legacyTags(false);
+      String analysis = "LZ[" + escape(primary) + "]LZ2[" + escape(secondary) + "]";
       for (String node : List.of(
           "B[aa]" + kgp + analysis + "AB[bb]PL[W]",
           "B[aa]" + analysis + "AB[bb]PL[W]" + kgp,
@@ -103,6 +169,8 @@ class AnalysisProvenanceSgfTest {
           assertFalse(move.isChanged, context);
           assertFalse(move.isChanged2, context);
           assertTrue(setup.isSnapshotNode(), context);
+          assertEquals(ESCAPED_PRIMARY_NAME, setup.engineName, context);
+          assertEquals(ESCAPED_SECONDARY_NAME, setup.engineName2, context);
           assertSources(setup);
           assertEquals(version == 2, setup.isChanged, context);
           assertFalse(setup.isChanged2, context);
@@ -142,11 +210,12 @@ class AnalysisProvenanceSgfTest {
   void importChecksOriginalPayloadBeforeSuggestionLimitsChangeIt() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       Lizzie.config.limitMaxSuggestion = 1;
-      String primary = PRIMARY.replace(" ownership", " info move E5 visits 20 winrate 5000"
+      String primary = PRIMARY.replace("KataGo", ESCAPED_PRIMARY_NAME)
+          .replace(" ownership", " info move E5 visits 20 winrate 5000"
           + " prior 100 order 1 pv E5 D4 ownership");
       String property = encode(metadata(primary, SECONDARY));
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]KGP[" + property + "]LZOP["
-          + primary + "]LZOP2[" + SECONDARY + "])", true);
+          + escape(primary) + "]LZOP2[" + SECONDARY + "])", true);
       assertEquals(1, history.getData().bestMoves.size());
       assertSources(history.getData());
       Lizzie.board.setHistory(history);
@@ -329,6 +398,8 @@ class AnalysisProvenanceSgfTest {
   void canonicalizingReplacedPayloadDoesNotResurrectRecognizedMetadata(int version) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       BoardHistoryList original = SGFParser.parseSgf("(;SZ[5]" + legacyTags(true) + ")", true);
+      original.getData().engineName = ESCAPED_PRIMARY_NAME;
+      original.getData().engineName2 = ESCAPED_SECONDARY_NAME;
       if (version == 1) {
         installSources(original.getData());
       } else {
@@ -553,6 +624,10 @@ class AnalysisProvenanceSgfTest {
   private static String encode(JSONObject value) {
     return Base64.getUrlEncoder().withoutPadding()
         .encodeToString(value.toString().getBytes(StandardCharsets.UTF_8));
+  }
+
+  private static String escape(String value) {
+    return value.replace("\\", "\\\\").replace("]", "\\]");
   }
 
   private static String digest(String payload) throws Exception {
