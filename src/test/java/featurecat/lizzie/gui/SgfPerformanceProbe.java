@@ -54,6 +54,7 @@ public final class SgfPerformanceProbe {
   private static final String SHORT_COMMENT = "성능 검증: 한국어 日本語 中文 English ] \\ \n끝";
   private static final int CANDIDATES = 32;
   private static final int OWNERSHIP = 19 * 19;
+  private static final int LONG_PV_LENGTH = 64;
   private static final OperatingSystemMXBean OS =
       (OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
   private static long edtThread;
@@ -327,7 +328,10 @@ public final class SgfPerformanceProbe {
         ordered.size() % 2 == 0
             ? (ordered.get(middle - 1) + ordered.get(middle)) / 2
             : ordered.get(middle);
-    return new JSONObject().put("median", median).put("max", ordered.get(ordered.size() - 1));
+    return new JSONObject()
+        .put("min", ordered.get(0))
+        .put("median", median)
+        .put("max", ordered.get(ordered.size() - 1));
   }
 
   private static List<Fixture> fixtures(Path output) throws Exception {
@@ -356,20 +360,53 @@ public final class SgfPerformanceProbe {
           .append(']');
     }
     comments.append(')');
+    StringBuilder longPv = header(SHORT_COMMENT, false).append(longPvAnalysis());
+    for (int index = 0; index < 150; index++) {
+      longPv
+          .append(';')
+          .append(index % 2 == 0 ? 'B' : 'W')
+          .append("[]C[")
+          .append(escape(SHORT_COMMENT))
+          .append(']')
+          .append(longPvAnalysis());
+    }
+    longPv.append(')');
     return List.of(
         fixture(
             output, "wide-variations", variations.toString(), 21845, 5461, SHORT_COMMENT, false),
         fixture(output, "dense-analysis-ownership", dense.toString(), 301, 0, SHORT_COMMENT, true),
         fixture(
-            output, "long-multilingual-comments", comments.toString(), 201, 0, longComment, false));
+            output, "long-multilingual-comments", comments.toString(), 201, 0, longComment, false),
+        fixture(
+            output,
+            "dense-analysis-long-pv-visits",
+            longPv.toString(),
+            151,
+            0,
+            SHORT_COMMENT,
+            true,
+            true));
   }
 
   private static Fixture fixture(
       Path output, String name, String text, int nodes, int forks, String comment, boolean analysis)
       throws Exception {
+    return fixture(output, name, text, nodes, forks, comment, analysis, false);
+  }
+
+  private static Fixture fixture(
+      Path output,
+      String name,
+      String text,
+      int nodes,
+      int forks,
+      String comment,
+      boolean analysis,
+      boolean longPv)
+      throws Exception {
     Path path = output.resolve(name + ".sgf");
     Files.writeString(path, text, StandardCharsets.UTF_8);
-    return new Fixture(name, path, text, nodes, forks, comment, analysis);
+    return new Fixture(name, path, text, nodes, forks, comment, analysis, longPv);
   }
 
   private static StringBuilder header(String comment, boolean analysis) {
@@ -419,6 +456,35 @@ public final class SgfPerformanceProbe {
     return payload.append(']').toString();
   }
 
+  private static String longPvAnalysis() {
+    StringBuilder payload = new StringBuilder("LZ[KataGo 45 12345 2.5 1.25 0 rootVisits=12345\n");
+    String columns = "ABCDEFGHJKLMNOPQRST";
+    for (int candidate = 0; candidate < CANDIDATES; candidate++) {
+      if (candidate > 0) payload.append(" info ");
+      payload
+          .append("move ")
+          .append(columns.charAt(candidate % 19))
+          .append(candidate / 19 + 1)
+          .append(" visits ")
+          .append(1000 - candidate)
+          .append(" winrate 5500 prior 1000 scoreMean 2.5 order ")
+          .append(candidate)
+          .append(" pv");
+      for (int step = 0; step < LONG_PV_LENGTH; step++) {
+        int point = (candidate * 13 + step * 7) % OWNERSHIP;
+        payload.append(' ').append(columns.charAt(point % 19)).append(point / 19 + 1);
+      }
+      payload.append(" pvVisits");
+      for (int step = 0; step < LONG_PV_LENGTH; step++) {
+        payload.append(' ').append(900 - step * 7 - candidate);
+      }
+    }
+    payload.append(" ownership");
+    for (int point = 0; point < OWNERSHIP; point++)
+      payload.append(point % 2 == 0 ? " 0.25" : " -0.25");
+    return payload.append(']').toString();
+  }
+
   private static String validate(Fixture fixture) throws Exception {
     ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
     pending.push(Lizzie.board.getHistory().getStart());
@@ -451,15 +517,36 @@ public final class SgfPerformanceProbe {
         for (int candidate = 0; candidate < candidates.size(); candidate++) {
           MoveData move = candidates.get(candidate);
           require(move.playouts == 1000 - candidate, "Candidate visits changed");
-          require(move.variation != null && move.variation.size() == 8, "PV was truncated");
+          require(
+              move.variation != null
+                  && move.variation.size() == (fixture.longPv ? LONG_PV_LENGTH : 8),
+              "PV was truncated");
           String coordinate =
               "" + "ABCDEFGHJKLMNOPQRST".charAt(candidate % 19) + (candidate / 19 + 1);
           require(coordinate.equals(move.coordinate), "Candidate coordinate changed");
-          require(
-              move.variation.equals(
-                  List.of(coordinate, "D4", "Q16", "C3", "R17", "D16", "Q4", "E5")),
-              "PV content changed");
+          if (fixture.longPv) {
+            require(
+                move.pvVisits != null && move.pvVisits.size() == LONG_PV_LENGTH,
+                "PV visit shape changed");
+            for (int step = 0; step < LONG_PV_LENGTH; step++) {
+              int point = (13 * candidate + 7 * step) % (19 * 19);
+              String expected =
+                  "" + "ABCDEFGHJKLMNOPQRST".charAt(point % 19) + (point / 19 + 1);
+              require(expected.equals(move.variation.get(step)), "Long PV content changed");
+              require(
+                  Integer.toString(900 - 7 * step - candidate).equals(move.pvVisits.get(step)),
+                  "PV visit value changed");
+            }
+            update(digest, move.pvVisits.toString());
+          } else {
+            require(
+                move.variation.equals(
+                    List.of(coordinate, "D4", "Q16", "C3", "R17", "D16", "Q4", "E5")),
+                "PV content changed");
+            require(move.pvVisits == null, "Unexpected PV visits");
+          }
           require(move.winrate == 55.0 && move.scoreMean == 2.5, "Candidate evaluation changed");
+          require(move.policy == 10.0 && move.order == candidate, "Candidate metadata changed");
           update(
               digest,
               move.coordinate
@@ -548,7 +635,14 @@ public final class SgfPerformanceProbe {
   }
 
   private record Fixture(
-      String name, Path path, String text, int nodes, int forks, String comment, boolean analysis) {
+      String name,
+      Path path,
+      String text,
+      int nodes,
+      int forks,
+      String comment,
+      boolean analysis,
+      boolean longPv) {
     JSONObject evidence() throws Exception {
       return new JSONObject()
           .put("name", name)
@@ -558,6 +652,8 @@ public final class SgfPerformanceProbe {
           .put("expectedForks", forks)
           .put("commentCharactersPerNode", comment.length())
           .put("expectedCandidatesPerNode", analysis ? CANDIDATES : 0)
+          .put("expectedPvLength", analysis ? (longPv ? LONG_PV_LENGTH : 8) : 0)
+          .put("expectedPvVisitCount", longPv ? LONG_PV_LENGTH : 0)
           .put("expectedOwnershipValuesPerNode", analysis ? OWNERSHIP : 0);
     }
   }

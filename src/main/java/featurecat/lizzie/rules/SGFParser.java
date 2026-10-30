@@ -5090,20 +5090,21 @@ public class SGFParser {
         return;
       }
       if (Utils.isBlank(tagContent)) return;
-      String[] lines = tagContent.split("\n", 2);
-      String[] line1 = analysisFields(lines[0]);
+      int detailStart = tagContent.indexOf('\n');
+      String[] line1 = analysisFields(
+          detailStart < 0 ? tagContent : tagContent.substring(0, detailStart));
       if (line1.length < 3 || Utils.isBlank(line1[0])) {
         return;
       }
-      String line2 = lines.length > 1 ? lines[1] : "";
       boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
       if (secondaryEngine) clearSecondaryAnalysisPayload(target);
       else clearPrimaryAnalysisPayload(target);
       applyAnalysisHeader(target, line1, secondaryEngine);
       int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
-      if (numPlayouts > 0 && !Utils.isBlank(line2)) {
+      if (numPlayouts > 0 && detailStart >= 0) {
         double stdev = extractAnalysisScoreStdev(line1);
-        ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(line2, stdev, secondaryEngine);
+        ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(
+            tagContent, detailStart + 1, stdev, secondaryEngine);
         applyParsedAnalysisInfo(target, parsed, secondaryEngine);
       }
       target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent), parseHeaderWrn(line1));
@@ -5251,44 +5252,81 @@ public class SGFParser {
   }
 
   private static ParsedAnalysisInfo parseAnalysisInfoForDetachedNode(
-      String line, double stdev, boolean secondaryEngineTag) {
-    boolean hasOwnership = line.contains("ownership");
-    String[] lineInfo = hasOwnership ? line.split("ownership", 2) : null;
-    String analysisLine = hasOwnership ? lineInfo[0] : line;
+      String line, int start, double stdev, boolean secondaryEngineTag) {
+    // Keep the legacy literal separators, including ownership occurring inside a token.
+    int ownership = line.indexOf("ownership", start);
+    int analysisEnd = ownership < 0 ? line.length() : ownership;
     List<MoveData> bestMoves = new ArrayList<>();
-    String[] variations = analysisLine.split(" info ");
     int maxSuggestions =
         secondaryEngineTag
             ? 361
             : (Lizzie.config.limitMaxSuggestion > 0 && !Lizzie.config.showNoSuggCircle
                 ? Lizzie.config.limitMaxSuggestion
                 : 361);
-    for (String variation : variations) {
-      if (Utils.isBlank(variation) || maxSuggestions < 1) {
-        continue;
+    while (start < analysisEnd && maxSuggestions > 0) {
+      int separator = line.indexOf(" info ", start);
+      if (separator < 0 || separator + " info ".length() > analysisEnd) separator = analysisEnd;
+      AnalysisTokens tokens = new AnalysisTokens(line, start, separator);
+      if (tokens.advance()) {
+        bestMoves.add(parseMoveDataFromAnalysis(tokens, bestMoves.size()));
+        maxSuggestions--;
       }
-      bestMoves.add(parseMoveDataFromAnalysis(variation, bestMoves));
-      maxSuggestions -= 1;
+      start = separator + " info ".length();
     }
     if (!bestMoves.isEmpty()) {
       bestMoves.get(0).scoreStdev = stdev;
     }
-    return new ParsedAnalysisInfo(bestMoves, parseOwnershipValues(lineInfo));
+    return new ParsedAnalysisInfo(bestMoves,
+        ownership < 0 ? null : parseOwnershipValues(line, ownership + "ownership".length()));
   }
 
-  private static MoveData parseMoveDataFromAnalysis(String variation, List<MoveData> bestMoves) {
+  /** A trimmed region with the same six ASCII delimiters as analysisFields, read only once. */
+  private static final class AnalysisTokens {
+    private final String text;
+    private final int end;
+    private int position;
+    private int tokenStart;
+    private int tokenEnd;
+
+    AnalysisTokens(String text, int start, int end) {
+      this.text = text;
+      // String.trim also removes other control characters, but only at the region's edges.
+      while (start < end && text.charAt(start) <= ' ') start++;
+      while (start < end && text.charAt(end - 1) <= ' ') end--;
+      this.position = start;
+      this.end = end;
+    }
+
+    boolean advance() {
+      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) >= 0) position++;
+      tokenStart = position;
+      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) < 0) position++;
+      tokenEnd = position;
+      return tokenStart < tokenEnd;
+    }
+
+    String value() {
+      return text.substring(tokenStart, tokenEnd);
+    }
+
+    boolean is(String expected) {
+      return tokenEnd - tokenStart == expected.length()
+          && text.regionMatches(tokenStart, expected, 0, expected.length());
+    }
+  }
+
+  private static MoveData parseMoveDataFromAnalysis(AnalysisTokens tokens, int order) {
     MoveData result = new MoveData();
-    result.order = bestMoves.size();
-    String[] data = analysisFields(variation);
-    for (int i = 0; i < data.length - 1; i++) {
-      String key = data[i];
+    result.order = order;
+    do {
+      String key = tokens.value();
+      if (!tokens.advance()) break;
       if ("pv".equals(key)) {
-        captureVariationTokens(result, data, i);
+        captureVariationTokens(result, tokens);
         break;
       }
-      String value = data[++i];
-      applyMoveDataToken(result, key, value);
-    }
+      applyMoveDataToken(result, key, tokens.value());
+    } while (tokens.advance());
     if ((result.variation == null || result.variation.isEmpty())
         && !Utils.isBlank(result.coordinate)) {
       result.variation = new ArrayList<>();
@@ -5297,21 +5335,17 @@ public class SGFParser {
     return result;
   }
 
-  private static void captureVariationTokens(MoveData target, String[] data, int pvIndex) {
-    int pvVisitsIndex = -1;
-    for (int cursor = pvIndex + 1; cursor < data.length; cursor++) {
-      if ("pvVisits".equals(data[cursor])) {
-        pvVisitsIndex = cursor;
-        target.pvVisits = new ArrayList<>(asList(data).subList(cursor + 1, data.length));
-        break;
+  private static void captureVariationTokens(MoveData target, AnalysisTokens tokens) {
+    target.variation = new ArrayList<>();
+    int limit = Lizzie.config.limitBranchLength;
+    do {
+      if (tokens.is("pvVisits")) {
+        target.pvVisits = new ArrayList<>();
+        while (tokens.advance()) target.pvVisits.add(tokens.value());
+        return;
       }
-    }
-    int end = pvVisitsIndex > -1 ? pvVisitsIndex : data.length;
-    int maxLength = end - pvIndex - 1;
-    if (Lizzie.config.limitBranchLength > 0 && maxLength > Lizzie.config.limitBranchLength) {
-      end = pvIndex + 1 + Lizzie.config.limitBranchLength;
-    }
-    target.variation = new ArrayList<>(asList(data).subList(pvIndex + 1, end));
+      if (limit <= 0 || target.variation.size() < limit) target.variation.add(tokens.value());
+    } while (tokens.advance());
   }
 
   private static void applyMoveDataToken(MoveData target, String key, String value) {
@@ -5345,20 +5379,21 @@ public class SGFParser {
     }
   }
 
-  private static ArrayList<Double> parseOwnershipValues(String[] lineInfo) {
-    if (lineInfo == null || lineInfo.length < 2) {
-      return null;
-    }
-    ArrayList<Double> estimateArray = new ArrayList<>();
-    String[] params = analysisFields(lineInfo[1]);
-    for (String param : params) {
+  private static List<Double> parseOwnershipValues(String line, int start) {
+    AnalysisTokens tokens = new AnalysisTokens(line, start, line.length());
+    double[] values = new double[32];
+    int size = 0;
+    while (tokens.advance()) {
+      double value;
       try {
-        estimateArray.add(Double.parseDouble(param));
+        value = Double.parseDouble(tokens.value());
       } catch (NumberFormatException ex) {
         break;
       }
+      if (size == values.length) values = java.util.Arrays.copyOf(values, size * 2);
+      values[size++] = value;
     }
-    return estimateArray;
+    return BoardData.compactEstimateArray(values, size);
   }
 
   private static void applyParsedAnalysisInfo(
@@ -5370,7 +5405,7 @@ public class SGFParser {
     if (secondaryEngineTag) {
       boolean headerHasKata = target.isKataData2;
       target.bestMoves2 = parsed.bestMoves;
-      target.estimateArray2 = BoardData.compactEstimateArray(parsed.estimateArray);
+      target.estimateArray2 = parsed.estimateArray;
       target.isSaiData2 = target.isSaiData2 || bestMove.isSaiData;
       target.isKataData2 = target.isKataData2 || bestMove.isKataData;
       if (!headerHasKata && bestMove.isKataData) {
@@ -5383,7 +5418,7 @@ public class SGFParser {
     }
     boolean headerHasKata = target.isKataData;
     target.bestMoves = parsed.bestMoves;
-    target.estimateArray = BoardData.compactEstimateArray(parsed.estimateArray);
+    target.estimateArray = parsed.estimateArray;
     target.playoutsChanged = true;
     target.isSaiData = target.isSaiData || bestMove.isSaiData;
     target.isKataData = target.isKataData || bestMove.isKataData;
@@ -5402,6 +5437,7 @@ public class SGFParser {
 
   private static final class ParsedAnalysisInfo {
     private final List<MoveData> bestMoves;
+    // Built once by parseOwnershipValues as an immutable, detached primitive-backed list.
     private final List<Double> estimateArray;
 
     private ParsedAnalysisInfo(List<MoveData> bestMoves, List<Double> estimateArray) {

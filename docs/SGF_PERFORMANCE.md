@@ -198,3 +198,52 @@ rerun, and all ten samples were retained. One attempted paired baseline reused
 stale Maven classes after archive restoration; it was rejected as an invalid
 build before reporting the valid pair above. Source/class preflight, raw results,
 fixture hashes and that exclusion were retained with the measurement evidence.
+
+## Analysis token parsing follow-up
+
+Revision `29ac14849e2680a936b1263de0ef0885c0f5e7aa` reads analysis detail
+regions directly from the original SGF property text. It avoids splitting the
+whole detail line, all candidates and each candidate's fields into intermediate
+strings/arrays. Candidate limits stop further candidate parsing while ownership
+is still read. PV length limits stop retaining coordinates but continue scanning
+for the full `pvVisits` suffix. Ownership is accumulated in a primitive buffer
+and copied once into the existing immutable compact list, without a temporary
+boxed list or a second compact-list copy during adoption.
+
+Header fields, numeric conversion, the literal ` info ` / `ownership` separators,
+ASCII whitespace and edge trimming retain their existing interpretation. The
+four LZ tags, primary/secondary suggestion policies, malformed-tail behavior,
+original payload digests and KGP adoption are unchanged. Parsing remains in the
+existing EDT/global context; this revision does not change the serializer or
+file-open/save completion contracts.
+
+The actual-window probe retains the original three fixtures and adds a
+3,040,737-byte fixture with 151 nodes, 32 candidates per node, 64 PV coordinates,
+64 `pvVisits` values and 361 ownership values. The probe checks every coordinate,
+visit count and ownership value after opening and reopening, as well as the
+existing tree/comment/evaluation checks.
+
+On 2026-10-30, main `0212ead4e2ddbba867a8659f33f013d4f95915eb` and the
+revision above were compared with the same extended probe, Ubuntu Java 21 on
+WSL2/Xvfb/Openbox, `-Xmx2g`, no engine and warm filesystem caches. Each fixture
+used five excluded warmups and ten retained samples in each revision. Clean
+builds and source/compiled-artifact hashes were checked before and after running.
+All 60 saved SGFs, including warmups, were byte-identical between revisions.
+
+| Parse/tree phase | Before median (min–max), ms | After median (min–max), ms |
+| --- | ---: | ---: |
+| Candidates + ownership / open | 37.01 (33.29–55.72) | 32.05 (28.83–49.08) |
+| Candidates + ownership / reopen | 41.25 (32.92–55.24) | 34.00 (30.75–44.17) |
+| Long PV + visits / open | 61.70 (59.02–80.84) | 56.06 (54.46–59.99) |
+| Long PV + visits / reopen | 66.20 (61.04–87.87) | 56.43 (54.59–64.90) |
+| Wide variations / open | 41.89 (40.17–46.32) | 39.55 (38.19–42.60) |
+| Long comments / open | 28.38 (23.90–32.42) | 27.73 (25.77–42.96) |
+
+Open EDT CPU medians were 52.13 → 45.58 ms for the original dense fixture and
+74.59 → 68.71 ms for the long-PV fixture. This is one prespecified sequential
+pair, with all ten samples retained. Sample ranges overlap, and unchanged
+workloads also vary; these observations do not establish a universal percentage
+improvement or a latency bound. They do not measure a native engine, cold disk,
+physical display FPS or the installed user's session. Raw samples, fixture and
+source identities, artifact pre/postflight and saved-output comparisons were
+retained with the local measurement evidence.
