@@ -1658,9 +1658,9 @@ class HumanSlGameControllerIntegrationTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
+  @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
   void deferredExternalFileOpenKeepsOriginalTargetUntilItsAcceptedLoadCompletes(
-      boolean startup, @TempDir Path directory) throws Exception {
+      boolean startup, boolean rejectedStartup, @TempDir Path directory) throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       SavedGameCompletionFrame frame = savedGameCompletionFrame(directory);
       Lizzie.config.saveBoardConfig = new JSONObject();
@@ -1681,8 +1681,13 @@ class HumanSlGameControllerIntegrationTest {
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "queued load is not a new save target");
         assertFalse(controller.isFinished());
+        assertFalse(request.get().isDone(), "admission is not completion of the deferred load");
 
-        SwingUtilities.invokeAndWait(() -> openExternalFile(frame, rejected, !startup));
+        SwingUtilities.invokeAndWait(() -> {
+          CompletableFuture<Void> denied = openExternalFile(frame, rejected, rejectedStartup);
+          assertTrue(denied.isDone(), "the teardown owner must reject before disk recovery starts");
+          if (rejectedStartup) assertTrue(denied.isCompletedExceptionally());
+        });
         assertSame(original, Lizzie.board.getHistory());
         assertEquals(originalFile, LizzieFrame.curFile, "rejected continuation cannot claim the file");
       } finally {
@@ -1714,11 +1719,7 @@ class HumanSlGameControllerIntegrationTest {
       AtomicReference<Runnable> exitWorker = new AtomicReference<>();
       controller.setExitLifecycleForTesting(
           exitWorker::set,
-          completion -> SwingUtilities.invokeLater(() -> {
-            completion.run();
-            // The queued native error notice needs a real owner or no owner.
-            if (startup) Lizzie.frame = null;
-          }),
+          SwingUtilities::invokeLater,
           () -> true,
           null);
 
@@ -1726,7 +1727,9 @@ class HumanSlGameControllerIntegrationTest {
       try {
         SwingUtilities.invokeAndWait(() -> {
           CompletableFuture<Void> opened = openExternalFile(frame, malformed, startup);
-          request.set(startup ? opened : opened.thenRun(() -> Lizzie.frame = null));
+          // Keep the owner through asynchronous recovery and parsing. Only the error
+          // notice queued after the completed failure needs a real owner or no owner.
+          request.set(opened.thenRun(() -> Lizzie.frame = null));
         });
         assertNotNull(exitWorker.get());
         assertSame(original, Lizzie.board.getHistory());

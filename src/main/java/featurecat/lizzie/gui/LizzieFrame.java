@@ -4791,9 +4791,26 @@ public class LizzieFrame extends JFrame {
     String[] requestedArgs = args.clone();
     return onSavedGameOwner(() -> {
       java.util.concurrent.CompletableFuture<Void> restored = new java.util.concurrent.CompletableFuture<>();
-      restoreStartupGameOnEdt(requestedArgs, ++startupGameSelection, restored);
+      beginStartupGameRestore(requestedArgs, Lizzie.config, restored);
       return restored;
     });
+  }
+
+  private void beginStartupGameRestore(
+      String[] args, Config expectedConfig, java.util.concurrent.CompletableFuture<Void> restored) {
+    Runnable retired = () -> restored.completeExceptionally(
+        new java.util.concurrent.CancellationException("Startup game selection was superseded"));
+    if (restored.isDone() || Lizzie.frame != this || Lizzie.config != expectedConfig
+        || localSgfOpenClosed) {
+      retired.run();
+      return;
+    }
+    Runnable retry = () -> beginStartupGameRestore(args, expectedConfig, restored);
+    // Admit the request before recovery yields the EDT. A rejected coach continuation
+    // must neither invalidate the accepted startup nor return later as a fresh open.
+    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(retry, retired)
+        || deferUntilHumanSlExit(retry, retired)) return;
+    restoreStartupGameOnEdt(args, ++startupGameSelection, restored);
   }
 
   private void restoreStartupGameOnEdt(
@@ -4803,10 +4820,6 @@ public class LizzieFrame extends JFrame {
           new java.util.concurrent.CancellationException("Startup game selection was superseded"));
       return;
     }
-    if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(
-        () -> restoreStartupGameOnEdt(args, selection, restored),
-        () -> restored.completeExceptionally(
-            new java.util.concurrent.CancellationException("Startup game selection was superseded")))) return;
     Config config = Lizzie.config;
     Board board = Lizzie.board;
     boolean recoveryPending = !autoSaveRecoveryComplete;
@@ -5542,6 +5555,8 @@ public class LizzieFrame extends JFrame {
 
   private volatile long localSgfOpenRequest;
   private volatile boolean localSgfOpenClosed;
+  // EDT-owned: parser navigation and success work must settle before a new edit snapshot.
+  private java.util.concurrent.CompletableFuture<Void> localSgfLoadFinalization;
 
   /** Interactive opening: true means parsed/applied, not that engine synchronization finished. */
   public java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
@@ -5582,15 +5597,36 @@ public class LizzieFrame extends JFrame {
     Config config = Lizzie.config;
     Board board = Lizzie.board;
     boolean displayed = isDisplayable();
+    BooleanSupplier ownerCurrent = () -> !result.isCancelled() && !localSgfOpenClosed
+        && selection == localSgfOpenRequest && Lizzie.frame == this
+        && Lizzie.config == config && Lizzie.board == board
+        && (!displayed || isDisplayable());
+    Runnable capture = () -> captureInteractiveFileOpen(
+        file, fromTemp, showHint, afterSuccessfulLoad, board, ownerCurrent, result);
+    var finalization = localSgfLoadFinalization;
+    if (finalization != null) {
+      // This completion belongs to the EDT. Capture at the settled boundary, before
+      // subsequent input can edit the board while the new read is pending.
+      finalization.thenRun(capture);
+    } else {
+      capture.run();
+    }
+  }
+
+  private void captureInteractiveFileOpen(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
+      Board board, BooleanSupplier ownerCurrent,
+      java.util.concurrent.CompletableFuture<Boolean> result) {
+    if (!ownerCurrent.getAsBoolean()) {
+      result.complete(false);
+      return;
+    }
     try {
       GameEditSnapshot edit;
       try (var phase = new featurecat.lizzie.logging.SgfPhase("open-edit-capture")) {
         edit = GameEditSnapshot.capture(board);
       }
-      BooleanSupplier current = () -> !result.isCancelled() && !localSgfOpenClosed
-          && selection == localSgfOpenRequest && Lizzie.frame == this
-          && Lizzie.config == config && Lizzie.board == board
-          && (!displayed || isDisplayable()) && edit.isCurrent(board);
+      BooleanSupplier current = () -> ownerCurrent.getAsBoolean() && edit.isCurrent(board);
       prepareInteractiveFileOpen(file, fromTemp, showHint, afterSuccessfulLoad, current, result);
     } catch (RuntimeException failure) {
       SgfObservation.record("open", "failed", file.getPath(), failure);
@@ -5778,17 +5814,24 @@ public class LizzieFrame extends JFrame {
       Board loadedBoard = Lizzie.board;
       Config loadedConfig = Lizzie.config;
       BoardHistoryList loadedHistory = loadedBoard.getHistory();
+      var finalization = new java.util.concurrent.CompletableFuture<Void>();
+      localSgfLoadFinalization = finalization;
       // SGFParser finalizes navigation on the next EDT turn. Run success work for the still-current
       // history after that navigation and before capturing the engine synchronization position.
       SwingUtilities.invokeLater(
           () -> {
-            if (Lizzie.frame != this || Lizzie.config != loadedConfig || localSgfOpenClosed
-                || Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
-            if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
-            if (afterEngineReady != null) {
-              scheduleKifuEngineReadyAfterLoad(afterEngineReady);
-            } else {
-              scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+            try {
+              if (Lizzie.frame != this || Lizzie.config != loadedConfig || localSgfOpenClosed
+                  || Lizzie.board != loadedBoard || loadedBoard.getHistory() != loadedHistory) return;
+              if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
+              if (afterEngineReady != null) {
+                scheduleKifuEngineReadyAfterLoad(afterEngineReady);
+              } else {
+                scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+              }
+            } finally {
+              if (localSgfLoadFinalization == finalization) localSgfLoadFinalization = null;
+              finalization.complete(null);
             }
           });
     }
