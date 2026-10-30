@@ -247,3 +247,61 @@ improvement or a latency bound. They do not measure a native engine, cold disk,
 physical display FPS or the installed user's session. Raw samples, fixture and
 source identities, artifact pre/postflight and saved-output comparisons were
 retained with the local measurement evidence.
+
+## Coordinate and PV serialization follow-up
+
+Revision `94a727d78f248a481b6d5bfa10d91a632ac82312` replaces coordinate
+formatters with direct character construction and appends PV / `pvVisits`
+tokens to the existing output builder in one pass. Setup coordinates no longer
+need a temporary two-element integer array or a formatter for their brackets.
+The alphabet, numeric coordinates for dimensions of 52 or more, primary and
+secondary score formatting, candidate order and separators retain their format.
+Capture ownership, EDT execution and asynchronous file-write contracts are unchanged.
+
+The same token loop also handles empty lists produced by the existing parsers.
+Previously, reducing an empty PV or `pvVisits` list threw an exception; the
+serializer could catch it and omit the node's analysis. Regression tests cover
+empty engine PVs and imported empty visits through save and reopen. Ordinary
+analysis payloads retain their bytes.
+
+On 2026-10-30, baseline main `8a511bbe8765e4bd1d472356d2a3625a93ffbe67`
+and this revision used the unchanged four-fixture probe, Ubuntu Java 21 on
+WSL2/Xvfb/Openbox, `-Xmx2g`, no engine and warm filesystem caches. Each run used
+five excluded warmups and ten retained samples per fixture. The first pair ran
+baseline then candidate. Because short-PV and unchanged control timings were
+higher in the candidate, a second pair ran candidate then baseline with the
+same protocol. All samples from both pairs were kept. Initial builds were clean;
+the reverse pair reused the exact compiled archives after emptying the owned
+target directory and verifying every source/class against the original build.
+Source/artifact pre/postflight checks passed. All 120 timing saved-file pairs
+were byte-identical, and the probe checked open/reopen semantics in every run.
+
+| Serialize workload | First pair, before → after (ms) | Reverse pair, before → after (ms) |
+| --- | ---: | ---: |
+| Wide variations | 22.83 → 12.00 | 21.95 → 10.98 |
+| Short PV + ownership | 15.80 → 22.23 | 14.60 → 17.40 |
+| Long comments | 8.25 → 8.33 | 11.37 → 6.98 |
+| Long PV + visits | 24.89 → 17.64 | 35.31 → 16.34 |
+
+| Serialize workload | All 20 before, median (min–max), ms | All 20 after, median (min–max), ms |
+| --- | ---: | ---: |
+| Wide variations | 22.31 (15.43–24.93) | 11.65 (10.12–15.49) |
+| Short PV + ownership | 14.60 (12.95–31.57) | 18.75 (11.84–34.06) |
+| Long comments | 9.62 (6.14–18.27) | 7.97 (6.04–13.92) |
+| Long PV + visits | 33.63 (24.19–52.75) | 17.04 (15.84–30.10) |
+
+These are descriptive observations, not a general save-latency guarantee. Wide
+tree total-save medians changed from 58.15 → 79.93 ms in the first pair and
+92.38 → 47.83 ms in the reverse pair. The separately recorded atomic-write
+phase varied from 6.78 → 39.60 ms and 42.37 → 7.51 ms, respectively. Short-PV
+serialization medians were higher in both pairs despite overlapping ranges;
+the primary recordings cannot establish a JIT or scheduling cause. Unchanged
+parse/capture controls also varied. No slow samples were discarded.
+
+A separate two-warmup/five-sample profile estimated serialization allocation
+at 29.12 → 20.90 MB per wide-tree operation and 187.86 → 85.12 MB per long-PV
+operation. These sum new-TLAB capacity and outside-TLAB allocations in the
+phase/thread interval; they are approximate allocation weights, not exact
+object counts or retained heap sizes. Profile timing is separate from the
+tables above. Neither timing nor profiling measures a native engine, cold disk,
+physical display FPS or the installed user's session.
