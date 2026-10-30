@@ -305,3 +305,81 @@ phase/thread interval; they are approximate allocation weights, not exact
 object counts or retained heap sizes. Profile timing is separate from the
 tables above. Neither timing nor profiling measures a native engine, cold disk,
 physical display FPS or the installed user's session.
+
+## Ownership serialization allocation follow-up
+
+Revision `f097de7efde0417ab59d630c1f8d65019d55a1c3` builds each canonical
+analysis payload in one builder instead of copying a separate detail-line
+string into the header. Non-null ownership values use primitive double append;
+null retains its legacy `null` text. Capacity estimation uses long arithmetic
+and caps speculative reservation at 64 KiB; larger payloads grow normally.
+LZ/LZ2/LZOP/LZOP2 and KGP scalar wrappers append directly to the SGF builder,
+avoiding temporary property builders and strings. General list-property
+formatting, SGF escaping, numeric text, raw payload digests, EDT capture and
+asynchronous disk-write ownership are unchanged. The final whole-SGF writer
+buffer and candidate score formatter remain outside this change.
+
+On 2026-10-31, baseline main `e0b2fc1ed743c2a079493fb592beb85ee30fa62b`
+and this revision were compared on Ubuntu Java 21.0.12.1, WSL2/Xvfb/Openbox,
+`-Xmx2g`, with no engine. Both measurement protocols ran baseline, candidate,
+candidate, baseline in separate JVMs. Sources, compiled outputs and dependency
+hashes were verified before and after each run. The host also had concurrent
+user work; it was not paused, and load observations are retained with the raw
+evidence. All retained samples, including GC-overlap samples, are included.
+
+The fixed-history protocol rotates four 301-node histories: 32 candidates with
+eight PV coordinates and 361 ownership values per node, the same history without
+ownership, one candidate with ownership, and 32 candidates with seeded
+full-precision ownership doubles in [-1, 1). The original ownership values are
+alternating 0.25/-0.25. Each JVM excludes 20 warmups and retains 40 samples per
+shape, giving 80 retained samples per version/shape. One continuous JFR records
+the serializer phase; ThreadMXBean measures exact EDT allocated bytes and CPU
+around `captureSave`, including history capture. These allocation counts are
+neither retained heap nor whole-process memory. Hashing and reopen checks are
+outside the measured interval. All 960 warmup/retained strings matched their
+counterparts; reopening also checks every ownership value.
+
+| Fixed history | Capture + serialize allocation before → after, MB | Change | Serialize median before → after, ms |
+| --- | ---: | ---: | ---: |
+| Short PV + ownership | 64.68 → 51.92 | -19.7% | 19.64 → 18.54 |
+| Full-precision ownership | 102.57 → 81.64 | -20.4% | 26.10 → 26.23 |
+| One candidate + ownership | 33.70 → 26.63 | -21.0% | 9.29 → 8.93 |
+| Without ownership | 34.55 → 28.66 | -17.0% | 10.49 → 9.84 |
+
+MB denotes 1,000,000 bytes. Allocation fell in both execution orders for every
+shape. Fixed-history timings did not improve consistently: short-PV medians
+were 20.98 → 19.02 ms in the first pair and 16.06 → 17.98 ms in the reverse
+pair; full-precision medians were 28.61 → 28.36 and 24.61 → 25.58 ms. These
+measurements support reduced allocation, not a uniform latency improvement.
+
+The unchanged tracked `SgfPerformanceProbe` separately exercises read, open,
+capture, serialize, atomic write and immediate reopen with its four fixtures.
+It excludes five warmups and retains ten samples per fixture/JVM, giving 20
+retained samples per version/fixture. All 240 saved files, including warmups,
+matched their corresponding bytes across the four runs, and the probe checks
+tree, comment, evaluation, PV, visit and ownership semantics after open/reopen.
+
+| Pipeline serialize workload | First pair before → after, ms | Reverse pair before → after, ms |
+| --- | ---: | ---: |
+| Wide variations | 21.42 → 20.89 | 12.36 → 13.16 |
+| Short PV + ownership | 17.25 → 13.27 | 18.76 → 15.00 |
+| Long multilingual comments | 10.43 → 8.55 | 7.80 → 8.67 |
+| Long PV + visits + ownership | 18.93 → 15.77 | 16.91 → 16.40 |
+
+The pooled wide-tree serialize median is 13.61 → 20.11 ms despite much closer
+within-pair medians: the two JVM blocks occupy different timing ranges. Its
+total-save median is 66.36 → 67.88 ms. Pooling clustered samples alone would
+overstate that control's difference. Short-PV pooled serialization is
+17.58 → 13.99 ms and total save is 27.13 → 23.82 ms, but neither these values
+nor the fixed-history results establish a general latency bound or a cause
+for the earlier #108 timing observation. Native engine work, cold disk,
+physical display FPS and the installed user's session are not measured.
+
+Seventeen new compatibility cases pass on both baseline and candidate. They
+cover all four analysis tags, signed zero, null/special/extreme/random double
+text, escaping and canonical KGP hashes, Unicode/provenance roundtrips, empty
+detail spacing, and output larger than the reservation cap. Escaped analysis
+engine names expose a pre-existing import limitation: non-comment property
+parsing retains escape bytes. Tests therefore check that case at the save/hash
+boundary, while supported Unicode names exercise repeated roundtrips. No parser
+format change is included here.
