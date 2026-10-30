@@ -958,7 +958,7 @@ public class SGFParser {
           if (inTag) {
             if (c == '\\') {
               escaping = true;
-              if (!tag.equals("C")) tagContentBuilder.append(c);
+              if (!tag.equals("C") && !isAnalysisPayloadTag(tag)) tagContentBuilder.append(c);
               continue;
             }
             tagContentBuilder.append(c);
@@ -4676,7 +4676,7 @@ public class SGFParser {
           if (inTag) {
             if (c == '\\') {
               escaping = true;
-              if (!tag.equals("C")) tagContentBuilder.append(c);
+              if (!tag.equals("C") && !isAnalysisPayloadTag(tag)) tagContentBuilder.append(c);
               continue;
             }
             tagContentBuilder.append(c);
@@ -5032,7 +5032,7 @@ public class SGFParser {
           if (inTag) {
             if (c == '\\') {
               escaping = true;
-              if (!tag.equals("C")) tagContentBuilder.append(c);
+              if (!tag.equals("C") && !isAnalysisPayloadTag(tag)) tagContentBuilder.append(c);
               continue;
             }
             tagContentBuilder.append(c);
@@ -5050,8 +5050,13 @@ public class SGFParser {
   }
 
   private static boolean isAnalysisTag(String tag) {
-    return "LZ".equals(tag) || "LZOP".equals(tag) || "LZ2".equals(tag) || "LZOP2".equals(tag)
-        || "KGP".equals(tag);
+    return isAnalysisPayloadTag(tag) || "KGP".equals(tag);
+  }
+
+  // Decode LZ text once while reading it: KGP hashes the unescaped payload, before parsing or
+  // suggestion limits. Keep the existing raw escape handling for opaque KGP and other properties.
+  private static boolean isAnalysisPayloadTag(String tag) {
+    return "LZ".equals(tag) || "LZOP".equals(tag) || "LZ2".equals(tag) || "LZOP2".equals(tag);
   }
 
   /** The existing branch-format heuristic only needs the final two non-whitespace characters. */

@@ -19,6 +19,34 @@ class SGFAnalysisParsingTest {
 
   @ParameterizedTest
   @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
+  void legacyNamesDecodeOnceWithoutInventingProvenance(String tag) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      // More than one literal slash may be intentional, or retained by an older importer.
+      // Do not guess at the original name by repeatedly unescaping it.
+      for (String name : List.of("KataGo", "엔진]", "path\\net\\n", "path\\\\net", "name\\]")) {
+        String escaped = name.replace("\\", "\\\\").replace("]", "\\]");
+        BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + tag + "["
+            + escaped + " 45 100 2.5 1.2 0\n" + MOVE + " ownership 0.25])", true);
+        for (int round = 0; round < 3; round++) {
+          BoardData data = history.getStart().getData();
+          assertEquals(name, tag.endsWith("2") ? data.engineName2 : data.engineName);
+          assertEquals(List.of("C3", "D4"), moves(data, tag).get(0).variation);
+          assertEquals(List.of(0.25), ownership(data, tag));
+          assertNull(tag.endsWith("2")
+              ? data.secondaryAnalysisProvenance() : data.primaryAnalysisProvenance());
+          assertNull(tag.endsWith("2")
+              ? data.secondaryOwnershipProvenance() : data.primaryOwnershipProvenance());
+          if (round < 2) {
+            Lizzie.board.setHistory(history);
+            history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+          }
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
   void literalSeparatorsAndWhitespaceKeepCandidatesAcrossParserEntryPoints(String tag)
       throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
@@ -26,7 +54,9 @@ class SGFAnalysisParsingTest {
       String detail = " info \t info \u0001move\tC3 visits 100 unknown ignored winrate 5500"
           + " pv C3\u0001D4 E5\u0002 info move D4 visits 50 pv D4"
           + " ownership\t0.25 -0.5 bad 1.0";
-      String branch = ";B[aa]" + tag + "[KataGo 45 100 2.5 1.2 0\n" + detail + "]";
+      String opaque = "raw\\]\\\\n";
+      String branch = ";B[aa]" + tag + "[KataGo 45 100 2.5 1.2 0\n" + detail + "]"
+          + "XX[" + opaque + "]KGP[" + opaque + "]C[comment\\]\\\\n]";
       String sgf = "(;SZ[5]" + branch + ")";
       for (String entry : List.of("detached", "live", "edit", "branch")) {
         BoardHistoryList history;
@@ -41,6 +71,9 @@ class SGFAnalysisParsingTest {
           history = Lizzie.board.getHistory();
         }
         BoardData data = history.getStart().next().orElseThrow().getData();
+        assertEquals(opaque, data.getProperty("XX"));
+        assertEquals(opaque, data.getProperty("KGP"));
+        assertEquals("comment]\\n", data.comment);
         List<MoveData> moves = moves(data, tag);
         assertEquals(2, moves.size());
         assertEquals("C3", moves.get(0).coordinate);

@@ -103,6 +103,10 @@ class AnalysisInvalidationSgfTest {
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]" + analysisTags(true) + ")", true);
       Lizzie.board.setHistory(history);
       recordSources(history.getStart().getData());
+      String primaryName = "KataGo]경로\\net\\n";
+      String secondaryName = "Other\\]끝\\";
+      history.getStart().getData().engineName = primaryName;
+      history.getStart().getData().engineName2 = secondaryName;
       Lizzie.board.clearbestmoves();
       Lizzie.board.clearbestmoves2();
       assertValidity(history.getStart(), true, true);
@@ -117,6 +121,8 @@ class AnalysisInvalidationSgfTest {
         SwingUtilities.invokeAndWait(() -> {});
         BoardHistoryNode root = Lizzie.board.getHistory().getStart();
         assertVisiblePayload(root.getData());
+        assertEquals(primaryName, root.getData().engineName);
+        assertEquals(secondaryName, root.getData().engineName2);
         assertEquals(SOURCE, root.getData().primaryAnalysisProvenance());
         assertEquals(SOURCE, root.getData().secondaryAnalysisProvenance());
         assertValidity(root, true, true);
