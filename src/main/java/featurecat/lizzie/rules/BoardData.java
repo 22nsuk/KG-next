@@ -1033,18 +1033,15 @@ public class BoardData {
         sb.append(" scoreMean ").append(String.format(Locale.ENGLISH, "%.2f", move.scoreMean));
       sb.append(" order ").append(move.order);
       if (move.edgeVisits >= 0) sb.append(" edgeVisits ").append(move.edgeVisits);
-      sb.append(" pv ")
-          .append(
-              move.variation == null
-                  ? ""
-                  : move.variation.stream().reduce((a, b) -> a + " " + b).get());
-      if (isKataData && move.pvVisits != null)
-        sb.append(" pvVisits ").append(move.pvVisits.stream().reduce((a, b) -> a + " " + b).get());
+      sb.append(" pv ");
+      if (move.variation != null) appendTokens(sb, move.variation);
+      if (isKataData && move.pvVisits != null) {
+        sb.append(" pvVisits ");
+        appendTokens(sb, move.pvVisits);
+      }
       if (i < bestMoves.size())
         sb.append(" info "); // this order is just because of how the MoveData info parser works
     }
-    if (estimateArray != null && !estimateArray.isEmpty()) {}
-
     return sb.toString();
   }
 
@@ -1061,10 +1058,20 @@ public class BoardData {
       if (isKataData2) sb.append(" scoreMean ").append(move.scoreMean);
       sb.append(" order ").append(move.order);
       if (move.edgeVisits >= 0) sb.append(" edgeVisits ").append(move.edgeVisits);
-      sb.append(" pv ").append(move.variation.stream().reduce((a, b) -> a + " " + b).get());
+      sb.append(" pv ");
+      appendTokens(sb, move.variation);
       sb.append(" info "); // this order is just because of how the MoveData info parser works
     }
     return sb.toString();
+  }
+
+  private static void appendTokens(StringBuilder target, List<String> tokens) {
+    boolean first = true;
+    for (String token : tokens) {
+      if (!first) target.append(' ');
+      target.append(token);
+      first = false;
+    }
   }
 
   public void setPlayouts(int playouts) {

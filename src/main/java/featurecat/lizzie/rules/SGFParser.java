@@ -1208,11 +1208,11 @@ public class SGFParser {
     }
 
     String asCoord(int index) {
-      return asCoord(new int[] {index / boardHeight, index % boardHeight});
+      return SGFParser.asCoord(index / boardHeight, index % boardHeight, boardWidth, boardHeight);
     }
 
     String asCoord(int[] coord) {
-      return SGFParser.asCoord(coord, boardWidth, boardHeight);
+      return SGFParser.asCoord(coord[0], coord[1], boardWidth, boardHeight);
     }
 
     int[] parseCoord(String value) {
@@ -1640,7 +1640,7 @@ public class SGFParser {
             Stone stone = stones[i];
             if (stone.isBlack()) {
               // i = x * Board.BOARD_SIZE + y;
-              builder.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+              builder.append('[').append(saveContext.asCoord(i)).append(']');
             }
           }
         } else {
@@ -1652,9 +1652,9 @@ public class SGFParser {
             Stone stone = stones[i];
             if (stone.isBlack() || stone.isWhite()) {
               if (stone.isBlack()) {
-                abStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+                abStone.append('[').append(saveContext.asCoord(i)).append(']');
               } else {
-                awStone.append(String.format(Locale.ENGLISH, "[%s]", saveContext.asCoord(i)));
+                awStone.append('[').append(saveContext.asCoord(i)).append(']');
               }
             }
           }
@@ -5534,17 +5534,14 @@ public class SGFParser {
   }
 
   public static String asCoord(int[] c) {
-    return asCoord(c, Board.boardWidth, Board.boardHeight);
+    return asCoord(c[0], c[1], Board.boardWidth, Board.boardHeight);
   }
 
-  private static String asCoord(int[] c, int boardWidth, int boardHeight) {
+  private static String asCoord(int x, int y, int boardWidth, int boardHeight) {
     if (boardHeight >= 52 || boardWidth >= 52) {
-      return c[0] + "_" + c[1];
+      return x + "_" + y;
     } else {
-      char x = alphabet.charAt(c[0]);
-      char y = alphabet.charAt(c[1]);
-
-      return String.format(Locale.ENGLISH, "%c%c", x, y);
+      return new String(new char[] {alphabet.charAt(x), alphabet.charAt(y)});
     }
   }
 }
