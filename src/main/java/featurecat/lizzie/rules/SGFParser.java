@@ -2209,8 +2209,12 @@ public class SGFParser {
       synchronized (data) {
         String primary = hasPrimaryAnalysisPayload(data) ? formatNodeData(node) : null;
         String secondary = hasSecondaryAnalysisPayload(data) ? formatNodeData2(node) : null;
-        if (primary != null) builder.append(nodeString(primaryTag, Escaping(primary)));
-        if (secondary != null) builder.append(nodeString(secondaryTag, Escaping(secondary)));
+        if (primary != null) {
+          builder.append(primaryTag).append('[').append(Escaping(primary)).append(']');
+        }
+        if (secondary != null) {
+          builder.append(secondaryTag).append('[').append(Escaping(secondary)).append(']');
+        }
         appendAnalysisMetadata(builder, data, primary, secondary);
       }
     } catch (Exception e) {
@@ -3111,25 +3115,29 @@ public class SGFParser {
     if (rootVisits >= 0) header.append(" rootVisits=").append(rootVisits);
     if (includeWrn) header.append(" wrn=").append(wrn);
 
-    String detailLine = formatAnalysisDetailLine(bestMoves, estimateArray);
-    if (Utils.isBlank(detailLine)) {
+    boolean hasBestMoves = !Utils.isBlank(bestMoves);
+    boolean hasOwnership = estimateArray != null && !estimateArray.isEmpty();
+    if (!hasBestMoves && !hasOwnership) {
       return header.toString();
     }
-    return header.append('\n').append(detailLine).toString();
-  }
-
-  private static String formatAnalysisDetailLine(String bestMoves, List<Double> estimateArray) {
-    StringBuilder detailLine = new StringBuilder();
-    if (!Utils.isBlank(bestMoves)) {
-      detailLine.append(bestMoves);
+    // Build the canonical payload once; KGP hashes this unescaped text. Limit speculative
+    // reservation for large imported lists, allowing the builder to grow normally if needed.
+    long estimatedLength = header.length() + 1L + (hasBestMoves ? bestMoves.length() : 0)
+        + (hasOwnership ? 10L + 8L * estimateArray.size() : 0);
+    header.ensureCapacity((int) Math.min(estimatedLength, 64 * 1024));
+    header.append('\n');
+    if (hasBestMoves) {
+      header.append(bestMoves);
     }
-    if (estimateArray != null && !estimateArray.isEmpty()) {
-      detailLine.append(" ownership");
+    if (hasOwnership) {
+      header.append(" ownership");
       for (Double value : estimateArray) {
-        detailLine.append(" ").append(value);
+        header.append(' ');
+        if (value == null) header.append("null");
+        else header.append(value.doubleValue());
       }
     }
-    return detailLine.toString();
+    return header.toString();
   }
 
   private static String formatAnalysisScalar(double value) {
@@ -3176,7 +3184,7 @@ public class SGFParser {
       property = null;
     }
     // Preserve opaque or future metadata when no current state supersedes it, without trusting it.
-    if (property != null) builder.append(nodeString("KGP", Escaping(property)));
+    if (property != null) builder.append("KGP[").append(Escaping(property)).append(']');
   }
 
   private static void addAnalysisMetadataSlot(
