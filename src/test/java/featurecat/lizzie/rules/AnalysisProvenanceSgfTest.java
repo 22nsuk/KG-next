@@ -232,6 +232,23 @@ class AnalysisProvenanceSgfTest {
   }
 
   @Test
+  void opaqueMetadataWithoutAnalysisStillSurvivesSave() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      for (String value : List.of("not base64!", "",
+          encode(metadata(PRIMARY, SECONDARY).put("version", 3)))) {
+        var history = SGFParser.parseSgf("(;SZ[5];B[aa]KGP[" + value + "])", true);
+        Lizzie.board.setHistory(history);
+        String saved = SGFParser.captureSave(Lizzie.board, true);
+        assertEquals(value, property(saved, "KGP"));
+        assertFalse(saved.contains("LZ["));
+        BoardData reopened = SGFParser.parseSgf(saved, true).getEnd().getData();
+        assertEquals(0, reopened.getPlayouts());
+        assertNull(reopened.primaryAnalysisProvenance());
+      }
+    }
+  }
+
+  @Test
   void versionTwoFlagsAreOptionalStrictBooleansAndVersionOneRejectsThem() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       JSONObject valid = metadata(PRIMARY, SECONDARY).put("version", 2);

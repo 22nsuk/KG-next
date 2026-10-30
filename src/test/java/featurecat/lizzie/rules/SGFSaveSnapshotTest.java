@@ -16,6 +16,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class SGFSaveSnapshotTest {
   @Test
@@ -238,6 +240,31 @@ class SGFSaveSnapshotTest {
       assertThrows(
           IllegalStateException.class,
           () -> SGFParser.saveSnapshot(Lizzie.board, false, false, false));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void savedCommentsPreserveLiteralEscapesOnRootAndBothVariations(boolean raw) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      var history = SGFParser.parseSgf("(;SZ[5];B[aa](;W[])(;W[bb]))", true);
+      Lizzie.board.setHistory(history);
+      String comment = "한국어 日本語 中文 ] \\ \\] $1 %s\n[끝]\\";
+      var root = history.getStart();
+      var fork = root.next().orElseThrow();
+      root.getData().comment = comment;
+      fork.getVariation(0).orElseThrow().getData().comment = comment;
+      fork.getVariation(1).orElseThrow().getData().comment = comment;
+      String saved = capture(raw, true, false);
+      BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+      assertEquals(comment, reopened.getStart().getData().comment);
+      var reopenedFork = reopened.getStart().next().orElseThrow();
+      assertEquals(2, reopenedFork.numberOfChildren());
+      assertTrue(reopenedFork.getVariation(0).orElseThrow().getData().isPassNode());
+      for (BoardHistoryNode child : reopenedFork.getVariations()) {
+        assertEquals(comment, child.getData().comment);
+      }
+      assertEquals(comment, root.getData().comment);
     }
   }
 
