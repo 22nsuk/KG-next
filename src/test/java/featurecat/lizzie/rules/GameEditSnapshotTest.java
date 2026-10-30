@@ -4,6 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.enginegame.EngineGameCompletionFacts;
+import featurecat.lizzie.enginegame.EngineGameRecord;
+import featurecat.lizzie.enginegame.EngineGameRecordContext;
+import featurecat.lizzie.enginegame.EngineGameSaveSnapshot;
+import featurecat.lizzie.enginegame.GameOutcome;
 import java.lang.management.ManagementFactory;
 import java.lang.management.ThreadInfo;
 import java.lang.management.ThreadMXBean;
@@ -11,18 +16,211 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class GameEditSnapshotTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void metadataKeepsValueEqualityAndIgnoresGeneratedSaveSnapshots(boolean strict) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        var info = board.getHistory().getGameInfo();
+        info.setKomiNoMenu(Double.NaN);
+        var context = EngineGameRecordContext.saveFormattingMarker();
+        info.attachEngineGameRecordContext(context);
+        GameEditSnapshot saved = GameEditSnapshot.capture(board);
+        info.setKomiNoMenu(Double.longBitsToDouble(0x7ff8000000000001L));
+        info.attachEngineGameRecordContext(EngineGameRecordContext.saveFormattingMarker());
+        info.setEngineGameSaveSnapshot(
+            new EngineGameSaveSnapshot(context, "black", "white", 1, 2, 3, 4, 5, 6));
+        assertTrue(matches(saved, board, strict), "NaN, equal records and save metadata are unchanged");
+        info.setKomiNoMenu(0.0);
+        assertFalse(matches(saved, board, strict));
+        saved = GameEditSnapshot.capture(board);
+        info.setKomiNoMenu(-0.0);
+        assertFalse(matches(saved, board, strict), "record equality distinguishes signed zero");
+        info.setKomiNoMenu(0.0);
+        assertTrue(matches(saved, board, strict));
+        info.freezeEngineGameRecord(new EngineGameRecord(context,
+            new EngineGameCompletionFacts(new GameOutcome.DoublePass(), 1, -1, true, 1, 2, 3, 4),
+            "black", "white"));
+        assertFalse(matches(saved, board, strict), "completed-game metadata is part of the game");
+        return null;
+      });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void originalArraysAndExtraStoneObjectsCannotAlterTheCapturedValues(boolean strict)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        var history = SGFParser.parseSgf("(;SZ[5];B[aa])", true);
+        board.setHistory(history);
+        history.setHead(history.getEnd());
+        var node = history.getCurrentHistoryNode();
+        node.addExtraStones(1, 2, true);
+        BoardData data = node.getData();
+        GameEditSnapshot saved = GameEditSnapshot.capture(board);
+        int[] move = data.lastMove.orElseThrow();
+        move[0] = 1;
+        assertFalse(matches(saved, board, strict));
+        move[0] = 0;
+        assertTrue(matches(saved, board, strict));
+        ExtraStones extra = node.extraStones.get(0);
+        extra.x++;
+        assertFalse(matches(saved, board, strict));
+        extra.x--;
+        extra.y++;
+        assertFalse(matches(saved, board, strict));
+        extra.y--;
+        extra.isBlack = false;
+        assertFalse(matches(saved, board, strict));
+        extra.isBlack = true;
+        assertTrue(matches(saved, board, strict));
+        return null;
+      });
+    }
+  }
+
+  @Test
+  void emptyMoveRepresentationsAndNullStonesKeepTheirOriginalMeaning() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        BoardData data = board.getData();
+        data.lastMove = null;
+        data.stones = null;
+        var saved = GameEditSnapshot.capture(board);
+        data.lastMove = Optional.empty();
+        assertTrue(saved.isCurrent(board));
+        data.lastMove = Optional.of(new int[0]);
+        assertTrue(saved.isCurrent(board));
+        data.stones = new Stone[0];
+        assertFalse(saved.isCurrent(board));
+        data.stones = null;
+        assertTrue(saved.isCurrent(board));
+        return null;
+      });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void filteredPropertiesDistinguishAbsentKeysFromNullValues(boolean strict) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        var properties = board.getData().getProperties();
+        properties.put("XX", null);
+        var saved = GameEditSnapshot.capture(board);
+        for (String key : List.of("KGP", "LZ", "LZ2", "LZOP", "LZOP2")) {
+          properties.put(key, "analysis");
+          assertTrue(matches(saved, board, strict));
+          properties.put(key, "new analysis");
+          assertTrue(matches(saved, board, strict));
+          properties.remove(key);
+          assertTrue(matches(saved, board, strict));
+        }
+        properties.remove("XX");
+        properties.put("YY", null);
+        assertFalse(matches(saved, board, strict), "equal sizes and null get() results are insufficient");
+        properties.remove("YY");
+        properties.put("XX", null);
+        assertTrue(matches(saved, board, strict));
+        properties.put("XX", "authored value");
+        assertFalse(matches(saved, board, strict));
+        return null;
+      });
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void comparisonReleasesHistoryAndNodeLocksBeforeWaitingForPayload(
+      boolean strict, boolean renewContext) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = fixture.board();
+      BoardHistoryList history = board.getHistory();
+      BoardHistoryNode node = history.getCurrentHistoryNode();
+      BoardData data = node.getData();
+      var saved = onEdt(() -> GameEditSnapshot.capture(board));
+      Thread eventThread = onEdt(Thread::currentThread);
+      CountDownLatch payloadHeld = new CountDownLatch(1);
+      CountDownLatch releasePayload = new CountDownLatch(1);
+      AtomicReference<Thread> payloadOwner = new AtomicReference<>();
+      var workers = Executors.newFixedThreadPool(2);
+      FutureTask<Boolean> comparison = new FutureTask<>(() -> matches(saved, board, strict));
+      var holder = workers.submit(() -> {
+        synchronized (data) {
+          payloadOwner.set(Thread.currentThread());
+          payloadHeld.countDown();
+          // Outlast the bounded access assertion, so the holder cannot release a broken lock order.
+          assertTrue(releasePayload.await(15, TimeUnit.SECONDS));
+        }
+        return null;
+      });
+      try {
+        assertTrue(payloadHeld.await(5, TimeUnit.SECONDS));
+        SwingUtilities.invokeLater(comparison);
+        awaitPayloadMonitorBlocked(eventThread, data, payloadOwner.get());
+        if (renewContext) board.requireEngineAlignment();
+        var access = workers.submit(() -> {
+          synchronized (history) {
+            assertSame(node, history.getCurrentHistoryNode());
+          }
+          synchronized (node) {
+            return node.getData();
+          }
+        });
+        assertSame(data, access.get(5, TimeUnit.SECONDS));
+      } finally {
+        releasePayload.countDown();
+        try {
+          holder.get(5, TimeUnit.SECONDS);
+          assertEquals(!strict || !renewContext, comparison.get(5, TimeUnit.SECONDS));
+        } finally {
+          workers.shutdownNow();
+        }
+      }
+    }
+  }
+
+  private static boolean matches(GameEditSnapshot snapshot, Board board, boolean strict) {
+    return strict ? snapshot.isCurrent(board) : snapshot.hasSameGame(board);
+  }
+
+  private static void awaitPayloadMonitorBlocked(Thread thread, BoardData data, Thread owner) {
+    ThreadMXBean threads = ManagementFactory.getThreadMXBean();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    ThreadInfo observed = null;
+    while (System.nanoTime() < deadline) {
+      observed = threads.getThreadInfo(thread.getId());
+      if (observed != null && observed.getThreadState() == Thread.State.BLOCKED
+          && observed.getLockInfo() != null
+          && observed.getLockInfo().getIdentityHashCode() == System.identityHashCode(data)
+          && observed.getLockInfo().getClassName().equals(BoardData.class.getName())
+          && observed.getLockOwnerId() == owner.getId()) return;
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+    }
+    fail("comparison must reach the held BoardData monitor; observed: " + observed);
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"comment", "cursor", "history", "rules", "analysisEdit"})
   void fallbackIdentitySurvivesEngineAlignmentButStillDetectsEdits(String change) throws Exception {
