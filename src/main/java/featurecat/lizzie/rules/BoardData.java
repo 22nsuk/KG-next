@@ -1021,6 +1021,7 @@ public class BoardData {
 
   public String bestMovesToString() {
     StringBuilder sb = new StringBuilder();
+    Formatter scoreFormatter = null;
     int i = 0;
     for (MoveData move : bestMoves) {
       i++;
@@ -1029,8 +1030,11 @@ public class BoardData {
       sb.append(" visits ").append(move.playouts);
       sb.append(" winrate ").append((int) (move.winrate * 100));
       sb.append(" prior ").append((int) (move.policy * 100));
-      if (isKataData)
-        sb.append(" scoreMean ").append(String.format(Locale.ENGLISH, "%.2f", move.scoreMean));
+      if (isKataData) {
+        sb.append(" scoreMean ");
+        if (scoreFormatter == null) scoreFormatter = new Formatter(sb, Locale.ENGLISH);
+        scoreFormatter.format("%.2f", move.scoreMean);
+      }
       sb.append(" order ").append(move.order);
       if (move.edgeVisits >= 0) sb.append(" edgeVisits ").append(move.edgeVisits);
       sb.append(" pv ");

@@ -8,6 +8,9 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Random;
+import java.util.StringJoiner;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -126,6 +129,72 @@ class SGFSerializationTest {
       move.variation = null;
       move.pvVisits = null;
       assertTrue(data.bestMovesToString().endsWith(" pv "));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"0.0,0.00", "-0.0,-0.00", "0.0049,0.00", "-0.0049,-0.00",
+      "0.005,0.01", "-0.005,-0.01", "1.125,1.13", "-1.125,-1.13",
+      "2.675,2.68", "-2.675,-2.68", "NaN,NaN", "Infinity,Infinity", "-Infinity,-Infinity"})
+  void candidateScoreKeepsDecimalRoundingAndSpecialText(double score, String expected)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardData data = Lizzie.board.getData();
+      MoveData candidate = move();
+      candidate.scoreMean = score;
+      candidate.variation = List.of("C3");
+      data.isKataData = true;
+      data.bestMoves = List.of(candidate);
+      assertEquals("move C3 visits 100 winrate 5500 prior 1250 scoreMean " + expected
+          + " order 3 edgeVisits 7 pv C3", data.bestMovesToString());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"en-US", "de-DE", "ar-EG"})
+  void candidateListsMatchLegacyFormattingAcrossCallsAndDefaultLocales(String language)
+      throws Exception {
+    Locale previous = Locale.getDefault(Locale.Category.FORMAT);
+    try (var ignored = RulesLayerTestHarness.open()) {
+      Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag(language));
+      BoardData data = Lizzie.board.getData();
+      List<Double> scores = new ArrayList<>(List.of(
+          0.0, -0.0, Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+          Double.MIN_VALUE, -Double.MIN_VALUE, Double.MIN_NORMAL, -Double.MIN_NORMAL,
+          Double.MAX_VALUE, -Double.MAX_VALUE, 1e20, -1e-20));
+      for (double boundary : new double[] {0.005, -0.005, 1.125, -1.125, 2.675, -2.675}) {
+        scores.add(Math.nextDown(boundary));
+        scores.add(boundary);
+        scores.add(Math.nextUp(boundary));
+      }
+      Random random = new Random(0x53434f52454cL);
+      for (int i = 0; i < 256; i++) scores.add(Double.longBitsToDouble(random.nextLong()));
+      List<MoveData> moves = new ArrayList<>();
+      StringJoiner expected = new StringJoiner(" info ");
+      for (double score : scores) {
+        MoveData candidate = move();
+        candidate.scoreMean = score;
+        candidate.variation = List.of("C3");
+        moves.add(candidate);
+        // The old public output uses String.format for every candidate independently.
+        expected.add("move C3 visits 100 winrate 5500 prior 1250 scoreMean "
+            + String.format(Locale.ENGLISH, "%.2f", score) + " order 3 edgeVisits 7 pv C3");
+      }
+      data.isKataData = true;
+      data.bestMoves = moves;
+      assertEquals(expected.toString(), data.bestMovesToString());
+      assertEquals(expected.toString(), data.bestMovesToString(), "no text leaks between calls");
+      data.bestMoves = List.of();
+      assertEquals("", data.bestMovesToString());
+      data.bestMoves = List.of(moves.get(1));
+      data.isKataData = false;
+      assertEquals("move C3 visits 100 winrate 5500 prior 1250 order 3 edgeVisits 7 pv C3",
+          data.bestMovesToString());
+      data.isKataData = true;
+      assertEquals("move C3 visits 100 winrate 5500 prior 1250 scoreMean -0.00"
+          + " order 3 edgeVisits 7 pv C3", data.bestMovesToString());
+    } finally {
+      Locale.setDefault(Locale.Category.FORMAT, previous);
     }
   }
 

@@ -428,3 +428,61 @@ capture files also compare byte-for-byte. Production, compiled classes, probe an
 dependency hashes are verified before and after measurement. Existing serialization,
 provenance/invalidation, snapshot, retired-game save and save-queue tests are reused;
 desktop-only save/close cases run separately in CI.
+
+### Reusing the candidate score formatter within one call (2026-10-31)
+
+Baseline: `7302e0e3ffd5cfdd95b082d0b013ff3d424a2e06`, including the final SGF
+buffer removal and direct edit-snapshot comparison. `BoardData.bestMovesToString()`
+now creates a local `Formatter` on the first KataGo score and reuses it for the
+remaining candidates, writing directly into that call's result builder. Empty
+lists and non-KataGo candidates do not create a formatter. There is no shared or
+thread-local cache. The existing `Locale.ENGLISH` and `%.2f` conversion remain;
+secondary analysis keeps its distinct primitive-double spelling and trailing
+separator. Header formatting, escaping, KGP digests and serializer ownership are
+unchanged. The conversion still performs the standard Formatter numeric work.
+
+The same offline Swing/EDT setup as above measures complete `saveToString(false)`
+and `captureSave` calls on Ubuntu/WSL2, Java 21.0.12.1, Xvfb/Openbox, `-Xmx2g`.
+The four existing fixtures are supplemented with variants of the 301-node,
+32-candidate short-PV fixture: no ownership, one candidate, non-KataGo candidates,
+and empty candidates. Four separate JVMs run baseline/candidate/candidate/baseline;
+each fixture/API excludes 10 warmups and retains all 20 subsequent samples.
+There are 1,920 timed calls, of which 1,280 are retained. ThreadMXBean allocation
+and CPU counters cover the EDT public call; hashing, writes and reopen checks are
+outside the measured region. Source, compiled-output, probe and dependency hashes
+are verified before and after each run. No GC or timing outliers are removed.
+
+| Full `captureSave` workload | Allocated bytes before | After | Reduction | Median elapsed ms before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Short PV + ownership, 32 candidates | 41,221,080 | 39,995,416 | 2.97% | 10.25 → 10.07 |
+| Same history without ownership | 23,582,364 | 22,356,700 | 5.20% | 5.78 → 5.77 |
+| One candidate + ownership | 20,786,076 | 20,754,780 | 0.15% | 5.12 → 5.11 |
+| Long PV + visits + ownership | 51,164,580 | 50,549,716 | 1.20% | 14.21 → 13.93 |
+| Non-KataGo candidates + ownership | 32,812,740 | 32,812,748 | approximately 0% | 7.36 → 7.38 |
+| Empty candidates + ownership | 20,134,540 | 20,134,548 | approximately 0% | 4.93 → 4.92 |
+| Wide variations | 117,828,048 | 117,828,048 | 0% | 34.30 → 33.31 |
+| Long multilingual comments | 33,200,832 | 33,200,832 | 0% | 5.42 → 5.49 |
+
+Score-bearing allocation reductions repeat in both execution orders. The other
+measured API has the same absolute savings, with relative reductions of
+0.17–5.53%. Non-KataGo and empty controls have identical allocation ranges and an
+eight-byte pooled-median difference; no reduction is claimed for those paths.
+These are transient allocated bytes, not retained heap, peak RSS or disk savings.
+The host is shared (24 logical CPUs, observed one-minute load approximately
+1.3–2.5); other user work is not paused.
+
+Timing does not establish a uniform speedup. Short-PV/ownership capture medians
+are 10.55 → 10.29 ms in the first pair and 10.04 → 9.91 ms in the reverse pair,
+but long-PV medians are 15.07 → 13.88 and 13.64 → 14.13 ms. Without ownership,
+the pairs are 5.90 → 5.98 and 5.68 → 5.58 ms. Native engines, cold disk, physical
+display FPS and the installed user's session are outside the measurement.
+
+All 64 fixture/save-mode combinations match across the four JVMs and reopen;
+all timed outputs match those hashes, and the 32 stored capture files match
+byte-for-byte. Modes include upload, automatic save, snapshot, raw, comments and
+current branch. The 24 added compatibility cases pass on both baseline and
+candidate: explicit decimal ties, adjacent doubles, signed/rounded negative zero,
+NaN/infinities, extreme/subnormal and seeded random doubles, English formatting
+under three default locales, and repeated calls with empty/non-KataGo transitions.
+All four analysis tags also preserve canonical digests, provenance, ownership and
+valid/invalidated state across two save/reopen cycles, including KGP versions 1/2.
