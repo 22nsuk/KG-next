@@ -14,6 +14,8 @@ import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import java.io.ByteArrayOutputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
@@ -539,6 +541,116 @@ class MenuKataAnalysisInputTest {
     return second;
   }
 
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void rejectedCommandPreservesAppliedStateAndSameDraftCanBeRetried(KataAnalysisParameter parameter)
+      throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          try (var reservation = engine.beginExclusiveGtpLifecycleReservation()) {
+            assertNotNull(reservation);
+            field(parameter).setText("1.25");
+            notifyDocumentChanged(field(parameter));
+            assertUnchanged(before);
+            assertEquals(-0.5, engine.pda);
+            assertEquals(-0.5, rememberedPda(engine));
+            assertEquals(0, engine.output.size());
+            assertEquals("1.25", field(parameter).getText());
+          }
+          // A repeated value must not be mistaken for an already-applied no-op.
+          field(parameter).setText("1.25");
+          assertEquals(List.of(command(parameter, "1.25")), engine.commands);
+          assertEquals("1.25", appliedText(parameter));
+          assertEquals(1, engine.ponders);
+          assertEquals(parameter == KataAnalysisParameter.WRN, root.isChanged);
+          assertEquals(parameter == KataAnalysisParameter.WRN, current.isChanged);
+        });
+  }
+
+  @ParameterizedTest
+  @CsvSource({"WRN,true", "WRN,false", "PDA,true", "PDA,false"})
+  void rejectedToggleRestoresObservedStateAndRemainsRetryable(
+      KataAnalysisParameter parameter, boolean enabled) throws Exception {
+    onEdt(
+        () -> {
+          configureEnabled(parameter, enabled);
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          try (var reservation = engine.beginExclusiveGtpLifecycleReservation()) {
+            assertNotNull(reservation);
+            checkbox(parameter).doClick(0);
+            assertUnchanged(before);
+            assertEquals(enabled, checkbox(parameter).isSelected());
+            assertEquals(enabled, field(parameter).isEnabled());
+            assertEquals(-0.5, engine.pda);
+            assertEquals(-0.5, rememberedPda(engine));
+            assertEquals(0, engine.output.size());
+          }
+          checkbox(parameter).doClick(0);
+          assertEquals(!enabled, checkbox(parameter).isSelected());
+          assertEquals(!enabled, field(parameter).isEnabled());
+          assertEquals(1, engine.commands.size());
+          assertEquals(1, engine.ponders);
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void rejectedEnableRestoresEngineDisplayEvenWhenConfigRemembersEnabled(
+      KataAnalysisParameter parameter) throws Exception {
+    onEdt(
+        () -> {
+          engine.useActualBreadthAvailability = true;
+          if (parameter == KataAnalysisParameter.WRN) menu.setUseWrn(false, "0");
+          else menu.setUseGfPda(false, "0");
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          try (var reservation = engine.beginExclusiveGtpLifecycleReservation()) {
+            assertNotNull(reservation);
+            checkbox(parameter).doClick(0);
+            assertUnchanged(before);
+            assertFalse(checkbox(parameter).isSelected());
+            assertFalse(field(parameter).isEnabled());
+          }
+          menu.refreshBreadthAdmission();
+          checkbox(parameter).doClick(0);
+          assertEquals(List.of(command(parameter, "0.0")), engine.commands);
+          assertTrue(checkbox(parameter).isSelected());
+          assertEquals(1, engine.ponders);
+        });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void rejectedGenmoveParticipantPreservesBothEnginesAndSameDraftCanBeRetried(boolean starting)
+      throws Exception {
+    onEdt(
+        () -> {
+          RecordingEngine second = publishGame(EngineGamePlayMode.GENMOVE, starting);
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          try (var reservation = second.beginExclusiveGtpLifecycleReservation()) {
+            assertNotNull(reservation);
+            menu.txtGfPDA.setText("1.25");
+            assertUnchanged(before);
+            assertTrue(second.commands.isEmpty());
+            assertEquals(0, engine.output.size());
+            assertEquals(0, second.output.size());
+            assertEquals(-0.5, engine.pda);
+            assertEquals(-0.5, rememberedPda(engine));
+            assertEquals(-0.5, second.pda);
+            assertEquals(-0.5, rememberedPda(second));
+          }
+          menu.txtGfPDA.setText("1.25");
+          assertEquals(List.of(command(KataAnalysisParameter.PDA, "1.25")), engine.commands);
+          assertEquals(engine.commands, second.commands);
+          assertEquals("1.25", Lizzie.config.txtKataEnginePDA);
+          assertEquals(1.25, engine.pda);
+          assertEquals(1.25, second.pda);
+          assertEquals(1, engine.ponders);
+          assertFalse(root.isChanged);
+          assertFalse(current.isChanged);
+        });
+  }
+
   private void queuedCheckboxAction(KataAnalysisParameter parameter, boolean selected) {
     JFontCheckBox checkbox = checkbox(parameter);
     checkbox.setSelected(selected);
@@ -608,10 +720,13 @@ class MenuKataAnalysisInputTest {
   }
 
   private static RecordingEngine recordingEngine() throws Exception {
-    RecordingEngine result = allocate(RecordingEngine.class);
-    result.commands = new ArrayList<>();
-    result.isKatago = true;
-    return result;
+    return new RecordingEngine();
+  }
+
+  private static double rememberedPda(Leelaz engine) throws Exception {
+    Field field = Leelaz.class.getDeclaredField("pdaBeforeGame");
+    field.setAccessible(true);
+    return field.getDouble(engine);
   }
 
   private static <T> T allocate(Class<T> type) throws Exception {
@@ -636,22 +751,57 @@ class MenuKataAnalysisInputTest {
   }
 
   private static final class RecordingEngine extends Leelaz {
-    List<String> commands;
+    final List<String> commands = new ArrayList<>();
+    final ByteArrayOutputStream output = new ByteArrayOutputStream();
     int ponders;
     boolean breadthBlocked;
+    boolean useActualBreadthAvailability;
 
     @Override
     public boolean canSetAnalysisWideRootNoise() {
-      return !breadthBlocked;
+      // Other rejection tests deliberately pass preflight to exercise the later queue boundary.
+      return !breadthBlocked && (!useActualBreadthAvailability || super.canSetAnalysisWideRootNoise());
     }
 
     private RecordingEngine() throws Exception {
-      super("");
+      super("katago gtp");
+      var install = Leelaz.class.getDeclaredMethod("installFreshCommandOutputForTest", OutputStream.class);
+      install.setAccessible(true);
+      install.invoke(this, output);
+      started = isLoaded = isKatago = true;
+      pda = -0.5;
+      Field remembered = Leelaz.class.getDeclaredField("pdaBeforeGame");
+      remembered.setAccessible(true);
+      remembered.setDouble(this, -0.5);
     }
 
     @Override
     public void sendCommand(String command) {
       commands.add(command);
+    }
+
+    @Override
+    public boolean trySetPda(String value) {
+      boolean accepted = super.trySetPda(value);
+      if (accepted) commands.add(command(KataAnalysisParameter.PDA, value));
+      return accepted;
+    }
+
+    @Override
+    public boolean trySetAnalysisWideRootNoise(String value) {
+      boolean accepted = super.trySetAnalysisWideRootNoise(value);
+      if (accepted) commands.add(command(KataAnalysisParameter.WRN, value));
+      return accepted;
+    }
+
+    @Override
+    public boolean trySetPdaForGame(String value, Leelaz second) {
+      boolean accepted = super.trySetPdaForGame(value, second);
+      if (accepted) {
+        commands.add(command(KataAnalysisParameter.PDA, value));
+        ((RecordingEngine) second).commands.add(command(KataAnalysisParameter.PDA, value));
+      }
+      return accepted;
     }
 
     @Override

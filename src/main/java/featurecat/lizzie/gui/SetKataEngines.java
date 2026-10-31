@@ -51,8 +51,8 @@ public class SetKataEngines extends JDialog {
   private final Leelaz openingEngine;
   private final boolean isPdaEngine;
   private final boolean remoteManagedThreads;
-  private final ParameterDraft initialWrn;
-  private final ParameterDraft initialPda;
+  private ParameterDraft initialWrn;
+  private ParameterDraft initialPda;
   private JCheckBox chkEditThreads;
   private JFontTextField txtThreads;
   private JFontLabel lblThreadReadStatus;
@@ -584,6 +584,12 @@ public class SetKataEngines extends JDialog {
                                 : "SetKataEngines.threadStale",
                             failure);
                       } else {
+                        loadedThreadOverride = true;
+                        try {
+                          threadInputEdited = Integer.parseInt(txtThreads.getText().trim()) != value;
+                        } catch (NumberFormatException invalidDraft) {
+                          threadInputEdited = true;
+                        }
                         applyExistingSettings(openingEngine, settings, true, true);
                       }
                     }));
@@ -664,6 +670,8 @@ public class SetKataEngines extends JDialog {
 
     beginThreadOperation();
     int generation = threadQueryGeneration;
+    java.util.concurrent.atomic.AtomicBoolean parametersApplied =
+        new java.util.concurrent.atomic.AtomicBoolean();
     try {
       restore
           .execute(
@@ -679,8 +687,9 @@ public class SetKataEngines extends JDialog {
                           throw new IllegalStateException(
                               Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
                         }
-                        applyExistingSettings(openingEngine, settings, false, false);
                         runtimeThreads = successor;
+                        parametersApplied.set(
+                            applyExistingSettings(openingEngine, settings, false, false));
                         applied.complete(null);
                       } catch (Throwable failure) {
                         applied.completeExceptionally(failure);
@@ -694,7 +703,10 @@ public class SetKataEngines extends JDialog {
                       () -> {
                         endThreadOperation();
                         if (failure == null) {
-                          if (isVisible()) setVisible(false);
+                          if (isVisible()) {
+                            if (parametersApplied.get()) setVisible(false);
+                            else showParameterRejection();
+                          }
                         } else {
                           updateThreadTooltip();
                           if (runtimeThreads != null
@@ -821,15 +833,31 @@ public class SetKataEngines extends JDialog {
         true, autoLoad.isSelected(), String.valueOf(parsed.getAsDouble()), edited);
   }
 
-  private void applyExistingSettings(
+  private boolean applyExistingSettings(
       Leelaz engine, AnalysisSettings settings, boolean closeDialog, boolean threadsChanged) {
     // Untouched dialog values may be stale after toolbar edits or an engine restart.
     boolean parametersOwned = EngineGameDesktop.parametersOwned();
-    Lizzie.config.showWRNInMenu = settings.showWrn();
-    Lizzie.config.uiConfig.put("show-wrn-in-menu", settings.showWrn());
-
     ParameterSetting pda = settings.pda();
-    if (pda != null) {
+    ParameterSetting wrn = settings.wrn();
+    boolean editPda = !parametersOwned && pda != null && pda.edited();
+    boolean editWrn = !parametersOwned && wrn.edited();
+    long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+    Object incarnation = engine == null ? null : engine.engineIncarnationToken();
+    java.util.function.BooleanSupplier currentTarget = () -> engine != null && generation >= 0
+        && Lizzie.capturePrimaryEngineGeneration(engine) == generation
+        && engine.engineIncarnationToken() == incarnation;
+    boolean pdaApplied = editPda && currentTarget.getAsBoolean()
+        && engine.trySetPda(pda.enabled() ? pda.value() : "0") && currentTarget.getAsBoolean();
+    boolean wrnApplied = editWrn && currentTarget.getAsBoolean()
+        && engine.trySetAnalysisWideRootNoise(wrn.enabled() ? wrn.value() : "0")
+        && currentTarget.getAsBoolean();
+    if (!currentTarget.getAsBoolean()) {
+      pdaApplied = wrnApplied = false;
+    }
+    boolean complete = (!editPda || pdaApplied) && (!editWrn || wrnApplied);
+
+    // On partial acceptance, commit only that parameter. Pending preferences stay in the dialog.
+    if (pda != null && (complete || pdaApplied)) {
       Lizzie.config.showPDAInMenu = settings.showPda();
       Lizzie.config.uiConfig.put("show-pda-in-menu", settings.showPda());
       Lizzie.config.autoLoadKataEnginePDA = pda.autoLoad();
@@ -838,38 +866,46 @@ public class SetKataEngines extends JDialog {
         Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-pda", pda.value());
       }
       Lizzie.config.uiConfig.put("autoload-kata-engine-pda", pda.autoLoad());
-      if (!parametersOwned && pda.edited()) {
+      if (pdaApplied) {
         Lizzie.config.chkKataEnginePDA = pda.enabled();
         Lizzie.config.txtKataEnginePDA = pda.value();
-        engine.setPda(pda.enabled() ? pda.value() : "0");
         LizzieFrame.menu.setUseGfPda(pda.enabled(), pda.value());
         Lizzie.config.uiConfig.put("chk-kata-engine-pda", pda.enabled());
         Lizzie.config.uiConfig.put("txt-kata-engine-pda", pda.value());
+        initialPda = new ParameterDraft(pda.enabled(), pda.value());
       }
     }
 
-    ParameterSetting wrn = settings.wrn();
-    Lizzie.config.autoLoadKataEngineWRN = wrn.autoLoad();
-    if (wrn.autoLoad()) {
-      Lizzie.config.autoLoadTxtKataEngineWRN = wrn.value();
-      Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-wrn", wrn.value());
+    if (complete || wrnApplied) {
+      Lizzie.config.showWRNInMenu = settings.showWrn();
+      Lizzie.config.uiConfig.put("show-wrn-in-menu", settings.showWrn());
+      Lizzie.config.autoLoadKataEngineWRN = wrn.autoLoad();
+      if (wrn.autoLoad()) {
+        Lizzie.config.autoLoadTxtKataEngineWRN = wrn.value();
+        Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-wrn", wrn.value());
+      }
+      Lizzie.config.uiConfig.put("autoload-kata-engine-wrn", wrn.autoLoad());
+      if (wrnApplied) {
+        Lizzie.config.chkKataEngineWRN = wrn.enabled();
+        Lizzie.config.txtKataEngineWRN = wrn.value();
+        if (wrn.enabled()) Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
+        LizzieFrame.menu.setUseWrn(wrn.enabled(), wrn.value());
+        Lizzie.config.uiConfig.put("chk-kata-engine-wrn", wrn.enabled());
+        Lizzie.config.uiConfig.put("txt-kata-engine-wrn", wrn.value());
+        initialWrn = new ParameterDraft(wrn.enabled(), wrn.value());
+      }
     }
-    Lizzie.config.uiConfig.put("autoload-kata-engine-wrn", wrn.autoLoad());
-    if (!parametersOwned && wrn.edited()) {
-      Lizzie.config.chkKataEngineWRN = wrn.enabled();
-      Lizzie.config.txtKataEngineWRN = wrn.value();
-      engine.sendCommand(
-          "kata-set-param analysisWideRootNoise " + (wrn.enabled() ? wrn.value() : "0"));
-      if (wrn.enabled()) Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-      LizzieFrame.menu.setUseWrn(wrn.enabled(), wrn.value());
-      Lizzie.config.uiConfig.put("chk-kata-engine-wrn", wrn.enabled());
-      Lizzie.config.uiConfig.put("txt-kata-engine-wrn", wrn.value());
-    }
-    if (closeDialog) setVisible(false);
-    LizzieFrame.menu.updateMenuStatusForEngine();
+    if (closeDialog && complete) setVisible(false);
+    if (complete || pdaApplied || wrnApplied) LizzieFrame.menu.updateMenuStatusForEngine();
     if (closeDialog && !parametersOwned
-        && (threadsChanged || wrn.edited() || (pda != null && pda.edited()))
+        && (threadsChanged || wrnApplied || pdaApplied) && currentTarget.getAsBoolean()
         && engine.isPondering()) engine.ponder();
+    if (closeDialog && !complete) showParameterRejection();
+    return complete;
+  }
+
+  void showParameterRejection() {
+    showThreadError("SetKataEngines.parametersRejected");
   }
 
   @Override
