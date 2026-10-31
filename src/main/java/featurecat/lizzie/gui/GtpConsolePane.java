@@ -422,13 +422,15 @@ public class GtpConsolePane extends JDialog {
         } else {
           boolean dynamic = "dympdacap".equals(commandName);
           double pda = value.getAsDouble();
-          if (Lizzie.leelaz.sendConsolePda(pda, dynamic)) {
-            Lizzie.leelaz.isStaticPda = !dynamic;
+          Leelaz source = Lizzie.leelaz;
+          Object sourceIncarnation = source.engineIncarnationToken();
+          if (source.sendConsolePda(pda, dynamic)) {
+            source.isStaticPda = !dynamic;
             if (dynamic) {
-              Lizzie.leelaz.pda = 0;
-              Lizzie.leelaz.pdaCap = pda;
+              source.pda = 0;
+              source.pdaCap = pda;
             } else {
-              Lizzie.leelaz.pda = pda;
+              source.pda = pda;
             }
             if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null)
               Lizzie.leelaz2.pda = 0;
@@ -436,11 +438,12 @@ public class GtpConsolePane extends JDialog {
               if (LizzieFrame.menu.txtPDA != null)
                 LizzieFrame.menu.txtPDA.setText(dynamic ? "0.000" : String.valueOf(pda));
               if (LizzieFrame.menu.setPda != null) {
-                if (dynamic) LizzieFrame.menu.setPda.txtDymCap.setText(String.valueOf(pda));
-                else LizzieFrame.menu.setPda.curPDA.setText(String.valueOf(pda));
+                LizzieFrame.menu.setPda.updateEngineValues(
+                    source, sourceIncarnation,
+                    dynamic ? null : String.valueOf(pda), dynamic ? String.valueOf(pda) : null);
               }
             }
-            if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
+            if (source.isPondering()) source.ponder();
           }
         }
       } else if ("getpda".equals(commandName) || "getdympdacap".equals(commandName)) {

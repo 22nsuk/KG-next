@@ -1650,10 +1650,7 @@ public class SGFParser {
           if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
             BoardData data = curNode.getData();
             if (saveContext.gameBoard()) {
-              BoardHistoryNode commentSource = curNode;
-              if (data.getPlayouts() > 0 && curNode.next().isPresent())
-                curNode.next().get().getData().setGeneratedComment(() -> formatCommentForGame(commentSource, saveContext));
-              else if (curNode.next().isPresent()) curNode.next().get().getData().setGeneratedComment(() -> "");
+              updateGameComment(curNode, data, saveContext);
             }
           }
         } catch (Exception e) {
@@ -1720,7 +1717,7 @@ public class SGFParser {
     } else if (data.getPlayouts() > 0) {
       if (Lizzie.board.isGameBoard) {
         data.setGeneratedComment(
-            () -> formatCommentForGame(node));
+            () -> mergeAnalysisComment(data.comment, formatCommentForGame(node)));
       } else {
         data.setGeneratedComment(
             () -> formatComment(node));
@@ -2091,11 +2088,10 @@ public class SGFParser {
 
   private static void updateGameComment(
       BoardHistoryNode node, BoardData data, SaveContext saveContext) throws IOException {
-    if (data.getPlayouts() > 0 && node.next().isPresent()) {
-      node.next().get().getData().setGeneratedComment(() -> formatCommentForGame(node, saveContext));
-    } else if (node.next().isPresent()) {
-      node.next().get().getData().setGeneratedComment(() -> "");
-    }
+    if (node.next().isEmpty()) return;
+    BoardData destination = node.next().get().getData();
+    destination.setGeneratedComment(() -> mergeAnalysisComment(
+        destination.comment, data.getPlayouts() > 0 ? formatCommentForGame(node, saveContext) : ""));
   }
 
   private static String getSerializedComment(BoardHistoryNode node, SaveContext saveContext)
@@ -2106,10 +2102,10 @@ public class SGFParser {
     if (node.getData().isSnapshotNode()) {
       return node.getData().comment;
     }
-    if (!node.previous().get().previous().isPresent()) {
-      return formatCommentPk(node.previous().get(), saveContext);
-    }
-    return node.previous().get().getData().comment;
+    BoardHistoryNode previous = node.previous().get();
+    String source = previous.previous().isEmpty()
+        ? formatCommentPk(previous, saveContext) : previous.getData().comment;
+    return mergeAnalysisComment(node.getData().comment, splitWinrateComment(source).matchInfo);
   }
 
   private static boolean shouldFormatSnapshotCommentForSave(
@@ -2229,11 +2225,10 @@ public class SGFParser {
   }
 
   private static String winrateCommentRegex(boolean isKataData, boolean isSaiData) {
-    boolean leadWithKomi = Lizzie.config != null && Lizzie.config.showKataGoScoreLeadWithKomi;
+    // Stored summaries retain their score label when the display preference changes.
     String lead =
-        leadWithKomi
-            ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-            : Lizzie.resourceBundle.getString("SGFParse.leadJustScore");
+        "(?:" + Pattern.quote(Lizzie.resourceBundle.getString("SGFParse.leadWithKomi"))
+            + "|" + Pattern.quote(Lizzie.resourceBundle.getString("SGFParse.leadJustScore")) + ")";
     if (!isKataData) {
       return "("
           + Lizzie.resourceBundle.getString("SGFParse.black")
@@ -2283,6 +2278,13 @@ public class SGFParser {
         + "\\)\\n"
         + Lizzie.resourceBundle.getString("SGFParse.komi")
         + ".*";
+  }
+
+  private static String mergeAnalysisComment(String comment, String summary) {
+    WinrateCommentSplit split = splitWinrateComment(comment);
+    if (!split.matchInfo.isEmpty()) return comment.replace(split.matchInfo, summary);
+    if (summary.isEmpty()) return comment;
+    return comment.isEmpty() ? summary : comment + "\n\n" + summary;
   }
 
   /**
@@ -2463,16 +2465,7 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    if (!data.comment.isEmpty()) {
-      String wp = winrateCommentRegex(data.isKataData, data.isSaiData);
-      // if (Lizzie.leelaz.isKatago) wp = wp + "\n.*";
-      if (data.comment.matches("(?s).*" + wp + "(?s).*")) {
-        nc = data.comment.replaceAll(wp, nc);
-      } else {
-        nc = String.format(Locale.ENGLISH, "%s\n\n%s", data.comment, nc);
-      }
-    }
-    return nc;
+    return mergeAnalysisComment(data.comment, nc);
   }
 
   private static String formatCommentForGame(BoardHistoryNode node) {
@@ -2798,16 +2791,7 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    if (!data.comment.isEmpty() && !saveContext.engineGameHistory()) {
-      String wp = winrateCommentRegex(data.isKataData, data.isSaiData);
-      // if (Lizzie.leelaz.isKatago) wp = wp + "\n.*";
-      if (data.comment.matches("(?s).*" + wp + "(?s).*")) {
-        nc = data.comment.replaceAll(wp, nc);
-      } else {
-        nc = String.format(Locale.ENGLISH, "%s\n\n%s", data.comment, nc);
-      }
-    }
-    return nc;
+    return mergeAnalysisComment(data.comment, nc);
   }
 
   private static String getPdaWrnString(double pda, AnalysisProvenance provenance) {
@@ -2975,16 +2959,7 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    if (!data.comment.isEmpty()) {
-      String wp = winrateCommentRegex(data.isKataData, data.isSaiData);
-      // if (Lizzie.leelaz.isKatago) wp = wp + "\n.*";
-      if (data.comment.matches("(?s).*" + wp + "(?s).*")) {
-        nc = data.comment.replaceAll(wp, nc);
-      } else {
-        nc = String.format(Locale.ENGLISH, "%s\n\n%s", data.comment, nc);
-      }
-    }
-    return nc;
+    return mergeAnalysisComment(data.comment, nc);
   }
 
   /** Format Comment with following format: <Winrate> <Playouts> */
