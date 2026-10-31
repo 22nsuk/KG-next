@@ -11,6 +11,7 @@ import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlayMode;
 import featurecat.lizzie.enginegame.EngineGameSide;
 import featurecat.lizzie.enginegame.EngineGameSideLimits;
+import featurecat.lizzie.enginegame.EngineGameView;
 import featurecat.lizzie.enginegame.GameOutcome;
 import featurecat.lizzie.enginegame.ParticipantBinding;
 import featurecat.lizzie.gui.EngineData;
@@ -6004,13 +6005,15 @@ public class Leelaz {
         if (params.length == 2) pda = Double.parseDouble(params[1]);
         LizzieFrame.menu.txtPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
         if (LizzieFrame.menu.setPda != null)
-          LizzieFrame.menu.setPda.curPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
+          LizzieFrame.menu.setPda.updateEngineValues(
+              this, sourceEngineIncarnation, String.format(Locale.ENGLISH, "%.3f", pda), null);
         if (Lizzie.config.chkAutoPDA) {
           sendCommand(Lizzie.config.AutoPDA);
           if (Lizzie.config.chkDymPDA) {
             this.pdaCap = Double.parseDouble(Lizzie.config.dymPDACap.trim());
             if (LizzieFrame.menu.setPda != null)
-              LizzieFrame.menu.setPda.txtDymCap.setText(Lizzie.config.dymPDACap);
+              LizzieFrame.menu.setPda.updateEngineValues(
+                  this, sourceEngineIncarnation, null, Lizzie.config.dymPDACap);
           }
           if (Lizzie.config.chkStaticPDA) {
             LizzieFrame.menu.txtPDA.setText(Lizzie.config.staticPDAcur);
@@ -6054,7 +6057,8 @@ public class Leelaz {
             isStaticPda = true;
           }
           if (LizzieFrame.menu.setPda != null)
-            LizzieFrame.menu.setPda.txtDymCap.setText(String.valueOf(pdaCap));
+            LizzieFrame.menu.setPda.updateEngineValues(
+                this, sourceEngineIncarnation, null, String.valueOf(pdaCap));
         }
       }
     }
@@ -6217,7 +6221,7 @@ public class Leelaz {
       }
     } else if (line.startsWith("PDA:")) {
       try {
-        parsePDALine(line);
+        parsePDALine(line, sourceEngineIncarnation);
       } catch (RuntimeException malformedDiagnostic) {
         // PDA output is an unnumbered diagnostic, not the terminal response for this exact turn.
         // Malformed content or presentation failure must neither settle nor fail the numbered
@@ -8198,13 +8202,15 @@ public class Leelaz {
             pda = Double.parseDouble(params[1]);
             LizzieFrame.menu.txtPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
             if (LizzieFrame.menu.setPda != null)
-              LizzieFrame.menu.setPda.curPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
+              LizzieFrame.menu.setPda.updateEngineValues(
+                  this, sourceEngineIncarnation, String.format(Locale.ENGLISH, "%.3f", pda), null);
             if (Lizzie.config.chkAutoPDA) {
               sendCommand(Lizzie.config.AutoPDA);
               if (Lizzie.config.chkDymPDA) {
                 this.pdaCap = Double.parseDouble(Lizzie.config.dymPDACap.trim());
                 if (LizzieFrame.menu.setPda != null)
-                  LizzieFrame.menu.setPda.txtDymCap.setText(Lizzie.config.dymPDACap);
+                  LizzieFrame.menu.setPda.updateEngineValues(
+                      this, sourceEngineIncarnation, null, Lizzie.config.dymPDACap);
               }
               if (Lizzie.config.chkStaticPDA) {
                 LizzieFrame.menu.txtPDA.setText(Lizzie.config.staticPDAcur);
@@ -8250,13 +8256,14 @@ public class Leelaz {
               isStaticPda = true;
             }
             if (LizzieFrame.menu.setPda != null)
-              LizzieFrame.menu.setPda.txtDymCap.setText(String.valueOf(pdaCap));
+              LizzieFrame.menu.setPda.updateEngineValues(
+                  this, sourceEngineIncarnation, null, String.valueOf(pdaCap));
           }
         }
       }
       if (this.isKatago) {
         if (line.startsWith("PDA:")) {
-          parsePDALine(line);
+          parsePDALine(line, sourceEngineIncarnation);
         }
       }
       // if (!this.isScreen&&line.startsWith("play")) {
@@ -8681,13 +8688,14 @@ public class Leelaz {
         currentEnginename + ": " + Lizzie.resourceBundle.getString("Leelaz.unacceptableKomi"));
   }
 
-  private void parsePDALine(String line) {
+  private void parsePDALine(String line, Object sourceEngineIncarnation) {
     String[] params = line.trim().split(" ");
     if (params.length == 2) {
       pda = Double.parseDouble(params[1]);
       LizzieFrame.menu.txtPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
       if (LizzieFrame.menu.setPda != null)
-        LizzieFrame.menu.setPda.curPDA.setText(String.format(Locale.ENGLISH, "%.3f", pda));
+        LizzieFrame.menu.setPda.updateEngineValues(
+            this, sourceEngineIncarnation, String.format(Locale.ENGLISH, "%.3f", pda), null);
     }
   }
 
@@ -9985,6 +9993,11 @@ public class Leelaz {
    */
   private long sendStatefulOrdinaryCommands(
       List<String> commands, StatefulOrdinaryMutationKind mutationKind) {
+    return sendStatefulOrdinaryCommands(commands, mutationKind, null);
+  }
+
+  private long sendStatefulOrdinaryCommands(
+      List<String> commands, StatefulOrdinaryMutationKind mutationKind, CustomPdaUpdate pdaUpdate) {
     List<String> capturedCommands = List.copyOf(commands);
     if (capturedCommands.isEmpty()) {
       throw new IllegalArgumentException("commands");
@@ -10008,7 +10021,8 @@ public class Leelaz {
     }
 
     Leelaz mirroredEngine =
-        startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
+        pdaUpdate != null ? pdaUpdate.target.mirror
+            : startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
     // The legacy secondary Leela 0.11.0 path rejects ordinary default mirroring and drives its
     // own ponder protocol. Preserve that contract while still making every supported mirror
     // participate in the atomic admission below.
@@ -10025,46 +10039,51 @@ public class Leelaz {
     QueuedCommand[] mirroredAdmitted =
         mirroredEngine == null ? null : new QueuedCommand[capturedCommands.size()];
     ReaderStreamBinding commandBinding =
-        startupBinding == null ? positionRestoreBindingContext.get() : startupBinding;
-    long admissionGeneration;
-    if (mirroredEngine == null) {
-      synchronized (engineArbitrationLock()) {
-        synchronized (commandQueue()) {
-          admissionGeneration =
-              admitStatefulOrdinaryCommandsLocked(
-                  capturedCommands,
-                  mutationKind,
-                  startupTransaction,
-                  commandBinding,
-                  bootstrapReceipt,
-                  effects,
-                  admitted,
-                  null,
-                  null,
-                  null,
-                  null);
+        pdaUpdate != null
+            ? pdaUpdate.target.binding
+            : startupBinding == null ? positionRestoreBindingContext.get() : startupBinding;
+    Leelaz capturedMirror = mirroredEngine;
+    java.util.function.LongSupplier admission = () -> {
+      if (capturedMirror == null) {
+        synchronized (engineArbitrationLock()) {
+          synchronized (commandQueue()) {
+            return admitStatefulOrdinaryCommandsLocked(
+                    capturedCommands,
+                    mutationKind,
+                    startupTransaction,
+                    commandBinding,
+                    bootstrapReceipt,
+                    effects,
+                    admitted,
+                    null,
+                    null,
+                    null,
+                    null,
+                    pdaUpdate);
+          }
         }
+      } else {
+        return withOrderedEngineArbitrationAndQueueLocks(
+                this,
+                capturedMirror,
+                () ->
+                    admitStatefulOrdinaryCommandsLocked(
+                        capturedCommands,
+                        mutationKind,
+                        startupTransaction,
+                        commandBinding,
+                        bootstrapReceipt,
+                        effects,
+                        admitted,
+                        capturedMirror,
+                        mirroredBootstrapReceipt,
+                        mirroredEffects,
+                        mirroredAdmitted,
+                        pdaUpdate));
       }
-    } else {
-      Leelaz capturedMirror = mirroredEngine;
-      admissionGeneration =
-          withOrderedEngineArbitrationAndQueueLocks(
-              this,
-              capturedMirror,
-              () ->
-                  admitStatefulOrdinaryCommandsLocked(
-                      capturedCommands,
-                      mutationKind,
-                      startupTransaction,
-                      commandBinding,
-                      bootstrapReceipt,
-                      effects,
-                      admitted,
-                      capturedMirror,
-                      mirroredBootstrapReceipt,
-                      mirroredEffects,
-                      mirroredAdmitted));
-    }
+    };
+    long admissionGeneration = pdaUpdate == null
+        ? admission.getAsLong() : pdaUpdate.target.admit(admission);
     if (admissionGeneration < 0L) {
       if (startupTransaction != null) {
         throw new IllegalStateException(
@@ -10101,9 +10120,13 @@ public class Leelaz {
       Leelaz mirroredEngine,
       RestartBootstrapReceipt mirroredBootstrapReceipt,
       OrdinaryEnqueueEffects mirroredEffects,
-      QueuedCommand[] mirroredAdmitted) {
+      QueuedCommand[] mirroredAdmitted,
+      CustomPdaUpdate pdaUpdate) {
+    if (pdaUpdate != null && !pdaUpdate.target.isCurrent(mirroredEngine)) return -1L;
     ReaderStreamBinding mirroredCommandBinding =
-        mirroredEngine == null ? null : mirroredEngine.positionRestoreBindingContext.get();
+        mirroredEngine == null ? null
+            : pdaUpdate != null ? pdaUpdate.target.mirrorBinding
+            : mirroredEngine.positionRestoreBindingContext.get();
     for (String command : commands) {
       if (!canAdmitOrdinaryCommandLocked(
           command,
@@ -10149,6 +10172,12 @@ public class Leelaz {
     }
     installStatefulOrdinaryBatchFailureLinks(
         admitted, mirroredEngine, mirroredAdmitted);
+    if (pdaUpdate != null) {
+      pda = pdaUpdate.dynamic ? 0 : pdaUpdate.value;
+      isStaticPda = !pdaUpdate.dynamic;
+      if (pdaUpdate.dynamic) pdaCap = pdaUpdate.value;
+      else if (pdaUpdate.value == 0 && mirroredEngine != null) mirroredEngine.pda = 0;
+    }
     return advanceStatefulOrdinaryAdmissionLocked(mutationKind);
   }
 
@@ -11590,6 +11619,90 @@ public class Leelaz {
     List<String> commands =
         dynamic ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
     return sendStatefulOrdinaryCommands(commands, StatefulOrdinaryMutationKind.NONE) >= 0L;
+  }
+
+  /** An editor's original readers; a replacement engine or comparison reader cannot inherit it. */
+  public final class CustomPdaTarget {
+    private final ReaderStreamBinding binding = readerStreamBinding;
+    private final Leelaz mirror;
+    private final ReaderStreamBinding mirrorBinding;
+    private final boolean requirePrimarySelection;
+    private final long primaryGeneration;
+    private final EngineGameView participantGame;
+
+    private CustomPdaTarget(boolean requirePrimarySelection) {
+      this.requirePrimarySelection = requirePrimarySelection;
+      primaryGeneration = requirePrimarySelection ? Lizzie.capturePrimaryEngineGeneration(Leelaz.this) : -1;
+      participantGame = requirePrimarySelection ? null : Lizzie.engineGame.current().view();
+      mirror = currentMirror();
+      mirrorBinding = mirror == null ? null : mirror.readerStreamBinding;
+    }
+
+    private Leelaz currentMirror() {
+      // GENMOVE edits belong to one participant, independent of per-turn primary selection.
+      if (!requirePrimarySelection) return null;
+      Leelaz candidate = resolveDefaultCommandMirrorEngine();
+      return candidate != null && !candidate.isLeela0110 ? candidate : null;
+    }
+
+    public boolean isCurrent() {
+      return (!requirePrimarySelection || (primaryGeneration >= 0
+              && Lizzie.capturePrimaryEngineGeneration(Leelaz.this) == primaryGeneration))
+          && isCurrent(currentMirror());
+    }
+
+    private boolean isCurrent(Leelaz currentMirror) {
+      if (!requirePrimarySelection) {
+        var game = Lizzie.engineGame.current();
+        if (participantGame == null || !game.playingGenmove() || game.view() != participantGame)
+          return false;
+      }
+      return (isKataGoPda || isDymPda)
+          && isCurrentLiveEngineIncarnation(binding)
+          && currentMirror == mirror
+          && (mirror == null || mirror.isCurrentLiveEngineIncarnation(mirrorBinding));
+    }
+
+    // Hold selection only for queue admission; transport and callbacks run after these locks exit.
+    private long admit(java.util.function.LongSupplier admission) {
+      Leelaz primary = requirePrimarySelection ? Leelaz.this : Lizzie.leelaz;
+      if (primary == null) return -1;
+      long generation = requirePrimarySelection
+          ? primaryGeneration : Lizzie.capturePrimaryEngineGeneration(primary);
+      if (generation < 0) return -1;
+      Leelaz activeMirror = primary.activeComparisonEngine();
+      long[] admitted = {-1};
+      do {
+        Boolean selected = EngineManager.callIfCurrentAnalysisSelection(
+            primary, activeMirror, mirror,
+            () -> Lizzie.tryCallIfPrimaryEngine(primary, generation, () -> {
+              if (!isCurrent()) return false;
+              admitted[0] = admission.getAsLong();
+              return true;
+            }));
+        if (selected != null) return selected ? admitted[0] : -1;
+        // Match ordinary-analysis lock ordering: release selection before waiting for PRIMARY.
+      } while (Lizzie.capturePrimaryEngineGeneration(primary) == generation);
+      return -1;
+    }
+
+    public boolean acceptsSource(Leelaz source, Object sourceIncarnation) {
+      return source == Leelaz.this && sourceIncarnation == binding && isCurrent();
+    }
+
+    public boolean apply(double value, boolean dynamic) {
+      if (!Double.isFinite(value) || (dynamic && value == 0)) return false;
+      List<String> commands = dynamic
+          ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
+      return sendStatefulOrdinaryCommands(
+          commands, StatefulOrdinaryMutationKind.NONE, new CustomPdaUpdate(this, value, dynamic)) >= 0;
+    }
+  }
+
+  private record CustomPdaUpdate(CustomPdaTarget target, double value, boolean dynamic) {}
+
+  public CustomPdaTarget captureCustomPdaTarget(boolean requirePrimarySelection) {
+    return new CustomPdaTarget(requirePrimarySelection);
   }
 
   public boolean sendRawConsoleCommand(String command) {

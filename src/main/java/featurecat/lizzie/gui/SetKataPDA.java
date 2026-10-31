@@ -24,6 +24,7 @@ import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JPanel;
 import javax.swing.JTextField;
+import javax.swing.SwingUtilities;
 import javax.swing.border.EmptyBorder;
 
 public class SetKataPDA extends JDialog {
@@ -35,9 +36,14 @@ public class SetKataPDA extends JDialog {
   JFontCheckBox chkAutoPDA;
   public JLabel curPDA;
   public JFontTextField txtDymCap;
+  private Leelaz openingEngine;
+  private Leelaz.CustomPdaTarget openingTarget;
+  private long openingPrimaryGeneration;
+  private boolean openingParticipant;
 
   public SetKataPDA(Window owner) {
     super(owner);
+    captureOpeningTarget();
     setResizable(false);
     setTitle(
         resourceBundle.getString("SetKataPDA.title")); // ("KataGo 激进参数PDA设置(仅支持KataGo PDA引擎)");
@@ -58,85 +64,7 @@ public class SetKataPDA extends JDialog {
 
     JFontButton btnApply =
         new JFontButton(resourceBundle.getString("SetKataPDA.btnApply")); // ("确定");
-    btnApply.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            // Analysis batches own runtime PDA; other modes retain their existing participant path.
-            Leelaz engine =
-                EngineGameDesktop.parametersOwned()
-                    ? null
-                    : kataGoPdaEngineGameParticipantOrPrimary();
-            if (chkDymPda.isSelected()) {
-              double dymCap;
-              try {
-                dymCap = Double.parseDouble(txtDymCap.getText().trim());
-              } catch (NumberFormatException es) {
-                invalidParameter(txtDymCap);
-                return;
-              }
-
-              if (!Double.isFinite(dymCap) || dymCap == 0) {
-                invalidParameter(txtDymCap);
-                return;
-              }
-              if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "dympdacap " + dymCap;
-              if (engine != null) {
-                engine.pda = 0;
-                engine.sendCommand("pda 0");
-                LizzieFrame.menu.txtPDA.setText("0.000");
-                engine.sendCommand("dympdacap " + dymCap);
-                engine.pdaCap = dymCap;
-                engine.isStaticPda = false;
-              }
-
-            } else if (chkStaticPda.isSelected()) {
-              double staticCur;
-              try {
-                staticCur = Double.parseDouble(txtStaticCur.getText().trim());
-
-              } catch (NumberFormatException es) {
-                invalidParameter(txtStaticCur);
-                return;
-              }
-              if (!Double.isFinite(staticCur)) {
-                invalidParameter(txtStaticCur);
-                return;
-              }
-              if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "pda " + staticCur;
-              if (engine != null) {
-                engine.sendCommand("pda " + staticCur);
-                engine.pda = staticCur;
-                engine.isStaticPda = true;
-                LizzieFrame.menu.txtPDA.setText(String.valueOf(staticCur));
-              }
-            }
-            if (chkNoPDA.isSelected()) {
-              Lizzie.config.AutoPDA = "pda 0";
-              if (engine != null) {
-                engine.sendCommand("pda 0");
-                engine.pda = 0;
-                if (Lizzie.config.isDoubleEngineMode()) Lizzie.leelaz2.pda = 0;
-                LizzieFrame.menu.txtPDA.setText("0");
-                engine.isStaticPda = true;
-              }
-            }
-
-            Lizzie.config.chkDymPDA = chkDymPda.isSelected();
-            Lizzie.config.chkStaticPDA = chkStaticPda.isSelected();
-            Lizzie.config.chkAutoPDA = chkAutoPDA.isSelected();
-            Lizzie.config.dymPDACap = txtDymCap.getText();
-            Lizzie.config.staticPDAcur = txtStaticCur.getText();
-
-            Lizzie.config.uiConfig.put("chk-dym-pda", Lizzie.config.chkDymPDA);
-            Lizzie.config.uiConfig.put("chk-static-pda", Lizzie.config.chkStaticPDA);
-            Lizzie.config.uiConfig.put("chk-auto-pda", Lizzie.config.chkAutoPDA);
-            Lizzie.config.uiConfig.put("dym-pda-cap", Lizzie.config.dymPDACap);
-            Lizzie.config.uiConfig.put("static-pda-cur", Lizzie.config.staticPDAcur);
-            Lizzie.config.uiConfig.put("auto-pda", Lizzie.config.AutoPDA);
-            if (engine != null && engine.isPondering()) engine.ponder();
-            setVisible(false);
-          }
-        });
+    btnApply.addActionListener(event -> applySettings());
     addControl(btnApply, 4, 7, 1);
     getRootPane().setDefaultButton(btnApply);
     AccessibilitySupport.installEscapeAction(getRootPane(), this, () -> setVisible(false));
@@ -168,7 +96,7 @@ public class SetKataPDA extends JDialog {
     curPDA = new JLabel("0.0");
     curPDA.setFont(new Font("Song", Font.PLAIN, Math.max(Config.frameFontSize, 15)));
     addControl(curPDA, 1, 0, 5);
-    curPDA.setText(String.format(Locale.ENGLISH, "%.3f", Lizzie.leelaz.pda));
+    curPDA.setText(String.format(Locale.ENGLISH, "%.3f", openingEngine == null ? 0 : openingEngine.pda));
 
     chkAutoPDA =
         new JFontCheckBox(
@@ -231,17 +159,17 @@ public class SetKataPDA extends JDialog {
     lblpdapda.setForeground(Color.RED);
     if (Lizzie.config.isChinese) addControl(lblpdapda, 0, 5, 6);
 
-    if (!Lizzie.leelaz.isStaticPda) {
+    if (openingEngine != null && !openingEngine.isStaticPda) {
       chkDymPda.setSelected(true);
-    } else if (Lizzie.leelaz.pda == 0) {
+    } else if (openingEngine == null || openingEngine.pda == 0) {
       chkNoPDA.setSelected(true);
     } else {
       chkStaticPda.setSelected(true);
     }
 
     chkAutoPDA.setSelected(Lizzie.config.chkAutoPDA);
-    txtDymCap.setText(String.valueOf(Lizzie.leelaz.pdaCap));
-    txtStaticCur.setText(String.valueOf(Lizzie.leelaz.pda));
+    txtDymCap.setText(openingEngine == null ? Lizzie.config.dymPDACap : String.valueOf(openingEngine.pdaCap));
+    txtStaticCur.setText(openingEngine == null ? Lizzie.config.staticPDAcur : String.valueOf(openingEngine.pda));
 
     JFontLabel label = new JFontLabel("一般默认为白方视角,也可修改配置文件改为黑方视角,或无视角(轮谁下是谁的视角)");
     label.setForeground(Color.RED);
@@ -266,6 +194,103 @@ public class SetKataPDA extends JDialog {
       // TODO Auto-generated catch block
       e1.printStackTrace();
     }
+  }
+
+  void applySettings() {
+    Leelaz engine = currentTargetEngine();
+    if (chkDymPda.isSelected()) {
+      double dymCap;
+      try {
+        dymCap = Double.parseDouble(txtDymCap.getText().trim());
+      } catch (NumberFormatException es) {
+        invalidParameter(txtDymCap);
+        return;
+      }
+
+      if (!Double.isFinite(dymCap) || dymCap == 0) {
+        invalidParameter(txtDymCap);
+        return;
+      }
+      if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "dympdacap " + dymCap;
+      if (engine != null) {
+        if (openingTarget.apply(dymCap, true) && currentTargetEngine() == engine)
+          LizzieFrame.menu.txtPDA.setText("0.000");
+        else engine = null;
+      }
+
+    } else if (chkStaticPda.isSelected()) {
+      double staticCur;
+      try {
+        staticCur = Double.parseDouble(txtStaticCur.getText().trim());
+
+      } catch (NumberFormatException es) {
+        invalidParameter(txtStaticCur);
+        return;
+      }
+      if (!Double.isFinite(staticCur)) {
+        invalidParameter(txtStaticCur);
+        return;
+      }
+      if (chkAutoPDA.isSelected()) Lizzie.config.AutoPDA = "pda " + staticCur;
+      if (engine != null) {
+        if (openingTarget.apply(staticCur, false) && currentTargetEngine() == engine)
+          LizzieFrame.menu.txtPDA.setText(String.valueOf(staticCur));
+        else engine = null;
+      }
+    }
+    if (chkNoPDA.isSelected()) {
+      Lizzie.config.AutoPDA = "pda 0";
+      if (engine != null) {
+        if (openingTarget.apply(0, false) && currentTargetEngine() == engine)
+          LizzieFrame.menu.txtPDA.setText("0");
+        else engine = null;
+      }
+    }
+
+    Lizzie.config.chkDymPDA = chkDymPda.isSelected();
+    Lizzie.config.chkStaticPDA = chkStaticPda.isSelected();
+    Lizzie.config.chkAutoPDA = chkAutoPDA.isSelected();
+    Lizzie.config.dymPDACap = txtDymCap.getText();
+    Lizzie.config.staticPDAcur = txtStaticCur.getText();
+
+    Lizzie.config.uiConfig.put("chk-dym-pda", Lizzie.config.chkDymPDA);
+    Lizzie.config.uiConfig.put("chk-static-pda", Lizzie.config.chkStaticPDA);
+    Lizzie.config.uiConfig.put("chk-auto-pda", Lizzie.config.chkAutoPDA);
+    Lizzie.config.uiConfig.put("dym-pda-cap", Lizzie.config.dymPDACap);
+    Lizzie.config.uiConfig.put("static-pda-cur", Lizzie.config.staticPDAcur);
+    Lizzie.config.uiConfig.put("auto-pda", Lizzie.config.AutoPDA);
+    if (engine != null && currentTargetEngine() == engine && engine.isPondering()) engine.ponder();
+    setVisible(false);
+  }
+
+  private void captureOpeningTarget() {
+    openingParticipant = Lizzie.engineGame.current().playingGenmove();
+    openingEngine = kataGoPdaEngineGameParticipantOrPrimary();
+    openingPrimaryGeneration = Lizzie.capturePrimaryEngineGeneration(openingEngine);
+    openingTarget = openingEngine == null ? null : openingEngine.captureCustomPdaTarget(!openingParticipant);
+  }
+
+  private Leelaz currentTargetEngine() {
+    if (EngineGameDesktop.parametersOwned() || openingTarget == null || !openingTarget.isCurrent()
+        || kataGoPdaEngineGameParticipantOrPrimary() != openingEngine
+        || (!openingParticipant && (openingPrimaryGeneration < 0
+            || Lizzie.capturePrimaryEngineGeneration(openingEngine) != openingPrimaryGeneration))) {
+      return null;
+    }
+    return openingEngine;
+  }
+
+  /** Reader updates must not replace another engine's editable draft in an already-open window. */
+  public void updateEngineValues(
+      Leelaz source, Object sourceIncarnation, String currentPda, String dynamicCap) {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(() -> updateEngineValues(source, sourceIncarnation, currentPda, dynamicCap));
+      return;
+    }
+    if (source == null || currentTargetEngine() != source
+        || !openingTarget.acceptsSource(source, sourceIncarnation)) return;
+    if (currentPda != null) curPDA.setText(currentPda);
+    if (dynamicCap != null) txtDymCap.setText(dynamicCap);
   }
 
   private void addControl(JComponent component, int column, int row, int columns) {
@@ -300,7 +325,7 @@ public class SetKataPDA extends JDialog {
     int second = manager.resolveEngineGameParticipant(active.batch().second());
     if (first >= 0
         && first < manager.engineList.size()
-        && manager.engineList.get(first).isKataGoPda) {
+        && (manager.engineList.get(first).isKataGoPda || manager.engineList.get(first).isDymPda)) {
       return manager.engineList.get(first);
     }
     if (second >= 0 && second < manager.engineList.size()) {
