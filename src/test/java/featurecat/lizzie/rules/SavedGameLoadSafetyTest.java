@@ -231,6 +231,7 @@ class SavedGameLoadSafetyTest {
       setFrameField("tempGameScrollPanel", new JScrollPane(list));
       Lizzie.board.setHistory(SGFParser.parseSgf(ORIGINAL_SGF, true));
       BoardHistoryList history = Lizzie.board.getHistory();
+      menu.txtKomi.setText(String.valueOf(history.getGameInfo().getKomi()));
       history.setHead(history.getStart().next().orElseThrow().next().orElseThrow());
       frame.setPlayers("original white", "original black");
       frame.setResult("B+2.5");
@@ -706,6 +707,8 @@ class SavedGameLoadSafetyTest {
       assertSame(current, Lizzie.board.getHistory(), "a failed open must keep the current game");
       assertSame(selected, current.getCurrentHistoryNode());
       assertEquals(originalTree.get(), assertDoesNotThrow(() -> SGFParser.saveToString(false)));
+      assertEquals("6.5", LizzieFrame.menu.txtKomi.getText(),
+          "a failed open must keep the editable komi consistent with the retained game");
       assertEquals(originalFile.getName(), LizzieFrame.fileNameTitle);
       assertEquals(originalPlayers, frame.playerTitle);
       try {

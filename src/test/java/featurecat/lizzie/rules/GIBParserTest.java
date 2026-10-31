@@ -80,6 +80,7 @@ class GIBParserTest {
       assertEquals(BLACK_NAME, info.getPlayerBlack());
       assertEquals(WHITE_NAME, info.getPlayerWhite());
       assertEquals(KOMI, info.getKomi(), 0.0001);
+      assertEquals(String.valueOf(KOMI), LizzieFrame.menu.txtKomi.getText());
       assertSame(env.board().getHistory().getStart(), env.current());
       assertEquals(BoardNodeKind.SNAPSHOT, env.current().getData().getNodeKind());
       assertEquals(Stone.EMPTY, env.stoneAt(BLACK_X, BLACK_Y));
@@ -184,12 +185,15 @@ class GIBParserTest {
     }
   }
 
-  @Test
-  void failedApplicationRestoresBoardAndTemporaryFlags() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void failedApplicationRestoresBoardKomiDisplayAndTemporaryFlags(boolean readKomi) throws Exception {
     try (RulesLayerTestHarness env = openSizedHarness()) {
       seedExistingPosition(env);
       BoardHistoryList history = env.board().getHistory();
+      history.getGameInfo().setKomi(5.5);
       BoardHistoryNode selected = env.current();
+      Lizzie.config.readKomi = readKomi;
       Lizzie.config.playSound = true;
       EngineManager.isEmpty = false;
       LoadTrackingFrame frame = RulesLayerTestHarness.allocate(LoadTrackingFrame.class);
@@ -201,8 +205,12 @@ class GIBParserTest {
 
       assertEquals("player update failed", failure.getMessage());
       assertNotSame(history, frame.historyAtFailure, "the failure must occur after adoption starts");
+      assertEquals(readKomi ? String.valueOf(KOMI) : "5.5", frame.komiTextAtFailure);
       assertSame(history, env.board().getHistory());
       assertSame(selected, env.current());
+      assertEquals(5.5, history.getGameInfo().getKomi());
+      assertEquals("5.5", LizzieFrame.menu.txtKomi.getText(),
+          "the retained game's komi must replace the failed import's editable display");
       assertEquals(Stone.BLACK, env.stoneAt(SEEDED_X, SEEDED_Y));
       assertFalse(EngineManager.isEmpty);
       assertTrue(Lizzie.config.playSound);
@@ -304,6 +312,7 @@ class GIBParserTest {
           "UNKNOWN extension record\n" + MINIMAL_GIB).toString()));
 
       assertEquals(5.5, env.board().getHistory().getGameInfo().getKomi(), 0.0001);
+      assertEquals("5.5", LizzieFrame.menu.txtKomi.getText());
       assertExplicitStoSkiMainline(env.board().getHistory().getStart());
     }
   }
@@ -378,6 +387,7 @@ class GIBParserTest {
   private static final class LoadTrackingFrame extends LizzieFrame {
     boolean failPlayerUpdate;
     BoardHistoryList historyAtFailure;
+    String komiTextAtFailure;
 
     @Override
     public void scheduleResumeAnalysisAfterLoad(int delayMillis) {}
@@ -392,6 +402,7 @@ class GIBParserTest {
     public void setPlayers(String whitePlayer, String blackPlayer) {
       if (failPlayerUpdate) {
         historyAtFailure = Lizzie.board.getHistory();
+        komiTextAtFailure = LizzieFrame.menu.txtKomi.getText();
         throw new IllegalStateException("player update failed");
       }
     }
