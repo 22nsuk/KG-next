@@ -383,3 +383,48 @@ engine names expose a pre-existing import limitation: non-comment property
 parsing retains escape bytes. Tests therefore check that case at the save/hash
 boundary, while supported Unicode names exercise repeated roundtrips. No parser
 format change is included here.
+
+### Returning the completed SGF directly (2026-10-31)
+
+Baseline: `dbb1db978a2acada2f0b7057d6f3a7275a348db9`, including the escaped-engine-name
+parser fix. The three public string-producing save paths now return the serializer's
+completed immutable string directly. The private Writer overload chain and its
+whole-result `StringWriter` copy are removed. Detached capture, EDT ownership, raw
+flag restoration, upload observation, and capture-before-file-I/O remain unchanged.
+Save retries still own a frozen string, not a builder or live board reference.
+
+An actual offline Swing process on Ubuntu/WSL2, Java 21.0.12.1, Xvfb/Openbox and
+`-Xmx2g` measures complete calls to `saveToString(false)`, `captureSave` and
+`saveSnapshot`. The input is each of the four generated performance fixtures above.
+Each process warms up 10 calls and retains 20 per fixture/API combination. Four
+separate JVMs run in baseline/candidate/candidate/baseline order; no timing or GC
+outliers are discarded. Exact EDT allocated bytes and thread CPU time cover the
+whole public call, including capture where that API performs it. Hashing, file
+writes and reopen checks are outside the measured region. This deliberately does
+not compare only `save-serialize` JFR events: the old final `StringWriter.toString()`
+was outside that event.
+
+| Full `captureSave` workload | Allocated bytes before | After | Reduction | Median elapsed ms before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Wide variations | 121,695,208 | 116,779,488 | 4.0% | 34.35 → 34.58 |
+| Short PV + ownership | 51,846,880 | 43,817,056 | 15.5% | 11.54 → 10.86 |
+| Long PV + visits + ownership | 67,677,064 | 52,466,944 | 22.5% | 15.97 → 13.90 |
+| Long multilingual comments | 46,866,824 | 33,191,184 | 29.2% | 6.94 → 5.62 |
+
+Allocation reductions repeat in both orders and are the same absolute byte savings
+for the other two APIs. Relative reductions are 19.3–29.8% for `saveToString(false)`
+and 4.0–29.2% for `saveSnapshot`; their capture costs differ by existing contract.
+These are transient allocations, not retained heap, peak RSS, or disk-byte savings.
+The host is shared (24 logical CPUs; load averages approximately 1.2–2.2), with no
+other user work suspended. Wide-tree capture elapsed medians change 34.20 → 35.12 ms
+in the first pair and 34.37 → 33.48 ms in the reverse pair, so there is no uniform
+latency improvement claim.
+
+All 1,440 timed outputs, including warmups (960 retained measurements), match their
+fixture/API hashes. The 32 fixture/mode combinations covering legacy, upload,
+capture, automatic, normal snapshot, raw, raw-with-comments and current-branch
+output match across all four processes and reopen successfully. The 16 stored full
+capture files also compare byte-for-byte. Production, compiled classes, probe and
+dependency hashes are verified before and after measurement. Existing serialization,
+provenance/invalidation, snapshot, retired-game save and save-queue tests are reused;
+desktop-only save/close cases run separately in CI.

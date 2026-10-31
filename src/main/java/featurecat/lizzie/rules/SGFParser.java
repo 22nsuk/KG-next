@@ -1006,12 +1006,13 @@ public class SGFParser {
   }
 
   public static String saveToString(boolean forUpload) throws IOException {
-    try (StringWriter writer = new StringWriter()) {
-      saveToStream(Lizzie.board, writer, forUpload, false);
+    try {
+      Board board = Lizzie.board;
+      String result = serialize(board, board.getHistory(), forUpload, false, false, false, false);
       if (forUpload) {
         SgfObservation.record("export", "ok", null, null);
       }
-      return writer.toString();
+      return result;
     } catch (IOException e) {
       if (forUpload) {
         SgfObservation.record("export", "failed", null, e);
@@ -1029,11 +1030,10 @@ public class SGFParser {
     }
     boolean originalRaw = LizzieFrame.isSavingRaw;
     boolean originalComments = LizzieFrame.isSavingRawComment;
-    try (StringWriter writer = new StringWriter()) {
+    try {
       LizzieFrame.isSavingRaw = raw;
       LizzieFrame.isSavingRawComment = comments;
-      saveToStream(board, writer, false, false, currentBranch, currentBranch, true);
-      return writer.toString();
+      return serialize(board, board.getHistory(), false, false, currentBranch, currentBranch, true);
     } finally {
       LizzieFrame.isSavingRaw = originalRaw;
       LizzieFrame.isSavingRawComment = originalComments;
@@ -1473,48 +1473,14 @@ public class SGFParser {
   /** Freezes the exact source history without installing it as the board's current history. */
   public static String captureSave(
       Board board, BoardHistoryList sourceHistory, boolean isAutoSave) throws IOException {
-    try (StringWriter writer = new StringWriter()) {
-      // Automatic/temporary saves need the same detached tree as manual saves. Finish
-      // serialization before opening any file, so a failed capture cannot truncate the old SGF.
-      saveToStream(board, sourceHistory, writer, false, isAutoSave, false, false, true);
-      return writer.toString();
-    }
+    // Automatic/temporary saves need the same detached tree as manual saves. Finish
+    // serialization before opening any file, so a failed capture cannot truncate the old SGF.
+    return serialize(board, sourceHistory, false, isAutoSave, false, false, true);
   }
 
-  private static void saveToStream(
-      Board board, Writer writer, boolean forUpload, boolean fromAutoSave) throws IOException {
-    saveToStream(board, writer, forUpload, fromAutoSave, false, false);
-  }
-
-  private static void saveToStream(
-      Board board,
-      Writer writer,
-      boolean forUpload,
-      boolean fromAutoSave,
-      boolean mainTrunkOnly,
-      boolean stripRootMetadata)
-      throws IOException {
-    saveToStream(board, writer, forUpload, fromAutoSave, mainTrunkOnly, stripRootMetadata, false);
-  }
-
-  private static void saveToStream(
-      Board board,
-      Writer writer,
-      boolean forUpload,
-      boolean fromAutoSave,
-      boolean mainTrunkOnly,
-      boolean stripRootMetadata,
-      boolean captureSnapshot)
-      throws IOException {
-    saveToStream(
-        board, board.getHistory(), writer, forUpload, fromAutoSave,
-        mainTrunkOnly, stripRootMetadata, captureSnapshot);
-  }
-
-  private static void saveToStream(
+  private static String serialize(
       Board board,
       BoardHistoryList sourceHistory,
-      Writer writer,
       boolean forUpload,
       boolean fromAutoSave,
       boolean mainTrunkOnly,
@@ -1731,9 +1697,8 @@ public class SGFParser {
           }
         }
       }
-      // close file
       builder.append(')');
-      writer.append(builder.toString());
+      return builder.toString();
     }
   }
 
