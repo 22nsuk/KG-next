@@ -497,6 +497,11 @@ class SetKataEnginesHitTest {
       Lizzie.engineManager = new EngineManager(List.of(engines[0], engines[1]));
       ByteArrayOutputStream output = new ByteArrayOutputStream();
       engineHook(engines[0], "installFreshCommandOutputForTest", java.io.OutputStream.class, output);
+      engineHook(
+          engines[1],
+          "installFreshCommandOutputForTest",
+          java.io.OutputStream.class,
+          new ByteArrayOutputStream());
       Field bundle = Menu.class.getDeclaredField("resourceBundle");
       bundle.setAccessible(true);
       bundle.set(LizzieFrame.menu, Lizzie.resourceBundle);
@@ -1159,6 +1164,7 @@ class SetKataEnginesHitTest {
 
   private static final class RecordingEngine extends Leelaz {
     final List<String> commands = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private boolean recordsPhysicalCommands;
 
     RecordingEngine() throws Exception {
       super("katago gtp");
@@ -1171,6 +1177,7 @@ class SetKataEnginesHitTest {
             return featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture.Response.success();
           });
       engineHook(this, "installFreshCommandOutputForTest", java.io.OutputStream.class, transport);
+      recordsPhysicalCommands = true;
       started = isLoaded = true;
     }
 
@@ -1183,6 +1190,36 @@ class SetKataEnginesHitTest {
     @Override
     public void sendCommand(String command) {
       commands.add(command);
+    }
+
+    @Override
+    public boolean trySetPda(String value) {
+      boolean accepted = super.trySetPda(value);
+      if (accepted) recordAcceptedCommand("kata-set-param playoutDoublingAdvantage " + value);
+      return accepted;
+    }
+
+    @Override
+    public boolean trySetAnalysisWideRootNoise(String value) {
+      boolean accepted = super.trySetAnalysisWideRootNoise(value);
+      if (accepted) recordAcceptedCommand("kata-set-param analysisWideRootNoise " + value);
+      return accepted;
+    }
+
+    @Override
+    public boolean trySetPdaForGame(String value, Leelaz second) {
+      boolean accepted = super.trySetPdaForGame(value, second);
+      if (accepted) {
+        String command = "kata-set-param playoutDoublingAdvantage " + value;
+        recordAcceptedCommand(command);
+        ((RecordingEngine) second).recordAcceptedCommand(command);
+      }
+      return accepted;
+    }
+
+    private void recordAcceptedCommand(String command) {
+      // Dedicated PDA tests already record the command in the real protocol transport.
+      if (!recordsPhysicalCommands) commands.add(command);
     }
   }
 
