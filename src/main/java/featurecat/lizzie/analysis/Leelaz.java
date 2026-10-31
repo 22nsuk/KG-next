@@ -9998,6 +9998,14 @@ public class Leelaz {
 
   private long sendStatefulOrdinaryCommands(
       List<String> commands, StatefulOrdinaryMutationKind mutationKind, CustomPdaUpdate pdaUpdate) {
+    return sendStatefulOrdinaryCommands(commands, mutationKind, pdaUpdate, null);
+  }
+
+  private long sendStatefulOrdinaryCommands(
+      List<String> commands,
+      StatefulOrdinaryMutationKind mutationKind,
+      CustomPdaUpdate pdaUpdate,
+      GamePdaUpdate gamePdaUpdate) {
     List<String> capturedCommands = List.copyOf(commands);
     if (capturedCommands.isEmpty()) {
       throw new IllegalArgumentException("commands");
@@ -10021,12 +10029,14 @@ public class Leelaz {
     }
 
     Leelaz mirroredEngine =
-        pdaUpdate != null ? pdaUpdate.target.mirror
+        gamePdaUpdate != null ? gamePdaUpdate.second
+            : pdaUpdate != null ? pdaUpdate.target.mirror
             : startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
     // The legacy secondary Leela 0.11.0 path rejects ordinary default mirroring and drives its
     // own ponder protocol. Preserve that contract while still making every supported mirror
     // participate in the atomic admission below.
     if (mirroredEngine != null && mirroredEngine.isLeela0110) {
+      if (gamePdaUpdate != null) return -1L;
       mirroredEngine = null;
     }
     RestartBootstrapReceipt bootstrapReceipt = restartBootstrapReceiptContext.get();
@@ -10039,7 +10049,8 @@ public class Leelaz {
     QueuedCommand[] mirroredAdmitted =
         mirroredEngine == null ? null : new QueuedCommand[capturedCommands.size()];
     ReaderStreamBinding commandBinding =
-        pdaUpdate != null
+        gamePdaUpdate != null ? gamePdaUpdate.binding
+            : pdaUpdate != null
             ? pdaUpdate.target.binding
             : startupBinding == null ? positionRestoreBindingContext.get() : startupBinding;
     Leelaz capturedMirror = mirroredEngine;
@@ -10059,7 +10070,8 @@ public class Leelaz {
                     null,
                     null,
                     null,
-                    pdaUpdate);
+                    pdaUpdate,
+                    gamePdaUpdate);
           }
         }
       } else {
@@ -10079,7 +10091,8 @@ public class Leelaz {
                         mirroredBootstrapReceipt,
                         mirroredEffects,
                         mirroredAdmitted,
-                        pdaUpdate));
+                        pdaUpdate,
+                        gamePdaUpdate));
       }
     };
     long admissionGeneration = pdaUpdate == null
@@ -10121,10 +10134,13 @@ public class Leelaz {
       RestartBootstrapReceipt mirroredBootstrapReceipt,
       OrdinaryEnqueueEffects mirroredEffects,
       QueuedCommand[] mirroredAdmitted,
-      CustomPdaUpdate pdaUpdate) {
+      CustomPdaUpdate pdaUpdate,
+      GamePdaUpdate gamePdaUpdate) {
     if (pdaUpdate != null && !pdaUpdate.target.isCurrent(mirroredEngine)) return -1L;
+    if (gamePdaUpdate != null && !gamePdaUpdate.isCurrent()) return -1L;
     ReaderStreamBinding mirroredCommandBinding =
         mirroredEngine == null ? null
+            : gamePdaUpdate != null ? gamePdaUpdate.secondBinding
             : pdaUpdate != null ? pdaUpdate.target.mirrorBinding
             : mirroredEngine.positionRestoreBindingContext.get();
     for (String command : commands) {
@@ -10177,6 +10193,10 @@ public class Leelaz {
       isStaticPda = !pdaUpdate.dynamic;
       if (pdaUpdate.dynamic) pdaCap = pdaUpdate.value;
       else if (pdaUpdate.value == 0 && mirroredEngine != null) mirroredEngine.pda = 0;
+    }
+    if (gamePdaUpdate != null) {
+      pda = pdaBeforeGame = gamePdaUpdate.value;
+      mirroredEngine.pda = mirroredEngine.pdaBeforeGame = gamePdaUpdate.value;
     }
     return advanceStatefulOrdinaryAdmissionLocked(mutationKind);
   }
@@ -10911,14 +10931,75 @@ public class Leelaz {
   //	}
 
   public void setPda(String pda) {
+    setPdaWithAdmission(pda, false);
+  }
+
+  /** Success means local command admission, not the external engine's acknowledgement. */
+  public boolean trySetPda(String value) {
+    return setPdaWithAdmission(value, true);
+  }
+
+  private boolean setPdaWithAdmission(String value, boolean interactive) {
+    double parsed;
     try {
-      this.pda = Double.parseDouble(pda);
-      pdaBeforeGame = Double.parseDouble(pda);
+      parsed = Double.parseDouble(value);
     } catch (NumberFormatException e) {
       e.printStackTrace();
-      return;
+      return false;
     }
-    sendCommand("kata-set-param playoutDoublingAdvantage " + pda);
+    Object incarnation = engineIncarnationToken();
+    if (!sendCommandWithAdmission(
+        "kata-set-param playoutDoublingAdvantage " + value, interactive)) return false;
+    synchronized (engineArbitrationLock()) {
+      if (readerStreamBinding != incarnation) return false;
+      pda = parsed;
+      pdaBeforeGame = parsed;
+      return true;
+    }
+  }
+
+  /** Success means local command admission, not the external engine's acknowledgement. */
+  public boolean trySetAnalysisWideRootNoise(String value) {
+    return sendCommandWithAdmission("kata-set-param analysisWideRootNoise " + value, true);
+  }
+
+  /** GENMOVE participants must admit the same PDA before either endpoint changes its state. */
+  public boolean trySetPdaForGame(String value, Leelaz second) {
+    if (second == null || second == this) return false;
+    double parsed;
+    try {
+      parsed = Double.parseDouble(value);
+    } catch (NumberFormatException invalid) {
+      return false;
+    }
+    if (!Double.isFinite(parsed)) return false;
+    GamePdaUpdate update = new GamePdaUpdate(second, parsed);
+    return sendStatefulOrdinaryCommands(
+            List.of("kata-set-param playoutDoublingAdvantage " + value),
+            StatefulOrdinaryMutationKind.NONE, null, update) >= 0
+        && update.isCurrent();
+  }
+
+  private final class GamePdaUpdate {
+    private final EngineGameView game = Lizzie.engineGame.current().view();
+    private final ReaderStreamBinding binding = readerStreamBinding;
+    private final Leelaz second;
+    private final ReaderStreamBinding secondBinding;
+    private final double value;
+
+    private GamePdaUpdate(Leelaz second, double value) {
+      this.second = second;
+      secondBinding = second.readerStreamBinding;
+      this.value = value;
+    }
+
+    private boolean isCurrent() {
+      var current = Lizzie.engineGame.current();
+      return game != null && game.genmove()
+          && current.startingOrPlaying() && current.view() == game
+          && isCurrentLiveEngineIncarnation(binding)
+          && second.isCurrentLiveEngineIncarnation(secondBinding);
+    }
   }
 
   public void setGameStatus(boolean isStart) {
@@ -10944,8 +11025,12 @@ public class Leelaz {
   }
 
   public void sendCommand(String command) {
+    sendCommandWithAdmission(command, false);
+  }
+
+  private boolean sendCommandWithAdmission(String command, boolean interactive) {
     if (!hasGtpCapability()) {
-      return;
+      return false;
     }
     if (this == Lizzie.leelaz) {
       AnalysisResourceCoordinator.commandSent(
@@ -10977,18 +11062,22 @@ public class Leelaz {
     Object startupContext = startupPostActionCommandContext.get();
     if (startupContext instanceof StartupPostActionLease) {
       ((StartupPostActionLease) startupContext).sendCommand(command);
-      return;
+      return true;
     }
     if (startupContext instanceof ReaderStreamBinding) {
       sendStartupPostActionCommand(command, (ReaderStreamBinding) startupContext);
-      return;
+      return true;
     }
     boolean failClosedStartupCommand = startupContext != null;
+    ReaderStreamBinding binding = interactive ? readerStreamBinding : null;
+    if (interactive && !isCurrentLiveEngineIncarnation(binding)) return false;
     boolean sent =
-        sendCommand(command, null, null, failClosedStartupCommand, !failClosedStartupCommand);
+        sendCommand(command, null, null, failClosedStartupCommand, !failClosedStartupCommand,
+            null, interactive, binding);
     if (failClosedStartupCommand && !sent) {
       throw new IllegalStateException("startup command was rejected: " + command);
     }
+    return sent;
   }
 
   private void sendStartupPostActionCommand(String command, ReaderStreamBinding binding) {

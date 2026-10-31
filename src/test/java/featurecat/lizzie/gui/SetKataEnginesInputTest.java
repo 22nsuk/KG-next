@@ -651,6 +651,206 @@ class SetKataEnginesInputTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"WRN,false", "PDA,false", "WRN,true", "PDA,true"})
+  void rejectedSubmissionKeepsDraftAndSettingsForSameValueRetry(
+      KataAnalysisParameter parameter, boolean changeThreads) throws Exception {
+    try (Environment env = new Environment()) {
+      onEdt(
+          () -> {
+            env.text(parameter).setText("1.25");
+            env.check("chkAutoLoadWRN").setSelected(true);
+            env.check("chkAutoLoadPDA").setSelected(true);
+            env.check("chkWRNInMenu").setSelected(true);
+            env.check("chkPDAInMenu").setSelected(true);
+            if (changeThreads) env.beginThreadChange();
+          });
+      if (changeThreads) env.awaitThreadCommand(10);
+      try (var reservation = env.engine.beginExclusiveGtpLifecycleReservation()) {
+        assertNotNull(reservation);
+        if (changeThreads) {
+          env.ackThreads(10);
+          env.awaitApplied();
+        } else {
+          onEdt(env::confirm);
+        }
+        onEdt(
+            () -> {
+              env.assertSettingsPreserved();
+              assertTrue(env.engine.commands.isEmpty(), env.engine.commands.toString());
+              assertEquals(changeThreads ? 1 : 0, env.engine.ponders);
+              assertEquals(0, env.engine.pda);
+              assertEquals(0, rememberedPda(env.engine));
+              assertTrue(env.dialog.isVisible());
+              assertEquals(1, env.dialog.rejections);
+              assertEquals("1.25", env.text(parameter).getText());
+              assertFalse(env.output.toString(StandardCharsets.UTF_8)
+                  .contains(command(parameter, "1.25")));
+            });
+      }
+      onEdt(
+          () -> {
+            env.confirm();
+            assertEquals(List.of(command(parameter, "1.25")), env.engine.commands);
+            assertFalse(env.dialog.isVisible());
+            assertEquals(changeThreads ? 2 : 1, env.engine.ponders);
+            assertEquals(parameter == KataAnalysisParameter.WRN, env.root.isChanged);
+            assertEquals(parameter == KataAnalysisParameter.WRN, env.current.isChanged);
+            assertEquals("1.25", parameter == KataAnalysisParameter.WRN
+                ? Lizzie.config.txtKataEngineWRN : Lizzie.config.txtKataEnginePDA);
+            assertEquals(changeThreads ? 1 : 0, env.output.toString(StandardCharsets.UTF_8)
+                .lines().filter(line -> line.contains("kata-set-param numSearchThreads")).count());
+          });
+    }
+  }
+
+  @Test
+  void partialAcceptanceCommitsOnlyTheAcceptedParameterAndDoesNotReplayItOnRetry() throws Exception {
+    try (Environment env = new Environment()) {
+      var reservation = new java.util.concurrent.atomic.AtomicReference<Leelaz.ExclusiveGtpLifecycleReservation>();
+      try {
+        onEdt(
+            () -> {
+              env.text("txtWRN").setText("1.25");
+              env.text("txtPDA").setText("1.25");
+              env.check("chkAutoLoadWRN").setSelected(true);
+              env.check("chkAutoLoadPDA").setSelected(true);
+              env.engine.afterPda = () -> {
+                reservation.set(env.engine.beginExclusiveGtpLifecycleReservation());
+                assertNotNull(reservation.get());
+              };
+              env.confirm();
+              assertEquals(List.of(command(KataAnalysisParameter.PDA, "1.25")), env.engine.commands);
+              assertEquals("1.25", Lizzie.config.txtKataEnginePDA);
+              assertEquals("1.25", LizzieFrame.menu.txtGfPDA.getText());
+              assertEquals("0.5", Lizzie.config.txtKataEngineWRN);
+              assertEquals("0.5", LizzieFrame.menu.txtWRN.getText());
+              assertTrue(Lizzie.config.autoLoadKataEnginePDA);
+              assertFalse(Lizzie.config.autoLoadKataEngineWRN);
+              env.assertAnalysisPreserved();
+              assertEquals(1, env.engine.ponders);
+              assertEquals(1, env.dialog.rejections);
+              assertTrue(env.dialog.isVisible());
+            });
+      } finally {
+        env.engine.afterPda = null;
+        if (reservation.get() != null) reservation.get().close();
+      }
+      onEdt(
+          () -> {
+            env.engine.commands.clear();
+            env.confirm();
+            assertEquals(List.of(command(KataAnalysisParameter.WRN, "1.25")), env.engine.commands);
+            assertEquals("1.25", Lizzie.config.txtKataEngineWRN);
+            assertTrue(Lizzie.config.autoLoadKataEngineWRN);
+            assertTrue(env.root.isChanged && env.current.isChanged);
+            assertFalse(env.dialog.isVisible());
+            assertEquals(2, env.engine.ponders);
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"WRN,true", "WRN,false", "PDA,true", "PDA,false"})
+  void rejectedCheckboxChangeDoesNotSaveAnUnappliedEnabledState(
+      KataAnalysisParameter parameter, boolean initiallyEnabled) throws Exception {
+    try (Environment env = new Environment("0.5", "-0.5", initiallyEnabled)) {
+      onEdt(
+          () -> {
+            String name = parameter == KataAnalysisParameter.WRN ? "chkEditWRN" : "chkEditPDA";
+            env.check(name).setSelected(!initiallyEnabled);
+            try (var reservation = env.engine.beginExclusiveGtpLifecycleReservation()) {
+              assertNotNull(reservation);
+              env.confirm();
+              assertTrue(env.originalConfig.similar(Lizzie.config.uiConfig));
+              assertEquals(initiallyEnabled, Lizzie.config.chkKataEngineWRN);
+              assertEquals(initiallyEnabled, Lizzie.config.chkKataEnginePDA);
+              assertTrue(env.engine.commands.isEmpty());
+              assertEquals(0, env.engine.ponders);
+              assertTrue(env.dialog.isVisible());
+              assertEquals(!initiallyEnabled, env.check(name).isSelected(), "retain the draft");
+              env.assertAnalysisPreserved();
+            }
+            env.confirm();
+            assertEquals(1, env.engine.commands.size());
+            assertEquals(!initiallyEnabled, parameter == KataAnalysisParameter.WRN
+                ? Lizzie.config.chkKataEngineWRN : Lizzie.config.chkKataEnginePDA);
+            assertFalse(env.dialog.isVisible());
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void restoredSuccessorRejectsWithoutSavingAndAcceptsTheSameSubmissionLater(
+      KataAnalysisParameter parameter) throws Exception {
+    try (Environment env = new Environment()) {
+      onEdt(
+          () -> {
+            env.text(parameter).setText("1.25");
+            var capture = SetKataEngines.class.getDeclaredMethod("captureAnalysisSettings");
+            capture.setAccessible(true);
+            Object settings = capture.invoke(env.dialog);
+            var oldReader = env.engine.captureRuntimeSearchThreads();
+            hook(env.engine, "installFreshCommandOutputForTest", OutputStream.class, env.output);
+            env.engine.started = env.engine.isLoaded = true;
+            assertFalse(oldReader.isCurrent());
+            setField(env.dialog, "runtimeThreads", env.engine.captureRuntimeSearchThreads());
+            var apply = SetKataEngines.class.getDeclaredMethod("applyExistingSettings",
+                Leelaz.class, settings.getClass(), boolean.class, boolean.class);
+            apply.setAccessible(true);
+            try (var reservation = env.engine.beginExclusiveGtpLifecycleReservation()) {
+              assertNotNull(reservation);
+              assertEquals(false, apply.invoke(env.dialog, env.engine, settings, false, false));
+              env.assertPreserved();
+              assertTrue(env.dialog.isVisible());
+            }
+            assertEquals(true, apply.invoke(env.dialog, env.engine, settings, false, false));
+            assertEquals(List.of(command(parameter, "1.25")), env.engine.commands);
+            assertEquals(0, env.engine.ponders, "source restore owns resuming analysis");
+            assertTrue(env.dialog.isVisible(), "source restore owns closing the dialog");
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void retiredTargetCannotPublishAcceptedParameters(boolean restartReader) throws Exception {
+    try (Environment env = new Environment()) {
+      onEdt(
+          () -> {
+            env.text("txtWRN").setText("1.25");
+            env.text("txtPDA").setText("1.25");
+            env.engine.afterPda = () -> {
+              try {
+                if (restartReader) {
+                  hook(env.engine, "installFreshCommandOutputForTest", OutputStream.class, env.output);
+                  env.engine.started = env.engine.isLoaded = true;
+                } else {
+                  Lizzie.setPrimaryEngine(new RecordingEngine());
+                }
+              } catch (Exception failure) {
+                throw new AssertionError(failure);
+              }
+            };
+            env.confirm();
+            assertEquals(List.of(command(KataAnalysisParameter.PDA, "1.25")), env.engine.commands);
+            env.assertSettingsPreserved();
+            assertEquals(0, env.engine.ponders);
+            assertEquals("0.5", LizzieFrame.menu.txtWRN.getText());
+            assertEquals("-0.5", LizzieFrame.menu.txtGfPDA.getText());
+            assertTrue(env.dialog.isVisible());
+            assertEquals(1, env.dialog.rejections);
+          });
+    }
+  }
+
+  private static double rememberedPda(Leelaz engine) throws Exception {
+    Field field = Leelaz.class.getDeclaredField("pdaBeforeGame");
+    field.setAccessible(true);
+    return field.getDouble(engine);
+  }
+
   private final class Environment implements AutoCloseable {
     final Config previousConfig = Lizzie.config;
     final Board previousBoard = Lizzie.board;
@@ -817,21 +1017,22 @@ class SetKataEnginesInputTest {
     }
 
     void ackThreads(int threads) throws Exception {
+      String line = awaitThreadCommand(threads);
+      hook(engine, "processCommandResponseLineForTest", String.class,
+          "=" + line.substring(0, line.indexOf(' ')));
+    }
+
+    String awaitThreadCommand(int threads) throws Exception {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
       do {
         for (String line : output.toString(StandardCharsets.UTF_8).split("\\R")) {
           if (line.endsWith("kata-set-param numSearchThreads " + threads)) {
-            hook(
-                engine,
-                "processCommandResponseLineForTest",
-                String.class,
-                "=" + line.substring(0, line.indexOf(' ')));
-            return;
+            return line;
           }
         }
         Thread.sleep(5);
       } while (System.nanoTime() < deadline);
-      fail("Missing thread command: " + output);
+      return fail("Missing thread command: " + output);
     }
 
     void awaitApplied() throws Exception {
@@ -858,6 +1059,10 @@ class SetKataEnginesInputTest {
       assertTrue(engine.commands.isEmpty(), engine.commands.toString());
       assertEquals("", output.toString(StandardCharsets.UTF_8));
       assertEquals(0, engine.ponders);
+      assertSettingsPreserved();
+    }
+
+    void assertSettingsPreserved() {
       assertTrue(originalConfig.similar(Lizzie.config.uiConfig));
       assertEquals("0.5", Lizzie.config.txtKataEngineWRN);
       assertEquals("-0.5", Lizzie.config.txtKataEnginePDA);
@@ -937,6 +1142,12 @@ class SetKataEnginesInputTest {
   private static final class TestDialog extends SetKataEngines {
     boolean visible;
     int closeOperation;
+    int rejections;
+
+    @Override
+    void showParameterRejection() {
+      rejections++;
+    }
 
     @Override
     public boolean isVisible() {
@@ -962,6 +1173,7 @@ class SetKataEnginesInputTest {
   private static final class RecordingEngine extends Leelaz {
     final List<String> commands = new ArrayList<>();
     int ponders;
+    Runnable afterPda;
 
     RecordingEngine() throws Exception {
       super("katago gtp");
@@ -970,6 +1182,23 @@ class SetKataEnginesInputTest {
     @Override
     public void sendCommand(String command) {
       commands.add(command);
+    }
+
+    @Override
+    public boolean trySetPda(String value) {
+      boolean accepted = super.trySetPda(value);
+      if (accepted) {
+        commands.add(command(KataAnalysisParameter.PDA, value));
+        if (afterPda != null) afterPda.run();
+      }
+      return accepted;
+    }
+
+    @Override
+    public boolean trySetAnalysisWideRootNoise(String value) {
+      boolean accepted = super.trySetAnalysisWideRootNoise(value);
+      if (accepted) commands.add(command(KataAnalysisParameter.WRN, value));
+      return accepted;
     }
 
     @Override

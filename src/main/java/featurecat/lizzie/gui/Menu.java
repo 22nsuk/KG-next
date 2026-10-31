@@ -6789,7 +6789,8 @@ public class Menu extends JMenuBar {
     boolean wrn = parameter == KataAnalysisParameter.WRN;
     JFontTextField field = wrn ? txtWRN : txtGfPDA;
     JFontCheckBox enabled = wrn ? chkWRN : chkPDA;
-    boolean wasEnabled = wrn ? Lizzie.config.chkKataEngineWRN : Lizzie.config.chkKataEnginePDA;
+    // The observed engine state can differ from the remembered setting in config.
+    boolean wasEnabled = checkboxChanged ? !enabled.isSelected() : enabled.isSelected();
     // A queued document/checkbox event must re-check ownership, even before the UI refresh runs.
     if (EngineGameDesktop.parametersOwned() || (wrn && !breadthAdmissionAvailable())) {
       if (checkboxChanged) enabled.setSelected(wasEnabled);
@@ -6816,16 +6817,28 @@ public class Menu extends JMenuBar {
     Double previousValue = wrn ? lastWrnValue : lastPdaValue;
     if (!checkboxChanged && previousValue != null && value == previousValue) return;
     EngineGameSnapshot snapshot = EngineGamePresentation.current();
-    java.util.function.Consumer<Leelaz> command = wrn
-        ? engine -> engine.sendCommand("kata-set-param analysisWideRootNoise " + value)
-        : engine -> engine.setPda(String.valueOf(value));
+    Leelaz engine = Lizzie.leelaz;
+    boolean accepted;
     if (snapshot.startingOrPlaying()) {
       Leelaz first = EngineGamePresentation.firstEngine(snapshot);
       Leelaz second = EngineGamePresentation.secondEngine(snapshot);
-      if (first != null) command.accept(first);
-      if (second != null) command.accept(second);
+      accepted = !wrn && first != null && first.trySetPdaForGame(String.valueOf(value), second)
+          && EngineGamePresentation.current().view() == snapshot.view();
     } else {
-      command.accept(Lizzie.leelaz);
+      long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+      Object incarnation = engine == null ? null : engine.engineIncarnationToken();
+      accepted = engine != null && (wrn
+          ? engine.trySetAnalysisWideRootNoise(String.valueOf(value))
+          : engine.trySetPda(String.valueOf(value)))
+          && generation >= 0 && Lizzie.capturePrimaryEngineGeneration(engine) == generation
+          && engine.engineIncarnationToken() == incarnation;
+    }
+    if (!accepted) {
+      if (checkboxChanged) {
+        enabled.setSelected(wasEnabled);
+        field.setEnabled(wasEnabled);
+      }
+      return; // Keep the draft and last applied value so the same edit remains retryable.
     }
     if (wrn) {
       lastWrnValue = parsed.getAsDouble();
