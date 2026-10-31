@@ -679,7 +679,7 @@ public class SetKataEngines extends JDialog {
                           throw new IllegalStateException(
                               Lizzie.resourceBundle.getString("SetKataEngines.threadStale"));
                         }
-                        applyExistingSettings(openingEngine, settings, false, true);
+                        applyExistingSettings(openingEngine, settings, false, false);
                         runtimeThreads = successor;
                         applied.complete(null);
                       } catch (Throwable failure) {
@@ -802,11 +802,10 @@ public class SetKataEngines extends JDialog {
       return new ParameterSetting(
           enabled.isSelected(), autoLoad.isSelected(), appliedValue, false);
     }
-    boolean edited =
-        enabled.isSelected() != initial.enabled()
-            || (enabled.isSelected() && !field.getText().equals(initial.value()));
+    boolean enabledChanged = enabled.isSelected() != initial.enabled();
     // Disabled values are not submitted; preserve the remembered value, including an unset default.
-    if (!enabled.isSelected()) return new ParameterSetting(false, false, appliedValue, edited);
+    if (!enabled.isSelected())
+      return new ParameterSetting(false, false, appliedValue, enabledChanged);
     OptionalDouble parsed = parameter.parse(field.getText());
     if (parsed.isEmpty()) {
       field.setBackground(AppleStyleSupport.errorFieldBackground());
@@ -814,13 +813,17 @@ public class SetKataEngines extends JDialog {
       field.requestFocusInWindow();
       return null;
     }
+    OptionalDouble initialValue = parameter.parse(initial.value());
+    boolean edited =
+        enabledChanged || initialValue.isEmpty()
+            || parsed.getAsDouble() != initialValue.getAsDouble();
     return new ParameterSetting(
         true, autoLoad.isSelected(), String.valueOf(parsed.getAsDouble()), edited);
   }
 
   private void applyExistingSettings(
-      Leelaz engine, AnalysisSettings settings, boolean resume, boolean editsOnly) {
-    // A thread callback must not replay untouched values over toolbar edits or restart defaults.
+      Leelaz engine, AnalysisSettings settings, boolean closeDialog, boolean threadsChanged) {
+    // Untouched dialog values may be stale after toolbar edits or an engine restart.
     boolean parametersOwned = EngineGameDesktop.parametersOwned();
     Lizzie.config.showWRNInMenu = settings.showWrn();
     Lizzie.config.uiConfig.put("show-wrn-in-menu", settings.showWrn());
@@ -835,7 +838,7 @@ public class SetKataEngines extends JDialog {
         Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-pda", pda.value());
       }
       Lizzie.config.uiConfig.put("autoload-kata-engine-pda", pda.autoLoad());
-      if (!parametersOwned && (!editsOnly || pda.edited())) {
+      if (!parametersOwned && pda.edited()) {
         Lizzie.config.chkKataEnginePDA = pda.enabled();
         Lizzie.config.txtKataEnginePDA = pda.value();
         engine.setPda(pda.enabled() ? pda.value() : "0");
@@ -852,7 +855,7 @@ public class SetKataEngines extends JDialog {
       Lizzie.config.uiConfig.put("auto-load-txt-kata-engine-wrn", wrn.value());
     }
     Lizzie.config.uiConfig.put("autoload-kata-engine-wrn", wrn.autoLoad());
-    if (!parametersOwned && (!editsOnly || wrn.edited())) {
+    if (!parametersOwned && wrn.edited()) {
       Lizzie.config.chkKataEngineWRN = wrn.enabled();
       Lizzie.config.txtKataEngineWRN = wrn.value();
       engine.sendCommand(
@@ -862,9 +865,11 @@ public class SetKataEngines extends JDialog {
       Lizzie.config.uiConfig.put("chk-kata-engine-wrn", wrn.enabled());
       Lizzie.config.uiConfig.put("txt-kata-engine-wrn", wrn.value());
     }
-    if (resume) setVisible(false);
+    if (closeDialog) setVisible(false);
     LizzieFrame.menu.updateMenuStatusForEngine();
-    if (resume && !parametersOwned && engine.isPondering()) engine.ponder();
+    if (closeDialog && !parametersOwned
+        && (threadsChanged || wrn.edited() || (pda != null && pda.edited()))
+        && engine.isPondering()) engine.ponder();
   }
 
   @Override

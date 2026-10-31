@@ -191,6 +191,83 @@ class SetKataEnginesInputTest {
     }
   }
 
+  static Stream<Arguments> equivalentDrafts() {
+    return Stream.of(
+            new String[] {"0.5", "-0.5", "0.5", "-0.5"},
+            new String[] {"0.5", "-0.5", "0.50", "-0.50"},
+            new String[] {"0.5", "-0.5", " 5e-1 ", " -5e-1 "},
+            new String[] {"0.0", "0.0", "-0.0", "-0.0"})
+        .flatMap(
+            values -> Stream.of(false, true).map(
+                threads -> Arguments.of(values[0], values[1], values[2], values[3], threads)));
+  }
+
+  @ParameterizedTest
+  @MethodSource("equivalentDrafts")
+  void equivalentSettingsPreserveRuntimeParametersAndAnalysis(
+      String wrn, String pda, String wrnDraft, String pdaDraft, boolean changeThreads)
+      throws Exception {
+    try (Environment env = new Environment(wrn, pda, true)) {
+      onEdt(
+          () -> {
+            env.text("txtWRN").setText(wrnDraft);
+            env.text("txtPDA").setText(pdaDraft);
+            if (changeThreads) env.beginThreadChange();
+            else env.confirm();
+          });
+      if (changeThreads) {
+        env.ackThreads(10);
+        env.awaitApplied();
+      }
+      onEdt(
+          () -> {
+            assertTrue(env.engine.commands.isEmpty(), env.engine.commands.toString());
+            assertEquals(changeThreads ? 1 : 0, env.engine.ponders);
+            if (!changeThreads) assertEquals("", env.output.toString(StandardCharsets.UTF_8));
+            assertEquals(wrn, Lizzie.config.txtKataEngineWRN);
+            assertEquals(pda, Lizzie.config.txtKataEnginePDA);
+            assertFalse(env.dialog.isVisible());
+            env.assertAnalysisPreserved();
+          });
+    }
+  }
+
+  @Test
+  void unchangedDisabledParametersIgnoreDraftsWithoutResettingTheEngine() throws Exception {
+    try (Environment env = new Environment("0.5", "-0.5", false)) {
+      onEdt(
+          () -> {
+            env.text("txtWRN").setText("NaN");
+            env.text("txtPDA").setText("");
+            env.confirm();
+            assertTrue(env.engine.commands.isEmpty(), env.engine.commands.toString());
+            assertEquals(0, env.engine.ponders);
+            assertEquals("0.5", Lizzie.config.txtKataEngineWRN);
+            assertEquals("-0.5", Lizzie.config.txtKataEnginePDA);
+            assertFalse(Lizzie.config.chkKataEngineWRN || Lizzie.config.chkKataEnginePDA);
+            env.assertAnalysisPreserved();
+          });
+    }
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void ordinaryConfirmationAppliesOnlyTheEditedParameter(KataAnalysisParameter parameter)
+      throws Exception {
+    try (Environment env = new Environment()) {
+      onEdt(
+          () -> {
+            env.text(parameter).setText("1.25");
+            env.confirm();
+            assertEquals(List.of(command(parameter, "1.25")), env.engine.commands);
+            assertEquals(1, env.engine.ponders);
+            assertEquals(parameter == KataAnalysisParameter.WRN, env.root.isChanged);
+            assertEquals(parameter == KataAnalysisParameter.WRN, env.current.isChanged);
+            if (parameter == KataAnalysisParameter.PDA) env.assertAnalysisPreserved();
+          });
+    }
+  }
+
   @Test
   void unchangedConfirmedThreadCountDoesNotStartAnotherThreadChange() throws Exception {
     try (Environment env = new Environment()) {
@@ -206,7 +283,9 @@ class SetKataEnginesInputTest {
             assertEquals("", env.output.toString(StandardCharsets.UTF_8));
             assertFalse((boolean) field(env.dialog, "applyingThreads"));
             assertFalse(env.dialog.isVisible());
-            assertEquals(2, env.engine.commands.size());
+            assertTrue(env.engine.commands.isEmpty(), env.engine.commands.toString());
+            assertEquals(0, env.engine.ponders);
+            env.assertAnalysisPreserved();
           });
     }
   }
@@ -289,16 +368,21 @@ class SetKataEnginesInputTest {
     }
   }
 
-  @Test
-  void threadCompletionPreservesNewerToolbarValuesWhenParametersAreUntouched() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void confirmationPreservesNewerToolbarValuesWhenParametersAreUntouched(boolean changeThreads)
+      throws Exception {
     try (Environment env = new Environment()) {
       onEdt(
           () -> {
-            env.beginThreadChange();
+            if (changeThreads) env.beginThreadChange();
             env.changeToolbarParameters();
+            if (!changeThreads) env.confirm();
           });
-      env.ackThreads(10);
-      env.awaitApplied();
+      if (changeThreads) {
+        env.ackThreads(10);
+        env.awaitApplied();
+      }
       onEdt(
           () -> {
             env.assertToolbarValuesPreserved();
@@ -378,8 +462,10 @@ class SetKataEnginesInputTest {
     }
   }
 
-  @Test
-  void threadCompletionSavesPreferencesWithoutReapplyingUntouchedParameters() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void confirmationSavesPreferencesWithoutReapplyingUntouchedParameters(boolean changeThreads)
+      throws Exception {
     try (Environment env = new Environment()) {
       onEdt(
           () -> {
@@ -387,11 +473,14 @@ class SetKataEnginesInputTest {
             env.check("chkAutoLoadPDA").setSelected(true);
             env.check("chkWRNInMenu").setSelected(true);
             env.check("chkPDAInMenu").setSelected(true);
-            env.beginThreadChange();
+            if (changeThreads) env.beginThreadChange();
             env.changeToolbarParameters();
+            if (!changeThreads) env.confirm();
           });
-      env.ackThreads(10);
-      env.awaitApplied();
+      if (changeThreads) {
+        env.ackThreads(10);
+        env.awaitApplied();
+      }
       onEdt(
           () -> {
             env.assertToolbarValuesPreserved();
@@ -508,7 +597,7 @@ class SetKataEnginesInputTest {
                     boolean.class,
                     boolean.class);
             apply.setAccessible(true);
-            apply.invoke(env.dialog, env.engine, settings, false, true);
+            apply.invoke(env.dialog, env.engine, settings, false, false);
             assertEquals(
                 editPda ? List.of(command(KataAnalysisParameter.PDA, "1.25")) : List.of(),
                 env.engine.commands);
@@ -551,7 +640,9 @@ class SetKataEnginesInputTest {
             env.check("chkPDAInMenu").setSelected(true);
             env.check("chkAutoLoadPDA").setSelected(true);
             env.confirm();
-            assertEquals(List.of("kata-set-param analysisWideRootNoise 0.5"), env.engine.commands);
+            assertTrue(env.engine.commands.isEmpty(), env.engine.commands.toString());
+            assertEquals(0, env.engine.ponders);
+            env.assertAnalysisPreserved();
             assertEquals("-0.5", Lizzie.config.txtKataEnginePDA);
             assertFalse(Lizzie.config.showPDAInMenu);
             assertFalse(Lizzie.config.autoLoadKataEnginePDA);
@@ -572,6 +663,8 @@ class SetKataEnginesInputTest {
     final ByteArrayOutputStream output = new ByteArrayOutputStream();
     final BoardData root = BoardData.empty(Board.boardWidth, Board.boardHeight);
     final BoardData current = BoardData.empty(Board.boardWidth, Board.boardHeight);
+    long rootAnalysisRevision;
+    long currentAnalysisRevision;
     final RecordingEngine engine;
     final TestDialog dialog;
     final JSONObject originalConfig;
@@ -603,8 +696,7 @@ class SetKataEnginesInputTest {
       engine.started = engine.isLoaded = engine.isKatago = true;
       Lizzie.setPrimaryEngine(engine);
       LizzieFrame.menu = allocate(QuietMenu.class);
-      root.setPlayouts(500);
-      current.setPlayouts(1000);
+      resetAnalysis();
       BoardHistoryList history = new BoardHistoryList(root);
       history.add(current);
       Lizzie.board = allocate(Board.class);
@@ -720,6 +812,8 @@ class SetKataEnginesInputTest {
       root.setPlayouts(500);
       current.setPlayouts(1000);
       root.isChanged = current.isChanged = false;
+      rootAnalysisRevision = root.primaryAnalysisRevision();
+      currentAnalysisRevision = current.primaryAnalysisRevision();
     }
 
     void ackThreads(int threads) throws Exception {
@@ -756,6 +850,8 @@ class SetKataEnginesInputTest {
       assertFalse(current.isChanged);
       assertEquals(500, root.getPlayouts());
       assertEquals(1000, current.getPlayouts());
+      assertEquals(rootAnalysisRevision, root.primaryAnalysisRevision());
+      assertEquals(currentAnalysisRevision, current.primaryAnalysisRevision());
     }
 
     void assertPreserved() {

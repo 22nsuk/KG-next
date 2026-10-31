@@ -234,6 +234,10 @@ public class Menu extends JMenuBar {
   private JFontCheckBox chkTime;
   private JFontMenu openRecent;
   private boolean ShouldIgnoreDtChange;
+  // Engine-reported values can differ from saved preferences and unfinished editor text.
+  // Disabling retains the remembered field value for WRN's post-game restoration.
+  private Double lastWrnValue;
+  private Double lastPdaValue;
 
   public Menu() {
     setPreferredSize(new Dimension(100, Config.menuHeight)); // 中25 大30
@@ -6809,6 +6813,8 @@ public class Menu extends JMenuBar {
 
     // Config holds the last applied value; field.getText() is only an editing draft.
     double value = use ? parsed.getAsDouble() : 0;
+    Double previousValue = wrn ? lastWrnValue : lastPdaValue;
+    if (!checkboxChanged && previousValue != null && value == previousValue) return;
     EngineGameSnapshot snapshot = EngineGamePresentation.current();
     java.util.function.Consumer<Leelaz> command = wrn
         ? engine -> engine.sendCommand("kata-set-param analysisWideRootNoise " + value)
@@ -6822,10 +6828,12 @@ public class Menu extends JMenuBar {
       command.accept(Lizzie.leelaz);
     }
     if (wrn) {
+      lastWrnValue = parsed.getAsDouble();
       Lizzie.config.chkKataEngineWRN = use;
       if (use) Lizzie.config.txtKataEngineWRN = String.valueOf(value);
       Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
     } else {
+      lastPdaValue = parsed.getAsDouble();
       Lizzie.config.chkKataEnginePDA = use;
       if (use) Lizzie.config.txtKataEnginePDA = String.valueOf(value);
     }
@@ -10884,7 +10892,11 @@ public class Menu extends JMenuBar {
     ShouldIgnoreDtChange = true;
     try {
       field.setText(text);
-      field.setBackground(parameter.parse(text).isPresent()
+      java.util.OptionalDouble parsed = parameter.parse(text);
+      Double value = parsed.isPresent() ? parsed.getAsDouble() : null;
+      if (parameter == KataAnalysisParameter.WRN) lastWrnValue = value;
+      else lastPdaValue = value;
+      field.setBackground(parsed.isPresent()
           ? AppleStyleSupport.validFieldBackground() : AppleStyleSupport.errorFieldBackground());
     } finally {
       ShouldIgnoreDtChange = previousIgnore;
