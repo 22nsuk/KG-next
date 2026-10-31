@@ -652,9 +652,10 @@ class SetKataEnginesInputTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"WRN,false", "PDA,false", "WRN,true", "PDA,true"})
+  @CsvSource({"WRN,false,10", "PDA,false,10", "WRN,true,10", "PDA,true,10",
+      "WRN,true,010", "PDA,true,+10"})
   void rejectedSubmissionKeepsDraftAndSettingsForSameValueRetry(
-      KataAnalysisParameter parameter, boolean changeThreads) throws Exception {
+      KataAnalysisParameter parameter, boolean changeThreads, String threadDraft) throws Exception {
     try (Environment env = new Environment()) {
       onEdt(
           () -> {
@@ -663,7 +664,7 @@ class SetKataEnginesInputTest {
             env.check("chkAutoLoadPDA").setSelected(true);
             env.check("chkWRNInMenu").setSelected(true);
             env.check("chkPDAInMenu").setSelected(true);
-            if (changeThreads) env.beginThreadChange();
+            if (changeThreads) env.beginThreadChange(threadDraft);
           });
       if (changeThreads) env.awaitThreadCommand(10);
       try (var reservation = env.engine.beginExclusiveGtpLifecycleReservation()) {
@@ -975,8 +976,12 @@ class SetKataEnginesInputTest {
     }
 
     void beginThreadChange() throws Exception {
+      beginThreadChange("10");
+    }
+
+    void beginThreadChange(String draft) throws Exception {
       check("chkEditThreads").setSelected(true);
-      text("txtThreads").setText("10");
+      text("txtThreads").setText(draft);
       confirm();
       assertTrue((boolean) field(dialog, "applyingThreads"));
       assertTrue(engine.commands.isEmpty(), engine.commands.toString());

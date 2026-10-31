@@ -585,7 +585,11 @@ public class SetKataEngines extends JDialog {
                             failure);
                       } else {
                         loadedThreadOverride = true;
-                        threadInputEdited = !txtThreads.getText().trim().equals(value.toString());
+                        try {
+                          threadInputEdited = Integer.parseInt(txtThreads.getText().trim()) != value;
+                        } catch (NumberFormatException invalidDraft) {
+                          threadInputEdited = true;
+                        }
                         applyExistingSettings(openingEngine, settings, true, true);
                       }
                     }));
