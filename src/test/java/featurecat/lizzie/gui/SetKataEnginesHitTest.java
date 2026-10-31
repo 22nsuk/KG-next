@@ -605,6 +605,7 @@ class SetKataEnginesHitTest {
       LizzieFrame.menu = allocate(QuietMenu.class);
       RecordingEngine engine = new RecordingEngine();
       engine.isKataGoPda = true;
+      engine.enablePdaProtocol();
       engine.pda = 1.25;
       engine.pdaCap = 0.4;
       engine.isStaticPda = true;
@@ -674,6 +675,7 @@ class SetKataEnginesHitTest {
         press(robot, KeyEvent.VK_ENTER);
         robot.waitForIdle();
       }
+      engine.awaitPdaCommands(dynamic ? 2 : 1);
       SwingUtilities.invokeAndWait(
           () -> {
             assertFalse(dialog[0].isVisible());
@@ -1051,6 +1053,7 @@ class SetKataEnginesHitTest {
       for (int i = 0; i < engines.length; i++) {
         engines[i] = new RecordingEngine();
         engines[i].setEngineCommand(i == 0 ? "first-cmd" : "second-cmd");
+        engines[i].enablePdaProtocol();
       }
       engines[participant].isKataGoPda = true;
       Lizzie.engineManager = new EngineManager(List.of(engines[0], engines[1]));
@@ -1068,6 +1071,10 @@ class SetKataEnginesHitTest {
             dialogs[0].chkAutoPDA.setSelected(false);
             button(dialogs[0], "SetKataPDA.btnApply").doClick(0);
             assertFalse(dialogs[0].isVisible());
+          });
+      engines[participant].awaitPdaCommands(1);
+      SwingUtilities.invokeAndWait(
+          () -> {
             assertEquals(List.of("pda 1.25"), engines[participant].commands);
             assertTrue(engines[1 - participant].commands.isEmpty());
             assertEquals(1.25, engines[participant].pda);
@@ -1151,10 +1158,26 @@ class SetKataEnginesHitTest {
   }
 
   private static final class RecordingEngine extends Leelaz {
-    final List<String> commands = new ArrayList<>();
+    final List<String> commands = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     RecordingEngine() throws Exception {
       super("katago gtp");
+    }
+
+    void enablePdaProtocol() throws Exception {
+      var transport = featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture.install(
+          this, command -> {
+            commands.add(command);
+            return featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture.Response.success();
+          });
+      engineHook(this, "installFreshCommandOutputForTest", java.io.OutputStream.class, transport);
+      started = isLoaded = true;
+    }
+
+    void awaitPdaCommands(int count) throws Exception {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (commands.size() < count && System.nanoTime() < deadline) Thread.sleep(5);
+      assertEquals(count, commands.size(), commands.toString());
     }
 
     @Override

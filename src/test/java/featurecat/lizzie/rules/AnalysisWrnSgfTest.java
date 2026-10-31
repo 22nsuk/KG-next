@@ -406,6 +406,92 @@ class AnalysisWrnSgfTest {
     assertNull(data.primaryOwnershipProvenance());
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void engineGameExportKeepsMoveNotesAndPredecessorSummariesAcrossScoreModes(boolean originalMode)
+      throws Exception {
+    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.SIMPLIFIED_CHINESE);
+    Lizzie.config.showKataGoScoreLeadWithKomi = originalMode;
+    Lizzie.board.getHistory().getGameInfo().attachEngineGameRecordContext(
+        featurecat.lizzie.enginegame.EngineGameRecordContext.saveFormattingMarker());
+    BoardHistoryNode[] nodes = new BoardHistoryNode[4];
+    String[] summaries = new String[4];
+    nodes[0] = Lizzie.board.getHistory().getStart();
+    for (int i = 0; i < nodes.length; i++) {
+      if (i > 0) {
+        Lizzie.board.getHistory().place(i, i, i % 2 == 1 ? Stone.BLACK : Stone.WHITE);
+        nodes[i] = Lizzie.board.getHistory().getCurrentHistoryNode();
+      }
+      BoardData data = nodes[i].getData();
+      data.isKataData = true;
+      data.engineName = "Engine" + i;
+      data.setPlayouts(100 + i);
+      data.winrate = 51 + i;
+      data.scoreMean = i + 0.5;
+      data.pda = i + 1;
+      data.setPrimaryAnalysisProvenance(source((i + 1) * 0.1));
+      summaries[i] = SGFParser.formatCommentPk(nodes[i]);
+      data.setAuthoredComment("Personal note " + i);
+      String summary = summaries[i];
+      data.setGeneratedComment(() -> data.comment + "\n\n" + summary);
+    }
+    Lizzie.config.showKataGoScoreLeadWithKomi = !originalMode;
+    String rootComment = nodes[0].getData().comment;
+    nodes[0].getData().comment = "";
+    String rootSummary = SGFParser.formatCommentPk(nodes[0]);
+    nodes[0].getData().comment = rootComment;
+    for (int round = 0; round < 2; round++) {
+      BoardHistoryNode saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getStart();
+      for (int i = 1; i < nodes.length; i++) {
+        saved = saved.next().orElseThrow();
+        String expectedSummary = i == 1 ? rootSummary : summaries[i - 1];
+        assertEquals("Personal note " + i + "\n\n" + expectedSummary, saved.getData().comment);
+        assertEquals("Personal note " + i + "\n\n" + summaries[i], nodes[i].getData().comment);
+        assertEquals("Personal note " + i, nodes[i].getData().authoredComment());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"formatComment", "formatCommentPk", "formatComment2"})
+  void changingChineseScoreModeReplacesTheExistingSummary(String formatter) throws Exception {
+    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.SIMPLIFIED_CHINESE);
+    BoardHistoryList history = parse(";B[aa]" + tags(false, " wrn=0", " wrn=1.25"));
+    Lizzie.board.setHistory(history);
+    BoardHistoryNode node = history.getStart().next().orElseThrow();
+    BoardData data = node.getData();
+    data.comment = "Personal note";
+    for (boolean leadWithKomi : List.of(false, true, false)) {
+      Lizzie.config.showKataGoScoreLeadWithKomi = leadWithKomi;
+      data.comment = format(formatter, node);
+      assertTrue(data.comment.startsWith("Personal note\n\n"), data.comment);
+      String wrn = Lizzie.resourceBundle.getString("SGFParse.wrn");
+      assertEquals(1, data.comment.split(Pattern.quote(wrn), -1).length - 1, data.comment);
+      assertEquals(data.comment, format(formatter, node));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void humanGameSavePreservesDestinationNoteEvenWithoutPrecedingAnalysis(boolean analyzed)
+      throws Exception {
+    BoardHistoryList history = parse(";B[aa]" + tags(false, " wrn=0.25", "") + ";W[bb]");
+    BoardHistoryNode previous = history.getStart().next().orElseThrow();
+    BoardData destination = previous.next().orElseThrow().getData();
+    destination.setAuthoredComment("Destination note / 사용자 메모");
+    String summary = format("formatCommentForGame", previous);
+    destination.setGeneratedComment(() -> destination.comment + "\n\n" + summary);
+    if (!analyzed) previous.getData().setPlayouts(0);
+    Lizzie.board.isGameBoard = true;
+    for (int round = 0; round < 2; round++) {
+      history = reopen(history);
+      String comment = history.getStart().next().orElseThrow().next().orElseThrow().getData().comment;
+      assertTrue(comment.startsWith("Destination note / 사용자 메모"), comment);
+      String wrn = Lizzie.resourceBundle.getString("SGFParse.wrn");
+      assertEquals(analyzed ? 1 : 0, comment.split(Pattern.quote(wrn), -1).length - 1, comment);
+    }
+  }
+
   private static BoardHistoryList parse(String nodes) {
     return SGFParser.parseSgf("(;SZ[5]" + nodes + ")", true);
   }
