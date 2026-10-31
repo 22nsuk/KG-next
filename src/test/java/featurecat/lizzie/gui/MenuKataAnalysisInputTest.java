@@ -140,14 +140,7 @@ class MenuKataAnalysisInputTest {
         () -> {
           JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
           field(parameter).setText(draft); // Actual removeUpdate and insertUpdate wiring.
-          AbstractDocument document = (AbstractDocument) field(parameter).getDocument();
-          var change =
-              document
-              .new DefaultDocumentEvent(0, document.getLength(), DocumentEvent.EventType.CHANGE);
-          change.end();
-          for (var listener : document.getDocumentListeners()) {
-            listener.changedUpdate(change);
-          }
+          notifyDocumentChanged(field(parameter));
           assertUnchanged(before);
           assertEquals(draft, field(parameter).getText());
           assertEquals(AppleStyleSupport.errorFieldBackground(), field(parameter).getBackground());
@@ -209,6 +202,90 @@ class MenuKataAnalysisInputTest {
 
   @ParameterizedTest
   @EnumSource(KataAnalysisParameter.class)
+  void equivalentDocumentEventsPreserveSettingsEngineAndAnalysis(KataAnalysisParameter parameter)
+      throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          List<String> drafts = parameter == KataAnalysisParameter.WRN
+              ? List.of("0.5", "0.50", " +5e-1 ")
+              : List.of("-0.5", "-0.50", " -5e-1 ");
+          for (String draft : drafts) {
+            field(parameter).setText("-");
+            field(parameter).setText(draft);
+            notifyDocumentChanged(field(parameter));
+            assertUnchanged(before);
+            assertEquals(draft, field(parameter).getText());
+            assertEquals(AppleStyleSupport.validFieldBackground(), field(parameter).getBackground());
+          }
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void observedValueIsTheComparisonBaselineInsteadOfTheSavedPreference(
+      KataAnalysisParameter parameter) throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          menu.setPdaAndWrn(1.25, 1.25);
+          field(parameter).setText("1.250");
+          assertUnchanged(before);
+
+          field(parameter).setText(appliedText(parameter));
+          assertEquals(List.of(command(parameter, appliedText(parameter))), engine.commands);
+          assertEquals(1, engine.ponders);
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void equivalentInputAfterARealEditDoesNotInvalidateAnalysisAgain(KataAnalysisParameter parameter)
+      throws Exception {
+    onEdt(
+        () -> {
+          field(parameter).setText("1.25");
+          assertEquals(List.of(command(parameter, "1.25")), engine.commands);
+          engine.commands.clear();
+          long rootRevision = root.primaryAnalysisRevision();
+          long currentRevision = current.primaryAnalysisRevision();
+          field(parameter).setText("1.250");
+          assertTrue(engine.commands.isEmpty(), engine.commands.toString());
+          assertEquals(1, engine.ponders);
+          assertEquals(rootRevision, root.primaryAnalysisRevision());
+          assertEquals(currentRevision, current.primaryAnalysisRevision());
+          assertEquals("1.25", appliedText(parameter));
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void signedZeroIsAnEquivalentDisplayedValue(KataAnalysisParameter parameter) throws Exception {
+    onEdt(
+        () -> {
+          JSONObject before = new JSONObject(Lizzie.config.uiConfig.toString());
+          if (parameter == KataAnalysisParameter.WRN) menu.setUseWrn(true, "0.0");
+          else menu.setUseGfPda(true, "0.0");
+          field(parameter).setText("-0.0");
+          assertUnchanged(before);
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
+  void unknownDisplayedValueDoesNotSuppressAValidInput(KataAnalysisParameter parameter)
+      throws Exception {
+    onEdt(
+        () -> {
+          if (parameter == KataAnalysisParameter.WRN) menu.setUseWrn(true, "");
+          else menu.setUseGfPda(true, "");
+          field(parameter).setText(appliedText(parameter));
+          assertEquals(List.of(command(parameter, appliedText(parameter))), engine.commands);
+        });
+  }
+
+  @ParameterizedTest
+  @EnumSource(KataAnalysisParameter.class)
   void disabledDraftCanBeRepairedThenEnabledAndDisabled(KataAnalysisParameter parameter)
       throws Exception {
     onEdt(
@@ -254,6 +331,9 @@ class MenuKataAnalysisInputTest {
           assertTrue(menu.chkWRN.isEnabled());
           assertTrue(menu.txtWRN.isEnabled());
           assertUnchanged(before);
+          menu.txtWRN.setText("1.250");
+          assertEquals(List.of(command(KataAnalysisParameter.WRN, "1.25")), engine.commands);
+          assertEquals(1, engine.ponders);
         });
   }
 
@@ -415,6 +495,33 @@ class MenuKataAnalysisInputTest {
         });
   }
 
+  @Test
+  void restoredWrnRetainsTheDisplayedValueForEquivalentInput() throws Exception {
+    onEdt(
+        () -> {
+          Lizzie.config.autoLoadKataEngineWRN = true;
+          menu.chkWRN.doClick(0);
+          assertFalse(menu.chkWRN.isSelected());
+          Lizzie.config.disableWRNInGame = true;
+          Lizzie.frame.isAnaPlayingAgainstLeelaz = true;
+          Lizzie.frame.clearWRNforGame(false);
+          Lizzie.frame.restoreWRN(false);
+          assertTrue(menu.chkWRN.isSelected());
+          assertEquals(command(KataAnalysisParameter.WRN, "0.5"),
+              engine.commands.get(engine.commands.size() - 1));
+          engine.commands.clear();
+          long rootRevision = root.primaryAnalysisRevision();
+          long currentRevision = current.primaryAnalysisRevision();
+          int ponders = engine.ponders;
+
+          menu.txtWRN.setText("0.50");
+          assertTrue(engine.commands.isEmpty(), engine.commands.toString());
+          assertEquals(ponders, engine.ponders);
+          assertEquals(rootRevision, root.primaryAnalysisRevision());
+          assertEquals(currentRevision, current.primaryAnalysisRevision());
+        });
+  }
+
   private RecordingEngine publishGame(EngineGamePlayMode mode, boolean starting) throws Exception {
     RecordingEngine second = recordingEngine();
     EngineGameSnapshot.BatchActive playing =
@@ -456,6 +563,16 @@ class MenuKataAnalysisInputTest {
     return parameter == KataAnalysisParameter.WRN ? menu.txtWRN : menu.txtGfPDA;
   }
 
+  private static void notifyDocumentChanged(JFontTextField field) {
+    AbstractDocument document = (AbstractDocument) field.getDocument();
+    var change = document.new DefaultDocumentEvent(
+        0, document.getLength(), DocumentEvent.EventType.CHANGE);
+    change.end();
+    for (var listener : document.getDocumentListeners()) {
+      listener.changedUpdate(change);
+    }
+  }
+
   private JFontCheckBox checkbox(KataAnalysisParameter parameter) {
     return parameter == KataAnalysisParameter.WRN ? menu.chkWRN : menu.chkPDA;
   }
@@ -486,6 +603,8 @@ class MenuKataAnalysisInputTest {
     assertFalse(current.isChanged);
     assertEquals(500, root.getPlayouts());
     assertEquals(1000, current.getPlayouts());
+    assertEquals(0, root.primaryAnalysisRevision());
+    assertEquals(0, current.primaryAnalysisRevision());
   }
 
   private static RecordingEngine recordingEngine() throws Exception {
