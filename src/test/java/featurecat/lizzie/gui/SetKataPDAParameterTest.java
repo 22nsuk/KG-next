@@ -142,15 +142,64 @@ class SetKataPDAParameterTest {
     }
   }
 
+  static Stream<Arguments> genmoveComparisonEditors() {
+    return Stream.of(0, 1).flatMap(participant ->
+        Stream.of("unchanged", "opponent", "participant-again").flatMap(selection ->
+            Stream.of("dynamic", "static", "off")
+                .map(mode -> Arguments.of(participant, selection, mode))));
+  }
+
+  @ParameterizedTest
+  @MethodSource("genmoveComparisonEditors")
+  void genmoveComparisonEditorFollowsItsParticipantAcrossTurns(
+      int participant, String selection, String mode) throws Exception {
+    try (Fixture f = new Fixture(root)) {
+      TestEngine target = participant == 0 ? f.engine : f.other;
+      TestEngine opponent = participant == 0 ? f.other : f.engine;
+      SwingUtilities.invokeAndWait(() -> {
+        f.engine.isKataGoPda = participant == 0;
+        f.other.isKataGoPda = participant == 1;
+        f.engine.setEngineCommand("first-cmd");
+        f.other.setEngineCommand("second-cmd");
+        Lizzie.engineManager = new EngineManager(List.of(f.engine, f.other));
+        Lizzie.setPrimaryEngine(target);
+        f.compareWith(opponent);
+        Lizzie.engineGame.publishSnapshotForTest(
+            EngineGameSnapshotFixtures.playing(EngineGamePlayMode.GENMOVE, RunState.RUNNING));
+        f.open(mode);
+        // A committed GENMOVE turn replaces primary while retaining the game and secondary.
+        if (!selection.equals("unchanged")) Lizzie.setPrimaryEngine(opponent);
+        if (selection.equals("participant-again")) Lizzie.setPrimaryEngine(target);
+        f.dialog.updateEngineValues(target, target.engineIncarnationToken(), "4.000", null);
+        assertEquals("4.000", f.dialog.curPDA.getText());
+        f.apply();
+        assertEquals(mode.equals("static") ? 7 : 0, target.pda);
+        assertEquals(mode.equals("dynamic") ? 2 : 0.5, target.pdaCap);
+        assertEquals(!mode.equals("dynamic"), target.isStaticPda);
+        assertEquals(1, target.ponders);
+        assertEquals(1, opponent.pda);
+        assertEquals(0.5, opponent.pdaCap);
+        assertEquals(0, opponent.ponders);
+        assertEquals(mode.equals("static") ? "7.0" : mode.equals("dynamic") ? "0.000" : "0",
+            LizzieFrame.menu.txtPDA.getText());
+        f.assertPreferences(mode);
+      });
+      target.assertCommands(expectedCommands(mode));
+      opponent.assertCommands(List.of());
+      f.replacement.assertCommands(List.of());
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"replacement", "reselection", "restart", "mirror-replacement", "mirror-restart",
-      "game-complete", "game-replacement"})
+      "game-complete", "game-replacement", "game-reader-restart"})
   void commandAdmissionRejectsChangesAfterTheEditorsCheck(String change) throws Exception {
     try (Fixture f = new Fixture(root)) {
       if (change.startsWith("mirror")) f.compareWith(f.other);
       boolean participant = change.startsWith("game");
       if (participant) {
         Lizzie.setPrimaryEngine(f.other);
+        f.compareWith(f.engine);
         Lizzie.engineGame.publishSnapshotForTest(
             EngineGameSnapshotFixtures.playing(EngineGamePlayMode.GENMOVE, RunState.RUNNING));
       }
@@ -174,6 +223,7 @@ class SetKataPDAParameterTest {
           case "replacement" -> Lizzie.setPrimaryEngine(f.other);
           case "reselection" -> { Lizzie.setPrimaryEngine(f.other); Lizzie.setPrimaryEngine(f.engine); }
           case "restart" -> f.engine.restartReader();
+          case "game-reader-restart" -> f.engine.restartReader();
           case "mirror-replacement" -> Lizzie.leelaz2 = f.replacement;
           case "mirror-restart" -> f.other.restartReader();
           case "game-complete" -> {

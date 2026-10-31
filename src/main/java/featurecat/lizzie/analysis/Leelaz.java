@@ -10021,7 +10021,8 @@ public class Leelaz {
     }
 
     Leelaz mirroredEngine =
-        startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
+        pdaUpdate != null ? pdaUpdate.target.mirror
+            : startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
     // The legacy secondary Leela 0.11.0 path rejects ordinary default mirroring and drives its
     // own ponder protocol. Preserve that contract while still making every supported mirror
     // participate in the atomic admission below.
@@ -11633,16 +11634,21 @@ public class Leelaz {
       this.requirePrimarySelection = requirePrimarySelection;
       primaryGeneration = requirePrimarySelection ? Lizzie.capturePrimaryEngineGeneration(Leelaz.this) : -1;
       participantGame = requirePrimarySelection ? null : Lizzie.engineGame.current().view();
-      Leelaz candidate = resolveDefaultCommandMirrorEngine();
-      mirror = candidate != null && !candidate.isLeela0110 ? candidate : null;
+      mirror = currentMirror();
       mirrorBinding = mirror == null ? null : mirror.readerStreamBinding;
     }
 
-    public boolean isCurrent() {
+    private Leelaz currentMirror() {
+      // GENMOVE edits belong to one participant, independent of per-turn primary selection.
+      if (!requirePrimarySelection) return null;
       Leelaz candidate = resolveDefaultCommandMirrorEngine();
+      return candidate != null && !candidate.isLeela0110 ? candidate : null;
+    }
+
+    public boolean isCurrent() {
       return (!requirePrimarySelection || (primaryGeneration >= 0
               && Lizzie.capturePrimaryEngineGeneration(Leelaz.this) == primaryGeneration))
-          && isCurrent(candidate != null && !candidate.isLeela0110 ? candidate : null);
+          && isCurrent(currentMirror());
     }
 
     private boolean isCurrent(Leelaz currentMirror) {
