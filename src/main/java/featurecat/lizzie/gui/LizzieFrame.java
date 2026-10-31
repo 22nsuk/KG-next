@@ -5751,7 +5751,7 @@ public class LizzieFrame extends JFrame {
     //        || file.getPath().toLowerCase().endsWith(".gib"))) {
     //      file = new File(file.getPath() + ".sgf");
     //    }
-    KifuLoadRollbackState rollbackState = null;
+    KifuLoadRollbackState rollbackState = KifuLoadRollbackState.capture();
     try {
       // System.out.println(file.getPath());
       boolean loaded;
@@ -5759,15 +5759,12 @@ public class LizzieFrame extends JFrame {
       if (!sgfFile) {
         loaded = GIBParser.load(file.getPath());
       } else {
-        rollbackState = KifuLoadRollbackState.capture();
         loaded = decodedSgf == null
             ? SGFParser.load(file.getPath(), showHint, false)
             : SGFParser.loadFileContent(decodedSgf, showHint, false);
       }
       if (!loaded) {
-        if (rollbackState != null) {
-          rollbackState.restore();
-        }
+        rollbackState.restore();
         restoreKifuLoadTemporaryState(oriSound, originalCanGoAfterload);
         showOpenFileFailedMessageLater();
         return false;
@@ -5784,9 +5781,7 @@ public class LizzieFrame extends JFrame {
         }
       }
     } catch (IOException | RuntimeException err) {
-      if (rollbackState != null) {
-        rollbackState.restore();
-      }
+      rollbackState.restore();
       restoreKifuLoadTemporaryState(oriSound, originalCanGoAfterload);
       showOpenFileFailedMessageLater();
       return false;
