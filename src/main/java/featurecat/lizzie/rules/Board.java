@@ -2629,7 +2629,10 @@ public class Board {
               0,
               0);
       newState.dummy = dummy;
-      history.addOrGoto(newState, newBranch);
+      // Reuse later pass variations without replacing their comments or analysis.
+      if (!newBranch && !dummy && history.nextByMoveIdentity(newState).isPresent())
+        clearAfterMove();
+      else history.addOrGoto(newState, newBranch);
       // update leelaz with pass
       if (Lizzie.leelaz != null && !Lizzie.leelaz.isInputCommand && !engineGamePlaying())
         feedEngineForMainlineMove(color, "pass");
