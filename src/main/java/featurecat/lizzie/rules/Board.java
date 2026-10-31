@@ -5182,7 +5182,7 @@ public class Board {
     return new ClearStateSnapshot(this);
   }
 
-  /** Restores an exact {@link #captureClearState()} token after a failed mode handoff. */
+  /** Restores board state and its editable komi display after a failed clear/load or mode handoff. */
   public void restoreClearState(ClearStateSnapshot snapshot) {
     if (snapshot == null || snapshot.owner != this) {
       throw new IllegalArgumentException("Clear-state snapshot belongs to a different board.");
@@ -5221,6 +5221,11 @@ public class Board {
       isTusmegoMode = snapshot.isTsumegoMode;
       tsumegoNode = snapshot.tsumegoNode;
       movelistRefreshGeneration++;
+    }
+    // The restored history owns the value; stale import text can otherwise reapply on mouse exit.
+    // Update only the display, without changing game metadata, analysis, or engine state.
+    if (Lizzie.board == this && LizzieFrame.menu != null && LizzieFrame.menu.txtKomi != null) {
+      LizzieFrame.menu.txtKomi.setText(String.valueOf(snapshot.history.getGameInfo().getKomi()));
     }
     notifyReadBoardHistoryOverwritten();
   }

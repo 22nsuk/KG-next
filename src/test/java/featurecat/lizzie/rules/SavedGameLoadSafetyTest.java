@@ -150,7 +150,8 @@ class SavedGameLoadSafetyTest {
 
   static Stream<Arguments> failedExternalOpens() {
     return Arrays.stream(FileOpenEntry.values()).flatMap(entry ->
-        Stream.of("missing", "malformed").map(input -> Arguments.of(entry, input)));
+        Stream.of("missing", "malformed", "gib-short-ini", "gib-invalid-coordinate",
+            "gib-unrecognized", "gib-apply-failure").map(input -> Arguments.of(entry, input)));
   }
 
   @BeforeEach
@@ -230,6 +231,7 @@ class SavedGameLoadSafetyTest {
       setFrameField("tempGameScrollPanel", new JScrollPane(list));
       Lizzie.board.setHistory(SGFParser.parseSgf(ORIGINAL_SGF, true));
       BoardHistoryList history = Lizzie.board.getHistory();
+      menu.txtKomi.setText(String.valueOf(history.getGameInfo().getKomi()));
       history.setHead(history.getStart().next().orElseThrow().next().orElseThrow());
       frame.setPlayers("original white", "original black");
       frame.setResult("B+2.5");
@@ -249,6 +251,7 @@ class SavedGameLoadSafetyTest {
   void restore() throws Exception {
     try {
       SgfSaveTestSupport.awaitPending();
+      if (frame != null && frame.historyAtFailedPlayerUpdate != null) awaitHistoryRestores();
       if (frame != null) {
         SwingUtilities.invokeAndWait(() -> {});
         Object coordinator = getFrameField("kifuEngineSyncCoordinator");
@@ -672,20 +675,53 @@ class SavedGameLoadSafetyTest {
   @MethodSource("failedExternalOpens")
   void rejectedExternalFileCannotBecomeOriginalSaveTarget(FileOpenEntry entry, String input)
       throws Exception {
-    Path rejected = directory.resolve("rejected.sgf");
-    String rejectedContent = "not an SGF game tree; preserve this file";
-    if (input.equals("malformed")) Files.writeString(rejected, rejectedContent);
+    boolean gib = input.startsWith("gib-");
+    Path rejected = directory.resolve(gib ? "rejected.gib" : "rejected.sgf");
+    String rejectedContent = switch (input) {
+      case "gib-short-ini" -> "INI\n";
+      case "gib-invalid-coordinate" -> "STO 0 1 1 3 3\nSTO 0 2 2 x 4\n";
+      case "gib-apply-failure" -> "\\[GAMEBLACKNAME=New black\\]\r\nSTO 0 1 1 3 3\n";
+      default -> "not a game tree; preserve this file";
+    };
+    if (!input.equals("missing")) Files.writeString(rejected, rejectedContent);
+    if (gib) installAcknowledgingEngine();
+    frame.failPlayerUpdate = input.equals("gib-apply-failure");
     BoardHistoryList current = Lizzie.board.getHistory();
+    BoardHistoryNode selected = current.getCurrentHistoryNode();
+    AtomicReference<String> originalTree = new AtomicReference<>();
     AtomicReference<CompletableFuture<Void>> opened = new AtomicReference<>();
     SwingUtilities.invokeAndWait(() -> {
       Lizzie.board.getData().comment = "unsaved current game";
+      originalTree.set(assertDoesNotThrow(() -> SGFParser.saveToString(false)));
       opened.set(openExternalFile(entry, rejected.toFile()).thenRun(() -> Lizzie.frame = null));
     });
     opened.get().get(5, TimeUnit.SECONDS);
     assertTrue(errorDialogAttempted.await(5, TimeUnit.SECONDS), "the load failure must be reported");
+    if (input.equals("gib-apply-failure")) {
+      SwingUtilities.invokeAndWait(() -> Lizzie.frame = frame);
+      awaitHistoryRestores();
+      transport.awaitResponses();
+    }
     SwingUtilities.invokeAndWait(() -> {
       Lizzie.frame = frame;
       assertSame(current, Lizzie.board.getHistory(), "a failed open must keep the current game");
+      assertSame(selected, current.getCurrentHistoryNode());
+      assertEquals(originalTree.get(), assertDoesNotThrow(() -> SGFParser.saveToString(false)));
+      assertEquals("6.5", LizzieFrame.menu.txtKomi.getText(),
+          "a failed open must keep the editable komi consistent with the retained game");
+      assertEquals(originalFile.getName(), LizzieFrame.fileNameTitle);
+      assertEquals(originalPlayers, frame.playerTitle);
+      try {
+        assertEquals(originalResult, getFrameField("resultTitle"));
+        assertNull(getFrameField("kifuEngineSyncCoordinator"));
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+      assertTrue(config.playSound);
+      assertTrue(LizzieFrame.canGoAfterload);
+      assertFalse(Lizzie.board.isLoadingFile);
+      assertEquals(1, frame.resumeScheduled.getCount(), "failure must not schedule load success");
+      if (gib) assertFalse(EngineManager.isEmpty);
       config.showReplaceFileHint = false;
       frame.saveOriFile();
     });
@@ -696,10 +732,24 @@ class SavedGameLoadSafetyTest {
         () -> assertTrue(Files.readString(originalFile.toPath()).contains("unsaved current game"),
             "save original must write the retained game to its original file"),
         () -> {
-          if (input.equals("malformed")) assertEquals(rejectedContent, Files.readString(rejected));
+          if (!input.equals("missing")) assertEquals(rejectedContent, Files.readString(rejected));
           else assertFalse(Files.exists(rejected), "a rejected missing file must not be created");
         },
         () -> assertEquals(1, errorDialogs.get()));
+    if (gib) {
+      if (input.equals("gib-apply-failure")) {
+        assertNotSame(current, frame.historyAtFailedPlayerUpdate);
+        List<String> commands = transport.commands();
+        int lastClear = commands.lastIndexOf("clear_board");
+        assertTrue(lastClear >= 0, "the engine must reset before replaying the retained game");
+        assertEquals(List.of("play B A5", "play W B4"),
+            commands.subList(lastClear + 1, commands.size()).stream()
+                .filter(command -> command.startsWith("play ")).toList());
+        assertTrue(commands.contains("komi 6.5"), "restore must also retain the old komi");
+      } else {
+        assertTrue(transport.commands().isEmpty(), "invalid input must not reset or play on the engine");
+      }
+    }
   }
 
   @ParameterizedTest
@@ -913,6 +963,14 @@ class SavedGameLoadSafetyTest {
     EngineManager.isEmpty = false;
   }
 
+  private static void awaitHistoryRestores() throws Exception {
+    Field field = Board.class.getDeclaredField("HISTORY_RESTORE_EXECUTOR");
+    field.setAccessible(true);
+    ExecutorService executor = (ExecutorService) field.get(null);
+    executor.submit(() -> {}).get(5, TimeUnit.SECONDS);
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
   private void prepareSavedItem(SavedPosition position, Slot slot) throws Exception {
     config.saveBoardConfig = new JSONObject()
         .put("save-auto-game-index1", slot.automatic ? 1 : -1)
@@ -1008,6 +1066,8 @@ class SavedGameLoadSafetyTest {
     BoardHistoryNode nodeWhenResumeScheduled;
     CountDownLatch resumeScheduled;
     List<String> loadedPlayers;
+    boolean failPlayerUpdate;
+    BoardHistoryList historyAtFailedPlayerUpdate;
     java.io.IOException reportedSaveFailure;
 
     @Override
@@ -1024,6 +1084,10 @@ class SavedGameLoadSafetyTest {
     @Override
     public void setPlayers(String white, String black) {
       super.setPlayers(white, black);
+      if (failPlayerUpdate) {
+        historyAtFailedPlayerUpdate = Lizzie.board.getHistory();
+        throw new IllegalStateException("player update failed");
+      }
       if (loadedPlayers != null) loadedPlayers.add(black);
     }
 
