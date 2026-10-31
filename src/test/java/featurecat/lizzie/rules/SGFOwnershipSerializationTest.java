@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Locale;
 import java.util.Random;
 import java.util.StringJoiner;
 import java.util.regex.Matcher;
@@ -21,6 +22,7 @@ import java.util.regex.Pattern;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class SGFOwnershipSerializationTest {
@@ -157,6 +159,66 @@ class SGFOwnershipSerializationTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"LZ,false", "LZ,true", "LZOP,false", "LZOP,true",
+      "LZ2,false", "LZ2,true", "LZOP2,false", "LZOP2,true"})
+  void scoreTextKeepsPayloadDigestProvenanceAndInvalidationOnReopen(
+      String tag, boolean invalidated) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = historyFor(tag);
+      BoardData data = target(history, tag);
+      String engineName = "엔진]경로\\net";
+      List<Double> ownership = List.of(-0.0, 0.25);
+      install(data, tag, engineName, ownership, false);
+      List<MoveData> moves = new ArrayList<>();
+      List<Double> expectedScores = new ArrayList<>();
+      StringJoiner detail = new StringJoiner(" info ");
+      for (double score : new double[] {-0.0, -0.0049, 0.005, -0.005, 2.675,
+          Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY,
+          Double.MIN_VALUE, Double.MAX_VALUE}) {
+        MoveData move = new MoveData();
+        move.coordinate = "C3";
+        move.playouts = 100;
+        move.winrate = 55;
+        move.policy = 12.5;
+        move.scoreMean = score;
+        move.variation = List.of("C3", "D4");
+        moves.add(move);
+        String number = secondary(tag) ? Double.toString(score)
+            : String.format(Locale.ENGLISH, "%.2f", score);
+        expectedScores.add(Double.parseDouble(number));
+        detail.add("move C3 visits 100 winrate 5500 prior 1250 scoreMean " + number
+            + " order 0 pv C3 D4");
+      }
+      if (secondary(tag)) {
+        data.bestMoves2 = moves;
+        data.isChanged2 = invalidated;
+      } else {
+        data.bestMoves = moves;
+        data.isChanged = invalidated;
+      }
+      installProvenance(data, tag);
+      String expected = payload(tag, engineName, null, false) + "\n" + detail
+          + (secondary(tag) ? " info " : "") + " ownership -0.0 0.25";
+      for (int round = 0; round < 2; round++) {
+        Lizzie.board.setHistory(history);
+        String saved = SGFParser.captureSave(Lizzie.board, false);
+        assertEquals(expected, property(saved, tag));
+        assertEquals(digest(expected), metadataDigest(saved, tag, invalidated ? 2 : 1));
+        history = SGFParser.parseSgf(saved, true);
+        data = target(history, tag);
+        assertEquals(expectedScores, (secondary(tag) ? data.bestMoves2 : data.bestMoves)
+            .stream().map(move -> move.scoreMean).toList());
+        assertEquals(ownership, ownership(data, tag));
+        assertEquals(invalidated, secondary(tag) ? data.isChanged2 : data.isChanged);
+        assertEquals(ANALYSIS,
+            secondary(tag) ? data.secondaryAnalysisProvenance() : data.primaryAnalysisProvenance());
+        assertEquals(OWNER,
+            secondary(tag) ? data.secondaryOwnershipProvenance() : data.primaryOwnershipProvenance());
+      }
+    }
+  }
+
   private static BoardHistoryList historyFor(String tag) {
     return SGFParser.parseSgf(tag.startsWith("LZOP") ? "(;SZ[5])" : "(;SZ[5];B[aa])", true);
   }
@@ -248,9 +310,13 @@ class SGFOwnershipSerializationTest {
   }
 
   private static String metadataDigest(String saved, String tag) {
+    return metadataDigest(saved, tag, 1);
+  }
+
+  private static String metadataDigest(String saved, String tag, int version) {
     JSONObject metadata = new JSONObject(new String(
         Base64.getUrlDecoder().decode(property(saved, "KGP")), StandardCharsets.UTF_8));
-    assertEquals(1, metadata.getInt("version"));
+    assertEquals(version, metadata.getInt("version"));
     return metadata.getJSONObject(secondary(tag) ? "secondary" : "primary")
         .getString("payloadSha256");
   }
