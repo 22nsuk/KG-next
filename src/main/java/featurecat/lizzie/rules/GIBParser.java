@@ -52,7 +52,14 @@ public class GIBParser {
     boolean oriPlaySound = Lizzie.config.playSound;
     try {
       try {
-        board.clear(false);
+        // GIB coordinates use a 19x19 board, independent of the currently displayed game.
+        if (Board.boardWidth == 19 && Board.boardHeight == 19) {
+          board.clear(false);
+        } else {
+          // File-load finalization owns engine resize and analysis resumption.
+          board.reopenOnlyBoard(19, 19);
+          Lizzie.frame.redrawBoardrendererBackground();
+        }
         EngineManager.isEmpty = true;
         Lizzie.config.playSound = false;
         for (Consumer<Board> move : game.moves()) move.accept(board);
