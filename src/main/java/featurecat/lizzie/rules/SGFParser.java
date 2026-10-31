@@ -3005,7 +3005,7 @@ public class SGFParser {
     String curWinrate = "";
     curWinrate = String.format(Locale.ENGLISH, "%.1f", 100 - curWR);
 
-    return formatAnalysisPayload(
+    StringBuilder header = formatAnalysisHeader(
         data.engineName,
         curWinrate,
         playouts,
@@ -3014,8 +3014,8 @@ public class SGFParser {
         data.scoreMean,
         data.scoreStdev,
         data.pda,
-        data.bestMovesToString(),
-        data.estimateArray, data.rootVisits, data.primaryAnalysisProvenance());
+        data.rootVisits, data.primaryAnalysisProvenance());
+    return formatAnalysisPayload(header, data, false);
   }
 
   private static String formatNodeData2(BoardHistoryNode node) {
@@ -3035,7 +3035,7 @@ public class SGFParser {
     String curWinrate = "";
     curWinrate = String.format(Locale.ENGLISH, "%.1f", 100 - curWR);
 
-    return formatAnalysisPayload(
+    StringBuilder header = formatAnalysisHeader(
         data.engineName2,
         curWinrate,
         playouts,
@@ -3044,11 +3044,11 @@ public class SGFParser {
         data.scoreMean2,
         data.scoreStdev2,
         data.pda2,
-        data.bestMovesToString2(),
-        data.estimateArray2, data.rootVisits2, data.secondaryAnalysisProvenance());
+        data.rootVisits2, data.secondaryAnalysisProvenance());
+    return formatAnalysisPayload(header, data, true);
   }
 
-  private static String formatAnalysisPayload(
+  private static StringBuilder formatAnalysisHeader(
       String engineName,
       String curWinrate,
       String playouts,
@@ -3057,8 +3057,7 @@ public class SGFParser {
       double scoreMean,
       double scoreStdev,
       double pda,
-      String bestMoves,
-      List<Double> estimateArray, int rootVisits, AnalysisProvenance provenance) {
+      int rootVisits, AnalysisProvenance provenance) {
     Double wrn = provenance == null ? null : provenance.wrn();
     boolean includeWrn = isHeaderWrn(wrn);
     StringBuilder header = new StringBuilder();
@@ -3079,20 +3078,28 @@ public class SGFParser {
     }
     if (rootVisits >= 0) header.append(" rootVisits=").append(rootVisits);
     if (includeWrn) header.append(" wrn=").append(wrn);
+    return header;
+  }
 
-    boolean hasBestMoves = !Utils.isBlank(bestMoves);
+  private static String formatAnalysisPayload(
+      StringBuilder header, BoardData data, boolean secondary) {
+    int candidateCount = (secondary ? data.bestMoves2 : data.bestMoves).size();
+    boolean hasBestMoves = candidateCount > 0;
+    List<Double> estimateArray = secondary ? data.estimateArray2 : data.estimateArray;
     boolean hasOwnership = estimateArray != null && !estimateArray.isEmpty();
     if (!hasBestMoves && !hasOwnership) {
       return header.toString();
     }
-    // Build the canonical payload once; KGP hashes this unescaped text. Limit speculative
-    // reservation for large imported lists, allowing the builder to grow normally if needed.
-    long estimatedLength = header.length() + 1L + (hasBestMoves ? bestMoves.length() : 0)
+    // Reserve a short-PV allowance per candidate without formatting or scanning its tokens twice.
+    // Cap speculative reservation for imported lists; long PVs and ownership grow normally.
+    long estimatedLength = header.length() + 1L + 128L * candidateCount
         + (hasOwnership ? 10L + 8L * estimateArray.size() : 0);
     header.ensureCapacity((int) Math.min(estimatedLength, 64 * 1024));
+    // Candidates write into the canonical payload; KGP still hashes its completed unescaped text.
     header.append('\n');
     if (hasBestMoves) {
-      header.append(bestMoves);
+      if (secondary) data.appendBestMoves2(header);
+      else data.appendBestMoves(header);
     }
     if (hasOwnership) {
       header.append(" ownership");
