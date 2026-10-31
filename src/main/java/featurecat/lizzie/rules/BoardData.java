@@ -1021,6 +1021,11 @@ public class BoardData {
 
   public String bestMovesToString() {
     StringBuilder sb = new StringBuilder();
+    appendBestMoves(sb);
+    return sb.toString();
+  }
+
+  void appendBestMoves(StringBuilder sb) {
     Formatter scoreFormatter = null;
     int i = 0;
     for (MoveData move : bestMoves) {
@@ -1046,14 +1051,16 @@ public class BoardData {
       if (i < bestMoves.size())
         sb.append(" info "); // this order is just because of how the MoveData info parser works
     }
-    return sb.toString();
   }
 
   public String bestMovesToString2() {
     StringBuilder sb = new StringBuilder();
-    int i = 0;
+    appendBestMoves2(sb);
+    return sb.toString();
+  }
+
+  void appendBestMoves2(StringBuilder sb) {
     for (MoveData move : bestMoves2) {
-      i++;
       // eg: info move R5 visits 38 winrate 5404 pv R5 Q5 R6 S4 Q10 C3 D3 C4 C6 C5 D5
       sb.append("move ").append(move.coordinate);
       sb.append(" visits ").append(move.playouts);
@@ -1066,7 +1073,6 @@ public class BoardData {
       appendTokens(sb, move.variation);
       sb.append(" info "); // this order is just because of how the MoveData info parser works
     }
-    return sb.toString();
   }
 
   private static void appendTokens(StringBuilder target, List<String> tokens) {

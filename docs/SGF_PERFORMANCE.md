@@ -486,3 +486,70 @@ NaN/infinities, extreme/subnormal and seeded random doubles, English formatting
 under three default locales, and repeated calls with empty/non-KataGo transitions.
 All four analysis tags also preserve canonical digests, provenance, ownership and
 valid/invalidated state across two save/reopen cycles, including KGP versions 1/2.
+
+### Appending candidate details into the canonical payload (2026-10-31)
+
+Baseline: `30de24dda90767e3905168573a8ee56b5660b685`, including the local
+score Formatter. SGF serialization now appends both candidate lists directly into
+the canonical analysis payload builder. The public `bestMovesToString()` and
+`bestMovesToString2()` methods remain wrappers around the same append logic.
+Primary/secondary score spelling, separators, optional PV/visit fields and local
+Formatter lifetime are unchanged. The completed canonical String is still used
+for KGP hashing before SGF escaping; the final SGF String, detached save capture,
+retry and shutdown ownership are unchanged.
+
+Capacity reservation uses the existing header length, a 128-character short-PV
+allowance per candidate and the existing ownership estimate, capped at 64 Ki
+characters. It uses collection sizes without scanning tokens or formatting twice;
+it is a sizing hint, not an output limit. Larger payloads grow normally. Reserving
+ownership only after writing candidates was also measured, but that approach
+increased Unicode-header capture allocations by 6.94%. The bounded combined
+reservation avoids that regression in the measured inputs. It does not promise
+optimal capacity for every imported PV length or numeric spelling.
+
+The full public calls, not isolated append loops, are measured on the actual
+offline Swing EDT: Ubuntu/WSL2, Java 21.0.12.1, Xvfb/Openbox, `-Xmx2g`.
+ThreadMXBean allocated-byte and CPU counters and wall time include all builder
+allocation, re-expansion, buffer copying and UTF-16 inflation inside the call.
+Those costs are not estimated away or subtracted. Hashing, disk writes and reopen
+checks are outside the timed region. The eight fixtures above are supplemented
+with secondary analysis, a Unicode/escaped engine name, and a 301-node history
+with 20,000-token PVs (30,756,576-byte saved SGF; individual details exceed the
+reservation cap). The final comparison uses four separate JVMs in
+baseline/candidate/candidate/baseline order, 10 warmups and 20 retained samples per
+fixture/API. Both `saveToString(false)` and `captureSave` are measured: 2,640 calls,
+1,760 retained. Source, classes, probe and dependency hashes are checked before
+and after each run; every sample, including GC/outliers, is retained.
+
+| Full `captureSave` workload | Allocated bytes before | After | Reduction | Median elapsed ms before → after |
+| --- | ---: | ---: | ---: | ---: |
+| Short PV + ownership, 32 candidates | 40,305,904 | 36,744,616 | 8.84% | 9.85 → 9.63 |
+| Long PV + visits + ownership | 50,860,016 | 46,807,320 | 7.97% | 13.87 → 13.52 |
+| Short PV without ownership | 22,667,176 | 19,108,296 | 15.70% | 5.82 → 5.39 |
+| One candidate + ownership | 20,766,664 | 20,624,736 | 0.68% | 4.90 → 4.92 |
+| Secondary candidates + ownership | 36,765,416 | 32,202,400 | 12.41% | 8.00 → 7.73 |
+| Unicode engine name + short PV + ownership | 50,281,520 | 46,977,888 | 6.57% | 11.28 → 10.87 |
+| Non-KataGo candidates + ownership | 33,123,224 | 29,850,896 | 9.88% | 7.35 → 7.03 |
+| 20,000-token PV per node + ownership | 492,679,488 | 432,058,232 | 12.30% | 94.99 → 92.72 |
+| Empty candidates + ownership | 20,136,800 | 20,096,008 | 0.20% | 4.65 → 4.68 |
+| Wide variations | 117,827,784 | 117,827,784 | 0.00% | 32.61 → 33.71 |
+| Long multilingual comments | 33,200,568 | 33,200,568 | 0.00% | 5.36 → 5.24 |
+
+Candidate-bearing allocation reductions repeat in both execution orders. These
+are transient allocations, not retained heap or peak RSS. Time improvements are
+smaller: short-PV/ownership medians are 9.94 → 9.42 ms and 9.76 → 9.72 ms;
+one-candidate medians are 4.91 → 4.94 and 4.89 → 4.89 ms. The unchanged wide-tree
+control varies 32.33 → 33.95 and 34.89 → 33.52 ms. No uniform speedup is claimed.
+The host is shared (24 logical CPUs, one-minute load approximately 0.85–2.42),
+with no other user workloads paused. Native-engine performance, cold disk,
+physical-display FPS and the installed user's session are not measured.
+
+All 88 fixture/save-mode combinations match across the four JVMs and reopen;
+all 2,640 timed outputs match their hashes and 44 stored capture files compare
+byte-for-byte. Modes cover legacy, upload, capture, automatic, snapshot, raw,
+comments and current branch. Both baseline and final candidate pass 325 relevant
+SGF/provenance/invalidation/save tests without skips. Twelve new cases cover long
+candidate details beyond the capacity cap across all four analysis tags, both
+valid/invalidated states, two save/reopen modes with canonical KGP digest and
+provenance checks, plus non-KataGo empty/missing-PV spacing. Existing score-format,
+empty-list, ownership-only and KGP version 1/2 coverage remains in use.

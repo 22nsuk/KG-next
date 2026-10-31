@@ -219,6 +219,84 @@ class SGFOwnershipSerializationTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"LZ,false", "LZ,true", "LZOP,false", "LZOP,true",
+      "LZ2,false", "LZ2,true", "LZOP2,false", "LZOP2,true"})
+  void longCandidateDetailsKeepDigestAndMetadataAcrossSaveModes(
+      String tag, boolean invalidated) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = historyFor(tag);
+      BoardData data = target(history, tag);
+      String engineName = "엔진]경로\\net";
+      List<Double> values = List.of(-0.0, 0.25);
+      install(data, tag, engineName, values, true);
+      installProvenance(data, tag);
+      List<String> pv = new ArrayList<>();
+      List<String> visits = new ArrayList<>();
+      for (int i = 0; i < 20000; i++) {
+        pv.add(i % 2 == 0 ? "C3" : "pass");
+        visits.add(Integer.toString(20000 - i));
+      }
+      MoveData move = (secondary(tag) ? data.bestMoves2 : data.bestMoves).get(0);
+      move.variation = pv;
+      move.pvVisits = visits;
+      if (secondary(tag)) data.isChanged2 = invalidated;
+      else data.isChanged = invalidated;
+      String expected = payload(tag, engineName, null, false)
+          + "\nmove C3 visits 100 winrate 5500 prior 1250 scoreMean "
+          + (secondary(tag) ? "2.5" : "2.50") + " order 0 pv " + String.join(" ", pv)
+          + (secondary(tag) ? " info " : " pvVisits " + String.join(" ", visits))
+          + " ownership -0.0 0.25";
+      assertTrue(expected.length() > 64 * 1024, "exercise growth beyond the reservation cap");
+      for (int round = 0; round < 2; round++) {
+        Lizzie.board.setHistory(history);
+        String saved = round == 0 ? SGFParser.saveToString(false)
+            : SGFParser.captureSave(Lizzie.board, false);
+        assertEquals(expected, property(saved, tag));
+        assertEquals(digest(expected), metadataDigest(saved, tag, invalidated ? 2 : 1));
+        history = SGFParser.parseSgf(saved, true);
+        data = target(history, tag);
+        MoveData reopened = (secondary(tag) ? data.bestMoves2 : data.bestMoves).get(0);
+        assertEquals(pv, reopened.variation);
+        if (!secondary(tag)) assertEquals(visits, reopened.pvVisits);
+        assertEquals(values, ownership(data, tag));
+        assertEquals(invalidated, secondary(tag) ? data.isChanged2 : data.isChanged);
+        assertEquals(ANALYSIS,
+            secondary(tag) ? data.secondaryAnalysisProvenance() : data.primaryAnalysisProvenance());
+        assertEquals(OWNER,
+            secondary(tag) ? data.secondaryOwnershipProvenance() : data.primaryOwnershipProvenance());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
+  void nonKataCandidatesKeepEmptyPvSpacingAndCanonicalDigest(String tag) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = historyFor(tag);
+      BoardData data = target(history, tag);
+      install(data, tag, "Leela", null, true);
+      installProvenance(data, tag);
+      MoveData move = (secondary(tag) ? data.bestMoves2 : data.bestMoves).get(0);
+      move.variation = List.of();
+      move.pvVisits = List.of("100"); // non-KataGo output omits pvVisits
+      if (secondary(tag)) data.isKataData2 = false;
+      else data.isKataData = false;
+      String expected = payload(tag, "Leela", null, false)
+          + "\nmove C3 visits 100 winrate 5500 prior 1250 order 0 pv "
+          + (secondary(tag) ? " info " : "");
+      Lizzie.board.setHistory(history);
+      String saved = SGFParser.captureSave(Lizzie.board, false);
+      assertEquals(expected, property(saved, tag));
+      assertEquals(digest(expected), metadataDigest(saved, tag));
+      // A missing primary PV has the same historical spelling as an empty one.
+      if (!secondary(tag)) {
+        move.variation = null;
+        assertEquals(expected, property(SGFParser.saveToString(false), tag));
+      }
+    }
+  }
+
   private static BoardHistoryList historyFor(String tag) {
     return SGFParser.parseSgf(tag.startsWith("LZOP") ? "(;SZ[5])" : "(;SZ[5];B[aa])", true);
   }
