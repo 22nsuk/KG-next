@@ -74,6 +74,22 @@ another final autosave. Capturing edit state follows the save snapshot's lock
 ordering: freeze topology under the history monitor, release it, then read each
 node's small state under its payload monitor.
 
+Continuation checks retain that original edit snapshot and compare current values
+directly instead of capturing a second tree. Root/cursor, metadata, rules identity
+and every node's ordered children are checked under the history monitor. After
+releasing it, each node's extra stones and payload are checked under separate node
+and BoardData monitors. A difference ends the comparison immediately; an equal
+tree still requires the complete comparison. The original snapshot continues to
+own its copied arrays, properties and extra-stone values.
+
+Authored comments, markup, off-cursor branches and explicit analysis edits remain
+protected; normal engine publication and generated comments are still ignored.
+`isCurrent()` checks context revision at entry and after payload comparison, so a
+context renewal while waiting for a payload cannot authorize a strict continuation.
+Recovery's `hasSameGame()` deliberately ignores only that revision, retaining the
+other checks. This does not make the separate topology/payload phases a globally
+atomic snapshot.
+
 ## Automatic records and batches
 
 The requesting event captures SGF, cursor metadata, name, destination and a
@@ -229,3 +245,45 @@ The subsequent [SGF measurement and interactive read path](SGF_PERFORMANCE.md)
 records these phases separately. Chooser, single-file drop and recent-file SGF
 reads/decode run on a bounded worker; parsing and serialization retain their
 existing context. Opening immediately after a save waits for its publication.
+
+## Edit-protection comparison measurement (2026-10-31)
+
+Baseline: `dbb1db978a2acada2f0b7057d6f3a7275a348db9`. An actual offline Swing process
+on Ubuntu/WSL2, Java 21.0.12.1, Xvfb/Openbox and `-Xmx2g` installs each generated
+fixture and captures its edit snapshot once. The measured interval covers only
+`isCurrent()` or `hasSameGame()`, not the initial capture, synthetic edit, restore,
+SGF serialization, hashing, or file I/O. It measures unchanged state, a root comment
+edit and an edit on the final node in breadth-first order (an off-mainline leaf in
+the wide tree). The cursor remains at the root.
+
+There are 10 warmups and 20 retained comparisons per fixture/scenario/API/JVM,
+with baseline/candidate/candidate/baseline separate JVMs: 1,440 timed comparisons,
+960 retained. All samples are retained, including GC/scheduling effects. Exact
+EDT allocated bytes and CPU time are collected around each complete comparison.
+Production, compiled classes, probe and dependency hashes match their preflight
+records before and after each run. Every comparison returns the expected Boolean;
+restoring the edits restores both snapshot checks and the original SGF output.
+
+| `isCurrent()` workload | Allocated bytes before → after | Median elapsed ms before → after |
+| --- | ---: | ---: |
+| Wide tree, 21,845 nodes, unchanged | 49,439,280 → 32 | 18.862 → 9.629 |
+| Wide tree, root comment edit | 48,215,984 → 0 | 11.107 → 0.715 |
+| Wide tree, late off-mainline comment edit | 49,439,248 → 32 | 22.838 → 9.245 |
+| Dense analysis, 301 nodes, unchanged | 620,320 → 32 | 0.125 → 0.037 |
+| Dense analysis, root comment edit | 593,888 → 0 | 0.054 → 0.002 |
+| Dense analysis, late comment edit | 620,288 → 32 | 0.126 → 0.037 |
+
+`hasSameGame()` has the same allocation medians in each scenario; unchanged wide
+tree timing is 18.858 → 9.498 ms. Both JVM orders show the wide unchanged improvement
+(18.62 → 9.69 and 19.01 → 9.34 ms). These values describe this shared-host workload
+(24 logical CPUs, load averages roughly 0.8–0.9), not a frame-latency guarantee,
+retained heap saving, or total-open speedup. The unchanged comparison still scans
+the tree and stones, and the original snapshot's capture cost remains.
+
+Regression coverage includes the two comparison modes, metadata value equality
+(NaN/signed zero and engine records), null-valued property keys, in-place move and
+extra-stone edits, analysis-property filtering, and actual monitor contention.
+The contention test establishes that comparison is blocked on a held BoardData
+monitor before checking that history and node monitors remain available. It also
+renews context during that wait: the old implementation misses the strict renewal,
+while the final revision check rejects it without changing recovery semantics.

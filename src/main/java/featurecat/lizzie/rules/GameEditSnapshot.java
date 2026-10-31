@@ -71,12 +71,31 @@ public final class GameEditSnapshot {
     requireEventThread();
     if (currentBoard != board || board.getHistory() != history
         || (requireContextRevision && board.getContextRevision() != revision)) return false;
-    GameEditSnapshot current = capture(board);
-    return current.root == root && current.cursor == cursor
-        && (!requireContextRevision || current.revision == revision)
-        && current.width == width && current.height == height
-        && Objects.equals(current.metadata, metadata) && current.rules == rules
-        && current.nodes.equals(nodes);
+    if (Board.boardWidth != width || Board.boardHeight != height) return false;
+    synchronized (history) {
+      if (history.getStart() != root || history.getCurrentHistoryNode() != cursor
+          || (metadata == null ? history.getGameInfo() != null : !metadata.matches(history.getGameInfo()))
+          || history.captureSessionRules() != rules) return false;
+      // Equal root and ordered children for every captured node establish the same whole tree.
+      // No payload monitor may be acquired while holding the history monitor.
+      for (NodeState state : nodes) {
+        List<BoardHistoryNode> children = state.node().getVariations();
+        if (children.size() != state.children().size()) return false;
+        for (int i = 0; i < children.size(); i++) {
+          if (children.get(i) != state.children().get(i)) return false;
+        }
+      }
+    }
+    for (NodeState state : nodes) {
+      if (!state.matchesPayload()) return false;
+    }
+    // A strict continuation must also notice context renewal while waiting for a payload.
+    return !requireContextRevision || board.getContextRevision() == revision;
+  }
+
+  private static boolean isAnalysisProperty(String key) {
+    return "KGP".equals(key) || "LZ".equals(key) || "LZ2".equals(key)
+        || "LZOP".equals(key) || "LZOP2".equals(key);
   }
 
   private static void requireEventThread() {
@@ -94,6 +113,15 @@ public final class GameEditSnapshot {
       return new GameMetadata(info.getPlayerBlack(), info.getPlayerWhite(), info.getDate(),
           info.getKomi(), info.getHandicap(), info.getResult(),
           info.engineGameRecordContext(), info.engineGameRecord());
+    }
+
+    boolean matches(GameInfo info) {
+      return info != null && Objects.equals(black, info.getPlayerBlack())
+          && Objects.equals(white, info.getPlayerWhite()) && Objects.equals(date, info.getDate())
+          && Double.compare(komi, info.getKomi()) == 0 && handicap == info.getHandicap()
+          && Objects.equals(result, info.getResult())
+          && Objects.equals(engineContext, info.engineGameRecordContext())
+          && Objects.equals(engineRecord, info.engineGameRecord());
     }
   }
 
@@ -121,7 +149,7 @@ public final class GameEditSnapshot {
       synchronized (data) {
         Map<String, String> properties = new LinkedHashMap<>(data.getProperties());
         // Normal engine adoption removes imported KGP; these properties describe analysis.
-        properties.keySet().removeAll(List.of("KGP", "LZ", "LZ2", "LZOP", "LZOP2"));
+        properties.keySet().removeIf(GameEditSnapshot::isAnalysisProperty);
         List<Integer> move = data.lastMove == null || data.lastMove.isEmpty() ? List.of()
             : Arrays.stream(data.lastMove.get()).boxed().toList();
         List<Stone> stones = data.stones == null ? null
@@ -131,6 +159,63 @@ public final class GameEditSnapshot {
             data.authoredComment(), Collections.unmodifiableMap(properties), data.analysisEditRevision(),
             node.hasRemovedStone(), List.copyOf(extra));
       }
+    }
+
+    boolean matchesPayload() {
+      BoardData data = node.getData();
+      synchronized (node) {
+        int size = node.extraStones == null ? 0 : node.extraStones.size();
+        if (extraStones.size() != size) return false;
+        for (int i = 0; i < size; i++) {
+          ExtraStone saved = extraStones.get(i);
+          ExtraStones current = node.extraStones.get(i);
+          if (saved.x() != current.x || saved.y() != current.y || saved.black() != current.isBlack) {
+            return false;
+          }
+        }
+      }
+      // Match capture's separate node/data locking, without retaining any live arrays or maps.
+      synchronized (data) {
+        return kind == data.getNodeKind() && color == data.lastMoveColor
+            && blackToPlay == data.blackToPlay && dummy == data.dummy
+            && moveNumber == data.moveNumber && moveMNNumber == data.moveMNNumber
+            && Objects.equals(comment, data.authoredComment())
+            && analysisEditRevision == data.analysisEditRevision()
+            && removedStone == node.hasRemovedStone()
+            && matchesStones(data.stones) && matchesMove(data)
+            && matchesProperties(data.getProperties());
+      }
+    }
+
+    private boolean matchesStones(Stone[] current) {
+      if (stones == null || current == null) return stones == null && current == null;
+      if (stones.size() != current.length) return false;
+      for (int i = 0; i < current.length; i++) {
+        if (stones.get(i) != current[i]) return false;
+      }
+      return true;
+    }
+
+    private boolean matchesMove(BoardData data) {
+      int[] current = data.lastMove == null ? null : data.lastMove.orElse(null);
+      int length = current == null ? 0 : current.length;
+      if (move.size() != length) return false;
+      for (int i = 0; i < length; i++) {
+        if (move.get(i) != current[i]) return false;
+      }
+      return true;
+    }
+
+    private boolean matchesProperties(Map<String, String> current) {
+      if (current.isEmpty()) return properties.isEmpty();
+      int count = 0;
+      for (Map.Entry<String, String> entry : current.entrySet()) {
+        if (isAnalysisProperty(entry.getKey())) continue;
+        if (!properties.containsKey(entry.getKey())
+            || !Objects.equals(properties.get(entry.getKey()), entry.getValue())) return false;
+        count++;
+      }
+      return count == properties.size();
     }
   }
 }
