@@ -441,6 +441,8 @@ class GtpConsoleSettingsTest {
     LizzieFrame.toolbar = RulesLayerTestHarness.allocate(BottomToolbar.class);
     RecordingEngine secondary = comparisonEngine();
     engine.isKatago = secondary.isKatago = true;
+    engine.bestMovesEnginename = "console-primary";
+    secondary.bestMovesEnginename = "console-secondary";
     engine.startAnalysis();
     engine.awaitIdle();
     secondary.awaitIdle();
@@ -508,7 +510,13 @@ class GtpConsoleSettingsTest {
     } finally {
       fence.unlock();
     }
-    analysis.get(3, TimeUnit.SECONDS);
+    try {
+      analysis.get(3, TimeUnit.SECONDS);
+    } catch (java.util.concurrent.ExecutionException cancelled) {
+      // The early preflight discards silently; a writer already past it reports cancellation.
+      assertInstanceOf(IllegalStateException.class, cancelled.getCause());
+      assertTrue(cancelled.getCause().getMessage().contains("Ordinary analysis target changed"));
+    }
     engine.awaitIdle();
     assertEquals(List.of("pda -1.5"), engine.commands);
     engine.startAnalysis();
