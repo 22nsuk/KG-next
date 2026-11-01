@@ -12482,8 +12482,8 @@ public class Leelaz {
       if (!targetQueue.isEmpty()
           && !targetQueue.peekLast().requiresStateReset()
           && shouldCoalesceQueuedCommand(targetQueue.peekLast().command, noLeelaz2Coalescing)) {
-        targetQueue.removeLast();
-        if (countCommand) {
+        QueuedCommand coalesced = targetQueue.removeLast();
+        if (coalesced.claimCommandCountRetirement()) {
           cmdNumber--;
         }
       }
@@ -12667,7 +12667,8 @@ public class Leelaz {
             && !isOrdinaryPositionAnalysisCommand(command))) {
       QueuedCommand coalesced = targetQueue.removeLast();
       effects.coalescedCommands.add(coalesced);
-      if (countCommand) {
+      // The removed command owns its count, including any later focus cancellation callback.
+      if (coalesced.claimCommandCountRetirement()) {
         cmdNumber--;
       }
     }
