@@ -39,10 +39,8 @@ public class EngineParameter extends JDialog {
       String enginePath,
       String weightPath,
       String helpCommand,
-      boolean isKataGo,
       String configPath,
-      boolean isAnalysisEngine,
-      boolean isOther) {
+      boolean isAnalysisEngine) {
     setTitle(resourceBundle.getString("LizzieConfig.title.parameterConfig"));
     setModalExclusionType(ModalExclusionType.APPLICATION_EXCLUDE);
     setModal(true);
@@ -61,8 +59,7 @@ public class EngineParameter extends JDialog {
     txtCommandLine = new JTextField();
     txtCommandLine.setEditable(false);
     txtCommandLine.setBounds(89, 12, 565, 26);
-    if (isKataGo) txtCommandLine.setText(enginePath);
-    else txtCommandLine.setText(enginePath);
+    txtCommandLine.setText(enginePath);
     contentPanel.add(txtCommandLine);
     txtCommandLine.setColumns(10);
     JLabel lblParameter = new JLabel(resourceBundle.getString("LizzieConfig.title.parameter"));
@@ -80,16 +77,12 @@ public class EngineParameter extends JDialog {
         });
     txtParameter.setColumns(10);
     txtParameter.setBounds(89, 44, 565, 26);
-    if (!isOther) {
-      if (isKataGo)
-        txtParameter.setText(
-            (isAnalysisEngine ? " analysis -model " : " gtp -model ")
-                + weightPath
-                + " -config "
-                + configPath
-                + (isAnalysisEngine ? " -quit-without-waiting" : ""));
-      else txtParameter.setText(" --weights " + weightPath + " -g --lagbuffer 0 ");
-    }
+    txtParameter.setText(
+        (isAnalysisEngine ? " analysis -model " : " gtp -model ")
+            + weightPath
+            + " -config "
+            + configPath
+            + (isAnalysisEngine ? " -quit-without-waiting" : ""));
     oriColor = txtParameter.getBackground();
     contentPanel.add(txtParameter);
 

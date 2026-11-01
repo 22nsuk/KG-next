@@ -274,7 +274,7 @@ public class SetKataPDA extends JDialog {
     if (EngineGameDesktop.parametersOwned() || openingTarget == null || !openingTarget.isCurrent()
         || kataGoPdaEngineGameParticipantOrPrimary() != openingEngine
         || (!openingParticipant && (openingPrimaryGeneration < 0
-            || Lizzie.capturePrimaryEngineGeneration(openingEngine) != openingPrimaryGeneration))) {
+            || Lizzie.capturePrimaryEngineGenerationSnapshot(openingEngine) != openingPrimaryGeneration))) {
       return null;
     }
     return openingEngine;

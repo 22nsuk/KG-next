@@ -31,6 +31,7 @@ import featurecat.lizzie.rules.extraMoveForTsumego;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -5180,7 +5181,7 @@ class EngineManagerInitialStartupSynchronizationTest {
   }
 
   @Test
-  void leelaSaiStartupCommandFailureCannotPublishLoaded() throws Exception {
+  void genericGtpStartupCommandFailureCannotPublishLoaded() throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       StartupSyncLeelaz engine = new StartupSyncLeelaz(true);
       Board board = boardWithHistory(emptyRootHistory(0));
@@ -5195,20 +5196,87 @@ class EngineManagerInitialStartupSynchronizationTest {
       Lizzie.config.txtLzsaiEngineMem = "256";
       String failedCommand = "lz-setoption name Maximum Memory Use (MiB) value 256";
       RuntimeException commandFailure =
-          new IllegalStateException("controlled Leela-SAI startup failure");
+          new IllegalStateException("controlled generic GTP startup failure");
       engine.pdaStartupCommandFailureCommand = failedCommand;
       engine.pdaStartupCommandFailure = commandFailure;
       int readyBaseline = env.readyTransitions.get();
 
       RuntimeException startupFailure =
-          assertThrows(RuntimeException.class, () -> invokeParseLine(engine, "= Leela Zero"));
+          assertThrows(RuntimeException.class, () -> invokeParseLine(engine, "= Pachi"));
 
       assertSame(commandFailure, startupFailure.getCause());
       assertTrue(engine.startupCommandAttempts.contains(failedCommand));
-      assertFalse(engine.isLoaded, "SAI post-work failure must not publish startup readiness");
+      assertFalse(engine.isLoaded, "generic GTP post-work failure must not publish startup readiness");
       assertTrue(
-          engine.isDownWithError, "SAI post-work failure must fail the exact runtime closed");
+          engine.isDownWithError, "generic GTP post-work failure must fail the exact runtime closed");
       assertEquals(0, env.readyTransitions.get() - readyBaseline);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"Leela", "Leela Zero", "LeelaZero", "leelaz", "LEELA ZERO", "Sai", "SAI 0.17", "sai-0.18"})
+  void retiredEngineNameClosesStartupBeforePostCommandsOrReady(String reportedName)
+      throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz engine = new StartupSyncLeelaz();
+      Board board = boardWithHistory(emptyRootHistory(0));
+      env.publish(engine, board);
+      Lizzie.engineManager = new EngineManager(new ArrayList<>(List.of(engine)));
+      Lizzie.setPrimaryEngine(engine);
+      RetirementProcess process = new RetirementProcess();
+      setLeelazField(engine, "process", process);
+      engine.installFreshCommandStreamsForTest(
+          new ByteArrayInputStream(("= " + reportedName + "\n").getBytes(StandardCharsets.UTF_8)),
+          new ByteArrayOutputStream(),
+          new ByteArrayInputStream(new byte[0]));
+      engine.bindCurrentPrimaryEngineGeneration();
+      engine.started = true;
+      engine.isLoaded = false;
+      engine.isCheckingName = true;
+      Lizzie.config.chkLzsaiEngineMem = true;
+      Lizzie.config.autoLoadLzsaiEngineMem = true;
+      Lizzie.config.txtLzsaiEngineMem = "256";
+      int readyBaseline = env.readyTransitions.get();
+      int readyIconBaseline = ((SilentStartupMenu) LizzieFrame.menu).readyPrimaryIconCount;
+
+      invokeReaderLoop(engine);
+      SwingUtilities.invokeAndWait(() -> {});
+
+      assertFalse(engine.started, "a rejected engine must close its exact runtime");
+      assertFalse(engine.isLoaded, "a retired engine must never become available");
+      assertTrue(engine.isDownWithError, "retirement must be reported as a startup failure");
+      assertNull(engine.beginAutomaticEngineRestartAttempt(), "health checks must not restart a retired engine");
+      assertEquals(1, process.destroyCount.get(), "the launched local process must be closed once");
+      assertTrue(engine.startupCommandAttempts.isEmpty(), "retired engines receive no startup post-work");
+      assertEquals(readyBaseline, env.readyTransitions.get());
+      assertEquals(readyIconBaseline, ((SilentStartupMenu) LizzieFrame.menu).readyPrimaryIconCount);
+      assertEquals(1, engine.diagnosticCount.get(), "the user must receive the retirement diagnostic");
+      assertNotNull(engine.lastTerminalDiagnostic);
+      assertTrue(engine.lastTerminalDiagnostic.contains("Leela"), engine.lastTerminalDiagnostic);
+      assertTrue(Lizzie.config.chkLzsaiEngineMem, "retirement must preserve saved options");
+      assertTrue(Lizzie.config.autoLoadLzsaiEngineMem);
+      assertEquals("256", Lizzie.config.txtLzsaiEngineMem);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"KataGo", "Sayuri", "Pachi", "LLZero", "Saiyan GTP"})
+  void unrelatedEngineNameRetainsStartupAdmission(String reportedName) throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz engine = new StartupSyncLeelaz(true);
+      env.publish(engine, boardWithHistory(emptyRootHistory(0)));
+      Lizzie.setPrimaryEngine(engine);
+      engine.bindCurrentPrimaryEngineGeneration();
+      engine.started = true;
+      engine.isLoaded = false;
+      engine.isCheckingName = true;
+
+      invokeParseLine(engine, "= " + reportedName);
+
+      assertTrue(engine.started);
+      assertTrue(engine.isLoaded, "unrelated engines retain their existing startup contract");
+      assertFalse(engine.isDownWithError);
+      assertEquals(0, engine.diagnosticCount.get());
     }
   }
 
@@ -7320,6 +7388,7 @@ class EngineManagerInitialStartupSynchronizationTest {
         new AtomicReference<>();
     private CountDownLatch terminalDiagnosticEntered;
     private CountDownLatch terminalDiagnosticGate;
+    private volatile String lastTerminalDiagnostic;
 
     private StartupSyncLeelaz() throws Exception {
       this(false);
@@ -7493,6 +7562,7 @@ class EngineManagerInitialStartupSynchronizationTest {
         boolean primaryEngine,
         long primaryGeneration,
         Object expectedEngineIncarnation) {
+      lastTerminalDiagnostic = message;
       CountDownLatch entered = terminalDiagnosticEntered;
       if (entered != null) {
         entered.countDown();
@@ -8100,6 +8170,46 @@ class EngineManagerInitialStartupSynchronizationTest {
     protected void showContributingEngineSwitchUnavailable() {}
   }
 
+
+  private static final class RetirementProcess extends Process {
+    private final AtomicInteger destroyCount = new AtomicInteger();
+
+    @Override
+    public OutputStream getOutputStream() {
+      return OutputStream.nullOutputStream();
+    }
+
+    @Override
+    public InputStream getInputStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public InputStream getErrorStream() {
+      return InputStream.nullInputStream();
+    }
+
+    @Override
+    public int waitFor() {
+      return 0;
+    }
+
+    @Override
+    public int exitValue() {
+      if (isAlive()) throw new IllegalThreadStateException("controlled engine is still running");
+      return 0;
+    }
+
+    @Override
+    public boolean isAlive() {
+      return destroyCount.get() == 0;
+    }
+
+    @Override
+    public void destroy() {
+      destroyCount.incrementAndGet();
+    }
+  }
 
   private static final class StartupTestEnvironment implements AutoCloseable {
     private final Leelaz previousPrimary = Lizzie.leelaz;

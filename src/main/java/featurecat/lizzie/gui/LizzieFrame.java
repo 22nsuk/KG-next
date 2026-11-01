@@ -13650,8 +13650,7 @@ public class LizzieFrame extends JFrame {
       SetKataEngines setKataEngines = new SetKataEngines();
       setKataEngines.setVisible(true);
     } else {
-      SetLeelaEngines setLeelaEngines = new SetLeelaEngines();
-      setLeelaEngines.setVisible(true);
+      Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.kataParametersOnly"));
     }
   }
 

@@ -93,6 +93,9 @@ public class Lizzie {
   private static final ThreadLocal<Integer> ENGINE_AUTHORITY_PRESENTATION_DEPTH =
       ThreadLocal.withInitial(() -> 0);
   private static long primaryEngineGeneration;
+  private record PrimaryEngineSelection(Leelaz engine, long generation) {}
+  private static volatile PrimaryEngineSelection primaryEngineSelection =
+      new PrimaryEngineSelection(null, 0L);
 
   public static void setPrimaryEngine(Leelaz engine) {
     runWithEngineAuthorityMutation(
@@ -101,6 +104,7 @@ public class Lizzie {
           try {
             leelaz = engine;
             primaryEngineGeneration++;
+            publishPrimaryEngineSelection();
           } finally {
             PRIMARY_ENGINE_LOCK.unlock();
           }
@@ -120,6 +124,7 @@ public class Lizzie {
             }
             leelaz = replacement;
             primaryEngineGeneration++;
+            publishPrimaryEngineSelection();
             return true;
           } finally {
             PRIMARY_ENGINE_LOCK.unlock();
@@ -229,6 +234,20 @@ public class Lizzie {
     }
   }
 
+  /**
+   * Captures a selection for deferred UI work without waiting for a primary-owned restore. The
+   * eventual admission must still validate this exact generation under {@link #PRIMARY_ENGINE_LOCK}.
+   */
+  public static long capturePrimaryEngineGenerationSnapshot(Leelaz expected) {
+    PrimaryEngineSelection selection = primaryEngineSelection;
+    return selection.engine == expected ? selection.generation : -1L;
+  }
+
+  /** Requires {@link #PRIMARY_ENGINE_LOCK}. */
+  private static void publishPrimaryEngineSelection() {
+    primaryEngineSelection = new PrimaryEngineSelection(leelaz, primaryEngineGeneration);
+  }
+
   public static boolean runIfPrimaryEngine(
       Leelaz expected, long expectedGeneration, Runnable action) {
     PRIMARY_ENGINE_LOCK.lock();
@@ -292,6 +311,7 @@ public class Lizzie {
                     }
                     leelaz = replacement;
                     primaryEngineGeneration++;
+                    publishPrimaryEngineSelection();
                   });
             } finally {
               active[0] = false;
@@ -395,7 +415,7 @@ public class Lizzie {
       javaVersion = 8;
     }
     installApplicationIcon();
-    leelaz = new Leelaz("");
+    setPrimaryEngine(new Leelaz(""));
     isMultiScreen = GraphicsEnvironment.getLocalGraphicsEnvironment().getScreenDevices().length > 1;
     // The HiDPI scale must be known synchronously before any window is sized; a paint-based
     // probe only delivers it after the EDT gets around to painting.

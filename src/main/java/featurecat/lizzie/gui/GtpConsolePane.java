@@ -26,10 +26,12 @@ import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.IOException;
+import java.util.ArrayDeque;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.OptionalDouble;
 import java.util.ResourceBundle;
+import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.BorderFactory;
@@ -37,6 +39,7 @@ import javax.swing.JButton;
 import javax.swing.JDialog;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.SwingUtilities;
 import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Document;
@@ -65,6 +68,23 @@ public class GtpConsolePane extends JDialog {
   private Font gtpFont;
   private GtpConsoleBuffer consoleBuffer;
   private int max_length = 30000;
+  // EDT-owned submissions wait for admission, never for engine output or acknowledgement.
+  private ArrayDeque<ConsoleCommand> pendingCommands;
+  private ConsoleCommand admittingCommand;
+  private boolean disposed;
+
+  private record ConsoleCommand(
+      String text, Leelaz engine, long generation, Object incarnation, Board board,
+      Leelaz.CustomPdaTarget pdaTarget) {
+    private boolean isCurrent() {
+      return engine != null
+          && generation >= 0
+          && Lizzie.leelaz == engine
+          && Lizzie.capturePrimaryEngineGenerationSnapshot(engine) == generation
+          && engine.engineIncarnationSnapshot() == incarnation
+          && Lizzie.board == board;
+    }
+  }
 
   /** Creates a Gtp Console Window */
   public GtpConsolePane(Window owner) {
@@ -203,6 +223,8 @@ public class GtpConsolePane extends JDialog {
 
   @Override
   public void dispose() {
+    disposed = true;
+    if (pendingCommands != null) pendingCommands.clear();
     if (updatePump != null) updatePump.close();
     super.dispose();
   }
@@ -348,10 +370,50 @@ public class GtpConsolePane extends JDialog {
       return;
     }
     String command = txtCommand.getText().trim();
+    txtCommand.setText("");
+
+    Leelaz source = Lizzie.leelaz;
+    if (source == null || disposed) return;
+    long generation = Lizzie.capturePrimaryEngineGenerationSnapshot(source);
+    Object incarnation = source.engineIncarnationSnapshot();
+    String verb = command.split("\\s+", 2)[0];
+    Leelaz.CustomPdaTarget pdaTarget =
+        verb.equalsIgnoreCase("pda") || verb.equalsIgnoreCase("dympdacap")
+            ? source.captureConsolePdaTarget(generation, incarnation) : null;
+    if (pendingCommands == null) pendingCommands = new ArrayDeque<>();
+    pendingCommands.addLast(new ConsoleCommand(
+        command, source, generation, incarnation, Lizzie.board, pdaTarget));
+    drainPendingCommands();
+  }
+
+  private void drainPendingCommands() {
+    while (!disposed && admittingCommand == null && !pendingCommands.isEmpty()) {
+      ConsoleCommand submission = pendingCommands.removeFirst();
+      if (!submission.isCurrent()) {
+        addErrorLine("GTP command cancelled because its engine or board changed: " + submission.text);
+        continue;
+      }
+      admittingCommand = submission;
+      boolean asynchronous = false;
+      try {
+        asynchronous = executeCommand(submission);
+      } finally {
+        if (!asynchronous) {
+          admittingCommand = null;
+          // A synchronous command failure must not strand subsequent submissions.
+          if (!pendingCommands.isEmpty()) SwingUtilities.invokeLater(this::drainPendingCommands);
+        }
+      }
+    }
+  }
+
+  /** Returns true only when the admission continuation owns advancement of the submission queue. */
+  private boolean executeCommand(ConsoleCommand submission) {
+    Leelaz source = submission.engine;
+    String command = submission.text;
     String commandToLower = command.toLowerCase(Locale.ROOT);
     String[] moveParams = command.split("\\s+");
     String commandName = moveParams[0].toLowerCase(Locale.ROOT);
-    txtCommand.setText("");
 
     if (EngineGamePresentation.current().playing()) {
       this.setDocs(
@@ -359,23 +421,23 @@ public class GtpConsolePane extends JDialog {
           new Color(255, 255, 0),
           false,
           Config.frameFontSize);
-      return;
+      return false;
     }
 
-    if (Lizzie.leelaz != null) {
+    if (source != null) {
       if ("play".equals(commandName)) {
         if (!playConsoleMove(moveParams)) wrongParameters();
       } else if ("genmove".equals(commandName)) {
         Stone color = moveParams.length == 2 ? consoleColor(moveParams[1]) : Stone.EMPTY;
         if (color == Stone.EMPTY) {
           wrongParameters();
-        } else if (!Lizzie.leelaz.isThinking) {
-          Lizzie.leelaz.genmove(color == Stone.BLACK ? "b" : "w", true);
+        } else if (!source.isThinking) {
+          source.genmove(color == Stone.BLACK ? "b" : "w", true);
         }
       } else if ("showboard".equals(commandName)) {
         if (moveParams.length != 1) wrongParameters();
-        else if (Lizzie.leelaz.sendRawConsoleCommand(commandName) && Lizzie.leelaz.isPondering()) {
-          Lizzie.leelaz.ponder();
+        else if (source.sendRawConsoleCommand(commandName) && source.isPondering()) {
+          source.ponder();
         }
       } else if ("clear_board".equals(commandName)) {
         if (moveParams.length != 1) wrongParameters();
@@ -385,10 +447,10 @@ public class GtpConsolePane extends JDialog {
         }
       } else if ("heatmap".equals(commandName)) {
         if (moveParams.length != 1) wrongParameters();
-        else Lizzie.leelaz.toggleHeatmap(false);
+        else source.toggleHeatmap(false);
       } else if (commandToLower.startsWith("kata-raw")) {
-        if (Lizzie.leelaz.sendRawConsoleCommand(command)) {
-        Lizzie.leelaz.setHeatmap();
+        if (source.sendRawConsoleCommand(command)) {
+        source.setHeatmap();
         }
       } else if ("boardsize".equals(commandName)
           || "rectangular_boardsize".equals(commandName)) {
@@ -397,13 +459,13 @@ public class GtpConsolePane extends JDialog {
         OptionalDouble value = consoleNumber(moveParams);
         if (value.isEmpty() || !Float.isFinite((float) value.getAsDouble())) {
           wrongParameters();
-        } else if (Lizzie.leelaz.sendRawConsoleCommand("komi " + value.getAsDouble())) {
+        } else if (source.sendRawConsoleCommand("komi " + value.getAsDouble())) {
           Lizzie.board.getHistory().getGameInfo().setKomi(value.getAsDouble());
           Lizzie.board.getHistory().getGameInfo().changeKomi();
           if (LizzieFrame.toolbar != null && LizzieFrame.toolbar.setkomi != null)
             LizzieFrame.toolbar.setkomi.textFieldKomi.setText(String.valueOf(value.getAsDouble()));
           Lizzie.board.clearBestMovesAfter(Lizzie.board.getHistory().getStart());
-          if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
+          if (source.isPondering()) source.ponder();
         }
       } else if ("undo".equals(commandName)) {
         if (moveParams.length != 1) {
@@ -422,38 +484,76 @@ public class GtpConsolePane extends JDialog {
         } else {
           boolean dynamic = "dympdacap".equals(commandName);
           double pda = value.getAsDouble();
-          Leelaz source = Lizzie.leelaz;
-          Object sourceIncarnation = source.engineIncarnationToken();
-          if (source.sendConsolePda(pda, dynamic)) {
-            source.isStaticPda = !dynamic;
-            if (dynamic) {
-              source.pda = 0;
-              source.pdaCap = pda;
-            } else {
-              source.pda = pda;
-            }
-            if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null)
-              Lizzie.leelaz2.pda = 0;
-            if (LizzieFrame.menu != null) {
-              if (LizzieFrame.menu.txtPDA != null)
-                LizzieFrame.menu.txtPDA.setText(dynamic ? "0.000" : String.valueOf(pda));
-              if (LizzieFrame.menu.setPda != null) {
-                LizzieFrame.menu.setPda.updateEngineValues(
-                    source, sourceIncarnation,
-                    dynamic ? null : String.valueOf(pda), dynamic ? String.valueOf(pda) : null);
-              }
-            }
-            if (source.isPondering()) source.ponder();
+          CompletableFuture<Boolean> admission;
+          try {
+            admission = submission.engine.sendConsolePdaAsync(
+                pda, dynamic, submission.pdaTarget);
+          } catch (RuntimeException failure) {
+            admission = CompletableFuture.failedFuture(failure);
           }
+          admission.whenComplete((accepted, failure) -> SwingUtilities.invokeLater(
+              () -> finishPdaAdmission(submission, pda, dynamic, accepted, failure)));
+          return true;
         }
       } else if ("getpda".equals(commandName) || "getdympdacap".equals(commandName)) {
         if (moveParams.length != 1) wrongParameters();
-        else if (Lizzie.leelaz.sendRawConsoleCommand(commandName) && Lizzie.leelaz.isPondering())
-          Lizzie.leelaz.ponder();
+        else if (source.sendRawConsoleCommand(commandName) && source.isPondering())
+          source.ponder();
       } else {
-        Lizzie.leelaz.sendRawConsoleCommand(command);
+        source.sendRawConsoleCommand(command);
       }
     }
+    return false;
+  }
+
+  private void finishPdaAdmission(
+      ConsoleCommand submission, double pda, boolean dynamic, Boolean accepted, Throwable failure) {
+    boolean resumingAnalysis = false;
+    try {
+      if (disposed) return;
+      if (failure != null) {
+        addErrorLine("Failed to admit GTP command '" + submission.text + "': "
+            + String.valueOf(failure.getMessage()));
+      } else if (!Boolean.TRUE.equals(accepted)) {
+        addErrorLine("GTP command was not admitted: " + submission.text);
+      } else if (submission.isCurrent()) {
+        if (LizzieFrame.menu != null) {
+          if (LizzieFrame.menu.txtPDA != null)
+            LizzieFrame.menu.txtPDA.setText(dynamic ? "0.000" : String.valueOf(pda));
+          if (LizzieFrame.menu.setPda != null) {
+            LizzieFrame.menu.setPda.updateEngineValues(
+                submission.engine, submission.incarnation,
+                dynamic ? null : String.valueOf(pda), dynamic ? String.valueOf(pda) : null);
+          }
+        }
+        if (submission.engine.isPondering()) {
+          CompletableFuture<Void> resumption;
+          try {
+            resumption = submission.engine.resumeConsolePonderAsync(submission.pdaTarget);
+          } catch (RuntimeException resumeFailure) {
+            resumption = CompletableFuture.failedFuture(resumeFailure);
+          }
+          resumption.whenComplete((ignored, resumeFailure) -> SwingUtilities.invokeLater(() -> {
+                try {
+                  if (!disposed && resumeFailure != null) {
+                    addErrorLine("Failed to resume analysis after GTP command '" + submission.text
+                        + "': " + String.valueOf(resumeFailure.getMessage()));
+                  }
+                } finally {
+                  finishConsoleCommand();
+                }
+              }));
+          resumingAnalysis = true;
+        }
+      }
+    } finally {
+      if (!resumingAnalysis) finishConsoleCommand();
+    }
+  }
+
+  private void finishConsoleCommand() {
+    admittingCommand = null;
+    drainPendingCommands();
   }
 
   private boolean resizeFromConsole(String[] params) {

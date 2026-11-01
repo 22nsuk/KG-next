@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.gui.BottomToolbar;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.JFontTextField;
@@ -14,11 +16,15 @@ import featurecat.lizzie.gui.LizzieFrame;
 import java.awt.GraphicsEnvironment;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,6 +43,7 @@ class GtpConsoleSettingsTest {
   private GtpConsolePane previousConsole;
   private BottomToolbar previousToolbar;
   private Leelaz previousSecondary;
+  private final List<RecordingEngine> testEngines = new ArrayList<>();
 
   @BeforeEach
   void setUp() throws Exception {
@@ -48,11 +55,11 @@ class GtpConsoleSettingsTest {
     board = RulesLayerTestHarness.allocate(RecordingBoard.class);
     board.setHistory(realBoard.getHistory());
     Lizzie.board = board;
-    engine = new RecordingEngine();
+    engine = newEngine();
     engine.pda = 1.5;
     engine.pdaCap = 0.2;
     engine.isStaticPda = true;
-    Lizzie.leelaz = engine;
+    Lizzie.setPrimaryEngine(engine);
     Lizzie.leelaz2 = null;
     EngineManager.isEmpty = false;
     LizzieFrame.toolbar = null;
@@ -68,11 +75,17 @@ class GtpConsoleSettingsTest {
   }
 
   @AfterEach
-  void tearDown() {
-    Lizzie.gtpConsole = previousConsole;
-    LizzieFrame.toolbar = previousToolbar;
-    Lizzie.leelaz2 = previousSecondary;
-    if (rules != null) rules.close();
+  void tearDown() throws Exception {
+    try {
+      for (RecordingEngine testEngine : testEngines) testEngine.close();
+    } finally {
+      SwingUtilities.invokeAndWait(() -> {
+        Lizzie.gtpConsole = previousConsole;
+        LizzieFrame.toolbar = previousToolbar;
+        Lizzie.leelaz2 = previousSecondary;
+        if (rules != null) rules.close();
+      });
+    }
   }
 
   @Test
@@ -172,12 +185,107 @@ class GtpConsoleSettingsTest {
     assertEquals(1, engine.admissionAttempts);
   }
 
-  @ParameterizedTest
-  @ValueSource(strings = {"komi 6.5", "pda -0.5", "dympdacap 0.3"})
-  void synchronousSendFailureDoesNotPublishSettings(String command) throws Exception {
+  @Test
+  void synchronousSendFailureDoesNotPublishSettings() throws Exception {
     engine.fail = true;
-    assertThrows(IllegalStateException.class, () -> submit(command));
+    assertThrows(IllegalStateException.class, () -> submit("komi 6.5"));
     assertSettingsUnchanged();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"pda -0.5", "dympdacap 0.3"})
+  void asynchronousPdaFailureIsReportedWithoutPublishingSettings(String command) throws Exception {
+    engine.fail = true;
+    submit(command);
+    assertSettingsUnchanged();
+    assertTrue(consoleMessages().contains("test transport failure"));
+  }
+
+  @Test
+  void pendingPdaKeepsLaterConsoleCommandsInSubmissionOrder() throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    engine.awaitIdle();
+    submitWithoutWaiting("known_extension later");
+    assertFalse(engine.commands.contains("known_extension later"));
+    assertEquals(0, engine.ponders);
+
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    engine.awaitIdle();
+    assertEquals(List.of("pda -0.5", "known_extension later"), engine.commands);
+    assertEquals(1, engine.ponders);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "reselection", "restart"})
+  void pendingCommandsCannotFollowAChangedPrimaryOrReader(String change) throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("known_extension stale");
+    RecordingEngine replacement = newEngine();
+    switch (change) {
+      case "replacement" -> Lizzie.setPrimaryEngine(replacement);
+      case "reselection" -> {
+        Lizzie.setPrimaryEngine(replacement);
+        Lizzie.setPrimaryEngine(engine);
+      }
+      case "restart" -> {
+        engine.awaitIdle();
+        engine.installOutput();
+      }
+      default -> fail(change);
+    }
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    assertFalse(engine.commands.contains("known_extension stale"));
+    assertTrue(replacement.commands.isEmpty());
+    assertEquals(0, engine.ponders);
+    assertEquals("1.5", LizzieFrame.menu.txtPDA.getText());
+    assertTrue(consoleMessages().contains("cancelled"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "restart", "disabled"})
+  void queuedPdaKeepsTheMirrorCapturedAtSubmission(String change) throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("dympdacap 0.3");
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    RecordingEngine replacement = newEngine();
+    switch (change) {
+      case "replacement" -> Lizzie.leelaz2 = replacement;
+      case "restart" -> secondary.installOutput();
+      case "disabled" -> EngineManager.publishExtraMode(Lizzie.config, ExtraMode.Normal);
+      default -> fail(change);
+    }
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    for (RecordingEngine testEngine : testEngines) testEngine.awaitIdle();
+    assertEquals(List.of("pda -0.5"), engine.commands);
+    assertEquals(List.of("pda -0.5"), secondary.commands);
+    assertTrue(replacement.commands.isEmpty());
+    assertTrue(engine.isStaticPda);
+    assertEquals(0.2, engine.pdaCap);
+    assertTrue(consoleMessages().contains("not admitted"));
+  }
+
+  @Test
+  void failedPendingPdaReportsFailureAndDrainsTheNextCommand() throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("known_extension after_failure");
+    engine.pdaCompletionGate.completeExceptionally(new IllegalStateException("deferred failure"));
+    awaitConsoleIdle();
+    assertTrue(engine.commands.contains("known_extension after_failure"));
+    assertEquals(0, engine.ponders);
+    assertTrue(consoleMessages().contains("deferred failure"));
   }
 
   @Test
@@ -198,13 +306,361 @@ class GtpConsoleSettingsTest {
 
   @Test
   void rejectedPdaDoesNotResetSecondaryEngineSetting() throws Exception {
-    RecordingEngine secondary = new RecordingEngine();
+    RecordingEngine secondary = newEngine();
     secondary.pda = 2;
     Lizzie.leelaz2 = secondary;
     Lizzie.config.extraMode = ExtraMode.Double_Engine;
     engine.accept = false;
     assertRejected("pda 0");
     assertEquals(2, secondary.pda);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "pda, -1.5", "pda, 0", "pda, 1.5",
+    "dympdacap, -0.3", "dympdacap, 0", "dympdacap, 0.3"
+  })
+  void consolePdaUpdatesBothRecipientsBeforeSecondaryAnalysisIsSaved(String command, double value)
+      throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    boolean dynamic = command.equals("dympdacap");
+
+    submit(command + " " + value);
+
+    List<String> expected = dynamic
+        ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
+    assertEquals(expected, engine.commands);
+    assertEquals(expected, secondary.commands);
+    double expectedPda = dynamic ? 0 : value;
+    assertPdaState(engine, expectedPda, dynamic ? value : 0.2, !dynamic);
+    assertPdaState(secondary, expectedPda, dynamic ? value : 0.7, !dynamic);
+    assertEquals(dynamic ? "0.000" : String.valueOf(value), LizzieFrame.menu.txtPDA.getText());
+    assertEquals(1, engine.ponders);
+    assertEquals(0, board.analysisClears);
+    assertSecondarySgfPda(secondary, expectedPda);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"pda -1.5", "dympdacap 0.3"})
+  void occupiedSecondaryRejectsBothStatesAndTheSameConsoleInputCanBeRetried(String command)
+      throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    try (var reservation = secondary.beginExclusiveGtpLifecycleReservation()) {
+      assertNotNull(reservation);
+      assertRejected(command);
+      assertPdaState(secondary, 2, 0.7, false);
+      assertTrue(secondary.commands.isEmpty());
+    }
+
+    assertTrue(engine.commands.isEmpty());
+    assertTrue(secondary.commands.isEmpty());
+    submit(command);
+    boolean dynamic = command.startsWith("dympdacap");
+    assertPdaState(engine, dynamic ? 0 : -1.5, dynamic ? 0.3 : 0.2, !dynamic);
+    assertPdaState(secondary, dynamic ? 0 : -1.5, dynamic ? 0.3 : 0.7, !dynamic);
+    assertEquals(engine.commands, secondary.commands);
+    assertEquals(dynamic ? 2 : 1, engine.commands.size());
+    assertEquals(1, engine.ponders);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "false, pda 0", "false, dympdacap 0.3",
+    "true, pda 0", "true, dympdacap 0.3"
+  })
+  void consolePdaDoesNotChangeAnEngineExcludedFromMirroring(boolean legacyLeela, String command)
+      throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    if (legacyLeela) secondary.isLeela0110 = true;
+    else Lizzie.config.extraMode = ExtraMode.Normal;
+
+    submit(command);
+
+    assertFalse(engine.commands.isEmpty());
+    assertTrue(secondary.commands.isEmpty());
+    assertPdaState(secondary, 2, 0.7, false);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "reselection", "restart"})
+  void changedPrimaryDuringSendDoesNotReceiveStaleConsolePublication(String change)
+      throws Exception {
+    RecordingEngine replacement = newEngine();
+    replacement.pda = 4;
+    replacement.pdaCap = 0.9;
+    replacement.isStaticPda = false;
+    engine.afterPdaAdmission = () -> {
+      switch (change) {
+        case "replacement" -> Lizzie.setPrimaryEngine(replacement);
+        case "reselection" -> {
+          Lizzie.setPrimaryEngine(replacement);
+          Lizzie.setPrimaryEngine(engine);
+        }
+        case "restart" -> {
+          engine.installOutput();
+          engine.pda = 4;
+          engine.pdaCap = 0.9;
+          engine.isStaticPda = false;
+        }
+        default -> fail(change);
+      }
+    };
+
+    submit("pda -0.5");
+
+    assertEquals("1.5", LizzieFrame.menu.txtPDA.getText());
+    assertEquals(0, engine.ponders);
+    assertEquals(0, replacement.ponders);
+    assertPdaState(replacement, 4, 0.9, false);
+    if (change.equals("restart")) assertPdaState(engine, 4, 0.9, false);
+  }
+
+  @Test
+  void mirrorChangedDuringSendDoesNotReceiveThePreviousRecipientsPda() throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    RecordingEngine replacement = newEngine();
+    replacement.pda = 4;
+    replacement.pdaCap = 0.9;
+    replacement.isStaticPda = false;
+    engine.afterPdaAdmission = () -> Lizzie.leelaz2 = replacement;
+
+    submit("pda -1.5");
+
+    assertPdaState(engine, -1.5, 0.2, true);
+    assertPdaState(secondary, -1.5, 0.7, true);
+    assertPdaState(replacement, 4, 0.9, false);
+    assertTrue(replacement.commands.isEmpty());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "reselection", "restart", "mirror-replacement", "mirror-restart"})
+  void consoleAdmissionRejectsRecipientsChangedWhileWaitingForSelection(String change)
+      throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    RecordingEngine replacement = newEngine();
+    Field selectionField = EngineManager.class.getDeclaredField("ENGINE_SELECTION_STATE_LOCK");
+    selectionField.setAccessible(true);
+    Object selection = selectionField.get(null);
+    CompletableFuture<Boolean> result = new CompletableFuture<>();
+    Thread sender = new Thread(() -> {
+      try { result.complete(engine.sendConsolePda(0.3, true)); }
+      catch (Throwable failure) { result.completeExceptionally(failure); }
+    }, "console-pda-selection-race");
+    try {
+      synchronized (selection) {
+        sender.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (sender.isAlive() && sender.getState() != Thread.State.BLOCKED
+            && System.nanoTime() < deadline) Thread.sleep(5);
+        assertEquals(Thread.State.BLOCKED, sender.getState(), "admission must wait for selection");
+        switch (change) {
+          case "replacement" -> Lizzie.setPrimaryEngine(replacement);
+          case "reselection" -> {
+            Lizzie.setPrimaryEngine(replacement);
+            Lizzie.setPrimaryEngine(engine);
+          }
+          case "restart" -> engine.installOutput();
+          case "mirror-replacement" -> Lizzie.leelaz2 = replacement;
+          case "mirror-restart" -> secondary.installOutput();
+          default -> fail(change);
+        }
+      }
+      assertFalse(result.get(3, TimeUnit.SECONDS));
+      assertSettingsUnchanged();
+      assertPdaState(secondary, 2, 0.7, false);
+      assertTrue(secondary.commands.isEmpty());
+      assertTrue(replacement.commands.isEmpty());
+    } finally {
+      sender.join(3000);
+      assertFalse(sender.isAlive());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+  void consolePdaRequiresBothRecipientsToBeReady(boolean second, boolean stopped) throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    RecordingEngine target = second ? secondary : engine;
+    if (stopped) target.started = false;
+    else target.isLoaded = false;
+
+    assertRejected("dympdacap 0.3");
+
+    assertPdaState(secondary, 2, 0.7, false);
+    assertTrue(secondary.commands.isEmpty());
+  }
+
+  @Test
+  void consolePdaWithoutAReaderDoesNotPublishState() throws Exception {
+    Leelaz unbound = new Leelaz("");
+    unbound.started = unbound.isLoaded = true;
+    unbound.pda = 1.5;
+    Lizzie.setPrimaryEngine(unbound);
+    assertNull(unbound.engineIncarnationToken());
+
+    assertFalse(unbound.sendConsolePda(0.3, true));
+
+    assertEquals(1.5, unbound.pda);
+    assertNull(unbound.engineIncarnationToken());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void acceptedConsolePdaQueuedBeforeReaderReplacementCannotReachTheNewOutput(boolean dynamic)
+      throws Exception {
+    engine.requireResponseBeforeSend = true;
+    engine.withholdResponses = true;
+    engine.sendCommandNoLeelaz2("protocol_version");
+    assertEquals(List.of("protocol_version"), engine.commands);
+    assertTrue(engine.sendConsolePda(0.3, dynamic));
+    assertEquals(List.of("protocol_version"), engine.commands, "PDA must still be queued");
+
+    engine.installOutput();
+    engine.withholdResponses = false;
+    engine.pda = 4;
+    engine.pdaCap = 0.9;
+    engine.isStaticPda = false;
+    engine.sendCommandNoLeelaz2("protocol_version");
+    engine.awaitIdle();
+
+    assertEquals(List.of("protocol_version"),
+        engine.transports.get(engine.transports.size() - 1).commands());
+    assertPdaState(engine, 4, 0.9, false);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void consolePdaRetiresOldAnalysisBeforeEitherRecipientReceivesTheCommand(boolean dynamic)
+      throws Exception {
+    Lizzie.frame = RulesLayerTestHarness.allocate(AnalysisFrame.class);
+    LizzieFrame.toolbar = RulesLayerTestHarness.allocate(BottomToolbar.class);
+    RecordingEngine secondary = comparisonEngine();
+    engine.isKatago = secondary.isKatago = true;
+    engine.bestMovesEnginename = "console-primary";
+    secondary.bestMovesEnginename = "console-secondary";
+    engine.startAnalysis();
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    engine.info(100);
+    secondary.info(100);
+    assertEquals(100, board.getData().getPlayouts());
+    assertEquals(100, board.getData().getPlayouts2());
+    assertEquals(1.5, board.getData().pda);
+    assertEquals(2, board.getData().pda2);
+
+    // The primary is writing PDA, before either engine has replied or the mirror receives it.
+    engine.beforePdaWrite = () -> {
+      assertTrue(secondary.commands.stream().noneMatch(c -> c.startsWith("pda ")));
+      engine.info(200);
+      secondary.info(200);
+    };
+    assertTrue(engine.sendConsolePda(dynamic ? 0.3 : -1.5, dynamic));
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    assertEquals(100, board.getData().getPlayouts());
+    assertEquals(100, board.getData().getPlayouts2());
+    BoardData saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getData();
+    assertEquals(1.5, saved.pda);
+    assertEquals(2, saved.pda2);
+    assertEquals(100, saved.getPlayouts());
+    assertEquals(100, saved.getPlayouts2());
+
+    // A newly written analysis command must still publish results with the admitted PDA.
+    engine.startAnalysis();
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    engine.info(300);
+    secondary.info(300);
+    saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getData();
+    assertEquals(dynamic ? 0 : -1.5, saved.pda);
+    assertEquals(dynamic ? 0 : -1.5, saved.pda2);
+    assertEquals(300, saved.getPlayouts());
+    assertEquals(300, saved.getPlayouts2());
+  }
+
+  @Test
+  void consolePdaRetiresAnOlderAnalysisAlreadyWaitingToWrite() throws Exception {
+    engine.isKatago = true;
+    Field fenceField = EngineManager.class.getDeclaredField("ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK");
+    fenceField.setAccessible(true);
+    var fence = (java.util.concurrent.locks.ReentrantLock) fenceField.get(null);
+    Field writerField = Leelaz.class.getDeclaredField("normalCommandBeingSent");
+    writerField.setAccessible(true);
+    Method queueMethod = Leelaz.class.getDeclaredMethod("commandQueue");
+    queueMethod.setAccessible(true);
+    Object queue = queueMethod.invoke(engine);
+    CompletableFuture<Void> analysis;
+    fence.lock();
+    try {
+      analysis = CompletableFuture.runAsync(engine::startAnalysis);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (true) {
+        synchronized (queue) {
+          if (writerField.get(engine) != null) break;
+        }
+        if (System.nanoTime() >= deadline) fail("Analysis did not reach the physical writer");
+        Thread.sleep(5);
+      }
+      assertTrue(engine.sendConsolePda(-1.5, false));
+    } finally {
+      fence.unlock();
+    }
+    try {
+      analysis.get(3, TimeUnit.SECONDS);
+    } catch (java.util.concurrent.ExecutionException cancelled) {
+      // The early preflight discards silently; a writer already past it reports cancellation.
+      assertInstanceOf(IllegalStateException.class, cancelled.getCause());
+      assertTrue(cancelled.getCause().getMessage().contains("Ordinary analysis target changed"));
+    }
+    engine.awaitIdle();
+    assertEquals(List.of("pda -1.5"), engine.commands);
+    engine.startAnalysis();
+    engine.awaitIdle();
+    assertEquals(List.of("pda -1.5", "kata-analyze B 10"), engine.commands);
+  }
+
+  private RecordingEngine comparisonEngine() throws IOException {
+    RecordingEngine secondary = newEngine();
+    secondary.pda = 2;
+    secondary.pdaCap = 0.7;
+    secondary.isStaticPda = false;
+    Lizzie.config.extraMode = ExtraMode.Double_Engine;
+    Lizzie.leelaz2 = secondary;
+    return secondary;
+  }
+
+  private RecordingEngine newEngine() throws IOException {
+    RecordingEngine result = new RecordingEngine();
+    testEngines.add(result);
+    return result;
+  }
+
+  private static void assertPdaState(Leelaz target, double pda, double cap, boolean isStatic) {
+    assertEquals(pda, target.pda);
+    assertEquals(cap, target.pdaCap);
+    assertEquals(isStatic, target.isStaticPda);
+  }
+
+  private void assertSecondarySgfPda(Leelaz secondary, double pda) throws IOException {
+    MoveData move = new MoveData();
+    move.coordinate = "C3";
+    move.playouts = 100;
+    move.winrate = 55;
+    move.scoreMean = 1.25;
+    move.scoreStdev = 2;
+    move.isKataData = true;
+    move.variation = List.of("C3", "D4");
+    BoardData data = board.getHistory().getData();
+    data.tryToSetBestMoves2FromEngine(
+        new ArrayList<>(List.of(move)), "console-secondary", secondary, 100, null);
+    assertEquals(pda, data.pda2);
+
+    String sgf = SGFParser.saveToString(false);
+    assertTrue(sgf.contains("LZ2[") || sgf.contains("LZOP2["), sgf);
+    BoardData reopened = SGFParser.parseSgf(sgf, true).getData();
+    assertEquals(pda, reopened.pda2);
+    assertEquals(100, reopened.getPlayouts2());
+    assertEquals("C3", reopened.bestMoves2.get(0).coordinate);
   }
 
   @ParameterizedTest
@@ -317,6 +773,12 @@ class GtpConsoleSettingsTest {
   }
 
   private void submit(String command) throws Exception {
+    submitWithoutWaiting(command);
+    awaitConsoleIdle();
+    for (RecordingEngine testEngine : testEngines) testEngine.awaitIdle();
+  }
+
+  private void submitWithoutWaiting(String command) throws Exception {
     Method post = GtpConsolePane.class.getDeclaredMethod("postCommand", ActionEvent.class);
     post.setAccessible(true);
     try {
@@ -342,6 +804,43 @@ class GtpConsoleSettingsTest {
     }
   }
 
+  private void awaitConsoleIdle() throws Exception {
+    Field admitting = GtpConsolePane.class.getDeclaredField("admittingCommand");
+    Field pending = GtpConsolePane.class.getDeclaredField("pendingCommands");
+    admitting.setAccessible(true);
+    pending.setAccessible(true);
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (true) {
+      boolean[] idle = {false};
+      SwingUtilities.invokeAndWait(() -> {
+        try {
+          var queue = (java.util.Deque<?>) pending.get(console);
+          idle[0] = admitting.get(console) == null && (queue == null || queue.isEmpty());
+        } catch (IllegalAccessException failure) {
+          throw new AssertionError(failure);
+        }
+      });
+      if (idle[0]) return;
+      if (System.nanoTime() >= deadline) fail("Console admission continuation did not finish");
+      Thread.sleep(5);
+    }
+  }
+
+  private String consoleMessages() throws Exception {
+    Field field = GtpConsolePane.class.getDeclaredField("consoleBuffer");
+    field.setAccessible(true);
+    Object buffer = field.get(console);
+    if (buffer == null) return "";
+    Method poll = buffer.getClass().getDeclaredMethod("poll");
+    poll.setAccessible(true);
+    StringBuilder messages = new StringBuilder();
+    featurecat.lizzie.util.DocType doc;
+    while ((doc = (featurecat.lizzie.util.DocType) poll.invoke(buffer)) != null) {
+      messages.append(doc.content);
+    }
+    return messages.toString();
+  }
+
   private void setConsoleField(String name, Object value) {
     try {
       Field field = GtpConsolePane.class.getDeclaredField(name);
@@ -350,6 +849,14 @@ class GtpConsoleSettingsTest {
     } catch (ReflectiveOperationException failure) {
       throw new AssertionError(failure);
     }
+  }
+
+  private static final class AnalysisFrame extends LizzieFrame {
+    @Override
+    public void requestAnalysisRefresh() {}
+
+    @Override
+    public void requestAnalysisTitleUpdate() {}
   }
 
   private static final class RecordingBoard extends Board {
@@ -379,13 +886,79 @@ class GtpConsoleSettingsTest {
     }
   }
 
-  private static final class RecordingEngine extends Leelaz {
-    final List<String> commands = new ArrayList<>();
+  private static final class RecordingEngine extends Leelaz implements AutoCloseable {
+    final List<String> commands = new CopyOnWriteArrayList<>();
+    final List<ExactSnapshotRestoreProtocolFixture.Transport> transports = new ArrayList<>();
     boolean accept = true, fail;
     int ponders, heatmaps, admissionAttempts;
+    Runnable afterPdaAdmission;
+    Runnable beforePdaWrite;
+    boolean withholdResponses;
+    CompletableFuture<Void> pdaCompletionGate;
+    CompletableFuture<Boolean> lastPdaAdmission;
 
     RecordingEngine() throws IOException {
       super("");
+      started = isLoaded = true;
+      installOutput();
+    }
+
+    void installOutput() {
+      try {
+        var transport = ExactSnapshotRestoreProtocolFixture.installAsync(this, command -> {
+          commands.add(command);
+          if (command.startsWith("pda ") && beforePdaWrite != null) {
+            Runnable callback = beforePdaWrite;
+            beforePdaWrite = null;
+            callback.run();
+          }
+          return withholdResponses ? null : ExactSnapshotRestoreProtocolFixture.Response.success();
+        });
+        var install = Leelaz.class.getDeclaredMethod("installFreshCommandOutputForTest", OutputStream.class);
+        install.setAccessible(true);
+        install.invoke(this, transport);
+        transports.add(transport);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    void startAnalysis() {
+      assertTrue(super.sendRawConsoleCommand("kata-analyze B 10"));
+    }
+
+    void info(int visits) {
+      try {
+        Method parse = Leelaz.class.getDeclaredMethod("parseLine", String.class);
+        parse.setAccessible(true);
+        parse.invoke(this, "info move C3 visits " + visits
+            + " winrate 0.55 scoreMean 1.25 scoreStdev 2 pv C3 D4");
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    void awaitIdle() throws Exception {
+      var queueMethod = Leelaz.class.getDeclaredMethod("commandQueue");
+      queueMethod.setAccessible(true);
+      var queue = (java.util.Deque<?>) queueMethod.invoke(this);
+      Field writing = Leelaz.class.getDeclaredField("normalCommandSendInProgress");
+      writing.setAccessible(true);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (true) {
+        synchronized (queue) {
+          if (queue.isEmpty() && !writing.getBoolean(this)) break;
+        }
+        if (System.nanoTime() >= deadline) fail("Console command output did not finish");
+        Thread.sleep(5);
+      }
+      for (var transport : transports) transport.awaitResponses();
+    }
+
+    @Override
+    public void close() throws Exception {
+      awaitIdle();
+      for (var transport : transports) transport.close();
     }
 
     @Override
@@ -424,8 +997,43 @@ class GtpConsoleSettingsTest {
     }
 
     @Override
+    public CompletableFuture<Boolean> sendConsolePdaAsync(
+        double value, boolean dynamic, CustomPdaTarget target) {
+      admissionAttempts++;
+      if (fail) return CompletableFuture.failedFuture(new IllegalStateException("test transport failure"));
+      CompletableFuture<Boolean> admission = accept
+          ? super.sendConsolePdaAsync(value, dynamic, target)
+          : CompletableFuture.completedFuture(false);
+      lastPdaAdmission = admission;
+      if (afterPdaAdmission != null) {
+        Runnable callback = afterPdaAdmission;
+        afterPdaAdmission = null;
+        admission = admission.thenApplyAsync(accepted -> {
+          if (accepted) {
+            try { awaitIdle(); }
+            catch (Exception failure) { throw new AssertionError(failure); }
+            callback.run();
+          }
+          return accepted;
+        });
+      }
+      CompletableFuture<Void> gate = pdaCompletionGate;
+      return gate == null ? admission : admission.thenCombine(gate, (accepted, ignored) -> accepted);
+    }
+
+    @Override
     public boolean sendConsolePda(double value, boolean dynamic) {
-      return admit(dynamic ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value));
+      admissionAttempts++;
+      if (fail) throw new IllegalStateException("test transport failure");
+      boolean accepted = accept && super.sendConsolePda(value, dynamic);
+      if (accepted && afterPdaAdmission != null) {
+        try { awaitIdle(); }
+        catch (Exception failure) { throw new AssertionError(failure); }
+        Runnable callback = afterPdaAdmission;
+        afterPdaAdmission = null;
+        callback.run();
+      }
+      return accepted;
     }
 
     private boolean admit(List<String> batch) {

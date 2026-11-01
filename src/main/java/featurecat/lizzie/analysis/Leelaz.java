@@ -99,6 +99,9 @@ public class Leelaz {
   private static final AtomicInteger BENCHMARK_TASK_THREAD_SEQUENCE = new AtomicInteger();
   private static final Executor COMMAND_DISPATCH_EXECUTOR =
       Executors.newCachedThreadPool(Leelaz::newCommandDispatchThread);
+  // Console workers own admission only, including any mirrored or reponder commands.
+  private static final ThreadLocal<Boolean> DEFER_CONSOLE_TRANSPORT = new ThreadLocal<>();
+  private static final ThreadLocal<CustomPdaTarget> CONSOLE_PONDER_TARGET = new ThreadLocal<>();
   private static final ScheduledExecutorService RUNTIME_THREAD_TIMEOUT_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(Leelaz::newCommandDispatchThread);
 
@@ -836,13 +839,18 @@ public class Leelaz {
   }
 
   private void retireMoveFocusForStateChange() {
+    retireMoveFocusForStateChange(Runnable::run);
+  }
+
+  private void retireMoveFocusForStateChange(java.util.function.Consumer<Runnable> afterAdmission) {
     MoveFocusState state = moveFocusState;
     if (state == null || state.retired) return;
     state.pendingAdoption = false;
     state.retired = true;
     state.desired = Set.of();
-    cancelUnwrittenMoveFocusUpdate(state);
-    COMMAND_DISPATCH_EXECUTOR.execute(() -> state.owner.onFocusStopped(state.context, true));
+    cancelUnwrittenMoveFocusUpdate(state, afterAdmission);
+    afterAdmission.accept(
+        () -> COMMAND_DISPATCH_EXECUTOR.execute(() -> state.owner.onFocusStopped(state.context, true)));
   }
 
   void retireMoveFocus(TrackingAnalysisController owner, TrackingAnalysisController.Context context) {
@@ -856,6 +864,11 @@ public class Leelaz {
   }
 
   private void cancelUnwrittenMoveFocusUpdate(MoveFocusState state) {
+    cancelUnwrittenMoveFocusUpdate(state, Runnable::run);
+  }
+
+  private void cancelUnwrittenMoveFocusUpdate(
+      MoveFocusState state, java.util.function.Consumer<Runnable> afterAdmission) {
     MoveFocusResponse pending = moveFocusBoundary;
     if (pending == null || pending.state != state || !pending.analyze || pending.probe
         || pending.command == null) return;
@@ -867,7 +880,7 @@ public class Leelaz {
       if (command.claimCommandCountRetirement()) cmdNumber = Math.max(1, cmdNumber - 1);
       if (currentCmdNum > cmdNumber - 1) currentCmdNum = cmdNumber - 1;
     }
-    pending.finishSuperseded();
+    afterAdmission.accept(pending::finishSuperseded);
   }
 
   private void continueMoveFocusAfterStop(MoveFocusState state) {
@@ -2319,6 +2332,8 @@ public class Leelaz {
   public AutomaticRestartAttempt beginAutomaticEngineRestartAttempt() { return beginAutomaticRestartAttempt(false); }
 
   private AutomaticRestartAttempt beginAutomaticRestartAttempt(boolean allowUnrestoredState) {
+    ReaderStreamBinding binding = readerStreamBinding;
+    if (binding != null && binding.unsupportedEngineReason != null) return null;
     if (!allowUnrestoredState
         && (engineStateUnrestored
             || readBoardGmaReservation != null
@@ -3890,6 +3905,11 @@ public class Leelaz {
     }
   }
 
+  /** Optimistic EDT capture only; consumers must revalidate before committing work. */
+  public Object engineIncarnationSnapshot() {
+    return readerStreamBinding;
+  }
+
   public Object engineIncarnationToken() {
     return captureEngineIncarnationFence();
   }
@@ -5238,6 +5258,7 @@ public class Leelaz {
     private int runtimeUiPresentationsInProgress;
     private AnalysisStateLineage queuedAnalysisStateLineage;
     private Throwable terminalFailure;
+    private volatile String unsupportedEngineReason;
     private boolean terminalCleanupStarted;
     /** The dead carrier's command leases were settled before deferred engine-game recovery. */
     private boolean engineGameCommandStateRetired;
@@ -6459,6 +6480,13 @@ public class Leelaz {
     StartupCommandAction startupCommandAction = StartupCommandAction.NONE;
     if (isCheckingName) {
       binding.reportedEngineName = String.join(" ", Arrays.copyOfRange(params, 1, params.length));
+      String identity = binding.reportedEngineName.trim().toLowerCase(Locale.ROOT);
+      if (identity.startsWith("leela") || identity.equals("sai")
+          || identity.startsWith("sai ") || identity.startsWith("sai-")) {
+        binding.unsupportedEngineReason = text("Leelaz.unsupportedLeela",
+            "Leela, Leela Zero and SAI engines are no longer supported. Select KataGo or another supported engine. Saved engine settings and SGF files have been preserved.");
+        throw new IllegalStateException(binding.unsupportedEngineReason);
+      }
       noAnalyze = false;
       isKataGoPda = false;
       pkMoveStartTime = System.currentTimeMillis();
@@ -6469,24 +6497,9 @@ public class Leelaz {
         this.noLcb = true;
         canAddPlayer = true;
       }
-      if (params[1].toLowerCase().startsWith("sai")) this.isSai = true;
-      if ((params[1].toLowerCase().startsWith("leela")
-              && params.length > 2
-              && params[2].toLowerCase().startsWith("zero"))
-          || params[1].toLowerCase().startsWith("pachi")) {
+      if (params[1].toLowerCase().startsWith("pachi")) {
         this.isLeela = true;
         canAddPlayer = true;
-      }
-      if (params[1].equals("Leela") && params.length == 2) {
-        isLeela0110 = true;
-        startupCommandAction =
-            StartupCommandAction.of(
-                StartupCommandKind.CLOSE_BUNDLED,
-                expectedPrimaryGeneration,
-                expectedEngineIncarnation,
-                engineGameTransaction,
-                false,
-                suppressGlobalPresentation);
       }
       //						if (params[1].startsWith("KataGoYm"))
       //							sendCommandToLeelazWithOutLog("lizzie_use");
@@ -7630,7 +7643,12 @@ public class Leelaz {
    * physically written analysis command can publish an owner for the new generation.
    */
   private void invalidateAnalysisInfoPayloadForLocalStateChange(boolean resetScore) {
-    retireMoveFocusForStateChange();
+    invalidateAnalysisInfoPayloadForLocalStateChange(resetScore, Runnable::run);
+  }
+
+  private void invalidateAnalysisInfoPayloadForLocalStateChange(
+      boolean resetScore, java.util.function.Consumer<Runnable> afterAdmission) {
+    retireMoveFocusForStateChange(afterAdmission);
     analysisOutputGeneration.incrementAndGet();
     resetAnalysisInfoPayload(resetScore);
   }
@@ -9997,14 +10015,14 @@ public class Leelaz {
   }
 
   private long sendStatefulOrdinaryCommands(
-      List<String> commands, StatefulOrdinaryMutationKind mutationKind, CustomPdaUpdate pdaUpdate) {
+      List<String> commands, StatefulOrdinaryMutationKind mutationKind, PdaUpdate pdaUpdate) {
     return sendStatefulOrdinaryCommands(commands, mutationKind, pdaUpdate, null);
   }
 
   private long sendStatefulOrdinaryCommands(
       List<String> commands,
       StatefulOrdinaryMutationKind mutationKind,
-      CustomPdaUpdate pdaUpdate,
+      PdaUpdate pdaUpdate,
       GamePdaUpdate gamePdaUpdate) {
     List<String> capturedCommands = List.copyOf(commands);
     if (capturedCommands.isEmpty()) {
@@ -10048,9 +10066,10 @@ public class Leelaz {
     QueuedCommand[] admitted = new QueuedCommand[capturedCommands.size()];
     QueuedCommand[] mirroredAdmitted =
         mirroredEngine == null ? null : new QueuedCommand[capturedCommands.size()];
+    // Console commands use ordinary queue retirement on reader rebind, preserving async EDT output.
     ReaderStreamBinding commandBinding =
         gamePdaUpdate != null ? gamePdaUpdate.binding
-            : pdaUpdate != null
+            : pdaUpdate != null && !pdaUpdate.fromConsole
             ? pdaUpdate.target.binding
             : startupBinding == null ? positionRestoreBindingContext.get() : startupBinding;
     Leelaz capturedMirror = mirroredEngine;
@@ -10096,7 +10115,11 @@ public class Leelaz {
       }
     };
     long admissionGeneration = pdaUpdate == null
-        ? admission.getAsLong() : pdaUpdate.target.admit(admission);
+        ? admission.getAsLong() : pdaUpdate.admit(admission);
+    if (pdaUpdate != null && pdaUpdate.result != null) {
+      // Queue admission is complete; callbacks and physical output have not begun.
+      pdaUpdate.result.complete(admissionGeneration >= 0L);
+    }
     if (admissionGeneration < 0L) {
       if (startupTransaction != null) {
         throw new IllegalStateException(
@@ -10134,14 +10157,16 @@ public class Leelaz {
       RestartBootstrapReceipt mirroredBootstrapReceipt,
       OrdinaryEnqueueEffects mirroredEffects,
       QueuedCommand[] mirroredAdmitted,
-      CustomPdaUpdate pdaUpdate,
+      PdaUpdate pdaUpdate,
       GamePdaUpdate gamePdaUpdate) {
-    if (pdaUpdate != null && !pdaUpdate.target.isCurrent(mirroredEngine)) return -1L;
+    if (pdaUpdate != null
+        && ((!pdaUpdate.fromConsole && !(isKataGoPda || isDymPda))
+            || !pdaUpdate.target.isCurrent(mirroredEngine))) return -1L;
     if (gamePdaUpdate != null && !gamePdaUpdate.isCurrent()) return -1L;
     ReaderStreamBinding mirroredCommandBinding =
         mirroredEngine == null ? null
             : gamePdaUpdate != null ? gamePdaUpdate.secondBinding
-            : pdaUpdate != null ? pdaUpdate.target.mirrorBinding
+            : pdaUpdate != null && !pdaUpdate.fromConsole ? pdaUpdate.target.mirrorBinding
             : mirroredEngine.positionRestoreBindingContext.get();
     for (String command : commands) {
       if (!canAdmitOrdinaryCommandLocked(
@@ -10189,10 +10214,11 @@ public class Leelaz {
     installStatefulOrdinaryBatchFailureLinks(
         admitted, mirroredEngine, mirroredAdmitted);
     if (pdaUpdate != null) {
-      pda = pdaUpdate.dynamic ? 0 : pdaUpdate.value;
-      isStaticPda = !pdaUpdate.dynamic;
-      if (pdaUpdate.dynamic) pdaCap = pdaUpdate.value;
-      else if (pdaUpdate.value == 0 && mirroredEngine != null) mirroredEngine.pda = 0;
+      pdaUpdate.applyTo(this, effects);
+      if (mirroredEngine != null) {
+        if (pdaUpdate.fromConsole) pdaUpdate.applyTo(mirroredEngine, mirroredEffects);
+        else if (!pdaUpdate.dynamic && pdaUpdate.value == 0) mirroredEngine.pda = 0;
+      }
     }
     if (gamePdaUpdate != null) {
       pda = pdaBeforeGame = gamePdaUpdate.value;
@@ -10711,6 +10737,8 @@ public class Leelaz {
               classifyEngineGameRecoveryCause(binding));
       if (disposition == EngineManager.EngineGameRecoveryDisposition.HANDLED) {
         isDownWithError = true;
+        if (binding.unsupportedEngineReason != null)
+          return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
         if (binding.remoteTransport != null) {
           rememberRecentLine(
               recentStderrLines,
@@ -10718,6 +10746,10 @@ public class Leelaz {
         }
         return null;
       }
+    }
+    if (binding.unsupportedEngineReason != null) {
+      isDownWithError = true;
+      return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
     }
     if (binding.remoteTransport != null && binding.remoteTransport.isRecoveryRequested()) {
       isDownWithError = true;
@@ -10869,6 +10901,8 @@ public class Leelaz {
       return EngineManager.EngineGameRecoveryCause.PROCESS_EXIT;
     }
     ReaderStreamBinding binding = (ReaderStreamBinding) expectedIncarnation;
+    if (binding.unsupportedEngineReason != null)
+      return EngineManager.EngineGameRecoveryCause.UNSUPPORTED_ENGINE;
     synchronized (engineArbitrationLock()) {
       if (readerStreamBinding != binding) {
         return EngineManager.EngineGameRecoveryCause.PROCESS_EXIT;
@@ -11707,11 +11741,70 @@ public class Leelaz {
     if (!Double.isFinite(value)) return false;
     List<String> commands =
         dynamic ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
-    return sendStatefulOrdinaryCommands(commands, StatefulOrdinaryMutationKind.NONE) >= 0L;
+    return sendStatefulOrdinaryCommands(
+        commands, StatefulOrdinaryMutationKind.NONE,
+        new PdaUpdate(new CustomPdaTarget(true), value, dynamic, true, null)) >= 0L;
   }
 
-  /** An editor's original readers; a replacement engine or comparison reader cannot inherit it. */
+  /** Nonblocking capture for an EDT request; admission revalidates every captured reader. */
+  public CustomPdaTarget captureConsolePdaTarget(long generation, Object incarnation) {
+    if (generation < 0 || readerStreamBinding != incarnation
+        || Lizzie.capturePrimaryEngineGenerationSnapshot(this) != generation) return null;
+    CustomPdaTarget target = new CustomPdaTarget(true, generation);
+    return target.binding == incarnation ? target : null;
+  }
+
+  /** Completion means atomic queue admission, before callbacks/output and never engine ACK. */
+  public java.util.concurrent.CompletableFuture<Boolean> sendConsolePdaAsync(
+      double value, boolean dynamic, CustomPdaTarget target) {
+    var result = new java.util.concurrent.CompletableFuture<Boolean>();
+    if (!Double.isFinite(value) || target == null || target.owner != this
+        || !target.requirePrimarySelection) {
+      result.complete(false);
+      return result;
+    }
+    List<String> commands = dynamic
+        ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
+    COMMAND_DISPATCH_EXECUTOR.execute(() -> {
+      DEFER_CONSOLE_TRANSPORT.set(true);
+      try {
+        long admitted = sendStatefulOrdinaryCommands(commands, StatefulOrdinaryMutationKind.NONE,
+            new PdaUpdate(target, value, dynamic, true, result));
+        result.complete(admitted >= 0);
+      } catch (RuntimeException | Error failure) {
+        if (!result.completeExceptionally(failure)) {
+          rememberRecentLine(recentStderrLines, "Console PDA output failed: " + failure.getMessage());
+        }
+        if (failure instanceof Error error) throw error;
+      } finally {
+        DEFER_CONSOLE_TRANSPORT.remove();
+      }
+    });
+    return result;
+  }
+
+  /** Queue the captured recipient's reponder without making an EDT continuation wait for I/O. */
+  public java.util.concurrent.CompletableFuture<Void> resumeConsolePonderAsync(CustomPdaTarget target) {
+    return java.util.concurrent.CompletableFuture.runAsync(() -> {
+      if (target == null || target.owner != this) return;
+      DEFER_CONSOLE_TRANSPORT.set(true);
+      CONSOLE_PONDER_TARGET.set(target);
+      try {
+        // Ponder also consults selection and UI state: never hold PRIMARY around that work.
+        // Its eventual command admission reclaims the captured target below.
+        // The optimistic pondering read is not permission to undo a later user pause.
+        // Reuse the pause/handback gate through command admission, including mirrored analysis.
+        if (target.isCurrentSelection() && isPondering()) ponderIfAnalysisControlAllows();
+      } finally {
+        CONSOLE_PONDER_TARGET.remove();
+        DEFER_CONSOLE_TRANSPORT.remove();
+      }
+    }, COMMAND_DISPATCH_EXECUTOR);
+  }
+
+  /** Captured PDA readers; a replacement engine or comparison reader cannot inherit the target. */
   public final class CustomPdaTarget {
+    private final Leelaz owner = Leelaz.this;
     private final ReaderStreamBinding binding = readerStreamBinding;
     private final Leelaz mirror;
     private final ReaderStreamBinding mirrorBinding;
@@ -11720,8 +11813,13 @@ public class Leelaz {
     private final EngineGameView participantGame;
 
     private CustomPdaTarget(boolean requirePrimarySelection) {
+      this(requirePrimarySelection,
+          requirePrimarySelection ? Lizzie.capturePrimaryEngineGeneration(Leelaz.this) : -1);
+    }
+
+    private CustomPdaTarget(boolean requirePrimarySelection, long generation) {
       this.requirePrimarySelection = requirePrimarySelection;
-      primaryGeneration = requirePrimarySelection ? Lizzie.capturePrimaryEngineGeneration(Leelaz.this) : -1;
+      primaryGeneration = generation;
       participantGame = requirePrimarySelection ? null : Lizzie.engineGame.current().view();
       mirror = currentMirror();
       mirrorBinding = mirror == null ? null : mirror.readerStreamBinding;
@@ -11735,8 +11833,12 @@ public class Leelaz {
     }
 
     public boolean isCurrent() {
+      return (isKataGoPda || isDymPda) && isCurrentSelection();
+    }
+
+    private boolean isCurrentSelection() {
       return (!requirePrimarySelection || (primaryGeneration >= 0
-              && Lizzie.capturePrimaryEngineGeneration(Leelaz.this) == primaryGeneration))
+              && Lizzie.capturePrimaryEngineGenerationSnapshot(Leelaz.this) == primaryGeneration))
           && isCurrent(currentMirror());
     }
 
@@ -11746,14 +11848,13 @@ public class Leelaz {
         if (participantGame == null || !game.playingGenmove() || game.view() != participantGame)
           return false;
       }
-      return (isKataGoPda || isDymPda)
-          && isCurrentLiveEngineIncarnation(binding)
+      return isCurrentLiveEngineIncarnation(binding)
           && currentMirror == mirror
           && (mirror == null || mirror.isCurrentLiveEngineIncarnation(mirrorBinding));
     }
 
     // Hold selection only for queue admission; transport and callbacks run after these locks exit.
-    private long admit(java.util.function.LongSupplier admission) {
+    private long admit(java.util.function.LongSupplier admission, boolean serializeAnalysis) {
       Leelaz primary = requirePrimarySelection ? Leelaz.this : Lizzie.leelaz;
       if (primary == null) return -1;
       long generation = requirePrimarySelection
@@ -11762,15 +11863,22 @@ public class Leelaz {
       Leelaz activeMirror = primary.activeComparisonEngine();
       long[] admitted = {-1};
       do {
-        Boolean selected = EngineManager.callIfCurrentAnalysisSelection(
+        Boolean[] selected = {null};
+        Runnable attempt = () -> selected[0] = EngineManager.callIfCurrentAnalysisSelection(
             primary, activeMirror, mirror,
             () -> Lizzie.tryCallIfPrimaryEngine(primary, generation, () -> {
-              if (!isCurrent()) return false;
+              if (!isCurrentSelection()) return false;
               admitted[0] = admission.getAsLong();
               return true;
             }));
-        if (selected != null) return selected ? admitted[0] : -1;
-        // Match ordinary-analysis lock ordering: release selection before waiting for PRIMARY.
+        if (serializeAnalysis) {
+          if (!EngineManager.runIfNoActiveEngineGameAnalysisOutput(attempt)) return -1;
+        } else {
+          attempt.run();
+        }
+        if (selected[0] != null) return selected[0] ? admitted[0] : -1;
+        // A root restore can hold PRIMARY while waiting for the analysis fence. Release BOTH
+        // selection and analysis fences before waiting for PRIMARY, then revalidate the target.
       } while (Lizzie.capturePrimaryEngineGeneration(primary) == generation);
       return -1;
     }
@@ -11784,11 +11892,37 @@ public class Leelaz {
       List<String> commands = dynamic
           ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
       return sendStatefulOrdinaryCommands(
-          commands, StatefulOrdinaryMutationKind.NONE, new CustomPdaUpdate(this, value, dynamic)) >= 0;
+          commands, StatefulOrdinaryMutationKind.NONE, new PdaUpdate(this, value, dynamic, false, null)) >= 0;
     }
   }
 
-  private record CustomPdaUpdate(CustomPdaTarget target, double value, boolean dynamic) {}
+  private record PdaUpdate(
+      CustomPdaTarget target, double value, boolean dynamic, boolean fromConsole,
+      java.util.concurrent.CompletableFuture<Boolean> result) {
+    private long admit(java.util.function.LongSupplier admission) {
+      return target.admit(admission, fromConsole);
+    }
+
+    private void applyTo(Leelaz engine, OrdinaryEnqueueEffects effects) {
+      if (fromConsole) {
+        // Only a subsequent analysis command may publish results under the newly admitted PDA.
+        engine.invalidateAnalysisInfoPayloadForLocalStateChange(false, effects.afterAdmission::add);
+        // An older analysis may already be dequeued but still waiting for the output fence.
+        // Retire its target too, so it cannot install an owner ahead of this PDA batch.
+        retirePendingAnalysis(engine.normalCommandBeingSent);
+        for (QueuedCommand queued : engine.commandQueue()) retirePendingAnalysis(queued);
+      }
+      engine.pda = dynamic ? 0 : value;
+      engine.isStaticPda = !dynamic;
+      if (dynamic) engine.pdaCap = value;
+    }
+
+    private static void retirePendingAnalysis(QueuedCommand command) {
+      if (command != null && isOrdinaryPositionAnalysisCommand(command.command)) {
+        command.ordinaryAnalysisTarget = null;
+      }
+    }
+  }
 
   public CustomPdaTarget captureCustomPdaTarget(boolean requirePrimarySelection) {
     return new CustomPdaTarget(requirePrimarySelection);
@@ -12104,6 +12238,21 @@ public class Leelaz {
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission,
       boolean defaultMirrorMustRemainAbsent,
       Supplier<Boolean> admission) {
+    CustomPdaTarget consoleTarget = CONSOLE_PONDER_TARGET.get();
+    if (consoleTarget != null) {
+      return consoleTarget.owner == this
+          && consoleTarget.admit(() -> {
+            if ((mirroredEngine != null && mirroredEngine != consoleTarget.mirror)
+                || (defaultMirrorMustRemainAbsent && resolveDefaultCommandMirrorEngine() != null))
+              return -1L;
+            boolean analysis = isOrdinaryPositionAnalysisCommand(command)
+                || isOrdinaryPositionAnalysisCommand(mirroredCommand);
+            boolean accepted = analysis
+                ? SessionRulesSynchronizer.withOrdinaryAnalysisAdmission(this, mirroredEngine, admission)
+                : admission.get();
+            return accepted ? 0L : -1L;
+          }, false) >= 0;
+    }
     if (startupTransactionAtAdmission != null) {
       return admission.get();
     }
@@ -12170,7 +12319,7 @@ public class Leelaz {
             && (isOrdinaryPositionAnalysisCommand(command)
                 || isOrdinaryPositionAnalysisCommand(mirroredCommand));
     boolean accepted =
-        analysisCommand
+        (analysisCommand || CONSOLE_PONDER_TARGET.get() != null)
             ? withOrdinaryAnalysisSelectionLocks(
                 command,
                 mirroredEngine,
@@ -12355,7 +12504,7 @@ public class Leelaz {
     }
     OrdinaryEnqueueEffects effects = new OrdinaryEnqueueEffects();
     boolean accepted =
-        isOrdinaryPositionAnalysisCommand(command)
+        (isOrdinaryPositionAnalysisCommand(command) || CONSOLE_PONDER_TARGET.get() != null)
             ? withOrdinaryAnalysisSelectionLocks(
                 command,
                 null,
@@ -12441,6 +12590,7 @@ public class Leelaz {
   }
 
   private final class OrdinaryEnqueueEffects {
+    final List<Runnable> afterAdmission = new ArrayList<>();
     private final List<QueuedCommand> coalescedCommands = new ArrayList<>();
   }
 
@@ -12453,6 +12603,10 @@ public class Leelaz {
       Object expectedLeela0110StateToken,
       RestartBootstrapReceipt bootstrapReceipt,
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission) {
+    CustomPdaTarget consoleTarget = CONSOLE_PONDER_TARGET.get();
+    if (consoleTarget != null
+        && ((this != consoleTarget.owner && this != consoleTarget.mirror)
+            || !consoleTarget.isCurrentSelection())) return false;
     return hasGtpCapability()
         && !shouldDropStaleForegroundRestoreCommand()
         && !shouldSuppressNormalCommandForForegroundAnalysis()
@@ -12536,6 +12690,7 @@ public class Leelaz {
 
   /** Publishes coalesced-command callbacks only after both endpoint locks are released. */
   private void publishOrdinaryEnqueueEffects(OrdinaryEnqueueEffects effects) {
+    for (Runnable effect : effects.afterAdmission) effect.run();
     for (QueuedCommand coalesced : effects.coalescedCommands) {
       RuntimeException failure =
           new IllegalStateException("Queued GTP command was coalesced before output write");
@@ -13483,7 +13638,8 @@ public class Leelaz {
 
   /** Sends a command from command queue for leelaz to execute if it is ready */
   private void trySendCommandFromQueue() {
-    if (SwingUtilities.isEventDispatchThread() && canDispatchOrdinaryCommandOffEventThread()) {
+    if (Boolean.TRUE.equals(DEFER_CONSOLE_TRANSPORT.get())
+        || (SwingUtilities.isEventDispatchThread() && canDispatchOrdinaryCommandOffEventThread())) {
       requestCommandDispatchOffEventThread();
       return;
     }
@@ -13651,6 +13807,12 @@ public class Leelaz {
                     || lastQueuedCommand.startsWith("heatmap")))) return;
       }
       EngineManager.EngineGameOwnerTransaction game = queueHead.engineGameTransaction();
+      if (queueHead.consoleTransportOffEventThread && SwingUtilities.isEventDispatchThread()) {
+        // Admission can complete before its worker schedules transport. A later UI command or
+        // response may drain this queue first; delivery policy belongs to the selected command.
+        requestCommandDispatchOffEventThread();
+        return;
+      }
       if (game != null && game.mutationLock.isHeldByCurrentThread()) {
         // State/clock publication may enqueue several ordered commands under the game fence.
         // The existing dispatcher owns delivery and its permit owns asynchronous failures.
@@ -19672,6 +19834,8 @@ public class Leelaz {
 
   private static final class QueuedCommand {
     private final String command;
+    private final boolean consoleTransportOffEventThread =
+        Boolean.TRUE.equals(DEFER_CONSOLE_TRANSPORT.get());
     private final Runnable onResponse;
     private final CommandSendFailureHandler onSendFailure;
     /** Internal queue-consistency link; deliberately separate from tracked restore callbacks. */
