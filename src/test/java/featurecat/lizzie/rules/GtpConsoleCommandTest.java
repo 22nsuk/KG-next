@@ -39,7 +39,7 @@ class GtpConsoleCommandTest {
     previousConsole = Lizzie.gtpConsole;
     rules = RulesLayerTestHarness.open(5);
     engine = new RecordingEngine();
-    Lizzie.leelaz = engine;
+    Lizzie.setPrimaryEngine(engine);
     EngineManager.isEmpty = false;
     // Most cases are headless, but call the unchanged production postCommand entry point on EDT.
     console = RulesLayerTestHarness.allocate(GtpConsolePane.class);

@@ -185,12 +185,107 @@ class GtpConsoleSettingsTest {
     assertEquals(1, engine.admissionAttempts);
   }
 
-  @ParameterizedTest
-  @ValueSource(strings = {"komi 6.5", "pda -0.5", "dympdacap 0.3"})
-  void synchronousSendFailureDoesNotPublishSettings(String command) throws Exception {
+  @Test
+  void synchronousSendFailureDoesNotPublishSettings() throws Exception {
     engine.fail = true;
-    assertThrows(IllegalStateException.class, () -> submit(command));
+    assertThrows(IllegalStateException.class, () -> submit("komi 6.5"));
     assertSettingsUnchanged();
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"pda -0.5", "dympdacap 0.3"})
+  void asynchronousPdaFailureIsReportedWithoutPublishingSettings(String command) throws Exception {
+    engine.fail = true;
+    submit(command);
+    assertSettingsUnchanged();
+    assertTrue(consoleMessages().contains("test transport failure"));
+  }
+
+  @Test
+  void pendingPdaKeepsLaterConsoleCommandsInSubmissionOrder() throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    engine.awaitIdle();
+    submitWithoutWaiting("known_extension later");
+    assertFalse(engine.commands.contains("known_extension later"));
+    assertEquals(0, engine.ponders);
+
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    engine.awaitIdle();
+    assertEquals(List.of("pda -0.5", "known_extension later"), engine.commands);
+    assertEquals(1, engine.ponders);
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "reselection", "restart"})
+  void pendingCommandsCannotFollowAChangedPrimaryOrReader(String change) throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("known_extension stale");
+    RecordingEngine replacement = newEngine();
+    switch (change) {
+      case "replacement" -> Lizzie.setPrimaryEngine(replacement);
+      case "reselection" -> {
+        Lizzie.setPrimaryEngine(replacement);
+        Lizzie.setPrimaryEngine(engine);
+      }
+      case "restart" -> {
+        engine.awaitIdle();
+        engine.installOutput();
+      }
+      default -> fail(change);
+    }
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    assertFalse(engine.commands.contains("known_extension stale"));
+    assertTrue(replacement.commands.isEmpty());
+    assertEquals(0, engine.ponders);
+    assertEquals("1.5", LizzieFrame.menu.txtPDA.getText());
+    assertTrue(consoleMessages().contains("cancelled"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"replacement", "restart", "disabled"})
+  void queuedPdaKeepsTheMirrorCapturedAtSubmission(String change) throws Exception {
+    RecordingEngine secondary = comparisonEngine();
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("dympdacap 0.3");
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    RecordingEngine replacement = newEngine();
+    switch (change) {
+      case "replacement" -> Lizzie.leelaz2 = replacement;
+      case "restart" -> secondary.installOutput();
+      case "disabled" -> EngineManager.publishExtraMode(Lizzie.config, ExtraMode.Normal);
+      default -> fail(change);
+    }
+    engine.pdaCompletionGate.complete(null);
+    awaitConsoleIdle();
+    for (RecordingEngine testEngine : testEngines) testEngine.awaitIdle();
+    assertEquals(List.of("pda -0.5"), engine.commands);
+    assertEquals(List.of("pda -0.5"), secondary.commands);
+    assertTrue(replacement.commands.isEmpty());
+    assertTrue(engine.isStaticPda);
+    assertEquals(0.2, engine.pdaCap);
+    assertTrue(consoleMessages().contains("not admitted"));
+  }
+
+  @Test
+  void failedPendingPdaReportsFailureAndDrainsTheNextCommand() throws Exception {
+    engine.pdaCompletionGate = new CompletableFuture<>();
+    submitWithoutWaiting("pda -0.5");
+    assertTrue(engine.lastPdaAdmission.get(3, TimeUnit.SECONDS));
+    submitWithoutWaiting("known_extension after_failure");
+    engine.pdaCompletionGate.completeExceptionally(new IllegalStateException("deferred failure"));
+    awaitConsoleIdle();
+    assertTrue(engine.commands.contains("known_extension after_failure"));
+    assertEquals(0, engine.ponders);
+    assertTrue(consoleMessages().contains("deferred failure"));
   }
 
   @Test
@@ -678,6 +773,12 @@ class GtpConsoleSettingsTest {
   }
 
   private void submit(String command) throws Exception {
+    submitWithoutWaiting(command);
+    awaitConsoleIdle();
+    for (RecordingEngine testEngine : testEngines) testEngine.awaitIdle();
+  }
+
+  private void submitWithoutWaiting(String command) throws Exception {
     Method post = GtpConsolePane.class.getDeclaredMethod("postCommand", ActionEvent.class);
     post.setAccessible(true);
     try {
@@ -701,7 +802,43 @@ class GtpConsoleSettingsTest {
       if (failure.getCause() instanceof Error error) throw error;
       throw failure;
     }
-    for (RecordingEngine testEngine : testEngines) testEngine.awaitIdle();
+  }
+
+  private void awaitConsoleIdle() throws Exception {
+    Field admitting = GtpConsolePane.class.getDeclaredField("admittingCommand");
+    Field pending = GtpConsolePane.class.getDeclaredField("pendingCommands");
+    admitting.setAccessible(true);
+    pending.setAccessible(true);
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (true) {
+      boolean[] idle = {false};
+      SwingUtilities.invokeAndWait(() -> {
+        try {
+          var queue = (java.util.Deque<?>) pending.get(console);
+          idle[0] = admitting.get(console) == null && (queue == null || queue.isEmpty());
+        } catch (IllegalAccessException failure) {
+          throw new AssertionError(failure);
+        }
+      });
+      if (idle[0]) return;
+      if (System.nanoTime() >= deadline) fail("Console admission continuation did not finish");
+      Thread.sleep(5);
+    }
+  }
+
+  private String consoleMessages() throws Exception {
+    Field field = GtpConsolePane.class.getDeclaredField("consoleBuffer");
+    field.setAccessible(true);
+    Object buffer = field.get(console);
+    if (buffer == null) return "";
+    Method poll = buffer.getClass().getDeclaredMethod("poll");
+    poll.setAccessible(true);
+    StringBuilder messages = new StringBuilder();
+    featurecat.lizzie.util.DocType doc;
+    while ((doc = (featurecat.lizzie.util.DocType) poll.invoke(buffer)) != null) {
+      messages.append(doc.content);
+    }
+    return messages.toString();
   }
 
   private void setConsoleField(String name, Object value) {
@@ -757,6 +894,8 @@ class GtpConsoleSettingsTest {
     Runnable afterPdaAdmission;
     Runnable beforePdaWrite;
     boolean withholdResponses;
+    CompletableFuture<Void> pdaCompletionGate;
+    CompletableFuture<Boolean> lastPdaAdmission;
 
     RecordingEngine() throws IOException {
       super("");
@@ -855,6 +994,31 @@ class GtpConsoleSettingsTest {
     @Override
     public boolean sendRawConsoleCommand(String command) {
       return admit(List.of(command));
+    }
+
+    @Override
+    public CompletableFuture<Boolean> sendConsolePdaAsync(
+        double value, boolean dynamic, CustomPdaTarget target) {
+      admissionAttempts++;
+      if (fail) return CompletableFuture.failedFuture(new IllegalStateException("test transport failure"));
+      CompletableFuture<Boolean> admission = accept
+          ? super.sendConsolePdaAsync(value, dynamic, target)
+          : CompletableFuture.completedFuture(false);
+      lastPdaAdmission = admission;
+      if (afterPdaAdmission != null) {
+        Runnable callback = afterPdaAdmission;
+        afterPdaAdmission = null;
+        admission = admission.thenApplyAsync(accepted -> {
+          if (accepted) {
+            try { awaitIdle(); }
+            catch (Exception failure) { throw new AssertionError(failure); }
+            callback.run();
+          }
+          return accepted;
+        });
+      }
+      CompletableFuture<Void> gate = pdaCompletionGate;
+      return gate == null ? admission : admission.thenCombine(gate, (accepted, ignored) -> accepted);
     }
 
     @Override
