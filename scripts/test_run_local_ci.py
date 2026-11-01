@@ -112,15 +112,15 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(fixtures))
         self.assertEqual("1", fixtures[0].env["LIZZIE_WINDOWS_PRODUCT_TESTS_REQUIRED"])
 
-    def test_macos_product_fixtures_are_registered_only_on_linux_hosts(self):
-        module = "scripts.test_macos_product_acceptance"
-        for host in ("linux", "darwin", "win32"):
-            for profile in ("portable", "all", "windows"):
-                with self.subTest(host=host, profile=profile), patch.object(run_local_ci.sys, "platform", host):
-                    steps = run_local_ci.build_steps(profile, "mvn", "bash", "pwsh", "scripts")
-                    fixtures = [step for step in steps if module in step.command]
-                    expected = 1 if host == "linux" and profile != "windows" else 0
-                    self.assertEqual(expected, len(fixtures))
+    def test_product_process_fixtures_are_registered_only_on_linux_hosts(self):
+        for module in ("scripts.test_linux_product_acceptance", "scripts.test_macos_product_acceptance"):
+            for host in ("linux", "darwin", "win32"):
+                for profile in ("portable", "all", "windows"):
+                    with self.subTest(module=module, host=host, profile=profile), patch.object(run_local_ci.sys, "platform", host):
+                        steps = run_local_ci.build_steps(profile, "mvn", "bash", "pwsh", "scripts")
+                        fixtures = [step for step in steps if module in step.command]
+                        expected = 1 if host == "linux" and profile != "windows" else 0
+                        self.assertEqual(expected, len(fixtures))
 
     def test_acceptance_helpers_are_tested_on_both_ci_platforms(self):
         for profile in ("windows", "portable"):

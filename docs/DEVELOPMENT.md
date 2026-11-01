@@ -115,7 +115,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | Group | Portable | Windows | 额外工具 |
 | --- | --- | --- | --- |
 | `repository` | 换行自测、换行、Markdown 链接 | 换行 | 无 |
-| `scripts` | Python 辅助脚本、KataGo shell、Bash 语法 | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Windows 需 PowerShell 7 |
+| `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 凭据专项，再执行原完整 Maven verify | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 引擎进程生命周期 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
@@ -140,6 +140,11 @@ Java/JUnit 状态为未执行。真实 Java 调用先清除旧 Surefire/Failsafe
 Dry-run 仅生成计划，不代表检查通过。
 
 Portable 脚本组逐文件执行 Bash 语法检查，失败步骤直接显示脚本路径。
+Linux 主机上的 `portable` / `all` 脚本组同时运行 Linux 和 macOS 产品 runner 的受控进程 fixture。
+Linux fixture 实际创建私有 network namespace，并用 `nft` 阻断和计数非 loopback 流量；
+仅能执行 `unshare ... true` 不足以证明环境可用，namespace 内还必须能运行 `ip link set lo up` 和创建 nft table。
+Ubuntu 的工具由 `util-linux`、`iproute2`、`nftables` 提供；CI 会安装这些依赖并先检查隔离能力，
+缺少工具或权限时检查失败，不静默跳过。fixture 通过不替代最终 ZIP/DMG、真实窗口或真实引擎/GPU 验收。
 两平台 Java gate 使用 Failsafe 默认命名发现集成测试，不再限定单一类；集成测试为空会失败。
 执行器还检查本次 XML 中 `LoggingProviderSmokeIT.shadedArtifactWritesOneProviderEvent`
 确实成功执行：关键用例缺失，或关键类任一用例 skipped/失败/报错，均使预检失败并写出失败摘要。

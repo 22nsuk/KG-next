@@ -650,7 +650,12 @@ JAVA_ARGS=(-Xshare:auto -Dlizzie.next.version=fixture)
         self.assertEqual(0, result.returncode, result.stderr)
         provenance.validate_acceptance_record(record)
         orphan_pid = int((Path(record["observed"]["dataRoot"]["path"]) / "orphan.pid").read_text())
-        self.assertFalse(Path(f"/proc/{orphan_pid}").exists(), f"owned orphan {orphan_pid} survived")
+        orphan_process = Path(f"/proc/{orphan_pid}")
+        # The host init reaps adopted children asynchronously after they exit.
+        deadline = time.monotonic() + 5
+        while orphan_process.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertFalse(orphan_process.exists(), f"owned orphan {orphan_pid} survived")
         self.assertEqual([], record["cleanup"]["remainingOwnedResources"])
 
     def test_missing_network_counter_keeps_schema_valid_cleanup_failure(self) -> None:
