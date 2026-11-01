@@ -1,5 +1,7 @@
 > KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
 
+Leela（包括 0.11.0）、Leela Zero/leelaz 和 SAI 引擎已停止支持。启动时识别到这些引擎后会关闭连接、显示说明，并禁止自动重启；主引擎、对比引擎、预加载和引擎对局采用同一规则。已保存的引擎配置和 SGF 分析数据仍会保留。请选择 KataGo 或其他受支持的引擎，Pachi、Sayuri 的通用 GTP 路径保持不变。
+
 <p align="center">
   <img src="assets/hero-chinese.svg" alt="KG-next" width="100%" />
 </p>

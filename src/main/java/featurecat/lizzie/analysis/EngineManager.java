@@ -284,7 +284,8 @@ public class EngineManager {
   enum EngineGameRecoveryCause {
     PROCESS_EXIT,
     REMOTE_DISCONNECT,
-    OPENCL_NATIVE_EXIT
+    OPENCL_NATIVE_EXIT,
+    UNSUPPORTED_ENGINE
   }
 
   enum EngineGameRecoveryDisposition {
@@ -5439,6 +5440,8 @@ public class EngineManager {
     if (manager == null || engine == null || failedIncarnation == null) {
       return EngineGameRecoveryDisposition.NOT_ENGINE_GAME_PARTICIPANT;
     }
+    boolean unsupported = engine.classifyEngineGameRecoveryCause(failedIncarnation)
+        == EngineGameRecoveryCause.UNSUPPORTED_ENGINE;
     EngineGameOwnerTransaction transaction;
     EngineGameDeferredRecovery recovery;
     EngineGameOperationLease preparationLease;
@@ -5487,7 +5490,13 @@ public class EngineManager {
           break;
         }
       }
-      if (recovery == null) {
+      if (unsupported) {
+        // Still fail and retire the exact participant below, but never restart a rejected engine.
+        if (recovery != null) {
+          transaction.deferredRecoveries.remove(recovery);
+          if (recoveryBatch != null) recoveryBatch.recoveries.remove(recovery);
+        }
+      } else if (recovery == null) {
         recovery =
             new EngineGameDeferredRecovery(
                 transaction,
@@ -5512,7 +5521,8 @@ public class EngineManager {
     }
 
     String detail =
-        recovery.openClNativeExit
+        unsupported ? "Leela, Leela Zero and SAI engines are no longer supported"
+            : recovery.openClNativeExit
             ? "engine-game OpenCL participant exited"
             : recovery.remoteDisconnect
                 ? "engine-game remote participant disconnected"
@@ -5565,6 +5575,8 @@ public class EngineManager {
     }
     // Participant failure belongs to the exact engine-game transaction even when the board is in
     // setup mode. Only the legacy, foreground restart fallback is subject to the setup-mode gate.
+    if (targetEngine.classifyEngineGameRecoveryCause(failedIncarnation)
+        == EngineGameRecoveryCause.UNSUPPORTED_ENGINE) return;
     if (rejectForegroundEngineStartDuringSetup(true)) return;
     Board restoreBoard = Lizzie.board;
     Leelaz proposedRestoreMirror = targetEngine.resolveLoadSgfMirrorEngine();
@@ -9015,6 +9027,12 @@ public class EngineManager {
     Leelaz engine = recovery.engine;
     InitialEngineStartupSynchronization synchronization = null;
     try {
+      if (engine.classifyEngineGameRecoveryCause(recovery.failedIncarnation)
+          == EngineGameRecoveryCause.UNSUPPORTED_ENGINE) {
+        completeDeferredEngineGameRecovery(recoveryBatch, recovery,
+            "Engine support has ended; automatic restart is disabled", null);
+        return;
+      }
       if (!isDeferredEngineGameRecoveryCurrent(recoveryBatch, recovery, recovery.failedIncarnation)) {
         completeDeferredEngineGameRecovery(recoveryBatch, recovery, null, null);
         return;

@@ -34,7 +34,12 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -4386,7 +4391,7 @@ class EngineManagerEngineGameStateMachineTest {
 
     black.sendEngineGameStartupCommandForTest("name", transaction);
     int nameId = commandIdFor(black.commandText(), "name");
-    black.parseStartupCommandResponseForTest("=" + nameId + " LeelaZero");
+    black.parseStartupCommandResponseForTest("=" + nameId + " Pachi");
     assertTrue(black.startupPostWorkerEntered.await(2, TimeUnit.SECONDS));
 
     manager.clearEngineGame();
@@ -4398,6 +4403,110 @@ class EngineManagerEngineGameStateMachineTest {
     assertEquals(EngineManager.EngineGamePhase.CANCELLED, transaction.phase());
     assertFalse(black.commandText().contains("lz-setoption"));
     assertFalse(black.isLoaded);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void retiredStartupFailsParticipantWithoutRegisteringRecovery(boolean remote) throws Exception {
+    CloseReleasedWriteOutput remoteOutput = new CloseReleasedWriteOutput();
+    remoteOutput.releaseWrite.countDown();
+    CloseReleasedTransport transport = new CloseReleasedTransport(remoteOutput);
+    if (remote) {
+      setRemoteTransport(black, transport);
+      black.useRemoteCompute = true;
+    }
+    try (PipedInputStream stdout = new PipedInputStream();
+        PipedOutputStream response = new PipedOutputStream(stdout)) {
+      ByteArrayOutputStream output = new ByteArrayOutputStream();
+      black.commandOutput = output;
+      black.installFreshCommandStreamsForTest(
+          stdout, remote ? remoteOutput : output, new ByteArrayInputStream(new byte[0]));
+      black.started = true;
+      black.isLoaded = false;
+      black.isCheckingName = true;
+      black.runStartupPostActionsInline = true;
+      RecoveryGateEngineManager manager =
+          installManager(new RecoveryGateEngineManager(allEngines(), true));
+      EngineManager.EngineGameOwnerTransaction transaction = beginPreparing(manager, gameInfo());
+      Object failedIncarnation = black.currentEngineIncarnation();
+      assertTrue(
+          EngineManager.recordEngineGameStartupIncarnation(transaction, black, failedIncarnation));
+      black.sendEngineGameStartupCommandForTest("name", transaction);
+      String writtenCommands = remote ? remoteOutput.toString() : output.toString();
+      int nameId = commandIdFor(writtenCommands, "name");
+      response.write(("=" + nameId + " Leela Zero\n").getBytes(StandardCharsets.UTF_8));
+      response.close();
+      AtomicReference<Throwable> readerFailure = new AtomicReference<>();
+      Thread reader =
+          new Thread(
+              () -> {
+                try {
+                  invokeStartupReaderLoop(black);
+                } catch (Throwable failure) {
+                  readerFailure.set(failure);
+                }
+              },
+              "retired-engine-game-startup-reader");
+
+      reader.start();
+      reader.join(2_000L);
+      try {
+        assertFalse(reader.isAlive(), "unsupported startup must finish without a readiness timeout");
+        assertNull(readerFailure.get());
+        assertFalse(black.started);
+        assertFalse(black.isLoaded);
+        assertTrue(black.isDownWithError);
+        assertEquals(EngineManager.EngineGamePhase.FAILED, transaction.phase());
+        assertEquals(0, transaction.operationsInFlightForTest(), "the startup name permit must settle");
+        assertNotNull(transaction.terminalFailure());
+        assertTrue(
+            throwableText(transaction.terminalFailure()).contains("Leela Zero"),
+            throwableText(transaction.terminalFailure()));
+        if (remote) assertEquals(1, transport.closeCount.get());
+
+        assertEquals(
+            EngineManager.EngineGameRecoveryDisposition.HANDLED,
+            EngineManager.requestEngineGameParticipantRecovery(
+                manager,
+                black,
+                failedIncarnation,
+                EngineManager.EngineGameRecoveryCause.REMOTE_DISCONNECT));
+        Field deferred = transaction.getClass().getDeclaredField("deferredRecoveries");
+        deferred.setAccessible(true);
+        assertTrue(
+            ((List<?>) deferred.get(transaction)).isEmpty(),
+            "neither the reader nor a delayed remote-health callback may register retirement recovery");
+        assertEquals(0, black.deferredRecoveryStartCount.get());
+        assertFalse((remote ? remoteOutput.toString() : output.toString()).contains("lz-setoption"));
+      } finally {
+        manager.releaseStage(EngineManager.DeferredEngineGameRecoveryStage.START);
+        manager.releaseStage(EngineManager.DeferredEngineGameRecoveryStage.READINESS);
+        manager.releaseStage(EngineManager.DeferredEngineGameRecoveryStage.CONFIRMATION);
+        if (manager.pendingUi.get() != null) manager.runPendingUi();
+      }
+      assertFalse(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
+    }
+  }
+
+  private static String throwableText(Throwable failure) {
+    StringBuilder text = new StringBuilder();
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      text.append(cause.getMessage()).append('\n');
+    }
+    return text.toString();
+  }
+
+  private static void invokeStartupReaderLoop(Leelaz engine) throws Exception {
+    Method method = Leelaz.class.getDeclaredMethod("read");
+    method.setAccessible(true);
+    try {
+      method.invoke(engine);
+    } catch (InvocationTargetException failure) {
+      Throwable cause = failure.getCause();
+      if (cause instanceof Exception exception) throw exception;
+      if (cause instanceof Error error) throw error;
+      throw new AssertionError(cause);
+    }
   }
 
   @Test
@@ -4414,7 +4523,7 @@ class EngineManagerEngineGameStateMachineTest {
 
     black.sendEngineGameStartupCommandForTest("name", transaction);
     int nameId = commandIdFor(black.commandText(), "name");
-    black.parseStartupCommandResponseForTest("=" + nameId + " LeelaZero");
+    black.parseStartupCommandResponseForTest("=" + nameId + " Pachi");
     assertTrue(black.startupPostCommandsEntered.await(2, TimeUnit.SECONDS));
     assertTrue(black.commandText().contains("lz-setoption"));
     int setOptionId =

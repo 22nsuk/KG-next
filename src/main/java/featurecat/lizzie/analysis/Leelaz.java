@@ -2332,6 +2332,8 @@ public class Leelaz {
   public AutomaticRestartAttempt beginAutomaticEngineRestartAttempt() { return beginAutomaticRestartAttempt(false); }
 
   private AutomaticRestartAttempt beginAutomaticRestartAttempt(boolean allowUnrestoredState) {
+    ReaderStreamBinding binding = readerStreamBinding;
+    if (binding != null && binding.unsupportedEngineReason != null) return null;
     if (!allowUnrestoredState
         && (engineStateUnrestored
             || readBoardGmaReservation != null
@@ -5256,6 +5258,7 @@ public class Leelaz {
     private int runtimeUiPresentationsInProgress;
     private AnalysisStateLineage queuedAnalysisStateLineage;
     private Throwable terminalFailure;
+    private volatile String unsupportedEngineReason;
     private boolean terminalCleanupStarted;
     /** The dead carrier's command leases were settled before deferred engine-game recovery. */
     private boolean engineGameCommandStateRetired;
@@ -6477,6 +6480,13 @@ public class Leelaz {
     StartupCommandAction startupCommandAction = StartupCommandAction.NONE;
     if (isCheckingName) {
       binding.reportedEngineName = String.join(" ", Arrays.copyOfRange(params, 1, params.length));
+      String identity = binding.reportedEngineName.trim().toLowerCase(Locale.ROOT);
+      if (identity.startsWith("leela") || identity.equals("sai")
+          || identity.startsWith("sai ") || identity.startsWith("sai-")) {
+        binding.unsupportedEngineReason = text("Leelaz.unsupportedLeela",
+            "Leela, Leela Zero and SAI engines are no longer supported. Select KataGo or another supported engine. Saved engine settings and SGF files have been preserved.");
+        throw new IllegalStateException(binding.unsupportedEngineReason);
+      }
       noAnalyze = false;
       isKataGoPda = false;
       pkMoveStartTime = System.currentTimeMillis();
@@ -6487,24 +6497,9 @@ public class Leelaz {
         this.noLcb = true;
         canAddPlayer = true;
       }
-      if (params[1].toLowerCase().startsWith("sai")) this.isSai = true;
-      if ((params[1].toLowerCase().startsWith("leela")
-              && params.length > 2
-              && params[2].toLowerCase().startsWith("zero"))
-          || params[1].toLowerCase().startsWith("pachi")) {
+      if (params[1].toLowerCase().startsWith("pachi")) {
         this.isLeela = true;
         canAddPlayer = true;
-      }
-      if (params[1].equals("Leela") && params.length == 2) {
-        isLeela0110 = true;
-        startupCommandAction =
-            StartupCommandAction.of(
-                StartupCommandKind.CLOSE_BUNDLED,
-                expectedPrimaryGeneration,
-                expectedEngineIncarnation,
-                engineGameTransaction,
-                false,
-                suppressGlobalPresentation);
       }
       //						if (params[1].startsWith("KataGoYm"))
       //							sendCommandToLeelazWithOutLog("lizzie_use");
@@ -10742,6 +10737,8 @@ public class Leelaz {
               classifyEngineGameRecoveryCause(binding));
       if (disposition == EngineManager.EngineGameRecoveryDisposition.HANDLED) {
         isDownWithError = true;
+        if (binding.unsupportedEngineReason != null)
+          return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
         if (binding.remoteTransport != null) {
           rememberRecentLine(
               recentStderrLines,
@@ -10749,6 +10746,10 @@ public class Leelaz {
         }
         return null;
       }
+    }
+    if (binding.unsupportedEngineReason != null) {
+      isDownWithError = true;
+      return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
     }
     if (binding.remoteTransport != null && binding.remoteTransport.isRecoveryRequested()) {
       isDownWithError = true;
@@ -10900,6 +10901,8 @@ public class Leelaz {
       return EngineManager.EngineGameRecoveryCause.PROCESS_EXIT;
     }
     ReaderStreamBinding binding = (ReaderStreamBinding) expectedIncarnation;
+    if (binding.unsupportedEngineReason != null)
+      return EngineManager.EngineGameRecoveryCause.UNSUPPORTED_ENGINE;
     synchronized (engineArbitrationLock()) {
       if (readerStreamBinding != binding) {
         return EngineManager.EngineGameRecoveryCause.PROCESS_EXIT;
@@ -13804,6 +13807,12 @@ public class Leelaz {
                     || lastQueuedCommand.startsWith("heatmap")))) return;
       }
       EngineManager.EngineGameOwnerTransaction game = queueHead.engineGameTransaction();
+      if (queueHead.consoleTransportOffEventThread && SwingUtilities.isEventDispatchThread()) {
+        // Admission can complete before its worker schedules transport. A later UI command or
+        // response may drain this queue first; delivery policy belongs to the selected command.
+        requestCommandDispatchOffEventThread();
+        return;
+      }
       if (game != null && game.mutationLock.isHeldByCurrentThread()) {
         // State/clock publication may enqueue several ordered commands under the game fence.
         // The existing dispatcher owns delivery and its permit owns asynchronous failures.
@@ -19825,6 +19834,8 @@ public class Leelaz {
 
   private static final class QueuedCommand {
     private final String command;
+    private final boolean consoleTransportOffEventThread =
+        Boolean.TRUE.equals(DEFER_CONSOLE_TRANSPORT.get());
     private final Runnable onResponse;
     private final CommandSendFailureHandler onSendFailure;
     /** Internal queue-consistency link; deliberately separate from tracked restore callbacks. */

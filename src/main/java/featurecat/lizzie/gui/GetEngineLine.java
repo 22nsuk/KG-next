@@ -37,7 +37,6 @@ public class GetEngineLine {
       boolean getEnginePath,
       boolean getConfigPath) {
     boolean isKataGo = false;
-    boolean isLeela = false;
     boolean isIkatago = false;
     if (getConfigPath) {
       JFileChooser chooseConfig = new JFileChooser(".");
@@ -56,7 +55,6 @@ public class GetEngineLine {
     } else {
       Object[] options = {
         "KataGo",
-        "LeelaZero",
         resourceBundle.getString("MoreEngines.ikatago"),
         resourceBundle.getString("MoreEngines.other")
       };
@@ -76,8 +74,6 @@ public class GetEngineLine {
       } else if (response == 0) {
         isKataGo = true;
       } else if (response == 1) {
-        isLeela = true;
-      } else if (response == 2) {
         isIkatago = true;
       }
     }
@@ -148,7 +144,7 @@ public class GetEngineLine {
               + password;
         }
         getCommandHelp();
-        if (!isKataGo && !isLeela && !isIkatago) {
+        if (!isKataGo && !isIkatago) {
           return enginePath;
         }
         JFileChooser chooserw = new JFileChooser(".");
@@ -177,17 +173,8 @@ public class GetEngineLine {
                       enginePath,
                       weightPath,
                       commandHelp,
-                      true,
                       configPath,
-                      isAnalysisEngine,
-                      false);
-              ep.setVisible(true);
-              if (!ep.commandLine.isEmpty()) {
-                engineLine = ep.commandLine;
-              }
-            } else {
-              ep =
-                  new EngineParameter(enginePath, weightPath, commandHelp, false, "", false, false);
+                      isAnalysisEngine);
               ep.setVisible(true);
               if (!ep.commandLine.isEmpty()) {
                 engineLine = ep.commandLine;

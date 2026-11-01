@@ -208,6 +208,66 @@ class LeelazEdtCommandDispatchTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void laterUiCommandCannotFlushAdmittedConsolePdaOnEventThread(boolean mirrored)
+      throws Exception {
+    installGlobals();
+    BlockingOutput output = new BlockingOutput();
+    AdmissionHeldEngine engine = new AdmissionHeldEngine();
+    engine.started = engine.isLoaded = engine.isKatago = true;
+    engine.installCommandOutputForTest(mirrored ? new java.io.ByteArrayOutputStream() : output);
+    Lizzie.setPrimaryEngine(engine);
+    if (mirrored) {
+      Leelaz mirror = new Leelaz("");
+      mirror.started = mirror.isLoaded = mirror.isKatago = true;
+      mirror.installCommandOutputForTest(output);
+      Lizzie.leelaz2 = mirror;
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+    }
+    var target = engine.captureConsolePdaTarget(
+        Lizzie.capturePrimaryEngineGenerationSnapshot(engine), engine.engineIncarnationSnapshot());
+    CountDownLatch nextUiEvent = new CountDownLatch(1);
+    try {
+      assertTrue(engine.sendConsolePdaAsync(0.3, true, target).get(2, TimeUnit.SECONDS));
+      assertTrue(engine.beforeTransport.await(2, TimeUnit.SECONDS));
+      // Model the paused console's completion draining its next command. Keep the admitting
+      // worker parked so the later EDT request is the first caller to drive physical output.
+      SwingUtilities.invokeLater(() -> engine.sendRawConsoleCommand("protocol_version"));
+      SwingUtilities.invokeLater(nextUiEvent::countDown);
+      assertTrue(output.writeEntered.await(2, TimeUnit.SECONDS));
+      assertTrue(nextUiEvent.await(1, TimeUnit.SECONDS), "a later command flushed PDA on the EDT");
+      assertFalse(output.writeRanOnEventThread.get());
+    } finally {
+      output.releaseWrite.countDown();
+      engine.releaseTransport.countDown();
+      output.writeCompleted.await(2, TimeUnit.SECONDS);
+      assertTrue(engine.admissionWorkerReleased.await(2, TimeUnit.SECONDS));
+      SwingUtilities.invokeAndWait(() -> {});
+    }
+  }
+
+  private static final class AdmissionHeldEngine extends Leelaz {
+    private final CountDownLatch beforeTransport = new CountDownLatch(1);
+    private final CountDownLatch releaseTransport = new CountDownLatch(1);
+    private final CountDownLatch admissionWorkerReleased = new CountDownLatch(1);
+
+    AdmissionHeldEngine() throws IOException { super(""); }
+
+    @Override void afterStatefulOrdinaryPairAdmissionForTest() {
+      beforeTransport.countDown();
+      try {
+        if (!releaseTransport.await(5, TimeUnit.SECONDS))
+          throw new AssertionError("PDA transport was not released");
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(failure);
+      } finally {
+        admissionWorkerReleased.countDown();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void realConsoleReponderHandsOffBeforePhysicalOutputCompletes(boolean mirrored) throws Exception {
     installGlobals();
     var previousBoard = Lizzie.board;

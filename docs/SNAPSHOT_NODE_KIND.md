@@ -33,8 +33,8 @@
 ## 引擎支持矩阵（本轮）
 
 - KataGo / 通用 GTP 属于本轮支持与验收范围。
-- Leela Zero / leelaz / Leela 0.11 / Sai 归入 legacy engine path，移出本轮验收与阻塞范围。
-- 现有菜单入口、类名、配置项保持现状，本轮不做 UI 隐藏和功能下架。
+- Leela Zero / leelaz / Leela 0.11 / Sai 已停止运行支持：启动身份握手拒绝这些引擎，保留旧配置和 SGF 数据读取。共用的 Pachi / Sayuri 解析路径继续保留。
+- 保留既有类名、序列化配置和 SGF 读取兼容；移除已停止支持的 Leela 引擎创建选项和专用参数窗口。
 
 ## PASS 契约
 
@@ -640,7 +640,7 @@ save-load movelist 只保存和恢复真实 `MOVE/PASS` 序列。
 24. 双引擎恢复中，一侧已发出快照加载请求、另一侧失败且已发出侧无响应时，流程仍完成兜底清理并释放对应处理器。
 25. 双引擎恢复中，一侧收到 GTP `?` 错误且另一侧无响应时，恢复流程返回失败，并完成临时 SGF 与两侧处理器清理。
 26. root `SNAPSHOT` 导出在陈旧或 partial `AB/AW/AE` property map 场景仍以当前根盘面与当前 `side-to-play` materialize 根 setup 语义，root round-trip 后根盘面与 `side-to-play` 保持一致。
-27. 引擎支持矩阵以 KataGo / 通用 GTP 为本轮验收范围，Leela Zero / leelaz / Leela 0.11 / Sai 保持 legacy engine path 且移出本轮阻塞范围。
+27. 引擎支持矩阵以 KataGo / 通用 GTP 为本轮验收范围；Leela Zero / leelaz / Leela 0.11 / Sai 在启动握手时拒绝，不自动重启，旧配置和 SGF 数据仍可读取。
 28. 双引擎 snapshot restore 在主/副入口都复用同一 mirror restore 合约，副入口发起时另一侧也完成 `loadsgf` 后续真实 `MOVE/PASS` 镜像重放。
 29. 同父节点下，`SNAPSHOT` child state 相同但 `properties`、`hasRemovedStone`、`extraStones` 任一不同时，variation 保持并行保留。
 30. `SNAPSHOT` comment ownership 以 source tree 为准，连续 sync 结果稳定，`playouts > 0` 格式化 comment 不覆盖 source snapshot comment。

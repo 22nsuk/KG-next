@@ -1,5 +1,7 @@
 > KG-next fork: [한국어 기본 문서](README.md). Build/install status and engine-patch requirements are documented there; inherited platform claims are not new KG-next acceptance results.
 
+Leela (including 0.11.0), Leela Zero/leelaz and SAI engine support has ended. These engines are rejected at startup with a diagnostic and no automatic restart, including primary, comparison, preload and engine-game use. Saved engine settings and SGF analysis are preserved. Select KataGo or another supported engine; shared GTP support for Pachi and Sayuri is retained.
+
 <p align="center">
   <img src="assets/hero-english.svg" alt="KG-next" width="100%" />
 </p>
