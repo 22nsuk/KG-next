@@ -11789,7 +11789,9 @@ public class Leelaz {
       try {
         // Ponder also consults selection and UI state: never hold PRIMARY around that work.
         // Its eventual command admission reclaims the captured target below.
-        if (target.isCurrentSelection() && isPondering()) ponder();
+        // The optimistic pondering read is not permission to undo a later user pause.
+        // Reuse the pause/handback gate through command admission, including mirrored analysis.
+        if (target.isCurrentSelection() && isPondering()) ponderIfAnalysisControlAllows();
       } finally {
         CONSOLE_PONDER_TARGET.remove();
         DEFER_CONSOLE_TRANSPORT.remove();

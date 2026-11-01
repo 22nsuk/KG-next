@@ -22,6 +22,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class LeelazEdtCommandDispatchTest {
@@ -238,6 +239,125 @@ class LeelazEdtCommandDispatchTest {
       output.writeCompleted.await(2, TimeUnit.SECONDS);
       Lizzie.board = previousBoard;
       LizzieFrame.menu = previousMenu;
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+  void consoleReponderPreservesUserPauseInEitherOrder(boolean mirrored, boolean reponderFirst)
+      throws Exception {
+    installGlobals();
+    var previousBoard = Lizzie.board;
+    var previousMenu = LizzieFrame.menu;
+    var output = new java.io.ByteArrayOutputStream();
+    PauseRaceEngine engine = new PauseRaceEngine(reponderFirst);
+    CompletableFuture<Void> resumed = null;
+    CompletableFuture<Void> paused = new CompletableFuture<>();
+    var pauseThread = new java.util.concurrent.atomic.AtomicReference<Thread>();
+    CountDownLatch pauseStarted = new CountDownLatch(1);
+    try {
+      Lizzie.board = new featurecat.lizzie.rules.Board();
+      Lizzie.frame = allocate(QuietFrame.class);
+      LizzieFrame.menu = allocate(QuietMenu.class);
+      engine.started = engine.isLoaded = engine.isKatago = true;
+      engine.installCommandOutputForTest(output);
+      engine.Pondering();
+      Lizzie.setPrimaryEngine(engine);
+      if (mirrored) {
+        Leelaz mirror = new Leelaz("");
+        mirror.started = mirror.isLoaded = mirror.isKatago = true;
+        mirror.installCommandOutputForTest(new java.io.ByteArrayOutputStream());
+        Lizzie.leelaz2 = mirror;
+        Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+      }
+      var target = engine.captureConsolePdaTarget(
+          Lizzie.capturePrimaryEngineGenerationSnapshot(engine), engine.engineIncarnationSnapshot());
+      resumed = engine.resumeConsolePonderAsync(target);
+      assertTrue(engine.resumeAtBoundary.await(2, TimeUnit.SECONDS));
+
+      Field pauseFlag = LizzieFrame.class.getDeclaredField("userAnalysisPaused");
+      pauseFlag.setAccessible(true);
+      SwingUtilities.invokeLater(() -> {
+        pauseThread.set(Thread.currentThread());
+        pauseStarted.countDown();
+        try {
+          engine.pauseForAnalysisControl(() -> {
+            try { pauseFlag.setBoolean(Lizzie.frame, true); }
+            catch (IllegalAccessException failure) { throw new AssertionError(failure); }
+          });
+          paused.complete(null);
+        } catch (Throwable failure) {
+          paused.completeExceptionally(failure);
+        }
+      });
+      assertTrue(pauseStarted.await(2, TimeUnit.SECONDS));
+      if (reponderFirst) {
+        // Let pause contend after the worker has passed its policy check but before real ponder.
+        // With the fix it waits for admission; without it pause finishes and is then overwritten.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!paused.isDone() && pauseThread.get().getState() != Thread.State.BLOCKED
+            && System.nanoTime() < deadline) Thread.sleep(5);
+        assertTrue(paused.isDone() || pauseThread.get().getState() == Thread.State.BLOCKED,
+            "pause did not reach the reponder boundary");
+      } else {
+        // Complete pause after the worker captured true, then let it use that stale observation.
+        paused.get(2, TimeUnit.SECONDS);
+      }
+      engine.continueResume.countDown();
+      resumed.get(3, TimeUnit.SECONDS);
+      paused.get(3, TimeUnit.SECONDS);
+      assertTrue(Lizzie.frame.isUserAnalysisPaused());
+      assertFalse(engine.isPondering(), "console handback restarted analysis after user pause");
+      if (!reponderFirst) {
+        assertFalse(engine.ponderEntered.get(), "a completed pause must reject reponder entirely");
+        assertFalse(output.toString(java.nio.charset.StandardCharsets.UTF_8).contains("kata-analyze"));
+      }
+    } finally {
+      engine.continueResume.countDown();
+      try {
+        if (resumed != null) resumed.get(3, TimeUnit.SECONDS);
+        SwingUtilities.invokeAndWait(() -> {});
+      } finally {
+        Lizzie.board = previousBoard;
+        LizzieFrame.menu = previousMenu;
+      }
+    }
+  }
+
+  /** Gates scheduling only: production pause, ponder, target validation and queue admission run. */
+  private static final class PauseRaceEngine extends Leelaz {
+    private final boolean reponderFirst;
+    private final AtomicBoolean capturePondering = new AtomicBoolean(true);
+    private final AtomicBoolean ponderEntered = new AtomicBoolean();
+    private final CountDownLatch resumeAtBoundary = new CountDownLatch(1);
+    private final CountDownLatch continueResume = new CountDownLatch(1);
+
+    PauseRaceEngine(boolean reponderFirst) throws IOException {
+      super("");
+      this.reponderFirst = reponderFirst;
+    }
+
+    @Override public boolean isPondering() {
+      boolean captured = super.isPondering();
+      if (!reponderFirst && capturePondering.compareAndSet(true, false)) awaitPauseRace();
+      return captured;
+    }
+
+    @Override public void ponder(boolean addPlayer, boolean blackToPlay) {
+      ponderEntered.set(true);
+      if (reponderFirst) awaitPauseRace();
+      super.ponder(addPlayer, blackToPlay);
+    }
+
+    private void awaitPauseRace() {
+      resumeAtBoundary.countDown();
+      try {
+        if (!continueResume.await(5, TimeUnit.SECONDS))
+          throw new AssertionError("console reponder was not released");
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(failure);
+      }
     }
   }
 
