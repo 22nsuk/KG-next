@@ -423,17 +423,12 @@ public class GtpConsolePane extends JDialog {
           boolean dynamic = "dympdacap".equals(commandName);
           double pda = value.getAsDouble();
           Leelaz source = Lizzie.leelaz;
+          long sourceGeneration = Lizzie.capturePrimaryEngineGeneration(source);
           Object sourceIncarnation = source.engineIncarnationToken();
-          if (source.sendConsolePda(pda, dynamic)) {
-            source.isStaticPda = !dynamic;
-            if (dynamic) {
-              source.pda = 0;
-              source.pdaCap = pda;
-            } else {
-              source.pda = pda;
-            }
-            if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null)
-              Lizzie.leelaz2.pda = 0;
+          if (source.sendConsolePda(pda, dynamic)
+              && sourceGeneration >= 0
+              && Lizzie.capturePrimaryEngineGeneration(source) == sourceGeneration
+              && source.engineIncarnationToken() == sourceIncarnation) {
             if (LizzieFrame.menu != null) {
               if (LizzieFrame.menu.txtPDA != null)
                 LizzieFrame.menu.txtPDA.setText(dynamic ? "0.000" : String.valueOf(pda));

@@ -20,6 +20,8 @@ import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LeelazEdtCommandDispatchTest {
   @TempDir Path tempDir;
@@ -37,12 +39,14 @@ class LeelazEdtCommandDispatchTest {
     Lizzie.frame = previousFrame;
   }
 
-  @Test
-  void blockedEngineOutputNeverBlocksTheSwingEventThread() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"play", "pda"})
+  void blockedEngineOutputNeverBlocksTheSwingEventThread(String command) throws Exception {
     installGlobals();
     BlockingOutput output = new BlockingOutput();
     Leelaz engine = new Leelaz("");
     engine.installCommandOutputForTest(output);
+    engine.started = engine.isLoaded = true;
     Lizzie.setPrimaryEngine(engine);
 
     CountDownLatch sendReturned = new CountDownLatch(1);
@@ -50,7 +54,8 @@ class LeelazEdtCommandDispatchTest {
     try {
       SwingUtilities.invokeLater(
           () -> {
-            engine.sendCommandNoLeelaz2("play B D4");
+            if (command.equals("play")) engine.sendCommandNoLeelaz2("play B D4");
+            else assertTrue(engine.sendConsolePda(0.25, false));
             sendReturned.countDown();
           });
 

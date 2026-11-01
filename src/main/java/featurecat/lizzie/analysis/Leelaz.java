@@ -9997,14 +9997,14 @@ public class Leelaz {
   }
 
   private long sendStatefulOrdinaryCommands(
-      List<String> commands, StatefulOrdinaryMutationKind mutationKind, CustomPdaUpdate pdaUpdate) {
+      List<String> commands, StatefulOrdinaryMutationKind mutationKind, PdaUpdate pdaUpdate) {
     return sendStatefulOrdinaryCommands(commands, mutationKind, pdaUpdate, null);
   }
 
   private long sendStatefulOrdinaryCommands(
       List<String> commands,
       StatefulOrdinaryMutationKind mutationKind,
-      CustomPdaUpdate pdaUpdate,
+      PdaUpdate pdaUpdate,
       GamePdaUpdate gamePdaUpdate) {
     List<String> capturedCommands = List.copyOf(commands);
     if (capturedCommands.isEmpty()) {
@@ -10048,9 +10048,10 @@ public class Leelaz {
     QueuedCommand[] admitted = new QueuedCommand[capturedCommands.size()];
     QueuedCommand[] mirroredAdmitted =
         mirroredEngine == null ? null : new QueuedCommand[capturedCommands.size()];
+    // Console commands use ordinary queue retirement on reader rebind, preserving async EDT output.
     ReaderStreamBinding commandBinding =
         gamePdaUpdate != null ? gamePdaUpdate.binding
-            : pdaUpdate != null
+            : pdaUpdate != null && !pdaUpdate.fromConsole
             ? pdaUpdate.target.binding
             : startupBinding == null ? positionRestoreBindingContext.get() : startupBinding;
     Leelaz capturedMirror = mirroredEngine;
@@ -10134,14 +10135,16 @@ public class Leelaz {
       RestartBootstrapReceipt mirroredBootstrapReceipt,
       OrdinaryEnqueueEffects mirroredEffects,
       QueuedCommand[] mirroredAdmitted,
-      CustomPdaUpdate pdaUpdate,
+      PdaUpdate pdaUpdate,
       GamePdaUpdate gamePdaUpdate) {
-    if (pdaUpdate != null && !pdaUpdate.target.isCurrent(mirroredEngine)) return -1L;
+    if (pdaUpdate != null
+        && ((!pdaUpdate.fromConsole && !(isKataGoPda || isDymPda))
+            || !pdaUpdate.target.isCurrent(mirroredEngine))) return -1L;
     if (gamePdaUpdate != null && !gamePdaUpdate.isCurrent()) return -1L;
     ReaderStreamBinding mirroredCommandBinding =
         mirroredEngine == null ? null
             : gamePdaUpdate != null ? gamePdaUpdate.secondBinding
-            : pdaUpdate != null ? pdaUpdate.target.mirrorBinding
+            : pdaUpdate != null && !pdaUpdate.fromConsole ? pdaUpdate.target.mirrorBinding
             : mirroredEngine.positionRestoreBindingContext.get();
     for (String command : commands) {
       if (!canAdmitOrdinaryCommandLocked(
@@ -10189,10 +10192,11 @@ public class Leelaz {
     installStatefulOrdinaryBatchFailureLinks(
         admitted, mirroredEngine, mirroredAdmitted);
     if (pdaUpdate != null) {
-      pda = pdaUpdate.dynamic ? 0 : pdaUpdate.value;
-      isStaticPda = !pdaUpdate.dynamic;
-      if (pdaUpdate.dynamic) pdaCap = pdaUpdate.value;
-      else if (pdaUpdate.value == 0 && mirroredEngine != null) mirroredEngine.pda = 0;
+      pdaUpdate.applyTo(this);
+      if (mirroredEngine != null) {
+        if (pdaUpdate.fromConsole) pdaUpdate.applyTo(mirroredEngine);
+        else if (!pdaUpdate.dynamic && pdaUpdate.value == 0) mirroredEngine.pda = 0;
+      }
     }
     if (gamePdaUpdate != null) {
       pda = pdaBeforeGame = gamePdaUpdate.value;
@@ -11707,10 +11711,12 @@ public class Leelaz {
     if (!Double.isFinite(value)) return false;
     List<String> commands =
         dynamic ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
-    return sendStatefulOrdinaryCommands(commands, StatefulOrdinaryMutationKind.NONE) >= 0L;
+    return sendStatefulOrdinaryCommands(
+        commands, StatefulOrdinaryMutationKind.NONE,
+        new PdaUpdate(new CustomPdaTarget(true), value, dynamic, true)) >= 0L;
   }
 
-  /** An editor's original readers; a replacement engine or comparison reader cannot inherit it. */
+  /** Captured PDA readers; a replacement engine or comparison reader cannot inherit the target. */
   public final class CustomPdaTarget {
     private final ReaderStreamBinding binding = readerStreamBinding;
     private final Leelaz mirror;
@@ -11735,6 +11741,10 @@ public class Leelaz {
     }
 
     public boolean isCurrent() {
+      return (isKataGoPda || isDymPda) && isCurrentSelection();
+    }
+
+    private boolean isCurrentSelection() {
       return (!requirePrimarySelection || (primaryGeneration >= 0
               && Lizzie.capturePrimaryEngineGeneration(Leelaz.this) == primaryGeneration))
           && isCurrent(currentMirror());
@@ -11746,8 +11756,7 @@ public class Leelaz {
         if (participantGame == null || !game.playingGenmove() || game.view() != participantGame)
           return false;
       }
-      return (isKataGoPda || isDymPda)
-          && isCurrentLiveEngineIncarnation(binding)
+      return isCurrentLiveEngineIncarnation(binding)
           && currentMirror == mirror
           && (mirror == null || mirror.isCurrentLiveEngineIncarnation(mirrorBinding));
     }
@@ -11765,7 +11774,7 @@ public class Leelaz {
         Boolean selected = EngineManager.callIfCurrentAnalysisSelection(
             primary, activeMirror, mirror,
             () -> Lizzie.tryCallIfPrimaryEngine(primary, generation, () -> {
-              if (!isCurrent()) return false;
+              if (!isCurrentSelection()) return false;
               admitted[0] = admission.getAsLong();
               return true;
             }));
@@ -11784,11 +11793,18 @@ public class Leelaz {
       List<String> commands = dynamic
           ? List.of("pda 0", "dympdacap " + value) : List.of("pda " + value);
       return sendStatefulOrdinaryCommands(
-          commands, StatefulOrdinaryMutationKind.NONE, new CustomPdaUpdate(this, value, dynamic)) >= 0;
+          commands, StatefulOrdinaryMutationKind.NONE, new PdaUpdate(this, value, dynamic, false)) >= 0;
     }
   }
 
-  private record CustomPdaUpdate(CustomPdaTarget target, double value, boolean dynamic) {}
+  private record PdaUpdate(
+      CustomPdaTarget target, double value, boolean dynamic, boolean fromConsole) {
+    private void applyTo(Leelaz engine) {
+      engine.pda = dynamic ? 0 : value;
+      engine.isStaticPda = !dynamic;
+      if (dynamic) engine.pdaCap = value;
+    }
+  }
 
   public CustomPdaTarget captureCustomPdaTarget(boolean requirePrimarySelection) {
     return new CustomPdaTarget(requirePrimarySelection);
