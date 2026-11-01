@@ -9,12 +9,13 @@ import zipfile
 from audit_katago_source_bundle import audit, restore_after_jpackage
 from katago_asset_catalog import engine_manifest_text
 from prepare_katago_source_assets import OFFICIAL_RECEIPT, inventory_digest, unpack
-from test_stage_katago_source_release import SourceReleaseTest
+# Keep the fixture TestCase out of this module's unittest discovery.
+import test_stage_katago_source_release
 
 
 class InstalledSourceTest(unittest.TestCase):
     def setUp(self):
-        self.fixture = SourceReleaseTest()
+        self.fixture = test_stage_katago_source_release.SourceReleaseTest()
         self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
         self.catalog = self.fixture.run_stage()

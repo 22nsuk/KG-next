@@ -15,7 +15,8 @@ from katago_asset_catalog import DEFAULT_CATALOG, SOURCE_OVERRIDE_FIELDS, asset_
 from pin_custom_cuda_assets import pin
 from prepare_katago_source_assets import download, prepare
 from stage_katago_source_release import record, stage, write_zip
-from test_stage_katago_source_release import SourceReleaseTest
+# Keep the fixture TestCase out of this module's unittest discovery.
+import test_stage_katago_source_release
 
 
 COMMIT = "a" * 40
@@ -152,7 +153,7 @@ class CustomCudaAssetsTest(unittest.TestCase):
             self.assertEqual(archive.read_bytes(), download(catalog, "windows-nvidia", self.root / "cache").read_bytes())
 
     def test_legacy_tensor_rt_companion_is_bound_to_new_custom_cuda12(self):
-        fixture = SourceReleaseTest()
+        fixture = test_stage_katago_source_release.SourceReleaseTest()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         legacy = fixture.run_stage()
@@ -176,7 +177,7 @@ class CustomCudaAssetsTest(unittest.TestCase):
 
     def test_legacy_matrix_promotion_preserves_both_independent_custom_assets(self):
         original = self.pin()
-        fixture = SourceReleaseTest()
+        fixture = test_stage_katago_source_release.SourceReleaseTest()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
         regenerated = stage(fixture.packages, fixture.acceptance, self.output, self.root / "legacy-release",

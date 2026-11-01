@@ -608,9 +608,11 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
             env={"PYTHON_BIN": python},
         )
     )
-    # These process fixtures emulate macOS from Linux; they are not native DMG acceptance.
+    # These controlled process fixtures require Linux; they do not replace native product acceptance.
     modules = UNITTEST_MODULES
     if sys.platform.startswith("linux"):
+        if platform.machine().lower() in {"amd64", "x86_64"}:
+            modules += ("scripts.test_linux_product_acceptance",)
         modules += ("scripts.test_macos_product_acceptance",)
     steps.extend(
         Step(
