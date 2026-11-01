@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 
 class TrackingProductionCutoverTest {
@@ -938,6 +939,104 @@ class TrackingProductionCutoverTest {
       environment.settleCommands();
       assertTrue(environment.engine.isStopPonderingByLimit());
       assertFalse(environment.frame.trackingDisplaySnapshot().active());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void coalescingRetiresTheRemovedCommandsCountRatherThanTheReplacements(
+      boolean removedCounted, boolean replacementCounted) throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      Object queue = fieldValue(environment.engine, Leelaz.class, "cmdQueue");
+      Method uncounted = Leelaz.class.getDeclaredMethod(
+          "sendCommandNoLeelaz2", String.class, Runnable.class);
+      uncounted.setAccessible(true);
+      int previousCount = (int) fieldValue(environment.engine, Leelaz.class, "cmdNumber");
+      synchronized (queue) {
+        setField(environment.engine, Leelaz.class, "normalCommandSendInProgress", true);
+      }
+      int actualCount;
+      try {
+        String analysis = "kata-analyze B 10 rootInfo true";
+        if (removedCounted) environment.engine.sendCommand(analysis);
+        else uncounted.invoke(environment.engine, analysis, null);
+        if (replacementCounted) environment.engine.sendCommand("name");
+        else uncounted.invoke(environment.engine, "name", null);
+        synchronized (queue) {
+          assertEquals(1, ((java.util.Deque<?>) queue).size());
+          actualCount = (int) fieldValue(environment.engine, Leelaz.class, "cmdNumber");
+        }
+      } finally {
+        synchronized (queue) {
+          setField(environment.engine, Leelaz.class, "normalCommandSendInProgress", false);
+        }
+      }
+      Method drain = Leelaz.class.getDeclaredMethod("trySendCommandFromQueue");
+      drain.setAccessible(true);
+      drain.invoke(environment.engine);
+      environment.settleCommands();
+      assertEquals(previousCount + (replacementCounted ? 1 : 0), actualCount);
+      assertEquals(actualCount, fieldValue(environment.engine, Leelaz.class, "cmdNumber"));
+      assertTrue(environment.engine.isResponseUpToDate());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void replacingUnwrittenFocusWithPdaRetiresItsCommandCountOnce(
+      boolean dynamic, boolean legacyQueueOwner) throws Exception {
+    Leelaz previousEngine = Lizzie.leelaz;
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      Lizzie.setPrimaryEngine(environment.engine);
+      environment.startSupportedAnalysis();
+      assertEquals(TrackingAnalysisController.AddResult.ADDED,
+          environment.frame.addTrackingPoint("A1"));
+      Object queue = fieldValue(environment.engine, Leelaz.class, "cmdQueue");
+      // Model an occupied writer while the real stop response queues the next focus command.
+      // Admission, coalescing, cancellation and accounting all use the production paths.
+      synchronized (queue) {
+        setField(environment.engine, Leelaz.class, "normalCommandSendInProgress", true);
+      }
+      int expectedCount;
+      int admittedCount;
+      boolean prematurelyUpToDate;
+      String before;
+      try {
+        environment.answerAvailableCommands();
+        synchronized (queue) {
+          Object focus = ((java.util.Deque<?>) queue).getLast();
+          assertTrue(((String) fieldValue(focus, focus.getClass(), "command")).contains("focus A1"));
+          int previousCount = (int) fieldValue(environment.engine, Leelaz.class, "cmdNumber");
+          if (legacyQueueOwner) environment.engine.sendCommand("name");
+          expectedCount = previousCount - 1 + (dynamic ? 2 : 1) + (legacyQueueOwner ? 1 : 0);
+        }
+        before = environment.commands();
+        assertTrue(environment.engine.sendConsolePda(1.5, dynamic));
+        assertEquals(before, environment.commands(), "admission must not bypass the occupied writer");
+        admittedCount = (int) fieldValue(environment.engine, Leelaz.class, "cmdNumber");
+        prematurelyUpToDate = environment.engine.isResponseUpToDate();
+      } finally {
+        synchronized (queue) {
+          setField(environment.engine, Leelaz.class, "normalCommandSendInProgress", false);
+        }
+      }
+      Method drain = Leelaz.class.getDeclaredMethod("trySendCommandFromQueue");
+      drain.setAccessible(true);
+      drain.invoke(environment.engine);
+      environment.settleCommands();
+      assertEquals(expectedCount, admittedCount,
+          "the replaced focus command must be subtracted exactly once");
+      assertFalse(prematurelyUpToDate, "PDA still awaits its real response");
+      String written = environment.commands().substring(before.length());
+      assertFalse(written.contains("focus A1"), written);
+      assertEquals(1, written.lines().filter(line -> line.contains("pda " + (dynamic ? "0" : "1.5"))).count());
+      assertEquals(dynamic ? 1 : 0, written.lines().filter(line -> line.contains("dympdacap 1.5")).count());
+      assertEquals(expectedCount, fieldValue(environment.engine, Leelaz.class, "cmdNumber"));
+      assertTrue(environment.engine.isResponseUpToDate());
+      assertTrue(environment.engine.isLoaded());
+    } finally {
+      Lizzie.setPrimaryEngine(previousEngine);
     }
   }
 
