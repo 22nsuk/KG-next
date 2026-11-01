@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.util.StoneSoundTestSupport;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -214,6 +215,73 @@ class BoardPlayCaptureHistoryRegressionTest {
       assertEquals(1500, data.rootVisits);
       assertEquals(List.of(best), data.bestMoves);
       assertSame(continuation, variation.next().orElseThrow());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true,BLACK,true,false,true,true,30",
+    "true,WHITE,true,false,true,true,30",
+    "true,BLACK,false,true,true,true,30",
+    "true,WHITE,false,true,true,true,30",
+    "true,BLACK,true,false,false,true,3",
+    "true,WHITE,false,true,false,true,3",
+    "true,WHITE,false,false,true,true,3",
+    "true,WHITE,true,false,true,false,3",
+    "false,BLACK,true,false,true,true,30",
+    "false,WHITE,false,true,true,true,30"
+  })
+  void laterPassReplayPreservesHumanByoyomiAcrossTheNextEngineMove(
+      boolean reuse,
+      Stone color,
+      boolean playing,
+      boolean analysisPlaying,
+      boolean humanTurn,
+      boolean timerActive,
+      int expectedSeconds)
+      throws Exception {
+    boolean previousShowingByoTime = LizzieFrame.isShowingByoTime;
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.place(2, 2, color.opposite());
+      BoardHistoryNode parent = env.current();
+      board.place(3, 3, color);
+      board.previousMove(false);
+      BoardHistoryNode existingPass = null;
+      if (reuse) {
+        board.pass(color);
+        existingPass = env.current();
+        existingPass.getData().comment = "keep this pass";
+        board.previousMove(false);
+      }
+
+      // Exercise the real clock reset without starting a wall-clock scheduler or engine process.
+      Lizzie.setPrimaryEngine(null);
+      Lizzie.frame.isPlayingAgainstLeelaz = playing;
+      Lizzie.frame.isAnaPlayingAgainstLeelaz = analysisPlaying;
+      Lizzie.frame.playerIsBlack = humanTurn == parent.getData().blackToPlay;
+      LizzieFrame.isShowingByoTime = timerActive;
+      Lizzie.frame.maxByoTimes = 30;
+      Lizzie.frame.byoSeconds = 3;
+      Lizzie.frame.byoTimes = 5;
+
+      board.pass(color);
+
+      assertEquals(expectedSeconds, Lizzie.frame.byoSeconds);
+      assertEquals(5, Lizzie.frame.byoTimes);
+      assertEquals(2, parent.numberOfChildren());
+      if (reuse) {
+        assertSame(existingPass, env.current());
+        assertEquals("keep this pass", env.current().getData().comment);
+      }
+      if (humanTurn) {
+        board.place(0, 0, color.opposite());
+        assertEquals(Lizzie.frame.playerIsBlack, board.getHistory().isBlacksTurn());
+        assertEquals(expectedSeconds, Lizzie.frame.byoSeconds);
+        assertEquals(5, Lizzie.frame.byoTimes);
+      }
+    } finally {
+      LizzieFrame.isShowingByoTime = previousShowingByoTime;
     }
   }
 
