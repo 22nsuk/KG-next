@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.util.StoneSoundTestSupport;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -167,6 +169,162 @@ class BoardPlayCaptureHistoryRegressionTest {
 
       assertSame(passNode, env.current());
       assertEquals(1, board.getHistory().getStart().numberOfChildren());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "true,false", "true,true"})
+  void replayingAnnotatedVariationPreservesNodeAndAnalysis(boolean pass, boolean later)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.place(2, 2, Stone.BLACK);
+      BoardHistoryNode parent = env.current();
+      if (later) {
+        board.place(3, 3, Stone.WHITE);
+        board.previousMove(false);
+      }
+      if (pass) board.pass(Stone.WHITE);
+      else board.place(3, 3, Stone.WHITE);
+      BoardHistoryNode variation = env.current();
+      BoardData data = variation.getData();
+      data.comment = "analysed variation";
+      data.winrate = 63.5;
+      data.scoreMean = 2.25;
+      data.setPlayouts(1234);
+      data.rootVisits = 1500;
+      MoveData best = new MoveData();
+      best.coordinate = "A1";
+      best.playouts = 1234;
+      data.bestMoves.add(best);
+      board.place(0, 0, Stone.BLACK);
+      BoardHistoryNode continuation = env.current();
+      board.previousMove(false);
+      board.previousMove(false);
+
+      if (pass) board.pass(Stone.WHITE);
+      else board.place(3, 3, Stone.WHITE);
+
+      assertSame(variation, env.current());
+      assertEquals(later ? 2 : 1, parent.numberOfChildren());
+      assertSame(data, env.current().getData());
+      assertEquals("analysed variation", data.comment);
+      assertEquals(63.5, data.winrate);
+      assertEquals(2.25, data.scoreMean);
+      assertEquals(1234, data.getPlayouts());
+      assertEquals(1500, data.rootVisits);
+      assertEquals(List.of(best), data.bestMoves);
+      assertSame(continuation, variation.next().orElseThrow());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true,BLACK,true,false,true,true,30",
+    "true,WHITE,true,false,true,true,30",
+    "true,BLACK,false,true,true,true,30",
+    "true,WHITE,false,true,true,true,30",
+    "true,BLACK,true,false,false,true,3",
+    "true,WHITE,false,true,false,true,3",
+    "true,WHITE,false,false,true,true,3",
+    "true,WHITE,true,false,true,false,3",
+    "false,BLACK,true,false,true,true,30",
+    "false,WHITE,false,true,true,true,30"
+  })
+  void laterPassReplayPreservesHumanByoyomiAcrossTheNextEngineMove(
+      boolean reuse,
+      Stone color,
+      boolean playing,
+      boolean analysisPlaying,
+      boolean humanTurn,
+      boolean timerActive,
+      int expectedSeconds)
+      throws Exception {
+    boolean previousShowingByoTime = LizzieFrame.isShowingByoTime;
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.place(2, 2, color.opposite());
+      BoardHistoryNode parent = env.current();
+      board.place(3, 3, color);
+      board.previousMove(false);
+      BoardHistoryNode existingPass = null;
+      if (reuse) {
+        board.pass(color);
+        existingPass = env.current();
+        existingPass.getData().comment = "keep this pass";
+        board.previousMove(false);
+      }
+
+      // Exercise the real clock reset without starting a wall-clock scheduler or engine process.
+      Lizzie.setPrimaryEngine(null);
+      Lizzie.frame.isPlayingAgainstLeelaz = playing;
+      Lizzie.frame.isAnaPlayingAgainstLeelaz = analysisPlaying;
+      Lizzie.frame.playerIsBlack = humanTurn == parent.getData().blackToPlay;
+      LizzieFrame.isShowingByoTime = timerActive;
+      Lizzie.frame.maxByoTimes = 30;
+      Lizzie.frame.byoSeconds = 3;
+      Lizzie.frame.byoTimes = 5;
+
+      board.pass(color);
+
+      assertEquals(expectedSeconds, Lizzie.frame.byoSeconds);
+      assertEquals(5, Lizzie.frame.byoTimes);
+      assertEquals(2, parent.numberOfChildren());
+      if (reuse) {
+        assertSame(existingPass, env.current());
+        assertEquals("keep this pass", env.current().getData().comment);
+      }
+      if (humanTurn) {
+        board.place(0, 0, color.opposite());
+        assertEquals(Lizzie.frame.playerIsBlack, board.getHistory().isBlacksTurn());
+        assertEquals(expectedSeconds, Lizzie.frame.byoSeconds);
+        assertEquals(5, Lizzie.frame.byoTimes);
+      }
+    } finally {
+      LizzieFrame.isShowingByoTime = previousShowingByoTime;
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true,false,WHITE,false", "false,true,WHITE,false",
+    "false,false,BLACK,false", "false,false,WHITE,true"
+  })
+  void passReplayKeepsExplicitBranchesDummyAndColorDistinct(
+      boolean newBranch, boolean dummy, Stone requestedColor, boolean existingDummy)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.place(2, 2, Stone.BLACK);
+      BoardHistoryNode parent = env.current();
+      board.place(3, 3, Stone.WHITE);
+      board.previousMove(false);
+      board.pass(Stone.WHITE, false, existingDummy);
+      BoardHistoryNode variation = env.current();
+      variation.getData().comment = "keep this branch";
+      board.previousMove(false);
+
+      board.pass(requestedColor, newBranch, dummy);
+
+      assertNotSame(variation, env.current());
+      assertEquals(3, parent.numberOfChildren());
+      assertEquals(requestedColor, env.current().getData().lastMoveColor);
+      assertEquals(dummy, env.current().getData().dummy);
+      assertEquals("keep this branch", variation.getData().comment);
+    }
+  }
+
+  @Test
+  void firstPassChildOfAnotherColorIsNotReplayed() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      board.pass(Stone.BLACK);
+      BoardHistoryNode blackPass = env.current();
+      board.previousMove(false);
+      board.pass(Stone.WHITE);
+      assertNotSame(blackPass, env.current());
+      assertEquals(Stone.WHITE, env.current().getData().lastMoveColor);
+      assertEquals(2, board.getHistory().getStart().numberOfChildren());
     }
   }
 

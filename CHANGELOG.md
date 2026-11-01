@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Re-enter an existing pass variation after stepping back, preserving its comments, analysis and continuation instead of creating a duplicate branch.
+
 - Preserve ReadBoard's JSON and two legacy user configuration files when activating an update, after confirming the old helper has exited. Abort before replacement if settings cannot be copied; attempt backup restoration independently of staging cleanup and retain all failure details.
 - Route ordinary analysis, tracking attention and background graph progress through the existing bounded Swing refresh queue. Keep current-search reuse checks in their existing owner, merge graph/title requests without losing board work, and serialize candidate visibility changes with analysis cache adoption so deeper results remain intact.
 - Write completed engine-game SGF and result summaries in the background, retaining frozen payloads and per-file retry progress. Keep Stop independent of saving, wait for save-state publication before shutdown, and start a successor only after both saving and engine retirement finish. Capture optional graph images on the UI thread and encode them with the background write.

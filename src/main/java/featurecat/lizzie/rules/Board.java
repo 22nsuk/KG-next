@@ -2629,7 +2629,15 @@ public class Board {
               0,
               0);
       newState.dummy = dummy;
-      history.addOrGoto(newState, newBranch);
+      boolean previousBlackToPlay = history.isBlacksTurn();
+      // Reuse later pass variations without replacing their comments or analysis.
+      if (!newBranch && !dummy && history.nextByMoveIdentity(newState).isPresent()) {
+        // Preserve addOrGoto's clock reset using the turn before history advanced.
+        if ((Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz)
+            && Lizzie.frame.playerIsBlack == previousBlackToPlay)
+          Lizzie.frame.tryToResetByoTime();
+        clearAfterMove();
+      } else history.addOrGoto(newState, newBranch);
       // update leelaz with pass
       if (Lizzie.leelaz != null && !Lizzie.leelaz.isInputCommand && !engineGamePlaying())
         feedEngineForMainlineMove(color, "pass");

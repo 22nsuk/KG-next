@@ -569,6 +569,64 @@ class ConsoleGenmoveRequestTest {
     idle();
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void replayedAnnotatedPassIsNotSentBackToGeneratingEngine(boolean laterVariation) throws Exception {
+    BoardHistoryNode parent = rules.current();
+    if (laterVariation) {
+      rules.board().getHistory().place(3, 3, Stone.WHITE);
+      rules.board().getHistory().setHead(parent);
+    }
+    rules.board().getHistory().pass(Stone.WHITE);
+    BoardHistoryNode pass = rules.current();
+    pass.getData().comment = "analysed pass";
+    rules.board().getHistory().setHead(pass.previous().orElseThrow());
+    EngineManager.isEmpty = false;
+    Lizzie.frame.isPlayingAgainstLeelaz = true;
+    Lizzie.frame.playerIsBlack = false;
+    response(request(true, "w"), "pass");
+    assertSame(pass, rules.current());
+    assertEquals(laterVariation ? 2 : 1, parent.numberOfChildren());
+    assertFalse(output.toString(StandardCharsets.UTF_8).contains("play "));
+    assertEquals(1, output.toString(StandardCharsets.UTF_8).lines()
+        .filter(row -> row.contains("genmove")).count());
+    idle();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void manualPassVariationFeedsEngineAndRequestsReplyOnce(boolean laterVariation)
+      throws Exception {
+    BoardHistoryNode parent = rules.current();
+    if (laterVariation) {
+      rules.board().getHistory().place(3, 3, Stone.WHITE);
+      rules.board().getHistory().setHead(parent);
+    }
+    rules.board().getHistory().pass(Stone.WHITE);
+    BoardHistoryNode pass = rules.current();
+    pass.getData().comment = "analysed pass";
+    rules.board().getHistory().setHead(parent);
+    Lizzie.frame.isPlayingAgainstLeelaz = true;
+    Lizzie.frame.playerIsBlack = false;
+    EngineManager.isEmpty = false;
+    engine.isKatago = true;
+    output.reset();
+
+    rules.board().pass(Stone.WHITE);
+
+    assertSame(pass, rules.current());
+    // Analysis-style genmove waits for the preceding play and stop acknowledgements.
+    String play = output.toString(StandardCharsets.UTF_8).lines()
+        .filter(row -> row.contains("play W pass")).findFirst().orElseThrow();
+    line("=" + play.substring(0, play.indexOf(' ')));
+    line("");
+    line("=");
+    line("");
+    String sent = output.toString(StandardCharsets.UTF_8);
+    assertEquals(1, sent.lines().filter(row -> row.contains("play W pass")).count(), sent);
+    assertEquals(1, sent.lines().filter(row -> row.contains("kata-genmove_analyze b")).count(), sent);
+  }
+
   @Test
   void actualNavigationAwayAndBackInvalidatesReply() throws Exception {
     rules.board().getHistory().place(3, 3, Stone.BLACK);

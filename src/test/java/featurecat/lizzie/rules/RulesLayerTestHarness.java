@@ -215,9 +215,6 @@ final class RulesLayerTestHarness implements AutoCloseable {
     public void resetTitle() {}
 
     @Override
-    public void tryToResetByoTime() {}
-
-    @Override
     public void setResult(String result) {
       resultPublications++;
       super.setResult(result);
