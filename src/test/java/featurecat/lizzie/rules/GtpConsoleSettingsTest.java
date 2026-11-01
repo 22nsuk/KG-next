@@ -433,6 +433,89 @@ class GtpConsoleSettingsTest {
     assertPdaState(engine, 4, 0.9, false);
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void consolePdaRetiresOldAnalysisBeforeEitherRecipientReceivesTheCommand(boolean dynamic)
+      throws Exception {
+    Lizzie.frame = RulesLayerTestHarness.allocate(AnalysisFrame.class);
+    LizzieFrame.toolbar = RulesLayerTestHarness.allocate(BottomToolbar.class);
+    RecordingEngine secondary = comparisonEngine();
+    engine.isKatago = secondary.isKatago = true;
+    engine.startAnalysis();
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    engine.info(100);
+    secondary.info(100);
+    assertEquals(100, board.getData().getPlayouts());
+    assertEquals(100, board.getData().getPlayouts2());
+    assertEquals(1.5, board.getData().pda);
+    assertEquals(2, board.getData().pda2);
+
+    // The primary is writing PDA, before either engine has replied or the mirror receives it.
+    engine.beforePdaWrite = () -> {
+      assertTrue(secondary.commands.stream().noneMatch(c -> c.startsWith("pda ")));
+      engine.info(200);
+      secondary.info(200);
+    };
+    assertTrue(engine.sendConsolePda(dynamic ? 0.3 : -1.5, dynamic));
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    assertEquals(100, board.getData().getPlayouts());
+    assertEquals(100, board.getData().getPlayouts2());
+    BoardData saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getData();
+    assertEquals(1.5, saved.pda);
+    assertEquals(2, saved.pda2);
+    assertEquals(100, saved.getPlayouts());
+    assertEquals(100, saved.getPlayouts2());
+
+    // A newly written analysis command must still publish results with the admitted PDA.
+    engine.startAnalysis();
+    engine.awaitIdle();
+    secondary.awaitIdle();
+    engine.info(300);
+    secondary.info(300);
+    saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getData();
+    assertEquals(dynamic ? 0 : -1.5, saved.pda);
+    assertEquals(dynamic ? 0 : -1.5, saved.pda2);
+    assertEquals(300, saved.getPlayouts());
+    assertEquals(300, saved.getPlayouts2());
+  }
+
+  @Test
+  void consolePdaRetiresAnOlderAnalysisAlreadyWaitingToWrite() throws Exception {
+    engine.isKatago = true;
+    Field fenceField = EngineManager.class.getDeclaredField("ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK");
+    fenceField.setAccessible(true);
+    var fence = (java.util.concurrent.locks.ReentrantLock) fenceField.get(null);
+    Field writerField = Leelaz.class.getDeclaredField("normalCommandBeingSent");
+    writerField.setAccessible(true);
+    Method queueMethod = Leelaz.class.getDeclaredMethod("commandQueue");
+    queueMethod.setAccessible(true);
+    Object queue = queueMethod.invoke(engine);
+    CompletableFuture<Void> analysis;
+    fence.lock();
+    try {
+      analysis = CompletableFuture.runAsync(engine::startAnalysis);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (true) {
+        synchronized (queue) {
+          if (writerField.get(engine) != null) break;
+        }
+        if (System.nanoTime() >= deadline) fail("Analysis did not reach the physical writer");
+        Thread.sleep(5);
+      }
+      assertTrue(engine.sendConsolePda(-1.5, false));
+    } finally {
+      fence.unlock();
+    }
+    analysis.get(3, TimeUnit.SECONDS);
+    engine.awaitIdle();
+    assertEquals(List.of("pda -1.5"), engine.commands);
+    engine.startAnalysis();
+    engine.awaitIdle();
+    assertEquals(List.of("pda -1.5", "kata-analyze B 10"), engine.commands);
+  }
+
   private RecordingEngine comparisonEngine() throws IOException {
     RecordingEngine secondary = newEngine();
     secondary.pda = 2;
@@ -623,6 +706,14 @@ class GtpConsoleSettingsTest {
     }
   }
 
+  private static final class AnalysisFrame extends LizzieFrame {
+    @Override
+    public void requestAnalysisRefresh() {}
+
+    @Override
+    public void requestAnalysisTitleUpdate() {}
+  }
+
   private static final class RecordingBoard extends Board {
     int resizeCalls, width, height, analysisClears, clears, undos;
 
@@ -656,6 +747,7 @@ class GtpConsoleSettingsTest {
     boolean accept = true, fail;
     int ponders, heatmaps, admissionAttempts;
     Runnable afterPdaAdmission;
+    Runnable beforePdaWrite;
     boolean withholdResponses;
 
     RecordingEngine() throws IOException {
@@ -668,12 +760,32 @@ class GtpConsoleSettingsTest {
       try {
         var transport = ExactSnapshotRestoreProtocolFixture.installAsync(this, command -> {
           commands.add(command);
+          if (command.startsWith("pda ") && beforePdaWrite != null) {
+            Runnable callback = beforePdaWrite;
+            beforePdaWrite = null;
+            callback.run();
+          }
           return withholdResponses ? null : ExactSnapshotRestoreProtocolFixture.Response.success();
         });
         var install = Leelaz.class.getDeclaredMethod("installFreshCommandOutputForTest", OutputStream.class);
         install.setAccessible(true);
         install.invoke(this, transport);
         transports.add(transport);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    }
+
+    void startAnalysis() {
+      assertTrue(super.sendRawConsoleCommand("kata-analyze B 10"));
+    }
+
+    void info(int visits) {
+      try {
+        Method parse = Leelaz.class.getDeclaredMethod("parseLine", String.class);
+        parse.setAccessible(true);
+        parse.invoke(this, "info move C3 visits " + visits
+            + " winrate 0.55 scoreMean 1.25 scoreStdev 2 pv C3 D4");
       } catch (ReflectiveOperationException failure) {
         throw new AssertionError(failure);
       }

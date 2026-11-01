@@ -10097,7 +10097,7 @@ public class Leelaz {
       }
     };
     long admissionGeneration = pdaUpdate == null
-        ? admission.getAsLong() : pdaUpdate.target.admit(admission);
+        ? admission.getAsLong() : pdaUpdate.admit(admission);
     if (admissionGeneration < 0L) {
       if (startupTransaction != null) {
         throw new IllegalStateException(
@@ -11799,10 +11799,34 @@ public class Leelaz {
 
   private record PdaUpdate(
       CustomPdaTarget target, double value, boolean dynamic, boolean fromConsole) {
+    private long admit(java.util.function.LongSupplier admission) {
+      if (!fromConsole) return target.admit(admission);
+      long[] generation = {-1L};
+      // Drain parser commits before changing their metadata. Keep this outside selection and
+      // endpoint locks, and release it before transport I/O, matching ordinary analysis routing.
+      EngineManager.runIfNoActiveEngineGameAnalysisOutput(
+          () -> generation[0] = target.admit(admission));
+      return generation[0];
+    }
+
     private void applyTo(Leelaz engine) {
+      if (fromConsole) {
+        // Only a subsequent analysis command may publish results under the newly admitted PDA.
+        engine.invalidateAnalysisInfoPayloadForLocalStateChange(false);
+        // An older analysis may already be dequeued but still waiting for the output fence.
+        // Retire its target too, so it cannot install an owner ahead of this PDA batch.
+        retirePendingAnalysis(engine.normalCommandBeingSent);
+        for (QueuedCommand queued : engine.commandQueue()) retirePendingAnalysis(queued);
+      }
       engine.pda = dynamic ? 0 : value;
       engine.isStaticPda = !dynamic;
       if (dynamic) engine.pdaCap = value;
+    }
+
+    private static void retirePendingAnalysis(QueuedCommand command) {
+      if (command != null && isOrdinaryPositionAnalysisCommand(command.command)) {
+        command.ordinaryAnalysisTarget = null;
+      }
     }
   }
 
