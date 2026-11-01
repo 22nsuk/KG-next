@@ -1,6 +1,7 @@
 """File-backed assembly checks; synthetic binaries do not claim GPU acceptance."""
 
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -133,6 +134,50 @@ class DualCudaAssemblyTest(unittest.TestCase):
         installed = json.loads((app / "lizzieyzy-next-installed-manifest.json").read_text())
         self.assertEqual("", installed["components"][0]["sha256"],
                          "Updater core hashes identify update archives; a standalone JAR is not that archive")
+
+    def test_independently_pinned_sources_keep_their_own_provenance(self):
+        target = "windows-nvidia-cuda13"
+        commit = "b" * 40
+        self.fixture.rewrite_metadata(target, lambda metadata: metadata.update(
+            sourceCommit=commit, versionOutput=f"Git revision: {commit}\n"))
+        archive = self.fixture.archives[target]
+        renamed = archive.with_name(f"katago-source-{commit[:12]}-{target}.zip")
+        archive.rename(renamed)
+        self.fixture.archives[target] = renamed
+        catalog = json.loads(self.inputs.catalog.read_text(encoding="utf-8"))
+        with zipfile.ZipFile(renamed) as opened:
+            metadata_sha = hashlib.sha256(opened.read("source-release.json")).hexdigest()
+        catalog["assets"][target].update(
+            katagoSourceCommit=commit, engineReleaseTag=f"kg-next-{commit[:12]}",
+            assetName=renamed.name, sizeBytes=renamed.stat().st_size, sha256=digest(renamed),
+            sourceMetadataSha256=metadata_sha)
+        self.inputs.catalog.write_text(json.dumps(catalog), encoding="utf-8")
+        self.fixture.prepare(catalog, [target])
+
+        app = assemble(self.inputs) / "app"
+        manifest = json.loads((app / "lizzieyzy-next-dual-cuda-manifest.json").read_text())
+        expected = {"windows-nvidia": fixture_tools.COMMIT, target: commit}
+        self.assertEqual(expected, {entry["target"]: entry["sourceCommit"] for entry in manifest["engines"]})
+        for entry in manifest["engines"]:
+            engine = app.parent / entry["directory"]
+            metadata = json.loads((engine / "source-release.json").read_text())
+            self.assertEqual(expected[entry["target"]], metadata["sourceCommit"])
+            self.assertIn(f"Source commit: {expected[entry['target']]}\n",
+                          (engine / "lizzieyzy-next-katago-engine-manifest.txt").read_text())
+            self.assertEqual(catalog["assets"][entry["target"]]["executableSha256"], digest(engine / "katago.exe"))
+
+    def test_each_engine_must_still_match_its_own_catalog_source(self):
+        original = self.inputs.catalog.read_text(encoding="utf-8")
+        commit = "c" * 40
+        for target in self.fixture.archives:
+            catalog = json.loads(original)
+            catalog["assets"][target].update(
+                katagoSourceCommit=commit, engineReleaseTag=f"kg-next-{commit[:12]}",
+                assetName=f"katago-source-{commit[:12]}-{target}.zip")
+            self.inputs.catalog.write_text(json.dumps(catalog), encoding="utf-8")
+            with self.subTest(target=target), self.assertRaisesRegex(ValueError, "source identity differs"):
+                assemble(self.inputs)
+            self.assertFalse(self.inputs.output.exists())
 
     def test_accepts_empty_output_but_never_overwrites_an_installation(self):
         self.inputs.output.mkdir(parents=True)

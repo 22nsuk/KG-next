@@ -17,7 +17,7 @@ GUI는 실제 엔진이 GTP `list_commands`에 `kg-reuse-root-tree`를 광고할
 - 기본 `windows-nvidia`: CUDA 12.8.0 / cuDNN 9.8.0.87, 저장된 런타임 프로필 이름 `cuda12.8-cudnn9`를 유지합니다.
 - 추가 `windows-nvidia-cuda13`: CUDA 13.2.2 / cuDNN 9.24.0.43 CUDA13, 런타임 프로필 `cuda13.2-cudnn9.24`.
 
-두 CUDA 번들은 `22nsuk/KataGo`의 같은 고정 소스 커밋에서 빌드하며 탐색 재사용 확장을 포함합니다. 각 자산에는 소스 저장소·커밋, 커밋 앞 12자리로 고정한 `kg-next-<SHA12>` 릴리스, 압축 파일·실행 파일·`source-release.json` 해시를 기록합니다. 다운로드와 패키징은 자산별 출처를 사용하고, 다른 14개 엔진 자산의 기존 출처를 유지합니다. TensorRT 패키지의 HumanSL 보조 실행 파일은 이 기본 CUDA12 실행 파일로 복사하고 그 해시에 연결합니다.
+두 CUDA 번들은 `22nsuk/KataGo`의 자산별 고정 소스 커밋에서 빌드하며 탐색 재사용 확장을 포함합니다. CUDA12와 CUDA13은 서로 다른 소스 커밋과 릴리스를 사용할 수 있습니다. 각 자산에는 소스 저장소·커밋, 커밋 앞 12자리로 고정한 `kg-next-<SHA12>` 릴리스, 압축 파일·실행 파일·`source-release.json` 해시를 기록합니다. 다운로드와 패키징은 자산별 출처를 사용하고, 다른 14개 엔진 자산의 기존 출처를 유지합니다. TensorRT 패키지의 HumanSL 보조 실행 파일은 이 기본 CUDA12 실행 파일로 복사하고 그 해시에 연결합니다.
 
 CUDA13 런타임의 `cudart`, cuBLAS, NVRTC, nvJitLink는 CUDA13 세트를 사용하고 cuDNN은 CUDA13용 9.24.0.43의 전체 DLL 세트를 함께 준비합니다. CUDA12 DLL을 이름만 바꾸거나 CUDA12의 manifest를 재사용하지 않습니다. 두 포크 엔진은 zlib 1.3.1을 정적으로 링크합니다. GUI는 신뢰한 자산의 실행 파일과 출처 매니페스트가 모두 일치할 때 동적 zlib 파일 검사를 생략합니다.
 
@@ -25,7 +25,7 @@ CUDA13 런타임의 `cudart`, cuBLAS, NVRTC, nvJitLink는 CUDA13 세트를 사�
 
 ## 선택 CUDA13 패키지 준비
 
-실제 엔진 릴리스 파일을 자산 목록에 반영할 때는 다음 명령으로 두 압축 파일을 검증하고 새 목록을 생성합니다. 두 파일의 소스·프로필·의존성·모든 파일 해시가 통과해야 출력합니다. 생성 결과를 검토한 뒤 `src/main/resources/katago-assets.json`을 교체합니다.
+같은 소스에서 빌드한 두 CUDA 자산을 함께 갱신할 때는 다음 명령으로 두 압축 파일을 검증하고 새 목록을 생성합니다. 두 파일의 소스·프로필·의존성·모든 파일 해시가 통과해야 출력합니다. 생성 결과를 검토한 뒤 `src/main/resources/katago-assets.json`을 교체합니다. 이 일괄 갱신 도구와 달리, 아래 설치 조립은 이미 자산별로 고정된 서로 다른 소스의 엔진도 사용합니다.
 
 ```sh
 python3 scripts/pin_custom_cuda_assets.py \
@@ -44,9 +44,11 @@ WINDOWS_BUILD_CUDA13=true ./scripts/package_windows_exe.sh YYYY-MM-DD 1.0.0 targ
 
 ## CUDA12·CUDA13 한 폴더에 설치
 
-두 버전을 함께 사용하려면 `scripts/assemble_windows_dual_cuda.py`로 하나의 portable 설치를 구성할 수 있습니다. 기존의 검증된 Windows app-image에서 GUI 실행 파일·Java 런타임·JCEF·readboard·기본 모델을 재사용하고, 최신 GUI JAR과 같은 소스 커밋의 CUDA12·CUDA13 엔진을 추가합니다. Python 3.10 이상이 필요하며 다운로드·엔진 빌드·JRE 재생성은 수행하지 않습니다.
+두 버전을 함께 사용하려면 `scripts/assemble_windows_dual_cuda.py`로 하나의 portable 설치를 구성할 수 있습니다. 기존의 검증된 Windows app-image에서 GUI 실행 파일·Java 런타임·JCEF·readboard·기본 모델을 재사용하고, 최신 GUI JAR과 자산 목록에 각각 고정된 CUDA12·CUDA13 엔진을 추가합니다. Python 3.10 이상이 필요하며 다운로드·엔진 빌드·JRE 재생성은 수행하지 않습니다.
 
 아래 예시는 이미 `prepare_katago_source_assets.py`로 검증·추출한 엔진 폴더와 `prepare_bundled_nvidia_runtime.py`로 준비한 각 런타임 폴더를 사용합니다. app-image에는 현재 자산 목록의 기본 모델과 한 개의 jpackage 실행 파일·설정 쌍이 있어야 합니다. JAR은 이 두 엔진을 등록하는 최신 GUI 빌드여야 하며 `--release-tag`는 해당 GUI 버전을 표시합니다.
+
+조립기는 각 엔진의 출처·파일 해시와 해당 런타임을 독립적으로 검증하고, 설치 매니페스트에 각 소스 커밋을 기록합니다. 두 커밋을 같게 맞추기 위한 엔진 재빌드나 자산 목록 변경은 필요하지 않습니다. 공용 GTP/analysis 설정은 CUDA12 번들의 템플릿을 사용합니다. 조립 성공은 두 엔진의 기능이 같거나 GPU 검증을 통과했다는 뜻이 아니며, 기능 지원 여부는 실행 중인 엔진과의 협상으로 확인합니다.
 
 ```powershell
 python scripts/assemble_windows_dual_cuda.py `
