@@ -55,14 +55,26 @@ jobs:
       - name: Prepare Linux product fixture isolation
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends iproute2 nftables util-linux
-          unshare --user --map-root-user --net --fork sh -eu -c '
+          sudo apt-get install -y --no-install-recommends apparmor iproute2 nftables util-linux
+          # Allow user namespaces for this CI copy without changing system unshare or global policy.
+          sudo install -D -m 0755 /usr/bin/unshare /usr/local/lib/kg-next-ci/unshare
+          sudo tee /etc/apparmor.d/kg-next-ci-unshare > /dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          profile kg-next-ci-unshare /usr/local/lib/kg-next-ci/unshare flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser -r /etc/apparmor.d/kg-next-ci-unshare
+          /usr/local/lib/kg-next-ci/unshare --user --map-root-user --net --fork sh -eu -c '
+            cat /proc/self/attr/current
             ip link set lo up
             nft add table inet kg_next_ci_probe
             nft delete table inet kg_next_ci_probe
           '
       - name: Run portable script tests
-        run: python3 scripts/run_local_ci.py --profile portable --group scripts --require-clean --summary-dir target/local-ci/portable-scripts
+        run: |
+          export PATH="/usr/local/lib/kg-next-ci:$PATH"
+          python3 scripts/run_local_ci.py --profile portable --group scripts --require-clean --summary-dir target/local-ci/portable-scripts
       - name: Upload local CI summary
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

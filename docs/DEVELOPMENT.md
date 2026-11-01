@@ -145,6 +145,8 @@ Linux fixture 实际创建私有 network namespace，并用 `nft` 阻断和计�
 仅能执行 `unshare ... true` 不足以证明环境可用，namespace 内还必须能运行 `ip link set lo up` 和创建 nft table。
 Ubuntu 的工具由 `util-linux`、`iproute2`、`nftables` 提供；CI 会安装这些依赖并先检查隔离能力，
 缺少工具或权限时检查失败，不静默跳过。fixture 通过不替代最终 ZIP/DMG、真实窗口或真实引擎/GPU 验收。
+GitHub Ubuntu runner 还为 root 所有的 CI 专用 `unshare` 副本加载允许 `userns` 的 AppArmor profile，
+仅在脚本测试步骤的 `PATH` 中使用该副本；系统 `unshare` 和全局 AppArmor user namespace 限制保持不变。
 两平台 Java gate 使用 Failsafe 默认命名发现集成测试，不再限定单一类；集成测试为空会失败。
 执行器还检查本次 XML 中 `LoggingProviderSmokeIT.shadedArtifactWritesOneProviderEvent`
 确实成功执行：关键用例缺失，或关键类任一用例 skipped/失败/报错，均使预检失败并写出失败摘要。
