@@ -538,16 +538,18 @@ public class SGFParser {
   }
 
   private static boolean parse(String value) {
+    boolean oriPlaySound = Lizzie.config.playSound;
     try (var phase = new SgfPhase("parse-build-tree")) {
+      Lizzie.config.playSound = false;
       return parseIntoCurrentBoard(value);
+    } finally {
+      Lizzie.config.playSound = oriPlaySound;
     }
   }
 
   // Token parsing and live history construction are interleaved in this legacy parser.
   private static boolean parseIntoCurrentBoard(String value) {
     // Drop anything outside "(;...)"
-    boolean oriPlaySound = Lizzie.config.playSound;
-    Lizzie.config.playSound = false;
     final Pattern SGF_PATTERN = Pattern.compile("(?s).*?(\\(\\s*;{0,1}.*\\))(?s).*?");
     Matcher sgfMatcher = SGF_PATTERN.matcher(value);
     if (sgfMatcher.matches()) {
@@ -1001,7 +1003,6 @@ public class SGFParser {
       Lizzie.board.addNodeProperties(gameProperties);
     }
     stabilizeRootSetupSideToPlay(Lizzie.board.getHistory());
-    Lizzie.config.playSound = oriPlaySound;
     return true;
   }
 
