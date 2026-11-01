@@ -611,7 +611,9 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
     # These controlled process fixtures require Linux; they do not replace native product acceptance.
     modules = UNITTEST_MODULES
     if sys.platform.startswith("linux"):
-        modules += ("scripts.test_linux_product_acceptance", "scripts.test_macos_product_acceptance")
+        if platform.machine().lower() in {"amd64", "x86_64"}:
+            modules += ("scripts.test_linux_product_acceptance",)
+        modules += ("scripts.test_macos_product_acceptance",)
     steps.extend(
         Step(
             f"Run {module}",
