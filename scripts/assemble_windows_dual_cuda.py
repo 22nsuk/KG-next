@@ -191,8 +191,6 @@ def assemble(inputs: Inputs) -> Path:
         metadata = json.loads((engine / "source-release.json").read_text(encoding="utf-8"))
         records = runtime_inventory(runtime, metadata, profile)
         prepared.append((target, platform_dir, profile, backend, engine, runtime, metadata, records))
-    if prepared[0][6]["sourceCommit"] != prepared[1][6]["sourceCommit"]:
-        raise ValueError("Both CUDA engines must use the same audited source commit")
     # Build beside the output, then publish the whole directory only after every check succeeds.
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".dual-cuda-", dir=output.parent) as temporary:

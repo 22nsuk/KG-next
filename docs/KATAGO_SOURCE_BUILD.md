@@ -405,7 +405,12 @@ application package integration, signing and publication remain separate gates.
 their sizes, archive/executable hashes and `sourceMetadataSha256`. It checks the exact
 source/target, runtime profile, CUDA runtime and cuDNN archive pins, static zlib evidence,
 configuration templates, license inventory and every archive member. Its output changes
-only the two CUDA assets; it does not upload anything. Source archive metadata itself is
+only the two CUDA assets from that shared source; it does not upload anything. This is a
+batch pinning tool, not a prerequisite for `assemble_windows_dual_cuda.py`. The assembler
+accepts independently pinned CUDA12 and CUDA13 sources, audits each engine and its
+runtime separately, and records both source identities in the installed manifest.
+It shares the CUDA12 bundle's GTP/analysis templates; assembly does not certify equal
+engine capabilities or GPU acceptance. Source archive metadata itself is
 hash-pinned so an installed receipt cannot change the recorded static-link evidence.
 The legacy fifteen-target staging process preserves independent overrides instead of
 promoting an upstream CUDA12 build over the fork. Release asset transfer copies only
