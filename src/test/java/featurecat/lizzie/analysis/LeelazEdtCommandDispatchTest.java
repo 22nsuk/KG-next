@@ -1,5 +1,6 @@
 package featurecat.lizzie.analysis;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -8,9 +9,11 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.rules.Stone;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -42,14 +45,22 @@ class LeelazEdtCommandDispatchTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"play", "pda"})
-  void blockedEngineOutputNeverBlocksTheSwingEventThread(String command) throws Exception {
+  @CsvSource({"play,false", "pda,false", "ordinary-pda,false", "ordinary-pda,true"})
+  void blockedEngineOutputNeverBlocksTheSwingEventThread(String command, boolean mirrored)
+      throws Exception {
     installGlobals();
     BlockingOutput output = new BlockingOutput();
     Leelaz engine = new Leelaz("");
-    engine.installCommandOutputForTest(output);
-    engine.started = engine.isLoaded = true;
+    engine.installCommandOutputForTest(mirrored ? new ByteArrayOutputStream() : output);
+    engine.started = engine.isLoaded = engine.isKatago = true;
     Lizzie.setPrimaryEngine(engine);
+    if (mirrored) {
+      Leelaz secondary = new Leelaz("");
+      secondary.installCommandOutputForTest(output);
+      secondary.started = secondary.isLoaded = secondary.isKatago = true;
+      Lizzie.leelaz2 = secondary;
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+    }
 
     CountDownLatch sendReturned = new CountDownLatch(1);
     CountDownLatch nextUiEventRan = new CountDownLatch(1);
@@ -57,6 +68,7 @@ class LeelazEdtCommandDispatchTest {
       SwingUtilities.invokeLater(
           () -> {
             if (command.equals("play")) engine.sendCommandNoLeelaz2("play B D4");
+            else if (command.equals("ordinary-pda")) assertTrue(engine.trySetPda("0.25"));
             else assertTrue(engine.sendConsolePda(0.25, false));
             sendReturned.countDown();
           });
@@ -74,6 +86,7 @@ class LeelazEdtCommandDispatchTest {
     } finally {
       output.releaseWrite.countDown();
       output.writeCompleted.await(2, TimeUnit.SECONDS);
+      SwingUtilities.invokeAndWait(() -> {});
     }
   }
 
@@ -133,6 +146,89 @@ class LeelazEdtCommandDispatchTest {
       SwingUtilities.invokeAndWait(() -> {});
     }
     assertTrue(admission.get().get(3, TimeUnit.SECONDS));
+  }
+
+  @ParameterizedTest(name = "blocked mirror: {0}")
+  @ValueSource(booleans = {false, true})
+  void ordinaryPdaRejectsBusyOutputOnEdtWithoutChangingStateAndAllowsTheSameRetry(
+      boolean blockedMirror) throws Exception {
+    installGlobals();
+    BlockingOutput output = new BlockingOutput();
+    ByteArrayOutputStream primaryBytes = blockedMirror ? new ByteArrayOutputStream() : output.written;
+    ByteArrayOutputStream secondaryBytes = blockedMirror ? output.written : new ByteArrayOutputStream();
+    Leelaz engine = new Leelaz("");
+    Leelaz secondary = new Leelaz("");
+    engine.installCommandOutputForTest(blockedMirror ? primaryBytes : output);
+    secondary.installCommandOutputForTest(blockedMirror ? output : secondaryBytes);
+    engine.started = engine.isLoaded = engine.isKatago = true;
+    secondary.started = secondary.isLoaded = secondary.isKatago = true;
+    engine.pda = 0.5;
+    secondary.pda = -0.75;
+    Field remembered = Leelaz.class.getDeclaredField("pdaBeforeGame");
+    remembered.setAccessible(true);
+    remembered.setDouble(engine, -0.5);
+    remembered.setDouble(secondary, 0.75);
+    Lizzie.setPrimaryEngine(engine);
+    if (blockedMirror) {
+      Lizzie.leelaz2 = secondary;
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+    }
+
+    Leelaz writer = blockedMirror ? secondary : engine;
+    CompletableFuture<Void> precedingWrite =
+        CompletableFuture.runAsync(() -> writer.sendCommandNoLeelaz2("play B D4"));
+    CountDownLatch returned = new CountDownLatch(1);
+    CountDownLatch nextEvent = new CountDownLatch(1);
+    CompletableFuture<Boolean> admission = new CompletableFuture<>();
+    List<String> primaryBefore = blockedMirror ? List.of() : List.of("play B D4");
+    List<String> secondaryBefore = blockedMirror ? List.of("play B D4") : List.of();
+    try {
+      assertTrue(output.writeEntered.await(2, TimeUnit.SECONDS), "preceding play never reached output");
+      SwingUtilities.invokeLater(() -> {
+        try { admission.complete(engine.trySetPda("1.25")); }
+        catch (Throwable failure) { admission.completeExceptionally(failure); }
+        finally { returned.countDown(); }
+      });
+      SwingUtilities.invokeLater(nextEvent::countDown);
+      assertTrue(returned.await(1, TimeUnit.SECONDS), "PDA admission waited for stalled engine I/O");
+      assertTrue(nextEvent.await(1, TimeUnit.SECONDS), "PDA admission blocked the next Swing event");
+      assertFalse(admission.get(1, TimeUnit.SECONDS));
+      assertEquals(0.5, engine.pda);
+      assertEquals(-0.5, remembered.getDouble(engine));
+      assertEquals(-0.75, secondary.pda);
+      assertEquals(0.75, remembered.getDouble(secondary));
+      // The stalled transport may have received only a command ID, not a complete line.
+      assertTrue(commandPayloads(blockedMirror ? primaryBytes : secondaryBytes).isEmpty());
+      assertFalse(primaryBytes.toString(StandardCharsets.UTF_8).contains("playoutDoublingAdvantage"));
+      assertFalse(secondaryBytes.toString(StandardCharsets.UTF_8).contains("playoutDoublingAdvantage"));
+    } finally {
+      output.releaseWrite.countDown();
+      try {
+        precedingWrite.get(3, TimeUnit.SECONDS);
+      } finally {
+        CompletableFuture<Void> drained = new CompletableFuture<>();
+        SwingUtilities.invokeLater(() -> drained.complete(null));
+        drained.get(3, TimeUnit.SECONDS);
+      }
+    }
+    // Rejection must not leave a delayed PDA write behind when the old output is released.
+    assertEquals(primaryBefore, commandPayloads(primaryBytes));
+    assertEquals(secondaryBefore, commandPayloads(secondaryBytes));
+    CompletableFuture<Boolean> retry = new CompletableFuture<>();
+    SwingUtilities.invokeLater(() -> {
+      try { retry.complete(engine.trySetPda("1.25")); }
+      catch (Throwable failure) { retry.completeExceptionally(failure); }
+    });
+    assertTrue(retry.get(2, TimeUnit.SECONDS));
+    assertEquals(1.25, engine.pda);
+    assertEquals(1.25, remembered.getDouble(engine));
+    assertEquals(blockedMirror ? 1.25 : -0.75, secondary.pda);
+    assertEquals(blockedMirror ? 1.25 : 0.75, remembered.getDouble(secondary));
+    String command = "kata-set-param playoutDoublingAdvantage 1.25";
+    assertCommandsEventually(primaryBytes,
+        blockedMirror ? List.of(command) : List.of("play B D4", command));
+    assertCommandsEventually(secondaryBytes,
+        blockedMirror ? List.of("play B D4", command) : List.of());
   }
 
   @Test
@@ -442,7 +538,20 @@ class LeelazEdtCommandDispatchTest {
     return (T) ((sun.misc.Unsafe) field.get(null)).allocateInstance(type);
   }
 
+  private static List<String> commandPayloads(ByteArrayOutputStream output) {
+    return output.toString(StandardCharsets.UTF_8).lines()
+        .map(line -> line.replaceFirst("^[0-9]+ ", "")).toList();
+  }
+
+  private static void assertCommandsEventually(ByteArrayOutputStream output, List<String> expected)
+      throws InterruptedException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+    while (!commandPayloads(output).equals(expected) && System.nanoTime() < deadline) Thread.sleep(5);
+    assertEquals(expected, commandPayloads(output));
+  }
+
   private static final class BlockingOutput extends OutputStream {
+    private final ByteArrayOutputStream written = new ByteArrayOutputStream();
     private final CountDownLatch writeEntered = new CountDownLatch(1);
     private final CountDownLatch releaseWrite = new CountDownLatch(1);
     private final CountDownLatch writeCompleted = new CountDownLatch(1);
@@ -455,6 +564,7 @@ class LeelazEdtCommandDispatchTest {
 
     @Override
     public void write(byte[] bytes, int offset, int length) throws IOException {
+      written.write(bytes, offset, length);
       writeRanOnEventThread.set(SwingUtilities.isEventDispatchThread());
       writeEntered.countDown();
       try {

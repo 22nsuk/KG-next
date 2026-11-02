@@ -17,8 +17,10 @@ import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
+import featurecat.lizzie.rules.BoardData;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
@@ -67,9 +69,96 @@ class LeelazAnalysisParameterAdmissionTest {
       env.assertCommands(expected, mirrored ? expected : List.of());
       if (parameter == Parameter.PDA) {
         assertPda(env.first, 1.25, 1.25);
+        assertPda(env.second, mirrored ? 1.25 : SECOND_PDA,
+            mirrored ? 1.25 : SECOND_BEFORE_GAME);
       } else {
         env.assertOriginalPda();
       }
+    }
+  }
+
+  @ParameterizedTest(name = "interactive: {0}, mirrored: {1}")
+  @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+  void ordinaryPdaCommitsEveryAdmittedEndpointBeforePhysicalOutput(
+      boolean interactive, boolean mirrored) throws Exception {
+    try (Environment env = new Environment()) {
+      if (mirrored) env.enableComparison();
+      List<List<Double>> statesAtWrite = new ArrayList<>();
+      try (var output = ExactSnapshotRestoreProtocolFixture.install(env.first, command -> {
+        statesAtWrite.add(List.of(env.first.pda, env.second.pda));
+        return ExactSnapshotRestoreProtocolFixture.Response.success();
+      })) {
+        if (interactive) assertTrue(env.first.trySetPda(REQUESTED));
+        else env.first.setPda(REQUESTED);
+
+        List<String> expected = List.of(Parameter.PDA.command(REQUESTED));
+        assertEquals(expected, output.commands());
+        assertEquals(mirrored ? expected : List.of(), env.secondOutput.commands());
+        assertEquals(List.of(List.of(1.25, mirrored ? 1.25 : SECOND_PDA)), statesAtWrite);
+        assertPda(env.first, 1.25, 1.25);
+        assertPda(env.second, mirrored ? 1.25 : SECOND_PDA,
+            mirrored ? 1.25 : SECOND_BEFORE_GAME);
+      }
+    }
+  }
+
+  @ParameterizedTest(name = "mirrored: {0}")
+  @ValueSource(booleans = {false, true})
+  void newerPdaAdmittedDuringOutputIsNotOverwrittenByTheEarlierCaller(boolean mirrored)
+      throws Exception {
+    try (Environment env = new Environment()) {
+      if (mirrored) env.enableComparison();
+      List<Boolean> newerAdmissions = new ArrayList<>();
+      try (var output = ExactSnapshotRestoreProtocolFixture.install(env.first, command -> {
+        if (command.equals(Parameter.PDA.command(REQUESTED))) {
+          newerAdmissions.add(env.first.trySetPda("-2.5"));
+        }
+        return ExactSnapshotRestoreProtocolFixture.Response.success();
+      })) {
+        assertTrue(env.first.trySetPda(REQUESTED));
+
+        assertEquals(List.of(true), newerAdmissions);
+        List<String> expected = List.of(
+            Parameter.PDA.command(REQUESTED), Parameter.PDA.command("-2.5"));
+        assertEquals(expected, output.commands());
+        assertEquals(mirrored ? expected : List.of(), env.secondOutput.commands());
+        assertPda(env.first, -2.5, -2.5);
+        assertPda(env.second, mirrored ? -2.5 : SECOND_PDA,
+            mirrored ? -2.5 : SECOND_BEFORE_GAME);
+      }
+    }
+  }
+
+  @ParameterizedTest(name = "interactive: {0}")
+  @ValueSource(booleans = {false, true})
+  void ordinaryPdaChangeLetsFreshComparisonAnalysisReplaceTheOldHighVisitCache(
+      boolean interactive) throws Exception {
+    try (Environment env = new Environment()) {
+      env.enableComparison();
+      Lizzie.config.enableLizzieCache = true;
+      BoardData data = BoardData.empty(19, 19);
+      Object stream = new Object();
+      assertEquals(BoardData.AnalysisAdoption.FULL,
+          data.adoptOrdinaryAnalysis(moves("D4", 500), "comparison", env.second,
+              500, 500, null, stream, true, false));
+      assertEquals(SECOND_PDA, data.pda2);
+      assertEquals(BoardData.AnalysisAdoption.REJECTED,
+          data.adoptOrdinaryAnalysis(moves("C3", 50), "comparison", env.second,
+              50, 50, null, stream, true, false));
+      assertEquals(500, data.getPlayouts2());
+
+      if (interactive) assertTrue(env.first.trySetPda(REQUESTED));
+      else env.first.setPda(REQUESTED);
+
+      assertEquals(BoardData.AnalysisAdoption.FULL,
+          data.adoptOrdinaryAnalysis(moves("C3", 50), "comparison", env.second,
+              50, 50, null, stream, true, false));
+      assertEquals(50, data.getPlayouts2());
+      assertEquals(50, data.rootVisits2);
+      assertEquals("C3", data.bestMoves2.get(0).coordinate);
+      assertEquals(1.25, data.pda2);
+      assertNotNull(data.secondaryAnalysisProvenance());
+      assertEquals(1.25, data.secondaryAnalysisProvenance().pda());
     }
   }
 
@@ -120,6 +209,15 @@ class LeelazAnalysisParameterAdmissionTest {
     PRIMARY,
     MIRRORED_PRIMARY,
     MIRROR
+  }
+
+  private static List<MoveData> moves(String coordinate, int visits) {
+    MoveData move = new MoveData();
+    move.coordinate = coordinate;
+    move.playouts = visits;
+    move.winrate = 55;
+    move.variation = new ArrayList<>(List.of(coordinate));
+    return new ArrayList<>(List.of(move));
   }
 
   private static void assertPda(Leelaz engine, double current, double beforeGame) throws Exception {

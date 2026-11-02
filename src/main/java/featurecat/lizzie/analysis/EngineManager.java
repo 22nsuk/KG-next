@@ -7956,10 +7956,20 @@ public class EngineManager {
 
 
   static boolean runIfNoActiveEngineGameAnalysisOutput(Runnable action) {
+    return runIfNoActiveEngineGameAnalysisOutput(action, true);
+  }
+
+  static boolean tryRunIfNoActiveEngineGameAnalysisOutput(Runnable action) {
+    return runIfNoActiveEngineGameAnalysisOutput(action, false);
+  }
+
+  private static boolean runIfNoActiveEngineGameAnalysisOutput(
+      Runnable action, boolean waitForOutput) {
     if (action == null) {
       return false;
     }
-    ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK.lock();
+    if (waitForOutput) ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK.lock();
+    else if (!ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK.tryLock()) return false;
     try {
       synchronized (ENGINE_SELECTION_STATE_LOCK) {
         if (hasEngineGameAnalysisOutputBarrierLocked()) {
