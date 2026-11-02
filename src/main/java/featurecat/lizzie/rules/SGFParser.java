@@ -55,8 +55,7 @@ import org.json.JSONTokener;
 
 public class SGFParser {
   private static final int DEFAULT_BOARD_SIZE = 19;
-  private static final Pattern BOARD_SIZE_PATTERN =
-      Pattern.compile("(?s).*?SZ\\[([\\d:]+)\\](?s).*");
+  private static final Pattern BOARD_SIZE_VALUE_PATTERN = Pattern.compile("[\\d:]+");
   private static final Pattern RECT_BOARD_SIZE_PATTERN = Pattern.compile("([\\d]+):([\\d]+)");
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
@@ -608,9 +607,9 @@ public class SGFParser {
     for (int i = 0; i < len; i++) {
       char c = value.charAt(i);
       if (escaping) {
-        // Any char following "\" is inserted verbatim
-        // (ref) "3.2. Text" in https://www.red-bean.com/sgf/sgf4.html
-        tagContentBuilder.append(c == 'n' ? "\n" : c);
+        // Preserve the raw SGF text until GameInfo decodes it; other payloads keep their
+        // existing escape handling.
+        tagContentBuilder.append(c == 'n' && !isGameInfoTextProperty(tag) ? '\n' : c);
         escaping = false;
         continue;
       }
@@ -793,11 +792,11 @@ public class SGFParser {
               applyCurrentPlayerPropertyOnNode(Lizzie.board.getHistory(), target, tagContent);
             }
           } else if (tag.equals("PB")) {
-            blackPlayer = tagContent;
+            blackPlayer = decodeGameInfoText(tagContent);
           } else if (tag.equals("PW")) {
-            whitePlayer = tagContent;
+            whitePlayer = decodeGameInfoText(tagContent);
           } else if (tag.equals("RE")) {
-            result = tagContent;
+            result = decodeGameInfoText(tagContent);
           } else if (tag.equals("DZ")) {
             if (tagContent.equals("Y")) {
               Lizzie.board.isPkBoard = true;
@@ -990,7 +989,7 @@ public class SGFParser {
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
     gameInfo.setResult(result);
-    gameInfo.setDate(gameProperties.get("DT"));
+    gameInfo.setDate(decodeGameInfoText(gameProperties.get("DT")));
     gameInfo.setHandicap(parseHandicapProperty(gameProperties.get("HA")));
     // Rewind to game start
     while (Lizzie.board.previousMove(false))
@@ -1513,18 +1512,11 @@ public class SGFParser {
       String result = gameInfo.getResult();
       Double komi = gameInfo.getKomi();
       Integer handicap = gameInfo.getHandicap();
-      String date = gameInfo.getDate() == null ? "" : gameInfo.getDate();
+      String date = gameInfo.getDate();
 
       // add SGF header
       StringBuilder builder = new StringBuilder("(;");
-      StringBuilder generalProps = new StringBuilder("");
-      if (handicap != 0) generalProps.append(String.format(Locale.ENGLISH, "HA[%s]", handicap));
-      if (LizzieFrame.isSavingRaw) {
-        generalProps.append(
-            String.format(
-                "KM[%s]PW[%s]PB[%s]DT[%s]RE[%s]SZ[%s]CA[UTF-8]",
-                komi, playerW, playerB, date, result, boardSizeTag));
-      } else {
+      if (!LizzieFrame.isSavingRaw) {
         if (engineGameHistory) {
           if (!captureSnapshot && saveContext.ownsCurrentHistory()) board.updateWinrate();
           appendTime(gameInfo, history);
@@ -1564,13 +1556,6 @@ public class SGFParser {
             }
           }
         }
-
-        generalProps.append(
-            String.format(
-                "KM[%s]PW[%s]PB[%s]DT[%s]%sAP[KG-next: %s]RE[%s]SZ[%s]CA[UTF-8]",
-                komi, playerW, playerB, date,
-                saveContext.dataType().isEmpty() ? "" : "DZ[" + saveContext.dataType() + "]",
-                Lizzie.nextVersion, result, boardSizeTag));
       }
       // To append the winrate to the comment of sgf we might need to update the
       // Winrate
@@ -1592,9 +1577,25 @@ public class SGFParser {
 
       // Game properties
       BoardData rootData = history.getData().clone();
-      rootData.addProperties(generalProps.toString());
-      if (gameInfo.getDate() == null) {
+      // Property values are SGF-encoded, while GameInfo holds plain text. Encode directly
+      // into the detached root so delimiters in metadata can never be parsed as properties.
+      if (handicap != 0) rootData.addProperty("HA", handicap.toString());
+      rootData.addProperty("KM", komi.toString());
+      rootData.addProperty("PW", Escaping(playerW));
+      rootData.addProperty("PB", Escaping(playerB));
+      rootData.addProperty("RE", Escaping(result));
+      rootData.addProperty("SZ", boardSizeTag);
+      rootData.addProperty("CA", "UTF-8");
+      if (date == null) {
         rootData.getProperties().remove("DT");
+      } else {
+        rootData.addProperty("DT", Escaping(date));
+      }
+      if (!LizzieFrame.isSavingRaw) {
+        if (!saveContext.dataType().isEmpty()) {
+          rootData.addProperty("DZ", saveContext.dataType());
+        }
+        rootData.addProperty("AP", Escaping("KG-next: " + Lizzie.nextVersion));
       }
       if (rootData.isSnapshotNode()) {
         builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
@@ -4082,6 +4083,32 @@ public class SGFParser {
     return in.replace("\\", "\\\\").replace("]", "\\]");
   }
 
+  private static boolean isGameInfoTextProperty(String tag) {
+    return "PB".equals(tag) || "PW".equals(tag) || "RE".equals(tag) || "DT".equals(tag);
+  }
+
+  /** Decode GameInfo's SimpleText fields without changing the raw node-property representation. */
+  private static String decodeGameInfoText(String value) {
+    if (value == null) return null;
+    StringBuilder text = new StringBuilder(value.length());
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      boolean escaped = c == '\\' && i + 1 < value.length();
+      if (escaped) c = value.charAt(++i);
+      if (c == '\r' || c == '\n') {
+        if (i + 1 < value.length()
+            && ((c == '\r' && value.charAt(i + 1) == '\n')
+                || (c == '\n' && value.charAt(i + 1) == '\r'))) {
+          i++;
+        }
+        if (!escaped) text.append(' ');
+      } else {
+        text.append(Character.isWhitespace(c) ? ' ' : c);
+      }
+    }
+    return text.toString();
+  }
+
   public static BoardHistoryList parseSgf(String value, boolean first) {
     value = normalizeStructuralNewlines(value);
     if (value == null) {
@@ -4186,17 +4213,40 @@ public class SGFParser {
   }
 
   private static int[] parseBoardSize(String value) {
-    int boardWidth = DEFAULT_BOARD_SIZE;
-    int boardHeight = DEFAULT_BOARD_SIZE;
-    Matcher szMatcher = BOARD_SIZE_PATTERN.matcher(value);
-    if (!szMatcher.matches()) {
-      return new int[] {boardWidth, boardHeight};
+    // Size is needed before creating the history. Scan property boundaries so a name such
+    // as PW[SZ[3] cannot resize the board; '[' is legal unescaped text inside a value.
+    StringBuilder tag = new StringBuilder();
+    int valueStart = -1;
+    boolean escaped = false;
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      if (valueStart >= 0) {
+        if (escaped) {
+          escaped = false;
+        } else if (c == '\\') {
+          escaped = true;
+        } else if (c == ']') {
+          if ("SZ".contentEquals(tag)) {
+            String size = value.substring(valueStart, i);
+            if (BOARD_SIZE_VALUE_PATTERN.matcher(size).matches()) {
+              int[] parsedBoardSize = parseBoardSizeTagValue(size);
+              return parsedBoardSize != null
+                  ? parsedBoardSize
+                  : new int[] {DEFAULT_BOARD_SIZE, DEFAULT_BOARD_SIZE};
+            }
+          }
+          valueStart = -1;
+          tag.setLength(0);
+        }
+      } else if (c == '[') {
+        valueStart = i + 1;
+      } else if (c == '(' || c == ')' || c == ';') {
+        tag.setLength(0);
+      } else if (SGF_WHITESPACE.indexOf(c) < 0) {
+        tag.append(c);
+      }
     }
-    int[] parsedBoardSize = parseBoardSizeTagValue(szMatcher.group(1));
-    if (parsedBoardSize != null) {
-      return parsedBoardSize;
-    }
-    return new int[] {boardWidth, boardHeight};
+    return new int[] {DEFAULT_BOARD_SIZE, DEFAULT_BOARD_SIZE};
   }
 
   static int[] resolveHistoryBoardSize(BoardHistoryList history) {
@@ -4333,9 +4383,9 @@ public class SGFParser {
     for (int i = 0; i < value.length(); i++) {
       char c = value.charAt(i);
       if (escaping) {
-        // Any char following "\" is inserted verbatim
-        // (ref) "3.2. Text" in https://www.red-bean.com/sgf/sgf4.html
-        tagContentBuilder.append(c == 'n' ? "\n" : c);
+        // Preserve the raw SGF text until GameInfo decodes it; other payloads keep their
+        // existing escape handling.
+        tagContentBuilder.append(c == 'n' && !isGameInfoTextProperty(tag) ? '\n' : c);
         escaping = false;
         continue;
       }
@@ -4500,13 +4550,13 @@ public class SGFParser {
               applyCurrentPlayerPropertyOnNode(history, target, tagContent);
             }
           } else if (tag.equals("PB")) {
-            blackPlayer = tagContent;
+            blackPlayer = decodeGameInfoText(tagContent);
             history.getGameInfo().setPlayerBlack(blackPlayer);
           } else if (tag.equals("PW")) {
-            whitePlayer = tagContent;
+            whitePlayer = decodeGameInfoText(tagContent);
             history.getGameInfo().setPlayerWhite(whitePlayer);
           } else if (tag.equals("RE")) {
-            history.getGameInfo().setResultNoUI(tagContent);
+            history.getGameInfo().setResultNoUI(decodeGameInfoText(tagContent));
           } else if (tag.equals("KM")) {
             if (firstTime) {
               try {
@@ -4652,7 +4702,7 @@ public class SGFParser {
       if (gameProperties.size() > 0) {
         history.getData().addProperties(gameProperties);
       }
-      history.getGameInfo().setDate(gameProperties.get("DT"));
+      history.getGameInfo().setDate(decodeGameInfoText(gameProperties.get("DT")));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
           parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();
@@ -4712,7 +4762,7 @@ public class SGFParser {
     for (int i = 0; i < value.length(); i++) {
       char c = value.charAt(i);
       if (escaping) {
-        tagContentBuilder.append(c == 'n' ? "\n" : c);
+        tagContentBuilder.append(c == 'n' && !isGameInfoTextProperty(tag) ? '\n' : c);
         escaping = false;
         continue;
       }

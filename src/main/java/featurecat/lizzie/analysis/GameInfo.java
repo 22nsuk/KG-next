@@ -13,6 +13,7 @@ public class GameInfo {
   public static double DEFAULT_KOMI = 7.5;
   public boolean changedKomi = false;
 
+  // Plain text; SGFParser owns decoding on import and escaping on serialization.
   private String playerBlack = "";
   private String playerWhite = "";
   // SGF DT expression, including partial dates and lists; null means no imported DT.
