@@ -381,14 +381,20 @@ class GIBParserTest {
       Lizzie.config.persisted =
           new org.json.JSONObject().put("filesystem", new org.json.JSONObject());
       Lizzie.config.loadSgfLast = false;
-      EngineManager.isEmpty = false;
+      EngineManager.isEmpty = true;
+      Lizzie.setPrimaryEngine(null);
       LoadTrackingFrame frame = RulesLayerTestHarness.allocate(LoadTrackingFrame.class);
       Lizzie.frame = frame;
       setFrameField(frame, "userAnalysisPaused", true);
       assertTrue(frame.isUserAnalysisPaused());
 
-      assertTrue(frame.loadFile(writeGib("fresh-context.gib", MINIMAL_GIB).toFile(), true, false));
-      assertFalse(frame.isUserAnalysisPaused());
+      try {
+        assertTrue(frame.loadFile(writeGib("fresh-context.gib", MINIMAL_GIB).toFile(), true, false));
+        awaitResumeScheduled(frame);
+        assertFalse(frame.isUserAnalysisPaused());
+      } finally {
+        frame.shutdownKifuEngineSyncCoordinator();
+      }
     }
   }
 
@@ -414,8 +420,14 @@ class GIBParserTest {
       engine.started = engine.isLoaded = true;
       Lizzie.setPrimaryEngine(engine);
       EngineManager.isEmpty = false;
+      List<String> snapshots = new java.util.ArrayList<>();
       try (var transport = ExactSnapshotRestoreProtocolFixture.install(
-          engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success())) {
+          engine, command -> {
+            if (command.startsWith("loadsgf ")) {
+              snapshots.add(Files.readString(Path.of(command.substring("loadsgf ".length()))));
+            }
+            return ExactSnapshotRestoreProtocolFixture.Response.success();
+          })) {
         Path file = writeGib("engine-resize.gib", MINIMAL_GIB);
         if (failApplication) {
           IllegalStateException failure =
@@ -427,20 +439,20 @@ class GIBParserTest {
           assertSame(selected, env.current());
         } else {
           assertTrue(frame.loadFile(file.toFile(), true, false));
-          assertTrue(frame.resumeScheduled);
+          awaitResumeScheduled(frame);
           assertFalse(engine.isPondering(), "import must not start analysis before finalization");
-          // Exercise the real resume path on the EDT, without starting a search in this fixture.
-          engine.noAnalyze = true;
-          try {
-            javax.swing.SwingUtilities.invokeAndWait(
-                () -> assertTrue(frame.ensureAnalysisResumedAfterLoad()));
-          } finally {
-            awaitHistoryRestores();
-          }
+          javax.swing.SwingUtilities.invokeAndWait(frame.resumeAction);
+          assertFalse(env.board().isEngineAlignmentPending());
           assertExplicitStoSkiMainline(env.board().getHistory().getStart());
         }
         List<String> commands = transport.commands();
-        assertEquals(!failApplication, commands.contains("boardsize 19"), commands.toString());
+        if (failApplication) {
+          assertFalse(commands.contains("boardsize 19"), commands.toString());
+        } else {
+          assertEquals(1, snapshots.size());
+          assertTrue(snapshots.get(0).contains("SZ[19]"), snapshots.toString());
+          assertTrue(snapshots.get(0).contains("KM[6.5]"), snapshots.toString());
+        }
         assertFalse(engine.isPondering(), "loading must not start a paused engine before finalization");
         assertFalse(commands.stream().anyMatch(command -> command.contains("analyze")),
             commands.toString());
@@ -458,6 +470,8 @@ class GIBParserTest {
             ? List.of("play B E" + (height - SEEDED_Y))
             : loadLast ? List.of("play B D16", "play W Q4", "play B pass") : List.of();
         assertEquals(expectedMoves, finalMoves);
+      } finally {
+        frame.shutdownKifuEngineSyncCoordinator();
       }
     }
   }
@@ -525,15 +539,24 @@ class GIBParserTest {
     javax.swing.SwingUtilities.invokeAndWait(() -> {});
   }
 
+  private static void awaitResumeScheduled(LoadTrackingFrame frame) throws Exception {
+    long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5);
+    while (frame.resumeAction == null && System.nanoTime() < deadline) {
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      Thread.sleep(5);
+    }
+    assertTrue(frame.resumeAction != null, "GIB finalization must reach the load continuation");
+  }
+
   private static final class LoadTrackingFrame extends LizzieFrame {
     boolean failPlayerUpdate;
-    boolean resumeScheduled;
+    volatile Runnable resumeAction;
     BoardHistoryList historyAtFailure;
     String komiTextAtFailure;
 
     @Override
-    public void scheduleResumeAnalysisAfterLoad(int delayMillis) {
-      resumeScheduled = true;
+    public void scheduleResumeAnalysisAfterLoad(int delayMillis, Runnable action) {
+      resumeAction = action;
     }
 
     @Override

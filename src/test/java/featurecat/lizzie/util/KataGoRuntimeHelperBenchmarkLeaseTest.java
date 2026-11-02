@@ -124,14 +124,21 @@ class KataGoRuntimeHelperBenchmarkLeaseTest {
     int previousEngineNo = EngineManager.currentEngineNo;
     int previousBoardWidth = Board.boardWidth;
     int previousBoardHeight = Board.boardHeight;
-    Board.boardWidth = 3;
-    Board.boardHeight = 3;
-    BoardHistoryList history = new BoardHistoryList(benchmarkSnapshotRoot());
-    history.getGameInfo().setKomiNoMenu(6.5);
-    history.add(benchmarkMoveNode(2, 2, Stone.BLACK, true, 4));
-    PreparedBenchmarkBoard board = preparedBenchmarkBoard(history);
-    PreparedBenchmarkLeelaz engine = new PreparedBenchmarkLeelaz();
+    Method captureTables = Zobrist.class.getDeclaredMethod("captureTables");
+    captureTables.setAccessible(true);
+    Object previousZobristTables = captureTables.invoke(null);
+    Method restoreTables =
+        Zobrist.class.getDeclaredMethod("restoreTables", previousZobristTables.getClass());
+    restoreTables.setAccessible(true);
     try {
+      Board.boardWidth = 3;
+      Board.boardHeight = 3;
+      Zobrist.init();
+      BoardHistoryList history = new BoardHistoryList(benchmarkSnapshotRoot());
+      history.getGameInfo().setKomiNoMenu(6.5);
+      history.add(benchmarkMoveNode(2, 2, Stone.BLACK, true, 4));
+      PreparedBenchmarkBoard board = preparedBenchmarkBoard(history);
+      PreparedBenchmarkLeelaz engine = new PreparedBenchmarkLeelaz();
       Lizzie.config = ConfigTestHelper.createForTests(Files.createTempDirectory("katago-prepared"));
       Lizzie.board = board;
       Lizzie.leelaz = engine;
@@ -186,6 +193,7 @@ class KataGoRuntimeHelperBenchmarkLeaseTest {
       EngineManager.currentEngineNo = previousEngineNo;
       Board.boardWidth = previousBoardWidth;
       Board.boardHeight = previousBoardHeight;
+      restoreTables.invoke(null, previousZobristTables);
     }
   }
 

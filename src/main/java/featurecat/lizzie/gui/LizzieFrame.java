@@ -381,6 +381,7 @@ public class LizzieFrame extends JFrame {
   private volatile int kifuAnalysisResumeGeneration = 0;
   private transient KifuEngineSyncCoordinator kifuEngineSyncCoordinator;
   private volatile BoardHistoryNode pendingKifuEngineSyncRoot;
+  private volatile BoardHistoryNode pendingManualAnalysisResumeRoot;
   private Runnable pendingKifuRulesConsent;
   private Runnable failedKifuPositionRetry;
   private AutomaticQuickAnalysisTask automaticQuickAnalysisTask;
@@ -5203,7 +5204,6 @@ public class LizzieFrame extends JFrame {
         resetAnalysisWindows,
         afterFirstPaint,
         true,
-        false,
         null,
         null);
   }
@@ -5233,7 +5233,6 @@ public class LizzieFrame extends JFrame {
         readKomi,
         resetAnalysisWindows,
         afterLoad,
-        false,
         false,
         null,
         stillCurrent);
@@ -5274,7 +5273,6 @@ public class LizzieFrame extends JFrame {
         resetAnalysisWindows,
         afterLoad,
         false,
-        true,
         singleShotCompletion,
         null);
   }
@@ -5303,7 +5301,6 @@ public class LizzieFrame extends JFrame {
       boolean resetAnalysisWindows,
       Runnable afterLoad,
       boolean showFeedback,
-      boolean forceAutoQuickAnalyzeAfterLoad,
       Consumer<Boolean> completion,
       BooleanSupplier stillCurrent) {
     if (!SwingUtilities.isEventDispatchThread()) {
@@ -5321,7 +5318,6 @@ public class LizzieFrame extends JFrame {
                         resetAnalysisWindows,
                         afterLoad,
                         showFeedback,
-                        forceAutoQuickAnalyzeAfterLoad,
                         completion,
                         stillCurrent);
               }
@@ -5351,7 +5347,6 @@ public class LizzieFrame extends JFrame {
                 resetAnalysisWindows,
                 afterLoad,
                 showFeedback,
-                forceAutoQuickAnalyzeAfterLoad,
                 completion,
                 stillCurrent),
         () -> notifySgfLoadCompletion(completion, false))) {
@@ -5368,7 +5363,6 @@ public class LizzieFrame extends JFrame {
                 resetAnalysisWindows,
                 afterLoad,
                 showFeedback,
-                forceAutoQuickAnalyzeAfterLoad,
                 completion,
                 stillCurrent),
         () -> notifySgfLoadCompletion(completion, false))) {
@@ -5405,10 +5399,7 @@ public class LizzieFrame extends JFrame {
         }
         setVisible(true);
         scheduleEngineSyncAndResumeAfterKifuLoad(
-            resumeDelayMillis,
-            forceAutoQuickAnalyzeAfterLoad
-                ? this::resumeAnalysisAfterConfirmedDownloadedKifuLoad
-                : this::resumeAnalysisAfterConfirmedLoad);
+            resumeDelayMillis, this::resumeAnalysisAfterConfirmedLoad);
         refresh();
         if (showFeedback) {
           finishKifuLoad(afterLoad);
@@ -5802,8 +5793,9 @@ public class LizzieFrame extends JFrame {
       if (afterEngineReady != null) {
         scheduleKifuEngineReadyAfterLoad(afterEngineReady);
       } else {
-        startNewKifuAnalysisContextAfterSuccessfulLoad();
-        scheduleResumeAnalysisAfterLoad(0);
+        // Align GIB positions even when automatic analysis is disabled. A separate quick-analysis
+        // worker can still start without a foreground engine when the setting is enabled.
+        scheduleKifuEngineReadyAfterLoad(this::resumeAnalysisAfterConfirmedLoad);
       }
     } else {
       Board loadedBoard = Lizzie.board;
@@ -6254,6 +6246,7 @@ public class LizzieFrame extends JFrame {
       RuntimeException failure) {
     if (!isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, mirror)) return;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     pendingKifuRulesConsent = null;
     canGoAfterload = true;
     userAnalysisPaused = true;
@@ -6872,6 +6865,7 @@ public class LizzieFrame extends JFrame {
   private synchronized void cancelPendingKifuEngineSync() {
     pendingKifuRulesConsent = null;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     failedKifuPositionRetry = null;
     if (kifuEngineSyncCoordinator != null) {
       kifuEngineSyncCoordinator.cancel();
@@ -6886,6 +6880,7 @@ public class LizzieFrame extends JFrame {
   public synchronized void shutdownKifuEngineSyncCoordinator() {
     pendingKifuRulesConsent = null;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     failedKifuPositionRetry = null;
     if (kifuEngineSyncCoordinator != null) {
       kifuEngineSyncCoordinator.close();
@@ -14462,6 +14457,7 @@ public class LizzieFrame extends JFrame {
 
   private void recordUserAnalysisPause(BoardHistoryNode cancelledRoot) {
     userAnalysisPaused = true;
+    pendingManualAnalysisResumeRoot = null;
     if (readBoard != null) readBoard.invalidatePendingSyncAnalysisResume();
     pendingForegroundResumeAfterCleanup = false;
     userCancelledQuickAnalysisRoot = cancelledRoot;
@@ -14479,9 +14475,11 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (pendingKifuEngineSyncRoot != null && pendingKifuEngineSyncRoot == currentHistoryRoot()) {
+      pendingManualAnalysisResumeRoot = pendingKifuEngineSyncRoot;
       if (pendingKifuRulesConsent != null) pendingKifuRulesConsent.run();
       return;
     }
+    pendingManualAnalysisResumeRoot = null;
     if (!Lizzie.leelaz.isPondering()) {
       if (!syncCurrentPositionToPrimaryEngineForAnalysis()) {
         return;
@@ -22083,19 +22081,27 @@ public class LizzieFrame extends JFrame {
   }
 
   private void resumeAnalysisAfterLoad() {
-    ensureAnalysisResumedAfterLoad();
-  }
-
-  private void resumeAnalysisAfterDownloadedKifuLoad() {
-    ensureAnalysisResumedAfterDownloadedKifuLoad();
+    resumeAnalysisAfterLoad(false);
   }
 
   private void resumeAnalysisAfterConfirmedLoad() {
-    ensureAnalysisResumedAfterLoad(true);
+    resumeAnalysisAfterLoad(true);
   }
 
-  private void resumeAnalysisAfterConfirmedDownloadedKifuLoad() {
-    ensureAnalysisResumedAfterLoad(true);
+  private void resumeAnalysisAfterLoad(boolean positionAlreadyConfirmed) {
+    // A manual start requested during this import waits for the same rules/position fences,
+    // but does not inherit the preference that controls automatic starts.
+    if (positionAlreadyConfirmed
+        && pendingManualAnalysisResumeRoot != null
+        && pendingManualAnalysisResumeRoot == currentHistoryRoot()) {
+      resumeForegroundAnalysisForConfirmedPosition();
+      return;
+    }
+    // This preference governs automatic starts from record loading. Explicit resume and engine
+    // recovery also use ensureAnalysisResumedAfterLoad and must remain independent of it.
+    if (Lizzie.config != null && Lizzie.config.autoQuickAnalyzeOnLoad) {
+      ensureAnalysisResumedAfterLoad(positionAlreadyConfirmed);
+    }
   }
 
   private void resumeAnalysisAfterSyncLoad() {
@@ -22137,6 +22143,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private boolean resumeForegroundAnalysisForConfirmedPosition() {
+    pendingManualAnalysisResumeRoot = null;
     return resumeForegroundAnalysisForCurrentPosition(true);
   }
 
@@ -22332,6 +22339,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private void clearUserAnalysisPauseForNewKifuLoadContext() {
+    pendingManualAnalysisResumeRoot = null;
     analysisControlCleanupGeneration++;
     userAnalysisPaused = false;
     pendingForegroundResumeAfterCleanup = false;

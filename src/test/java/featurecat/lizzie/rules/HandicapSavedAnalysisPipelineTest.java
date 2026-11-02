@@ -131,9 +131,11 @@ class HandicapSavedAnalysisPipelineTest {
             "the actual post-load resume continuation did not settle");
         awaitEngineIdle(engine, transport);
         assertTrue(LizzieFrame.canGoAfterload);
-        // The import may start another analysis context while its continuations settle.
-        // Pause only after the actual final continuation, through the production pause path.
-        assertTrue(engine.isPondering(), "the real post-load continuation should resume analysis");
+        assertFalse(engine.isPondering(), "the disabled load setting must keep analysis stopped");
+        assertFalse(transport.commands().stream().anyMatch(command -> command.startsWith("kata-analyze")));
+        SwingUtilities.invokeAndWait(frame::togglePonderMannul);
+        awaitEngineIdle(engine, transport);
+        assertTrue(engine.isPondering(), "explicit analysis remains available after import");
         int commandsBeforePause = transport.commands().size();
         pauseThroughAnalysisControl(frame);
         awaitEngineIdle(engine, transport);
@@ -390,6 +392,9 @@ class HandicapSavedAnalysisPipelineTest {
   private static final class QuietMenu extends Menu {
     @Override
     public void toggleEngineMenuStatus(boolean pondering, boolean thinking) {}
+
+    @Override
+    public void toggleDoubleMenuGameStatus() {}
   }
 
   private static final class TestFrame extends LizzieFrame {

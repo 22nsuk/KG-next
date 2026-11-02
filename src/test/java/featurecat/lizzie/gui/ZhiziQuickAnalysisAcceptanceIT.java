@@ -195,12 +195,16 @@ public class ZhiziQuickAnalysisAcceptanceIT {
       if (mode.equals("reconnect")) server.disconnect();
       loadFox("(;FF[4]GM[1]SZ[19]KM[7.5]RU[Chinese]GN[fox-fixture];B[pd];W[dd];B[qp];W[dq])");
       if (mode.equals("disabled")) {
-        await(() -> primary[0].isPondering(), 30, "foreground without automatic curve");
+        await(() -> LizzieFrame.canGoAfterload && !Lizzie.board.isEngineAlignmentPending(),
+            30, "disabled import synchronized");
         Thread.sleep(2500);
+        assertFalse(primary[0].isPondering(), "disabled load analysis must remain stopped");
         assertFalse(allMovesAnalyzed());
         assertTrue(
             Lizzie.frame.analysisEngine == null
                 || !Lizzie.frame.analysisEngine.hasRequestLifecycleInProgress());
+        SwingUtilities.invokeAndWait(() -> Lizzie.frame.togglePonderMannul());
+        await(() -> primary[0].isPondering(), 30, "manual foreground after disabled import");
         assertEquals(1, server.sessions.get());
         screenshot(result);
         Files.writeString(result, "result=PASS\nmode=disabled\n");

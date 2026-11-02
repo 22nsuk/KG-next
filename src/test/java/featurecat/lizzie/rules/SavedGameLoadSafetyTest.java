@@ -9,6 +9,8 @@ import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.BottomToolbar;
+import featurecat.lizzie.gui.Input;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.SgfSaveTestSupport;
@@ -26,6 +28,7 @@ import java.awt.datatransfer.Transferable;
 import java.awt.datatransfer.UnsupportedFlavorException;
 import java.awt.event.AWTEventListener;
 import java.awt.event.MouseEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseListener;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
@@ -68,6 +71,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /** Real file/saved-list entrypoints and SGF I/O; only native painting/analysis are stubbed. */
 @Isolated("Uses shared Lizzie state and observes the queued open-failure dialog")
@@ -152,6 +156,186 @@ class SavedGameLoadSafetyTest {
     return Arrays.stream(FileOpenEntry.values()).flatMap(entry ->
         Stream.of("missing", "malformed", "gib-short-ini", "gib-invalid-coordinate",
             "gib-unrecognized", "gib-apply-failure").map(input -> Arguments.of(entry, input)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"file", "string", "download", "parser", "gib"})
+  void disabledAutomaticAnalysisStillSynchronizesLoadedRecordAndAllowsManualResume(String entry)
+      throws Exception {
+    installAcknowledgingEngine();
+    SwingUtilities.invokeAndWait(() -> {
+      frame.togglePonderMannul();
+      assertTrue(Lizzie.leelaz.isPondering());
+    });
+    awaitAnalysisCommandCount(1);
+    SwingUtilities.invokeAndWait(() -> {
+      frame.togglePonderMannul();
+      assertTrue(frame.isUserAnalysisPaused());
+    });
+    transport.awaitResponses();
+    long analysisBeforeLoad = analysisCommandCount();
+    synchronizedSnapshots.clear();
+    File file = directory.resolve(entry.equals("gib") ? "opened.gib" : "opened.sgf").toFile();
+    Files.writeString(file.toPath(), entry.equals("gib")
+        ? "INI 0 0 0\nSTO 0 1 1 3 3\nSTO 0 2 2 15 15\n" : SAVED_SGF);
+
+    SwingUtilities.invokeAndWait(() -> {
+      switch (entry) {
+        case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
+        case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
+        case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
+        default -> throw new AssertionError(entry);
+      }
+    });
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS), "load must reach engine sync");
+    SwingUtilities.invokeAndWait(frame.resumeAction);
+    transport.awaitResponses();
+
+    assertFalse(synchronizedSnapshots.isEmpty(), "the engine must receive the new position");
+    assertFalse(Lizzie.board.isEngineAlignmentPending());
+    assertFalse(Lizzie.leelaz.isPondering(), "opening a record must respect the disabled setting");
+    assertEquals(analysisBeforeLoad, analysisCommandCount());
+    assertNull(getFrameField("automaticQuickAnalysisTask"));
+
+    SwingUtilities.invokeAndWait(frame::togglePonderMannul);
+    awaitAnalysisCommandCount(analysisBeforeLoad + 1);
+    assertTrue(Lizzie.leelaz.isPondering(), "explicit analysis remains available after loading");
+    assertEquals(analysisBeforeLoad + 1, analysisCommandCount());
+    assertFalse(config.autoQuickAnalyzeOnLoad, "manual resume must not change the saved preference");
+  }
+
+  static Stream<Arguments> pendingLoadAnalysisControls() {
+    return Stream.of("file", "string", "download", "parser", "gib")
+        .flatMap(entry -> Stream.of(false, true).map(toolbar -> Arguments.of(entry, toolbar)));
+  }
+
+  @ParameterizedTest
+  @MethodSource("pendingLoadAnalysisControls")
+  void manualAnalysisDuringLoadWaitsForSynchronization(String entry, boolean toolbar)
+      throws Exception {
+    CountDownLatch snapshotSent = holdNextSnapshotResponse();
+    File file = directory.resolve(entry.equals("gib") ? "pending.gib" : "pending.sgf").toFile();
+    Files.writeString(file.toPath(), entry.equals("gib")
+        ? "INI 0 0 0\nSTO 0 1 1 3 3\nSTO 0 2 2 15 15\n" : SAVED_SGF);
+    SwingUtilities.invokeAndWait(() -> {
+      switch (entry) {
+        case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
+        case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
+        case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
+        default -> throw new AssertionError(entry);
+      }
+    });
+    assertTrue(snapshotSent.await(5, TimeUnit.SECONDS), "hold the real loadsgf ACK");
+    activateAnalysisControl(toolbar);
+    activateAnalysisControl(toolbar);
+    assertTrue(Lizzie.board.isEngineAlignmentPending());
+    assertFalse(Lizzie.leelaz.isPondering());
+    assertEquals(0, analysisCommandCount(), "analysis must wait for the confirmed position");
+    releaseSnapshotResponse();
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(frame.resumeAction);
+    awaitAnalysisCommandCount(1);
+    assertFalse(Lizzie.board.isEngineAlignmentPending());
+    assertTrue(Lizzie.leelaz.isPondering());
+    assertNull(getFrameField("automaticQuickAnalysisTask"), "manual start uses foreground analysis");
+    assertFalse(config.autoQuickAnalyzeOnLoad);
+  }
+
+  @Test
+  void pendingManualAnalysisDoesNotCarryIntoAnotherRecord() throws Exception {
+    CountDownLatch snapshotSent = holdNextSnapshotResponse();
+    SwingUtilities.invokeAndWait(() ->
+        assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null)));
+    assertTrue(snapshotSent.await(5, TimeUnit.SECONDS));
+    activateAnalysisControl(false);
+    // Finish the first sync, but keep its EDT continuation queued until another record is loaded.
+    releaseSnapshotResponse();
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    Runnable staleResume = frame.resumeAction;
+    frame.resumeScheduled = new CountDownLatch(1);
+    SwingUtilities.invokeAndWait(() -> {
+      assertTrue(frame.loadSgfString(ORIGINAL_SGF, 0, true, false, null));
+      staleResume.run();
+    });
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(frame.resumeAction);
+    transport.awaitResponses();
+    assertEquals(0, analysisCommandCount());
+    assertFalse(Lizzie.leelaz.isPondering());
+  }
+
+  private CountDownLatch holdNextSnapshotResponse() throws Exception {
+    CountDownLatch snapshotSent = new CountDownLatch(1);
+    installAcknowledgingEngine(command -> {
+      if (command.startsWith("loadsgf ") && snapshotSent.getCount() != 0) {
+        snapshotSent.countDown();
+        return null;
+      }
+      return ExactSnapshotRestoreProtocolFixture.Response.success();
+    });
+    return snapshotSent;
+  }
+
+  private void releaseSnapshotResponse() {
+    String request = transport.rawCommands().stream()
+        .filter(command -> command.contains(" loadsgf ")).findFirst().orElseThrow();
+    transport.respond("=" + request.substring(0, request.indexOf(' ')));
+  }
+
+  private void activateAnalysisControl(boolean toolbar) throws Exception {
+    BottomToolbar control = RulesLayerTestHarness.allocate(AnalysisControlToolbar.class);
+    Method toggle = BottomToolbar.class.getDeclaredMethod("toggleAnalysisFromToolbar");
+    toggle.setAccessible(true);
+    SwingUtilities.invokeAndWait(() -> {
+      if (toolbar) {
+        try {
+          toggle.invoke(control);
+        } catch (ReflectiveOperationException failure) {
+          throw new AssertionError(failure);
+        }
+      } else {
+        new Input().keyPressed(new KeyEvent(new JPanel(), KeyEvent.KEY_PRESSED,
+            0L, 0, KeyEvent.VK_SPACE, ' '));
+      }
+    });
+  }
+
+  static final class AnalysisControlToolbar extends BottomToolbar {
+    @Override public void setTxtUnfocuse() {}
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void loadCompletionUsesCurrentAutomaticAnalysisSetting(boolean enabled) throws Exception {
+    installAcknowledgingEngine();
+    config.autoQuickAnalyzeOnLoad = !enabled;
+    SwingUtilities.invokeAndWait(() ->
+        assertTrue(frame.loadSgfString("(;SZ[5])", 0, true, false, null)));
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    assertEquals(0, analysisCommandCount());
+
+    SwingUtilities.invokeAndWait(() -> {
+      config.autoQuickAnalyzeOnLoad = enabled;
+      frame.resumeAction.run();
+    });
+    if (enabled) awaitAnalysisCommandCount(1);
+    assertEquals(enabled, Lizzie.leelaz.isPondering());
+    assertEquals(enabled ? 1 : 0, analysisCommandCount());
+  }
+
+  private void awaitAnalysisCommandCount(long expected) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (analysisCommandCount() < expected && System.nanoTime() < deadline) {
+      transport.awaitResponses();
+      Thread.sleep(5);
+    }
+    assertEquals(expected, analysisCommandCount(), transport.commands().toString());
+  }
+
+  private long analysisCommandCount() {
+    return transport.commands().stream().filter(command -> command.startsWith("kata-analyze")).count();
   }
 
   @BeforeEach
@@ -945,6 +1129,11 @@ class SavedGameLoadSafetyTest {
   }
 
   private void installAcknowledgingEngine() throws Exception {
+    installAcknowledgingEngine(command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+  }
+
+  private void installAcknowledgingEngine(
+      ExactSnapshotRestoreProtocolFixture.CommandBehavior behavior) throws Exception {
     Leelaz engine = new Leelaz("");
     engine.started = true;
     engine.isLoaded = true;
@@ -957,7 +1146,7 @@ class SavedGameLoadSafetyTest {
       if (command.startsWith("loadsgf ")) {
         synchronizedSnapshots.add(Files.readString(Path.of(command.substring("loadsgf ".length()))));
       }
-      return ExactSnapshotRestoreProtocolFixture.Response.success();
+      return behavior.onCommand(command);
     });
     Lizzie.setPrimaryEngine(engine);
     EngineManager.isEmpty = false;
@@ -1058,6 +1247,7 @@ class SavedGameLoadSafetyTest {
 
   static final class QuietMenu extends Menu {
     @Override public void toggleEngineMenuStatus(boolean pondering, boolean thinking) {}
+    @Override public void toggleDoubleMenuGameStatus() {}
   }
 
   static final class SavedListFrame extends LizzieFrame {
@@ -1065,6 +1255,7 @@ class SavedGameLoadSafetyTest {
     BoardHistoryNode nodeWhenListClosed;
     BoardHistoryNode nodeWhenResumeScheduled;
     CountDownLatch resumeScheduled;
+    Runnable resumeAction;
     List<String> loadedPlayers;
     boolean failPlayerUpdate;
     BoardHistoryList historyAtFailedPlayerUpdate;
@@ -1103,6 +1294,7 @@ class SavedGameLoadSafetyTest {
     public void scheduleResumeAnalysisAfterLoad(int delayMillis, Runnable action) {
       assertTrue(SwingUtilities.isEventDispatchThread());
       nodeWhenResumeScheduled = Lizzie.board.getHistory().getCurrentHistoryNode();
+      resumeAction = action;
       resumeScheduled.countDown();
     }
 
@@ -1121,5 +1313,6 @@ class SavedGameLoadSafetyTest {
     @Override public void clearKataEstimate() {}
     @Override public void requestProblemListRefresh() {}
     @Override public void refreshProblemListSnapshot() {}
+    @Override public void redrawBoardrendererBackground() {}
   }
 }
