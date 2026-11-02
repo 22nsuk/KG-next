@@ -5844,29 +5844,8 @@ public class Menu extends JMenuBar {
           }
         });
 
-    lblPDASpinner = new JFontLabel(resourceBundle.getString("Menu.lblPDA"));
-    txtPDA = new JFontTextField();
-    txtPDA.setDocument(new DoubleDocument());
-    txtPDA.setHorizontalAlignment(JFontTextField.RIGHT);
-    txtPDA.setFocusable(true);
+    initializePdaField();
     AccessibilitySupport.labelFor(lblKomiSpinner, txtKomi, resourceBundle.getString("Menu.komi"));
-    AccessibilitySupport.labelFor(
-        lblPDASpinner, txtPDA, resourceBundle.getString("Menu.chkPDA.toolTopText"));
-    txtPDA.addKeyListener(
-        new KeyAdapter() {
-          @Override
-          public void keyReleased(KeyEvent e) {
-            if (EngineGameDesktop.parametersOwned()) return;
-            String text = txtPDA.getText().trim();
-            if (text.isEmpty() || text.equals("-") || text.equals(".")) return;
-            try {
-              double value = Double.parseDouble(text);
-              Lizzie.leelaz.sendCommand("kata-set-param playoutDoublingAdvantage " + value);
-              if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
-            } catch (NumberFormatException ignored) {
-            }
-          }
-        });
 
     ImageIcon komiUp;
     komiUp = new ImageIcon();
@@ -6745,6 +6724,37 @@ public class Menu extends JMenuBar {
       Lizzie.frame.refresh();
       Lizzie.frame.repaint();
     }
+  }
+
+  private void initializePdaField() {
+    lblPDASpinner = new JFontLabel(resourceBundle.getString("Menu.lblPDA"));
+    txtPDA = new JFontTextField();
+    txtPDA.setDocument(new DoubleDocument());
+    txtPDA.setHorizontalAlignment(JFontTextField.RIGHT);
+    txtPDA.setFocusable(true);
+    AccessibilitySupport.labelFor(
+        lblPDASpinner, txtPDA, resourceBundle.getString("Menu.chkPDA.toolTopText"));
+    txtPDA.addKeyListener(
+        new KeyAdapter() {
+          @Override
+          public void keyReleased(KeyEvent e) {
+            if (EngineGameDesktop.parametersOwned()) return;
+            String text = txtPDA.getText().trim();
+            if (text.isEmpty() || text.equals("-") || text.equals(".")) return;
+            try {
+              double value = Double.parseDouble(text);
+              Leelaz engine = Lizzie.leelaz;
+              long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+              Object incarnation = engine == null ? null : engine.engineIncarnationToken();
+              if (engine != null && engine.trySetPda(String.valueOf(value))
+                  && generation >= 0 && Lizzie.capturePrimaryEngineGeneration(engine) == generation
+                  && engine.engineIncarnationToken() == incarnation && engine.isPondering()) {
+                engine.ponder();
+              }
+            } catch (NumberFormatException ignored) {
+            }
+          }
+        });
   }
 
   private void initializeKataAnalysisFields() {

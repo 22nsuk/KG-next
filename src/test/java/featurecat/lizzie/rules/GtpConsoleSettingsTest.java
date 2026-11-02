@@ -528,12 +528,14 @@ class GtpConsoleSettingsTest {
     assertPdaState(engine, 4, 0.9, false);
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void consolePdaRetiresOldAnalysisBeforeEitherRecipientReceivesTheCommand(boolean dynamic)
+  @ParameterizedTest(name = "ordinary: {0}, dynamic console: {1}")
+  @CsvSource({"false,false", "false,true", "true,false"})
+  void consolePdaRetiresOldAnalysisBeforeEitherRecipientReceivesTheCommand(
+      boolean ordinary, boolean dynamic)
       throws Exception {
     Lizzie.frame = RulesLayerTestHarness.allocate(AnalysisFrame.class);
     LizzieFrame.toolbar = RulesLayerTestHarness.allocate(BottomToolbar.class);
+    Lizzie.config.enableLizzieCache = true;
     RecordingEngine secondary = comparisonEngine();
     engine.isKatago = secondary.isKatago = true;
     engine.bestMovesEnginename = "console-primary";
@@ -550,11 +552,13 @@ class GtpConsoleSettingsTest {
 
     // The primary is writing PDA, before either engine has replied or the mirror receives it.
     engine.beforePdaWrite = () -> {
-      assertTrue(secondary.commands.stream().noneMatch(c -> c.startsWith("pda ")));
+      assertTrue(secondary.commands.stream().noneMatch(c -> c.startsWith("pda ")
+          || c.startsWith("kata-set-param playoutDoublingAdvantage ")));
       engine.info(200);
       secondary.info(200);
     };
-    assertTrue(engine.sendConsolePda(dynamic ? 0.3 : -1.5, dynamic));
+    assertTrue(ordinary ? engine.trySetPda("-1.5")
+        : engine.sendConsolePda(dynamic ? 0.3 : -1.5, dynamic));
     engine.awaitIdle();
     secondary.awaitIdle();
     assertEquals(100, board.getData().getPlayouts());
@@ -565,21 +569,23 @@ class GtpConsoleSettingsTest {
     assertEquals(100, saved.getPlayouts());
     assertEquals(100, saved.getPlayouts2());
 
-    // A newly written analysis command must still publish results with the admitted PDA.
+    // Fresh analysis at the admitted PDA must replace even a higher-visit old-condition cache.
     engine.startAnalysis();
     engine.awaitIdle();
     secondary.awaitIdle();
-    engine.info(300);
-    secondary.info(300);
+    engine.info(50);
+    secondary.info(50);
     saved = SGFParser.parseSgf(SGFParser.saveToString(false), true).getData();
     assertEquals(dynamic ? 0 : -1.5, saved.pda);
     assertEquals(dynamic ? 0 : -1.5, saved.pda2);
-    assertEquals(300, saved.getPlayouts());
-    assertEquals(300, saved.getPlayouts2());
+    assertEquals(50, saved.getPlayouts());
+    assertEquals(50, saved.getPlayouts2());
   }
 
-  @Test
-  void consolePdaRetiresAnOlderAnalysisAlreadyWaitingToWrite() throws Exception {
+  @ParameterizedTest(name = "ordinary: {0}, dynamic console: {1}")
+  @CsvSource({"false,false", "false,true", "true,false"})
+  void consolePdaRetiresAnOlderAnalysisAlreadyWaitingToWrite(boolean ordinary, boolean dynamic)
+      throws Exception {
     engine.isKatago = true;
     Field fenceField = EngineManager.class.getDeclaredField("ENGINE_GAME_ANALYSIS_OUTPUT_MUTATION_LOCK");
     fenceField.setAccessible(true);
@@ -601,7 +607,8 @@ class GtpConsoleSettingsTest {
         if (System.nanoTime() >= deadline) fail("Analysis did not reach the physical writer");
         Thread.sleep(5);
       }
-      assertTrue(engine.sendConsolePda(-1.5, false));
+      assertTrue(ordinary ? engine.trySetPda("-1.5")
+          : engine.sendConsolePda(dynamic ? 0.3 : -1.5, dynamic));
     } finally {
       fence.unlock();
     }
@@ -613,10 +620,15 @@ class GtpConsoleSettingsTest {
       assertTrue(cancelled.getCause().getMessage().contains("Ordinary analysis target changed"));
     }
     engine.awaitIdle();
-    assertEquals(List.of("pda -1.5"), engine.commands);
+    List<String> expected = ordinary
+        ? List.of("kata-set-param playoutDoublingAdvantage -1.5")
+        : dynamic ? List.of("pda 0", "dympdacap 0.3") : List.of("pda -1.5");
+    assertEquals(expected, engine.commands);
     engine.startAnalysis();
     engine.awaitIdle();
-    assertEquals(List.of("pda -1.5", "kata-analyze B 10"), engine.commands);
+    List<String> restarted = new ArrayList<>(expected);
+    restarted.add("kata-analyze B 10");
+    assertEquals(restarted, engine.commands);
   }
 
   private RecordingEngine comparisonEngine() throws IOException {
@@ -907,7 +919,9 @@ class GtpConsoleSettingsTest {
       try {
         var transport = ExactSnapshotRestoreProtocolFixture.installAsync(this, command -> {
           commands.add(command);
-          if (command.startsWith("pda ") && beforePdaWrite != null) {
+          if ((command.startsWith("pda ")
+                  || command.startsWith("kata-set-param playoutDoublingAdvantage "))
+              && beforePdaWrite != null) {
             Runnable callback = beforePdaWrite;
             beforePdaWrite = null;
             callback.run();

@@ -5920,8 +5920,10 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
-  @Test
-  void asyncStartupCommandsCarryExactRestartBootstrapReceiptAcrossQueueGate() throws Exception {
+  @ParameterizedTest(name = "autoload PDA: {0}")
+  @ValueSource(booleans = {false, true})
+  void asyncStartupCommandsCarryExactRestartBootstrapReceiptAcrossQueueGate(boolean autoLoadPda)
+      throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       BootstrapReceiptLeelaz engine = new BootstrapReceiptLeelaz();
       installRestartBootstrapBinding(engine, engine.transport);
@@ -5934,6 +5936,10 @@ class EngineManagerInitialStartupSynchronizationTest {
       engine.started = true;
       engine.isLoaded = false;
       engine.isCheckingName = true;
+      engine.pda = 0.5;
+      setLeelazField(engine, "pdaBeforeGame", -0.5);
+      Lizzie.config.autoLoadKataEnginePDA = autoLoadPda;
+      Lizzie.config.autoLoadTxtKataEnginePDA = "1.25";
 
       invokeParseLine(engine, "= KataGo");
 
@@ -5944,6 +5950,10 @@ class EngineManagerInitialStartupSynchronizationTest {
       assertTrue(
           engine.transport.commands().contains("kata-get-param playoutDoublingAdvantage"),
           "the async worker must physically write through the gated bootstrap receipt");
+      assertEquals(autoLoadPda,
+          engine.transport.commands().contains("kata-set-param playoutDoublingAdvantage 1.25"));
+      assertEquals(autoLoadPda ? 1.25 : 0.5, engine.pda);
+      assertEquals(autoLoadPda ? 1.25 : -0.5, (double) getLeelazField(engine, "pdaBeforeGame"));
       assertFalse(engine.isDownWithError);
     }
   }

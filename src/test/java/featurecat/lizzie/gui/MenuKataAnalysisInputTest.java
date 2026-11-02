@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
@@ -14,6 +15,7 @@ import featurecat.lizzie.enginegame.RunState;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import java.awt.event.KeyEvent;
 import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
@@ -38,6 +40,7 @@ class MenuKataAnalysisInputTest {
   private Config previousConfig;
   private Board previousBoard;
   private Leelaz previousEngine;
+  private Leelaz previousSecondary;
   private EngineManager previousManager;
   private LizzieFrame previousFrame;
   private Menu previousMenu;
@@ -54,6 +57,7 @@ class MenuKataAnalysisInputTest {
           previousConfig = Lizzie.config;
           previousBoard = Lizzie.board;
           previousEngine = Lizzie.leelaz;
+          previousSecondary = Lizzie.leelaz2;
           previousManager = Lizzie.engineManager;
           previousFrame = Lizzie.frame;
           previousMenu = LizzieFrame.menu;
@@ -79,6 +83,7 @@ class MenuKataAnalysisInputTest {
           Lizzie.board.setHistory(history);
           engine = recordingEngine();
           Lizzie.leelaz = engine;
+          Lizzie.leelaz2 = null;
           Lizzie.engineManager = null;
           Lizzie.frame = allocate(LizzieFrame.class);
           EngineGameSnapshotFixtures.publishIdle();
@@ -89,6 +94,9 @@ class MenuKataAnalysisInputTest {
           var initialize = Menu.class.getDeclaredMethod("initializeKataAnalysisFields");
           initialize.setAccessible(true);
           initialize.invoke(menu);
+          var initializePda = Menu.class.getDeclaredMethod("initializePdaField");
+          initializePda.setAccessible(true);
+          initializePda.invoke(menu);
           LizzieFrame.menu = menu;
           menu.setPdaAndWrn(-0.5, 0.5);
         });
@@ -101,6 +109,7 @@ class MenuKataAnalysisInputTest {
           Lizzie.config = previousConfig;
           Lizzie.board = previousBoard;
           Lizzie.leelaz = previousEngine;
+          Lizzie.leelaz2 = previousSecondary;
           Lizzie.engineManager = previousManager;
           Lizzie.frame = previousFrame;
           LizzieFrame.menu = previousMenu;
@@ -566,6 +575,44 @@ class MenuKataAnalysisInputTest {
           assertEquals(parameter == KataAnalysisParameter.WRN, root.isChanged);
           assertEquals(parameter == KataAnalysisParameter.WRN, current.isChanged);
         });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void pdaKeyEditPreservesRejectedStateAndCommitsEveryAdmittedEngine(boolean mirrored)
+      throws Exception {
+    onEdt(() -> {
+      RecordingEngine second = recordingEngine();
+      if (mirrored) {
+        Lizzie.config.extraMode = ExtraMode.Double_Engine;
+        Lizzie.leelaz2 = second;
+      }
+      Leelaz occupied = mirrored ? second : engine;
+      menu.txtPDA.setText("1.25");
+      KeyEvent released = new KeyEvent(menu.txtPDA, KeyEvent.KEY_RELEASED, 0L, 0,
+          KeyEvent.VK_5, '5');
+      try (var reservation = occupied.beginExclusiveGtpLifecycleReservation()) {
+        assertNotNull(reservation);
+        for (var listener : menu.txtPDA.getKeyListeners()) listener.keyReleased(released);
+        assertEquals(-0.5, engine.pda);
+        assertEquals(-0.5, rememberedPda(engine));
+        assertEquals(-0.5, second.pda);
+        assertEquals(-0.5, rememberedPda(second));
+        assertTrue(engine.commands.isEmpty());
+        assertEquals(0, engine.output.size());
+        assertEquals(0, second.output.size());
+        assertEquals(0, engine.ponders);
+        assertEquals("1.25", menu.txtPDA.getText());
+      }
+
+      for (var listener : menu.txtPDA.getKeyListeners()) listener.keyReleased(released);
+      assertEquals(List.of(command(KataAnalysisParameter.PDA, "1.25")), engine.commands);
+      assertEquals(1.25, engine.pda);
+      assertEquals(1.25, rememberedPda(engine));
+      assertEquals(mirrored ? 1.25 : -0.5, second.pda);
+      assertEquals(mirrored ? 1.25 : -0.5, rememberedPda(second));
+      assertEquals(1, engine.ponders);
+    });
   }
 
   @ParameterizedTest
