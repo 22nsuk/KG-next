@@ -5765,6 +5765,7 @@ class BoardNodeKindHistoryPipelineTest {
       RuleAwareFakeLeelaz engine = allocate(RuleAwareFakeLeelaz.class);
       engine.isLoaded = true;
       if (!userPaused) {
+        Lizzie.config.autoQuickAnalyzeOnLoad = true;
         engine.trackPonderCalls = true;
         engine.pretendingToPonder = true;
       }
@@ -5772,7 +5773,10 @@ class BoardNodeKindHistoryPipelineTest {
       Lizzie.leelaz = engine;
       Lizzie.config.loadSgfLast = loadSgfLast;
       EngineManager.isEmpty = false;
-      String sgf = "(;SZ[3]HA[2]AB[aa]AB[ca];W[ba];B[bb])";
+      // Saved move analysis keeps this test on the foreground resume path, without a quick worker.
+      String savedAnalysis = userPaused ? "" : "LZ[Main 50.0 10]";
+      String sgf = "(;SZ[3]HA[2]AB[aa]AB[ca];W[ba]" + savedAnalysis
+          + ";B[bb]" + savedAnalysis + ")";
 
       assertTrue(SGFParser.loadFromString(sgf), "loadFromString should parse handicap SGF.");
       awaitCondition(

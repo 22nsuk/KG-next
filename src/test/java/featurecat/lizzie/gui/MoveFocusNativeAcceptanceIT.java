@@ -1,6 +1,7 @@
 package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
@@ -131,6 +132,12 @@ public class MoveFocusNativeAcceptanceIT {
           30, "real focus capability");
       phase(output, result, "load-game");
       edt(() -> assertTrue(Lizzie.frame.loadFile(sgf.toFile(), false, true)));
+      await(() -> LizzieFrame.canGoAfterload && !Lizzie.board.isEngineAlignmentPending(),
+          30, "loaded position confirmed");
+      edt(() -> {
+        assertFalse(Lizzie.leelaz.isPondering(), "disabled load analysis must remain stopped");
+        Lizzie.frame.togglePonderMannul();
+      });
       await(() -> Lizzie.frame.canStartTrackingAnalysis() && Lizzie.leelaz.isPondering()
           && Lizzie.frame.getDisplayNode().getData().rootVisits > 0, 30, "ordinary result");
       phase(output, result, "single-point");

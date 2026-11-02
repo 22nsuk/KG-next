@@ -136,10 +136,14 @@ public final class LiveQuickAnalysisProbe {
 
       edt(() -> Lizzie.config.autoQuickAnalyzeOnLoad = false);
       load(game(35, "Chinese", "7.5"));
-      await(primary::isPondering, 40, "automatic-curve-disabled");
+      await(() -> LizzieFrame.canGoAfterload && !Lizzie.board.isEngineAlignmentPending(),
+          40, "disabled-import-synchronized");
       Thread.sleep(2500);
+      check(!primary.isPondering(), "Disabled import restarted foreground analysis");
       check(!quickRunning(), "Disabled quick analysis still started");
       check(!allAnalyzed(), "Disabled import unexpectedly analyzed the whole game");
+      edt(() -> Lizzie.frame.togglePonderMannul());
+      await(primary::isPondering, 40, "manual-resume-after-disabled-import");
       record("automatic-curve-disabled PASS");
       screenshot("disabled");
       record("result=PASS mode=" + mode);
