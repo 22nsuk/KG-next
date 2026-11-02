@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.*;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.gui.LizzieFrame;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -16,10 +18,30 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class SGFSaveSnapshotTest {
+  private static final String METADATA_TREE =
+      "(;SZ[5]KM[0.5]HA[2]AB[aa][ee]PL[W]XX[opaque\\]value\\\\]"
+          + "C[root\\]note\\\\];W[bb](;B[]C[pass])(;B[cc]C[branch]))";
+  private static final MetadataExpectation EDITED_METADATA =
+      new MetadataExpectation(
+          "Alice[9d] literal\\n 한국어\\",
+          "Bob]7d A]XX[extra",
+          "2026-09-12,13]DT[extra\\",
+          "W+R]RE[extra\\",
+          List.of(
+              "PB[Alice[9d\\] literal\\\\n 한국어\\\\]",
+              "PW[Bob\\]7d A\\]XX[extra]",
+              "DT[2026-09-12,13\\]DT[extra\\\\]",
+              "RE[W+R\\]RE[extra\\\\]"));
+  private static final MetadataExpectation EMPTY_METADATA =
+      new MetadataExpectation("", "", "", "", List.of("PB[]", "PW[]", "DT[]", "RE[]"));
+
+  @TempDir Path tempDirectory;
+
   @Test
   void engineMoveWaitsForTopologyCaptureAndCannotEnterTheSavedTree() throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
@@ -267,6 +289,169 @@ class SGFSaveSnapshotTest {
       assertEquals(comment, root.getData().comment);
     }
   }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editedGameInfoSurvivesNormalAndRawSnapshotsWithoutChangingLiveState(boolean raw)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      for (MetadataExpectation expected : List.of(EDITED_METADATA, EMPTY_METADATA)) {
+        BoardHistoryList original = SGFParser.parseSgf(METADATA_TREE, true);
+        Lizzie.board.setHistory(original);
+        setMetadata(original, expected);
+        for (int round = 0; round < 2; round++) {
+          BoardHistoryList live = Lizzie.board.getHistory();
+          var current = live.getCurrentHistoryNode();
+          var rootProperties = new LinkedHashMap<>(live.getStart().getData().getProperties());
+
+          String saved = capture(raw, true, false);
+
+          assertEncodedMetadata(saved, expected);
+          assertMetadata(live, expected);
+          assertSame(live, Lizzie.board.getHistory());
+          assertSame(current, live.getCurrentHistoryNode());
+          assertEquals(rootProperties, live.getStart().getData().getProperties());
+          BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+          assertMetadata(reopened, expected);
+          SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(original, reopened);
+          Lizzie.board.setHistory(reopened);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"SZ[3", "XSZ[3"})
+  void metadataSizeTextDoesNotResizeANewGameOnReopen(String name) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList original = Lizzie.board.getHistory();
+      original.getGameInfo().setPlayerWhite(name);
+      original.place(4, 4, Stone.BLACK);
+      for (String saved : List.of(
+          capture(false, false, false), "(;PW[" + name + "]SZ[5];B[ee])")) {
+        BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+        assertEquals(name, reopened.getGameInfo().getPlayerWhite());
+        assertEquals(25, reopened.getStart().getData().stones.length);
+        SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(original, reopened);
+        openMetadataSgf("live", saved);
+        assertEquals(name, Lizzie.board.getHistory().getGameInfo().getPlayerWhite());
+        SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(original, Lizzie.board.getHistory());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"detached", "live", "edit"})
+  void importedGameInfoDecodesEscapesAndSimpleTextOnceAcrossOpeners(String opener)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      // Literal SGF input and literal expectations keep the parser and writer from agreeing
+      // on the same escaping mistake. CRLF/LFCR are one line break, escaped breaks vanish,
+      // and an escaped letter n is the letter n rather than a line break.
+      String imported =
+          "(;PB[Alice[9d\\] \\n한글]PW[Bob\\\\ end\\\\]"
+              + "RE[W+R\\]\r\nline\n\rend\t\f\u000B]"
+              + "DT[2026\\\r\n-09\\\n\r-12\\n]"
+              + METADATA_TREE.substring(2);
+      MetadataExpectation expected =
+          new MetadataExpectation(
+              "Alice[9d] n한글",
+              "Bob\\ end\\",
+              "2026-09-12n",
+              "W+R] line end   ",
+              List.of(
+                  "PB[Alice[9d\\] n한글]",
+                  "PW[Bob\\\\ end\\\\]",
+                  "DT[2026-09-12n]",
+                  "RE[W+R\\] line end   ]"));
+      BoardHistoryList expectedTree = SGFParser.parseSgf(METADATA_TREE, true);
+      openMetadataSgf(opener, imported);
+      for (int round = 0; round < 3; round++) {
+        BoardHistoryList live = Lizzie.board.getHistory();
+        assertMetadata(live, expected);
+        SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(expectedTree, live);
+        if (round < 2) {
+          var rootProperties = new LinkedHashMap<>(live.getStart().getData().getProperties());
+          String saved = capture(false, true, false);
+          assertEncodedMetadata(saved, expected);
+          assertMetadata(live, expected);
+          assertEquals(rootProperties, live.getStart().getData().getProperties());
+          openMetadataSgf(opener, saved);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void manualAndAutomaticFilesKeepGameInfoAcrossRepeatedReopens(boolean automatic)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList original = SGFParser.parseSgf(METADATA_TREE, true);
+      Lizzie.board.setHistory(original);
+      setMetadata(original, EDITED_METADATA);
+      Path target = tempDirectory.resolve(automatic ? "automatic.sgf" : "manual.sgf");
+      for (int round = 0; round < 2; round++) {
+        BoardHistoryList live = Lizzie.board.getHistory();
+        var current = live.getCurrentHistoryNode();
+        var rootProperties = new LinkedHashMap<>(live.getStart().getData().getProperties());
+
+        SGFParser.save(Lizzie.board, target.toString(), automatic);
+
+        String saved = Files.readString(target);
+        assertEncodedMetadata(saved, EDITED_METADATA);
+        assertMetadata(live, EDITED_METADATA);
+        assertSame(live, Lizzie.board.getHistory());
+        assertSame(current, live.getCurrentHistoryNode());
+        assertEquals(rootProperties, live.getStart().getData().getProperties());
+        BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+        assertMetadata(reopened, EDITED_METADATA);
+        SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(original, reopened);
+        Lizzie.board.setHistory(reopened);
+      }
+    }
+  }
+
+  private static void setMetadata(BoardHistoryList history, MetadataExpectation expected) {
+    var gameInfo = history.getGameInfo();
+    gameInfo.setPlayerBlack(expected.black());
+    gameInfo.setPlayerWhite(expected.white());
+    gameInfo.setDate(expected.date());
+    gameInfo.setResultNoUI(expected.result());
+  }
+
+  private static void assertMetadata(BoardHistoryList history, MetadataExpectation expected) {
+    var gameInfo = history.getGameInfo();
+    assertEquals(expected.black(), gameInfo.getPlayerBlack());
+    assertEquals(expected.white(), gameInfo.getPlayerWhite());
+    assertEquals(expected.date(), gameInfo.getDate());
+    assertEquals(expected.result(), gameInfo.getResult());
+    assertEquals(0.5, gameInfo.getKomi());
+    assertEquals(2, gameInfo.getHandicap());
+    assertEquals("5", history.getStart().getData().getProperty("SZ"));
+    assertEquals(25, history.getStart().getData().stones.length);
+    assertEquals("opaque\\]value\\\\", history.getStart().getData().getProperty("XX"));
+  }
+
+  private static void assertEncodedMetadata(String saved, MetadataExpectation expected) {
+    for (String property : expected.encodedProperties()) {
+      assertTrue(saved.contains(property), "Missing literal property " + property + " in " + saved);
+    }
+    assertTrue(saved.contains("XX[opaque\\]value\\\\]"), saved);
+  }
+
+  private static void openMetadataSgf(String opener, String sgf) throws Exception {
+    switch (opener) {
+      case "detached" -> Lizzie.board.setHistory(SGFParser.parseSgf(sgf, true));
+      case "live" -> assertTrue(SGFParser.loadFromString(sgf, false));
+      case "edit" -> assertTrue(SGFParser.loadFromStringforedit(sgf));
+      default -> throw new IllegalArgumentException(opener);
+    }
+    SwingUtilities.invokeAndWait(() -> {});
+  }
+
+  private record MetadataExpectation(
+      String black, String white, String date, String result, List<String> encodedProperties) {}
 
   private static String capture(boolean raw, boolean comments, boolean branch) throws Exception {
     AtomicReference<String> result = new AtomicReference<>();
