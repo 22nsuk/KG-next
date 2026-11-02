@@ -112,7 +112,7 @@ class ZhiziGtpTransportTest {
   }
 
   @Test
-  void sessionLifecycleRequiresTokenConnectAndRealReadyInOrder() {
+  void sessionLifecycleRequiresTokenConnectAndRealReadyInOrder() throws Exception {
     ZhiziGtpTransport.SessionLifecycle lifecycle = new ZhiziGtpTransport.SessionLifecycle();
     long generation = lifecycle.beginAttempt();
 
@@ -126,7 +126,16 @@ class ZhiziGtpTransportTest {
   }
 
   @Test
-  void sessionLifecycleRejectsEventsFromRetiredSocketGeneration() {
+  void closedLifecycleCannotBeginAnotherAttempt() {
+    ZhiziGtpTransport.SessionLifecycle lifecycle = new ZhiziGtpTransport.SessionLifecycle();
+    lifecycle.close();
+
+    assertThrows(java.io.IOException.class, lifecycle::beginAttempt);
+    assertEquals(ZhiziGtpTransport.SessionState.CLOSED, lifecycle.state());
+  }
+
+  @Test
+  void sessionLifecycleRejectsEventsFromRetiredSocketGeneration() throws Exception {
     ZhiziGtpTransport.SessionLifecycle lifecycle = new ZhiziGtpTransport.SessionLifecycle();
     long retired = lifecycle.beginAttempt();
     assertTrue(lifecycle.tokenFetched(retired));
@@ -140,7 +149,8 @@ class ZhiziGtpTransportTest {
   }
 
   @Test
-  void sessionFailureBeforeActivationRetriesButActiveFailureRequiresFullRecovery() {
+  void sessionFailureBeforeActivationRetriesButActiveFailureRequiresFullRecovery()
+      throws Exception {
     ZhiziGtpTransport.SessionLifecycle lifecycle = new ZhiziGtpTransport.SessionLifecycle();
     long startup = lifecycle.beginAttempt();
     assertTrue(lifecycle.tokenFetched(startup));
