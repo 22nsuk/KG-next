@@ -28,6 +28,8 @@ import java.util.function.BooleanSupplier;
 import java.util.function.Predicate;
 import javax.imageio.ImageIO;
 import javax.swing.AbstractButton;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JRadioButton;
 import javax.swing.JSpinner;
@@ -154,6 +156,7 @@ class ThemeSaveDesktopTest {
   private static void verifySave(
       ConfigDialog2 dialog, Path themeFile, Path work, Path result) throws Exception {
     int originalIndicator = onEdt(() -> Lizzie.config.stoneIndicatorType);
+    CoordinateLabels originalLabels = onEdt(() -> CoordinateLabels.of(Lizzie.config.theme));
     float originalFilter = onEdt(() -> Lizzie.frame.filter20.getRadius());
     byte[] originalTheme = Files.readAllBytes(themeFile);
     byte[] originalConfig = Files.readAllBytes(work.resolve("config.txt"));
@@ -162,6 +165,8 @@ class ThemeSaveDesktopTest {
           field(dialog, "spnWinrateStrokeWidth", JSpinner.class).setValue(3.4);
           field(dialog, "rdoStoneIndicatorCircle", JRadioButton.class).setSelected(true);
           field(dialog, "txtBackgroundFilter", JTextField.class).setText("7");
+          field(dialog, "cmbCoordinateSize", JComboBox.class).setSelectedIndex(2);
+          field(dialog, "chkCoordinateBold", JCheckBox.class).setSelected(true);
           return null;
         });
     try (AutoCloseable ignored = FileAccessTestSupport.denyParentWrite(themeFile.getParent())) {
@@ -184,6 +189,9 @@ class ThemeSaveDesktopTest {
             assertTrue(field(dialog, "rdoStoneIndicatorCircle", JRadioButton.class).isSelected());
             assertEquals("7", field(dialog, "txtBackgroundFilter", JTextField.class).getText());
             assertEquals(originalIndicator, Lizzie.config.stoneIndicatorType);
+            assertEquals(originalLabels, CoordinateLabels.of(Lizzie.config.theme));
+            assertEquals(2, field(dialog, "cmbCoordinateSize", JComboBox.class).getSelectedIndex());
+            assertTrue(field(dialog, "chkCoordinateBold", JCheckBox.class).isSelected());
             assertEquals(originalFilter, Lizzie.frame.filter20.getRadius());
             return null;
           });
@@ -195,6 +203,8 @@ class ThemeSaveDesktopTest {
     assertEquals(3.4, saved.getDouble("winrate-stroke-width"));
     assertEquals(1, saved.getInt("stone-indicator-type"));
     assertEquals(7, saved.getInt("background-filter"));
+    assertEquals(200, saved.getInt("coordinate-size"));
+    assertTrue(saved.getBoolean("coordinate-bold"));
     assertEquals(
         THEME_NAME,
         new JSONObject(Files.readString(work.resolve("config.txt")))
@@ -204,6 +214,7 @@ class ThemeSaveDesktopTest {
         () -> {
           assertEquals(1, Lizzie.config.stoneIndicatorType);
           assertEquals(7f, Lizzie.frame.filter20.getRadius());
+          assertEquals(new CoordinateLabels(true, 200), CoordinateLabels.of(Lizzie.config.theme));
           return null;
         });
     capture(result.resolveSibling("retry-ko.png"));

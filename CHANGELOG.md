@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Add theme-specific 100% / 140% / 200% and bold coordinate labels to main, comparison and independent main boards, adapting upstream #725. Preserve the default appearance, Korean font selection, coordinate formats and external-board overlay alignment. Recompute margins and stone caches together when label size changes, including same-size images and coordinate visibility changes, and expose the setting through function search.
+
 - Re-enter an existing pass variation after stepping back, preserving its comments, analysis and continuation instead of creating a duplicate branch.
 
 - Preserve ReadBoard's JSON and two legacy user configuration files when activating an update, after confirming the old helper has exited. Abort before replacement if settings cannot be copied; attempt backup restoration independently of staging cleanup and retain all failure details.

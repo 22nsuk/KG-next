@@ -53,9 +53,9 @@ class FunctionSearchTest {
             "FunctionSearch.category.sync",
             "FunctionSearch.category.view"),
         FunctionCatalog.categoryKeys());
-    assertEquals(76, FunctionCatalog.configSettingTargets().size());
+    assertEquals(77, FunctionCatalog.configSettingTargets().size());
     assertEquals(
-        76,
+        77,
         FunctionCatalog.configSettingTargets().stream()
             .map(FunctionCatalog.ConfigSettingTarget::id)
             .distinct()
@@ -70,6 +70,15 @@ class FunctionSearchTest {
             .allMatch(entry -> FunctionCatalog.categoryKeys().contains(entry.categoryKey())));
     assertEquals(1, FunctionCatalog.entries().stream().filter(entry -> entry.id().equals("game.komi")).count());
     assertEquals(1, FunctionCatalog.entries().stream().filter(entry -> entry.id().equals("engine.rules")).count());
+  }
+
+  @Test
+  void coordinateAppearanceResolvesToTheThemeSettingInKoreanAndEnglish() {
+    FunctionSearch search = new FunctionSearch();
+    assertEquals("config.theme.coordinates", search.search("바둑판 좌표", Locale.KOREAN).get(0).id());
+    assertEquals("config.theme.coordinates", search.search("좌표 크기", Locale.KOREAN).get(0).id());
+    assertEquals("config.theme.coordinates", search.search("좌표 굵기", Locale.KOREAN).get(0).id());
+    assertEquals("config.theme.coordinates", search.search("board coordinates", Locale.US).get(0).id());
   }
 
   @Test

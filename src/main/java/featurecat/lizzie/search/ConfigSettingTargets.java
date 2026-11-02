@@ -65,6 +65,7 @@ final class ConfigSettingTargets {
         target("config.theme.info-font", SettingSection.THEME, "ConfigDialog2.modern.theme.infoFont", "ConfigDialog2.modern.theme.infoFontSub", "view"),
         target("config.theme.ui-font", SettingSection.THEME, "ConfigDialog2.modern.theme.uiFont", "ConfigDialog2.modern.theme.uiFontSub", "view"),
         target("config.theme.winrate-font", SettingSection.THEME, "ConfigDialog2.modern.theme.winrateFont", "ConfigDialog2.modern.theme.winrateFontSub", "view"),
+        target("config.theme.coordinates", SettingSection.THEME, "ConfigDialog2.modern.theme.coordinates", "ConfigDialog2.modern.theme.coordinatesSub", "view"),
         target("config.theme.background-image", SettingSection.THEME, "ConfigDialog2.modern.theme.backgroundImage", "ConfigDialog2.modern.theme.assetHint", "view"),
         target("config.theme.board-image", SettingSection.THEME, "ConfigDialog2.modern.theme.boardImage", "ConfigDialog2.modern.theme.assetHint", "view"),
         target("config.theme.black-stone-image", SettingSection.THEME, "ConfigDialog2.modern.theme.blackStoneImage", "ConfigDialog2.modern.theme.assetHint", "view"),
