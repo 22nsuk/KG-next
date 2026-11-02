@@ -1583,9 +1583,6 @@ public class SGFParser {
       rootData.addProperty("KM", komi.toString());
       rootData.addProperty("PW", Escaping(playerW));
       rootData.addProperty("PB", Escaping(playerB));
-      rootData.addProperty("RE", Escaping(result));
-      rootData.addProperty("SZ", boardSizeTag);
-      rootData.addProperty("CA", "UTF-8");
       if (date == null) {
         rootData.getProperties().remove("DT");
       } else {
@@ -1597,6 +1594,9 @@ public class SGFParser {
         }
         rootData.addProperty("AP", Escaping("KG-next: " + Lizzie.nextVersion));
       }
+      rootData.addProperty("RE", Escaping(result));
+      rootData.addProperty("SZ", boardSizeTag);
+      rootData.addProperty("CA", "UTF-8");
       if (rootData.isSnapshotNode()) {
         builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
       } else {
