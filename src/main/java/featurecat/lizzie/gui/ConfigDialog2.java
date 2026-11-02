@@ -2970,7 +2970,7 @@ public class ConfigDialog2 extends JDialog {
               sgf,
               "config.kifu.auto-analyze",
               configText("ConfigDialog2.modern.kifu.autoAnalyze", "打开棋谱后自动快速分析"),
-              configText("ConfigDialog2.modern.kifu.autoAnalyzeSub", "SGF 打开后自动进行快速形势分析"),
+              configText("ConfigDialog2.modern.kifu.autoAnalyzeSub", "打开棋谱后自动补全缺失的分析；关闭后需手动开始分析。"),
               chkAutoQuickAnalyzeOnLoad);
           addToggleRow(
               sgf,

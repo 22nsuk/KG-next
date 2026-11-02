@@ -1330,6 +1330,7 @@ class PositionConfirmedRollbackTest {
   @ValueSource(strings = {"none", "kifu", "rules", "reader", "generation"})
   void localRestartReconfirmsPositionAndFencesDelayedAnalysis(String replacement) throws Exception {
     try (Harness harness = Harness.open()) {
+      harness.enableAutomaticResumeAfterLoad();
       boolean previousCanGo = LizzieFrame.canGoAfterload;
       try {
         harness.engine.isLoaded = false;
@@ -1389,6 +1390,7 @@ class PositionConfirmedRollbackTest {
   void localRestartReconfirmsImportAfterComparisonModeChoice(String modeChoice)
       throws Exception {
     try (Harness harness = Harness.open()) {
+      harness.enableAutomaticResumeAfterLoad();
       boolean previousCanGo = LizzieFrame.canGoAfterload;
       Leelaz mirror = new Leelaz("");
       try {
@@ -2645,6 +2647,15 @@ class PositionConfirmedRollbackTest {
     private final ExactSnapshotRestoreProtocolFixture.Transport transport;
     private final BoardHistoryNode p0;
     private final BoardHistoryNode p1;
+
+    private void enableAutomaticResumeAfterLoad() {
+      Lizzie.config.autoQuickAnalyzeOnLoad = true;
+      // These tests exercise foreground resume after confirmation, with no missing quick analysis.
+      p1.getData().setPlayouts(10);
+      p1.getData().winrate = 50;
+      p1.getData().engineName = "saved-analysis";
+      p1.getData().analysisHeaderSlots = 3;
+    }
 
     private Harness(
         Config previousConfig,
