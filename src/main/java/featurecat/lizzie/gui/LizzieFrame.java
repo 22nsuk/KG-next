@@ -381,6 +381,7 @@ public class LizzieFrame extends JFrame {
   private volatile int kifuAnalysisResumeGeneration = 0;
   private transient KifuEngineSyncCoordinator kifuEngineSyncCoordinator;
   private volatile BoardHistoryNode pendingKifuEngineSyncRoot;
+  private volatile BoardHistoryNode pendingManualAnalysisResumeRoot;
   private Runnable pendingKifuRulesConsent;
   private Runnable failedKifuPositionRetry;
   private AutomaticQuickAnalysisTask automaticQuickAnalysisTask;
@@ -6245,6 +6246,7 @@ public class LizzieFrame extends JFrame {
       RuntimeException failure) {
     if (!isCurrentKifuRulesRequest(root, rulesTarget, primary, primaryGeneration, mirror)) return;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     pendingKifuRulesConsent = null;
     canGoAfterload = true;
     userAnalysisPaused = true;
@@ -6863,6 +6865,7 @@ public class LizzieFrame extends JFrame {
   private synchronized void cancelPendingKifuEngineSync() {
     pendingKifuRulesConsent = null;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     failedKifuPositionRetry = null;
     if (kifuEngineSyncCoordinator != null) {
       kifuEngineSyncCoordinator.cancel();
@@ -6877,6 +6880,7 @@ public class LizzieFrame extends JFrame {
   public synchronized void shutdownKifuEngineSyncCoordinator() {
     pendingKifuRulesConsent = null;
     pendingKifuEngineSyncRoot = null;
+    pendingManualAnalysisResumeRoot = null;
     failedKifuPositionRetry = null;
     if (kifuEngineSyncCoordinator != null) {
       kifuEngineSyncCoordinator.close();
@@ -14453,6 +14457,7 @@ public class LizzieFrame extends JFrame {
 
   private void recordUserAnalysisPause(BoardHistoryNode cancelledRoot) {
     userAnalysisPaused = true;
+    pendingManualAnalysisResumeRoot = null;
     if (readBoard != null) readBoard.invalidatePendingSyncAnalysisResume();
     pendingForegroundResumeAfterCleanup = false;
     userCancelledQuickAnalysisRoot = cancelledRoot;
@@ -14470,9 +14475,11 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (pendingKifuEngineSyncRoot != null && pendingKifuEngineSyncRoot == currentHistoryRoot()) {
+      pendingManualAnalysisResumeRoot = pendingKifuEngineSyncRoot;
       if (pendingKifuRulesConsent != null) pendingKifuRulesConsent.run();
       return;
     }
+    pendingManualAnalysisResumeRoot = null;
     if (!Lizzie.leelaz.isPondering()) {
       if (!syncCurrentPositionToPrimaryEngineForAnalysis()) {
         return;
@@ -22082,6 +22089,14 @@ public class LizzieFrame extends JFrame {
   }
 
   private void resumeAnalysisAfterLoad(boolean positionAlreadyConfirmed) {
+    // A manual start requested during this import waits for the same rules/position fences,
+    // but does not inherit the preference that controls automatic starts.
+    if (positionAlreadyConfirmed
+        && pendingManualAnalysisResumeRoot != null
+        && pendingManualAnalysisResumeRoot == currentHistoryRoot()) {
+      resumeForegroundAnalysisForConfirmedPosition();
+      return;
+    }
     // This preference governs automatic starts from record loading. Explicit resume and engine
     // recovery also use ensureAnalysisResumedAfterLoad and must remain independent of it.
     if (Lizzie.config != null && Lizzie.config.autoQuickAnalyzeOnLoad) {
@@ -22128,6 +22143,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private boolean resumeForegroundAnalysisForConfirmedPosition() {
+    pendingManualAnalysisResumeRoot = null;
     return resumeForegroundAnalysisForCurrentPosition(true);
   }
 
@@ -22323,6 +22339,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private void clearUserAnalysisPauseForNewKifuLoadContext() {
+    pendingManualAnalysisResumeRoot = null;
     analysisControlCleanupGeneration++;
     userAnalysisPaused = false;
     pendingForegroundResumeAfterCleanup = false;
