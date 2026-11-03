@@ -2,9 +2,16 @@ package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
+import featurecat.lizzie.rules.BoardHistoryNode;
+import java.lang.ref.WeakReference;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Set;
 import javax.swing.SwingUtilities;
 
 /** Owns a manual selection until its cache decision and session rules publication finish. */
@@ -26,6 +33,8 @@ public final class ManualRulesSelection {
   private boolean unchanged;
   private volatile boolean done;
   private volatile Leelaz.EngineRulesOperation operation;
+  private RetainedCache primaryCache;
+  private RetainedCache mirrorCache;
 
   private ManualRulesSelection(Leelaz primary, KataGoRules requested, long timeoutMillis) {
     this.primary = primary;
@@ -124,6 +133,13 @@ public final class ManualRulesSelection {
                   && matches(previousRules, requested)
                   && (mirror == null || matches(previousMirrorRules, requested))
                   && compatibleTarget(target, requested);
+              List<WeakReference<BoardData>> retained = captureRetainedData(history);
+              primaryCache = primary.retainManualRulesCache(
+                  new RetainedCache(this, retained, false), pending);
+              if (mirror != null) {
+                mirrorCache = mirror.retainManualRulesCache(
+                    new RetainedCache(this, retained, true), pending);
+              }
               if (!unchanged) {
                 intent = history.beginManualRulesIntent(this::currentIdentity);
                 primary.manualRulesCacheOwner.set(this);
@@ -213,11 +229,20 @@ public final class ManualRulesSelection {
             if (!preserveCache
                 || !compatibleTarget(intent.previousTarget(), requested)
                 || (currentMirror != null && !matches(currentMirror.currentConfirmedRules(), requested))) {
-              board.clearBestMovesAfter(history.getStart());
+              List<WeakReference<BoardData>> currentData = captureRetainedData(history);
+              primaryCache.invalidateAtSettlement(primary, currentData);
+              if (Lizzie.config.isDoubleEngineMode()) {
+                if (currentMirror != null && currentMirror == mirror
+                    && currentMirror.engineIncarnationSnapshot() == mirrorIncarnation) {
+                  mirrorCache.invalidateAtSettlement(mirror, currentData);
+                } else {
+                  board.clearBestMovesAfterForSecondEngine(history.getStart());
+                }
+              }
             }
             published[0] = history.publishManualRulesIfCurrent(intent, observed).orElse(null);
           } else if (!preserveCache) {
-            board.clearBestMovesAfterForFirstEngine(history.getStart());
+            primaryCache.invalidateAtSettlement(primary, captureRetainedData(history));
           }
           if (!selected && preserveCache && previousOverride && matches(previousRules, observed)
               && currentMirror == mirror
@@ -305,5 +330,82 @@ public final class ManualRulesSelection {
       case SET_REJECTED, SET_UNSUPPORTED, OCCUPIED, LIST_COMMANDS_FAILED, LIST_COMMANDS_TIMEOUT -> true;
       default -> false;
     };
+  }
+
+  // Capture under history admission; physical writers must never traverse or lock the history.
+  private static List<WeakReference<BoardData>> captureRetainedData(BoardHistoryList history) {
+    List<WeakReference<BoardData>> retained = new ArrayList<>();
+    ArrayDeque<BoardHistoryNode> nodes = new ArrayDeque<>();
+    nodes.push(history.getStart());
+    while (!nodes.isEmpty()) {
+      BoardHistoryNode node = nodes.pop();
+      retained.add(new WeakReference<>(node.getData()));
+      nodes.addAll(node.getVariations());
+    }
+    return List.copyOf(retained);
+  }
+
+  /** One-shot protection of the payloads retained by a manual selection, per engine slot. */
+  static final class RetainedCache {
+    private final WeakReference<Board> board;
+    private final WeakReference<BoardHistoryList> history;
+    private final WeakReference<Leelaz> primary;
+    private final long primaryGeneration;
+    private final boolean secondary;
+    private final List<WeakReference<BoardData>> retained;
+    private boolean invalidated;
+
+    private RetainedCache(ManualRulesSelection selection,
+        List<WeakReference<BoardData>> retained, boolean secondary) {
+      board = new WeakReference<>(selection.board);
+      history = new WeakReference<>(selection.history);
+      primary = new WeakReference<>(selection.primary);
+      primaryGeneration = selection.primaryGeneration;
+      this.secondary = secondary;
+      this.retained = retained;
+    }
+
+    boolean sameSelection(RetainedCache other) {
+      return board.get() != null && board.get() == other.board.get()
+          && history.get() != null && history.get() == other.history.get()
+          && primary.get() != null && primary.get() == other.primary.get()
+          && primaryGeneration == other.primaryGeneration && secondary == other.secondary;
+    }
+
+    // Only state snapshots and BoardData locks here: writers may hold endpoint/protocol locks.
+    synchronized void invalidate(Leelaz receiver) {
+      if (invalidated) return;
+      Board currentBoard = board.get();
+      Leelaz currentPrimary = primary.get();
+      if (currentBoard == null || currentPrimary == null || Lizzie.board != currentBoard
+          || currentBoard.getHistory() != history.get()
+          || Lizzie.capturePrimaryEngineGenerationSnapshot(currentPrimary) != primaryGeneration
+          || receiver != (secondary ? currentPrimary.activeComparisonEngine() : currentPrimary)) return;
+      invalidated = true;
+      for (WeakReference<BoardData> reference : retained) {
+        BoardData data = reference.get();
+        if (data == null) continue;
+        if (secondary) data.invalidateSecondaryAnalysis();
+        else data.invalidatePrimaryAnalysis();
+      }
+    }
+
+    // Preserve full-tree settlement semantics if editing/sync added cached nodes while pending.
+    // The caller captures currentData under history admission, before entering this monitor.
+    synchronized void invalidateAtSettlement(
+        Leelaz receiver, List<WeakReference<BoardData>> currentData) {
+      invalidate(receiver);
+      Set<BoardData> captured = Collections.newSetFromMap(new IdentityHashMap<>());
+      for (WeakReference<BoardData> reference : retained) {
+        BoardData data = reference.get();
+        if (data != null) captured.add(data);
+      }
+      for (WeakReference<BoardData> reference : currentData) {
+        BoardData data = reference.get();
+        if (data == null || captured.contains(data)) continue;
+        if (secondary) data.invalidateSecondaryAnalysis();
+        else data.invalidatePrimaryAnalysis();
+      }
+    }
   }
 }

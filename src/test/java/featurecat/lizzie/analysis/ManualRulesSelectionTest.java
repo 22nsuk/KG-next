@@ -231,6 +231,136 @@ class ManualRulesSelectionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"console,kata-set-rules aga", "mirror,kata-set-rules aga",
+      "console,kata-set-rule ko POSITIONAL", "mirror,kata-set-rule ko POSITIONAL",
+      "console,kgs-rules aga", "mirror,kgs-rules aga"})
+  void externalRulesWritesInvalidateTheCacheOfEachReceivingEngine(String route, String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      if (route.equals("console")) assertTrue(f.primary.sendRawConsoleCommand(command));
+      else f.mirror.sendCommandNoLeelaz2(command);
+      assertTrue(f.mirrorTransport.commands().contains(command));
+      if (route.equals("console")) f.reply(f.primary, f.transport, command, "", true);
+      f.reply(f.mirror, f.mirrorTransport, command, "", true);
+      f.reply(f.primary, f.transport, "kata-get-rules", "read failed", false);
+      await(selection::isDone);
+
+      f.assertCaches(route.equals("console"), true);
+      assertTrue(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.mirror));
+      f.mirror.sendCommandNoLeelaz2("kata-analyze 10");
+      f.reply(f.mirror, f.mirrorTransport, "kata-analyze", "", true);
+      f.mirror.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts2());
+      assertEquals("Q16", f.history.getData().bestMoves2.get(0).coordinate);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void queuedMirroredRulesWriteCannotRetainCacheAfterManualSelectionFinishes(boolean retry)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.mirror.requireResponseBeforeSend = true;
+      f.mirror.sendCommandNoLeelaz2("name");
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules aga"));
+      assertEquals(0, count(f.mirrorTransport, "kata-set-rules"));
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      if (retry) {
+        int expectedQueries = count(f.transport, "kata-get-rules") + 1;
+        selection = f.apply(JAPANESE);
+        f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+        await(() -> count(f.transport, "kata-get-rules") == expectedQueries);
+      }
+      f.reply(f.primary, f.transport, "kata-get-rules", "read failed", false);
+      await(selection::isDone);
+      f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+      assertEquals(1, count(f.mirrorTransport, "kata-set-rules"));
+      f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+      f.assertCaches(true, true);
+    }
+  }
+
+  @Test
+  void cancelledBeforeWriteDoesNotInvalidateTheRetainedMirrorCache() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.mirror.requireResponseBeforeSend = true;
+      f.mirror.sendCommandNoLeelaz2("name");
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      var cancelled = f.mirror.applyEngineRulesOperation(JAPANESE, 30_000L);
+      var replacement = f.mirror.queryEngineRulesOperation(30_000L);
+      assertEquals(EngineRulesResult.Reason.REPLACED, cancelled.await(1_000L).reason());
+      f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      await(selection::isDone);
+      f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+      assertEquals(0, count(f.mirrorTransport, "kata-set-rules"));
+      f.reply(f.mirror, f.mirrorTransport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      assertTrue(replacement.await(1_000L).isConfirmed());
+      f.assertCaches(false, false);
+    }
+  }
+
+  @Test
+  void unchangedSelectionAlsoProtectsItsRetainedCachesUntilTheNextExternalWrite() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      assertTrue(f.apply(CHINESE).unchanged());
+      f.assertCaches(false, false);
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules aga"));
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+      f.assertCaches(true, true);
+    }
+  }
+
+  @Test
+  void successfulSettlementAlsoInvalidatesCachedNodesAddedWhilePending() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      BoardData added = BoardData.empty(19, 19);
+      added.bestMoves = f.history.getData().bestMoves;
+      added.bestMoves2 = f.history.getData().bestMoves2;
+      added.setPlayouts(100);
+      added.setPlayouts2(100);
+      added.isChanged = false;
+      added.isChanged2 = false;
+      synchronized (f.history) {
+        f.history.getStart().addAtLast(added);
+      }
+      f.confirmChange(JAPANESE);
+      await(selection::isDone);
+      assertTrue(added.isChanged);
+      assertTrue(added.isChanged2);
+      assertEquals(100, added.getPlayouts());
+      assertEquals(100, added.getPlayouts2());
+      f.assertCaches(true, true);
+    }
+  }
+
+  @Test
+  void successfulSelectionStillInvalidatesTheInactiveComparisonSlot() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      Lizzie.leelaz2 = null;
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.confirmChange(JAPANESE);
+      await(selection::isDone);
+      f.assertCaches(true, true);
+    }
+  }
+
   @Test
   void externalRulesWriteAfterRecoveryPublicationInvalidatesTheCurrentSelection() throws Exception {
     try (Fixture f = new Fixture()) {

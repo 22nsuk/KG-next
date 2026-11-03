@@ -1823,6 +1823,11 @@ public class Leelaz {
             || rulesHandler.operation.currentIntent == null) {
           // Revoke preservation for both this selection's settlement and any successor.
           manualRulesCacheOwner.set(null);
+          // A mirrored command may reach this endpoint after the selection has settled.
+          // Its retained cache guard belongs to this reader, not the request's completion.
+          if (binding.retainedManualRulesCache != null) {
+            binding.retainedManualRulesCache.invalidate(this);
+          }
         }
       }
     }
@@ -5248,6 +5253,7 @@ public class Leelaz {
     private volatile String reportedRules = "";
     // Advanced before every potentially changing rules write, including rejected/partial writes.
     private volatile long rulesWriteSequence;
+    private ManualRulesSelection.RetainedCache retainedManualRulesCache;
     private volatile AnalysisConditionObservation provenanceKomi;
     private volatile AnalysisConditionObservation provenancePda;
     private volatile AnalysisConditionObservation provenanceWrn;
@@ -25326,6 +25332,18 @@ public class Leelaz {
   void withManualRulesCache(Runnable action) {
     synchronized (rulesObservationLock) {
       action.run();
+    }
+  }
+
+  ManualRulesSelection.RetainedCache retainManualRulesCache(
+      ManualRulesSelection.RetainedCache cache, boolean pending) {
+    synchronized (rulesObservationLock) {
+      ReaderStreamBinding binding = readerStreamBinding;
+      ManualRulesSelection.RetainedCache previous = binding.retainedManualRulesCache;
+      // Overlapping retries share the same retained payloads and one invalidation decision.
+      if (pending && previous != null && previous.sameSelection(cache)) return previous;
+      binding.retainedManualRulesCache = cache;
+      return cache;
     }
   }
 
