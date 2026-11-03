@@ -1787,8 +1787,8 @@ public class Leelaz {
     boolean parameterWrite =
         verb.equals("kata-set-param") || verb.equals("kata-set-params");
     boolean fullRulesWrite = verb.equals("kata-set-rules");
-    boolean rulesWrite = fullRulesWrite || verb.equals("kata-set-rule") || verb.equals("kgs-rules");
     boolean loadSgf = verb.equals("loadsgf");
+    boolean rulesWrite = !loadSgf && isRulesMutationCommand(normalized);
     if (condition == null && !parameterWrite && !rulesWrite && !loadSgf) return;
     command.provenanceBinding = binding;
     command.provenanceCondition = condition;
@@ -1819,6 +1819,9 @@ public class Leelaz {
       synchronized (rulesObservationLock) {
         binding.rulesWriteSequence++;
         binding.reportedRules = "";
+        if (rulesWrite || command.queuedCommand.restoreAdmission == null) {
+          binding.sessionRulesConfirmation = null;
+        }
         if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
             || rulesHandler.operation.currentIntent == null) {
           // Revoke preservation for both this selection's settlement and any successor.
@@ -5253,6 +5256,8 @@ public class Leelaz {
     private volatile String reportedRules = "";
     // Advanced before every potentially changing rules write, including rejected/partial writes.
     private volatile long rulesWriteSequence;
+    // Exact snapshot restoration owns its rules contract; arbitrary writers do not.
+    private EngineRulesResult sessionRulesConfirmation;
     private ManualRulesSelection.RetainedCache retainedManualRulesCache;
     private volatile AnalysisConditionObservation provenanceKomi;
     private volatile AnalysisConditionObservation provenancePda;
@@ -25309,6 +25314,50 @@ public class Leelaz {
     return engineRulesResult;
   }
 
+  private static boolean isRulesMutationCommand(String command) {
+    return switch (command.trim().split("\\s+", 2)[0]) {
+      case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
+      default -> false;
+    };
+  }
+
+  /**
+   * A confirmed observation describes physical state, not the result of already admitted work.
+   * Inspect the queue and its selected sender together so dequeue cannot hide a pending writer.
+   * Call before taking rulesObservationLock; cache decisions must never acquire a queue monitor.
+   */
+  boolean hasPendingRulesWrite() {
+    synchronized (commandQueue()) {
+      if (normalCommandBeingSent != null
+          && isRulesMutationCommand(normalCommandBeingSent.command)) return true;
+      for (QueuedCommand command : commandQueue()) {
+        if (isRulesMutationCommand(command.command)) return true;
+      }
+      if (foregroundRestoreQueue != null) {
+        for (QueuedCommand command : foregroundRestoreQueue) {
+          if (isRulesMutationCommand(command.command)) return true;
+        }
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Session convergence can reuse a confirmation across an admitted exact-position restore.
+   * Such a restore synchronizes rules before loading its snapshot. Raw writes still revoke the
+   * confirmation until a fresh readback, independently of the historical result shown in the UI.
+   */
+  EngineRulesResult confirmedSessionRulesResult() {
+    synchronized (rulesObservationLock) {
+      ReaderStreamBinding binding = readerStreamBinding;
+      EngineRulesResult result = engineRulesResult;
+      return binding != null && !binding.terminated && !binding.readerShutdownRequested
+              && binding.sessionRulesConfirmation == result
+              && readerStreamBinding == binding && engineRulesResult == result
+              && result != null && result.isConfirmed() ? result : null;
+    }
+  }
+
   /** Only readbacks with no intervening physical rules write can establish current rules. */
   public KataGoRules currentConfirmedRules() {
     synchronized (rulesObservationLock) {
@@ -25943,6 +25992,7 @@ public class Leelaz {
           recentRulesLine = observedRulesLine;
           if (operation.readerBinding != null) {
             operation.readerBinding.reportedRules = observedRulesLine;
+            operation.readerBinding.sessionRulesConfirmation = completed;
           }
           getSuicidalAndRules();
           if (!isolated && this == Lizzie.leelaz && Lizzie.config != null) {

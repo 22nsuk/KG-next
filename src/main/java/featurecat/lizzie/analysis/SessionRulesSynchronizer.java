@@ -162,12 +162,13 @@ public final class SessionRulesSynchronizer {
       return failure(Failure.ENGINE_UNAVAILABLE, null, null);
     }
     KataGoRules requested = target.parsedRules().orElseThrow();
-    EngineRulesResult current = engine.engineRulesResult();
-    if (current != null
-        && current.isConfirmed()
-        && current.observed() != null
-        && current.observed().semanticallyEquals(requested)) {
-      return success(current, current.observed());
+    // Earlier admitted work must settle before a historical match can justify skipping a set.
+    if (!engine.hasPendingRulesWrite()) {
+      EngineRulesResult current = engine.confirmedSessionRulesResult();
+      if (current != null && current.observed() != null
+          && current.observed().semanticallyEquals(requested)) {
+        return success(current, current.observed());
+      }
     }
 
     Leelaz.EngineRulesOperation[] operation = new Leelaz.EngineRulesOperation[1];

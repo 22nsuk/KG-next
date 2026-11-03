@@ -105,6 +105,11 @@ public final class ManualRulesSelection {
           Runnable prepareEndpoints = () -> {
             if (primary.isRulesMutationOccupied()
                 || (mirror != null && mirror.isRulesMutationOccupied())) return;
+            // Endpoint admission is fenced here. Check queues before the observation fence:
+            // physical observations remain useful for cache provenance, but cannot justify a
+            // no-op while earlier admitted work can still change either endpoint's rules.
+            boolean pendingRulesWrite = primary.hasPendingRulesWrite()
+                || (mirror != null && mirror.hasPendingRulesWrite());
             primary.withManualRulesCache(() -> {
               boolean pending = history.hasPendingManualRulesIntent();
               ManualRulesSelection predecessor = primary.manualRulesCacheOwner.get();
@@ -129,7 +134,7 @@ public final class ManualRulesSelection {
                     && predecessor.mirrorIncarnation == mirrorIncarnation
                     && (mirror == null || matches(predecessor.previousMirrorRules, previousMirrorRules));
               }
-              unchanged = !pending
+              unchanged = !pending && !pendingRulesWrite
                   && matches(previousRules, requested)
                   && (mirror == null || matches(previousMirrorRules, requested))
                   && compatibleTarget(target, requested);

@@ -60,6 +60,166 @@ class ManualRulesSelectionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"primary,kata-set-rules japanese", "mirror,kata-set-rules japanese",
+      "console,kata-set-rules japanese", "primary,kata-set-rule ko SIMPLE",
+      "mirror,kata-set-rule ko SIMPLE", "console,kata-set-rule ko SIMPLE",
+      "primary,kgs-rules japanese", "mirror,kgs-rules japanese", "console,kgs-rules japanese",
+      "primary,loadsgf queued.sgf", "mirror,loadsgf queued.sgf", "console,loadsgf queued.sgf"})
+  void queuedRulesWritersCannotMakeTheLastManualSelectionANoOp(String route, String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.primary.requireResponseBeforeSend = true;
+      f.mirror.requireResponseBeforeSend = true;
+      f.primary.sendCommandNoLeelaz2("name");
+      f.mirror.sendCommandNoLeelaz2("name");
+      if (route.equals("console")) assertTrue(f.primary.sendRawConsoleCommand(command));
+      else (route.equals("primary") ? f.primary : f.mirror).sendCommandNoLeelaz2(command);
+      assertFalse(f.transport.commands().contains(command));
+      assertFalse(f.mirrorTransport.commands().contains(command));
+      f.assertCaches(false, false);
+
+      ManualRulesSelection selection = f.apply(CHINESE);
+      assertFalse(selection.unchanged(), "An earlier queued writer can still change the rules");
+      f.reply(f.primary, f.transport, "name", "KataGo", true);
+      if (!route.equals("mirror")) f.reply(f.primary, f.transport, command, "", true);
+      List<String> primaryCommands = f.transport.commands();
+      assertEquals("kata-set-rules " + CHINESE.toGtpArgument(),
+          primaryCommands.get(primaryCommands.size() - 1));
+      f.confirmChange(CHINESE);
+      await(selection::isDone);
+      assertTrue(f.history.captureSessionRules().parsedRules().orElseThrow()
+          .semanticallyEquals(CHINESE));
+
+      // Exercise the real post-selection synchronizer while the mirror still has queued work.
+      FutureTask<SessionRulesSynchronizer.Result> sync = new FutureTask<>(() ->
+          SessionRulesSynchronizer.synchronize(f.history.captureSessionRules(), f.mirror));
+      Thread worker = new Thread(sync, "queued-rules-mirror-sync");
+      worker.start();
+      try {
+        if (!route.equals("primary")) {
+          await(() -> sync.isDone() || !f.mirror.engineRulesOperation().isDone());
+          assertFalse(sync.isDone(), "Mirror convergence must not reuse a superseded observation");
+        }
+        f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+        if (!route.equals("primary")) {
+          f.reply(f.mirror, f.mirrorTransport, command, "", true);
+          List<String> mirrorCommands = f.mirrorTransport.commands();
+          assertEquals("kata-set-rules " + CHINESE.toGtpArgument(),
+              mirrorCommands.get(mirrorCommands.size() - 1));
+          f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+          f.reply(f.mirror, f.mirrorTransport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+        }
+        assertTrue(sync.get(3, TimeUnit.SECONDS).satisfied());
+        assertTrue(f.mirror.currentConfirmedRules().semanticallyEquals(CHINESE));
+      } finally {
+        worker.interrupt();
+        worker.join(3_000L);
+        assertFalse(worker.isAlive());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"kata-set-rules japanese", "kata-set-rule ko SIMPLE",
+      "kgs-rules japanese", "loadsgf external.sgf"})
+  void synchronizationCannotSkipAnAlreadyWrittenExternalRulesChange(String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      var target = f.history.publishExternalRules(CHINESE.toGtpArgument());
+      f.primary.sendCommandNoLeelaz2(command);
+      f.reply(f.primary, f.transport, command, "", true);
+      assertTrue(f.primary.engineRulesResult().isConfirmed(), "UI result is historical");
+      FutureTask<SessionRulesSynchronizer.Result> sync = new FutureTask<>(() ->
+          SessionRulesSynchronizer.synchronize(target, f.primary));
+      Thread worker = new Thread(sync, "written-rules-sync");
+      worker.start();
+      try {
+        await(() -> sync.isDone() || !f.primary.engineRulesOperation().isDone());
+        assertFalse(sync.isDone(), "A prior confirmation cannot cover an external write");
+        await(() -> f.transport.commands().contains("kata-set-rules " + CHINESE.toGtpArgument()));
+        f.confirmChange(CHINESE);
+        assertTrue(sync.get(3, TimeUnit.SECONDS).satisfied());
+        assertTrue(f.primary.currentConfirmedRules().semanticallyEquals(CHINESE));
+      } finally {
+        worker.interrupt();
+        worker.join(3_000L);
+        assertFalse(worker.isAlive());
+      }
+    }
+  }
+
+  @Test
+  void dispatchedRulesWriterStillPreventsNoOpBeforeItsFirstPhysicalByte() throws Exception {
+    try (Fixture f = new Fixture()) {
+      Field lockField = Leelaz.class.getDeclaredField("rulesObservationLock");
+      lockField.setAccessible(true);
+      int lockId = System.identityHashCode(lockField.get(f.primary));
+      FutureTask<Void> write = new FutureTask<>(() -> {
+        f.primary.sendRawConsoleCommand("kgs-rules japanese");
+        return null;
+      });
+      Thread writer = new Thread(write, "dequeued-rules-writer");
+      ManualRulesSelection[] selected = {null};
+      try {
+        f.primary.withManualRulesCache(() -> {
+          writer.start();
+          try {
+            await(() -> {
+              var info = ManagementFactory.getThreadMXBean().getThreadInfo(writer.getId());
+              return info != null && info.getThreadState() == Thread.State.BLOCKED
+                  && info.getLockInfo() != null
+                  && info.getLockInfo().getIdentityHashCode() == lockId;
+            });
+          } catch (Exception failure) { throw new AssertionError(failure); }
+          assertEquals(0, count(f.transport, "kgs-rules"));
+          selected[0] = f.apply(CHINESE);
+          assertFalse(selected[0].unchanged(), "Dequeue must not hide the selected writer");
+        });
+        write.get(3, TimeUnit.SECONDS);
+        f.reply(f.primary, f.transport, "kgs-rules", "", true);
+        f.confirmChange(CHINESE);
+        await(selected[0]::isDone);
+        assertTrue(f.primary.currentConfirmedRules().semanticallyEquals(CHINESE));
+      } finally {
+        writer.join(3_000L);
+        assertFalse(writer.isAlive());
+      }
+    }
+  }
+
+  @Test
+  void unrelatedQueuedWorkDoesNotDisableTheManualNoOp() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.primary.requireResponseBeforeSend = true;
+      f.primary.sendCommandNoLeelaz2("name");
+      f.primary.sendCommandNoLeelaz2("version");
+      assertTrue(f.apply(CHINESE).unchanged());
+      f.assertCaches(false, false);
+      f.reply(f.primary, f.transport, "name", "KataGo", true);
+      f.reply(f.primary, f.transport, "version", "test", true);
+      assertEquals(0, count(f.transport, "kata-set-rules"));
+    }
+  }
+
+  @Test
+  void cancelledQueuedRulesWriterRestoresNoOpWithoutDiscardingCache() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.primary.requireResponseBeforeSend = true;
+      f.primary.sendCommandNoLeelaz2("name");
+      var cancelled = f.primary.applyEngineRulesOperation(JAPANESE, 30_000L);
+      var replacement = f.primary.queryEngineRulesOperation(30_000L);
+      assertEquals(EngineRulesResult.Reason.REPLACED, cancelled.await(1_000L).reason());
+      f.reply(f.primary, f.transport, "name", "KataGo", true);
+      f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      assertTrue(replacement.await(1_000L).isConfirmed());
+      assertTrue(f.apply(CHINESE).unchanged());
+      assertEquals(0, count(f.transport, "kata-set-rules"));
+      f.assertCaches(false, false);
+    }
+  }
+
   @Test
   void rejectionPreservesCachesAndResumesWithFreshAnalysisAfterRecovery() throws Exception {
     try (Fixture f = new Fixture()) {
