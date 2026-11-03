@@ -341,18 +341,24 @@ public class ScoreResult extends JDialog {
               + "="
               + whiteAll);
     }
-    scoreResult.setText(
-        (blackAll >= whiteAll
-                ? Lizzie.resourceBundle.getString("ScoreResult.blackWin")
-                : Lizzie.resourceBundle.getString("ScoreResult.whiteWin"))
-            + String.format(Locale.ENGLISH, "%.1f", Math.abs(blackAll - whiteAll))
-            + Lizzie.resourceBundle.getString("ScoreResult.points"));
-    if (blackAll >= whiteAll) {
-      scoreResult.setBackground(Color.BLACK);
+    if (blackAll == whiteAll) {
+      scoreResult.setText(Lizzie.resourceBundle.getString("ScoreResult.draw"));
+      scoreResult.setBackground(Color.GRAY);
       scoreResult.setForeground(Color.WHITE);
     } else {
-      scoreResult.setBackground(AppleStyleSupport.validFieldBackground());
-      scoreResult.setForeground(Color.BLACK);
+      scoreResult.setText(
+          (blackAll > whiteAll
+                  ? Lizzie.resourceBundle.getString("ScoreResult.blackWin")
+                  : Lizzie.resourceBundle.getString("ScoreResult.whiteWin"))
+              + String.format(Locale.ENGLISH, "%.1f", Math.abs(blackAll - whiteAll))
+              + Lizzie.resourceBundle.getString("ScoreResult.points"));
+      if (blackAll > whiteAll) {
+        scoreResult.setBackground(Color.BLACK);
+        scoreResult.setForeground(Color.WHITE);
+      } else {
+        scoreResult.setBackground(AppleStyleSupport.validFieldBackground());
+        scoreResult.setForeground(Color.BLACK);
+      }
     }
     setLblRule();
     relayoutAfterTextChange();

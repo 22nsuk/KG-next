@@ -154,12 +154,14 @@ class RunLocalCiTest(unittest.TestCase):
 
         self.assertEqual(1, len(steps))
         self.assertIn(
-            "-Dtest=FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
+            "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
             "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
             steps[0].command,
         )
         self.assertEqual(
             (
+                ("featurecat.lizzie.rules.ManualScoreResultTest", "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes"),
+                ("featurecat.lizzie.rules.ManualScoreResultTest", "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult"),
                 ("featurecat.lizzie.gui.AnalysisProgressDesktopTest", "progressWindowShowsGraphBeforeAnalysisCompletes"),
                 ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedThemeSavePreservesFilesAndAllowsRetry"),
                 ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedColorResetKeepsDialogOpenAndAllowsRetry"),
