@@ -401,8 +401,9 @@ public class Leelaz {
   private long engineRulesGeneration;
   private volatile EngineRulesResult engineRulesResult = EngineRulesResult.idle();
   private EngineRulesOperation activeEngineRulesOperation;
+  // Serializes physical rules provenance, readback publication and manual cache decisions.
+  private final Object rulesObservationLock = new Object();
   // Cache provenance owner, separate from the history intent that controls request completion.
-  private final Object manualRulesCacheLock = new Object();
   final AtomicReference<ManualRulesSelection> manualRulesCacheOwner = new AtomicReference<>();
   private volatile boolean autoSettleMatchRulesForTest;
   private volatile MatchRulesTestHook matchRulesTestHook;
@@ -1773,6 +1774,13 @@ public class Leelaz {
   private void recordAnalysisConditionWrite(
       PendingResponseHandler command, ReaderStreamBinding binding) {
     if (binding == null) return;
+    if (command.handler instanceof EngineRulesResponseHandler rulesHandler
+        && !rulesHandler.setCommand) {
+      synchronized (rulesObservationLock) {
+        // Capture physical order, not enqueue order: a queued query may follow a queued write.
+        rulesHandler.rulesWriteSequence = binding.rulesWriteSequence;
+      }
+    }
     String normalized = command.command.trim();
     String verb = normalized.split("\\s+", 2)[0];
     AnalysisCondition condition = AnalysisCondition.fromCommand(command.command);
@@ -1808,7 +1816,8 @@ public class Leelaz {
       }
     }
     if (rulesWrite || loadSgf) {
-      synchronized (manualRulesCacheLock) {
+      synchronized (rulesObservationLock) {
+        binding.rulesWriteSequence++;
         binding.reportedRules = "";
         if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
             || rulesHandler.operation.currentIntent == null) {
@@ -5237,6 +5246,8 @@ public class Leelaz {
     private volatile String reportedEngineName = "";
     private volatile String reportedEngineVersion = "";
     private volatile String reportedRules = "";
+    // Advanced before every potentially changing rules write, including rejected/partial writes.
+    private volatile long rulesWriteSequence;
     private volatile AnalysisConditionObservation provenanceKomi;
     private volatile AnalysisConditionObservation provenancePda;
     private volatile AnalysisConditionObservation provenanceWrn;
@@ -25292,26 +25303,28 @@ public class Leelaz {
     return engineRulesResult;
   }
 
-  /** A raw rules write retires the binding observation even before its protocol readback. */
+  /** Only readbacks with no intervening physical rules write can establish current rules. */
   public KataGoRules currentConfirmedRules() {
-    ReaderStreamBinding binding = readerStreamBinding;
-    EngineRulesResult result = engineRulesResult;
-    if (binding == null || binding.terminated || binding.readerShutdownRequested
-        || result == null || !result.isConfirmed() || result.observed() == null) return null;
-    KataGoRules reported = KataGoRules.parse(binding.reportedRules).orElse(null);
-    return readerStreamBinding == binding && engineRulesResult == result
-            && reported != null && reported.semanticallyEquals(result.observed())
-        ? result.observed() : null;
+    synchronized (rulesObservationLock) {
+      ReaderStreamBinding binding = readerStreamBinding;
+      EngineRulesResult result = engineRulesResult;
+      if (binding == null || binding.terminated || binding.readerShutdownRequested
+          || result == null || !result.isConfirmed() || result.observed() == null) return null;
+      KataGoRules reported = KataGoRules.parse(binding.reportedRules).orElse(null);
+      return readerStreamBinding == binding && engineRulesResult == result
+              && reported != null && reported.semanticallyEquals(result.observed())
+          ? result.observed() : null;
+    }
   }
 
   /**
-   * Orders manual cache handoff/settlement with invalidation before physical rules writes.
+   * Orders manual cache handoff/settlement with physical rules writes and readback publication.
    * Callers hold selection/history first. The action must not acquire protocol, endpoint or queue
    * locks, send commands, or invoke UI callbacks. In particular, engineRulesLock can enter the
    * command queue in the opposite order and cannot be used for this cache decision fence.
    */
   void withManualRulesCache(Runnable action) {
-    synchronized (manualRulesCacheLock) {
+    synchronized (rulesObservationLock) {
       action.run();
     }
   }
@@ -25880,15 +25893,19 @@ public class Leelaz {
           operation, EngineRulesResult.Status.QUERY_FAILED, EngineRulesResult.Reason.INVALID_READBACK);
       return;
     }
-    confirmEngineRules(operation, parsed.get(), "= " + gtpResponsePayload(responseLine));
+    confirmEngineRules(operation, parsed.get(), "= " + gtpResponsePayload(responseLine),
+        handler.rulesWriteSequence);
   }
 
   private void confirmEngineRules(EngineRulesOperation operation, KataGoRules observed) {
-    confirmEngineRules(operation, observed, observed.toResponseLine());
+    // Synthetic match fixtures have no physical query; their observation is immediate.
+    confirmEngineRules(operation, observed, observed.toResponseLine(),
+        operation.readerBinding == null ? 0L : operation.readerBinding.rulesWriteSequence);
   }
 
   private void confirmEngineRules(
-      EngineRulesOperation operation, KataGoRules observed, String observedRulesLine) {
+      EngineRulesOperation operation, KataGoRules observed, String observedRulesLine,
+      long observedRulesWriteSequence) {
     boolean isolated;
     EngineRulesResult completed;
     synchronized (engineRulesLock) {
@@ -25896,17 +25913,27 @@ public class Leelaz {
         return;
       }
       isolated = operation.isolated;
-      completed = engineRulesResult.confirmed(observed);
-      publishEngineRulesResultLocked(operation, completed);
-      recentRulesLine = observedRulesLine;
-      if (operation.readerBinding != null) {
-        operation.readerBinding.reportedRules = observedRulesLine;
+      synchronized (rulesObservationLock) {
+        if (operation.readerBinding != null
+            && observedRulesWriteSequence != operation.readerBinding.rulesWriteSequence) {
+          // A later physical write supersedes this observation even if the protocol operation
+          // itself is still current. Do not resurrect retired provenance or publish stale UI state.
+          completed = engineRulesResult.failed(
+              EngineRulesResult.Status.QUERY_FAILED, EngineRulesResult.Reason.INVALID_READBACK);
+        } else {
+          completed = engineRulesResult.confirmed(observed);
+          recentRulesLine = observedRulesLine;
+          if (operation.readerBinding != null) {
+            operation.readerBinding.reportedRules = observedRulesLine;
+          }
+          getSuicidalAndRules();
+          if (!isolated && this == Lizzie.leelaz && Lizzie.config != null) {
+            Lizzie.config.currentKataGoRules = recentRulesLine;
+          }
+        }
+        publishEngineRulesResultLocked(operation, completed);
+        operation.markTerminalLocked(completed);
       }
-      getSuicidalAndRules();
-      if (!isolated && this == Lizzie.leelaz && Lizzie.config != null) {
-        Lizzie.config.currentKataGoRules = recentRulesLine;
-      }
-      operation.markTerminalLocked(completed);
     }
     if (!isolated && Lizzie.frame != null) {
       Lizzie.frame.refresh();
@@ -26357,6 +26384,8 @@ public class Leelaz {
     private final boolean setCommand;
     private final int commandId;
     private final ReaderStreamBinding readerBinding;
+    // Written at physical query admission and checked under rulesObservationLock.
+    private volatile long rulesWriteSequence = -1L;
 
     private EngineRulesResponseHandler(EngineRulesOperation operation, boolean setCommand) {
       this.operation = operation;

@@ -11,6 +11,7 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.enginegame.EngineGamePlans;
+import featurecat.lizzie.enginegame.MatchRulesTexts;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
@@ -26,6 +27,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class LeelazEngineRulesProtocolTest {
   private static final String CHINESE =
@@ -218,6 +221,45 @@ class LeelazEngineRulesProtocolTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "false, kata-set-rules japanese", "true, kata-set-rules japanese",
+      "false, kata-set-rule ko POSITIONAL", "true, kata-set-rule ko POSITIONAL",
+      "false, kgs-rules japanese", "true, kgs-rules japanese",
+      "false, loadsgf changed-rules.sgf", "true, loadsgf changed-rules.sgf"})
+  void aLaterPhysicalRulesWriteSupersedesQueryAndSetterReadbacks(boolean apply, String command)
+      throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      fixture.confirm(CHINESE);
+      String previousPresentation = fixture.engine.recentRulesLine;
+      var operation = apply
+          ? fixture.engine.applyEngineRulesOperation(KataGoRules.parse("japanese").orElseThrow())
+          : fixture.engine.queryEngineRulesOperation();
+      if (apply) fixture.reply("kata-set-rules", "");
+      fixture.engine.sendCommand(command);
+      assertTrue(fixture.output.toString().contains(command + "\n"));
+      fixture.reply("kata-get-rules", JAPANESE_READBACK);
+
+      EngineRulesResult result = operation.await(1_000L);
+      assertNotNull(result);
+      assertEquals(EngineRulesResult.Status.QUERY_FAILED, result.status());
+      assertEquals(EngineRulesResult.Reason.INVALID_READBACK, result.reason());
+      assertEquals(Lizzie.resourceBundle.getString("MatchRules.reason.INVALID_READBACK"),
+          MatchRulesTexts.statusLabel(result.status(), result.reason(), Lizzie.resourceBundle));
+      assertTrue(result.lastKnownStale());
+      assertNull(fixture.engine.currentConfirmedRules());
+      assertEquals(previousPresentation, fixture.engine.recentRulesLine);
+      assertEquals(previousPresentation, Lizzie.config.currentKataGoRules);
+
+      // A fresh query after the write can establish current rules again.
+      fixture.engine.processCommandResponseLineForTest("=");
+      fixture.confirm(JAPANESE_READBACK);
+      assertTrue(fixture.engine.engineRulesResult().isConfirmed());
+      assertTrue(fixture.engine.currentConfirmedRules()
+          .semanticallyEquals(KataGoRules.parse("japanese").orElseThrow()));
+    }
+  }
+
   @Test
   void namedJapaneseAndKoreanRequestsMatchReadbackAndPublishJapaneseSummary() throws Exception {
     for (String name : List.of("japanese", "korean")) {
@@ -235,6 +277,40 @@ class LeelazEngineRulesProtocolTest {
         assertEquals("= " + JAPANESE_READBACK, fixture.engine.recentRulesLine, name);
         assertEquals(fixture.engine.recentRulesLine, Lizzie.config.currentKataGoRules, name);
       }
+    }
+  }
+
+  @Test
+  void queuedQueryObservesWritesAheadOfItWhenItActuallyReachesTheEngine() throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      fixture.engine.requireResponseBeforeSend = true;
+      fixture.engine.sendCommand("name");
+      fixture.engine.sendCommand("kata-set-rules japanese");
+      var query = fixture.engine.queryEngineRulesOperation();
+      assertFalse(fixture.output.toString().contains("kata-set-rules"));
+      assertFalse(fixture.output.toString().contains("kata-get-rules"));
+
+      fixture.engine.processCommandResponseLineForTest("= KataGo");
+      assertTrue(fixture.output.toString().contains("kata-set-rules japanese"));
+      assertFalse(fixture.output.toString().contains("kata-get-rules"));
+      fixture.engine.processCommandResponseLineForTest("=");
+      fixture.reply("kata-get-rules", JAPANESE_READBACK);
+
+      assertTrue(query.await(1_000L).isConfirmed());
+      assertTrue(fixture.engine.currentConfirmedRules()
+          .semanticallyEquals(KataGoRules.parse("japanese").orElseThrow()));
+    }
+  }
+
+  @Test
+  void unrelatedPhysicalCommandDoesNotSupersedeRulesReadback() throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      var query = fixture.engine.queryEngineRulesOperation();
+      fixture.engine.sendCommand("komi 7.5");
+      fixture.reply("kata-get-rules", CHINESE);
+      assertTrue(query.await(1_000L).isConfirmed());
+      assertNotNull(fixture.engine.currentConfirmedRules());
+      fixture.engine.processCommandResponseLineForTest("=");
     }
   }
 

@@ -194,7 +194,7 @@ class ManualRulesSelectionTest {
       ManualRulesSelection selection = f.apply(JAPANESE);
       f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
       f.awaitRecovery();
-      Field lockField = Leelaz.class.getDeclaredField("manualRulesCacheLock");
+      Field lockField = Leelaz.class.getDeclaredField("rulesObservationLock");
       lockField.setAccessible(true);
       int lockId = System.identityHashCode(lockField.get(f.primary));
       FutureTask<Void> write = new FutureTask<>(() -> {
@@ -601,6 +601,33 @@ class ManualRulesSelectionTest {
       assertFalse(selection.unchanged());
       f.confirmChange(CHINESE);
       await(selection::isDone);
+      f.assertCaches(true, false);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"kata-set-rules japanese", "kata-set-rule ko POSITIONAL",
+      "kgs-rules japanese", "loadsgf changed-rules.sgf"})
+  void delayedReadbackBeforeARulesWriteCannotMakeManualSelectionANoOp(String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      var target = f.history.publishExternalRules(CHINESE.toGtpArgument());
+      var query = f.primary.queryEngineRulesOperation(30_000L);
+      f.primary.sendCommand(command);
+      assertTrue(f.transport.commands().contains(command), "The later write must reach the engine");
+      // The engine answered this query before processing the later write; delivery is delayed.
+      f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      f.reply(f.primary, f.transport, command, "", true);
+
+      assertFalse(query.await(1_000L).isConfirmed());
+      assertNull(f.primary.currentConfirmedRules());
+      assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
+      ManualRulesSelection selection = f.apply(CHINESE);
+      assertFalse(selection.unchanged());
+      f.confirmChange(CHINESE);
+      await(selection::isDone);
+      assertEquals(target.revision() + 1, f.history.captureSessionRules().revision());
+      assertTrue(f.primary.currentConfirmedRules().semanticallyEquals(CHINESE));
       f.assertCaches(true, false);
     }
   }
