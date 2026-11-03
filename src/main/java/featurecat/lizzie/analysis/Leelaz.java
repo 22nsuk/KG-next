@@ -401,6 +401,8 @@ public class Leelaz {
   private long engineRulesGeneration;
   private volatile EngineRulesResult engineRulesResult = EngineRulesResult.idle();
   private EngineRulesOperation activeEngineRulesOperation;
+  // Manual selection ownership outlives its setter while rejection recovery is pending.
+  final AtomicReference<ManualRulesSelection> pendingManualRulesSelection = new AtomicReference<>();
   private volatile boolean autoSettleMatchRulesForTest;
   private volatile MatchRulesTestHook matchRulesTestHook;
   public boolean preload = false;
@@ -1802,6 +1804,11 @@ public class Leelaz {
       }
       if (rulesWrite || loadSgf) {
         binding.reportedRules = "";
+        if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
+            || rulesHandler.operation.currentIntent == null) {
+          // A separate rules writer breaks the provenance handed between manual retries.
+          pendingManualRulesSelection.set(null);
+        }
       }
       if (loadSgf) {
         binding.provenanceKomi = new AnalysisConditionObservation(command.provenanceToken, null);

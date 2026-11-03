@@ -31,6 +31,7 @@ import java.util.function.BooleanSupplier;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class ManualRulesSelectionTest {
@@ -102,6 +103,60 @@ class ManualRulesSelectionTest {
       assertSame(target, f.history.captureSessionRules());
       assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
       f.assertCaches(false, false);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"chinese", "aga", "read-failed", "raw-write", "other-setter"})
+  void rejectedRetriesRetainOriginalCacheProvenanceAndContinueDecision(String recovery)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      var target = f.history.publishExternalRules("unrecognized-rules");
+      long generation = Lizzie.capturePrimaryEngineGeneration(f.primary);
+      f.history.authorizeAnalysisWithCurrentRules(target, f.primary, generation, f.mirror);
+      set(f.primary, "isPondering", true);
+
+      for (int attempt = 0; attempt < 3; attempt++) {
+        boolean injectWrite = attempt == 1;
+        int[] expectedQueries = {0};
+        ManualRulesSelection[] next = {null};
+        // Hold settlement until the successor is admitted, preserving the overlap under test.
+        assertTrue(EngineManager.runIfNoActiveEngineGameAnalysisOutput(() -> {
+          if (injectWrite && recovery.equals("raw-write")) {
+            f.primary.sendCommandNoLeelaz2("kata-set-rule ko POSITIONAL");
+            f.reply(f.primary, f.transport, "kata-set-rule", "", true);
+            assertTrue(f.history.hasPendingManualRulesIntent());
+          } else if (injectWrite && recovery.equals("other-setter")) {
+            f.primary.applyEngineRulesOperation(KataGoRules.parse("aga").orElseThrow(), 1_000L);
+            f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+            assertTrue(f.history.hasPendingManualRulesIntent());
+          }
+          expectedQueries[0] = count(f.transport, "kata-get-rules") + 1;
+          next[0] = f.apply(JAPANESE);
+        }));
+        ManualRulesSelection selection = next[0];
+        assertFalse(selection.unchanged());
+        assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
+        f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+        await(() -> count(f.transport, "kata-get-rules") == expectedQueries[0]);
+        assertFalse(selection.isDone(), "Retry must overlap the pending recovery query");
+      }
+      boolean externalWrite = recovery.equals("raw-write") || recovery.equals("other-setter");
+      boolean readFailed = recovery.equals("read-failed") || externalWrite;
+      f.reply(f.primary, f.transport, "kata-get-rules",
+          readFailed ? "read failed" : KataGoRules.parse(recovery).orElseThrow().toGtpArgument(),
+          !readFailed);
+      for (ManualRulesSelection selection : f.selections) await(selection::isDone);
+
+      boolean unchangedRules = recovery.equals("chinese");
+      assertSame(target, f.history.captureSessionRules());
+      assertFalse(f.history.hasPendingManualRulesIntent());
+      assertEquals(unchangedRules, f.history.permitsAnalysisWithCurrentRules(
+          target, f.primary, generation, f.mirror));
+      assertEquals(unchangedRules, SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
+      assertEquals(unchangedRules ? 1 : 0, count(f.transport, "kata-analyze"));
+      f.assertCaches(recovery.equals("aga") || externalWrite, false);
     }
   }
 
@@ -368,13 +423,16 @@ class ManualRulesSelectionTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void overlappingApplyCannotMistakeAPreviousConfirmationForCacheProvenance(boolean rejectSecond)
+  @CsvSource({"false,confirmed", "false,rejected", "false,rejected-retry",
+      "true,rejected", "true,rejected-retry"})
+  void overlappingApplyCannotMistakeAPreviousConfirmationForCacheProvenance(
+      boolean rejectFirst, String outcome)
       throws Exception {
     try (Fixture f = new Fixture()) {
       var original = f.history.captureSessionRules();
       ManualRulesSelection first = f.apply(JAPANESE);
-      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.reply(f.primary, f.transport, "kata-set-rules", rejectFirst ? "rejected" : "", !rejectFirst);
+      if (rejectFirst) f.awaitRecovery();
       f.frame.refreshEntered = new CountDownLatch(1);
       f.frame.releaseRefresh = new CountDownLatch(1);
       f.frame.gateNextRefresh = true;
@@ -386,15 +444,21 @@ class ManualRulesSelectionTest {
       reader.start();
       try {
         assertTrue(f.frame.refreshEntered.await(3, TimeUnit.SECONDS));
-        assertTrue(first.operation().snapshot().isConfirmed());
+        assertEquals(!rejectFirst, first.operation().snapshot().isConfirmed());
         assertFalse(first.isDone());
         f.assertCaches(false, false);
 
         ManualRulesSelection second = f.apply(JAPANESE);
         assertFalse(second.unchanged());
+        boolean rejectSecond = !outcome.equals("confirmed");
         if (rejectSecond) {
           f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
           await(() -> count(f.transport, "kata-get-rules") == 3);
+          if (outcome.equals("rejected-retry")) {
+            second = f.apply(JAPANESE);
+            f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+            await(() -> count(f.transport, "kata-get-rules") == 4);
+          }
           f.reply(f.primary, f.transport, "kata-get-rules", "read failed", false);
         } else {
           f.confirmChange(JAPANESE);
@@ -565,6 +629,7 @@ class ManualRulesSelectionTest {
     @Override public void close() throws Exception {
       try {
         for (ManualRulesSelection selection : selections) await(selection::isDone);
+        assertNull(primary.pendingManualRulesSelection.get());
       } finally {
         EngineManager.resetEngineGameTransactionStateForTest();
         Lizzie.config = previousConfig;

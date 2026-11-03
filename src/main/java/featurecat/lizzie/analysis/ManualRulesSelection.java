@@ -22,10 +22,10 @@ public final class ManualRulesSelection {
   private KataGoRules previousRules;
   private KataGoRules previousMirrorRules;
   private boolean previousOverride;
-  private boolean inheritedPendingChange;
+  private boolean inheritedUncertainChange;
   private boolean unchanged;
   private volatile boolean done;
-  private Leelaz.EngineRulesOperation operation;
+  private volatile Leelaz.EngineRulesOperation operation;
 
   private ManualRulesSelection(Leelaz primary, KataGoRules requested, long timeoutMillis) {
     this.primary = primary;
@@ -68,7 +68,7 @@ public final class ManualRulesSelection {
       started = true;
       return selection;
     } finally {
-      if (!started) selection.history.finishManualRulesIntent(selection.intent);
+      if (!started) selection.finish();
     }
   }
 
@@ -96,20 +96,36 @@ public final class ManualRulesSelection {
           Runnable prepareEndpoints = () -> {
             if (primary.isRulesMutationOccupied()
                 || (mirror != null && mirror.isRulesMutationOccupied())) return;
-            // A prior setter can already be confirmed while its cache effects are still pending.
-            // Its successor must not treat that observation as the provenance of the retained cache.
-            inheritedPendingChange = history.hasPendingManualRulesIntent();
-            previousRules = inheritedPendingChange ? null : primary.currentConfirmedRules();
+            boolean pending = history.hasPendingManualRulesIntent();
+            ManualRulesSelection predecessor = primary.pendingManualRulesSelection.get();
+            inheritedUncertainChange = pending;
+            KataGoRules confirmedRules = primary.currentConfirmedRules();
+            previousRules = pending ? null : confirmedRules;
             previousMirrorRules = mirror == null ? null : mirror.currentConfirmedRules();
             BoardHistoryList.SessionRulesTarget target = history.captureSessionRules();
-            unchanged = !inheritedPendingChange
+            previousOverride = history.permitsAnalysisWithCurrentRules(
+                target, primary, primaryGeneration, mirror);
+            // Only an explicitly harmless predecessor can hand off retained cache provenance.
+            // A confirmed or in-flight setter may already have changed rules before settling.
+            if (pending && predecessor != null && predecessor.history == history
+                && predecessor.isCurrent() && !predecessor.inheritedUncertainChange
+                && predecessor.operation != null
+                && rejectedWithoutChange(predecessor.operation.snapshot())
+                && (confirmedRules == null || matches(predecessor.previousRules, confirmedRules))) {
+              inheritedUncertainChange = false;
+              previousRules = predecessor.previousRules;
+              previousOverride |= predecessor.previousOverride
+                  && predecessor.mirror == mirror
+                  && predecessor.mirrorIncarnation == mirrorIncarnation
+                  && (mirror == null || matches(predecessor.previousMirrorRules, previousMirrorRules));
+            }
+            unchanged = !pending
                 && matches(previousRules, requested)
                 && (mirror == null || matches(previousMirrorRules, requested))
                 && compatibleTarget(target, requested);
             if (!unchanged) {
-              previousOverride = history.permitsAnalysisWithCurrentRules(
-                  target, primary, primaryGeneration, mirror);
               intent = history.beginManualRulesIntent(this::currentIdentity);
+              primary.pendingManualRulesSelection.set(this);
               primary.retireOrdinaryAnalysisForRulesChange(incarnation, afterAdmission::add);
               if (mirror != null) {
                 mirror.retireOrdinaryAnalysisForRulesChange(mirrorIncarnation, afterAdmission::add);
@@ -129,7 +145,7 @@ public final class ManualRulesSelection {
       succeeded = admitted && prepared[0];
       return succeeded;
     } finally {
-      if (!succeeded) history.finishManualRulesIntent(intent);
+      if (!succeeded) finish();
     }
   }
 
@@ -153,7 +169,7 @@ public final class ManualRulesSelection {
       try {
         settle(result, recovered, settledOperation);
       } finally {
-        history.finishManualRulesIntent(intent);
+        finish();
         done = true;
       }
     }
@@ -192,7 +208,7 @@ public final class ManualRulesSelection {
             board.clearBestMovesAfter(history.getStart());
           }
           published[0] = history.publishManualRulesIfCurrent(intent, observed).orElse(null);
-        } else if (inheritedPendingChange
+        } else if (inheritedUncertainChange
             || (!rejectedWithoutChange(result) && !matches(previousRules, observed))
             || (observed != null && !matches(previousRules, observed))) {
           // A rejected setter is harmless; an unknown or different actual state is not.
@@ -237,6 +253,11 @@ public final class ManualRulesSelection {
       // Release the output/selection fences before waiting for a primary-owned restore.
     } while (!nonBlocking && Lizzie.capturePrimaryEngineGeneration(primary) == primaryGeneration);
     return false;
+  }
+
+  private void finish() {
+    history.finishManualRulesIntent(intent);
+    primary.pendingManualRulesSelection.compareAndSet(this, null);
   }
 
   // This predicate also runs under the protocol lock; it must use only nonblocking snapshots.
