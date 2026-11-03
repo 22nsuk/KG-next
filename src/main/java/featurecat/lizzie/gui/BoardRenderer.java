@@ -99,6 +99,8 @@ public class BoardRenderer {
 
   private BufferedImage cachedBackgroundImage = emptyImage;
   private boolean cachedIsBigMargin = false;
+  private CoordinateLabels coordinateLabels = CoordinateLabels.STANDARD;
+  private CoordinateLabels cachedCoordinateLabels;
   private int cachedBoardWidth = 0, cachedBoardHeight = 0;
   private BufferedImage cachedStonesImage = emptyImage;
   private BufferedImage cachedStonesImagedraged = emptyImage;
@@ -969,6 +971,7 @@ public class BoardRenderer {
         || cachedBoardHeight != boardHeight
         || changedName
         || cachedShowCoords != showCoordinates()
+        || !coordinateLabels.equals(cachedCoordinateLabels)
         || !cachedBoardStyle.equals(Lizzie.config.boardStyle)
         || Lizzie.board.isForceRefresh()) {
       cachedShadow = null;
@@ -980,6 +983,7 @@ public class BoardRenderer {
       cachedBoardWidth = boardWidth;
       cachedBoardHeight = boardHeight;
       cachedBoardStyle = Lizzie.config.boardStyle;
+      cachedCoordinateLabels = coordinateLabels;
       Lizzie.board.setForceRefresh(false);
 
       cachedBackgroundImage = new BufferedImage(width, height, TYPE_INT_ARGB);
@@ -1041,6 +1045,7 @@ public class BoardRenderer {
       // Draw coordinates if enabled
       if (showCoordinates()) {
         g.setColor(Color.BLACK);
+        CoordinateLabels labels = coordinateLabels;
         boolean chineseClassicCoordinates = Lizzie.config.useChineseClassicBoardStyle();
         for (int i = 0; i < Board.boardWidth; i++) {
           String coordinateLabel =
@@ -1049,14 +1054,12 @@ public class BoardRenderer {
                   : (Lizzie.config.useNumCoordsFromTop || Lizzie.config.useNumCoordsFromBottom)
                       ? String.valueOf(i + 1)
                       : Board.asName(i);
-          drawString(
+          drawCoordinate(
               g,
               scaledMarginWidth + squareWidth * i,
               scaledMarginHeight * 4 / 10,
-              LizzieFrame.uiFont,
               coordinateLabel,
-              stoneRadius * 4 / 5,
-              stoneRadius);
+              labels);
           if ((!Lizzie.config.showNameInBoard
                   || (Lizzie.board != null
                       && (Lizzie.board.getHistory().getGameInfo().getPlayerWhite().equals("")
@@ -1064,14 +1067,12 @@ public class BoardRenderer {
                   || (Lizzie.config.isThinkingMode() && boardIndex == 2))
               && (!Lizzie.frame.isShowingHeatmap || Lizzie.leelaz.isZen)
               && (!Lizzie.frame.isShowingPolicy || Lizzie.leelaz.isKatago || Lizzie.leelaz.isZen)) {
-            drawString(
+            drawCoordinate(
                 g,
                 scaledMarginWidth + squareWidth * i,
                 -scaledMarginHeight * 4 / 10 + boardHeight,
-                LizzieFrame.uiFont,
                 coordinateLabel,
-                stoneRadius * 4 / 5,
-                stoneRadius);
+                labels);
           }
         }
         for (int i = 0; i < Board.boardHeight; i++) {
@@ -1084,22 +1085,18 @@ public class BoardRenderer {
                                   || Lizzie.config.useFoxStyleCoords)
                           ? (Board.boardHeight - i)
                           : (i + 1)));
-          drawString(
+          drawCoordinate(
               g,
               scaledMarginWidth * 4 / 10,
               scaledMarginHeight + squareHeight * i,
-              LizzieFrame.uiFont,
               coordinateLabel,
-              stoneRadius * 4 / 5,
-              stoneRadius);
-          drawString(
+              labels);
+          drawCoordinate(
               g,
               -scaledMarginWidth * 4 / 10 + boardWidth,
               scaledMarginHeight + squareHeight * i,
-              LizzieFrame.uiFont,
               coordinateLabel,
-              stoneRadius * 4 / 5,
-              stoneRadius);
+              labels);
         }
       }
       g.dispose();
@@ -3681,6 +3678,9 @@ public class BoardRenderer {
    */
   private int[] calculatePixelMargins(
       int boardWidth, int boardHeight, boolean showCoordinates, boolean isBigMargin) {
+    if (showCoordinates && coordinateLabels.sizePercent() > 100) {
+      return calculateEnlargedCoordinateMargins(boardWidth, boardHeight, isBigMargin);
+    }
     // boardLength -= boardLength*MARGIN/3; // account for the shadows we will draw
     // around the edge
     // of the board
@@ -3745,6 +3745,34 @@ public class BoardRenderer {
       availableWidth,
       boardHeight,
       scaledMarginHeight,
+      availableHeight
+    };
+  }
+
+  private int[] calculateEnlargedCoordinateMargins(int width, int height, boolean isBigMargin) {
+    // One pixel margin and square spacing must fit both axes. Scaling each axis separately
+    // can invert a narrow board or expand the other axis past its bounds.
+    double margin = coordinateLabels.margin(isBigMargin ? 0.055 : 0.03) * 19.0;
+    int scaledMargin =
+        (int)
+            (margin
+                * Math.min((double) width / Board.boardWidth, (double) height / Board.boardHeight));
+    int maximumMargin = Math.min((width - Board.boardWidth) / 2, (height - Board.boardHeight) / 2);
+    scaledMargin = Math.max(0, Math.min(scaledMargin, maximumMargin));
+    int square =
+        Math.max(
+            0,
+            Math.min(
+                (width - 2 * scaledMargin - 1) / (Board.boardWidth - 1),
+                (height - 2 * scaledMargin - 1) / (Board.boardHeight - 1)));
+    int availableWidth = square * (Board.boardWidth - 1) + 1;
+    int availableHeight = square * (Board.boardHeight - 1) + 1;
+    return new int[] {
+      availableWidth + 2 * scaledMargin,
+      scaledMargin,
+      availableWidth,
+      availableHeight + 2 * scaledMargin,
+      scaledMargin,
       availableHeight
     };
   }
@@ -4347,6 +4375,19 @@ public class BoardRenderer {
     drawString(g, x, y, fontBase, Font.PLAIN, string, maximumFontHeight, maximumFontWidth, 0);
   }
 
+  private void drawCoordinate(Graphics2D g, int x, int y, String label, CoordinateLabels labels) {
+    drawString(
+        g,
+        x,
+        y,
+        LizzieFrame.uiFont,
+        labels.fontStyle(),
+        label,
+        labels.maxHeight(stoneRadius),
+        labels.maxWidth(stoneRadius),
+        0);
+  }
+
   private void drawStringBold(
       Graphics2D g,
       int x,
@@ -4401,6 +4442,16 @@ public class BoardRenderer {
    */
   public void setBoardLength(int boardWidth, int boardHeight) {
     boolean isBigMargin = isBigMargin();
+    CoordinateLabels labels =
+        showCoordinates() ? CoordinateLabels.of(Lizzie.config.theme) : CoordinateLabels.STANDARD;
+    boolean labelsChanged = !labels.equals(coordinateLabels);
+    boolean coordinateSizeChanged = labels.sizePercent() != coordinateLabels.sizePercent();
+    if (coordinateSizeChanged) {
+      // The grid can move even when the rounded board image dimensions remain unchanged.
+      cachedStonesImage = emptyImage;
+      kataEstimateImage.clear();
+    }
+    coordinateLabels = labels;
     if (this.boardWidth != boardWidth
         || this.boardHeight != boardHeight
         || boardWSize != Board.boardWidth
@@ -4410,10 +4461,22 @@ public class BoardRenderer {
       boardWSize = Board.boardWidth;
       boardHSize = Board.boardHeight;
       setupSizeParameters(isBigMargin);
-    } else if (isBigMargin != cachedIsBigMargin) {
+    } else if (isBigMargin != cachedIsBigMargin || labelsChanged) {
       cachedIsBigMargin = isBigMargin;
       setupSizeParameters(isBigMargin);
     }
+    if (coordinateSizeChanged) redrawRawOwnershipAfterLayout();
+  }
+
+  private void redrawRawOwnershipAfterLayout() {
+    if (Lizzie.frame.isInScoreMode || !Lizzie.frame.isShowingHeatmap) return;
+    Leelaz engine = boardIndex == 1 && Lizzie.leelaz2 != null ? Lizzie.leelaz2 : Lizzie.leelaz;
+    if (engine == null || !engine.isKatago || !engine.iskataHeatmapShowOwner) return;
+    // A completed response stops appending; the next response replaces this list.
+    List<Double> ownership = engine.heatOwnership;
+    if (ownership.size() != Board.boardWidth * Board.boardHeight) return;
+    if (Lizzie.config.showPureEstimateBySize) drawKataEstimateBySize(ownership, false);
+    else drawKataEstimateByTransparent(ownership, false, true);
   }
 
   /**

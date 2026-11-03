@@ -305,6 +305,8 @@ public class ConfigDialog2 extends JDialog {
   private ColorLabel lblCommentFontColor;
   private ColorLabel lblBestMoveColor;
   private JTextField txtCommentFontSize;
+  private JCheckBox chkCoordinateBold;
+  private JComboBox<String> cmbCoordinateSize;
   private JTextField txtBackgroundFilter;
   private JRadioButton rdoStoneIndicatorDelta;
   private JRadioButton rdoStoneIndicatorCircle;
@@ -3814,6 +3816,12 @@ public class ConfigDialog2 extends JDialog {
         configText("ConfigDialog2.modern.theme.winrateFont", "胜率目数字体"),
         configText("ConfigDialog2.modern.theme.winrateFontSub", "胜率条和目差显示字体"),
         cmbWinrateFontName);
+    addComponentRow(
+        strokes,
+        "config.theme.coordinates",
+        configText("ConfigDialog2.modern.theme.coordinates", "棋盘坐标"),
+        configText("ConfigDialog2.modern.theme.coordinatesSub", "主棋盘和对比棋盘的坐标大小与粗细"),
+        rowOf(cmbCoordinateSize, chkCoordinateBold));
     content.add(strokes);
     content.add(javax.swing.Box.createVerticalStrut(12));
 
@@ -4736,6 +4744,15 @@ public class ConfigDialog2 extends JDialog {
             });
     txtCommentFontSize.setBounds(529, 403, 52, 24);
     themeTab.add(txtCommentFontSize);
+    chkCoordinateBold =
+        new JCheckBox(configText("ConfigDialog2.modern.theme.coordinateBold", "加粗"));
+    cmbCoordinateSize =
+        new JComboBox<String>(
+            new String[] {
+              configText("ConfigDialog2.modern.theme.coordinateSize.standard", "标准 (100%)"),
+              configText("ConfigDialog2.modern.theme.coordinateSize.large", "大 (140%)"),
+              configText("ConfigDialog2.modern.theme.coordinateSize.extraLarge", "特大 (200%)")
+            });
 
     JLabel lblStoneIndicatorType =
         new JLabel(resourceBundle.getString("LizzieConfig.title.stoneIndicatorType"));
@@ -6180,6 +6197,8 @@ public class ConfigDialog2 extends JDialog {
         lblBestMoveColor.setColor(
             new Color(BestCl.getRed(), BestCl.getGreen(), BestCl.getBlue(), 240));
         txtCommentFontSize.setText(String.valueOf(theme.commentFontSize()));
+        chkCoordinateBold.setSelected(theme.coordinateBold());
+        cmbCoordinateSize.setSelectedIndex(CoordinateLabels.sizeIndex(theme.coordinateSize()));
         txtBackgroundFilter.setText(String.valueOf(theme.backgroundFilter()));
         tblBlunderNodes.setModel(
             new BlunderNodeTableModel(
@@ -6247,6 +6266,9 @@ public class ConfigDialog2 extends JDialog {
         theme.config.put("comment-font-color", Theme.color2Array(lblCommentFontColor.getColor()));
         theme.config.put("best-move-color", Theme.color2Array(lblBestMoveColor.getColor()));
         theme.config.put("comment-font-size", txtFieldIntValue(txtCommentFontSize));
+        theme.config.put("coordinate-bold", chkCoordinateBold.isSelected());
+        theme.config.put(
+            "coordinate-size", CoordinateLabels.SIZES.get(cmbCoordinateSize.getSelectedIndex()));
         theme.config.put("background-filter", txtFieldIntValue(txtBackgroundFilter));
         theme.config.put(
             "blunder-winrate-thresholds",
@@ -6326,6 +6348,9 @@ public class ConfigDialog2 extends JDialog {
     lblBestMoveColor.setColor(new Color(BestCl.getRed(), BestCl.getGreen(), BestCl.getBlue(), 240));
     txtCommentFontSize.setText(
         String.valueOf(Lizzie.config.uiConfig.optInt("comment-font-size", 0)));
+    chkCoordinateBold.setSelected(Lizzie.config.uiConfig.optBoolean("coordinate-bold", false));
+    cmbCoordinateSize.setSelectedIndex(
+        CoordinateLabels.sizeIndex(Lizzie.config.uiConfig.optInt("coordinate-size", 100)));
     txtBackgroundFilter.setText(
         String.valueOf(Lizzie.config.uiConfig.optInt("background-filter", 20)));
     chkUseScoreDiff.setSelected(
@@ -6388,6 +6413,9 @@ public class ConfigDialog2 extends JDialog {
         "comment-font-color", Theme.color2Array(lblCommentFontColor.getColor()));
     Lizzie.config.uiConfig.put("best-move-color", Theme.color2Array(lblBestMoveColor.getColor()));
     Lizzie.config.uiConfig.put("comment-font-size", txtFieldIntValue(txtCommentFontSize));
+    Lizzie.config.uiConfig.put("coordinate-bold", chkCoordinateBold.isSelected());
+    Lizzie.config.uiConfig.put(
+        "coordinate-size", CoordinateLabels.SIZES.get(cmbCoordinateSize.getSelectedIndex()));
     Lizzie.config.uiConfig.put("background-filter", txtFieldIntValue(txtBackgroundFilter));
     if (txtFieldIntValue(txtBackgroundFilter) != Lizzie.frame.filter20.getRadius()) {
       Lizzie.frame.testFilter(txtFieldIntValue(txtBackgroundFilter));
