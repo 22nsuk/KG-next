@@ -20,6 +20,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -157,6 +158,115 @@ class ManualRulesSelectionTest {
       assertEquals(unchangedRules, SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
       assertEquals(unchangedRules ? 1 : 0, count(f.transport, "kata-analyze"));
       f.assertCaches(recovery.equals("aga") || externalWrite, false);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"kata-set-rule ko POSITIONAL,false", "kata-set-rules aga,false", "kgs-rules aga,false",
+      "kata-set-rule ko POSITIONAL,true", "kata-set-rules aga,true", "kgs-rules aga,true"})
+  void externalRulesWriteInvalidatesRejectedSelectionWithoutRetry(
+      String command, boolean delayedReadback) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      var target = f.history.publishExternalRules("unrecognized-rules");
+      long generation = Lizzie.capturePrimaryEngineGeneration(f.primary);
+      f.history.authorizeAnalysisWithCurrentRules(target, f.primary, generation, f.mirror);
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+
+      f.primary.sendCommandNoLeelaz2(command);
+      f.reply(f.primary, f.transport, command, "", true);
+      f.reply(f.primary, f.transport, "kata-get-rules",
+          delayedReadback ? CHINESE.toGtpArgument() : "read failed", delayedReadback);
+      await(selection::isDone);
+
+      assertSame(target, f.history.captureSessionRules());
+      assertFalse(f.history.permitsAnalysisWithCurrentRules(target, f.primary, generation, f.mirror));
+      assertEquals(0, f.frame.synchronizedRules);
+      f.assertCaches(true, false);
+    }
+  }
+
+  @Test
+  void physicalRulesWriteCannotCrossTheCacheDecisionFence() throws Exception {
+    try (Fixture f = new Fixture()) {
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      Field lockField = Leelaz.class.getDeclaredField("manualRulesCacheLock");
+      lockField.setAccessible(true);
+      int lockId = System.identityHashCode(lockField.get(f.primary));
+      FutureTask<Void> write = new FutureTask<>(() -> {
+        f.primary.sendCommandNoLeelaz2("kgs-rules aga");
+        return null;
+      });
+      Thread writer = new Thread(write, "manual-rules-cache-fenced-writer");
+      try {
+        f.primary.withManualRulesCache(() -> {
+          writer.start();
+          try {
+            await(() -> {
+              var info = ManagementFactory.getThreadMXBean().getThreadInfo(writer.getId());
+              return info != null && info.getThreadState() == Thread.State.BLOCKED
+                  && info.getLockInfo() != null
+                  && info.getLockInfo().getIdentityHashCode() == lockId;
+            });
+          } catch (Exception failure) {
+            throw new AssertionError(failure);
+          }
+          assertEquals(0, count(f.transport, "kgs-rules"));
+          assertSame(selection, f.primary.manualRulesCacheOwner.get());
+        });
+        write.get(3, TimeUnit.SECONDS);
+        f.reply(f.primary, f.transport, "kgs-rules", "", true);
+        assertNull(f.primary.manualRulesCacheOwner.get());
+        f.reply(f.primary, f.transport, "kata-get-rules", "read failed", false);
+        await(selection::isDone);
+        f.assertCaches(true, false);
+      } finally {
+        writer.join(3_000L);
+        assertFalse(writer.isAlive());
+      }
+    }
+  }
+
+  @Test
+  void externalRulesWriteAfterRecoveryPublicationInvalidatesTheCurrentSelection() throws Exception {
+    try (Fixture f = new Fixture()) {
+      var target = f.history.publishExternalRules("unrecognized-rules");
+      long generation = Lizzie.capturePrimaryEngineGeneration(f.primary);
+      f.history.authorizeAnalysisWithCurrentRules(target, f.primary, generation, null);
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      f.frame.refreshEntered = new CountDownLatch(1);
+      f.frame.releaseRefresh = new CountDownLatch(1);
+      f.frame.gateNextRefresh = true;
+      FutureTask<Void> readback = new FutureTask<>(() -> {
+        f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+        return null;
+      });
+      Thread reader = new Thread(readback, "manual-rules-external-write-after-readback");
+      reader.start();
+      try {
+        assertTrue(f.frame.refreshEntered.await(3, TimeUnit.SECONDS));
+        assertFalse(selection.isDone());
+        f.primary.sendCommandNoLeelaz2("kata-set-rules aga");
+        f.reply(f.primary, f.transport, "kata-set-rules aga", "", true);
+        f.frame.releaseRefresh.countDown();
+        readback.get(3, TimeUnit.SECONDS);
+        await(selection::isDone);
+
+        assertSame(target, f.history.captureSessionRules());
+        assertFalse(f.history.permitsAnalysisWithCurrentRules(target, f.primary, generation, null));
+        assertEquals(0, f.frame.synchronizedRules);
+        f.assertCaches(true, false);
+      } finally {
+        f.frame.releaseRefresh.countDown();
+        reader.join(3_000L);
+        assertFalse(reader.isAlive());
+      }
     }
   }
 
@@ -629,7 +739,7 @@ class ManualRulesSelectionTest {
     @Override public void close() throws Exception {
       try {
         for (ManualRulesSelection selection : selections) await(selection::isDone);
-        assertNull(primary.pendingManualRulesSelection.get());
+        assertNull(primary.manualRulesCacheOwner.get());
       } finally {
         EngineManager.resetEngineGameTransactionStateForTest();
         Lizzie.config = previousConfig;

@@ -401,8 +401,9 @@ public class Leelaz {
   private long engineRulesGeneration;
   private volatile EngineRulesResult engineRulesResult = EngineRulesResult.idle();
   private EngineRulesOperation activeEngineRulesOperation;
-  // Manual selection ownership outlives its setter while rejection recovery is pending.
-  final AtomicReference<ManualRulesSelection> pendingManualRulesSelection = new AtomicReference<>();
+  // Cache provenance owner, separate from the history intent that controls request completion.
+  private final Object manualRulesCacheLock = new Object();
+  final AtomicReference<ManualRulesSelection> manualRulesCacheOwner = new AtomicReference<>();
   private volatile boolean autoSettleMatchRulesForTest;
   private volatile MatchRulesTestHook matchRulesTestHook;
   public boolean preload = false;
@@ -1802,16 +1803,18 @@ public class Leelaz {
         binding.provenancePda = new AnalysisConditionObservation(command.provenanceToken, null);
         binding.provenanceWrn = new AnalysisConditionObservation(command.provenanceToken, null);
       }
-      if (rulesWrite || loadSgf) {
+      if (loadSgf) {
+        binding.provenanceKomi = new AnalysisConditionObservation(command.provenanceToken, null);
+      }
+    }
+    if (rulesWrite || loadSgf) {
+      synchronized (manualRulesCacheLock) {
         binding.reportedRules = "";
         if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
             || rulesHandler.operation.currentIntent == null) {
-          // A separate rules writer breaks the provenance handed between manual retries.
-          pendingManualRulesSelection.set(null);
+          // Revoke preservation for both this selection's settlement and any successor.
+          manualRulesCacheOwner.set(null);
         }
-      }
-      if (loadSgf) {
-        binding.provenanceKomi = new AnalysisConditionObservation(command.provenanceToken, null);
       }
     }
   }
@@ -25299,6 +25302,18 @@ public class Leelaz {
     return readerStreamBinding == binding && engineRulesResult == result
             && reported != null && reported.semanticallyEquals(result.observed())
         ? result.observed() : null;
+  }
+
+  /**
+   * Orders manual cache handoff/settlement with invalidation before physical rules writes.
+   * Callers hold selection/history first. The action must not acquire protocol, endpoint or queue
+   * locks, send commands, or invoke UI callbacks. In particular, engineRulesLock can enter the
+   * command queue in the opposite order and cannot be used for this cache decision fence.
+   */
+  void withManualRulesCache(Runnable action) {
+    synchronized (manualRulesCacheLock) {
+      action.run();
+    }
   }
 
   public EngineRulesOperation engineRulesOperation() {

@@ -96,36 +96,40 @@ public final class ManualRulesSelection {
           Runnable prepareEndpoints = () -> {
             if (primary.isRulesMutationOccupied()
                 || (mirror != null && mirror.isRulesMutationOccupied())) return;
-            boolean pending = history.hasPendingManualRulesIntent();
-            ManualRulesSelection predecessor = primary.pendingManualRulesSelection.get();
-            inheritedUncertainChange = pending;
-            KataGoRules confirmedRules = primary.currentConfirmedRules();
-            previousRules = pending ? null : confirmedRules;
-            previousMirrorRules = mirror == null ? null : mirror.currentConfirmedRules();
-            BoardHistoryList.SessionRulesTarget target = history.captureSessionRules();
-            previousOverride = history.permitsAnalysisWithCurrentRules(
-                target, primary, primaryGeneration, mirror);
-            // Only an explicitly harmless predecessor can hand off retained cache provenance.
-            // A confirmed or in-flight setter may already have changed rules before settling.
-            if (pending && predecessor != null && predecessor.history == history
-                && predecessor.isCurrent() && !predecessor.inheritedUncertainChange
-                && predecessor.operation != null
-                && rejectedWithoutChange(predecessor.operation.snapshot())
-                && (confirmedRules == null || matches(predecessor.previousRules, confirmedRules))) {
-              inheritedUncertainChange = false;
-              previousRules = predecessor.previousRules;
-              previousOverride |= predecessor.previousOverride
-                  && predecessor.mirror == mirror
-                  && predecessor.mirrorIncarnation == mirrorIncarnation
-                  && (mirror == null || matches(predecessor.previousMirrorRules, previousMirrorRules));
-            }
-            unchanged = !pending
-                && matches(previousRules, requested)
-                && (mirror == null || matches(previousMirrorRules, requested))
-                && compatibleTarget(target, requested);
+            primary.withManualRulesCache(() -> {
+              boolean pending = history.hasPendingManualRulesIntent();
+              ManualRulesSelection predecessor = primary.manualRulesCacheOwner.get();
+              inheritedUncertainChange = pending;
+              KataGoRules confirmedRules = primary.currentConfirmedRules();
+              previousRules = pending ? null : confirmedRules;
+              previousMirrorRules = mirror == null ? null : mirror.currentConfirmedRules();
+              BoardHistoryList.SessionRulesTarget target = history.captureSessionRules();
+              previousOverride = history.permitsAnalysisWithCurrentRules(
+                  target, primary, primaryGeneration, mirror);
+              // Only an explicitly harmless predecessor can hand off retained cache provenance.
+              // A confirmed or in-flight setter may already have changed rules before settling.
+              if (pending && predecessor != null && predecessor.history == history
+                  && predecessor.isCurrent() && predecessor.hasCacheProvenance()
+                  && predecessor.operation != null
+                  && rejectedWithoutChange(predecessor.operation.snapshot())
+                  && (confirmedRules == null || matches(predecessor.previousRules, confirmedRules))) {
+                inheritedUncertainChange = false;
+                previousRules = predecessor.previousRules;
+                previousOverride |= predecessor.previousOverride
+                    && predecessor.mirror == mirror
+                    && predecessor.mirrorIncarnation == mirrorIncarnation
+                    && (mirror == null || matches(predecessor.previousMirrorRules, previousMirrorRules));
+              }
+              unchanged = !pending
+                  && matches(previousRules, requested)
+                  && (mirror == null || matches(previousMirrorRules, requested))
+                  && compatibleTarget(target, requested);
+              if (!unchanged) {
+                intent = history.beginManualRulesIntent(this::currentIdentity);
+                primary.manualRulesCacheOwner.set(this);
+              }
+            });
             if (!unchanged) {
-              intent = history.beginManualRulesIntent(this::currentIdentity);
-              primary.pendingManualRulesSelection.set(this);
               primary.retireOrdinaryAnalysisForRulesChange(incarnation, afterAdmission::add);
               if (mirror != null) {
                 mirror.retireOrdinaryAnalysisForRulesChange(mirrorIncarnation, afterAdmission::add);
@@ -193,36 +197,38 @@ public final class ManualRulesSelection {
       }
       synchronized (history) {
         if (!isCurrent() || history.captureSessionRules() != intent.previousTarget()) return;
-        currentOperation = currentOperation && primary.engineRulesOperation() == settledOperation;
-        KataGoRules currentRules = primary.currentConfirmedRules();
-        boolean confirmed = currentOperation && result != null && result.isConfirmed()
-            && matches(result.observed(), currentRules);
-        boolean selected = confirmed && matches(result.observed(), requested);
-        KataGoRules observed = confirmed ? result.observed()
-            : currentOperation && recovered != null && recovered.isConfirmed()
-                && matches(recovered.observed(), currentRules) ? recovered.observed() : null;
-        if (selected) {
-          if (!matches(previousRules, observed)
-              || !compatibleTarget(intent.previousTarget(), requested)
-              || (currentMirror != null && !matches(currentMirror.currentConfirmedRules(), requested))) {
-            board.clearBestMovesAfter(history.getStart());
+        primary.withManualRulesCache(() -> {
+          // The published generation is a nonblocking snapshot of protocol ownership.
+          boolean operationStillCurrent = currentOperation
+              && primary.engineRulesResult().generation() == settledOperation.generation();
+          KataGoRules currentRules = primary.currentConfirmedRules();
+          boolean confirmed = operationStillCurrent && result != null && result.isConfirmed()
+              && matches(result.observed(), currentRules);
+          boolean selected = confirmed && matches(result.observed(), requested);
+          KataGoRules observed = confirmed ? result.observed()
+              : operationStillCurrent && recovered != null && recovered.isConfirmed()
+                  && matches(recovered.observed(), currentRules) ? recovered.observed() : null;
+          boolean preserveCache = canPreserveCache(result, observed);
+          if (selected) {
+            if (!preserveCache
+                || !compatibleTarget(intent.previousTarget(), requested)
+                || (currentMirror != null && !matches(currentMirror.currentConfirmedRules(), requested))) {
+              board.clearBestMovesAfter(history.getStart());
+            }
+            published[0] = history.publishManualRulesIfCurrent(intent, observed).orElse(null);
+          } else if (!preserveCache) {
+            board.clearBestMovesAfterForFirstEngine(history.getStart());
           }
-          published[0] = history.publishManualRulesIfCurrent(intent, observed).orElse(null);
-        } else if (inheritedUncertainChange
-            || (!rejectedWithoutChange(result) && !matches(previousRules, observed))
-            || (observed != null && !matches(previousRules, observed))) {
-          // A rejected setter is harmless; an unknown or different actual state is not.
-          board.clearBestMovesAfterForFirstEngine(history.getStart());
-        }
-        if (!selected && previousOverride && matches(previousRules, observed)
-            && currentMirror == mirror
-            && (mirror == null || (mirror.engineIncarnationSnapshot() == mirrorIncarnation
-                && matches(previousMirrorRules, mirror.currentConfirmedRules())))) {
-          history.authorizeAnalysisWithCurrentRules(
-              intent.previousTarget(), primary, primaryGeneration, mirror);
-        }
-        resume[0] = !selected && observed != null;
-        history.finishManualRulesIntent(intent);
+          if (!selected && preserveCache && previousOverride && matches(previousRules, observed)
+              && currentMirror == mirror
+              && (mirror == null || (mirror.engineIncarnationSnapshot() == mirrorIncarnation
+                  && matches(previousMirrorRules, mirror.currentConfirmedRules())))) {
+            history.authorizeAnalysisWithCurrentRules(
+                intent.previousTarget(), primary, primaryGeneration, mirror);
+          }
+          resume[0] = !selected && observed != null;
+          history.finishManualRulesIntent(intent);
+        });
       }
     }, false);
     for (Runnable action : afterAdmission) action.run();
@@ -255,9 +261,20 @@ public final class ManualRulesSelection {
     return false;
   }
 
+  // A current request may still need to settle after another writer revoked its cache provenance.
+  private boolean hasCacheProvenance() {
+    return !inheritedUncertainChange && primary.manualRulesCacheOwner.get() == this;
+  }
+
+  private boolean canPreserveCache(EngineRulesResult result, KataGoRules observed) {
+    return hasCacheProvenance()
+        && (matches(previousRules, observed)
+            || (rejectedWithoutChange(result) && observed == null));
+  }
+
   private void finish() {
     history.finishManualRulesIntent(intent);
-    primary.pendingManualRulesSelection.compareAndSet(this, null);
+    primary.manualRulesCacheOwner.compareAndSet(this, null);
   }
 
   // This predicate also runs under the protocol lock; it must use only nonblocking snapshots.
