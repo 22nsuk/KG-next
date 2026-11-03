@@ -7393,6 +7393,7 @@ public class Leelaz {
           readerStreamBinding == binding
               && !binding.terminated
               && isCurrentAnalysisInfoTarget(ownership.target)
+              && !SessionRulesSynchronizer.manualRulesPending(this)
               && !EngineManager.hasEngineGameAnalysisOutputBarrier();
       return new AnalysisOutputRoute(
           currentOrdinary
@@ -7435,7 +7436,9 @@ public class Leelaz {
     return expected.ownerToken != null
         && ownership == expected.ownerToken
         && !ownership.hasFailedAnalysisStateLineage()
-        && (!ownership.isOrdinary() || isCurrentAnalysisInfoTarget(ownership.target))
+        && (!ownership.isOrdinary()
+            || (isCurrentAnalysisInfoTarget(ownership.target)
+                && !SessionRulesSynchronizer.manualRulesPending(this)))
         && ownership.generation == analysisOutputGeneration.get();
   }
 
@@ -11931,6 +11934,25 @@ public class Leelaz {
     // Retire its target too, so it cannot install an owner ahead of this PDA command.
     retirePendingAnalysis(normalCommandBeingSent);
     for (QueuedCommand queued : commandQueue()) retirePendingAnalysis(queued);
+  }
+
+  /** State-only retirement under ordinary output admission, including during lifecycle reservation. */
+  boolean retireOrdinaryAnalysisForRulesChange(
+      Object incarnation, java.util.function.Consumer<Runnable> afterAdmission) {
+    synchronized (engineArbitrationLock()) {
+      if (!isCurrentLiveEngineIncarnationLocked(incarnation)) return false;
+      synchronized (commandQueue()) {
+        retireMoveFocusForStateChange(afterAdmission);
+        AnalysisOutputOwnership owner = readerStreamBinding.analysisOutputOwnership.get();
+        if (owner == null || owner.isOrdinary()) {
+          analysisOutputGeneration.incrementAndGet();
+          advanceAnalysisInfoEpoch();
+        }
+        retirePendingAnalysis(normalCommandBeingSent);
+        for (QueuedCommand queued : commandQueue()) retirePendingAnalysis(queued);
+      }
+      return true;
+    }
   }
 
   private static void retirePendingAnalysis(QueuedCommand command) {
@@ -25260,6 +25282,18 @@ public class Leelaz {
     return engineRulesResult;
   }
 
+  /** A raw rules write retires the binding observation even before its protocol readback. */
+  public KataGoRules currentConfirmedRules() {
+    ReaderStreamBinding binding = readerStreamBinding;
+    EngineRulesResult result = engineRulesResult;
+    if (binding == null || binding.terminated || binding.readerShutdownRequested
+        || result == null || !result.isConfirmed() || result.observed() == null) return null;
+    KataGoRules reported = KataGoRules.parse(binding.reportedRules).orElse(null);
+    return readerStreamBinding == binding && engineRulesResult == result
+            && reported != null && reported.semanticallyEquals(result.observed())
+        ? result.observed() : null;
+  }
+
   public EngineRulesOperation engineRulesOperation() {
     synchronized (engineRulesLock) {
       return activeEngineRulesOperation;
@@ -25292,9 +25326,22 @@ public class Leelaz {
 
   private EngineRulesOperation applyEngineRulesOperation(
       KataGoRules rules, long timeoutMillis, boolean matchOwner) {
+    return applyEngineRulesOperation(rules, timeoutMillis, matchOwner, null);
+  }
+
+  EngineRulesOperation applyManualRulesOperation(
+      KataGoRules rules, long timeoutMillis, java.util.function.BooleanSupplier currentIntent) {
+    return applyEngineRulesOperation(rules, timeoutMillis, false, currentIntent);
+  }
+
+  private EngineRulesOperation applyEngineRulesOperation(
+      KataGoRules rules, long timeoutMillis, boolean matchOwner,
+      java.util.function.BooleanSupplier currentIntent) {
     Objects.requireNonNull(rules, "rules");
     EngineRulesOperation operation =
-        beginEngineRulesOperation(false, rules, lastObservedRules(), false);
+        beginEngineRulesOperation(
+            false, rules, lastObservedRules(), false, currentIntent, currentIntent);
+    if (operation == null) return null;
     ExactSnapshotRestoreAdmission restoreAdmission = operation.restoreAdmission;
     boolean lifecycleOwner =
         restoreAdmission != null && isExactSnapshotRestoreAdmissionValid(restoreAdmission);
@@ -25348,8 +25395,25 @@ public class Leelaz {
   }
 
   EngineRulesOperation queryEngineRulesOperation(long timeoutMillis) {
+    return queryEngineRulesOperation(timeoutMillis, null, null);
+  }
+
+  EngineRulesOperation queryEngineRulesAfter(
+      EngineRulesOperation expected, long timeoutMillis,
+      java.util.function.BooleanSupplier currentIntent) {
+    if (expected == null || isRulesMutationOccupied()) return null;
+    return queryEngineRulesOperation(timeoutMillis, expected, currentIntent);
+  }
+
+  private EngineRulesOperation queryEngineRulesOperation(
+      long timeoutMillis, EngineRulesOperation expected,
+      java.util.function.BooleanSupplier currentIntent) {
     EngineRulesOperation operation =
-        beginEngineRulesOperation(false, null, lastObservedRules(), false);
+        beginEngineRulesOperation(false, null, lastObservedRules(), false,
+            expected == null ? null : () -> activeEngineRulesOperation == expected
+                && readerStreamBinding == expected.readerBinding && currentIntent.getAsBoolean(),
+            currentIntent);
+    if (operation == null) return null;
     if (autoSettleMatchRulesForTest) {
       return settleMatchRulesForTest(operation, null, false);
     }
@@ -25512,6 +25576,13 @@ public class Leelaz {
 
   private EngineRulesOperation beginEngineRulesOperation(
       boolean isolated, KataGoRules requested, KataGoRules lastKnown, boolean capabilitiesKnown) {
+    return beginEngineRulesOperation(isolated, requested, lastKnown, capabilitiesKnown, null, null);
+  }
+
+  private EngineRulesOperation beginEngineRulesOperation(
+      boolean isolated, KataGoRules requested, KataGoRules lastKnown, boolean capabilitiesKnown,
+      java.util.function.BooleanSupplier admission,
+      java.util.function.BooleanSupplier currentIntent) {
     ReaderStreamBinding binding = currentReaderStreamBinding();
     EngineManager.EngineGameOwnerTransaction engineGameTransaction =
         engineGameStartupCommandContext.get();
@@ -25527,6 +25598,8 @@ public class Leelaz {
     }
     EngineRulesOperation operation;
     synchronized (engineRulesLock) {
+      // Manual intent predicates read only snapshots: never acquire history/selection here.
+      if (admission != null && !admission.getAsBoolean()) return null;
       replaced = activeEngineRulesOperation;
       if (replaced != null && !replaced.isTerminalLocked()) {
         EngineRulesResult.Status status =
@@ -25547,6 +25620,7 @@ public class Leelaz {
               engineGameTransaction,
               startupCommandBinding,
               restoreAdmission,
+              currentIntent,
               pending);
       operation.awaitingSet = requested != null;
       activeEngineRulesOperation = operation;
@@ -25571,6 +25645,7 @@ public class Leelaz {
         ((EngineRulesResponseHandler) queuedCommand.onResponse).operation;
     synchronized (engineRulesLock) {
       return isCurrentEngineRulesOperationLocked(operation)
+          && (operation.currentIntent == null || operation.currentIntent.getAsBoolean())
           && operation.readerBinding != null
           && currentReaderStreamBinding() == operation.readerBinding
           && !operation.readerBinding.terminated;
@@ -25983,6 +26058,7 @@ public class Leelaz {
     private final EngineManager.EngineGameOwnerTransaction engineGameTransaction;
     private final ReaderStreamBinding startupCommandBinding;
     private final ExactSnapshotRestoreAdmission restoreAdmission;
+    private final java.util.function.BooleanSupplier currentIntent;
     private final CompletableFuture<EngineRulesResult> completion = new CompletableFuture<>();
     private volatile EngineRulesResult snapshot;
     private volatile boolean accepted;
@@ -25998,6 +26074,7 @@ public class Leelaz {
         EngineManager.EngineGameOwnerTransaction engineGameTransaction,
         ReaderStreamBinding startupCommandBinding,
         ExactSnapshotRestoreAdmission restoreAdmission,
+        java.util.function.BooleanSupplier currentIntent,
         EngineRulesResult initial) {
       this.generation = generation;
       this.isolated = isolated;
@@ -26005,6 +26082,7 @@ public class Leelaz {
       this.engineGameTransaction = engineGameTransaction;
       this.startupCommandBinding = startupCommandBinding;
       this.restoreAdmission = restoreAdmission;
+      this.currentIntent = currentIntent;
       this.snapshot = initial;
     }
 

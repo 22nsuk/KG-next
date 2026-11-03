@@ -59,6 +59,14 @@ public final class SessionRulesSynchronizer {
 
   private SessionRulesSynchronizer() {}
 
+  static boolean manualRulesPending(Leelaz engine) {
+    Board board = Lizzie.board;
+    Leelaz primary = Lizzie.leelaz;
+    return board != null && primary != null
+        && (engine == primary || engine == primary.activeComparisonEngine())
+        && board.getHistory().hasPendingManualRulesIntent();
+  }
+
   public static Result capabilityDiscoveryFailed() {
     return failure(Failure.CAPABILITY_DISCOVERY_FAILED, null, null);
   }
@@ -108,6 +116,9 @@ public final class SessionRulesSynchronizer {
       Leelaz primary,
       Leelaz mirror,
       Leelaz engine) {
+    if ((engine == primary || engine == mirror) && history.hasPendingManualRulesIntent()) {
+      return false;
+    }
     if (target.kind() == BoardHistoryList.SessionRulesKind.UNSPECIFIED) {
       return true;
     }

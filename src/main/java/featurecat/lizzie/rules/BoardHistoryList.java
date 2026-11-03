@@ -6,6 +6,7 @@ import featurecat.lizzie.analysis.KataGoRules;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.BooleanSupplier;
 
 /** Linked list data structure to store board history */
 public class BoardHistoryList {
@@ -67,10 +68,13 @@ public class BoardHistoryList {
   public static final class ManualRulesIntent {
     private final SessionRulesTarget previousTarget;
     private final long generation;
+    private final BooleanSupplier selectionIsCurrent;
 
-    private ManualRulesIntent(SessionRulesTarget previousTarget, long generation) {
+    private ManualRulesIntent(
+        SessionRulesTarget previousTarget, long generation, BooleanSupplier selectionIsCurrent) {
       this.previousTarget = previousTarget;
       this.generation = generation;
+      this.selectionIsCurrent = selectionIsCurrent;
     }
 
     public SessionRulesTarget previousTarget() {
@@ -86,6 +90,7 @@ public class BoardHistoryList {
   private Object analysisOverrideMirror;
   private long analysisOverridePrimaryGeneration = -1L;
   private long manualRulesIntentGeneration;
+  private volatile ManualRulesIntent pendingManualRulesIntent;
 
   /**
    * Initialize a new board history list, whose first node is data
@@ -106,7 +111,28 @@ public class BoardHistoryList {
   }
 
   public synchronized ManualRulesIntent beginManualRulesIntent() {
-    return new ManualRulesIntent(sessionRulesTarget, ++manualRulesIntentGeneration);
+    return beginManualRulesIntent(() -> true);
+  }
+
+  /** The admission predicate must read only nonblocking selection snapshots. */
+  public synchronized ManualRulesIntent beginManualRulesIntent(BooleanSupplier selectionIsCurrent) {
+    pendingManualRulesIntent =
+        new ManualRulesIntent(sessionRulesTarget, ++manualRulesIntentGeneration,
+            Objects.requireNonNull(selectionIsCurrent, "selectionIsCurrent"));
+    return pendingManualRulesIntent;
+  }
+
+  public boolean hasPendingManualRulesIntent() {
+    ManualRulesIntent pending = pendingManualRulesIntent;
+    return pending != null && pending.selectionIsCurrent.getAsBoolean();
+  }
+
+  public boolean ownsPendingManualRulesIntent(ManualRulesIntent intent) {
+    return intent != null && pendingManualRulesIntent == intent;
+  }
+
+  public synchronized void finishManualRulesIntent(ManualRulesIntent intent) {
+    if (pendingManualRulesIntent == intent) pendingManualRulesIntent = null;
   }
 
   public synchronized boolean isLatestManualRulesIntent(ManualRulesIntent intent) {
@@ -117,6 +143,7 @@ public class BoardHistoryList {
   public synchronized void restoreSessionRulesTarget(SessionRulesTarget target) {
     sessionRulesTarget = Objects.requireNonNull(target, "target");
     manualRulesIntentGeneration++;
+    pendingManualRulesIntent = null;
     clearAnalysisOverride();
   }
 
@@ -159,6 +186,7 @@ public class BoardHistoryList {
    */
   public synchronized SessionRulesTarget publishExternalRules(String rawDeclaration) {
     manualRulesIntentGeneration++;
+    pendingManualRulesIntent = null;
     clearAnalysisOverride();
     long revision = sessionRulesTarget.revision() + 1L;
     if (rawDeclaration == null) {
@@ -195,6 +223,7 @@ public class BoardHistoryList {
   /** Publishes a successful manual selection as a valid target at a newer revision. */
   public synchronized SessionRulesTarget publishManualRules(KataGoRules rules) {
     manualRulesIntentGeneration++;
+    pendingManualRulesIntent = null;
     return publishManualRulesUnchecked(rules);
   }
 
@@ -206,7 +235,9 @@ public class BoardHistoryList {
         || sessionRulesTarget != intent.previousTarget) {
       return Optional.empty();
     }
-    return Optional.of(publishManualRulesUnchecked(rules));
+    SessionRulesTarget published = publishManualRulesUnchecked(rules);
+    finishManualRulesIntent(intent);
+    return Optional.of(published);
   }
 
   private SessionRulesTarget publishManualRulesUnchecked(KataGoRules rules) {
