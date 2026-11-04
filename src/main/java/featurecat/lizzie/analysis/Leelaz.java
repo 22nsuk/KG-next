@@ -20623,14 +20623,18 @@ public class Leelaz {
             || EngineManager.occupiesEngineGameAdmission());
   }
 
-  private boolean hasUnconfirmedOrdinaryResponse(boolean positionsOnly) {
+  private boolean hasUnconfirmedOrdinaryResponse(boolean stateChangesOnly) {
     ArrayDeque<PendingResponseHandler> pending = pendingResponseHandlers();
     synchronized (pending) {
       for (PendingResponseHandler response : pending) {
         if (response.isOutstandingResponseRetired()) continue;
         String command = response.queuedCommand.command;
-        if (positionsOnly
+        // Rules writes retire the old output owner just like position writes. Do not publish a
+        // successor owner until their replies have drained any old info still in the pipe, even
+        // when ordinary commands are otherwise pipelined (KataGo's default).
+        if (stateChangesOnly
             ? analysisStateMutation(command) != AnalysisStateMutation.NONE
+                || isRulesMutationCommand(command)
             : !isAnalysisOutputOwnershipCommand(command)) {
           return true;
         }

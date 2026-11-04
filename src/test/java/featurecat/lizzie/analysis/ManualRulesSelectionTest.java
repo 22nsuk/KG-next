@@ -222,6 +222,95 @@ class ManualRulesSelectionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+      "false,kata-set-rules japanese,=", "false,123 kata-set-rules japanese,=123",
+      "false,kata-set-rule ko SIMPLE,=", "false,123 kata-set-rule ko SIMPLE,=123",
+      "false,kgs-rules japanese,=", "false,123 kgs-rules japanese,=123",
+      "false,loadsgf external.sgf,=", "false,123 loadsgf external.sgf,=123",
+      "true,kata-set-rules japanese,=", "true,123 kata-set-rule ko SIMPLE,=123",
+      "true,kgs-rules japanese,=", "true,123 loadsgf external.sgf,=123",
+      "false,kata-set-rules japanese,? rejected", "true,123 kata-set-rule ko SIMPLE,?123 rejected",
+      "false,kgs-rules japanese,? rejected"
+  })
+  void asynchronousRawRulesWaitForTheirResponseBeforeAcceptingSuccessorAnalysis(
+      boolean mirrored, String command, String response) throws Exception {
+    try (Fixture f = new Fixture()) {
+      if (mirrored) f.addMirror(CHINESE);
+      Leelaz engine = mirrored ? f.mirror : f.primary;
+      var transport = mirrored ? f.mirrorTransport : f.transport;
+      assertFalse(engine.requireResponseBeforeSend, "Exercise the default KataGo dispatch mode");
+      assertTrue(SessionRulesSynchronizer.permitsOrdinaryAnalysis(engine));
+      engine.sendCommandNoLeelaz2("kata-analyze 10");
+      f.reply(engine, transport, "kata-analyze", "", true);
+      if (mirrored) engine.sendCommandNoLeelaz2(command);
+      else assertTrue(engine.sendRawConsoleCommand(command));
+      engine.sendCommandNoLeelaz2("kata-analyze 10");
+
+      // Output already in the pipe belongs to the retired analysis until the rules reply.
+      engine.parseAnalysisLineForTest("info move Q16 visits 1000 winrate 0.6 pv Q16");
+      f.assertCaches(!mirrored, mirrored);
+      assertEquals(1, count(transport, "kata-analyze"));
+      engine.processCommandResponseLineForTest("=9999 unrelated response");
+      assertEquals(1, count(transport, "kata-analyze"), "Only the matching reply drains the boundary");
+
+      if (command.startsWith("loadsgf ")) {
+        // Position synchronization assigns its own response ID to an unnumbered loadsgf.
+        f.reply(engine, transport, command, "", true);
+      } else {
+        engine.processCommandResponseLineForTest(response);
+      }
+      assertEquals(2, count(transport, "kata-analyze"), "Success and rejection both drain old output");
+      // KataGo can stream before completing the new analyze command's response.
+      engine.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      BoardData data = f.history.getData();
+      assertEquals(10, mirrored ? data.getPlayouts2() : data.getPlayouts());
+      assertEquals("Q16", (mirrored ? data.bestMoves2 : data.bestMoves).get(0).coordinate);
+      assertFalse(mirrored ? data.isChanged2 : data.isChanged);
+    }
+  }
+
+  @Test
+  void asynchronousAnalysisWaitsForEveryRulesWriteWithoutBlockingOtherCommands() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      f.reply(f.primary, f.transport, "kata-analyze", "", true);
+      assertTrue(f.primary.sendRawConsoleCommand("123 kata-set-rules japanese"));
+      f.primary.sendCommandNoLeelaz2("789 name");
+      assertTrue(f.primary.sendRawConsoleCommand("124 kgs-rules chinese"));
+      assertTrue(f.transport.rawCommands().contains("789 name"), "Unrelated commands stay asynchronous");
+      assertTrue(f.transport.rawCommands().contains("124 kgs-rules chinese"));
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      f.primary.processCommandResponseLineForTest("=123");
+      f.primary.processCommandResponseLineForTest("=789 KataGo");
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 1000 winrate 0.6 pv Q16");
+      f.assertCaches(true, false, 2L);
+      assertEquals(1, count(f.transport, "kata-analyze"));
+      f.primary.processCommandResponseLineForTest("?124 rejected");
+      assertEquals(2, count(f.transport, "kata-analyze"));
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+      assertFalse(f.history.getData().isChanged);
+    }
+  }
+
+  @Test
+  void replacingTheReaderRetiresTheAsynchronousRulesBoundaryAndQueuedAnalysis() throws Exception {
+    try (Fixture f = new Fixture()) {
+      assertTrue(f.primary.sendRawConsoleCommand("123 kata-set-rules japanese"));
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      assertEquals(0, count(f.transport, "kata-analyze"));
+      f.primary.installFreshCommandOutputForTest(new ByteArrayOutputStream());
+      var freshTransport = ExactSnapshotRestoreProtocolFixture.install(f.primary, command -> null);
+      f.primary.processCommandResponseLineForTest("=123");
+      assertEquals(0, count(freshTransport, "kata-analyze"), "Old queued work must not survive rebind");
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      assertEquals(1, count(freshTransport, "kata-analyze"), "Old replies must not gate the new reader");
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+    }
+  }
+
   @Test
   void rawRulesFromAHistoryLockedProducerUseTheCleanDispatcher() throws Exception {
     try (Fixture f = new Fixture()) {
