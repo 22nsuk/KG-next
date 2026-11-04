@@ -386,6 +386,11 @@ public class BoardData {
     return getNodeKind() == BoardNodeKind.PASS;
   }
 
+  /** The next move or pass inherits this variation's number unless it starts a new branch. */
+  int nextMoveMNNumber(boolean newBranch) {
+    return moveMNNumber > -1 && !newBranch ? moveMNNumber + 1 : -1;
+  }
+
   public boolean isSnapshotNode() {
     return getNodeKind() == BoardNodeKind.SNAPSHOT;
   }
