@@ -1781,14 +1781,15 @@ public class Leelaz {
         rulesHandler.rulesWriteSequence = binding.rulesWriteSequence;
       }
     }
-    String normalized = command.command.trim();
-    String verb = normalized.split("\\s+", 2)[0];
-    AnalysisCondition condition = AnalysisCondition.fromCommand(command.command);
+    GtpCommandText parsed = GtpCommandText.parse(command.command);
+    String normalized = parsed.payload();
+    String verb = parsed.verb();
+    AnalysisCondition condition = AnalysisCondition.fromCommand(normalized);
     boolean parameterWrite =
         verb.equals("kata-set-param") || verb.equals("kata-set-params");
     boolean fullRulesWrite = verb.equals("kata-set-rules");
     boolean loadSgf = verb.equals("loadsgf");
-    boolean rulesWrite = !loadSgf && isRulesMutationCommand(normalized);
+    boolean rulesWrite = !loadSgf && parsed.mutatesRules();
     // Admitted exact snapshots contain position/komi, never RU. Their physical write still
     // fences readbacks, but cannot revoke rules confirmation or retained analysis provenance.
     boolean rulesMayChange = rulesWrite || (loadSgf && command.queuedCommand.restoreAdmission == null);
@@ -1864,7 +1865,7 @@ public class Leelaz {
     if (binding == null || condition == null || line == null || !line.startsWith("=")) return;
     Double value = null;
     try {
-      String[] parts = command.command.trim().split("\\s+");
+      String[] parts = GtpCommandText.parse(command.command).payload().split("\\s+");
       String numeric =
           parts[0].equals("kata-get-param")
               ? gtpResponsePayload(line)
@@ -14950,7 +14951,8 @@ public class Leelaz {
       Runnable handler,
       boolean exactLoadSgf,
       QueuedCommand queuedCommand) {
-    return handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler
+    return GtpCommandText.parse(command).id() != NO_RESPONSE_COMMAND_ID
+        || handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler
         || (queuedCommand != null && queuedCommand.positionResponseTimeout != null)
         || handler instanceof EngineGameResponseHandler
         || handler instanceof ManualGenmoveRequest
@@ -14975,6 +14977,8 @@ public class Leelaz {
 
   private int nextResponseCommandId(
       String command, Runnable handler, QueuedCommand queuedCommand) {
+    int explicitId = GtpCommandText.parse(command).id();
+    if (explicitId != NO_RESPONSE_COMMAND_ID) return explicitId;
     if (command != null && command.startsWith("loadsgf ")) {
       return loadSgfResponseCommandIds.getAndIncrement();
     }
@@ -15009,7 +15013,8 @@ public class Leelaz {
   }
 
   private String buildCommandLine(String command, int responseCommandId) {
-    if (responseCommandId == NO_RESPONSE_COMMAND_ID) {
+    if (responseCommandId == NO_RESPONSE_COMMAND_ID
+        || GtpCommandText.parse(command).id() != NO_RESPONSE_COMMAND_ID) {
       return command;
     }
     return responseCommandId + " " + command;
@@ -15281,7 +15286,7 @@ public class Leelaz {
     }
   }
 
-  private boolean isAsciiDigit(char value) {
+  private static boolean isAsciiDigit(char value) {
     return value >= '0' && value <= '9';
   }
 
@@ -25350,11 +25355,50 @@ public class Leelaz {
     return engineRulesResult;
   }
 
+  /**
+   * Parsed view only: preserve the original command, including its ID, on the wire.
+   * GTP strips controls/comments and treats tabs as spaces before parsing the optional ID.
+   * KataGo also discards non-ASCII input and accepts an ID directly adjacent to the verb
+   * (e.g. 123kata-set-rules).
+   */
+  private record GtpCommandText(String payload, int id) {
+    String verb() {
+      return payload.split("\\s+", 2)[0];
+    }
+
+    boolean mutatesRules() {
+      return switch (verb()) {
+        case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
+        default -> false;
+      };
+    }
+
+    static GtpCommandText parse(String command) {
+      if (command == null) return new GtpCommandText("", NO_RESPONSE_COMMAND_ID);
+      StringBuilder text = new StringBuilder(command.length());
+      for (int i = 0; i < command.length(); i++) {
+        char c = command.charAt(i);
+        if (c == '#' || c == '\n') break;
+        if (c == '\t') text.append(' ');
+        else if (c >= ' ' && c <= '~') text.append(c);
+      }
+      String line = text.toString().trim();
+      int end = 0;
+      while (end < line.length() && isAsciiDigit(line.charAt(end))) end++;
+      int id = NO_RESPONSE_COMMAND_ID;
+      if (end > 0) {
+        try {
+          id = Integer.parseInt(line.substring(0, end));
+        } catch (NumberFormatException invalidId) {
+          // A rejected ID must not prevent conservative invalidation of a possible rules write.
+        }
+      }
+      return new GtpCommandText(line.substring(end).trim(), id);
+    }
+  }
+
   private static boolean isRulesMutationCommand(String command) {
-    return switch (command.trim().split("\\s+", 2)[0]) {
-      case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
-      default -> false;
-    };
+    return GtpCommandText.parse(command).mutatesRules();
   }
 
   private static boolean isUntrackedRulesWrite(QueuedCommand command) {

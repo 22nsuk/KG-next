@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -97,16 +98,71 @@ class ManualRulesSelectionTest {
     }
   }
 
-  @Test
-  void rawRulesBoundaryCoversQueuedNodesAndRetiresOnlyThePreviousStream() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "123 kata-set-rules japanese", "123 kata-set-rule ko SIMPLE",
+      "123 kgs-rules japanese", "123 loadsgf external.sgf",
+      "  00123\tkata-set-rules\tjapanese # comment", "123kata-set-rules japanese",
+      "123 ka\rta-set-rules japanese", "123 kata-set-rules# missing argument",
+      "123 ka\u0001ta-set-rules japanese", "123 ka\u007fta-set-rules japanese",
+      "123 한kata-set-rules japanese"
+  })
+  void numberedRawRulesWritesInvalidateBothSlotsAndFenceReadbacks(String command) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      var query = f.primary.queryEngineRulesOperation(30_000L);
+      Object settings = f.primary.analysisSettingsToken();
+      assertTrue(f.primary.sendRawConsoleCommand(command));
+      assertTrue(f.transport.rawCommands().contains(command.trim()), "Preserve the wire command");
+      assertTrue(f.mirrorTransport.rawCommands().contains(command.trim()));
+      f.assertCaches(true, true);
+      assertNull(f.primary.currentConfirmedRules());
+      assertNull(f.mirror.currentConfirmedRules());
+      assertEquals("", f.primary.captureAnalysisProvenance().rules());
+      assertNotSame(settings, f.primary.analysisSettingsToken());
+      // This query was written before the raw mutation, so its late result cannot confirm rules.
+      f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      assertFalse(query.await(1_000L).isConfirmed());
+      f.primary.processCommandResponseLineForTest("?123 rejected");
+      f.mirror.processCommandResponseLineForTest("?123 rejected");
+      f.assertCaches(true, true);
+      var freshPrimary = f.primary.queryEngineRulesOperation(1_000L);
+      f.reply(f.primary, f.transport, "kata-get-rules", JAPANESE.toGtpArgument(), true);
+      assertTrue(freshPrimary.await(1_000L).isConfirmed());
+      var freshMirror = f.mirror.queryEngineRulesOperation(1_000L);
+      f.reply(f.mirror, f.mirrorTransport, "kata-get-rules", JAPANESE.toGtpArgument(), true);
+      assertTrue(freshMirror.await(1_000L).isConfirmed());
+      assertTrue(f.apply(JAPANESE).unchanged());
+      f.assertCaches(true, true);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"123 name # kata-set-rules japanese",
+      "# 123 kata-set-rules japanese", "123 kata-get-rules", "123 kata-set-rules-extra japanese",
+      "123 456 kata-set-rules japanese"})
+  void nonMutatingRawCommandsDoNotInvalidateRules(String command) throws Exception {
+    try (Fixture f = new Fixture()) {
+      Object settings = f.primary.analysisSettingsToken();
+      assertTrue(f.primary.sendRawConsoleCommand(command));
+      f.assertCaches(false, false);
+      assertNotNull(f.primary.currentConfirmedRules());
+      assertSame(settings, f.primary.analysisSettingsToken());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"kata-set-rules japanese", "123 kata-set-rules japanese"})
+  void rawRulesBoundaryCoversQueuedNodesAndRetiresOnlyThePreviousStream(String command) throws Exception {
     try (Fixture f = new Fixture()) {
       assertTrue(f.apply(CHINESE).unchanged());
       f.primary.sendCommandNoLeelaz2("kata-analyze 10");
       f.reply(f.primary, f.transport, "kata-analyze", "", true);
       f.primary.requireResponseBeforeSend = true;
       f.primary.sendCommandNoLeelaz2("name");
-      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      assertTrue(f.primary.sendRawConsoleCommand(command));
       f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      assertTrue(f.primary.hasPendingRulesWrite());
       f.assertCaches(false, false);
       BoardData added = BoardData.empty(19, 19);
       added.bestMoves = f.history.getData().bestMoves;
@@ -119,7 +175,7 @@ class ManualRulesSelectionTest {
       f.assertCaches(true, false);
       f.primary.parseAnalysisLineForTest("info move Q16 visits 1000 winrate 0.6 pv Q16");
       f.assertCaches(true, false);
-      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.primary.processCommandResponseLineForTest(command.startsWith("123") ? "=123" : "=");
       assertEquals(2, count(f.transport, "kata-analyze"), "Post-write analysis must still dispatch");
       f.reply(f.primary, f.transport, "kata-analyze", "", true);
       f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
@@ -192,14 +248,15 @@ class ManualRulesSelectionTest {
     }
   }
 
-  @Test
-  void rawRulesCancelledByReaderReplacementDoNotInvalidateAnalysis() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"kata-set-rules japanese", "123 kata-set-rules japanese"})
+  void rawRulesCancelledByReaderReplacementDoNotInvalidateAnalysis(String command) throws Exception {
     try (Fixture f = new Fixture()) {
       f.primary.requireResponseBeforeSend = true;
       f.primary.sendCommandNoLeelaz2("name");
-      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      assertTrue(f.primary.sendRawConsoleCommand(command));
       f.primary.installFreshCommandOutputForTest(new ByteArrayOutputStream());
-      assertEquals(0, count(f.transport, "kata-set-rules"));
+      assertFalse(f.transport.rawCommands().stream().anyMatch(line -> line.contains("kata-set-rules")));
       f.assertCaches(false, false);
     }
   }

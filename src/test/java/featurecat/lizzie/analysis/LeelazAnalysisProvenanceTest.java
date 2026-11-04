@@ -221,6 +221,31 @@ class LeelazAnalysisProvenanceTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"123 kata-set-param analysisWideRootNoise 0.25",
+      "00123\tkata-set-param\tanalysisWideRootNoise 0.25 # comment",
+      "123kata-set-param analysisWideRootNoise 0.25"})
+  void numberedConditionsInvalidateAndOnlyTheirMatchingReplyPublishesValues(String command)
+      throws Exception {
+    try (Environment env = new Environment()) {
+      env.reply(env.send("kata-set-param analysisWideRootNoise 0.5"), "");
+      assertEquals(0.5, env.source().wrn());
+      Object previous = env.engine.analysisSettingsToken();
+      assertTrue(env.engine.sendRawConsoleCommand(command));
+      assertTrue(env.output.toString(StandardCharsets.UTF_8).contains(command + "\n"));
+      assertNotSame(previous, env.engine.analysisSettingsToken());
+      assertNull(env.source().wrn());
+      env.reply(124, "");
+      assertNull(env.source().wrn());
+      env.reply(123, "");
+      assertEquals(0.25, env.source().wrn());
+      assertTrue(env.engine.sendRawConsoleCommand("124 kata-get-param analysisWideRootNoise"));
+      assertNull(env.source().wrn());
+      env.reply(124, "0.75");
+      assertEquals(0.75, env.source().wrn());
+    }
+  }
+
   @Test
   void sameConfirmedKomiAndSemanticRulesRestorePreserveTheSettingsToken() throws Exception {
     try (Environment env = new Environment()) {
