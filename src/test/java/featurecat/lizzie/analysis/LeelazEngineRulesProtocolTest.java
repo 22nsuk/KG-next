@@ -1020,7 +1020,7 @@ class LeelazEngineRulesProtocolTest {
       EngineManager.resetEngineGameTransactionStateForTest();
       output = fixtureOutput;
       engine = suppliedEngine == null ? liveEngine(output) : suppliedEngine;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.board = new Board();
     }
 
@@ -1084,7 +1084,7 @@ class LeelazEngineRulesProtocolTest {
 
     Leelaz replaceEngine() throws Exception {
       Leelaz replacement = liveEngine(new ByteArrayOutputStream());
-      Lizzie.leelaz = replacement;
+      Lizzie.setPrimaryEngine(replacement);
       return replacement;
     }
 
@@ -1114,7 +1114,7 @@ class LeelazEngineRulesProtocolTest {
       engine.cancelParameterRead();
       EngineManager.resetEngineGameTransactionStateForTest();
       Lizzie.config = previousConfig;
-      Lizzie.leelaz = previousLeelaz;
+      Lizzie.setPrimaryEngine(previousLeelaz);
       Lizzie.gtpConsole = previousConsole;
       Lizzie.board = previousBoard;
       Lizzie.frame = previousFrame;

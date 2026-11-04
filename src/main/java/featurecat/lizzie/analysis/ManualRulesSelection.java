@@ -377,15 +377,22 @@ public final class ManualRulesSelection {
           && primaryGeneration == other.primaryGeneration && secondary == other.secondary;
     }
 
-    // Only state snapshots and BoardData locks here: writers may hold endpoint/protocol locks.
-    synchronized void invalidate(Leelaz receiver) {
-      if (invalidated) return;
+    synchronized void supersededByFullInvalidation(Leelaz receiver) {
+      if (isCurrentSelection(receiver)) invalidated = true;
+    }
+
+    private boolean isCurrentSelection(Leelaz receiver) {
       Board currentBoard = board.get();
       Leelaz currentPrimary = primary.get();
-      if (currentBoard == null || currentPrimary == null || Lizzie.board != currentBoard
-          || currentBoard.getHistory() != history.get()
-          || Lizzie.capturePrimaryEngineGenerationSnapshot(currentPrimary) != primaryGeneration
-          || receiver != (secondary ? currentPrimary.activeComparisonEngine() : currentPrimary)) return;
+      return currentBoard != null && currentPrimary != null && Lizzie.board == currentBoard
+          && currentBoard.getHistory() == history.get()
+          && Lizzie.capturePrimaryEngineGenerationSnapshot(currentPrimary) == primaryGeneration
+          && receiver == (secondary ? currentPrimary.activeComparisonEngine() : currentPrimary);
+    }
+
+    // Only state snapshots and BoardData locks here: writers may hold endpoint/protocol locks.
+    synchronized void invalidate(Leelaz receiver) {
+      if (invalidated || !isCurrentSelection(receiver)) return;
       invalidated = true;
       for (WeakReference<BoardData> reference : retained) {
         BoardData data = reference.get();

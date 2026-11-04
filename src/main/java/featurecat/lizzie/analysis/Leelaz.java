@@ -1830,7 +1830,8 @@ public class Leelaz {
             manualRulesCacheOwner.set(null);
             // A mirrored command may reach this endpoint after the selection has settled.
             // Its retained cache guard belongs to this reader, not the request's completion.
-            if (binding.retainedManualRulesCache != null) {
+            if (!isUntrackedRulesWrite(command.queuedCommand)
+                && binding.retainedManualRulesCache != null) {
               binding.retainedManualRulesCache.invalidate(this);
             }
           }
@@ -13910,6 +13911,7 @@ public class Leelaz {
     // possible hang-up by missing response for some reason.
     // cmdQueue can be replaced with a mere String variable in this case,
     // but it is kept for future change of our mind.
+    boolean inheritedQueueLock = Thread.holdsLock(commandQueue());
     QueuedCommand queuedCommand;
     synchronized (commandQueue()) {
       if (exclusiveGtpSession != null
@@ -13991,6 +13993,17 @@ public class Leelaz {
         // State/clock publication may enqueue several ordered commands under the game fence.
         // The existing dispatcher owns delivery and its permit owns asynchronous failures.
         // Never let either a direct send or response-driven drain inherit that caller's lock.
+        requestCommandDispatchOffEventThread();
+        return;
+      }
+      if (isUntrackedRulesWrite(queueHead)
+          && (inheritedQueueLock || Thread.holdsLock(engineArbitrationLock())
+              || Thread.holdsLock(engineRulesLock)
+              || Thread.holdsLock(rulesObservationLock)
+              || (Lizzie.board != null && (Thread.holdsLock(Lizzie.board)
+                  || Thread.holdsLock(Lizzie.board.getHistory()))))) {
+        // Full-tree invalidation takes output -> selection -> PRIMARY -> history. Never inherit
+        // a producer's inner locks while entering that order from synchronous queue draining.
         requestCommandDispatchOffEventThread();
         return;
       }
@@ -14099,6 +14112,7 @@ public class Leelaz {
     EngineManager.TransactionlessAnalysisWriteLease transactionlessAnalysisWrite = null;
     EngineManager.EngineGameAnalysisWriteLease exactAnalysisWrite = null;
     EngineManager.EngineGameStateWriteLease exactStateWrite = null;
+    List<Runnable> rawRulesEffects = new ArrayList<>();
     boolean analysisOutputBindingLocked = false;
     boolean leela0110PonderPhysicalWriteLocked = false;
     boolean physicalWriteCompleted = false;
@@ -14165,18 +14179,36 @@ public class Leelaz {
         // Canonical physical-write order is transaction/global admission -> short selection
         // validation -> binding owner -> output stream. Never wait for either manager admission
         // while already owning the output monitor.
-        if ((publishesAnalysisOutputOwnership || stateMutation != AnalysisStateMutation.NONE)
+        boolean untrackedRulesWrite = isUntrackedRulesWrite(queuedCommand);
+        if ((publishesAnalysisOutputOwnership || stateMutation != AnalysisStateMutation.NONE
+                || untrackedRulesWrite)
             && analysisOutputTransaction == null) {
-          transactionlessAnalysisWrite =
-              EngineManager.claimTransactionlessAnalysisWrite(
-                  this,
-                  outputBinding,
-                  outputBinding == null ? null : outputBinding.analysisOutputRecoveryToken,
-                  queuedCommand.restoreAdmission == null ? null : queuedCommand.restoreAdmission.ownerIdentity);
-          if (transactionlessAnalysisWrite == null) {
-            throw new AnalysisOutputAdmissionFailure(
-                "analysis/state output is blocked by an unrelated game or recovery owner");
-          }
+          do {
+            transactionlessAnalysisWrite =
+                EngineManager.claimTransactionlessAnalysisWrite(
+                    this,
+                    outputBinding,
+                    outputBinding == null ? null : outputBinding.analysisOutputRecoveryToken,
+                    queuedCommand.restoreAdmission == null ? null : queuedCommand.restoreAdmission.ownerIdentity);
+            if (transactionlessAnalysisWrite == null) {
+              throw new AnalysisOutputAdmissionFailure(
+                  "analysis/state output is blocked by an unrelated game or recovery owner");
+            }
+            if (!untrackedRulesWrite) break;
+            Boolean began = beginUntrackedRulesWrite(queuedCommand, outputBinding, rawRulesEffects);
+            if (began != null) {
+              if (!began) {
+                queuedCommand.cancelBeforeOutputWrite(
+                    new IllegalStateException("Raw rules command lost foreground admission"));
+                finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
+                return null;
+              }
+              break;
+            }
+            transactionlessAnalysisWrite.close();
+            transactionlessAnalysisWrite = null;
+            Thread.yield();
+          } while (true);
         }
         if (queuedCommand.onResponse instanceof ManualGenmoveRequest
             && !((ManualGenmoveRequest) queuedCommand.onResponse).validAfterOutputAdmission()) {
@@ -14184,7 +14216,7 @@ public class Leelaz {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
         }
-        if (!queuedCommand.beginOutputWrite()) {
+        if (!untrackedRulesWrite && !queuedCommand.beginOutputWrite()) {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
         }
@@ -14431,6 +14463,7 @@ public class Leelaz {
         if (exactStateWrite != null) {
           exactStateWrite.close();
         }
+        for (Runnable effect : rawRulesEffects) effect.run();
       }
       if (physicalWriteCompleted) {
         try {
@@ -25322,6 +25355,50 @@ public class Leelaz {
       case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
       default -> false;
     };
+  }
+
+  private static boolean isUntrackedRulesWrite(QueuedCommand command) {
+    return command != null && isRulesMutationCommand(command.command)
+        && !(command.onResponse instanceof EngineRulesResponseHandler)
+        && command.restoreAdmission == null
+        && command.engineGameTransaction() == null
+        && command.restartBootstrapReceipt == null
+        && !command.foregroundRestoreCommand;
+  }
+
+  // Called with output admission, before binding/protocol locks. A null result requires releasing
+  // output admission before retrying PRIMARY, which a foreground restore may already own.
+  private Boolean beginUntrackedRulesWrite(
+      QueuedCommand command, ReaderStreamBinding binding, List<Runnable> afterAdmission) {
+    Leelaz primary = Lizzie.leelaz;
+    if (primary == null) return command.beginOutputWrite();
+    Leelaz mirror = primary.activeComparisonEngine();
+    long generation = Lizzie.capturePrimaryEngineGenerationSnapshot(primary);
+    return EngineManager.callIfCurrentAnalysisSelection(primary, mirror, null,
+        () -> Lizzie.tryCallIfPrimaryEngine(primary, generation, () -> {
+          if (this != primary && this != mirror) return command.beginOutputWrite();
+          Board board = Lizzie.board;
+          if (board == null) return command.beginOutputWrite();
+          BoardHistoryList history = board.getHistory();
+          synchronized (history) {
+            if (Lizzie.board != board || board.getHistory() != history) return null;
+            if (!command.beginOutputWrite()) return false;
+            synchronized (rulesObservationLock) {
+              // Raw commands have no confirming owner. Invalidate every current node on every
+              // physical attempt, including nodes added while queued and refilled old caches.
+              if (this == primary) board.clearBestMovesAfterForFirstEngine(history.getStart());
+              else board.clearBestMovesAfterForSecondEngine(history.getStart());
+              manualRulesCacheOwner.set(null);
+              if (binding.retainedManualRulesCache != null) {
+                binding.retainedManualRulesCache.supersededByFullInvalidation(this);
+              }
+            }
+            // An old streaming response must not refill the cache after rules change. Queued
+            // successor analyses retain their targets and may establish a new output owner.
+            invalidateAnalysisInfoPayloadForLocalStateChange(false, afterAdmission::add);
+            return true;
+          }
+        }));
   }
 
   /**

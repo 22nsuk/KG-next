@@ -62,6 +62,149 @@ class ManualRulesSelectionTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"false,kata-set-rules japanese", "true,kata-set-rules japanese",
+      "false,kata-set-rule ko SIMPLE", "true,kata-set-rule ko SIMPLE",
+      "false,kgs-rules japanese", "true,kgs-rules japanese",
+      "false,loadsgf external.sgf", "true,loadsgf external.sgf"})
+  void rawRulesWritesInvalidateCachesBeforeTheFirstManualSelection(boolean mirrored, String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      if (mirrored) f.addMirror(CHINESE);
+      assertTrue(f.primary.sendRawConsoleCommand(command));
+      f.reply(f.primary, f.transport, command, "", true);
+      if (mirrored) f.reply(f.mirror, f.mirrorTransport, command, "", true);
+      int primaryQueries = count(f.transport, "kata-get-rules");
+      var query = f.primary.queryEngineRulesOperation(1_000L);
+      await(() -> count(f.transport, "kata-get-rules") == primaryQueries + 1);
+      f.reply(f.primary, f.transport, "kata-get-rules", JAPANESE.toGtpArgument(), true);
+      assertTrue(query.await(1_000L).isConfirmed());
+      if (mirrored) {
+        int mirrorQueries = count(f.mirrorTransport, "kata-get-rules");
+        var mirrorQuery = f.mirror.queryEngineRulesOperation(1_000L);
+        await(() -> count(f.mirrorTransport, "kata-get-rules") == mirrorQueries + 1);
+        f.reply(f.mirror, f.mirrorTransport, "kata-get-rules", JAPANESE.toGtpArgument(), true);
+        assertTrue(mirrorQuery.await(1_000L).isConfirmed());
+      }
+      assertTrue(f.apply(JAPANESE).unchanged());
+      f.assertCaches(true, mirrored);
+
+      // The actual ordinary-analysis consumer must replace a deeper result from the old rules.
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      f.reply(f.primary, f.transport, "kata-analyze", "", true);
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+      assertEquals("Q16", f.history.getData().bestMoves.get(0).coordinate);
+    }
+  }
+
+  @Test
+  void rawRulesBoundaryCoversQueuedNodesAndRetiresOnlyThePreviousStream() throws Exception {
+    try (Fixture f = new Fixture()) {
+      assertTrue(f.apply(CHINESE).unchanged());
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      f.reply(f.primary, f.transport, "kata-analyze", "", true);
+      f.primary.requireResponseBeforeSend = true;
+      f.primary.sendCommandNoLeelaz2("name");
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      f.primary.sendCommandNoLeelaz2("kata-analyze 10");
+      f.assertCaches(false, false);
+      BoardData added = BoardData.empty(19, 19);
+      added.bestMoves = f.history.getData().bestMoves;
+      added.setPlayouts(100);
+      added.isChanged = false;
+      synchronized (f.history) { f.history.getStart().addAtLast(added); }
+
+      f.reply(f.primary, f.transport, "name", "KataGo", true);
+      assertTrue(added.isChanged, "Capture at enqueue would miss this node");
+      f.assertCaches(true, false);
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 1000 winrate 0.6 pv Q16");
+      f.assertCaches(true, false);
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      assertEquals(2, count(f.transport, "kata-analyze"), "Post-write analysis must still dispatch");
+      f.reply(f.primary, f.transport, "kata-analyze", "", true);
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+      assertFalse(f.history.getData().isChanged);
+
+      // A later raw write must invalidate refilled data even after a one-shot manual guard fired.
+      assertTrue(f.primary.sendRawConsoleCommand("kgs-rules chinese"));
+      assertTrue(f.history.getData().isChanged);
+      assertFalse(f.history.getData().hasReusablePrimaryAnalysis(10, false));
+      assertEquals(2, f.history.getData().primaryAnalysisRevision());
+    }
+  }
+
+  @Test
+  void historyReplacementWhileRawWriterWaitsInvalidatesTheLiveTree() throws Exception {
+    try (Fixture f = new Fixture()) {
+      BoardData replacementData = BoardData.empty(19, 19);
+      replacementData.bestMoves = f.history.getData().bestMoves;
+      replacementData.setPlayouts(100);
+      replacementData.isChanged = false;
+      BoardHistoryList replacement = new BoardHistoryList(replacementData);
+      FutureTask<Boolean> write = new FutureTask<>(() ->
+          f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      Thread writer = new Thread(write, "raw-rules-history-replacement");
+      try {
+        synchronized (f.history) {
+          writer.start();
+          await(() -> {
+            var info = ManagementFactory.getThreadMXBean().getThreadInfo(writer.getId());
+            return info != null && info.getThreadState() == Thread.State.BLOCKED
+                && info.getLockInfo() != null
+                && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(f.history);
+          });
+          Lizzie.board.setHistory(replacement);
+        }
+        assertTrue(write.get(3, TimeUnit.SECONDS));
+        assertTrue(replacementData.isChanged);
+        f.assertCaches(false, false);
+      } finally {
+        writer.join(3_000L);
+        assertFalse(writer.isAlive());
+      }
+    }
+  }
+
+  @Test
+  void rawRulesFromAHistoryLockedProducerUseTheCleanDispatcher() throws Exception {
+    try (Fixture f = new Fixture()) {
+      synchronized (f.history) {
+        assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+        assertEquals(0, count(f.transport, "kata-set-rules"));
+        f.assertCaches(false, false);
+      }
+      await(() -> count(f.transport, "kata-set-rules") == 1);
+      f.assertCaches(true, false);
+    }
+  }
+
+  @Test
+  void rawRulesWriteInvalidatesOnlyTheMirrorWhenItActuallyDrains() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.mirror.requireResponseBeforeSend = true;
+      f.mirror.sendCommandNoLeelaz2("name");
+      f.mirror.sendCommandNoLeelaz2("kata-set-rules japanese");
+      f.assertCaches(false, false);
+      f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+      f.assertCaches(false, true);
+    }
+  }
+
+  @Test
+  void rawRulesCancelledByReaderReplacementDoNotInvalidateAnalysis() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.primary.requireResponseBeforeSend = true;
+      f.primary.sendCommandNoLeelaz2("name");
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      f.primary.installFreshCommandOutputForTest(new ByteArrayOutputStream());
+      assertEquals(0, count(f.transport, "kata-set-rules"));
+      f.assertCaches(false, false);
+    }
+  }
+
+  @ParameterizedTest
   @CsvSource({"primary,kata-set-rules japanese", "mirror,kata-set-rules japanese",
       "console,kata-set-rules japanese", "primary,kata-set-rule ko SIMPLE",
       "mirror,kata-set-rule ko SIMPLE", "console,kata-set-rule ko SIMPLE",
@@ -179,10 +322,11 @@ class ManualRulesSelectionTest {
             });
           } catch (Exception failure) { throw new AssertionError(failure); }
           assertEquals(0, count(f.transport, "kgs-rules"));
-          selected[0] = f.apply(CHINESE);
-          assertFalse(selected[0].unchanged(), "Dequeue must not hide the selected writer");
+          assertTrue(f.primary.hasPendingRulesWrite(), "Dequeue must not hide the selected writer");
         });
         write.get(3, TimeUnit.SECONDS);
+        selected[0] = f.apply(CHINESE);
+        assertFalse(selected[0].unchanged());
         f.reply(f.primary, f.transport, "kgs-rules", "", true);
         f.confirmChange(CHINESE);
         await(selected[0]::isDone);
@@ -1011,7 +1155,7 @@ class ManualRulesSelectionTest {
       assertFalse(selection.unchanged());
       f.confirmChange(CHINESE);
       await(selection::isDone);
-      f.assertCaches(true, false);
+      f.assertCaches(true, false, 2L);
     }
   }
 
@@ -1038,7 +1182,7 @@ class ManualRulesSelectionTest {
       await(selection::isDone);
       assertEquals(target.revision() + 1, f.history.captureSessionRules().revision());
       assertTrue(f.primary.currentConfirmedRules().semanticallyEquals(CHINESE));
-      f.assertCaches(true, false);
+      f.assertCaches(true, false, 2L);
     }
   }
 
@@ -1172,6 +1316,10 @@ class ManualRulesSelectionTest {
     }
 
     void assertCaches(boolean primaryChanged, boolean secondaryChanged) {
+      assertCaches(primaryChanged, secondaryChanged, primaryChanged ? 1L : 0L);
+    }
+
+    void assertCaches(boolean primaryChanged, boolean secondaryChanged, long primaryRevision) {
       for (BoardData data : cached) {
         assertEquals(100, data.getPlayouts());
         assertEquals(100, data.getPlayouts2());
@@ -1180,7 +1328,7 @@ class ManualRulesSelectionTest {
         assertEquals(primaryChanged, data.isChanged);
         assertEquals(secondaryChanged, data.isChanged2);
         assertEquals(!primaryChanged, data.hasReusablePrimaryAnalysis(100, false));
-        assertEquals(primaryChanged ? 1L : 0L, data.primaryAnalysisRevision());
+        assertEquals(primaryRevision, data.primaryAnalysisRevision());
       }
     }
 
