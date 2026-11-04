@@ -15,7 +15,10 @@ import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.EngineRulesResult;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.ManualRulesSelection;
+import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import java.awt.Color;
 import java.awt.image.BufferedImage;
@@ -32,6 +35,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javax.swing.JComponent;
+import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.border.Border;
 import org.json.JSONObject;
@@ -54,6 +58,196 @@ class SetKataRulesWindowTest {
   private static final String JAPANESE =
       "{\"ko\":\"SIMPLE\",\"scoring\":\"TERRITORY\",\"tax\":\"SEKI\",\"suicide\":false,"
           + "\"hasButton\":false,\"whiteHandicapBonus\":\"0\",\"friendlyPassOk\":true}";
+
+  @Test
+  void unchangedConfirmPreservesAnalysisHiddenFieldsAndConfigFile() throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      HeadlessRulesDialog dialog = headlessDialog(fixture, POSITIONAL_CHINESE);
+      try {
+        BoardData data = seedAnalysis();
+        var target = Lizzie.board.getHistory().captureSessionRules();
+        Lizzie.config.updateConfigSections((ui, leelaz) -> ui.put("auto-load-kata-rules", false));
+        Path path = Path.of(Lizzie.config.getConfigFilePath());
+        var stamp = java.nio.file.attribute.FileTime.fromMillis(1_700_000_000_000L);
+        Files.setLastModifiedTime(path, stamp);
+        String configBefore = Files.readString(path);
+        String commands = fixture.output.toString();
+
+        SwingUtilities.invokeAndWait(dialog::applySelectedRules);
+
+        assertTrue(data.hasReusablePrimaryAnalysis(100, false),
+            "Unchanged rules must preserve cached analysis");
+        assertEquals(0L, data.primaryAnalysisRevision());
+        assertFalse(dialog.visible);
+        assertEquals(commands, fixture.output.toString(), "No redundant rules command is sent");
+        assertSame(target, Lizzie.board.getHistory().captureSessionRules());
+        assertEquals(configBefore, Files.readString(path));
+        assertEquals(stamp, Files.getLastModifiedTime(path));
+      } finally {
+        stopHeadlessDialog(dialog, fixture);
+      }
+    }
+  }
+
+  @Test
+  void startupPreferenceOnlyChangeSavesWithoutInvalidatingCurrentAnalysis() throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      HeadlessRulesDialog dialog = headlessDialog(fixture, POSITIONAL_CHINESE);
+      try {
+        BoardData data = seedAnalysis();
+        var target = Lizzie.board.getHistory().captureSessionRules();
+        SwingUtilities.invokeAndWait(() -> {
+          dialog.chkbxAutoLoadRules.setSelected(true);
+          dialog.applySelectedRules();
+        });
+
+        JSONObject saved = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())))
+            .getJSONObject("ui");
+        assertTrue(saved.getBoolean("auto-load-kata-rules"));
+        assertTrue(KataGoRules.parse(saved.getString("kata-rules")).orElseThrow()
+            .semanticallyEquals(KataGoRules.parse(POSITIONAL_CHINESE).orElseThrow()));
+        assertFalse(fixture.output.toString().contains("kata-set-rules"));
+        assertSame(target, Lizzie.board.getHistory().captureSessionRules());
+        assertTrue(data.hasReusablePrimaryAnalysis(100, false));
+      } finally {
+        stopHeadlessDialog(dialog, fixture);
+      }
+    }
+  }
+
+  @Test
+  void rejectionRecoveryDoesNotCloseEditorOrReportApplySuccessAndRetryKeepsHiddenFields()
+      throws Exception {
+    try (Fixture fixture = Fixture.ordinary()) {
+      HeadlessRulesDialog dialog = headlessDialog(fixture, POSITIONAL_CHINESE);
+      try {
+        BoardData data = seedAnalysis();
+        SwingUtilities.invokeAndWait(() -> {
+          dialog.editor.rdoTerritory.setSelected(true);
+          dialog.chkbxAutoLoadRules.setSelected(true);
+          dialog.applySelectedRules();
+        });
+        // Startup defaults are a separate preference and retain their existing pre-ack save behavior.
+        JSONObject saved = new JSONObject(Files.readString(Path.of(Lizzie.config.getConfigFilePath())))
+            .getJSONObject("ui");
+        assertEquals("TERRITORY", KataGoRules.parse(saved.getString("kata-rules"))
+            .orElseThrow().string("scoring"));
+        int openingQuery = commandIdFor(fixture.output.toString(), "kata-get-rules");
+        dispatch(fixture.engine, "?" + commandIdFor(fixture.output.toString(), "kata-set-rules")
+            + " rejected rules");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
+        while (commandIdFor(fixture.output.toString(), "kata-get-rules") == openingQuery
+            && System.nanoTime() < deadline) Thread.sleep(5L);
+        assertTrue(commandIdFor(fixture.output.toString(), "kata-get-rules") != openingQuery);
+        dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-get-rules")
+            + " " + POSITIONAL_CHINESE);
+        awaitManualCompletion(dialog);
+        awaitStatus(dialog, "Failed to set engine rules");
+        SwingUtilities.invokeAndWait(() -> {
+          assertTrue(dialog.hasRulesResponse());
+          assertFalse(dialog.getRules());
+          assertTrue(dialog.visible);
+          assertTrue(dialog.editor.rdoTerritory.isSelected());
+        });
+        assertTrue(data.hasReusablePrimaryAnalysis(100, false));
+
+        SwingUtilities.invokeAndWait(dialog::applySelectedRules);
+        KataGoRules retried = fixture.engine.engineRulesOperation().snapshot().requested();
+        assertEquals("X", retried.string("experimentalKo"));
+        dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-set-rules"));
+        dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-get-rules")
+            + " " + retried.toGtpArgument());
+        awaitManualCompletion(dialog);
+        awaitHidden(dialog);
+        assertFalse(data.hasReusablePrimaryAnalysis(100, false));
+        assertEquals(100, data.getPlayouts());
+      } finally {
+        stopHeadlessDialog(dialog, fixture);
+      }
+    }
+  }
+
+  private static BoardData seedAnalysis() {
+    BoardData data = Lizzie.board.getHistory().getData();
+    MoveData move = new MoveData();
+    move.coordinate = "D4";
+    move.playouts = 100;
+    move.winrate = 55;
+    move.variation = List.of("D4");
+    data.bestMoves = List.of(move);
+    data.setPlayouts(100);
+    data.isChanged = false;
+    return data;
+  }
+
+  /** Exercises the real action/editor/status worker without requiring a native top-level window. */
+  private static HeadlessRulesDialog headlessDialog(Fixture fixture, String initial) throws Exception {
+    var opening = fixture.engine.queryEngineRulesOperation();
+    dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-get-rules")
+        + " " + initial);
+    HeadlessRulesDialog dialog = allocate(HeadlessRulesDialog.class);
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        setDialogField(dialog, "engine", fixture.engine);
+        setDialogField(dialog, "resourceBundle", Lizzie.resourceBundle);
+        setDialogField(dialog, "lblStatus", new JFontLabel(""));
+        setDialogField(dialog, "lblKomiHint", new JFontLabel(""));
+        dialog.chkbxAutoLoadRules = new JFontCheckBox("startup");
+        KataRulesEditor editor = new KataRulesEditor(new JPanel(null), Lizzie.resourceBundle);
+        editor.apply(new JSONObject(initial));
+        setDialogField(dialog, "editor", editor);
+        setDialogField(dialog, "rulesOperation", opening);
+        dialog.visible = true;
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+    return dialog;
+  }
+
+  private static void setDialogField(SetKataRules dialog, String name, Object value)
+      throws ReflectiveOperationException {
+    Field field = SetKataRules.class.getDeclaredField(name);
+    field.setAccessible(true);
+    field.set(dialog, value);
+  }
+
+  private static void awaitManualCompletion(SetKataRules dialog) throws Exception {
+    Field field = SetKataRules.class.getDeclaredField("manualSelection");
+    field.setAccessible(true);
+    ManualRulesSelection selection = (ManualRulesSelection) field.get(dialog);
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4);
+    while (!selection.isDone() && System.nanoTime() < deadline) Thread.sleep(5L);
+    assertTrue(selection.isDone());
+  }
+
+  private static void stopHeadlessDialog(SetKataRules dialog, Fixture fixture) throws Exception {
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        var close = SetKataRules.class.getDeclaredMethod("closeDialog");
+        close.setAccessible(true);
+        close.invoke(dialog);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+    // Retire any unfinished operation before restoring global test state, including on assertion failure.
+    fixture.engine.queryEngineRulesOperation();
+    dispatch(fixture.engine, "=" + commandIdFor(fixture.output.toString(), "kata-get-rules")
+        + " " + CHINESE);
+    for (Thread worker : Thread.getAllStackTraces().keySet()) {
+      if (worker.getName().startsWith("lizzie-set-kata-rules-")) {
+        worker.join(3_000L);
+        assertFalse(worker.isAlive(), "Rules workers must finish before fixture restoration");
+      }
+    }
+  }
+
+  private static final class HeadlessRulesDialog extends SetKataRules {
+    volatile boolean visible;
+    @Override public void setVisible(boolean value) { visible = value; }
+    @Override public boolean isVisible() { return visible; }
+  }
 
   @Test
   void navigationFocusesScoringControlsWithoutChangingRulesOrSaving() throws Exception {
@@ -747,7 +941,7 @@ class SetKataRulesWindowTest {
       resetEngineGame();
       output = new ByteArrayOutputStream();
       engine = liveEngine(output);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.board = new Board();
     }
 
@@ -793,7 +987,7 @@ class SetKataRulesWindowTest {
         // Restore global Lizzie fields even if engine-game reset fails.
       }
       Lizzie.config = previousConfig;
-      Lizzie.leelaz = previousLeelaz;
+      Lizzie.setPrimaryEngine(previousLeelaz);
       Lizzie.leelaz2 = previousSecondary;
       Lizzie.gtpConsole = previousConsole;
       Lizzie.board = previousBoard;

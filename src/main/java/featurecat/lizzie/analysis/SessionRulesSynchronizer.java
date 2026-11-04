@@ -59,6 +59,14 @@ public final class SessionRulesSynchronizer {
 
   private SessionRulesSynchronizer() {}
 
+  static boolean manualRulesPending(Leelaz engine) {
+    Board board = Lizzie.board;
+    Leelaz primary = Lizzie.leelaz;
+    return board != null && primary != null
+        && (engine == primary || engine == primary.activeComparisonEngine())
+        && board.getHistory().hasPendingManualRulesIntent();
+  }
+
   public static Result capabilityDiscoveryFailed() {
     return failure(Failure.CAPABILITY_DISCOVERY_FAILED, null, null);
   }
@@ -108,6 +116,9 @@ public final class SessionRulesSynchronizer {
       Leelaz primary,
       Leelaz mirror,
       Leelaz engine) {
+    if ((engine == primary || engine == mirror) && history.hasPendingManualRulesIntent()) {
+      return false;
+    }
     if (target.kind() == BoardHistoryList.SessionRulesKind.UNSPECIFIED) {
       return true;
     }
@@ -151,12 +162,13 @@ public final class SessionRulesSynchronizer {
       return failure(Failure.ENGINE_UNAVAILABLE, null, null);
     }
     KataGoRules requested = target.parsedRules().orElseThrow();
-    EngineRulesResult current = engine.engineRulesResult();
-    if (current != null
-        && current.isConfirmed()
-        && current.observed() != null
-        && current.observed().semanticallyEquals(requested)) {
-      return success(current, current.observed());
+    // Earlier admitted work must settle before a historical match can justify skipping a set.
+    if (!engine.hasPendingRulesWrite()) {
+      EngineRulesResult current = engine.confirmedSessionRulesResult();
+      if (current != null && current.observed() != null
+          && current.observed().semanticallyEquals(requested)) {
+        return success(current, current.observed());
+      }
     }
 
     Leelaz.EngineRulesOperation[] operation = new Leelaz.EngineRulesOperation[1];
