@@ -103,7 +103,7 @@ class LeelazLoadSgfResponseBindingTest {
   void loadSgfBindsAfterConsumedToImmediateResponse() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new ImmediateResponseOutputStream(engine));
 
       Path sgfFile = Files.createTempFile("loadsgf-race-", ".sgf");
@@ -127,7 +127,7 @@ class LeelazLoadSgfResponseBindingTest {
   void unnumberedNumericPayloadResponsesConsumeOrdinaryCallbacks() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new PassiveOutputStream());
 
       String[] numericPayloadResponses = {"= 2", "= 7.5", "? 404"};
@@ -157,7 +157,7 @@ class LeelazLoadSgfResponseBindingTest {
   void queuedLoadSgfTimedOutBeforeSendIsDroppedAndNeverSentLater() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
 
       RecordingOutputStream output = new RecordingOutputStream();
@@ -195,7 +195,7 @@ class LeelazLoadSgfResponseBindingTest {
   void loadSgfSendFailureRetiresOutstandingResponseCount() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new FailingCommandOutputStream("loadsgf "));
 
       int outstandingBefore = outstandingResponseCount(engine);
@@ -224,7 +224,7 @@ class LeelazLoadSgfResponseBindingTest {
   void loadSgfNoResponseTimeoutRetiresOutstandingAndIsolatesLateResponse() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.isKatago = false;
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
@@ -268,7 +268,7 @@ class LeelazLoadSgfResponseBindingTest {
   void loadSgfNoResponseTimeoutAutoSendsAlreadyQueuedCommand() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
@@ -318,7 +318,7 @@ class LeelazLoadSgfResponseBindingTest {
   void queuedLoadSgfRecoverableFlushFailureAutoSendsAlreadyQueuedCommand() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
       RecordingFailingOutputStream output = new RecordingFailingOutputStream("loadsgf ");
       setOutputStream(engine, output);
@@ -379,7 +379,7 @@ class LeelazLoadSgfResponseBindingTest {
   void queuedLoadSgfRawWriteFailureClearsStaleBytesBeforeQueueAdvance() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
       RecordingOutputStream initialOutput = new RecordingOutputStream();
       setOutputStream(engine, initialOutput);
@@ -433,7 +433,7 @@ class LeelazLoadSgfResponseBindingTest {
   void queuedLoadSgfPartialRawWriteFailureInvalidatesPollutedOutputStream() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
       RecordingOutputStream initialOutput = new RecordingOutputStream();
       setOutputStream(engine, initialOutput);
@@ -499,7 +499,7 @@ class LeelazLoadSgfResponseBindingTest {
   void retiredLateLoadSgfResponseDoesNotAdvanceWindowOrSendQueuedCommandEarly() throws Exception {
     try (TestHarness harness = TestHarness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -964,7 +964,7 @@ class LeelazLoadSgfResponseBindingTest {
       Lizzie.config = minimalConfig();
       Lizzie.frame = allocate(SilentFrame.class);
       Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
-      Lizzie.leelaz = null;
+      Lizzie.setPrimaryEngine(null);
       Lizzie.leelaz2 = null;
       return harness;
     }
@@ -974,7 +974,7 @@ class LeelazLoadSgfResponseBindingTest {
       Lizzie.config = previousConfig;
       Lizzie.frame = previousFrame;
       Lizzie.gtpConsole = previousGtpConsole;
-      Lizzie.leelaz = previousLeelaz;
+      Lizzie.setPrimaryEngine(previousLeelaz);
       Lizzie.leelaz2 = previousLeelaz2;
     }
   }

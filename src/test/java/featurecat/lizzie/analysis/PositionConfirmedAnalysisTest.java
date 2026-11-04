@@ -153,7 +153,7 @@ class PositionConfirmedAnalysisTest {
     try (Fixture fixture = new Fixture()) {
       fixture.engine.sendCommand("undo");
       fixture.engine.sendCommand(command);
-      Lizzie.leelaz = new Leelaz("");
+      Lizzie.setPrimaryEngine(new Leelaz(""));
       fixture.respond(0, "=");
       assertEquals(List.of("undo"), fixture.transport.commands());
     }
@@ -421,7 +421,7 @@ class PositionConfirmedAnalysisTest {
       Lizzie.gtpConsole = allocate(GtpConsolePane.class);
       this.engine = engine;
       this.mirror = withMirror ? new Leelaz("") : null;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.leelaz2 = mirror;
       Lizzie.board = new Board();
       Lizzie.frame = allocate(LizzieFrame.class);
@@ -474,7 +474,7 @@ class PositionConfirmedAnalysisTest {
       Lizzie.board = previousBoard;
       Lizzie.frame = previousFrame;
       Lizzie.gtpConsole = previousGtpConsole;
-      Lizzie.leelaz = previousEngine;
+      Lizzie.setPrimaryEngine(previousEngine);
       Lizzie.leelaz2 = previousMirror;
     }
   }
