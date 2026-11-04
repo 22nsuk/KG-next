@@ -1789,6 +1789,9 @@ public class Leelaz {
     boolean fullRulesWrite = verb.equals("kata-set-rules");
     boolean loadSgf = verb.equals("loadsgf");
     boolean rulesWrite = !loadSgf && isRulesMutationCommand(normalized);
+    // Admitted exact snapshots contain position/komi, never RU. Their physical write still
+    // fences readbacks, but cannot revoke rules confirmation or retained analysis provenance.
+    boolean rulesMayChange = rulesWrite || (loadSgf && command.queuedCommand.restoreAdmission == null);
     if (condition == null && !parameterWrite && !rulesWrite && !loadSgf) return;
     command.provenanceBinding = binding;
     command.provenanceCondition = condition;
@@ -1798,7 +1801,7 @@ public class Leelaz {
       // Ordinary edits and parameter writes still retire a paused reassessment's settings token.
       boolean foregroundHandback = command.queuedCommand.foregroundRestoreCommand;
       boolean settingsWrite =
-          (loadSgf && command.queuedCommand.restoreAdmission == null)
+          (loadSgf && rulesMayChange)
               || (condition == AnalysisCondition.KOMI && !sameObservedKomi(binding, normalized))
               || (rulesWrite && !(fullRulesWrite && sameObservedRules(binding, normalized)));
       if (parameterWrite || (!foregroundHandback && settingsWrite)) {
@@ -1819,17 +1822,17 @@ public class Leelaz {
       synchronized (rulesObservationLock) {
         binding.rulesWriteSequence++;
         binding.reportedRules = "";
-        if (rulesWrite || command.queuedCommand.restoreAdmission == null) {
+        if (rulesMayChange) {
           binding.sessionRulesConfirmation = null;
-        }
-        if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
-            || rulesHandler.operation.currentIntent == null) {
-          // Revoke preservation for both this selection's settlement and any successor.
-          manualRulesCacheOwner.set(null);
-          // A mirrored command may reach this endpoint after the selection has settled.
-          // Its retained cache guard belongs to this reader, not the request's completion.
-          if (binding.retainedManualRulesCache != null) {
-            binding.retainedManualRulesCache.invalidate(this);
+          if (!(command.handler instanceof EngineRulesResponseHandler rulesHandler)
+              || !rulesHandler.operation.manualSelection) {
+            // Revoke preservation for both this selection's settlement and any successor.
+            manualRulesCacheOwner.set(null);
+            // A mirrored command may reach this endpoint after the selection has settled.
+            // Its retained cache guard belongs to this reader, not the request's completion.
+            if (binding.retainedManualRulesCache != null) {
+              binding.retainedManualRulesCache.invalidate(this);
+            }
           }
         }
       }
@@ -25358,18 +25361,10 @@ public class Leelaz {
     }
   }
 
-  /** Only readbacks with no intervening physical rules write can establish current rules. */
+  /** Confirmed rules remain current across admitted restores that do not change rules. */
   public KataGoRules currentConfirmedRules() {
-    synchronized (rulesObservationLock) {
-      ReaderStreamBinding binding = readerStreamBinding;
-      EngineRulesResult result = engineRulesResult;
-      if (binding == null || binding.terminated || binding.readerShutdownRequested
-          || result == null || !result.isConfirmed() || result.observed() == null) return null;
-      KataGoRules reported = KataGoRules.parse(binding.reportedRules).orElse(null);
-      return readerStreamBinding == binding && engineRulesResult == result
-              && reported != null && reported.semanticallyEquals(result.observed())
-          ? result.observed() : null;
-    }
+    EngineRulesResult result = confirmedSessionRulesResult();
+    return result == null ? null : result.observed();
   }
 
   /**
@@ -26175,7 +26170,10 @@ public class Leelaz {
     private final EngineManager.EngineGameOwnerTransaction engineGameTransaction;
     private final ReaderStreamBinding startupCommandBinding;
     private final ExactSnapshotRestoreAdmission restoreAdmission;
-    private final java.util.function.BooleanSupplier currentIntent;
+    // Physical writers need immutable origin even after terminal cleanup releases the callback.
+    private final boolean manualSelection;
+    // Guarded by engineRulesLock; only needed while protocol work can still be admitted.
+    private java.util.function.BooleanSupplier currentIntent;
     private final CompletableFuture<EngineRulesResult> completion = new CompletableFuture<>();
     private volatile EngineRulesResult snapshot;
     private volatile boolean accepted;
@@ -26199,6 +26197,7 @@ public class Leelaz {
       this.engineGameTransaction = engineGameTransaction;
       this.startupCommandBinding = startupCommandBinding;
       this.restoreAdmission = restoreAdmission;
+      this.manualSelection = currentIntent != null;
       this.currentIntent = currentIntent;
       this.snapshot = initial;
     }
@@ -26246,6 +26245,9 @@ public class Leelaz {
     private void markTerminalLocked(EngineRulesResult result) {
       terminal = true;
       snapshot = result;
+      // The active result, retired handlers and timeout workers can outlive the caller's board.
+      // Release its closure at the common terminal boundary, before publishing completion.
+      currentIntent = null;
     }
 
     private void installHandlerLocked(EngineRulesResponseHandler handler, boolean setCommand) {

@@ -22,6 +22,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -105,6 +106,10 @@ class ManualRulesSelectionTest {
         f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
         if (!route.equals("primary")) {
           f.reply(f.mirror, f.mirrorTransport, command, "", true);
+          // Creating the asynchronous operation precedes enqueue/dispatch. Wait for its actual
+          // corrective write, not just the pending operation observed above.
+          await(() -> f.mirrorTransport.commands().contains(
+              "kata-set-rules " + CHINESE.toGtpArgument()));
           List<String> mirrorCommands = f.mirrorTransport.commands();
           assertEquals("kata-set-rules " + CHINESE.toGtpArgument(),
               mirrorCommands.get(mirrorCommands.size() - 1));
@@ -216,6 +221,121 @@ class ManualRulesSelectionTest {
       assertTrue(replacement.await(1_000L).isConfirmed());
       assertTrue(f.apply(CHINESE).unchanged());
       assertEquals(0, count(f.transport, "kata-set-rules"));
+      f.assertCaches(false, false);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"unchanged,false", "unchanged,true", "rejected,false", "rejected,true",
+      "recovering,false", "recovering,true"})
+  void exactPositionRestorePreservesRetainedAnalysisUntilAnExternalWrite(
+      String selectionState, boolean comparison) throws Exception {
+    try (Fixture f = new Fixture()) {
+      if (comparison) f.addMirror(CHINESE);
+      ManualRulesSelection selection = f.apply(
+          selectionState.equals("unchanged") ? CHINESE : JAPANESE);
+      if (!selectionState.equals("unchanged")) {
+        f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+        f.awaitRecovery();
+        if (selectionState.equals("rejected")) {
+          f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+          await(selection::isDone);
+        }
+      }
+      f.assertCaches(false, false);
+      f.restoreResponses = true;
+      ExactSnapshotEngineRestore.prepareCurrentPosition(
+          f.primary.captureHistoryNavigationExactSnapshotRestoreAdmission(f.mirror),
+          f.cached.get(0)).execute();
+      assertEquals(comparison ? 2 : 1, f.restoredSgfs.size());
+      for (String sgf : f.restoredSgfs) assertFalse(sgf.contains("RU["));
+      if (selectionState.equals("recovering")) {
+        // The physical snapshot fence rejects this older readback, but cannot revoke cache
+        // provenance: the rejected setter and the admitted restore did not change the rules.
+        f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+        await(selection::isDone);
+      }
+      f.assertCaches(false, false);
+      if (!selectionState.equals("recovering")) {
+        var target = f.history.captureSessionRules();
+        var commands = f.transport.commands();
+        assertTrue(f.apply(CHINESE).unchanged(),
+            "An admitted rules-preserving restore must not make the next identical choice a change");
+        assertSame(target, f.history.captureSessionRules());
+        assertEquals(commands, f.transport.commands());
+        f.assertCaches(false, false);
+      }
+
+      // A harmless restore must not consume the guard protecting against a later real writer.
+      f.restoreResponses = false;
+      assertTrue(f.primary.sendRawConsoleCommand("loadsgf external.sgf"));
+      f.reply(f.primary, f.transport, "loadsgf external.sgf", "", true);
+      if (comparison) f.reply(f.mirror, f.mirrorTransport, "loadsgf external.sgf", "", true);
+      f.assertCaches(true, comparison);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"confirmed", "rejected", "query-failed", "timeout", "replaced",
+      "send-failed", "unconfirmed"})
+  void terminalRulesOperationsReleaseTheirIntent(String outcome) throws Exception {
+    try (Fixture f = new Fixture()) {
+      if (outcome.equals("send-failed")) f.failSetWrite = true;
+      if (outcome.equals("unconfirmed")) f.primary.advertiseCommandsForTest(List.of("kata-set-rules"));
+      BooleanSupplier intent = () -> Lizzie.board.getHistory() == f.history;
+      var operation = f.primary.applyManualRulesOperation(JAPANESE,
+          outcome.equals("timeout") ? 40L : 30_000L, intent);
+      Field callback = Leelaz.EngineRulesOperation.class.getDeclaredField("currentIntent");
+      callback.setAccessible(true);
+      if (!outcome.equals("timeout") && !outcome.equals("send-failed")) {
+        assertSame(intent, callback.get(operation));
+      }
+      switch (outcome) {
+        case "confirmed" -> f.confirmChange(JAPANESE);
+        case "rejected" -> f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+        case "query-failed" -> {
+          f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+          f.reply(f.primary, f.transport, "kata-get-rules", "query failed", false);
+        }
+        case "unconfirmed" -> f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+        case "replaced" -> {
+          f.primary.queryEngineRulesOperation(1_000L);
+          f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+        }
+        default -> { }
+      }
+      assertNotNull(operation.await(2_000L));
+      var result = operation.result();
+      assertEquals(switch (outcome) {
+        case "confirmed" -> EngineRulesResult.Reason.NONE;
+        case "rejected" -> EngineRulesResult.Reason.SET_REJECTED;
+        case "query-failed" -> EngineRulesResult.Reason.QUERY_REJECTED;
+        case "timeout" -> EngineRulesResult.Reason.SET_TIMEOUT;
+        case "replaced" -> EngineRulesResult.Reason.REPLACED;
+        case "send-failed" -> EngineRulesResult.Reason.SEND_FAILED;
+        case "unconfirmed" -> EngineRulesResult.Reason.QUERY_UNSUPPORTED;
+        default -> throw new AssertionError(outcome);
+      }, result.reason());
+      assertNull(callback.get(operation), "Terminal protocol work must release its caller's history");
+      Lizzie.board.setHistory(new BoardHistoryList(BoardData.empty(19, 19)));
+      assertSame(result, operation.result(), "Releasing caller ownership must retain the result");
+    }
+  }
+
+  @Test
+  void rejectedManualSelectionReleasesBothSetterAndRecoveryIntents() throws Exception {
+    try (Fixture f = new Fixture()) {
+      ManualRulesSelection selection = f.apply(JAPANESE);
+      f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+      f.awaitRecovery();
+      var recovery = f.primary.engineRulesOperation();
+      f.reply(f.primary, f.transport, "kata-get-rules", CHINESE.toGtpArgument(), true);
+      await(selection::isDone);
+      Field callback = Leelaz.EngineRulesOperation.class.getDeclaredField("currentIntent");
+      callback.setAccessible(true);
+      assertNull(callback.get(selection.operation()));
+      assertNull(callback.get(recovery));
+      assertSame(recovery, f.primary.engineRulesOperation());
       f.assertCaches(false, false);
     }
   }
@@ -950,6 +1070,17 @@ class ManualRulesSelectionTest {
     final ExactSnapshotRestoreProtocolFixture.Transport transport;
     ExactSnapshotRestoreProtocolFixture.Transport mirrorTransport;
     boolean failSetWrite;
+    boolean restoreResponses;
+    final List<String> restoredSgfs = new ArrayList<>();
+
+    ExactSnapshotRestoreProtocolFixture.Response restoreResponse(String command) throws Exception {
+      if (!restoreResponses) return null;
+      if (command.startsWith("loadsgf ")) {
+        restoredSgfs.add(Files.readString(Path.of(command.substring("loadsgf ".length()))));
+      }
+      return command.equals("clear_board") || command.equals("name") || command.startsWith("loadsgf ")
+          ? ExactSnapshotRestoreProtocolFixture.Response.success() : null;
+    }
 
     Fixture() throws Exception {
       EngineManager.resetEngineGameTransactionStateForTest();
@@ -967,7 +1098,7 @@ class ManualRulesSelectionTest {
         if (failSetWrite && command.startsWith("kata-set-rules")) {
           throw new IOException("Failure after the command bytes reached the transport");
         }
-        return null;
+        return restoreResponse(command);
       });
       Lizzie.setPrimaryEngine(primary);
       Lizzie.leelaz2 = null;
@@ -997,7 +1128,7 @@ class ManualRulesSelectionTest {
     void addMirror(KataGoRules rules) throws Exception {
       mirror = new Leelaz("");
       initialize(mirror);
-      mirrorTransport = ExactSnapshotRestoreProtocolFixture.install(mirror, command -> null);
+      mirrorTransport = ExactSnapshotRestoreProtocolFixture.install(mirror, this::restoreResponse);
       Lizzie.config.extraMode = ExtraMode.Double_Engine;
       Lizzie.leelaz2 = mirror;
       mirror.queryEngineRulesOperation(1_000L);
