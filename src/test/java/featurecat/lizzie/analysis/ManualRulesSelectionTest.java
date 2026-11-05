@@ -324,6 +324,79 @@ class ManualRulesSelectionTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"kata-set-rules japanese,kata-analyze,true",
+      "KATA-SET-RULES japanese,KATA-ANALYZE,false",
+      "kata-set-rules japanese,KaTa-AnAlYzE,false",
+      "kata-set-rules invalid,KATA-ANALYZE,true",
+      "kgs-rules japanese,kata-analyze,false",
+      "kata-set-rule ko SIMPLE,KATA-ANALYZE,true"})
+  void websocketRulesWaitForOldQueryBeforeReleasingSuccessor(
+      String rulesCommand, String analyzeCommand, boolean ackFirst) throws Exception {
+    try (Fixture f = new Fixture(); TransportHarness remote = TransportHarness.open()) {
+      f.primary.installCommandOutputForTest(remote.transport().stdin());
+      assertTrue(f.primary.sendRawConsoleCommand("120 kata-analyze B 10"));
+      pumpRemote(f, remote);
+      remote.emitAnalysis(0, true, 200);
+      pumpRemote(f, remote);
+      assertEquals(200, f.history.getData().getPlayouts());
+      assertTrue(f.primary.sendRawConsoleCommand("121" + rulesCommand));
+      String early = pumpRemote(f, remote);
+      assertFalse(early.contains("=121") || early.contains("?121"), early);
+      assertTrue(f.history.getData().isChanged);
+      assertTrue(f.primary.sendRawConsoleCommand("122\t" + analyzeCommand + " B 10 # comment"));
+      remote.emitAnalysis(0, true, 777);
+      pumpRemote(f, remote);
+      assertEquals(200, f.history.getData().getPlayouts(), "Old partial must not repopulate cache");
+      var terminate = remote.sentQuery(1);
+      assertEquals("terminate", terminate.getString("action"));
+      if (ackFirst) remote.emit(terminate);
+      else remote.emitAnalysis(0, false, 888);
+      assertFalse(pumpRemote(f, remote).contains("121"));
+      if (ackFirst) remote.emitAnalysis(0, false, 888);
+      else remote.emit(terminate);
+      pumpRemote(f, remote);
+      pumpRemote(f, remote); // successor response produced while consuming the rules response
+      assertEquals(200, f.history.getData().getPlayouts());
+      var successor = remote.sentQuery(2);
+      assertEquals(rulesCommand.toLowerCase(java.util.Locale.ROOT).equals("kata-set-rules japanese")
+          ? "TERRITORY" : "AREA", successor.getJSONObject("rules").getString("scoring"));
+      remote.emitAnalysis(0, true, 999); // late/duplicate packets remain retired
+      remote.emit(terminate);
+      assertEquals("", pumpRemote(f, remote));
+      remote.emitAnalysis(2, true, 20);
+      pumpRemote(f, remote);
+      assertEquals(20, f.history.getData().getPlayouts(), "Only successor may publish fresh results");
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"KATA-ANALYZE", "KaTa-AnAlYzE"})
+  void websocketUppercaseAnalysisAfterStoppedRulesChangePublishesResults(String verb)
+      throws Exception {
+    try (Fixture f = new Fixture(); TransportHarness remote = TransportHarness.open()) {
+      f.primary.installCommandOutputForTest(remote.transport().stdin());
+      assertTrue(f.primary.sendRawConsoleCommand("123 kata-set-rules japanese"));
+      pumpRemote(f, remote);
+      assertTrue(f.primary.sendRawConsoleCommand("124" + verb + " B 10"));
+      pumpRemote(f, remote);
+      remote.emitAnalysis(0, true, 20);
+      pumpRemote(f, remote);
+      assertEquals(20, f.history.getData().getPlayouts());
+    }
+  }
+
+  private static String pumpRemote(Fixture f, TransportHarness remote) throws Exception {
+    var input = remote.transport().stdout();
+    String output = new String(input.readNBytes(input.available()),
+        java.nio.charset.StandardCharsets.UTF_8);
+    output.lines().forEach(line -> {
+      if (line.startsWith("info ")) f.primary.parseAnalysisLineForTest(line);
+      else f.primary.processCommandResponseLineForTest(line);
+    });
+    return output;
+  }
+
+  @ParameterizedTest
   @NullAndEmptySource
   @ValueSource(strings = {" ", "# comment", "\t\r\u0001", "한글", "0", "123 # comment",
       "1000000000 name", "2147483647 name", "0000000001 name", "0000000000 name",

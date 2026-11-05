@@ -328,6 +328,111 @@ public class KataGoAnalysisWebSocketTransportTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void rulesBarrierOrdersQueuedCommandsAndWaitsForQuerySend(boolean explicitStop) throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      CompletableFuture<WebSocket> send = harness.webSocket.deferNextSend();
+      writeGtp(harness.transport, "10 kata-analyze B 10");
+      String id = harness.webSocket.sentJson(0).getString("id");
+      if (explicitStop) writeGtp(harness.transport, "11 stop");
+      writeGtp(harness.transport, "12 KATA-SET-RULES japanese");
+      writeGtp(harness.transport, "13 kata-set-rules chinese");
+      writeGtp(harness.transport, "14 kata-get-rules");
+      writeGtp(harness.transport, "15 stop");
+      writeGtp(harness.transport, "16 KATA-ANALYZE B 10");
+      assertEquals(2, harness.webSocket.sentTexts.size());
+      assertEquals("", readAvailable(harness.transport.stdout()));
+      JSONObject terminate = harness.webSocket.sentJson(1);
+      harness.webSocket.emit(terminate);
+      harness.webSocket.emit(finalWithoutResults(id));
+      assertEquals("", readAvailable(harness.transport.stdout()));
+      send.complete(harness.webSocket);
+      String output = readAvailable(harness.transport.stdout());
+      assertTrue(output.startsWith("=10\n\n" + (explicitStop ? "=11\n\n" : "")
+          + "=12\n\n=13\n\n=14 "), output);
+      assertTrue(output.endsWith("\n\n=15\n\n=16\n"), output);
+      assertEquals("AREA", harness.webSocket.sentJson(2).getJSONObject("rules").getString("scoring"));
+      harness.webSocket.emit(terminate);
+      harness.webSocket.emit(analysisResponse(id, true, "Q16", 999));
+      assertEquals("", readAvailable(harness.transport.stdout()));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"GENMOVE B", "KATA-GENMOVE_ANALYZE B 10"})
+  void rulesBarrierPreservesPendingGenmoveResponse(String command) throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      writeGtp(harness.transport, "10 " + command);
+      String id = harness.webSocket.sentJson(0).getString("id");
+      writeGtp(harness.transport, "11 kata-set-rules japanese");
+      writeGtp(harness.transport, "12 KATA-ANALYZE W 10");
+      assertEquals("", readAvailable(harness.transport.stdout()));
+      harness.webSocket.emit(harness.webSocket.sentJson(1));
+      assertEquals("", readAvailable(harness.transport.stdout()));
+      harness.webSocket.emit(analysisResponse(id, false, "D4", 100));
+      String output = readAvailable(harness.transport.stdout());
+      assertTrue(output.endsWith("=10 D4\n\n=11\n\n=12\n"), output);
+      JSONObject successor = harness.webSocket.sentJson(2);
+      assertEquals("TERRITORY", successor.getJSONObject("rules").getString("scoring"));
+      assertEquals(java.util.List.of(java.util.List.of("B", "D4")),
+          successor.getJSONArray("moves").toList());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void loadSgfDrainsOldQueryEvenWhenFileIsRejected(boolean valid) throws Exception {
+    Path snapshot = Files.createTempFile("CaseSensitive-한글#", ".sgf");
+    try (TransportHarness harness = TransportHarness.open()) {
+      Files.writeString(snapshot, valid ? "(;FF[4]GM[1]CA[UTF-8]SZ[9]PL[B])" : "invalid");
+      writeGtp(harness.transport, "30 kata-analyze B 10");
+      String id = harness.webSocket.sentJson(0).getString("id");
+      readAvailable(harness.transport.stdout());
+      writeGtp(harness.transport, "31LOADSGF " + snapshot);
+      assertEquals("", readAvailable(harness.transport.stdout()));
+      harness.webSocket.emit(finalWithoutResults(id));
+      harness.webSocket.emit(harness.webSocket.sentJson(1));
+      String output = readAvailable(harness.transport.stdout());
+      assertTrue(output.startsWith(valid ? "\n=31\n\n" : "\n?31 "), output);
+      assertEquals("=32\n", sendGtp(harness.transport, "32 KATA-ANALYZE B 10"));
+      assertEquals(valid ? 9 : 19, harness.webSocket.sentJson(2).getInt("boardXSize"));
+    } finally {
+      Files.deleteIfExists(snapshot);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"terminate-send", "server-error", "close", "quit", "timeout"})
+  void failedRulesDrainCannotAcknowledgeOrExecuteDeferredCommands(String failure) throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      writeGtp(harness.transport, "20 kata-analyze B 10");
+      String id = harness.webSocket.sentJson(0).getString("id");
+      readAvailable(harness.transport.stdout());
+      if (failure.equals("terminate-send")) harness.webSocket.failNextSend(new IOException("failed"));
+      writeGtp(harness.transport, "21 kata-set-rules japanese");
+      if (failure.equals("server-error")) {
+        harness.webSocket.emit(new JSONObject().put("id", id).put("error", "failed"));
+      } else if (failure.equals("close")) {
+        harness.closeFromServer(1001, "closed");
+      } else if (failure.equals("quit")) {
+        writeGtp(harness.transport, "22 quit");
+      } else if (failure.equals("timeout")) {
+        var field = KataGoAnalysisWebSocketTransport.class.getDeclaredField("activeQuery");
+        field.setAccessible(true);
+        Object query = field.get(harness.transport);
+        var expire = KataGoAnalysisWebSocketTransport.class.getDeclaredMethod("expireStop", query.getClass());
+        expire.setAccessible(true);
+        expire.invoke(harness.transport, query); // controlled deadline, no 20-second sleep
+      }
+      assertFalse(harness.transport.isOpen());
+      String output = readAvailable(harness.transport.stdout());
+      assertFalse(output.contains("=21"), output);
+      assertEquals(2, harness.webSocket.sentTexts.size());
+      assertEof(harness.transport.stdout());
+    }
+  }
+
   @Test
   void duplicateStopAndTerminalEventsCompleteOnlyOnce() throws Exception {
     try (TransportHarness harness = TransportHarness.open()) {
@@ -1429,6 +1534,21 @@ public class KataGoAnalysisWebSocketTransportTest {
 
     public KataGoAnalysisWebSocketTransport transport() {
       return transport;
+    }
+
+    public JSONObject sentQuery(int index) {
+      return webSocket.sentJson(index);
+    }
+
+    public void emit(JSONObject response) {
+      webSocket.emit(response);
+    }
+
+    public void emitAnalysis(int index, boolean partial, int visits) {
+      JSONObject response = analysisResponse(sentQuery(index).getString("id"), partial, "Q16", visits);
+      response.getJSONArray("moveInfos").getJSONObject(0).put("winrate", 0.6)
+          .put("pv", new JSONArray().put("Q16"));
+      webSocket.emit(response);
     }
 
     public void closeFromServer(int statusCode, String reason) {

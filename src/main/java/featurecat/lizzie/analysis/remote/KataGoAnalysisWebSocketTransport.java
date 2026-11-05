@@ -22,6 +22,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.Timer;
+import java.util.TimerTask;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -35,6 +37,7 @@ import org.json.JSONTokener;
 /** Adapts KaTrain-compatible KataGo Analysis Engine WebSocket links to Lizzie's GTP flow. */
 public class KataGoAnalysisWebSocketTransport implements EngineTransport {
   private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(20);
+  private static final Duration STOP_TIMEOUT = Duration.ofSeconds(20);
   private static final int DEFAULT_BOARD_SIZE = 19;
   private static final int LIVE_ANALYSIS_MAX_VISITS = 10_000_000;
   private static final double DEFAULT_MOVE_MAX_TIME = 1e20;
@@ -192,6 +195,7 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
       webSocket = null;
       ActiveQuery query = activeQuery;
       if (query != null) {
+        cancelStopTimeout(query);
         query.completed = true;
         if (activeQuery == query) {
           activeQuery = null;
@@ -240,6 +244,15 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     String responseId = parsed.id() == GtpCommandText.NO_ID ? "" : Integer.toString(parsed.id());
     String line = parsed.payload();
     String lower = line.toLowerCase(Locale.ROOT);
+    // Even a rejected rules write is a drain boundary for the GUI. Keep subsequent commands
+    // ordered behind it, including readbacks and stop, until both terminal events arrive.
+    // quit still tears down immediately; failure/close discards the deferred work.
+    if (!lower.equals("quit") && activeQuery != null
+        && (parsed.mutatesRules() || !activeQuery.commandsAfterQuery.isEmpty())) {
+      activeQuery.commandsAfterQuery.addLast(rawLine);
+      requestStop(null);
+      return;
+    }
     try {
       if (line.isEmpty()) {
         writeError(responseId, "empty command");
@@ -953,6 +966,13 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     query.stopRequested = true;
     query.stopGtpResponseId = responseId;
     query.terminateQueryId = "terminate-" + query.queryId;
+    query.stopTimeout = new Timer("websocket-analysis-stop", true);
+    query.stopTimeout.schedule(new TimerTask() {
+      @Override
+      public void run() {
+        expireStop(query);
+      }
+    }, STOP_TIMEOUT.toMillis());
     WebSocket current = webSocket;
     if (current != null && open.get()) {
       JSONObject terminate = new JSONObject();
@@ -971,6 +991,18 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     } else {
       completeTerminateSend(query, new IOException("websocket transport is closed"));
     }
+  }
+
+  private synchronized void expireStop(ActiveQuery query) {
+    if (activeQuery == query && !query.completed && query.stopRequested) {
+      writeStderrLine("Timed out waiting for websocket analysis termination.");
+      abort();
+    }
+  }
+
+  private static void cancelStopTimeout(ActiveQuery query) {
+    Timer timer = query.stopTimeout;
+    if (timer != null) timer.cancel();
   }
 
   private synchronized void completeTerminateSend(ActiveQuery query, Throwable failure) {
@@ -1010,14 +1042,18 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
         || !query.terminateAcknowledged) {
       return;
     }
-    writeOk(query.stopGtpResponseId, "");
+    if (query.stopGtpResponseId != null) writeOk(query.stopGtpResponseId, "");
     completeActiveQuery(query);
+    while (isOpen() && !query.commandsAfterQuery.isEmpty()) {
+      handleCommandLine(query.commandsAfterQuery.removeFirst());
+    }
   }
 
   private void completeActiveQuery(ActiveQuery query) {
     if (activeQuery != query || query.completed) {
       return;
     }
+    cancelStopTimeout(query);
     query.completed = true;
     activeQuery = null;
   }
@@ -1205,8 +1241,10 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     private final boolean genmove;
     private final String genmoveColor;
     private final QueryParameters parameterSnapshot;
+    private volatile Timer stopTimeout;
     private String terminateQueryId = "";
     private String stopGtpResponseId = "";
+    private final ArrayDeque<String> commandsAfterQuery = new ArrayDeque<>();
     private final List<JSONObject> pendingResponses = new ArrayList<>();
     private boolean sendCompleted;
     private boolean responseStarted;

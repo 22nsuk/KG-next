@@ -1,5 +1,7 @@
 package featurecat.lizzie.analysis;
 
+import java.util.Locale;
+
 /**
  * Parsed view only: preserve the original command, including its ID, on the wire.
  * GTP strips controls/comments and treats tabs as spaces before parsing the optional ID.
@@ -14,6 +16,7 @@ public record GtpCommandText(String payload, int id, String wireId) {
     return wireId.length() <= 9 && (wireId.isEmpty() || id != NO_ID);
   }
 
+  /** Semantic classification is case-insensitive; payload and wire arguments stay literal. */
   public String verb() {
     return payload.split("\\s+", 2)[0];
   }
@@ -59,7 +62,14 @@ public record GtpCommandText(String payload, int id, String wireId) {
       if (c == '\t') text.append(' ');
       else if (c >= ' ' && c <= '~') text.append(c);
     }
-    return parseEnvelope(text.toString().trim());
+    GtpCommandText parsed = parseEnvelope(text.toString().trim());
+    // Normalize only the verb so every payload consumer shares the adapter's command semantics.
+    // Case-sensitive parameter names, JSON values and filenames must remain untouched.
+    String payload = parsed.payload();
+    int separator = payload.indexOf(' ');
+    String normalized = separator < 0 ? payload.toLowerCase(Locale.ROOT)
+        : payload.substring(0, separator).toLowerCase(Locale.ROOT) + payload.substring(separator);
+    return new GtpCommandText(normalized, parsed.id(), parsed.wireId());
   }
 
   /** Retains literal local filenames; only adapters implementing local loadsgf use this view. */
