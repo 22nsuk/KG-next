@@ -1,5 +1,6 @@
 package featurecat.lizzie.analysis.remote;
 
+import featurecat.lizzie.analysis.GtpCommandText;
 import featurecat.lizzie.util.NetworkProxy;
 import io.socket.client.IO;
 import io.socket.client.Socket;
@@ -1011,21 +1012,7 @@ public class ZhiziGtpTransport implements EngineTransport {
     }
 
     private static String normalizedCommand(String command) {
-      String normalized = firstCommandLine(command).trim();
-      int separator = normalized.indexOf(' ');
-      if (separator > 0
-          && normalized.substring(0, separator).chars().allMatch(Character::isDigit)) {
-        return normalized.substring(separator + 1).trim();
-      }
-      return normalized;
-    }
-
-    private static String firstCommandLine(String command) {
-      if (command == null) {
-        return "";
-      }
-      int newline = command.indexOf('\n');
-      return newline >= 0 ? command.substring(0, newline) : command;
+      return GtpCommandText.parse(command).payload();
     }
   }
 

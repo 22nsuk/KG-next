@@ -248,7 +248,7 @@ public class Leelaz {
 
   // private static final long MINUTE = 60 * 1000; // number of milliseconds in a minute
   private static final Runnable NO_OP_RESPONSE_HANDLER = () -> {};
-  private static final int NO_RESPONSE_COMMAND_ID = -1;
+  private static final int NO_RESPONSE_COMMAND_ID = GtpCommandText.NO_ID;
   private static final long FOREGROUND_INITIAL_STOP_TIMEOUT_MILLIS = 8000L;
   private static final long FOREGROUND_RELEASE_STOP_TIMEOUT_MILLIS = 8000L;
   private static final long STARTUP_COMMAND_DELIVERY_TIMEOUT_MILLIS = 8000L;
@@ -11993,8 +11993,7 @@ public class Leelaz {
     // Reject these envelopes before queue admission/mirroring, not by weakening reply ownership.
     if (parsed.payload().isEmpty()
         || command.indexOf('\n') >= 0
-        || parsed.wireId().length() > 9
-        || (!parsed.wireId().isEmpty() && parsed.id() == NO_RESPONSE_COMMAND_ID)) {
+        || !parsed.hasSupportedId()) {
       if (Lizzie.gtpConsole != null) {
         Lizzie.gtpConsole.addErrorLine(
             "GTP command rejected: enter one nonempty command with an optional ID of at most 9 digits.");
@@ -25258,73 +25257,6 @@ public class Leelaz {
 
   public EngineRulesResult engineRulesResult() {
     return engineRulesResult;
-  }
-
-  /**
-   * Parsed view only: preserve the original command, including its ID, on the wire.
-   * GTP strips controls/comments and treats tabs as spaces before parsing the optional ID.
-   * KataGo also discards non-ASCII input and accepts an ID directly adjacent to the verb
-   * (e.g. 123kata-set-rules).
-   */
-  private record GtpCommandText(String payload, int id, String wireId) {
-    String verb() {
-      return payload.split("\\s+", 2)[0];
-    }
-
-    // All analysis lifecycle decisions use the same parsed verb, never the wire prefix or a
-    // second parse of payload ("123 456 kata-analyze" is not an analysis command).
-    boolean isOrdinaryAnalysis() {
-      return switch (verb()) {
-        case "kata-analyze", "lz-analyze", "analyze" -> true;
-        default -> false;
-      };
-    }
-
-    boolean isAnalyze() {
-      return isOrdinaryAnalysis() || switch (verb()) {
-        case "kata-genmove_analyze", "lz-genmove_analyze", "genmove_analyze" -> true;
-        default -> false;
-      };
-    }
-
-    boolean startsAnalysisPayload() {
-      return isAnalyze() || verb().equals("genmove");
-    }
-
-    String withPayload(String original, String replacement) {
-      if (payload.equals(replacement)) return original;
-      return wireId.isEmpty() ? replacement : wireId + " " + replacement;
-    }
-
-    boolean mutatesRules() {
-      return switch (verb()) {
-        case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
-        default -> false;
-      };
-    }
-
-    static GtpCommandText parse(String command) {
-      if (command == null) return new GtpCommandText("", NO_RESPONSE_COMMAND_ID, "");
-      StringBuilder text = new StringBuilder(command.length());
-      for (int i = 0; i < command.length(); i++) {
-        char c = command.charAt(i);
-        if (c == '#' || c == '\n') break;
-        if (c == '\t') text.append(' ');
-        else if (c >= ' ' && c <= '~') text.append(c);
-      }
-      String line = text.toString().trim();
-      int end = 0;
-      while (end < line.length() && isAsciiDigit(line.charAt(end))) end++;
-      int id = NO_RESPONSE_COMMAND_ID;
-      if (end > 0) {
-        try {
-          id = Integer.parseInt(line.substring(0, end));
-        } catch (NumberFormatException invalidId) {
-          // A rejected ID must not prevent conservative invalidation of a possible rules write.
-        }
-      }
-      return new GtpCommandText(line.substring(end).trim(), id, line.substring(0, end));
-    }
   }
 
   private static boolean isRulesMutationCommand(String command) {

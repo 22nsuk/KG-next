@@ -1,5 +1,6 @@
 package featurecat.lizzie.analysis.remote;
 
+import featurecat.lizzie.analysis.GtpCommandText;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.logging.NetworkEndpointCategory;
 import featurecat.lizzie.logging.NetworkObservation;
@@ -228,19 +229,21 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
   }
 
   private synchronized void handleCommandLine(String rawLine) {
-    String line = rawLine == null ? "" : rawLine.trim();
-    if (line.isEmpty()) {
+    GtpCommandText parsed = GtpCommandText.parse(rawLine);
+    if (parsed.payload().isEmpty() && parsed.wireId().isEmpty()) {
       return;
     }
-    String responseId = "";
-    int firstSpace = line.indexOf(' ');
-    if (firstSpace > 0 && isPositiveInteger(line.substring(0, firstSpace))) {
-      responseId = line.substring(0, firstSpace);
-      line = line.substring(firstSpace + 1).trim();
+    if (!parsed.hasSupportedId()) {
+      writeError("", "invalid GTP command ID");
+      return;
     }
+    String responseId = parsed.id() == GtpCommandText.NO_ID ? "" : Integer.toString(parsed.id());
+    String line = parsed.payload();
     String lower = line.toLowerCase(Locale.ROOT);
     try {
-      if (lower.equals("name")) {
+      if (line.isEmpty()) {
+        writeError(responseId, "empty command");
+      } else if (lower.equals("name")) {
         writeOk(responseId, "KataGo");
       } else if (lower.equals("protocol_version")) {
         writeOk(responseId, "2");
@@ -276,7 +279,7 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
       } else if (lower.startsWith("komi ")) {
         komi = parseDoubleToken(line, 1, komi);
         writeOk(responseId, "");
-      } else if (lower.startsWith("kata-get-rules")) {
+      } else if (lower.equals("kata-get-rules")) {
         writeOk(responseId, rules);
       } else if (lower.equals("kata-get-param") || lower.startsWith("kata-get-param ")) {
         writeKnownKataGoParam(responseId, line);
@@ -309,8 +312,11 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
         moves.clear();
         snapshotInitialPlayer = "";
         writeOk(responseId, "");
-      } else if (lower.startsWith("loadsgf ")) {
-        loadSnapshotSgf(line.substring(line.indexOf(' ') + 1).trim());
+      } else if (parsed.verb().equalsIgnoreCase("loadsgf")) {
+        // This adapter opens a local file, not an ASCII GTP engine path. Preserve Unicode and
+        // '#' in existing snapshot paths while sharing the ID/verb interpretation above.
+        String[] literal = GtpCommandText.literalPayload(rawLine).split("\\s+", 2);
+        loadSnapshotSgf(literal.length == 2 ? literal[1] : "");
         writeOk(responseId, "");
       } else if (lower.startsWith("play ")) {
         String color = normalizeColor(token(line, 1, ""));
@@ -328,7 +334,7 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
         writeOk(responseId, "");
       } else if (lower.startsWith("kata-raw-nn")) {
         writeError(responseId, "kata-raw-nn unsupported by websocket analysis adapter");
-      } else if (lower.startsWith("kata-analyze")) {
+      } else if (parsed.verb().equalsIgnoreCase("kata-analyze")) {
         startAnalysis(responseId, line, false);
       } else if (lower.startsWith("kata-genmove_analyze ") || lower.startsWith("genmove ")) {
         startAnalysis(responseId, line, true);
@@ -1087,18 +1093,6 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
 
   private static String safeResponseId(String responseId) {
     return responseId == null || responseId.isBlank() ? "" : responseId;
-  }
-
-  private static boolean isPositiveInteger(String value) {
-    if (value == null || value.isBlank()) {
-      return false;
-    }
-    for (int i = 0; i < value.length(); i++) {
-      if (!Character.isDigit(value.charAt(i))) {
-        return false;
-      }
-    }
-    return true;
   }
 
   private static int parseIntToken(String command, int index, int fallback) {

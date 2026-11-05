@@ -12,6 +12,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.remote.KataGoAnalysisWebSocketTransportTest.TransportHarness;
 import featurecat.lizzie.gui.BottomToolbar;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
@@ -291,6 +292,34 @@ class ManualRulesSelectionTest {
       f.mirror.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
       assertEquals(10, f.history.getData().getPlayouts());
       assertEquals(10, f.history.getData().getPlayouts2());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"123kata-set-rules japanese", "123\tkata-set-rules japanese",
+      "00123\tkata-set-rules\tjapanese # ignored", "123 ka\u0001ta-set-rules japanese",
+      " 123 kata-set-rules japanese", "123kata-set-rules invalid",
+      "123\tkgs-rules japanese"})
+  void websocketRulesReplyCannotStrandSuccessorAnalysis(String command) throws Exception {
+    try (Fixture f = new Fixture(); TransportHarness remote = TransportHarness.open()) {
+      var transport = remote.transport();
+      f.primary.installCommandOutputForTest(transport.stdin());
+      assertTrue(f.primary.sendRawConsoleCommand(command));
+      String firstReply = new String(transport.stdout().readNBytes(transport.stdout().available()),
+          java.nio.charset.StandardCharsets.UTF_8);
+      firstReply.lines().forEach(f.primary::processCommandResponseLineForTest);
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules chinese"));
+      String rulesReply = new String(transport.stdout().readNBytes(transport.stdout().available()),
+          java.nio.charset.StandardCharsets.UTF_8);
+      rulesReply.lines().forEach(f.primary::processCommandResponseLineForTest);
+      assertTrue(f.primary.sendRawConsoleCommand("124kata-analyze B 10"));
+      String analysisReply = new String(transport.stdout().readNBytes(transport.stdout().available()),
+          java.nio.charset.StandardCharsets.UTF_8);
+      assertEquals("=124\n", analysisReply, "Rules success or rejection must release analysis");
+      assertTrue(firstReply.startsWith("=123") || firstReply.startsWith("?123"), firstReply);
+      analysisReply.lines().forEach(f.primary::processCommandResponseLineForTest);
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
     }
   }
 

@@ -55,8 +55,44 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 public class KataGoAnalysisWebSocketTransportTest {
+
+  @ParameterizedTest
+  @ValueSource(strings = {"42kata-set-rules japanese", "42\tkata-set-rules\tjapanese",
+      "00042 kata-set-rules japanese # chinese", "42 ka\u0001ta-set-rules japanese",
+      "42 ka한ta-set-rules japanese"})
+  void normalizedCommandsKeepTheirIdAndCommitTheRequestedRules(String command) throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      assertEquals("=42\n\n", sendGtp(harness.transport, command));
+      String rules = sendGtp(harness.transport, "43\tkata-get-rules # comment");
+      assertTrue(rules.startsWith("=43 "), rules);
+      assertTrue(rules.contains("TERRITORY"), rules);
+      writeGtp(harness.transport, "44\tkata-analyze\tB\t10 # ownership true");
+      assertEquals("=44\n", readAvailable(harness.transport.stdout()));
+      JSONObject query = harness.webSocket.sentJson(0);
+      assertFalse(query.optBoolean("includeOwnership"));
+      assertTrue(query.get("rules").toString().contains("TERRITORY"));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {"42unsupported-command|?42 unknown command",
+      "42\tkata-set-rules invalid|?42 ", "42 kata-analyze-extra B 10|?42 unknown command",
+      "42 123 kata-analyze B 10|?42 unknown command", "42 # empty|?42 empty command",
+      "0000000001 name|? invalid GTP command ID", "2147483648 name|? invalid GTP command ID"})
+  void rejectedCommandsKeepRepliesBoundAndDoNotStartAnalysis(String command, String error)
+      throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      String response = sendGtp(harness.transport, command);
+      assertTrue(response.startsWith(error), response);
+      assertTrue(harness.webSocket.sentTexts.isEmpty());
+      assertEquals("=45 KataGo\n\n", sendGtp(harness.transport, "45name # ignored"));
+    }
+  }
 
   @Test
   void analysisPayloadIsTracedOnlyDuringNetworkFullTrace(@TempDir Path tempDir) throws Exception {
@@ -1041,15 +1077,17 @@ public class KataGoAnalysisWebSocketTransportTest {
     assertEquals("B", query.getString("initialPlayer"));
   }
 
-  @Test
-  void loadSgfRestoresGeneratedSnapshotIntoAnalysisQuery() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"", "7 ", "7\t", "7"})
+  void loadSgfRestoresGeneratedSnapshotIntoAnalysisQuery(String prefix) throws Exception {
     KataGoAnalysisWebSocketTransport transport =
         new KataGoAnalysisWebSocketTransport("ws://127.0.0.1:1");
-    Path snapshot = Files.createTempFile("remote-snapshot-", ".sgf");
+    Path snapshot = Files.createTempFile("remote-한글 #snapshot-", ".sgf");
     try {
       Files.writeString(snapshot, "(;FF[4]GM[1]CA[UTF-8]SZ[9:13]KM[6.5]PL[W]AB[aa]AB[bc]AW[cb])");
 
-      assertEquals("=\n\n", sendGtp(transport, "loadsgf " + snapshot));
+      assertEquals(prefix.isEmpty() ? "=\n\n" : "=7\n\n",
+          sendGtp(transport, prefix + "loadsgf " + snapshot));
 
       JSONObject query = transport.buildAnalysisQuery("test", false, false, 50, "B");
       assertEquals(9, query.getInt("boardXSize"));
@@ -1063,6 +1101,19 @@ public class KataGoAnalysisWebSocketTransportTest {
           query.getJSONArray("initialStones").toList());
       assertEquals(java.util.List.of(), query.getJSONArray("moves").toList());
       assertEquals("W", query.getString("initialPlayer"));
+    } finally {
+      Files.deleteIfExists(snapshot);
+    }
+  }
+
+  @Test
+  void loadSgfPreservesAUnicodeOnlyRelativeFilename() throws Exception {
+    Path snapshot = Files.createTempFile(Path.of("."), "한글#", ".sgf");
+    try (TransportHarness harness = TransportHarness.open()) {
+      Files.writeString(snapshot, "(;FF[4]GM[1]CA[UTF-8]SZ[9]PL[B])");
+      assertEquals("=7\n\n", sendGtp(harness.transport, "7loadsgf " + snapshot.getFileName()));
+      assertEquals(9, harness.transport.buildAnalysisQuery("test", false, false, 50, "B")
+          .getInt("boardXSize"));
     } finally {
       Files.deleteIfExists(snapshot);
     }
