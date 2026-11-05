@@ -297,6 +297,7 @@ class ManualRulesSelectionTest {
   @ParameterizedTest
   @NullAndEmptySource
   @ValueSource(strings = {" ", "# comment", "\t\r\u0001", "한글", "0", "123 # comment",
+      "1000000000 name", "2147483647 name", "0000000001 name", "0000000000 name",
       "2147483648 name", "999999999999999999999 kata-set-rules japanese",
       "name\nkata-set-rules japanese", "123 # comment\nname"})
   void malformedConsoleEnvelopeIsRejectedBeforeEitherEngineIsTouched(String command)
@@ -324,7 +325,7 @@ class ManualRulesSelectionTest {
 
   @ParameterizedTest
   @CsvSource(delimiter = '|', value = {"unknown-command|? unknown command",
-      "0 unknown-command|?0 unknown command", "2147483647 unknown-command|?2147483647 unknown command",
+      "0 unknown-command|?0 unknown command", "999999999 unknown-command|?999999999 unknown command",
       "000123unknown-command # comment|?123 unknown command"})
   void engineRejectionOfAValidEnvelopeStillAllowsRulesAndAnalysis(String command, String error)
       throws Exception {
