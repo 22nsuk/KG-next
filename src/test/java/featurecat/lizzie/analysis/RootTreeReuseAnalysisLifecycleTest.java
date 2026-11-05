@@ -19,6 +19,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class RootTreeReuseAnalysisLifecycleTest {
   @ParameterizedTest
@@ -66,6 +67,24 @@ class RootTreeReuseAnalysisLifecycleTest {
       assertEquals(1000, fixture.current.getPlayouts());
       assertEquals("Q16", fixture.current.bestMoves.get(0).coordinate);
       assertFalse(fixture.current.isChanged);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "124kata-analyze 10 allow b D4 1|50",
+      "124 kata-analyze 10 # allow b D4 1|1000",
+      "124 kata-analyze-file allow b D4 1|1000",
+      "124 456 kata-analyze 10 allow b D4 1|1000"
+  })
+  void numberedRestrictionsUseOnlyTheParsedCommandAndArguments(String command, int expectedVisits)
+      throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      fixture.startAnalysis(fixture.primary, fixture.primaryTransport);
+      fixture.primary.parseAnalysisLineForTest(info("Q16", 1000));
+      assertTrue(fixture.primary.sendRawConsoleCommand(command));
+      fixture.primary.parseAnalysisLineForTest(info("D4", 50));
+      assertEquals(expectedVisits, fixture.current.getPlayouts());
     }
   }
 

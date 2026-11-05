@@ -324,6 +324,78 @@ class ManualRulesSelectionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "true|124 kata-analyze 10", "false|124 kata-analyze 10",
+      "true|124kata-analyze 10", "false|124kata-analyze 10",
+      "true|00124\tkata-analyze\t10 # allow B D4 1",
+      "true|124 ka\rta-analyze 10", "true|124 lz-analyze 10", "true|124 analyze 10"
+  })
+  void numberedSuccessorAnalysisUsesTheSameRulesBoundaryAndOutputOwner(
+      boolean queuedBeforeReply, String analysis) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      assertTrue(f.primary.sendRawConsoleCommand("kata-analyze 10"));
+      f.reply(f.primary, f.transport, "kata-analyze", "", true);
+      f.reply(f.mirror, f.mirrorTransport, "kata-analyze", "", true);
+      assertTrue(f.primary.sendRawConsoleCommand("123 kata-set-rules japanese"));
+      if (queuedBeforeReply) {
+        assertTrue(f.primary.sendRawConsoleCommand(analysis));
+        assertFalse(f.transport.rawCommands().contains(analysis));
+        assertFalse(f.mirrorTransport.rawCommands().contains(analysis));
+        f.primary.parseAnalysisLineForTest("info move D4 visits 1000 winrate 0.6 pv D4");
+        f.mirror.parseAnalysisLineForTest("info move D4 visits 1000 winrate 0.6 pv D4");
+        f.assertCaches(true, true);
+      }
+      f.primary.processCommandResponseLineForTest("=123");
+      f.mirror.processCommandResponseLineForTest("=123");
+      if (!queuedBeforeReply) assertTrue(f.primary.sendRawConsoleCommand(analysis));
+      assertTrue(f.transport.rawCommands().contains(analysis));
+      assertTrue(f.mirrorTransport.rawCommands().contains(analysis));
+      f.primary.processCommandResponseLineForTest("=124");
+      f.mirror.processCommandResponseLineForTest("=124");
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      f.mirror.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+      assertEquals(10, f.history.getData().getPlayouts2());
+      assertEquals("Q16", f.history.getData().bestMoves.get(0).coordinate);
+      assertEquals("Q16", f.history.getData().bestMoves2.get(0).coordinate);
+    }
+  }
+
+  @Test
+  void numberedAnalysisIsCoalescedAndCannotBypassInitialSynchronization() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.primary.beginInitialBoardSynchronization();
+      try {
+        assertFalse(f.primary.sendRawConsoleCommand("124kata-analyze 10"));
+      } finally {
+        f.primary.endInitialBoardSynchronization();
+      }
+      assertTrue(f.primary.sendRawConsoleCommand("123 kata-set-rules japanese"));
+      assertTrue(f.primary.sendRawConsoleCommand("124kata-analyze 10"));
+      assertTrue(f.primary.sendRawConsoleCommand("125 analyze 10"));
+      f.primary.processCommandResponseLineForTest("=123");
+      assertFalse(f.transport.rawCommands().contains("124kata-analyze 10"));
+      assertTrue(f.transport.rawCommands().contains("125 analyze 10"));
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void numberedAnalysisIsTranslatedForTheReceivingLegacyEngine(boolean direct) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.mirror.isKatago = false;
+      String command = "00124kata-analyze 10 rootInfo true reuseRootTree true ownership true # comment";
+      if (direct) f.mirror.sendCommandNoLeelaz2(command);
+      else assertTrue(f.primary.sendRawConsoleCommand(command));
+      assertTrue(f.mirrorTransport.rawCommands().contains("00124 lz-analyze 10"));
+    }
+  }
+
   @Test
   void rawRulesWriteInvalidatesOnlyTheMirrorWhenItActuallyDrains() throws Exception {
     try (Fixture f = new Fixture()) {

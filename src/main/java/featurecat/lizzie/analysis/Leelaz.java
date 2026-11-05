@@ -7077,36 +7077,19 @@ public class Leelaz {
   }
 
   private boolean isAnalysisOutputOwnershipCommand(String command) {
-    if (command == null) {
-      return false;
-    }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return isOrdinaryPositionAnalysisCommand(normalized)
-        || normalized.startsWith("kata-genmove_analyze ")
-        || normalized.startsWith("lz-genmove_analyze ")
-        || normalized.startsWith("genmove_analyze ")
-        || normalized.startsWith("genmove ")
-        || (isLeela0110 && normalized.startsWith("time_left "));
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    return parsed.startsAnalysisPayload() || (isLeela0110 && parsed.verb().equals("time_left"));
   }
 
   /** Commands whose successful physical write starts a distinct analysis payload generation. */
   private boolean startsNewAnalysisInfoPayload(String command) {
-    if (command == null) {
-      return false;
-    }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return normalized.startsWith("kata-analyze")
-        || normalized.startsWith("lz-analyze")
-        || normalized.startsWith("analyze ")
-        || normalized.startsWith("kata-genmove_analyze ")
-        || normalized.startsWith("lz-genmove_analyze ")
-        || normalized.startsWith("genmove_analyze ")
-        || normalized.startsWith("genmove ");
+    return GtpCommandText.parse(command).startsAnalysisPayload();
   }
 
   private boolean hasAnalysisMoveRestrictions(String command) {
-    if (!isOrdinaryPositionAnalysisCommand(command)) return false;
-    for (String token : command.trim().split("\\s+")) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (!parsed.isOrdinaryAnalysis()) return false;
+    for (String token : parsed.payload().split("\\s+")) {
       if (token.equalsIgnoreCase("allow") || token.equalsIgnoreCase("avoid")) return true;
     }
     return false;
@@ -7124,7 +7107,7 @@ public class Leelaz {
     if (command == null) {
       return AnalysisStateMutation.NONE;
     }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
+    String normalized = GtpCommandText.parse(command).payload();
     if (normalized.equals("clear_board")) {
       return AnalysisStateMutation.RESET_PAYLOAD_AND_SCORE;
     }
@@ -7151,7 +7134,7 @@ public class Leelaz {
     if (command == null) {
       return false;
     }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
+    String normalized = GtpCommandText.parse(command).payload();
     return normalized.equals("clear_board")
         || normalized.startsWith("loadsgf ")
         || normalized.equals("set_position")
@@ -7263,7 +7246,7 @@ public class Leelaz {
       return false;
     }
     if (!isLeela0110
-        || !command.command.trim().toLowerCase(Locale.ROOT).startsWith("time_left ")) {
+        || !GtpCommandText.parse(command.command).verb().equals("time_left")) {
       return true;
     }
     EngineManager.EngineGamePrimaryContext currentGame =
@@ -12121,42 +12104,13 @@ public class Leelaz {
       }
       return false;
     }
-    if (Lizzie.config.isDoubleEngineMode()) {
-      if ((command.startsWith("heat") || command.startsWith("kata-raw"))
-          && !this.isKatago
-          && Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2) heatcount = new ArrayList<Integer>();
-      if (Lizzie.leelaz2 != null && this == Lizzie.leelaz2)
-        if (this.isLeela0110) {
-          if (command.startsWith("lz-") || command.startsWith("kata-")) this.leela0110Ponder(true);
-          return false;
-        } else if (this.isKatago && !Lizzie.leelaz.isKatago) {
-          if (command.startsWith("lz-")) {
-            command = "kata-" + command.substring(3);
-          }
-          if (command.startsWith("heat")) {
-            command = ("kata-raw-nn " + new Random().nextInt(8));
-          }
-        }
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && !this.isKatago
-          && Lizzie.leelaz.isKatago) {
-        if (command.startsWith("kata-raw")) {
-          command = "heatmap";
-        }
-        if (command.startsWith("kata-")) {
-          command = "lz-" + command.substring(5);
-        }
-
-        String[] params = command.trim().split(" ");
-        if (params.length > 2) {
-          if (params[params.length - 2].equals("ownership")) {
-            command = command.substring(0, command.length() - 14);
-          }
-        }
-      }
+    if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null
+        && this == Lizzie.leelaz2 && isLeela0110) {
+      String verb = GtpCommandText.parse(command).verb();
+      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
+      return false;
     }
+    command = adaptSecondaryCommand(command);
     command = adaptRootTreeReuseForReceiver(command);
     Leelaz mirroredEngine = mirrorToSecondEngine ? resolveDefaultCommandMirrorEngine() : null;
     boolean defaultMirrorMustRemainAbsent = mirrorToSecondEngine && mirroredEngine == null;
@@ -12264,63 +12218,49 @@ public class Leelaz {
    * secondary path, which does not accept ordinary default mirroring.
    */
   private String prepareDefaultMirroredCommand(String command) {
-    if (Lizzie.config == null
-        || !Lizzie.config.isDoubleEngineMode()
-        || Lizzie.leelaz2 == null
-        || this != Lizzie.leelaz2) {
-      return command;
-    }
-    if ((command.startsWith("heat") || command.startsWith("kata-raw")) && !isKatago) {
-      heatcount = new ArrayList<Integer>();
-    }
-    if (isLeela0110) {
-      if (command.startsWith("lz-") || command.startsWith("kata-")) {
-        leela0110Ponder(true);
-      }
+    if (Lizzie.config != null && Lizzie.config.isDoubleEngineMode()
+        && Lizzie.leelaz2 != null && this == Lizzie.leelaz2 && isLeela0110) {
+      String verb = GtpCommandText.parse(command).verb();
+      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
       return null;
     }
-    String adapted = command;
+    return adaptRootTreeReuseForReceiver(adaptSecondaryCommand(command));
+  }
+
+  /** Share receiver translation across default mirroring and direct secondary dispatch. */
+  private String adaptSecondaryCommand(String command) {
+    if (Lizzie.config == null || !Lizzie.config.isDoubleEngineMode()
+        || Lizzie.leelaz2 == null || this != Lizzie.leelaz2) return command;
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    String adapted = parsed.payload();
+    if ((adapted.startsWith("heat") || adapted.startsWith("kata-raw")) && !isKatago) {
+      heatcount = new ArrayList<Integer>();
+    }
     if (isKatago && !Lizzie.leelaz.isKatago) {
-      if (adapted.startsWith("lz-")) {
-        adapted = "kata-" + adapted.substring(3);
-      }
-      if (adapted.startsWith("heat")) {
-        adapted = "kata-raw-nn " + new Random().nextInt(8);
-      }
+      if (adapted.startsWith("lz-")) adapted = "kata-" + adapted.substring(3);
+      if (adapted.startsWith("heat")) adapted = "kata-raw-nn " + new Random().nextInt(8);
     }
     if (!isKatago && Lizzie.leelaz.isKatago) {
-      if (adapted.startsWith("kata-raw")) {
-        adapted = "heatmap";
-      }
-      if (adapted.startsWith("kata-")) {
-        adapted = "lz-" + adapted.substring(5);
-      }
-      String[] params = adapted.trim().split(" ");
+      if (adapted.startsWith("kata-raw")) adapted = "heatmap";
+      if (adapted.startsWith("kata-")) adapted = "lz-" + adapted.substring(5);
+      String[] params = adapted.split("\\s+");
       if (params.length > 2 && params[params.length - 2].equals("ownership")) {
-        adapted = adapted.substring(0, adapted.length() - 14);
+        adapted = adapted.replaceFirst("\\s+ownership\\s+\\S+$", "");
       }
     }
-    return adaptRootTreeReuseForReceiver(adapted);
+    return parsed.withPayload(command, adapted);
   }
 
   String adaptRootTreeReuseForReceiver(String command) {
-    if (command == null
-        || (!command.contains("reuseRootTree") && !command.contains("rootInfo"))) {
-      return command;
-    }
-    boolean analysisCommand = switch (command.trim().split("\\s+", 2)[0].toLowerCase(Locale.ROOT)) {
-      case "kata-analyze", "lz-analyze", "analyze", "kata-genmove_analyze",
-          "lz-genmove_analyze", "genmove_analyze" -> true;
-      default -> false;
-    };
-    if (!analysisCommand) return command;
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (!parsed.isAnalyze()) return command;
     boolean reuseRootTree = supportsRootTreeReuse();
     String adapted =
-        reuseRootTree ? command : command.replaceAll("\\s+reuseRootTree\\s+\\S+", "");
+        reuseRootTree ? parsed.payload() : parsed.payload().replaceAll("\\s+reuseRootTree\\s+\\S+", "");
     if (!isKatago || (!supportRootInfo && !reuseRootTree)) {
       adapted = adapted.replaceAll("\\s+rootInfo\\s+\\S+", "");
     }
-    return adapted;
+    return parsed.withPayload(command, adapted);
   }
 
   private boolean withOrdinaryAnalysisSelectionLocks(
@@ -12881,14 +12821,11 @@ public class Leelaz {
   }
 
   private static boolean isOrdinaryPositionAnalysisCommand(String command) {
-    if (command == null) return false;
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return normalized.startsWith("kata-analyze")
-        || normalized.startsWith("lz-analyze")
-        || normalized.startsWith("analyze ");
+    return GtpCommandText.parse(command).isOrdinaryAnalysis();
   }
 
   private static boolean isIncrementalPositionCommand(String command) {
+    command = GtpCommandText.parse(command).payload();
     return command != null
         && (command.equals("undo")
             || command.startsWith("play ")
@@ -12960,20 +12897,15 @@ public class Leelaz {
   }
 
   private boolean shouldCoalesceQueuedCommand(String command, boolean noLeelaz2Coalescing) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (parsed.isOrdinaryAnalysis()) return true;
+    String verb = parsed.verb();
     if (noLeelaz2Coalescing) {
-      return command.startsWith("lz-analyze")
-          || command.startsWith("kata-analyze")
-          || command.startsWith("kata-raw")
-          || command.startsWith("heatmap");
+      return verb.equals("kata-raw-nn") || verb.equals("heatmap");
     }
-    return (isKatago
-            && (command.startsWith("kata-analyze")
-                || command.startsWith("kata-raw")
-                || command.startsWith("stop-ponder")))
-        || (!isKatago
-            && (command.startsWith("lz-analyze")
-                || command.startsWith("analyze")
-                || command.startsWith("heatmap")));
+    return isKatago
+        ? verb.equals("kata-raw-nn") || verb.equals("stop-ponder")
+        : verb.equals("heatmap");
   }
 
 
@@ -13719,41 +13651,7 @@ public class Leelaz {
         || shouldSuppressNormalCommandForForegroundAnalysis()) {
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode()) {
-      if ((command.startsWith("heat") || command.startsWith("kata-raw"))
-          && !this.isKatago
-          && Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2) heatcount = new ArrayList<Integer>();
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && this.isKatago
-          && !Lizzie.leelaz.isKatago) {
-        if (command.startsWith("lz-")) {
-          command = "kata-" + command.substring(3);
-        }
-        if (command.startsWith("heat")) {
-          command = ("kata-raw-nn " + new Random().nextInt(8));
-        }
-      }
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && !this.isKatago
-          && Lizzie.leelaz.isKatago) {
-        if (command.startsWith("kata-raw")) {
-          command = "heatmap";
-        }
-        if (command.startsWith("kata-")) {
-          command = "lz-" + command.substring(5);
-        }
-
-        String[] params = command.trim().split(" ");
-        if (params.length > 2) {
-          if (params[params.length - 2].equals("ownership")) {
-            command = command.substring(0, command.length() - 14);
-          }
-        }
-      }
-    }
+    command = adaptRootTreeReuseForReceiver(adaptSecondaryCommand(command));
     EngineManager.EngineGameOwnerTransaction startupTransaction =
         engineGameStartupCommandContext.get();
     ReaderStreamBinding startupBinding =
@@ -13974,14 +13872,7 @@ public class Leelaz {
           && queueHead.engineGameTransaction() != null
           && !isResponseUpToPreCommand()) {
         String lastQueuedCommand = targetQueue.peekLast().command;
-        if ((isKatago
-                && (lastQueuedCommand.startsWith("kata-analyze")
-                    || lastQueuedCommand.startsWith("kata-raw")
-                    || lastQueuedCommand.startsWith("stop-ponder")))
-            || (!isKatago
-                && (lastQueuedCommand.startsWith("lz-analyze")
-                    || lastQueuedCommand.startsWith("analyze")
-                    || lastQueuedCommand.startsWith("heatmap")))) return;
+        if (shouldCoalesceQueuedCommand(lastQueuedCommand, false)) return;
       }
       EngineManager.EngineGameOwnerTransaction game = queueHead.engineGameTransaction();
       if (queueHead.transportOffEventThread && SwingUtilities.isEventDispatchThread()) {
@@ -14341,7 +14232,7 @@ public class Leelaz {
               if (startsAnalysisInfoPayload) resetAnalysisInfoPayload(false);
               if (isOrdinaryPositionAnalysisCommand(command)
                   && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = command;
+                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
               }
               if (analysisOutputBindingLocked) {
                 analysisOutputBindingLocked = false;
@@ -14360,7 +14251,7 @@ public class Leelaz {
               currentOutputStream.flush();
               if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
                   && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = command;
+                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
               }
               if (startsAnalysisInfoPayload && analysisOutputTransaction == null) {
                 // The binding fence keeps even an immediate reader line from committing before
@@ -14863,17 +14754,11 @@ public class Leelaz {
   }
 
   private static boolean isInitialBoardSynchronizationLiveUpdateCommand(String command) {
-    if (command == null) {
-      return false;
-    }
-    return command.startsWith("play ")
-        || command.startsWith("undo")
-        || command.startsWith("clear_board")
-        || command.startsWith("lz-analyze")
-        || command.startsWith("kata-analyze")
-        || command.startsWith("analyze ")
-        || command.startsWith("kata-raw")
-        || command.startsWith("heat");
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    return parsed.isOrdinaryAnalysis() || switch (parsed.verb()) {
+      case "play", "undo", "clear_board", "kata-raw-nn", "heat", "heatmap" -> true;
+      default -> false;
+    };
   }
 
   private PendingResponseHandler buildPendingResponseHandler(
@@ -14930,6 +14815,7 @@ public class Leelaz {
 
 
   private static boolean isTrackedExactSnapshotRestoreCommand(String command) {
+    command = GtpCommandText.parse(command).payload();
     return command != null
         && (command.startsWith("loadsgf ")
             || command.equals("set_position")
@@ -25365,9 +25251,34 @@ public class Leelaz {
    * KataGo also discards non-ASCII input and accepts an ID directly adjacent to the verb
    * (e.g. 123kata-set-rules).
    */
-  private record GtpCommandText(String payload, int id) {
+  private record GtpCommandText(String payload, int id, String wireId) {
     String verb() {
       return payload.split("\\s+", 2)[0];
+    }
+
+    // All analysis lifecycle decisions use the same parsed verb, never the wire prefix or a
+    // second parse of payload ("123 456 kata-analyze" is not an analysis command).
+    boolean isOrdinaryAnalysis() {
+      return switch (verb()) {
+        case "kata-analyze", "lz-analyze", "analyze" -> true;
+        default -> false;
+      };
+    }
+
+    boolean isAnalyze() {
+      return isOrdinaryAnalysis() || switch (verb()) {
+        case "kata-genmove_analyze", "lz-genmove_analyze", "genmove_analyze" -> true;
+        default -> false;
+      };
+    }
+
+    boolean startsAnalysisPayload() {
+      return isAnalyze() || verb().equals("genmove");
+    }
+
+    String withPayload(String original, String replacement) {
+      if (payload.equals(replacement)) return original;
+      return wireId.isEmpty() ? replacement : wireId + " " + replacement;
     }
 
     boolean mutatesRules() {
@@ -25378,7 +25289,7 @@ public class Leelaz {
     }
 
     static GtpCommandText parse(String command) {
-      if (command == null) return new GtpCommandText("", NO_RESPONSE_COMMAND_ID);
+      if (command == null) return new GtpCommandText("", NO_RESPONSE_COMMAND_ID, "");
       StringBuilder text = new StringBuilder(command.length());
       for (int i = 0; i < command.length(); i++) {
         char c = command.charAt(i);
@@ -25397,7 +25308,7 @@ public class Leelaz {
           // A rejected ID must not prevent conservative invalidation of a possible rules write.
         }
       }
-      return new GtpCommandText(line.substring(end).trim(), id);
+      return new GtpCommandText(line.substring(end).trim(), id, line.substring(0, end));
     }
   }
 
