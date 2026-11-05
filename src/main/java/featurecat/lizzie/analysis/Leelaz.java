@@ -11986,6 +11986,19 @@ public class Leelaz {
   }
 
   public boolean sendRawConsoleCommand(String command) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    // One console submission must yield one matchable response. Blank/comment-only input
+    // yields none; KataGo rejects an empty payload or overflowing ID without echoing the ID.
+    // Reject these envelopes before queue admission/mirroring, not by weakening reply ownership.
+    if (parsed.payload().isEmpty()
+        || command.indexOf('\n') >= 0
+        || (!parsed.wireId().isEmpty() && parsed.id() == NO_RESPONSE_COMMAND_ID)) {
+      if (Lizzie.gtpConsole != null) {
+        Lizzie.gtpConsole.addErrorLine(
+            "GTP command rejected: enter one nonempty command with an optional ID from 0 to 2147483647.");
+      }
+      return false;
+    }
     return sendCommand(command, null, null, false, true);
   }
 

@@ -35,6 +35,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class ManualRulesSelectionTest {
@@ -138,13 +139,13 @@ class ManualRulesSelectionTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"123 name # kata-set-rules japanese",
-      "# 123 kata-set-rules japanese", "123 kata-get-rules", "123 kata-set-rules-extra japanese",
-      "123 456 kata-set-rules japanese"})
-  void nonMutatingRawCommandsDoNotInvalidateRules(String command) throws Exception {
+  @CsvSource(delimiter = '|', value = {"true|123 name # kata-set-rules japanese",
+      "false|# 123 kata-set-rules japanese", "true|123 kata-get-rules",
+      "true|123 kata-set-rules-extra japanese", "true|123 456 kata-set-rules japanese"})
+  void nonMutatingRawCommandsDoNotInvalidateRules(boolean accepted, String command) throws Exception {
     try (Fixture f = new Fixture()) {
       Object settings = f.primary.analysisSettingsToken();
-      assertTrue(f.primary.sendRawConsoleCommand(command));
+      assertEquals(accepted, f.primary.sendRawConsoleCommand(command));
       f.assertCaches(false, false);
       assertNotNull(f.primary.currentConfirmedRules());
       assertSame(settings, f.primary.analysisSettingsToken());
@@ -267,6 +268,82 @@ class ManualRulesSelectionTest {
       assertEquals(10, mirrored ? data.getPlayouts2() : data.getPlayouts());
       assertEquals("Q16", (mirrored ? data.bestMoves2 : data.bestMoves).get(0).coordinate);
       assertFalse(mirrored ? data.isChanged2 : data.isChanged);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"123", "123 # comment", "00123\t\r# comment"})
+  void emptyNumberedConsoleInputCannotPoisonLaterRulesResponses(String command) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      if (f.primary.sendRawConsoleCommand(command)) {
+        // KataGo's empty-command error has no ID, even when the input has one.
+        f.primary.processCommandResponseLineForTest("? empty command");
+        f.mirror.processCommandResponseLineForTest("? empty command");
+      }
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      assertTrue(f.primary.sendRawConsoleCommand("kata-analyze 10"));
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+      assertEquals(1, count(f.transport, "kata-analyze"));
+      assertEquals(1, count(f.mirrorTransport, "kata-analyze"));
+      f.primary.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      f.mirror.parseAnalysisLineForTest("info move Q16 visits 10 winrate 0.6 pv Q16");
+      assertEquals(10, f.history.getData().getPlayouts());
+      assertEquals(10, f.history.getData().getPlayouts2());
+    }
+  }
+
+  @ParameterizedTest
+  @NullAndEmptySource
+  @ValueSource(strings = {" ", "# comment", "\t\r\u0001", "한글", "0", "123 # comment",
+      "2147483648 name", "999999999999999999999 kata-set-rules japanese",
+      "name\nkata-set-rules japanese", "123 # comment\nname"})
+  void malformedConsoleEnvelopeIsRejectedBeforeEitherEngineIsTouched(String command)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      assertTrue(f.primary.sendRawConsoleCommand("123 name"));
+      var primaryBefore = f.transport.rawCommands();
+      var mirrorBefore = f.mirrorTransport.rawCommands();
+      assertFalse(f.primary.sendRawConsoleCommand(command));
+      assertEquals(primaryBefore, f.transport.rawCommands());
+      assertEquals(mirrorBefore, f.mirrorTransport.rawCommands());
+      f.assertCaches(false, false);
+      // Rejection cannot consume or relax an existing numbered response owner.
+      f.primary.processCommandResponseLineForTest("=123 KataGo");
+      f.mirror.processCommandResponseLineForTest("=123 KataGo");
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+      assertTrue(f.primary.sendRawConsoleCommand("kata-analyze 10"));
+      assertEquals(1, count(f.transport, "kata-analyze"));
+      assertEquals(1, count(f.mirrorTransport, "kata-analyze"));
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {"unknown-command|? unknown command",
+      "0 unknown-command|?0 unknown command", "2147483647 unknown-command|?2147483647 unknown command",
+      "000123unknown-command # comment|?123 unknown command"})
+  void engineRejectionOfAValidEnvelopeStillAllowsRulesAndAnalysis(String command, String error)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.primary.requireResponseBeforeSend = true;
+      f.mirror.requireResponseBeforeSend = true;
+      assertTrue(f.primary.sendRawConsoleCommand(command));
+      assertTrue(f.transport.rawCommands().contains(command));
+      assertTrue(f.mirrorTransport.rawCommands().contains(command));
+      assertTrue(f.primary.sendRawConsoleCommand("kata-set-rules japanese"));
+      assertTrue(f.primary.sendRawConsoleCommand("kata-analyze 10"));
+      assertEquals(0, count(f.transport, "kata-set-rules"));
+      f.primary.processCommandResponseLineForTest(error);
+      f.mirror.processCommandResponseLineForTest(error);
+      f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+      f.reply(f.mirror, f.mirrorTransport, "kata-set-rules", "", true);
+      assertEquals(1, count(f.transport, "kata-analyze"));
+      assertEquals(1, count(f.mirrorTransport, "kata-analyze"));
     }
   }
 
@@ -445,7 +522,11 @@ class ManualRulesSelectionTest {
       ManualRulesSelection selection = f.apply(CHINESE);
       assertFalse(selection.unchanged(), "An earlier queued writer can still change the rules");
       f.reply(f.primary, f.transport, "name", "KataGo", true);
-      if (!route.equals("mirror")) f.reply(f.primary, f.transport, command, "", true);
+      if (!route.equals("mirror")) {
+        await(() -> f.transport.commands().contains(command));
+        f.reply(f.primary, f.transport, command, "", true);
+      }
+      await(() -> f.transport.commands().contains("kata-set-rules " + CHINESE.toGtpArgument()));
       List<String> primaryCommands = f.transport.commands();
       assertEquals("kata-set-rules " + CHINESE.toGtpArgument(),
           primaryCommands.get(primaryCommands.size() - 1));
@@ -464,8 +545,16 @@ class ManualRulesSelectionTest {
           await(() -> sync.isDone() || !f.mirror.engineRulesOperation().isDone());
           assertFalse(sync.isDone(), "Mirror convergence must not reuse a superseded observation");
         }
-        f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+        synchronized (f.history) {
+          // Force the supported deferred-send path; releasing this response is not a transport
+          // completion signal for the raw write that follows it (the Linux CI race).
+          f.reply(f.mirror, f.mirrorTransport, "name", "KataGo", true);
+          if (!route.equals("primary")) {
+            assertFalse(f.mirrorTransport.commands().contains(command));
+          }
+        }
         if (!route.equals("primary")) {
+          await(() -> f.mirrorTransport.commands().contains(command));
           f.reply(f.mirror, f.mirrorTransport, command, "", true);
           // Creating the asynchronous operation precedes enqueue/dispatch. Wait for its actual
           // corrective write, not just the pending operation observed above.
