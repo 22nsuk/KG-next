@@ -26,10 +26,10 @@ SHA256 = "6abb1c2764fe14f72f77a2444d314e037d1d1e95c6c95974cd6c9c67de6e9512"
 PACKAGE_SCRIPT = (ROOT / "scripts/package_windows_exe.sh").read_text(encoding="utf-8")
 START = PACKAGE_SCRIPT.index("prepare_bundled_readboard_assets() {")
 STAGING_CODE = PACKAGE_SCRIPT[START:].split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
-POWERSHELL = (
-    shutil.which("powershell.exe") or shutil.which("pwsh.exe")
-    if os.name == "nt" else shutil.which("pwsh")
-)
+# Exercise the release's .NET Framework host as well as the preferred PowerShell 7.
+POWERSHELLS = list(dict.fromkeys(filter(None, (
+    shutil.which("pwsh"), shutil.which("powershell.exe") if os.name == "nt" else None,
+))))
 
 
 def manifest(level: str = "asInvoker", ui_access: str = "false") -> bytes:
@@ -195,7 +195,7 @@ class ReadBoardPackagingTest(unittest.TestCase):
                     validator.validate_bundle(self.source)
 
 
-@unittest.skipUnless(POWERSHELL, "PowerShell is needed to execute the native smoke control flow")
+@unittest.skipUnless(POWERSHELLS, "PowerShell is needed to execute the native smoke control flow")
 class ReadBoardPipeSmokeTest(unittest.TestCase):
     def test_protocol_success_and_failure_cleanup(self) -> None:
         source = (ROOT / "scripts/windows_smoke_test.ps1").read_text(encoding="utf-8")
@@ -214,15 +214,24 @@ if mode == "early-exit":
     sys.exit(3)
 if mode != "no-ready":
     print("ready", flush=True)
-for line in sys.stdin:
-    if line.strip() == "version":
+for line in sys.stdin.buffer:
+    print("command bytes: " + line.hex(), file=sys.stderr, flush=True)
+    if line.strip() == b"version":
         print("version: " + ("wrong" if mode == "wrong-version" else "220430"), flush=True)
-    if line.strip() == "quit" and mode != "no-quit":
+    if line.strip() == b"quit" and mode != "no-quit":
         print("shutdown " + "x" * 131072, flush=True)
-        sys.exit(0)
+        # The host must close stdin after its final command, not wait with it open.
+        sys.stdin.buffer.read()
+        sys.exit(7 if mode == "quit-error" else 0)
+# Refusing quit must also refuse EOF; exiting this loop alone is not success.
+while True:
+    time.sleep(0.1)
 ''', encoding="utf-8")
             script = root / "probe.ps1"
             script.write_text('''$ErrorActionPreference = 'Stop'
+# Reproduce the UTF-8 Windows CI console without changing the parent console.
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($true)
+$originalInputEncoding = [Console]::InputEncoding
 function Get-NativeReadBoardAssets {
     param([string]$AppExe)
     return @{ ExePath = $env:READBOARD_FIXTURE_PYTHON; Directory = $env:READBOARD_FIXTURE_ROOT }
@@ -231,11 +240,17 @@ function Stop-NativeReadBoardProcesses { param([string]$ReadBoardExePath) }
 ''' + function + '''
 try { Invoke-NativeReadBoardPipeProbe -AppExe fixture -TimeoutSeconds 2 -ExitTimeoutSeconds 2 }
 catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
+finally {
+    if (-not $originalInputEncoding.Equals([Console]::InputEncoding)) {
+        throw 'Probe did not restore the caller input encoding'
+    }
+}
 ''', encoding="utf-8")
-            for mode in ("success", "no-ready", "wrong-version", "early-exit", "no-quit"):
-                with self.subTest(mode=mode):
+            for shell, mode in ((shell, mode) for shell in POWERSHELLS
+                                for mode in ("success", "no-ready", "wrong-version", "early-exit", "no-quit", "quit-error")):
+                with self.subTest(shell=shell, mode=mode):
                     result = subprocess.run(
-                        [POWERSHELL, "-NoProfile", "-File", str(script)],
+                        [shell, "-NoProfile", "-File", str(script)],
                         env=dict(os.environ, READBOARD_FIXTURE_MODE=mode,
                                  READBOARD_FIXTURE_ROOT=str(root), READBOARD_FIXTURE_PYTHON=sys.executable),
                         capture_output=True, text=True, timeout=20,
@@ -245,6 +260,14 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
                     stdout = (root / "lizzieyzy-next-readboard-probe.stdout.txt").read_text()
                     stderr = (root / "lizzieyzy-next-readboard-probe.stderr.txt").read_text()
                     self.assertIn("diagnostic " + "x" * 131072, stderr)
+                    if mode in ("success", "wrong-version", "no-quit", "quit-error"):
+                        newline = "0d0a" if os.name == "nt" else "0a"
+                        commands = [line for line in stderr.splitlines()
+                                    if line.startswith("command bytes: ")]
+                        expected = ["command bytes: 76657273696f6e" + newline]
+                        if mode != "wrong-version":
+                            expected.append("command bytes: 71756974" + newline)
+                        self.assertEqual(expected, commands)
                     if mode == "success":
                         self.assertIn("ready\nversion: 220430\nshutdown ", stdout)
                     elif mode == "no-ready":
@@ -255,6 +278,8 @@ catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }
                         self.assertIn("closed stdout before 'ready'", result.stderr)
                     elif mode == "no-quit":
                         self.assertIn("did not exit after quit", result.stderr)
+                    elif mode == "quit-error":
+                        self.assertIn("quit with exit code 7", result.stderr)
 
 
 if __name__ == "__main__":

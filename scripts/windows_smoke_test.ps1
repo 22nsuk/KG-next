@@ -337,7 +337,17 @@ function Invoke-NativeReadBoardPipeProbe {
         $psi.Arguments = 'yzy " " " " " " 0 en -1'
 
         Write-Host "Probing native readboard pipe launch: $($assets.ExePath)"
-        $process = [System.Diagnostics.Process]::Start($psi)
+        # .NET Framework constructs and flushes StandardInput during Start, using
+        # Console.InputEncoding. Select BOM-free UTF-8 before that first flush;
+        # replacing the writer afterwards is too late. Restore the caller's setting.
+        $inputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+            $process = [System.Diagnostics.Process]::Start($psi)
+        }
+        finally {
+            [Console]::InputEncoding = $inputEncoding
+        }
         # Drain stderr while waiting for protocol output so diagnostics cannot fill the pipe.
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.StandardInput.AutoFlush = $true
@@ -369,6 +379,9 @@ function Invoke-NativeReadBoardPipeProbe {
         # 220430 is the unchanged wire protocol version, not the helper release tag.
         $stdoutTailTask = $process.StandardOutput.ReadToEndAsync()
         $process.StandardInput.WriteLine('quit')
+        # Match ReadBoard.shutdown(): finish the host's input after its last command
+        # so the helper reader can reach EOF rather than remain blocked during close.
+        $process.StandardInput.Close()
         if (-not $process.WaitForExit($ExitTimeoutSeconds * 1000)) {
             throw "Native readboard did not exit after quit within $ExitTimeoutSeconds seconds."
         }
