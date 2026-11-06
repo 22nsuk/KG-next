@@ -75,7 +75,8 @@ public final class SessionRulesSynchronizer {
     return synchronize(target, engine, null);
   }
 
-  static boolean permitsOrdinaryAnalysis(Leelaz engine) {
+  /** Shared admission decision, also used by explicit Continue to reacquire failed convergence. */
+  public static boolean permitsOrdinaryAnalysis(Leelaz engine) {
     if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
       return true;
     }

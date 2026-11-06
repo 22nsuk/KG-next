@@ -37,6 +37,8 @@ The menu uses the same `ManualRulesSelection` owner as the full rules editor. It
 old analysis output and requests the selected rules. Komi is committed only after the matching
 rules readback has completed and the request still belongs to the same engine and game.
 A komi or handicap edit made while the request is pending supersedes that preset's komi edit.
+It does not cancel the rules readback: confirmed rules are still published and the engines are
+restored with the latest game komi. Editing a value and changing it back also preserves that edit.
 
 A successful change keeps previous variations, comments, visits and PVs visible, but marks
 affected analysis as unsuitable for reuse. Choosing the already confirmed rules and komi does
@@ -48,6 +50,11 @@ After local publication, the existing synchronization coordinator restores the c
 to the primary and active comparison engines. Ordinary analysis is blocked until this position
 restore is acknowledged. A restore failure follows the existing paused-analysis error and
 explicit-retry flow; local publication is not a claim that an unreachable engine accepted it.
+**Continue analysis** reacquires rules and acknowledged position restoration if an intervening
+rejected selection or engine replacement retired the earlier restore request. It keeps analysis
+blocked until restoration succeeds and reports a persistent restore failure again.
+It also resynchronizes when a failed or mismatched rules readback leaves the engine out of step
+with the game's declared rules, even if no position restoration was pending.
 
 The current game's `GameInfo.komi` is authoritative for a live-board restore. `BoardData.komi`
 remains the provenance of retained analysis, including after its evaluation has been cleared.

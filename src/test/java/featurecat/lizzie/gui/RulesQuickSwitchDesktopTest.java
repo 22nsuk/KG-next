@@ -19,6 +19,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
@@ -64,6 +65,8 @@ class RulesQuickSwitchDesktopTest {
       return null;
     });
     AtomicReference<KataGoRules> rules = new AtomicReference<>(RulePreset.CHINESE.rules());
+    AtomicBoolean holdReadback = new AtomicBoolean();
+    AtomicBoolean holdRestore = new AtomicBoolean();
     List<String> restored = java.util.Collections.synchronizedList(new ArrayList<>());
     Leelaz engine = new Leelaz("");
     engine.isKatago = true;
@@ -79,10 +82,12 @@ class RulesQuickSwitchDesktopTest {
         rules.set(KataGoRules.parse(command.substring("kata-set-rules ".length())).orElseThrow());
       }
       if (command.equals("kata-get-rules")) {
+        if (holdReadback.get()) return null;
         return ExactSnapshotRestoreProtocolFixture.Response.success(rules.get().toGtpArgument());
       }
       if (command.startsWith("loadsgf ")) {
         restored.add(Files.readString(Path.of(command.substring("loadsgf ".length()))));
+        if (holdRestore.get()) return null;
       }
       return ExactSnapshotRestoreProtocolFixture.Response.success();
     });
@@ -109,6 +114,33 @@ class RulesQuickSwitchDesktopTest {
     JPopupMenu selected = openFromCaption();
     assertTrue(edt(() -> ((JCheckBoxMenuItem) selected.getComponent(2)).isSelected()));
     capture(result.resolveSibling("quick-rules-ko.png"));
+    // Let the engine change rules, then edit komi through the real toolbar before its readback.
+    long queriesBefore = count(transport, "kata-get-rules");
+    long analysisBefore = count(transport, "kata-analyze");
+    int restoresBeforeEdit = restored.size();
+    holdReadback.set(true);
+    holdRestore.set(true);
+    edt(() -> { ((JMenuItem) selected.getComponent(6)).doClick(0); return null; });
+    await(() -> count(transport, "kata-get-rules") > queriesBefore);
+    edt(() -> { LizzieFrame.menu.btnKomiDown.doClick(0); return null; });
+    assertEquals(6.5, Lizzie.board.getHistory().getGameInfo().getKomi());
+    holdReadback.set(false);
+    reply(transport, "kata-get-rules", rules.get().toGtpArgument());
+    await(() -> restored.size() > restoresBeforeEdit);
+    assertTrue(rules.get().semanticallyEquals(RulePreset.GOE.rules()));
+    assertTrue(Lizzie.board.isEngineAlignmentPending());
+    assertTrue(restored.get(restored.size() - 1).contains("KM[6.5]"));
+    engine.sendCommand("kata-analyze 10");
+    assertEquals(analysisBefore, count(transport, "kata-analyze"));
+    holdRestore.set(false);
+    reply(transport, "loadsgf ", "");
+    await(() -> !Lizzie.board.getHistory().hasPendingManualRulesIntent()
+        && !Lizzie.board.isEngineAlignmentPending()
+        && count(transport, "kata-analyze") > analysisBefore);
+    assertEquals(6.5, Lizzie.board.getHistory().getGameInfo().getKomi());
+    assertTrue(Lizzie.board.getHistory().captureSessionRules().parsedRules().orElseThrow()
+        .semanticallyEquals(RulePreset.GOE.rules()));
+    assertArrayEquals(config, Files.readAllBytes(work.resolve("config.txt")));
     edt(() -> {
       selected.setVisible(false);
       Lizzie.board.getHistory().getGameInfo().setHandicap(2);
@@ -179,6 +211,24 @@ class RulesQuickSwitchDesktopTest {
         throw new AssertionError("Rules caption did not open its popup");
       } catch (IllegalAccessException failure) { throw new AssertionError(failure); }
     });
+  }
+
+  private static long count(ExactSnapshotRestoreProtocolFixture.Transport transport, String prefix) {
+    return transport.commands().stream().filter(command -> command.startsWith(prefix)).count();
+  }
+
+  private static void reply(
+      ExactSnapshotRestoreProtocolFixture.Transport transport, String prefix, String payload) {
+    List<String> commands = transport.rawCommands();
+    for (int index = commands.size() - 1; index >= 0; index--) {
+      String line = commands.get(index);
+      int split = line.indexOf(' ');
+      if (split > 0 && line.substring(split + 1).startsWith(prefix)) {
+        transport.respond("=" + line.substring(0, split) + " " + payload);
+        return;
+      }
+    }
+    throw new AssertionError("Missing response target: " + prefix);
   }
 
   private static void capture(Path output) throws Exception {

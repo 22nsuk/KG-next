@@ -14484,13 +14484,31 @@ public class LizzieFrame extends JFrame {
       return;
     }
     pendingForegroundResumeAfterCleanup = false;
+    if (Lizzie.board != null && Lizzie.board.getHistory().hasPendingManualRulesIntent()) {
+      // Its completion owns rules publication and position convergence. Do not supersede it.
+      return;
+    }
     if (failedKifuPositionRetry != null) {
       failedKifuPositionRetry.run();
       return;
     }
     if (pendingKifuEngineSyncRoot != null && pendingKifuEngineSyncRoot == currentHistoryRoot()) {
       pendingManualAnalysisResumeRoot = pendingKifuEngineSyncRoot;
-      if (pendingKifuRulesConsent != null) pendingKifuRulesConsent.run();
+      if (pendingKifuRulesConsent != null) {
+        pendingKifuRulesConsent.run();
+      } else {
+        // A replaced engine/reader can retire the request while leaving its root pending.
+        scheduleEngineSyncAndResumeAfterKifuLoad(
+            0, this::resumeForegroundAnalysisForConfirmedPosition, false);
+      }
+      return;
+    }
+    if (Lizzie.board != null && !SessionRulesSynchronizer.permitsOrdinaryAnalysis(Lizzie.leelaz)) {
+      // A rejected manual selection may have retired an earlier restore's retry callback.
+      // Failed/mismatched rules may also close admission without a pending position marker.
+      // Ordinary forwarding cannot satisfy either gate; reacquire acknowledged convergence.
+      scheduleEngineSyncAndResumeAfterKifuLoad(
+          0, this::resumeForegroundAnalysisForConfirmedPosition, false);
       return;
     }
     pendingManualAnalysisResumeRoot = null;

@@ -101,7 +101,7 @@ public final class ManualRulesSelection {
             selection.history, selection.intent.previousTarget());
       }
       selection.operation =
-          primary.applyManualRulesOperation(requested, timeoutMillis, selection::isCurrentRequest);
+          primary.applyManualRulesOperation(requested, timeoutMillis, selection::isCurrent);
       if (selection.operation == null) return null;
       Thread completion =
           new Thread(selection::complete, "lizzie-set-kata-rules-completion");
@@ -127,9 +127,9 @@ public final class ManualRulesSelection {
     return done && applied;
   }
 
-  /** Suppresses feedback from a replaced popup request or a game edited while it was pending. */
+  /** Suppresses feedback from a replaced request, history or engine, not a newer komi edit. */
   public boolean isLatestSelection() {
-    return currentIdentity() && currentKomiContext()
+    return currentIdentity()
         && (intent == null || history.isLatestManualRulesIntent(intent));
   }
 
@@ -247,6 +247,7 @@ public final class ManualRulesSelection {
   private void settle(EngineRulesResult result, EngineRulesResult recovered,
       Leelaz.EngineRulesOperation settledOperation) {
     BoardHistoryList.SessionRulesTarget[] published = {null};
+    boolean[] komiApplied = {false};
     boolean[] resume = {false};
     List<Runnable> afterAdmission = new ArrayList<>();
     settleAtCurrentSelection(() -> {
@@ -269,15 +270,17 @@ public final class ManualRulesSelection {
           KataGoRules currentRules = primary.currentConfirmedRules();
           boolean confirmed = operationStillCurrent && result != null && result.isConfirmed()
               && matches(result.observed(), currentRules);
-          boolean selected = confirmed && matches(result.observed(), requested) && currentKomiContext();
+          boolean selected = confirmed && matches(result.observed(), requested);
           KataGoRules observed = confirmed ? result.observed()
               : operationStillCurrent && recovered != null && recovered.isConfirmed()
                   && matches(recovered.observed(), currentRules) ? recovered.observed() : null;
           boolean preserveCache = canPreserveCache(result, observed);
-          if (selected && changesKomi) {
+          // A metadata edit supersedes only the preset komi. The rules may already have changed
+          // physically, so their readback, publication and position convergence must still finish.
+          if (selected && changesKomi && currentKomiContext()) {
             long revision = game.applyPresetKomi(expectedGameRevision, expectedKomi, handicap, presetKomi);
-            selected = revision >= 0L;
-            if (selected) {
+            komiApplied[0] = revision >= 0L;
+            if (komiApplied[0]) {
               expectedKomi = presetKomi;
               expectedGameRevision = revision;
             }
@@ -288,12 +291,12 @@ public final class ManualRulesSelection {
               // Hold ordinary analysis until both engines acknowledge this game's position.
               board.requireEngineAlignment();
             }
-            if (changesKomi || !preserveCache
+            if (komiApplied[0] || !preserveCache
                 || !compatibleTarget(intent.previousTarget(), requested)
                 || (currentMirror != null && !matches(currentMirror.currentConfirmedRules(), requested))) {
               List<WeakReference<BoardData>> currentData = captureRetainedData(history);
               primaryCache.invalidateAtSettlement(primary, currentData);
-              if (changesKomi || Lizzie.config.isDoubleEngineMode()) {
+              if (komiApplied[0] || Lizzie.config.isDoubleEngineMode()) {
                 if (currentMirror != null && currentMirror == mirror
                     && currentMirror.engineIncarnationSnapshot() == mirrorIncarnation) {
                   mirrorCache.invalidateAtSettlement(mirror, currentData);
@@ -320,9 +323,9 @@ public final class ManualRulesSelection {
       }
     });
     for (Runnable action : afterAdmission) action.run();
-    if (applied && changesKomi) {
+    if (applied && komiApplied[0]) {
       SwingUtilities.invokeLater(() -> {
-        if (!isLatestSelection()) return;
+        if (!isLatestSelection() || !currentKomiContext()) return;
         game.refreshKomiDisplay();
         if (Lizzie.frame != null) Lizzie.frame.refresh();
       });
@@ -398,10 +401,6 @@ public final class ManualRulesSelection {
     return presetKomi == null || (history.getGameInfo() == game
         && game.rulesMetadataRevision() == expectedGameRevision
         && game.getHandicap() == handicap && Double.compare(game.getKomi(), expectedKomi) == 0);
-  }
-
-  private boolean isCurrentRequest() {
-    return isCurrent() && currentKomiContext();
   }
 
   private boolean isCurrent() {
