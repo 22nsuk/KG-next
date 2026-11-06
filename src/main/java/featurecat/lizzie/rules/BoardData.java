@@ -1165,14 +1165,23 @@ public class BoardData {
 
   /** True when the primary payload contains a winrate point that can actually be graphed. */
   public boolean hasDisplayablePrimaryAnalysis() {
-    if (getPlayouts() <= 0 || !Double.isFinite(winrate) || winrate < 0 || winrate > 100) {
+    return hasDisplayableAnalysis(getPlayouts(), winrate, analysisHeaderSlots, bestMoves);
+  }
+
+  public boolean hasDisplayableSecondaryAnalysis() {
+    return hasDisplayableAnalysis(getPlayouts2(), winrate2, analysisHeaderSlots2, bestMoves2);
+  }
+
+  private static boolean hasDisplayableAnalysis(
+      int visits, double winrate, int headerSlots, List<MoveData> candidates) {
+    if (visits <= 0 || !Double.isFinite(winrate) || winrate < 0 || winrate > 100) {
       return false;
     }
     // Imported SGFs may legitimately contain only the serialized analysis header. Live engine
     // results, on the other hand, carry at least one candidate. Requiring either signal prevents
     // download/sync placeholders with a default 50% winrate and a visit counter from suppressing
     // automatic curve completion.
-    return analysisHeaderSlots >= 3 || (bestMoves != null && !bestMoves.isEmpty());
+    return headerSlots >= 3 || (candidates != null && !candidates.isEmpty());
   }
 
   public boolean hasSecondaryAnalysisPayload() {
