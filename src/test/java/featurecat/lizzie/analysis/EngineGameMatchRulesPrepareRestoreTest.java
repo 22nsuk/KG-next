@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -51,6 +52,8 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class EngineGameMatchRulesPrepareRestoreTest {
   private static final EngineParticipantIdentity FIRST =
@@ -276,6 +279,50 @@ class EngineGameMatchRulesPrepareRestoreTest {
   }
 
   @Test
+  void fastSuccessfulStartupDoesNotPublishStartingAfterPlaying() {
+    manager.finishStartupBeforeDispatchReturns = true;
+    var transitions = new CopyOnWriteArrayList<featurecat.lizzie.enginegame.EngineGameChromeTransition>();
+    Lizzie.engineGame.replaceChromeForTest(transitions::add);
+    assertInstanceOf(Acceptance.Accepted.class,
+        Lizzie.engineGame.accept(genmoveSpec(CHINESE), observer));
+    assertTrue(Lizzie.engineGame.current().playing());
+    assertEquals(1, observer.playing);
+    assertEquals(featurecat.lizzie.enginegame.EngineGameChromeTransition.Kind.PLAYING,
+        transitions.get(transitions.size() - 1).kind());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true,set", "false,set", "true,query", "false,consent"})
+  void admittedStartupFailureBeforeReturnIsNotReportedAsAdmissionRejection(
+      boolean genmove, String failure) throws Exception {
+    manager.finishStartupBeforeDispatchReturns = true;
+    var transitions = new CopyOnWriteArrayList<featurecat.lizzie.enginegame.EngineGameChromeTransition>();
+    Lizzie.engineGame.replaceChromeForTest(transitions::add);
+    if (failure.equals("set")) white.rejectNextSet();
+    else if (failure.equals("query")) black.failNextQuery();
+    else {
+      black.writeOnly(JAPANESE);
+      white.writeOnly(TROMP);
+      Lizzie.engineGame.installMatchRulesConsentForTest(decision -> false);
+    }
+    Acceptance acceptance = Lizzie.engineGame.accept(
+        genmove ? genmoveSpec(CHINESE) : analysisSpec(CHINESE), observer);
+    boolean interrupted = Thread.interrupted();
+    assertAll(
+        () -> assertFalse(interrupted, "Startup worker must not interrupt its returned caller"),
+        () -> assertInstanceOf(Acceptance.Accepted.class, acceptance, () -> String.valueOf(acceptance)));
+    awaitFailedStart();
+    assertEquals(1, observer.failures.size());
+    assertInstanceOf(StartFailure.MatchRulesFailed.class, observer.failures.get(0));
+    assertEquals(MatchRulesSnapshot.Phase.FAILED, Lizzie.engineGame.matchRulesSnapshot().phase());
+    assertInstanceOf(EngineGameSnapshot.Idle.class, Lizzie.engineGame.current());
+    assertEquals(featurecat.lizzie.enginegame.EngineGameChromeTransition.Kind.START_FAILED,
+        transitions.get(transitions.size() - 1).kind(), "Late STARTING must not replace failure UI");
+    awaitRestored();
+    assertEquals(0, black.searches.get() + white.searches.get());
+  }
+
+  @Test
   void matchingConsentIsReusedAcrossColorExchange() throws Exception {
     black.writeOnly(JAPANESE);
     white.writeOnly(TROMP);
@@ -465,6 +512,7 @@ class EngineGameMatchRulesPrepareRestoreTest {
 
   private static final class InlineEngineManager extends EngineManager {
     private final List<Thread> startupWorkers = new CopyOnWriteArrayList<>();
+    private boolean finishStartupBeforeDispatchReturns;
 
     private void awaitStartupWorkers() throws InterruptedException {
       for (int index = 0; index < startupWorkers.size(); index++) {
@@ -495,6 +543,25 @@ class EngineGameMatchRulesPrepareRestoreTest {
             run();
           }
         };
+      }
+      if (finishStartupBeforeDispatchReturns
+          && ("engine-game-genmove-start".equals(name) || "engine-game-analysis-start".equals(name))) {
+        Thread worker = new Thread(task, name) {
+          @Override
+          public synchronized void start() {
+            super.start();
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            boolean interrupted = false;
+            while (isAlive() && System.nanoTime() < deadline) {
+              try { join(100); }
+              catch (InterruptedException expectedBeforeFix) { interrupted = true; }
+            }
+            if (interrupted) Thread.currentThread().interrupt();
+            assertFalse(isAlive(), "Controlled startup worker did not complete");
+          }
+        };
+        startupWorkers.add(worker);
+        return worker;
       }
       Thread worker = super.createEngineGameWorker(task, name);
       startupWorkers.add(worker);

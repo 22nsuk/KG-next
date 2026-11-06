@@ -167,6 +167,76 @@ class LoggingRuntimeTest {
   }
 
   @Test
+  void sourceCaptureDefersWriterWithoutBlockingProducer() throws Exception {
+    LoggingRuntime runtime = LoggingRuntime.initialize(
+        new WorkDirectoryResolution(tempDir, List.of()), testLimits());
+    runtime.awaitIdle();
+    CountDownLatch writerEntered = new CountDownLatch(1);
+    runtime.pauseHandoffForTests(LogStream.APP, writerEntered, null);
+    Path active = tempDir.resolve("logs/app.log");
+    runtime.captureLogFiles(active, () -> {
+      // Admission stays nonblocking even while capture owns the writer/rollover boundary.
+      LoggerFactory.getLogger(LogCategories.APP).warn("capture-gate-marker");
+      try {
+        assertTrue(writerEntered.await(5, TimeUnit.SECONDS));
+      } catch (InterruptedException interrupted) {
+        throw new AssertionError(interrupted);
+      }
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      boolean writerWaiting;
+      do {
+        long captureThread = Thread.currentThread().getId();
+        writerWaiting = java.util.Arrays.stream(
+            java.lang.management.ManagementFactory.getThreadMXBean().dumpAllThreads(false, false))
+            .anyMatch(thread -> thread.getThreadName().equals("lizzie-log-app")
+                && thread.getLockOwnerId() == captureThread);
+        if (!writerWaiting) java.util.concurrent.locks.LockSupport.parkNanos(1_000_000);
+      } while (!writerWaiting && System.nanoTime() < deadline);
+      assertTrue(writerWaiting, "Writer must actually wait on the capture thread's file gate");
+      assertFalse(Files.readString(active).contains("capture-gate-marker"));
+      return null;
+    }, () -> false);
+    assertTrue(runtime.awaitWritten(LogStream.APP, 5, TimeUnit.SECONDS));
+    assertTrue(Files.readString(active).contains("capture-gate-marker"));
+  }
+
+  @Test
+  void sourceCaptureWaitingForWriterCanBeCancelled() throws Exception {
+    LoggingRuntime runtime = LoggingRuntime.initialize(
+        new WorkDirectoryResolution(tempDir, List.of()), testLimits());
+    runtime.awaitIdle();
+    Path active = tempDir.resolve("logs/app.log");
+    var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
+    CountDownLatch checkedCancellation = new CountDownLatch(1);
+    var executor = java.util.concurrent.Executors.newSingleThreadExecutor();
+    try {
+      runtime.captureLogFiles(active, () -> {
+        var waiting = executor.submit(() -> assertThrows(java.io.InterruptedIOException.class,
+            () -> runtime.captureLogFiles(active, () -> {
+              throw new AssertionError("Cancelled capture cannot enter the held gate");
+            }, () -> {
+              checkedCancellation.countDown();
+              return cancelled.get();
+            })));
+        try {
+          assertTrue(checkedCancellation.await(5, TimeUnit.SECONDS));
+          cancelled.set(true);
+          assertTrue(waiting.get(5, TimeUnit.SECONDS).getMessage().contains("cancelled"));
+        } catch (Exception failure) {
+          throw new AssertionError(failure);
+        } finally {
+          cancelled.set(true);
+        }
+        return null;
+      }, () -> false);
+    } finally {
+      cancelled.set(true);
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
   void rollingCreatesArchiveSegmentsAndKeepsActiveName() throws Exception {
     LoggingRuntime.resetForTests();
     LoggingRuntime runtime =

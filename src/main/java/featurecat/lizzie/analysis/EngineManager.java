@@ -1505,13 +1505,9 @@ public class EngineManager {
     }
     EngineGameOwnerTransaction gameTransaction =
         startNewEngineGame(firstGame, plan, null, Lizzie.engineGame);
-    if (gameTransaction == null || !isCurrentEngineGameTransaction(gameTransaction)) {
-      return false;
-    }
-    captureEngineGameOutputIdentity(gameTransaction);
-    fillEngineGameSettingStrings(gameTransaction);
-    publishEngineGamePreparingUi(gameTransaction);
-    return true;
+    // A non-null result is the dispatch receipt, not a promise that asynchronous preparation
+    // is still running. A fast failure already belongs to the product's failure callback.
+    return gameTransaction != null;
   }
 
   private void captureEngineGameOutputIdentity(EngineGameOwnerTransaction transaction) {
@@ -2674,13 +2670,8 @@ public class EngineManager {
                     firstTime);
                   }
             };
-        if (System.nanoTime() >= engineGameDeadlineNanos(gameTransaction)) {
-          throw new IllegalStateException("Engine-game analysis setup timed out before dispatch");
-                }
-        if (!transitionEngineGameToDispatched(gameTransaction)) {
-          return null;
-              }
-        dispatchEngineGameWorker(gameTransaction, "engine-game-analysis-start", runnable);
+        if (!dispatchPreparedEngineGameStart(
+            gameTransaction, "engine-game-analysis-start", runnable)) return null;
               } else {
         // genmove对战
         if (gameTransaction.blackEngine != null) {
@@ -2815,13 +2806,8 @@ public class EngineManager {
                     }
             }
           };
-        if (System.nanoTime() >= engineGameDeadlineNanos(gameTransaction)) {
-          throw new IllegalStateException("Engine-game genmove setup timed out before dispatch");
-        }
-        if (!transitionEngineGameToDispatched(gameTransaction)) {
-          return null;
-      }
-        dispatchEngineGameWorker(gameTransaction, "engine-game-genmove-start", runnable);
+        if (!dispatchPreparedEngineGameStart(
+            gameTransaction, "engine-game-genmove-start", runnable)) return null;
       }
       return gameTransaction;
     } catch (RuntimeException | Error startupFailure) {
@@ -2831,6 +2817,21 @@ public class EngineManager {
       gameTransaction.workers.remove(startupThread);
       startupLease.close();
     }
+  }
+
+  private boolean dispatchPreparedEngineGameStart(
+      EngineGameOwnerTransaction transaction, String workerName, Runnable task) {
+    if (System.nanoTime() >= engineGameDeadlineNanos(transaction)) {
+      throw new IllegalStateException("Engine-game setup timed out before dispatch");
+    }
+    if (!transitionEngineGameToDispatched(transaction)) return false;
+    captureEngineGameOutputIdentity(transaction);
+    fillEngineGameSettingStrings(transaction);
+    publishEngineGamePreparingUi(transaction);
+    // All synchronous setup is complete. From here the worker owns cancellation; retaining the
+    // dispatch caller in workers lets a fast failure interrupt code outside engine-game startup.
+    transaction.workers.remove(Thread.currentThread());
+    return dispatchEngineGameWorker(transaction, workerName, task);
   }
 
   private void scheduleProductSuccessorAfterRetirement(

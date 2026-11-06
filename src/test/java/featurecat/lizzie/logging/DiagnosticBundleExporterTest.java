@@ -83,6 +83,245 @@ class DiagnosticBundleExporterTest {
   }
 
   @Test
+  void startupFailureLogSurvivesRolloverAfterSourceCapture() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
+    try (var service = new EngineStartupDiagnostics(
+        EngineStartupDiagnostics.Policy.production(), EngineObservation::recordStartupDiagnostic)) {
+      var attempt = service.begin("contribution", "CONTRIBUTE", List.of("katago"), true);
+      var diagnostic = attempt.fail("startup-output", "Compile with -DBUILD_DISTRIBUTED");
+      assertTrue(runtime.awaitWritten(LogStream.APP, 10, TimeUnit.SECONDS));
+      var request = new DiagnosticBundleRequest(runtime, Set.of(), false, false,
+          new JSONObject(), emptySnapshot(), ReadBoardLoggingSnapshot.detached(),
+          "next-dev", "unknown", diagnostic);
+      Path active = runtime.logsDirectory().resolve("app.log");
+      var exporter = new DiagnosticBundleExporter(tempDir.resolve("rollover-export"));
+      var captured = new java.util.ArrayList<java.nio.channels.FileChannel>();
+      exporter.setLogSourceObserverForTests((source, inputs) -> {
+        captured.addAll(inputs);
+        if (!source.equals("lizzie-app")) return;
+        // A real rollover closes its writer before rename (required by Windows), then compresses.
+        // Stop only the writer here; the exporter's already captured read handles stay live.
+        runtime.shutdown();
+        Path old = runtime.logsDirectory().resolve("app-rotating.tmp");
+        Files.move(active, old);
+        Path archive = runtime.logsDirectory().resolve("archive/app.2026-11-05.0.log.gz");
+        try (var gzip = new GZIPOutputStream(Files.newOutputStream(archive))) {
+          Files.copy(old, gzip);
+        }
+        Files.writeString(active, "replacement after rollover\n");
+      });
+      var entries = unzipEntries(exporter.export(request));
+      String log = text(entries, "logs/lizzie/app.log");
+      assertTrue(log.contains("startup-failed"), log);
+      assertTrue(log.contains(diagnostic.attemptId()), log);
+      assertFalse(log.contains("replacement after rollover"));
+      JSONObject source = new JSONObject(text(entries, "manifest.json"))
+          .getJSONObject("sources").getJSONObject("lizzie-app");
+      assertEquals("included", source.getString("status"));
+      assertEquals(0, source.optInt("readErrors"));
+      assertFalse(captured.isEmpty());
+      assertTrue(captured.stream().noneMatch(java.nio.channels.FileChannel::isOpen));
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(strings = {"complete", "cancel", "timeout"})
+  void sourceCaptureWaitsForAlreadyRunningLogbackCompression(String outcome) throws Exception {
+    LoggingRuntime.resetForTests();
+    var context = (ch.qos.logback.classic.LoggerContext) LoggerFactory.getILoggerFactory();
+    var compressionEntered = new CountDownLatch(1);
+    var releaseCompression = new CountDownLatch(1);
+    var held = new AtomicBoolean();
+    ch.qos.logback.core.status.StatusListener listener =
+        status -> {
+          // Logback 1.6.3 emits this before GZIPOutputStream.close writes the gzip trailer.
+          if (status.getMessage().startsWith("Done GZ compressing")
+              && held.compareAndSet(false, true)) {
+            compressionEntered.countDown();
+            try {
+              if (!releaseCompression.await(10, TimeUnit.SECONDS)) {
+                throw new AssertionError("compression was never released");
+              }
+            } catch (InterruptedException interrupted) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(interrupted);
+            }
+          }
+        };
+    var executor = Executors.newSingleThreadExecutor();
+    var cancelled = new AtomicBoolean();
+    try {
+      LoggingRuntime runtime =
+          LoggingRuntime.initialize(
+              new WorkDirectoryResolution(tempDir, List.of()),
+              new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 4000));
+      context.getStatusManager().add(listener);
+      runtime.awaitIdle();
+      LoggerFactory.getLogger(LogCategories.APP)
+          .warn("archive-startup-failed {} password=CANARY_ASYNC_GZIP", "x".repeat(5000));
+      assertTrue(runtime.awaitWritten(LogStream.APP, 5, TimeUnit.SECONDS));
+      LoggerFactory.getLogger(LogCategories.APP).warn("post-rollover-active");
+      assertTrue(compressionEntered.await(5, TimeUnit.SECONDS));
+      assertTrue(runtime.awaitWritten(LogStream.APP, 5, TimeUnit.SECONDS));
+      Path archive;
+      try (var files = Files.list(runtime.logsDirectory().resolve("archive"))) {
+        archive =
+            files.filter(path -> path.toString().endsWith(".log.gz")).findFirst().orElseThrow();
+      }
+      long incompleteSize = Files.size(archive);
+      assertThrows(
+          IOException.class,
+          () -> {
+            try (var gzip = new java.util.zip.GZIPInputStream(Files.newInputStream(archive))) {
+              gzip.readAllBytes();
+            }
+          },
+          "Fixture must expose the actual incomplete gzip before its trailer is written");
+      var exporter = new DiagnosticBundleExporter(tempDir.resolve("compression-export"));
+      var captured = new java.util.ArrayList<java.nio.channels.FileChannel>();
+      var reachedBoundary = new CountDownLatch(1);
+      exporter.setLogSourceObserverForTests(
+          (source, inputs) -> {
+            captured.addAll(inputs);
+            if (source.equals("lizzie-app")) {
+              // The old implementation captures a partial gzip before reaching this observer.
+              reachedBoundary.countDown();
+            }
+          });
+      Future<Path> exported =
+          executor.submit(
+              () ->
+                  exporter.export(
+                      request(runtime, Set.of()),
+                      () -> {
+                        if (java.util.Arrays.stream(Thread.currentThread().getStackTrace())
+                            .anyMatch(
+                                frame ->
+                                    frame.getClassName().equals(ArchiveJobContext.class.getName())
+                                        && frame.getMethodName().equals("awaitIdle")))
+                          reachedBoundary.countDown();
+                        return cancelled.get();
+                      }));
+      assertTrue(reachedBoundary.await(5, TimeUnit.SECONDS));
+      // Waiting for compression must not hold the writer gate or producer admission.
+      LoggerFactory.getLogger(LogCategories.APP).warn("writer-progress-during-compression");
+      assertTrue(runtime.awaitWritten(LogStream.APP, 2, TimeUnit.SECONDS));
+      if (outcome.equals("cancel")) {
+        cancelled.set(true);
+        var failure =
+            assertThrows(
+                java.util.concurrent.ExecutionException.class,
+                () -> exported.get(5, TimeUnit.SECONDS));
+        assertTrue(failure.getCause().getMessage().contains("cancelled"));
+        try (var files = Files.list(tempDir.resolve("compression-export"))) {
+          assertFalse(
+              files.anyMatch(
+                  path ->
+                      path.toString().endsWith(".zip") || path.toString().endsWith(".partial")));
+        }
+      } else {
+        if (outcome.equals("complete")) releaseCompression.countDown();
+        var entries = unzipEntries(exported.get(5, TimeUnit.SECONDS));
+        JSONObject source = source(manifest(entries), "lizzie-app");
+        if (outcome.equals("timeout")) {
+          assertEquals("failed", source.getString("status"));
+          assertEquals("failed", source.getString("enumerationState"));
+          assertEquals("unreadable", source.getString("reason"));
+        } else {
+          assertTrue(Files.size(archive) > incompleteSize);
+          String log = text(entries, "logs/lizzie/app.log");
+          assertTrue(log.contains("archive-startup-failed"), log);
+          assertTrue(log.contains("post-rollover-active"), log);
+          assertFalse(log.contains("CANARY_ASYNC_GZIP"));
+          assertEquals("included", source.getString("status"));
+          assertEquals(0, source.optInt("readErrors"));
+        }
+      }
+      assertTrue(captured.stream().noneMatch(java.nio.channels.FileChannel::isOpen));
+    } finally {
+      cancelled.set(true);
+      releaseCompression.countDown();
+      executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
+      context.getStatusManager().remove(listener);
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void foreignGzipCompletionAndFailureRemainBounded(boolean complete) throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    Path archive = runtime.logsDirectory().resolve("archive/app.foreign.log.gz");
+    String record =
+        LocalDateTime.now().minusSeconds(1).format(LOG_TIMESTAMP)
+            + " WARN [lizzie.app] completed-foreign-gzip password=CANARY_FOREIGN_GZIP\n";
+    try (var gzip = new GZIPOutputStream(Files.newOutputStream(archive))) {
+      gzip.write(record.getBytes(StandardCharsets.UTF_8));
+      var exporter = new DiagnosticBundleExporter(tempDir.resolve("foreign-gzip-export"));
+      exporter.setLogSourceObserverForTests(
+          (source, inputs) -> {
+            if (complete && source.equals("lizzie-app")) gzip.finish();
+          });
+      var entries = unzipEntries(exporter.export(request(runtime, Set.of())));
+      String log = text(entries, "logs/lizzie/app.log");
+      assertEquals(complete, log.contains("completed-foreign-gzip"), log);
+      assertFalse(log.contains("CANARY_FOREIGN_GZIP"));
+      JSONObject source = source(manifest(entries), "lizzie-app");
+      assertEquals(complete ? 0 : 1, source.optInt("readErrors"));
+      assertEquals(complete ? "included" : "partial", source.getString("status"));
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void capturedLogInputsCloseWhenExportStopsBeforeReading(boolean cancel) throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    Path archive = runtime.logsDirectory().resolve("archive/app.fixture.log.gz");
+    writeGzipRecords(archive, 2, "captured-archive-", 10);
+    var captured = new java.util.ArrayList<java.nio.channels.FileChannel>();
+    var cancelled = new AtomicBoolean();
+    var exporter = new DiagnosticBundleExporter(tempDir.resolve("capture-failure-export"));
+    exporter.setLogSourceObserverForTests((source, inputs) -> {
+      captured.addAll(inputs);
+      if (cancel) cancelled.set(true);
+      else throw new IOException("controlled capture failure");
+    });
+    IOException failure = assertThrows(IOException.class,
+        () -> exporter.export(request(runtime, Set.of()), cancelled::get));
+    assertTrue(failure.getMessage().contains(cancel ? "cancelled" : "controlled capture failure"));
+    assertEquals(2, captured.size(), "Active file and gzip archive must both be captured");
+    assertTrue(captured.stream().noneMatch(java.nio.channels.FileChannel::isOpen));
+    try (var files = Files.list(tempDir.resolve("capture-failure-export"))) {
+      assertFalse(files.anyMatch(path -> path.toString().endsWith(".zip")
+          || path.toString().endsWith(".partial")));
+    }
+  }
+
+  @Test
+  void capturedLogLengthExcludesLaterAppendsWithOlderTimestamps() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    runtime.shutdown();
+    Path active = runtime.logsDirectory().resolve("app.log");
+    String timestamp = LocalDateTime.now().minusSeconds(1).format(LOG_TIMESTAMP);
+    Files.writeString(active, timestamp + " WARN [lizzie.engine] before-capture\n");
+    var exporter = new DiagnosticBundleExporter(tempDir.resolve("capture-length-export"));
+    exporter.setLogSourceObserverForTests((source, inputs) -> {
+      if (source.equals("lizzie-app")) {
+        Files.writeString(active, timestamp + " WARN [lizzie.engine] after-capture\n",
+            StandardOpenOption.APPEND);
+      }
+    });
+    String log = text(unzipEntries(exporter.export(request(runtime, Set.of()))),
+        "logs/lizzie/app.log");
+    assertTrue(log.contains("before-capture"));
+    assertFalse(log.contains("after-capture"));
+  }
+
+  @Test
   void plinkPasswordsAreRedactedOnDiskAndWhenReexportingLegacyLogs() throws Exception {
     LoggingRuntime runtime = start();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));

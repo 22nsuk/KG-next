@@ -109,7 +109,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -144,7 +144,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -198,7 +198,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -255,7 +255,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -309,7 +309,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -336,7 +336,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -365,7 +365,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -394,7 +394,7 @@ class LeelazReadBoardGmaTest {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -432,7 +432,7 @@ class LeelazReadBoardGmaTest {
     BlockingModeSwitchBoard board = null;
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = modeSwitchReadBoard();
@@ -552,7 +552,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new RecordingOutputStream());
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 0, 0, false));
 
@@ -599,7 +599,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -649,7 +649,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -667,7 +667,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -697,7 +697,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(
           engine,
           new OutputStream() {
@@ -721,7 +721,7 @@ class LeelazReadBoardGmaTest {
       Leelaz engine = new ShortGmaRestoreTimeoutLeelaz();
       configureReadyReadBoardGmaEngine(engine);
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new RecordingOutputStream());
 
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -743,7 +743,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -781,7 +781,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -822,7 +822,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -851,7 +851,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -887,7 +887,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -915,7 +915,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, false));
@@ -953,7 +953,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.setEngineCommand(RemoteComputeConfig.COMMAND_CUSTOM_WS);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = allocate(ReadBoard.class);
@@ -991,7 +991,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1069,7 +1069,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1120,7 +1120,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1158,7 +1158,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setReadBoardGmaParamState(engine, "readBoardGmaMaxTime", "2", true);
       setReadBoardGmaParamState(engine, "readBoardGmaMaxVisits", "800", true);
       RecordingOutputStream output = new RecordingOutputStream();
@@ -1209,7 +1209,7 @@ class LeelazReadBoardGmaTest {
   void inSessionLimitRestoreErrorQuarantinesEngine() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setReadBoardGmaParamState(engine, "readBoardGmaMaxTime", "2", true);
       setReadBoardGmaParamState(engine, "readBoardGmaMaxVisits", "800", true);
       RecordingOutputStream output = new RecordingOutputStream();
@@ -1239,7 +1239,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1303,7 +1303,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1364,7 +1364,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1396,7 +1396,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1448,7 +1448,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1484,7 +1484,7 @@ class LeelazReadBoardGmaTest {
   void restoreCannotMissAnOverrideWhileItsSnapshotCommandIsBeingSent() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       BlockingFirstFlushOutputStream output = new BlockingFirstFlushOutputStream();
       setOutputStream(engine, output);
       AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -1533,7 +1533,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new RecordingOutputStream());
 
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -1551,7 +1551,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
 
@@ -1588,7 +1588,7 @@ class LeelazReadBoardGmaTest {
   void partialRuntimeRestoreSuccessKeepsEverySnapshotUntilTheBarrierCompletes() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -1614,7 +1614,7 @@ class LeelazReadBoardGmaTest {
   void runtimeRestoreErrorCanBeRecoveredByAnImmediateSameInstanceRestart() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -1642,7 +1642,7 @@ class LeelazReadBoardGmaTest {
   void repeatedCleanupAfterSuccessDoesNotSendOrCompleteAgain() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 0, 0, false));
@@ -1673,7 +1673,7 @@ class LeelazReadBoardGmaTest {
   void repeatedCleanupAfterFailureDoesNotRetryOrReportSuccess() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -1700,7 +1700,7 @@ class LeelazReadBoardGmaTest {
   void readBoardGmaRuntimeRestoreSendFailureQuarantinesEngine() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -1729,7 +1729,7 @@ class LeelazReadBoardGmaTest {
   void readBoardGmaRestoreFailureCancelsLoadSgfBeforePendingRegistration() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       invokeBeginReadBoardGmaSession(engine);
@@ -1779,7 +1779,7 @@ class LeelazReadBoardGmaTest {
   void readBoardGmaRestoreFailureKeepsWritingLoadSgfAliveUntilItsResponse() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       BlockingFirstFlushOutputStream output = new BlockingFirstFlushOutputStream();
       setOutputStream(engine, output);
       invokeBeginReadBoardGmaSession(engine);
@@ -1837,7 +1837,7 @@ class LeelazReadBoardGmaTest {
   void readBoardGmaRestoreFailureKeepsSentLoadSgfAliveUntilItsResponse() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Path sgfFile = Files.createTempFile("gma-reset-sent-loadsgf-", ".sgf");
@@ -1889,7 +1889,7 @@ class LeelazReadBoardGmaTest {
       Lizzie.config.extraMode = ExtraMode.Double_Engine;
       Leelaz primary = readyReadBoardGmaEngine();
       Leelaz secondary = new Leelaz("");
-      Lizzie.leelaz = primary;
+      Lizzie.setPrimaryEngine(primary);
       Lizzie.leelaz2 = secondary;
       RecordingOutputStream primaryOutput = new RecordingOutputStream();
       RecordingOutputStream secondaryOutput = new RecordingOutputStream();
@@ -1945,7 +1945,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.requireResponseBeforeSend = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Path sentSgf = Files.createTempFile("gma-reset-sent-race-", ".sgf");
@@ -2008,7 +2008,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.requireResponseBeforeSend = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Path sgfFile = Files.createTempFile("gma-reset-retired-outstanding-", ".sgf");
@@ -2050,7 +2050,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Path sgfFile = Files.createTempFile("gma-reset-late-response-", ".sgf");
@@ -2094,7 +2094,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.requireResponseBeforeSend = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Path sgfFile = Files.createTempFile("gma-reset-timeout-linearization-", ".sgf");
@@ -2139,7 +2139,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
       engine.requireResponseBeforeSend = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       BlockingFailingFirstFlushOutputStream blockedOutput =
           new BlockingFailingFirstFlushOutputStream();
       setOutputStream(engine, blockedOutput);
@@ -2182,7 +2182,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new ShortGmaRestoreTimeoutLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2204,7 +2204,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new ShortGmaRestoreTimeoutLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2234,7 +2234,7 @@ class LeelazReadBoardGmaTest {
   void readBoardGmaTransportEofDuringRestoreQuarantinesEngine() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2257,7 +2257,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new FailingBoardRestoreLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2295,7 +2295,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       ControlledBoardRestoreLeelaz engine = new ControlledBoardRestoreLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2364,7 +2364,7 @@ class LeelazReadBoardGmaTest {
   void readLoopEofQuarantinesActiveReadBoardGmaSession() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setOutputStream(engine, new RecordingOutputStream());
       setInputStream(engine, "");
       engine.isNormalEnd = true;
@@ -2382,7 +2382,7 @@ class LeelazReadBoardGmaTest {
   void manualRestartKeepsQuarantineUntilBoardSyncConfirmationIsAcknowledged() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       assertTrue(engine.genmoveAnalyzeForReadBoard("B", 5, 1000, true));
@@ -2423,7 +2423,7 @@ class LeelazReadBoardGmaTest {
   void ordinaryLifecycleFailureDoesNotClearReadBoardGmaQuarantine() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setEngineStateUnrestored(engine, true);
 
       engine.markLifecycleBoardSynchronizationFailed("ordinary lifecycle failure", false);
@@ -2440,7 +2440,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       ReadyAutomaticRestartLeelaz engine = new ReadyAutomaticRestartLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Leelaz.AutomaticRestartAttempt attempt =
@@ -2486,7 +2486,7 @@ class LeelazReadBoardGmaTest {
       ReadyAutomaticRestartPonderLeelaz engine = new ReadyAutomaticRestartPonderLeelaz();
       configureReadyReadBoardGmaEngine(engine);
       engine.Pondering();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       Leelaz.AutomaticRestartAttempt attempt =
@@ -2517,7 +2517,7 @@ class LeelazReadBoardGmaTest {
       configureReadyReadBoardGmaEngine(engine);
       engine.Pondering();
       Lizzie.board.getHistory().getStart().getData().stones[Board.getIndex(3, 3)] = Stone.BLACK;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
 
           ExactSnapshotRestoreProtocolFixture.install(
@@ -2564,7 +2564,7 @@ class LeelazReadBoardGmaTest {
       SwappingAutomaticRestartLeelaz engine = new SwappingAutomaticRestartLeelaz(replacement);
       configureReadyReadBoardGmaEngine(engine);
       Lizzie.board.getHistory().getStart().getData().stones[Board.getIndex(3, 3)] = Stone.BLACK;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
               engine,
@@ -2594,7 +2594,7 @@ class LeelazReadBoardGmaTest {
       ReadyAutomaticRestartPonderLeelaz engine = new ReadyAutomaticRestartPonderLeelaz();
       configureReadyReadBoardGmaEngine(engine);
       engine.Pondering();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       CountDownLatch completed = new CountDownLatch(1);
@@ -2645,7 +2645,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       LateAnchorRestartLeelaz engine = new LateAnchorRestartLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       CountDownLatch completed = new CountDownLatch(1);
@@ -2679,7 +2679,7 @@ class LeelazReadBoardGmaTest {
       throws Exception {
     try (Harness harness = Harness.open()) {
       TimeoutAutomaticRestartLeelaz engine = new TimeoutAutomaticRestartLeelaz();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Leelaz.AutomaticRestartAttempt attempt =
           engine.beginAutomaticEngineRestartAttempt();
       assertTrue(attempt != null);
@@ -2710,7 +2710,7 @@ class LeelazReadBoardGmaTest {
   void automaticRestartReadinessTimeoutPreservesPreexistingGmaQuarantine() throws Exception {
     try (Harness harness = Harness.open()) {
       TimeoutAutomaticRestartLeelaz engine = new TimeoutAutomaticRestartLeelaz();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       setEngineStateUnrestored(engine, true);
       CountDownLatch completed = new CountDownLatch(1);
 
@@ -2748,7 +2748,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new ShortGmaRestoreTimeoutLeelaz();
       configureReadyReadBoardGmaEngine(engine);
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       engine.requireResponseBeforeSend = true;
       setReadBoardGmaParamState(engine, "readBoardGmaMaxTime", "2", true);
       setReadBoardGmaParamState(engine, "readBoardGmaMaxVisits", "800", true);
@@ -2774,7 +2774,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = allocate(ReadBoard.class);
@@ -2812,7 +2812,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = allocate(ReadBoard.class);
@@ -2847,7 +2847,7 @@ class LeelazReadBoardGmaTest {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
       engine.isKatago = true;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       RecordingOutputStream output = new RecordingOutputStream();
       setOutputStream(engine, output);
       ReadBoard readBoard = allocate(ReadBoard.class);
@@ -2882,7 +2882,7 @@ class LeelazReadBoardGmaTest {
   void lateGmaPlayIsDeliveredToTheRetiredHelperOwnerAfterReplacement() throws Exception {
     try (Harness harness = Harness.open()) {
       Leelaz engine = new Leelaz("");
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       ReadBoard retired = allocate(ReadBoard.class);
       ReadBoard replacement = allocate(ReadBoard.class);
       setBooleanField(retired, "retiredReadBoardGmaTerminalPending", true);
@@ -3239,7 +3239,7 @@ class LeelazReadBoardGmaTest {
       // restore after the schedule and before the acknowledged preparation: the production
       // deferral path records the restore while the hand is still pending, so the restore is
       // already deferred when the session is admitted.
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.frame.bothSync = true;
       LizzieFrame.boardRenderer = new BoardRenderer(false);
       Lizzie.board = new SilentPlacementBoard();
@@ -3655,7 +3655,7 @@ class LeelazReadBoardGmaTest {
       // An anchored board (usable snapshot root with a stone, black to play) makes the session
       // capture a real MOVE tail for the black final play.
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Board board = new SilentPlacementBoard();
       Stone[] stones = new Stone[Board.boardWidth * Board.boardHeight];
       Arrays.fill(stones, Stone.EMPTY);
@@ -3753,7 +3753,7 @@ class LeelazReadBoardGmaTest {
       // An anchored board (usable snapshot root with a stone, black to play) makes the session
       // capture a real MOVE tail for the black final play.
       Leelaz engine = readyReadBoardGmaEngine();
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Board board = new SilentPlacementBoard();
       Stone[] stones = new Stone[Board.boardWidth * Board.boardHeight];
       Arrays.fill(stones, Stone.EMPTY);
@@ -4985,7 +4985,7 @@ class LeelazReadBoardGmaTest {
       Stone autoPlayColor,
       Board board)
       throws Exception {
-    Lizzie.leelaz = engine;
+    Lizzie.setPrimaryEngine(engine);
     Lizzie.frame.bothSync = true;
     LizzieFrame.boardRenderer = new BoardRenderer(false);
     Lizzie.board = board == null ? new SilentPlacementBoard() : board;
@@ -5156,10 +5156,10 @@ class LeelazReadBoardGmaTest {
       Lizzie.config = minimalConfig();
       Lizzie.frame = allocate(SilentFrame.class);
       Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
-      Lizzie.leelaz = new Leelaz("");
+      Lizzie.setPrimaryEngine(new Leelaz(""));
       Lizzie.leelaz2 = null;
       Lizzie.board = new Board();
-      Lizzie.leelaz = null;
+      Lizzie.setPrimaryEngine(null);
       LizzieFrame.menu = allocate(SilentMenu.class);
       return harness;
     }
@@ -5170,7 +5170,7 @@ class LeelazReadBoardGmaTest {
       Lizzie.config = previousConfig;
       Lizzie.frame = previousFrame;
       Lizzie.gtpConsole = previousGtpConsole;
-      Lizzie.leelaz = previousLeelaz;
+      Lizzie.setPrimaryEngine(previousLeelaz);
       Lizzie.leelaz2 = previousLeelaz2;
       Lizzie.board = previousBoard;
       LizzieFrame.menu = previousMenu;
@@ -5571,7 +5571,7 @@ class LeelazReadBoardGmaTest {
       started = true;
       isLoaded = true;
       isCheckingName = false;
-      Lizzie.leelaz = replacement;
+      Lizzie.setPrimaryEngine(replacement);
     }
   }
 

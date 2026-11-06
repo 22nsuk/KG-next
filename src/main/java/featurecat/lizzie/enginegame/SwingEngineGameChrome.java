@@ -45,7 +45,12 @@ public class SwingEngineGameChrome implements EngineGameChrome {
     BottomToolbar toolbar = LizzieFrame.toolbar;
     Menu menu = LizzieFrame.menu;
     switch (transition.kind()) {
-      case STARTING -> applyStarting(toolbar, menu);
+      case STARTING -> {
+        // The captured start may have failed or reached playing while this EDT event was queued.
+        if (transition.snapshot() == Lizzie.engineGame.current() && transition.snapshot().starting()) {
+          applyStarting(toolbar, menu);
+        }
+      }
       case PLAYING, RESUMED -> applyRunning(toolbar, menu);
       case PAUSED -> applyPaused(toolbar, menu);
       case KOMI_CHANGED -> {

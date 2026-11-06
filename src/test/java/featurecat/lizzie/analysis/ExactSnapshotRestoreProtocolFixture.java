@@ -1,7 +1,9 @@
 package featurecat.lizzie.analysis;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -55,7 +57,7 @@ public final class ExactSnapshotRestoreProtocolFixture {
   public static final class Transport extends OutputStream {
     private final Leelaz engine;
     private final CommandBehavior behavior;
-    private final StringBuilder current = new StringBuilder();
+    private final ByteArrayOutputStream current = new ByteArrayOutputStream();
     private final List<String> commands = new ArrayList<>();
     private final List<String> rawCommands = new ArrayList<>();
     private final ExecutorService responseReader;
@@ -77,13 +79,13 @@ public final class ExactSnapshotRestoreProtocolFixture {
 
     @Override
     public synchronized void write(int value) {
-      current.append((char) value);
+      current.write(value);
     }
 
     @Override
     public synchronized void flush() throws IOException {
-      String commandLine = current.toString().trim();
-      current.setLength(0);
+      String commandLine = current.toString(StandardCharsets.UTF_8).trim();
+      current.reset();
       if (commandLine.isEmpty()) {
         return;
       }

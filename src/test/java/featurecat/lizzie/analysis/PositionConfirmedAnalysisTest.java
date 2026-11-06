@@ -107,6 +107,22 @@ class PositionConfirmedAnalysisTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"undo", "play B D4", "set_position B D4", "loadsgf external.sgf"})
+  void explicitPositionIdsRetainFailureFencingAndFreshPositionRecovery(String mutation) throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      fixture.engine.sendRawConsoleCommand("123 " + mutation);
+      fixture.engine.sendRawConsoleCommand("124 kata-analyze B 10");
+      assertEquals(List.of(mutation), fixture.transport.commands());
+      fixture.engine.processCommandResponseLineForTest("?123 rejected");
+      assertEquals(List.of(mutation), fixture.transport.commands());
+      fixture.engine.sendRawConsoleCommand("125 set_position");
+      fixture.engine.sendRawConsoleCommand("126 kata-analyze W 11");
+      fixture.engine.processCommandResponseLineForTest("=125");
+      assertEquals(List.of(mutation, "set_position", "kata-analyze W 11"), fixture.transport.commands());
+    }
+  }
+
   @Test
   void queuedSetPositionTimeoutCannotOpenAnalysis() throws Exception {
     try (Fixture fixture = new Fixture()) {
@@ -134,7 +150,8 @@ class PositionConfirmedAnalysisTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"kata-analyze B 10", "kata-analyze", "lz-analyze"})
+  @ValueSource(strings = {"kata-analyze B 10", "kata-analyze", "lz-analyze",
+      "124kata-analyze B 10", "124 lz-analyze", "124 analyze 10"})
   void replacingBoardWhilePositionIsPendingDiscardsCapturedAnalysis(String command)
       throws Exception {
     try (Fixture fixture = new Fixture()) {
@@ -147,13 +164,14 @@ class PositionConfirmedAnalysisTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"kata-analyze B 10", "kata-analyze", "lz-analyze"})
+  @ValueSource(strings = {"kata-analyze B 10", "kata-analyze", "lz-analyze",
+      "124kata-analyze B 10", "124 lz-analyze", "124 analyze 10"})
   void replacingPrimaryWhilePositionIsPendingDiscardsCapturedAnalysis(String command)
       throws Exception {
     try (Fixture fixture = new Fixture()) {
       fixture.engine.sendCommand("undo");
       fixture.engine.sendCommand(command);
-      Lizzie.leelaz = new Leelaz("");
+      Lizzie.setPrimaryEngine(new Leelaz(""));
       fixture.respond(0, "=");
       assertEquals(List.of("undo"), fixture.transport.commands());
     }
@@ -421,7 +439,7 @@ class PositionConfirmedAnalysisTest {
       Lizzie.gtpConsole = allocate(GtpConsolePane.class);
       this.engine = engine;
       this.mirror = withMirror ? new Leelaz("") : null;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.leelaz2 = mirror;
       Lizzie.board = new Board();
       Lizzie.frame = allocate(LizzieFrame.class);
@@ -474,7 +492,7 @@ class PositionConfirmedAnalysisTest {
       Lizzie.board = previousBoard;
       Lizzie.frame = previousFrame;
       Lizzie.gtpConsole = previousGtpConsole;
-      Lizzie.leelaz = previousEngine;
+      Lizzie.setPrimaryEngine(previousEngine);
       Lizzie.leelaz2 = previousMirror;
     }
   }

@@ -248,7 +248,7 @@ public class Leelaz {
 
   // private static final long MINUTE = 60 * 1000; // number of milliseconds in a minute
   private static final Runnable NO_OP_RESPONSE_HANDLER = () -> {};
-  private static final int NO_RESPONSE_COMMAND_ID = -1;
+  private static final int NO_RESPONSE_COMMAND_ID = GtpCommandText.NO_ID;
   private static final long FOREGROUND_INITIAL_STOP_TIMEOUT_MILLIS = 8000L;
   private static final long FOREGROUND_RELEASE_STOP_TIMEOUT_MILLIS = 8000L;
   private static final long STARTUP_COMMAND_DELIVERY_TIMEOUT_MILLIS = 8000L;
@@ -1781,14 +1781,15 @@ public class Leelaz {
         rulesHandler.rulesWriteSequence = binding.rulesWriteSequence;
       }
     }
-    String normalized = command.command.trim();
-    String verb = normalized.split("\\s+", 2)[0];
-    AnalysisCondition condition = AnalysisCondition.fromCommand(command.command);
+    GtpCommandText parsed = GtpCommandText.parse(command.command);
+    String normalized = parsed.payload();
+    String verb = parsed.verb();
+    AnalysisCondition condition = AnalysisCondition.fromCommand(normalized);
     boolean parameterWrite =
         verb.equals("kata-set-param") || verb.equals("kata-set-params");
     boolean fullRulesWrite = verb.equals("kata-set-rules");
     boolean loadSgf = verb.equals("loadsgf");
-    boolean rulesWrite = !loadSgf && isRulesMutationCommand(normalized);
+    boolean rulesWrite = !loadSgf && parsed.mutatesRules();
     // Admitted exact snapshots contain position/komi, never RU. Their physical write still
     // fences readbacks, but cannot revoke rules confirmation or retained analysis provenance.
     boolean rulesMayChange = rulesWrite || (loadSgf && command.queuedCommand.restoreAdmission == null);
@@ -1830,7 +1831,8 @@ public class Leelaz {
             manualRulesCacheOwner.set(null);
             // A mirrored command may reach this endpoint after the selection has settled.
             // Its retained cache guard belongs to this reader, not the request's completion.
-            if (binding.retainedManualRulesCache != null) {
+            if (!isUntrackedRulesWrite(command.queuedCommand)
+                && binding.retainedManualRulesCache != null) {
               binding.retainedManualRulesCache.invalidate(this);
             }
           }
@@ -1863,7 +1865,7 @@ public class Leelaz {
     if (binding == null || condition == null || line == null || !line.startsWith("=")) return;
     Double value = null;
     try {
-      String[] parts = command.command.trim().split("\\s+");
+      String[] parts = GtpCommandText.parse(command.command).payload().split("\\s+");
       String numeric =
           parts[0].equals("kata-get-param")
               ? gtpResponsePayload(line)
@@ -7075,36 +7077,19 @@ public class Leelaz {
   }
 
   private boolean isAnalysisOutputOwnershipCommand(String command) {
-    if (command == null) {
-      return false;
-    }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return isOrdinaryPositionAnalysisCommand(normalized)
-        || normalized.startsWith("kata-genmove_analyze ")
-        || normalized.startsWith("lz-genmove_analyze ")
-        || normalized.startsWith("genmove_analyze ")
-        || normalized.startsWith("genmove ")
-        || (isLeela0110 && normalized.startsWith("time_left "));
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    return parsed.startsAnalysisPayload() || (isLeela0110 && parsed.verb().equals("time_left"));
   }
 
   /** Commands whose successful physical write starts a distinct analysis payload generation. */
   private boolean startsNewAnalysisInfoPayload(String command) {
-    if (command == null) {
-      return false;
-    }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return normalized.startsWith("kata-analyze")
-        || normalized.startsWith("lz-analyze")
-        || normalized.startsWith("analyze ")
-        || normalized.startsWith("kata-genmove_analyze ")
-        || normalized.startsWith("lz-genmove_analyze ")
-        || normalized.startsWith("genmove_analyze ")
-        || normalized.startsWith("genmove ");
+    return GtpCommandText.parse(command).startsAnalysisPayload();
   }
 
   private boolean hasAnalysisMoveRestrictions(String command) {
-    if (!isOrdinaryPositionAnalysisCommand(command)) return false;
-    for (String token : command.trim().split("\\s+")) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (!parsed.isOrdinaryAnalysis()) return false;
+    for (String token : parsed.payload().split("\\s+")) {
       if (token.equalsIgnoreCase("allow") || token.equalsIgnoreCase("avoid")) return true;
     }
     return false;
@@ -7122,7 +7107,7 @@ public class Leelaz {
     if (command == null) {
       return AnalysisStateMutation.NONE;
     }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
+    String normalized = GtpCommandText.parse(command).payload();
     if (normalized.equals("clear_board")) {
       return AnalysisStateMutation.RESET_PAYLOAD_AND_SCORE;
     }
@@ -7149,7 +7134,7 @@ public class Leelaz {
     if (command == null) {
       return false;
     }
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
+    String normalized = GtpCommandText.parse(command).payload();
     return normalized.equals("clear_board")
         || normalized.startsWith("loadsgf ")
         || normalized.equals("set_position")
@@ -7261,7 +7246,7 @@ public class Leelaz {
       return false;
     }
     if (!isLeela0110
-        || !command.command.trim().toLowerCase(Locale.ROOT).startsWith("time_left ")) {
+        || !GtpCommandText.parse(command.command).verb().equals("time_left")) {
       return true;
     }
     EngineManager.EngineGamePrimaryContext currentGame =
@@ -12001,6 +11986,20 @@ public class Leelaz {
   }
 
   public boolean sendRawConsoleCommand(String command) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    // One console submission must yield one matchable response. Blank/comment-only input
+    // yields none; KataGo rejects an empty payload or an ID longer than nine digits (including
+    // leading zeros) without echoing the ID. Use that interoperable limit for console submissions.
+    // Reject these envelopes before queue admission/mirroring, not by weakening reply ownership.
+    if (parsed.payload().isEmpty()
+        || command.indexOf('\n') >= 0
+        || !parsed.hasSupportedId()) {
+      if (Lizzie.gtpConsole != null) {
+        Lizzie.gtpConsole.addErrorLine(
+            "GTP command rejected: enter one nonempty command with an optional ID of at most 9 digits.");
+      }
+      return false;
+    }
     return sendCommand(command, null, null, false, true);
   }
 
@@ -12119,42 +12118,13 @@ public class Leelaz {
       }
       return false;
     }
-    if (Lizzie.config.isDoubleEngineMode()) {
-      if ((command.startsWith("heat") || command.startsWith("kata-raw"))
-          && !this.isKatago
-          && Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2) heatcount = new ArrayList<Integer>();
-      if (Lizzie.leelaz2 != null && this == Lizzie.leelaz2)
-        if (this.isLeela0110) {
-          if (command.startsWith("lz-") || command.startsWith("kata-")) this.leela0110Ponder(true);
-          return false;
-        } else if (this.isKatago && !Lizzie.leelaz.isKatago) {
-          if (command.startsWith("lz-")) {
-            command = "kata-" + command.substring(3);
-          }
-          if (command.startsWith("heat")) {
-            command = ("kata-raw-nn " + new Random().nextInt(8));
-          }
-        }
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && !this.isKatago
-          && Lizzie.leelaz.isKatago) {
-        if (command.startsWith("kata-raw")) {
-          command = "heatmap";
-        }
-        if (command.startsWith("kata-")) {
-          command = "lz-" + command.substring(5);
-        }
-
-        String[] params = command.trim().split(" ");
-        if (params.length > 2) {
-          if (params[params.length - 2].equals("ownership")) {
-            command = command.substring(0, command.length() - 14);
-          }
-        }
-      }
+    if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null
+        && this == Lizzie.leelaz2 && isLeela0110) {
+      String verb = GtpCommandText.parse(command).verb();
+      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
+      return false;
     }
+    command = adaptSecondaryCommand(command);
     command = adaptRootTreeReuseForReceiver(command);
     Leelaz mirroredEngine = mirrorToSecondEngine ? resolveDefaultCommandMirrorEngine() : null;
     boolean defaultMirrorMustRemainAbsent = mirrorToSecondEngine && mirroredEngine == null;
@@ -12262,63 +12232,49 @@ public class Leelaz {
    * secondary path, which does not accept ordinary default mirroring.
    */
   private String prepareDefaultMirroredCommand(String command) {
-    if (Lizzie.config == null
-        || !Lizzie.config.isDoubleEngineMode()
-        || Lizzie.leelaz2 == null
-        || this != Lizzie.leelaz2) {
-      return command;
-    }
-    if ((command.startsWith("heat") || command.startsWith("kata-raw")) && !isKatago) {
-      heatcount = new ArrayList<Integer>();
-    }
-    if (isLeela0110) {
-      if (command.startsWith("lz-") || command.startsWith("kata-")) {
-        leela0110Ponder(true);
-      }
+    if (Lizzie.config != null && Lizzie.config.isDoubleEngineMode()
+        && Lizzie.leelaz2 != null && this == Lizzie.leelaz2 && isLeela0110) {
+      String verb = GtpCommandText.parse(command).verb();
+      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
       return null;
     }
-    String adapted = command;
+    return adaptRootTreeReuseForReceiver(adaptSecondaryCommand(command));
+  }
+
+  /** Share receiver translation across default mirroring and direct secondary dispatch. */
+  private String adaptSecondaryCommand(String command) {
+    if (Lizzie.config == null || !Lizzie.config.isDoubleEngineMode()
+        || Lizzie.leelaz2 == null || this != Lizzie.leelaz2) return command;
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    String adapted = parsed.payload();
+    if ((adapted.startsWith("heat") || adapted.startsWith("kata-raw")) && !isKatago) {
+      heatcount = new ArrayList<Integer>();
+    }
     if (isKatago && !Lizzie.leelaz.isKatago) {
-      if (adapted.startsWith("lz-")) {
-        adapted = "kata-" + adapted.substring(3);
-      }
-      if (adapted.startsWith("heat")) {
-        adapted = "kata-raw-nn " + new Random().nextInt(8);
-      }
+      if (adapted.startsWith("lz-")) adapted = "kata-" + adapted.substring(3);
+      if (adapted.startsWith("heat")) adapted = "kata-raw-nn " + new Random().nextInt(8);
     }
     if (!isKatago && Lizzie.leelaz.isKatago) {
-      if (adapted.startsWith("kata-raw")) {
-        adapted = "heatmap";
-      }
-      if (adapted.startsWith("kata-")) {
-        adapted = "lz-" + adapted.substring(5);
-      }
-      String[] params = adapted.trim().split(" ");
+      if (adapted.startsWith("kata-raw")) adapted = "heatmap";
+      if (adapted.startsWith("kata-")) adapted = "lz-" + adapted.substring(5);
+      String[] params = adapted.split("\\s+");
       if (params.length > 2 && params[params.length - 2].equals("ownership")) {
-        adapted = adapted.substring(0, adapted.length() - 14);
+        adapted = adapted.replaceFirst("\\s+ownership\\s+\\S+$", "");
       }
     }
-    return adaptRootTreeReuseForReceiver(adapted);
+    return parsed.withPayload(command, adapted);
   }
 
   String adaptRootTreeReuseForReceiver(String command) {
-    if (command == null
-        || (!command.contains("reuseRootTree") && !command.contains("rootInfo"))) {
-      return command;
-    }
-    boolean analysisCommand = switch (command.trim().split("\\s+", 2)[0].toLowerCase(Locale.ROOT)) {
-      case "kata-analyze", "lz-analyze", "analyze", "kata-genmove_analyze",
-          "lz-genmove_analyze", "genmove_analyze" -> true;
-      default -> false;
-    };
-    if (!analysisCommand) return command;
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (!parsed.isAnalyze()) return command;
     boolean reuseRootTree = supportsRootTreeReuse();
     String adapted =
-        reuseRootTree ? command : command.replaceAll("\\s+reuseRootTree\\s+\\S+", "");
+        reuseRootTree ? parsed.payload() : parsed.payload().replaceAll("\\s+reuseRootTree\\s+\\S+", "");
     if (!isKatago || (!supportRootInfo && !reuseRootTree)) {
       adapted = adapted.replaceAll("\\s+rootInfo\\s+\\S+", "");
     }
-    return adapted;
+    return parsed.withPayload(command, adapted);
   }
 
   private boolean withOrdinaryAnalysisSelectionLocks(
@@ -12879,14 +12835,11 @@ public class Leelaz {
   }
 
   private static boolean isOrdinaryPositionAnalysisCommand(String command) {
-    if (command == null) return false;
-    String normalized = command.trim().toLowerCase(Locale.ROOT);
-    return normalized.startsWith("kata-analyze")
-        || normalized.startsWith("lz-analyze")
-        || normalized.startsWith("analyze ");
+    return GtpCommandText.parse(command).isOrdinaryAnalysis();
   }
 
   private static boolean isIncrementalPositionCommand(String command) {
+    command = GtpCommandText.parse(command).payload();
     return command != null
         && (command.equals("undo")
             || command.startsWith("play ")
@@ -12958,20 +12911,15 @@ public class Leelaz {
   }
 
   private boolean shouldCoalesceQueuedCommand(String command, boolean noLeelaz2Coalescing) {
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    if (parsed.isOrdinaryAnalysis()) return true;
+    String verb = parsed.verb();
     if (noLeelaz2Coalescing) {
-      return command.startsWith("lz-analyze")
-          || command.startsWith("kata-analyze")
-          || command.startsWith("kata-raw")
-          || command.startsWith("heatmap");
+      return verb.equals("kata-raw-nn") || verb.equals("heatmap");
     }
-    return (isKatago
-            && (command.startsWith("kata-analyze")
-                || command.startsWith("kata-raw")
-                || command.startsWith("stop-ponder")))
-        || (!isKatago
-            && (command.startsWith("lz-analyze")
-                || command.startsWith("analyze")
-                || command.startsWith("heatmap")));
+    return isKatago
+        ? verb.equals("kata-raw-nn") || verb.equals("stop-ponder")
+        : verb.equals("heatmap");
   }
 
 
@@ -13717,41 +13665,7 @@ public class Leelaz {
         || shouldSuppressNormalCommandForForegroundAnalysis()) {
       return;
     }
-    if (Lizzie.config.isDoubleEngineMode()) {
-      if ((command.startsWith("heat") || command.startsWith("kata-raw"))
-          && !this.isKatago
-          && Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2) heatcount = new ArrayList<Integer>();
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && this.isKatago
-          && !Lizzie.leelaz.isKatago) {
-        if (command.startsWith("lz-")) {
-          command = "kata-" + command.substring(3);
-        }
-        if (command.startsWith("heat")) {
-          command = ("kata-raw-nn " + new Random().nextInt(8));
-        }
-      }
-      if (Lizzie.leelaz2 != null
-          && this == Lizzie.leelaz2
-          && !this.isKatago
-          && Lizzie.leelaz.isKatago) {
-        if (command.startsWith("kata-raw")) {
-          command = "heatmap";
-        }
-        if (command.startsWith("kata-")) {
-          command = "lz-" + command.substring(5);
-        }
-
-        String[] params = command.trim().split(" ");
-        if (params.length > 2) {
-          if (params[params.length - 2].equals("ownership")) {
-            command = command.substring(0, command.length() - 14);
-          }
-        }
-      }
-    }
+    command = adaptRootTreeReuseForReceiver(adaptSecondaryCommand(command));
     EngineManager.EngineGameOwnerTransaction startupTransaction =
         engineGameStartupCommandContext.get();
     ReaderStreamBinding startupBinding =
@@ -13910,6 +13824,7 @@ public class Leelaz {
     // possible hang-up by missing response for some reason.
     // cmdQueue can be replaced with a mere String variable in this case,
     // but it is kept for future change of our mind.
+    boolean inheritedQueueLock = Thread.holdsLock(commandQueue());
     QueuedCommand queuedCommand;
     synchronized (commandQueue()) {
       if (exclusiveGtpSession != null
@@ -13971,14 +13886,7 @@ public class Leelaz {
           && queueHead.engineGameTransaction() != null
           && !isResponseUpToPreCommand()) {
         String lastQueuedCommand = targetQueue.peekLast().command;
-        if ((isKatago
-                && (lastQueuedCommand.startsWith("kata-analyze")
-                    || lastQueuedCommand.startsWith("kata-raw")
-                    || lastQueuedCommand.startsWith("stop-ponder")))
-            || (!isKatago
-                && (lastQueuedCommand.startsWith("lz-analyze")
-                    || lastQueuedCommand.startsWith("analyze")
-                    || lastQueuedCommand.startsWith("heatmap")))) return;
+        if (shouldCoalesceQueuedCommand(lastQueuedCommand, false)) return;
       }
       EngineManager.EngineGameOwnerTransaction game = queueHead.engineGameTransaction();
       if (queueHead.transportOffEventThread && SwingUtilities.isEventDispatchThread()) {
@@ -13991,6 +13899,17 @@ public class Leelaz {
         // State/clock publication may enqueue several ordered commands under the game fence.
         // The existing dispatcher owns delivery and its permit owns asynchronous failures.
         // Never let either a direct send or response-driven drain inherit that caller's lock.
+        requestCommandDispatchOffEventThread();
+        return;
+      }
+      if (isUntrackedRulesWrite(queueHead)
+          && (inheritedQueueLock || Thread.holdsLock(engineArbitrationLock())
+              || Thread.holdsLock(engineRulesLock)
+              || Thread.holdsLock(rulesObservationLock)
+              || (Lizzie.board != null && (Thread.holdsLock(Lizzie.board)
+                  || Thread.holdsLock(Lizzie.board.getHistory()))))) {
+        // Full-tree invalidation takes output -> selection -> PRIMARY -> history. Never inherit
+        // a producer's inner locks while entering that order from synchronous queue draining.
         requestCommandDispatchOffEventThread();
         return;
       }
@@ -14099,6 +14018,7 @@ public class Leelaz {
     EngineManager.TransactionlessAnalysisWriteLease transactionlessAnalysisWrite = null;
     EngineManager.EngineGameAnalysisWriteLease exactAnalysisWrite = null;
     EngineManager.EngineGameStateWriteLease exactStateWrite = null;
+    List<Runnable> rawRulesEffects = new ArrayList<>();
     boolean analysisOutputBindingLocked = false;
     boolean leela0110PonderPhysicalWriteLocked = false;
     boolean physicalWriteCompleted = false;
@@ -14165,18 +14085,36 @@ public class Leelaz {
         // Canonical physical-write order is transaction/global admission -> short selection
         // validation -> binding owner -> output stream. Never wait for either manager admission
         // while already owning the output monitor.
-        if ((publishesAnalysisOutputOwnership || stateMutation != AnalysisStateMutation.NONE)
+        boolean untrackedRulesWrite = isUntrackedRulesWrite(queuedCommand);
+        if ((publishesAnalysisOutputOwnership || stateMutation != AnalysisStateMutation.NONE
+                || untrackedRulesWrite)
             && analysisOutputTransaction == null) {
-          transactionlessAnalysisWrite =
-              EngineManager.claimTransactionlessAnalysisWrite(
-                  this,
-                  outputBinding,
-                  outputBinding == null ? null : outputBinding.analysisOutputRecoveryToken,
-                  queuedCommand.restoreAdmission == null ? null : queuedCommand.restoreAdmission.ownerIdentity);
-          if (transactionlessAnalysisWrite == null) {
-            throw new AnalysisOutputAdmissionFailure(
-                "analysis/state output is blocked by an unrelated game or recovery owner");
-          }
+          do {
+            transactionlessAnalysisWrite =
+                EngineManager.claimTransactionlessAnalysisWrite(
+                    this,
+                    outputBinding,
+                    outputBinding == null ? null : outputBinding.analysisOutputRecoveryToken,
+                    queuedCommand.restoreAdmission == null ? null : queuedCommand.restoreAdmission.ownerIdentity);
+            if (transactionlessAnalysisWrite == null) {
+              throw new AnalysisOutputAdmissionFailure(
+                  "analysis/state output is blocked by an unrelated game or recovery owner");
+            }
+            if (!untrackedRulesWrite) break;
+            Boolean began = beginUntrackedRulesWrite(queuedCommand, outputBinding, rawRulesEffects);
+            if (began != null) {
+              if (!began) {
+                queuedCommand.cancelBeforeOutputWrite(
+                    new IllegalStateException("Raw rules command lost foreground admission"));
+                finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
+                return null;
+              }
+              break;
+            }
+            transactionlessAnalysisWrite.close();
+            transactionlessAnalysisWrite = null;
+            Thread.yield();
+          } while (true);
         }
         if (queuedCommand.onResponse instanceof ManualGenmoveRequest
             && !((ManualGenmoveRequest) queuedCommand.onResponse).validAfterOutputAdmission()) {
@@ -14184,7 +14122,7 @@ public class Leelaz {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
         }
-        if (!queuedCommand.beginOutputWrite()) {
+        if (!untrackedRulesWrite && !queuedCommand.beginOutputWrite()) {
           finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
           return null;
         }
@@ -14308,7 +14246,7 @@ public class Leelaz {
               if (startsAnalysisInfoPayload) resetAnalysisInfoPayload(false);
               if (isOrdinaryPositionAnalysisCommand(command)
                   && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = command;
+                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
               }
               if (analysisOutputBindingLocked) {
                 analysisOutputBindingLocked = false;
@@ -14327,7 +14265,7 @@ public class Leelaz {
               currentOutputStream.flush();
               if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
                   && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = command;
+                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
               }
               if (startsAnalysisInfoPayload && analysisOutputTransaction == null) {
                 // The binding fence keeps even an immediate reader line from committing before
@@ -14431,6 +14369,7 @@ public class Leelaz {
         if (exactStateWrite != null) {
           exactStateWrite.close();
         }
+        for (Runnable effect : rawRulesEffects) effect.run();
       }
       if (physicalWriteCompleted) {
         try {
@@ -14829,17 +14768,11 @@ public class Leelaz {
   }
 
   private static boolean isInitialBoardSynchronizationLiveUpdateCommand(String command) {
-    if (command == null) {
-      return false;
-    }
-    return command.startsWith("play ")
-        || command.startsWith("undo")
-        || command.startsWith("clear_board")
-        || command.startsWith("lz-analyze")
-        || command.startsWith("kata-analyze")
-        || command.startsWith("analyze ")
-        || command.startsWith("kata-raw")
-        || command.startsWith("heat");
+    GtpCommandText parsed = GtpCommandText.parse(command);
+    return parsed.isOrdinaryAnalysis() || switch (parsed.verb()) {
+      case "play", "undo", "clear_board", "kata-raw-nn", "heat", "heatmap" -> true;
+      default -> false;
+    };
   }
 
   private PendingResponseHandler buildPendingResponseHandler(
@@ -14896,6 +14829,7 @@ public class Leelaz {
 
 
   private static boolean isTrackedExactSnapshotRestoreCommand(String command) {
+    command = GtpCommandText.parse(command).payload();
     return command != null
         && (command.startsWith("loadsgf ")
             || command.equals("set_position")
@@ -14917,7 +14851,8 @@ public class Leelaz {
       Runnable handler,
       boolean exactLoadSgf,
       QueuedCommand queuedCommand) {
-    return handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler
+    return GtpCommandText.parse(command).id() != NO_RESPONSE_COMMAND_ID
+        || handler instanceof MoveFocusResponse || handler instanceof BoardSynchronizationResponseHandler
         || (queuedCommand != null && queuedCommand.positionResponseTimeout != null)
         || handler instanceof EngineGameResponseHandler
         || handler instanceof ManualGenmoveRequest
@@ -14942,6 +14877,8 @@ public class Leelaz {
 
   private int nextResponseCommandId(
       String command, Runnable handler, QueuedCommand queuedCommand) {
+    int explicitId = GtpCommandText.parse(command).id();
+    if (explicitId != NO_RESPONSE_COMMAND_ID) return explicitId;
     if (command != null && command.startsWith("loadsgf ")) {
       return loadSgfResponseCommandIds.getAndIncrement();
     }
@@ -14976,7 +14913,8 @@ public class Leelaz {
   }
 
   private String buildCommandLine(String command, int responseCommandId) {
-    if (responseCommandId == NO_RESPONSE_COMMAND_ID) {
+    if (responseCommandId == NO_RESPONSE_COMMAND_ID
+        || GtpCommandText.parse(command).id() != NO_RESPONSE_COMMAND_ID) {
       return command;
     }
     return responseCommandId + " " + command;
@@ -15248,7 +15186,7 @@ public class Leelaz {
     }
   }
 
-  private boolean isAsciiDigit(char value) {
+  private static boolean isAsciiDigit(char value) {
     return value >= '0' && value <= '9';
   }
 
@@ -20585,14 +20523,18 @@ public class Leelaz {
             || EngineManager.occupiesEngineGameAdmission());
   }
 
-  private boolean hasUnconfirmedOrdinaryResponse(boolean positionsOnly) {
+  private boolean hasUnconfirmedOrdinaryResponse(boolean stateChangesOnly) {
     ArrayDeque<PendingResponseHandler> pending = pendingResponseHandlers();
     synchronized (pending) {
       for (PendingResponseHandler response : pending) {
         if (response.isOutstandingResponseRetired()) continue;
         String command = response.queuedCommand.command;
-        if (positionsOnly
+        // Rules writes retire the old output owner just like position writes. Do not publish a
+        // successor owner until their replies have drained any old info still in the pipe, even
+        // when ordinary commands are otherwise pipelined (KataGo's default).
+        if (stateChangesOnly
             ? analysisStateMutation(command) != AnalysisStateMutation.NONE
+                || isRulesMutationCommand(command)
             : !isAnalysisOutputOwnershipCommand(command)) {
           return true;
         }
@@ -25318,10 +25260,51 @@ public class Leelaz {
   }
 
   private static boolean isRulesMutationCommand(String command) {
-    return switch (command.trim().split("\\s+", 2)[0]) {
-      case "kata-set-rules", "kata-set-rule", "kgs-rules", "loadsgf" -> true;
-      default -> false;
-    };
+    return GtpCommandText.parse(command).mutatesRules();
+  }
+
+  private static boolean isUntrackedRulesWrite(QueuedCommand command) {
+    return command != null && isRulesMutationCommand(command.command)
+        && !(command.onResponse instanceof EngineRulesResponseHandler)
+        && command.restoreAdmission == null
+        && command.engineGameTransaction() == null
+        && command.restartBootstrapReceipt == null
+        && !command.foregroundRestoreCommand;
+  }
+
+  // Called with output admission, before binding/protocol locks. A null result requires releasing
+  // output admission before retrying PRIMARY, which a foreground restore may already own.
+  private Boolean beginUntrackedRulesWrite(
+      QueuedCommand command, ReaderStreamBinding binding, List<Runnable> afterAdmission) {
+    Leelaz primary = Lizzie.leelaz;
+    if (primary == null) return command.beginOutputWrite();
+    Leelaz mirror = primary.activeComparisonEngine();
+    long generation = Lizzie.capturePrimaryEngineGenerationSnapshot(primary);
+    return EngineManager.callIfCurrentAnalysisSelection(primary, mirror, null,
+        () -> Lizzie.tryCallIfPrimaryEngine(primary, generation, () -> {
+          if (this != primary && this != mirror) return command.beginOutputWrite();
+          Board board = Lizzie.board;
+          if (board == null) return command.beginOutputWrite();
+          BoardHistoryList history = board.getHistory();
+          synchronized (history) {
+            if (Lizzie.board != board || board.getHistory() != history) return null;
+            if (!command.beginOutputWrite()) return false;
+            synchronized (rulesObservationLock) {
+              // Raw commands have no confirming owner. Invalidate every current node on every
+              // physical attempt, including nodes added while queued and refilled old caches.
+              if (this == primary) board.clearBestMovesAfterForFirstEngine(history.getStart());
+              else board.clearBestMovesAfterForSecondEngine(history.getStart());
+              manualRulesCacheOwner.set(null);
+              if (binding.retainedManualRulesCache != null) {
+                binding.retainedManualRulesCache.supersededByFullInvalidation(this);
+              }
+            }
+            // An old streaming response must not refill the cache after rules change. Queued
+            // successor analyses retain their targets and may establish a new output owner.
+            invalidateAnalysisInfoPayloadForLocalStateChange(false, afterAdmission::add);
+            return true;
+          }
+        }));
   }
 
   /**

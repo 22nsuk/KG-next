@@ -46,6 +46,24 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 class TrackingProductionCutoverTest {
   @Test
+  void focusRebuildsNumberedAnalysisWithoutReusingItsIdOrComment() throws Exception {
+    try (TestEnvironment environment = TestEnvironment.open()) {
+      environment.startSupportedAnalysis();
+      assertTrue(environment.engine.sendRawConsoleCommand(
+          "124 kata-analyze B 10 rootInfo true # console request"));
+      environment.settleCommands();
+      int before = environment.commands().length();
+      assertEquals(TrackingAnalysisController.AddResult.ADDED,
+          environment.frame.addTrackingPoint("A1"));
+      environment.settleCommands();
+      String focusCommands = environment.commands().substring(before);
+      assertTrue(focusCommands.contains("focus A1 0.5"));
+      assertFalse(focusCommands.contains("124 kata-analyze"));
+      assertFalse(focusCommands.contains("#"));
+    }
+  }
+
+  @Test
   void capabilityProbeDoesNotConsumeAnInFlightRulesReply() throws Exception {
     try (TestEnvironment environment = TestEnvironment.open()) {
       environment.engine.commandLists.add("kata-get-rules");

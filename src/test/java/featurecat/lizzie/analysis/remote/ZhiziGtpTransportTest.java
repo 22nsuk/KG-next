@@ -19,6 +19,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ZhiziGtpTransportTest {
   @Test
@@ -266,8 +268,10 @@ class ZhiziGtpTransportTest {
     }
   }
 
-  @Test
-  void analysisWatchdogRecognizesNumberedGtpAnalysisCommand() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"42 kata-analyze B 10",
+      "42kata-analyze B 10", "42\tkata-analyze\tB\t10", "00042 ka\u0001ta-analyze B 10 # comment"})
+  void analysisWatchdogRecognizesNumberedGtpAnalysisCommand(String command) throws Exception {
     ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     CountDownLatch timedOut = new CountDownLatch(1);
     try {
@@ -277,7 +281,7 @@ class ZhiziGtpTransportTest {
           new ZhiziGtpTransport.SocketCommandOutputStream(
               new FakeEmitter(true), watchdog::onCommandSubmittedOrEmitted);
 
-      send(stream, "42 kata-analyze B 10");
+      send(stream, command);
 
       assertEquals(true, timedOut.await(2, TimeUnit.SECONDS));
       assertEquals(true, watchdog.isUnresponsive());
@@ -316,8 +320,10 @@ class ZhiziGtpTransportTest {
     }
   }
 
-  @Test
-  void analysisWatchdogIsCancelledByExplicitStop() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"stop", "42stop", "42\tstop",
+      "00042 st\u0001op # kata-analyze B 10"})
+  void analysisWatchdogIsCancelledByExplicitStop(String command) throws Exception {
     ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
     CountDownLatch timedOut = new CountDownLatch(1);
     try {
@@ -328,7 +334,7 @@ class ZhiziGtpTransportTest {
               new FakeEmitter(true), watchdog::onCommandSubmittedOrEmitted);
 
       send(stream, "kata-analyze B 10");
-      send(stream, "stop");
+      send(stream, command);
       TimeUnit.MILLISECONDS.sleep(120L);
       assertFalse(watchdog.isUnresponsive());
       assertEquals(1L, timedOut.getCount());

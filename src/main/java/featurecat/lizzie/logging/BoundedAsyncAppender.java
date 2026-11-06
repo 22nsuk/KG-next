@@ -46,11 +46,15 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   private final AtomicBoolean afterAcceptHoldArmed = new AtomicBoolean();
   // Linearizes the shutdown transition with queue admission and publication of its watermark.
   private final Object acceptanceLock = new Object();
+  // Capture the active file and archive handles without racing this writer's rollover.
+  private final java.util.concurrent.locks.ReentrantLock fileAccess =
+      new java.util.concurrent.locks.ReentrantLock();
   // Keeps completion, outstanding, and abandoned accounting as one consistent snapshot.
   private final Object progress = new Object();
   private long outstanding;
   private long abandoned;
   private volatile Appender<ILoggingEvent> nested;
+  private ArchiveJobContext archiveJobs;
   private volatile LoggingRuntime runtime;
   private volatile CountDownLatch gate;
   private volatile CountDownLatch beforeAcceptEntered;
@@ -73,6 +77,10 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
 
   void setNested(Appender<ILoggingEvent> nested) {
     this.nested = nested;
+  }
+
+  void setArchiveJobs(ArchiveJobContext archiveJobs) {
+    this.archiveJobs = archiveJobs;
   }
 
   void setRuntime(LoggingRuntime runtime) {
@@ -123,6 +131,40 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
 
   void setActiveFile(Path activeFile) {
     this.activeFile = activeFile;
+  }
+
+  Path activeFile() {
+    return activeFile;
+  }
+
+  <T> T captureLogFiles(
+      LoggingRuntime.LogFileCapture<T> capture, java.util.function.BooleanSupplier cancelled)
+      throws java.io.IOException {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (true) {
+      try {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+          throw new java.io.InterruptedIOException("diagnostic export cancelled");
+        }
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) throw new java.io.IOException("archive completion timed out");
+        if (!fileAccess.tryLock(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)),
+            TimeUnit.NANOSECONDS)) continue;
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new java.io.InterruptedIOException("diagnostic export cancelled");
+      }
+      try {
+        // Rollover submits its jobs under this gate. Once they finish, no new archive
+        // mutation can start until enumeration has pinned the source handles.
+        if (archiveJobs == null || !archiveJobs.hasPendingJobs()) return capture.capture();
+      } finally {
+        fileAccess.unlock();
+      }
+      // Compression and retention run on Logback's executor, independently of the writer.
+      // Never hold the writer gate while waiting for them, including during shutdown.
+      archiveJobs.awaitIdle(deadline, cancelled);
+    }
   }
 
   LogStream stream() {
@@ -203,8 +245,13 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
       }
     }
     Appender<ILoggingEvent> current = nested;
-    if (current != null && current.isStarted()) {
-      current.stop();
+    fileAccess.lock();
+    try {
+      if (current != null && current.isStarted()) {
+        current.stop();
+      }
+    } finally {
+      fileAccess.unlock();
     }
     if (interrupted) {
       Thread.currentThread().interrupt();
@@ -307,7 +354,12 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
           if (failWrites) {
             reportWriteFailure();
           } else {
-            nested.doAppend(queued.event);
+            fileAccess.lock();
+            try {
+              nested.doAppend(queued.event);
+            } finally {
+              fileAccess.unlock();
+            }
           }
           persisted =
               nested.isStarted()

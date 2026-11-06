@@ -104,7 +104,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       }
       return new Acceptance.Rejected(ownerRejection(manager, acceptedPlan));
     }
-    publishChrome(EngineGameChromeTransition.Kind.STARTING);
+    publishStartingChrome(acceptedTransaction);
     return new Acceptance.Accepted();
   }
 
@@ -636,7 +636,7 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
       publishChrome(EngineGameChromeTransition.Kind.LATER_GAME_FAILED);
       return false;
     }
-    publishChrome(EngineGameChromeTransition.Kind.STARTING);
+    publishStartingChrome(nextProduct);
     return true;
   }
 
@@ -785,6 +785,20 @@ public final class EngineGameModule implements EngineGameControl, EngineGameStat
     snapshot = next;
     if (next instanceof EngineGameSnapshot.BatchActive active) {
       lastSummary = active.batch();
+    }
+  }
+
+  private void publishStartingChrome(EngineGameTransaction expected) {
+    EngineGameChrome target;
+    EngineGameSnapshot published;
+    synchronized (lock) {
+      // Dispatch may finish (or a failure observer may start a replacement) before admission returns.
+      if (transaction != expected || !snapshot.starting()) return;
+      target = chrome;
+      published = snapshot;
+    }
+    if (target != null) {
+      target.publish(new EngineGameChromeTransition(EngineGameChromeTransition.Kind.STARTING, published));
     }
   }
 
