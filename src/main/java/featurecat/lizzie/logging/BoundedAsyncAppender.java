@@ -54,6 +54,7 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   private long outstanding;
   private long abandoned;
   private volatile Appender<ILoggingEvent> nested;
+  private ArchiveJobContext archiveJobs;
   private volatile LoggingRuntime runtime;
   private volatile CountDownLatch gate;
   private volatile CountDownLatch beforeAcceptEntered;
@@ -76,6 +77,10 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
 
   void setNested(Appender<ILoggingEvent> nested) {
     this.nested = nested;
+  }
+
+  void setArchiveJobs(ArchiveJobContext archiveJobs) {
+    this.archiveJobs = archiveJobs;
   }
 
   void setRuntime(LoggingRuntime runtime) {
@@ -135,21 +140,30 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   <T> T captureLogFiles(
       LoggingRuntime.LogFileCapture<T> capture, java.util.function.BooleanSupplier cancelled)
       throws java.io.IOException {
-    try {
-      while (true) {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+    while (true) {
+      try {
         if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
           throw new java.io.InterruptedIOException("diagnostic export cancelled");
         }
-        if (fileAccess.tryLock(50, TimeUnit.MILLISECONDS)) break;
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) throw new java.io.IOException("archive completion timed out");
+        if (!fileAccess.tryLock(Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(50)),
+            TimeUnit.NANOSECONDS)) continue;
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new java.io.InterruptedIOException("diagnostic export cancelled");
       }
-    } catch (InterruptedException interrupted) {
-      Thread.currentThread().interrupt();
-      throw new java.io.InterruptedIOException("diagnostic export cancelled");
-    }
-    try {
-      return capture.capture();
-    } finally {
-      fileAccess.unlock();
+      try {
+        // Rollover submits its jobs under this gate. Once they finish, no new archive
+        // mutation can start until enumeration has pinned the source handles.
+        if (archiveJobs == null || !archiveJobs.hasPendingJobs()) return capture.capture();
+      } finally {
+        fileAccess.unlock();
+      }
+      // Compression and retention run on Logback's executor, independently of the writer.
+      // Never hold the writer gate while waiting for them, including during shutdown.
+      archiveJobs.awaitIdle(deadline, cancelled);
     }
   }
 

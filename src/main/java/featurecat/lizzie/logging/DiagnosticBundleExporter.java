@@ -1651,7 +1651,15 @@ public final class DiagnosticBundleExporter {
     }
     FileChannel channel = openVerifiedSource(file);
     if (isGzip(file.path())) {
-      InputStream raw = new SnapshotInputStream(Channels.newInputStream(channel), file.size());
+      // Host archive jobs have completed before capture. Foreign writers have no shared
+      // completion gate; at least include a gzip that finished after enumeration.
+      InputStream raw;
+      try {
+        raw = new SnapshotInputStream(Channels.newInputStream(channel), channel.size());
+      } catch (IOException | RuntimeException failure) {
+        channel.close();
+        throw failure;
+      }
       try {
         InputStream gzip =
             new GZIPInputStream(

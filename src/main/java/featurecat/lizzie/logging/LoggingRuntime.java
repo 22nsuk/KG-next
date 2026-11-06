@@ -698,13 +698,15 @@ public final class LoggingRuntime {
 
   private void startFileStream(LogStream stream, String fileName, boolean dropInfoFirst) {
     try {
-      RollingFileAppender<ILoggingEvent> file = rollingAppender(stream, fileName);
+      ArchiveJobContext archiveJobs = new ArchiveJobContext(context);
+      RollingFileAppender<ILoggingEvent> file = rollingAppender(stream, fileName, archiveJobs);
       boolean fileStarted = file.isStarted();
       BoundedAsyncAppender async =
           new BoundedAsyncAppender(stream, limits.queueCapacity(stream), dropInfoFirst);
       async.setName(stream.name());
       async.setContext(context);
       async.setNested(file);
+      async.setArchiveJobs(archiveJobs);
       async.setRuntime(this);
       async.setActiveFile(logsDirectory.resolve(fileName));
       async.start();
@@ -748,7 +750,8 @@ public final class LoggingRuntime {
     }
   }
 
-  private RollingFileAppender<ILoggingEvent> rollingAppender(LogStream stream, String fileName) {
+  private RollingFileAppender<ILoggingEvent> rollingAppender(
+      LogStream stream, String fileName, ArchiveJobContext archiveJobs) {
     Path active = logsDirectory.resolve(fileName);
     Path archive = logsDirectory.resolve("archive");
     RollingFileAppender<ILoggingEvent> file = new RollingFileAppender<>();
@@ -766,7 +769,7 @@ public final class LoggingRuntime {
     encoders.add(encoder);
     file.setEncoder(encoder);
     SizeAndTimeBasedRollingPolicy<ILoggingEvent> policy = new SizeAndTimeBasedRollingPolicy<>();
-    policy.setContext(context);
+    policy.setContext(archiveJobs);
     policy.setParent(file);
     String stem =
         fileName.endsWith(".log") ? fileName.substring(0, fileName.length() - 4) : fileName;
