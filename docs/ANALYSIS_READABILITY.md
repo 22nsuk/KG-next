@@ -62,12 +62,15 @@ window or an additional persistent font-size setting.
 Focused tests cover missing payloads, saved and invalidated analysis, primary/secondary slot
 ownership, previous-position fallback, percentage rounding, score and winrate perspectives,
 atomic setting publication on save failure, long multilingual names, Unicode truncation,
-and row clipping at ordinary and simulated 2× rendering scales. Existing coordinate and
-analysis-provenance regression tests remain applicable.
+and row clipping at ordinary and simulated 2× rendering scales. The frame regression checks
+compare the complete status text area with independently specified source, score and change
+text. This permits source labels while still rejecting stale scores, nonadjacent move changes
+and missing measured-zero scores. Both images use the current platform's fonts. Existing
+coordinate and analysis-provenance regression tests remain applicable.
 
 ```bash
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
-  -Dtest=WinrateReadingTest,MoveStatusLineTest,BoardNamePlateTest,MoveStatusTextTest,BoardRendererKoreanNameTest,BoardCoordinateStyleTest,MainWindowTitleTest,AnalysisProvenanceDisplayTest,BoardDataAnalysisProvenanceTest,FunctionSearchTest,LocalizationResourceParityTest test
+  -Dtest=LizzieFrameRegressionTest,WinrateReadingTest,MoveStatusLineTest,BoardNamePlateTest,MoveStatusTextTest,BoardRendererKoreanNameTest,BoardCoordinateStyleTest,MainWindowTitleTest,AnalysisProvenanceDisplayTest,BoardDataAnalysisProvenanceTest,FunctionSearchTest,LocalizationResourceParityTest test
 ```
 
 `AnalysisReadabilityDesktopTest` starts the production application with an isolated profile and
