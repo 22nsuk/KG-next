@@ -86,8 +86,9 @@ mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true 
   -Dtest=AnalysisReadabilityDesktopTest test
 ```
 
-These checks do not run a real KataGo model, GPU, Windows/macOS desktop, or physical HiDPI
-display. The screenshots below are Linux Swing captures using controlled saved analysis.
+The desktop probe has been verified on Linux Swing and a native Windows desktop using controlled
+analysis. It does not run a real KataGo model or GPU, or establish native macOS or physical HiDPI
+coverage. The screenshots below are Linux Swing captures using controlled saved analysis.
 
 ![Korean names and previous-move emphasis](screenshots/analysis-readability/analysis-readability-ko.png)
 
