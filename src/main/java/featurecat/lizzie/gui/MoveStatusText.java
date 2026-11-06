@@ -6,11 +6,19 @@ import java.util.Locale;
 import java.util.ResourceBundle;
 
 /**
- * The status line under the win-rate bar, on one line: who leads by how much ("白领先 7.3 目" rather
+ * The status text under the win-rate bar: who leads by how much ("白领先 7.3 目" rather
  * than "黑领先:-7.3"), then what the previous move changed ("上一手(#3) -0.3% -1.9目").
  */
 final class MoveStatusText {
   private MoveStatusText() {}
+
+  record PreviousMove(String text, double winrateChange, Double scoreChange) {
+    static final PreviousMove NONE = new PreviousMove("", Double.NaN, null);
+
+    double emphasisChange() {
+      return scoreChange != null ? scoreChange : winrateChange;
+    }
+  }
 
   static boolean hasWinrate(BoardData data) {
     return data != null && data.hasDisplayablePrimaryAnalysis();
@@ -37,15 +45,31 @@ final class MoveStatusText {
   /** Only adjacent, measured positions establish the change caused by the previous move. */
   static String previousMove(
       ResourceBundle strings, BoardData current, BoardData previous, boolean withScore) {
-    if (!hasWinrate(current) || !hasWinrate(previous)) return "";
+    return previousMoveStatus(strings, current, previous, withScore).text();
+  }
+
+  static PreviousMove previousMoveStatus(
+      ResourceBundle strings, BoardData current, BoardData previous, boolean withScore) {
+    if (!hasWinrate(current) || !hasWinrate(previous)) return PreviousMove.NONE;
     double currentWR =
         current.blackToPlay == previous.blackToPlay ? current.winrate : 100 - current.winrate;
     Double change =
         withScore && hasScore(current) && hasScore(previous)
             ? (blackScore(current) - blackScore(previous)) * (previous.blackToPlay ? 1 : -1)
             : null;
-    return previousMove(
-        strings, current.lastMoveMatchCandidteNo, currentWR - previous.winrate, change);
+    double winrateChange = currentWR - previous.winrate;
+    return new PreviousMove(
+        previousMove(strings, current.lastMoveMatchCandidteNo, winrateChange, change),
+        winrateChange, change);
+  }
+
+  /** Engine games compare each engine's own readings, sometimes two moves apart. */
+  static double engineGameWinrateChange(BoardData current, BoardData previous) {
+    if (!hasWinrate(current) || !hasWinrate(previous)) return Double.NaN;
+    double previousWR = current.blackToPlay == previous.blackToPlay
+        ? previous.winrate : 100 - previous.winrate;
+    // The arrow describes the side that just played, opposite the current side to move.
+    return previousWR - current.winrate;
   }
 
   static String decimal(double value) {

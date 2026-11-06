@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -41,6 +42,7 @@ import java.awt.Graphics2D;
 import java.awt.GraphicsConfiguration;
 import java.awt.GraphicsDevice;
 import java.awt.Rectangle;
+import java.awt.RenderingHints;
 import java.awt.Window;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.Transferable;
@@ -60,8 +62,10 @@ import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ResourceBundle;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledFuture;
@@ -266,37 +270,50 @@ class LizzieFrameRegressionTest {
   @ValueSource(booleans = {false, true})
   void scoreTextDisappearsAfterNavigatingToUnanalysedNode(boolean withKomi) throws Exception {
     Font previousFont = LizzieFrame.uiFont;
+    ResourceBundle previousStrings = Lizzie.resourceBundle;
     try (TestEnvironment env = TestEnvironment.open()) {
       EmptyEngineUiFrame frame = prepareEmptyEngineUiFrame();
       LizzieFrame.uiFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+      Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.US);
       Lizzie.config.showKataGoScoreLeadWithKomi = withKomi;
+      Lizzie.board.getHistory().getGameInfo().setKomi(6.5);
+      assertStatusText(frame, "No analysis", MoveStatusText.PreviousMove.NONE);
       BoardData analysed = Lizzie.board.getData();
       analysed.analysisHeaderSlots = 3;
       analysed.isKataData = true;
       analysed.setPlayouts(20);
       analysed.scoreMean = 7.3;
       analysed.winrate = 60;
-      assertTrue(paintedStatusTextPixels(frame) > 0);
+      assertStatusText(
+          frame,
+          "Saved analysis · " + (withKomi ? "Lead:13.8" : "Black leads by 7.3"),
+          MoveStatusText.PreviousMove.NONE);
       BoardData empty = moveData(new int[] {0, 0}, Stone.BLACK, false, 1, 0);
       empty.isKataData = true;
       Lizzie.board.getHistory().add(empty);
-      assertEquals(0, paintedStatusTextPixels(frame), "no stale score or previous-move delta");
+      assertStatusText(frame, "Earlier position (move 0)", MoveStatusText.PreviousMove.NONE);
       empty.setPlayouts(20);
       empty.analysisHeaderSlots = 3;
       empty.winrate = 50;
       empty.scoreMean = 0;
-      assertTrue(paintedStatusTextPixels(frame) > 0, "a measured zero is valid");
+      assertStatusText(
+          frame,
+          "Saved analysis · " + (withKomi ? "Lead:6.5" : "Even"),
+          new MoveStatusText.PreviousMove("Prev. move -10.0% -7.3pts", -10, -7.3));
     } finally {
       LizzieFrame.uiFont = previousFont;
+      Lizzie.resourceBundle = previousStrings;
     }
   }
 
   @Test
   void previousMoveTextDoesNotBorrowGrandparentAnalysis() throws Exception {
     Font previousFont = LizzieFrame.uiFont;
+    ResourceBundle previousStrings = Lizzie.resourceBundle;
     try (TestEnvironment env = TestEnvironment.open()) {
       EmptyEngineUiFrame frame = prepareEmptyEngineUiFrame();
       LizzieFrame.uiFont = new Font(Font.SANS_SERIF, Font.PLAIN, 12);
+      Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.US);
       BoardHistoryList history = Lizzie.board.getHistory();
       history.getData().setPlayouts(20);
       history.getData().analysisHeaderSlots = 3;
@@ -307,13 +324,17 @@ class LizzieFrameRegressionTest {
       current.winrate = 40;
       current.analysisHeaderSlots = 3;
       history.add(current);
-      assertEquals(0, paintedStatusTextPixels(frame), "N-2 is not the preceding position");
+      assertStatusText(frame, "Saved analysis", MoveStatusText.PreviousMove.NONE);
       middle.setPlayouts(20);
       middle.analysisHeaderSlots = 3;
       middle.winrate = 55;
-      assertTrue(paintedStatusTextPixels(frame) > 0, "N-1 arrival enables the delta");
+      assertStatusText(
+          frame,
+          "Saved analysis",
+          new MoveStatusText.PreviousMove("Prev. move +5.0%", 5, null));
     } finally {
       LizzieFrame.uiFont = previousFont;
+      Lizzie.resourceBundle = previousStrings;
     }
   }
 
@@ -368,7 +389,9 @@ class LizzieFrameRegressionTest {
     assertTrue(drawn > 0, "retry remains painted in the narrow column despite a long engine name");
   }
 
-  private static int paintedStatusTextPixels(LizzieFrame frame) throws Exception {
+  private static void assertStatusText(
+      LizzieFrame frame, String expectedLead, MoveStatusText.PreviousMove expectedPrevious)
+      throws Exception {
     BufferedImage image = new BufferedImage(400, 120, BufferedImage.TYPE_INT_ARGB);
     Graphics2D graphics = image.createGraphics();
     try {
@@ -383,10 +406,34 @@ class LizzieFrameRegressionTest {
     } finally {
       graphics.dispose();
     }
-    int count = 0;
-    for (int y = 85; y < 120; y++)
-      for (int x = 0; x < 400; x++) if ((image.getRGB(x, y) & 0xffffff) != 0) count++;
-    return count;
+    BufferedImage expected = new BufferedImage(400, 120, BufferedImage.TYPE_INT_ARGB);
+    Graphics2D expectedGraphics = expected.createGraphics();
+    try {
+      expectedGraphics.setRenderingHint(
+          RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+      expectedGraphics.setColor(new Color(0, 0, 0, 130));
+      expectedGraphics.fillRect(0, 0, 400, 120);
+      expectedGraphics.setColor(Color.WHITE);
+      // Reuse only the row's placement/painting. The expected content above is independent of
+      // drawMoveStatistics and its analysis selection, so a source label cannot hide a stale delta.
+      MoveStatusLine.draw(
+          expectedGraphics,
+          LizzieFrame.uiFont,
+          2,
+          95,
+          47,
+          396 * 20 / 21,
+          Math.round(Config.frameFontSize * Lizzie.javaScaleFactor) + 4,
+          expectedLead,
+          expectedPrevious);
+    } finally {
+      expectedGraphics.dispose();
+    }
+    // Compare both possible text rows below the bar, including blank space around the labels.
+    assertArrayEquals(
+        expected.getRGB(0, 70, 400, 50, null, 0, 400),
+        image.getRGB(0, 70, 400, 50, null, 0, 400),
+        "Only the expected source, current score and adjacent-move change may be painted");
   }
 
   @Test

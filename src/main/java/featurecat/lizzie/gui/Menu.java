@@ -1015,6 +1015,15 @@ public class Menu extends JMenuBar {
           }
         });
 
+    final JFontCheckBoxMenuItem showNameWinrates =
+        new JFontCheckBoxMenuItem(resourceBundle.getString("Menu.showNameWinrates"));
+    showNameWinrates.setToolTipText(resourceBundle.getString("Menu.showNameWinrates.tooltip"));
+    showNameWinrates.addActionListener(
+        event -> {
+          Lizzie.frame.togglePlayerNameWinrates();
+          showNameWinrates.setState(NameWinrates.shown(Lizzie.config.uiConfig));
+        });
+
     final JFontCheckBoxMenuItem showCommentConrolPane =
         new JFontCheckBoxMenuItem(resourceBundle.getString("Menu.showCommentConrolPane"));
     showCommentConrolPane.setToolTipText(
@@ -1070,6 +1079,7 @@ public class Menu extends JMenuBar {
     mainPanelSettings.add(largeWinrateGraph);
     mainPanelSettings.add(appendWinrateToComment);
     mainPanelSettings.add(showNameInBoard);
+    mainPanelSettings.add(showNameWinrates);
     mainPanelSettings.add(showCommentConrolPane);
     mainPanelSettings.add(alwaysOnTop);
     mainPanelSettings.addSeparator();
@@ -2940,6 +2950,7 @@ public class Menu extends JMenuBar {
             }
             if (Lizzie.config.showNameInBoard) showNameInBoard.setState(true);
             else showNameInBoard.setState(false);
+            showNameWinrates.setState(NameWinrates.shown(Lizzie.config.uiConfig));
           }
 
           @Override
@@ -6248,6 +6259,7 @@ public class Menu extends JMenuBar {
     appendWinrateToComment.putClientProperty(
         AutoAnalyzeMenu.ACTION_PROPERTY, "menu.appendWinrateToComment");
     showNameInBoard.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showNameInBoard");
+    showNameWinrates.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showNameWinrates");
     showCommentConrolPane.putClientProperty(
         AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showCommentConrolPane");
     alwaysOnTop.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.alwaysOnTop");

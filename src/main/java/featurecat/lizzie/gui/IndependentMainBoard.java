@@ -802,6 +802,10 @@ public class IndependentMainBoard extends JFrame {
   }
 
   private void onClickedForManul(int x, int y) {
+    if (boardRenderer.isOnPlayerName(x, y)) {
+      Lizzie.frame.togglePlayerNameWinrates();
+      return;
+    }
     Optional<int[]> boardCoordinates = boardRenderer.convertScreenToCoordinates(x, y);
     if (boardCoordinates.isPresent()) {
       int[] coords = boardCoordinates.get();
@@ -852,6 +856,10 @@ public class IndependentMainBoard extends JFrame {
   private void onClicked(int x, int y) {
     cancelPendingSuggestionHoverPreview();
     if (Lizzie.frame.isContributing) return;
+    if (boardRenderer.isOnPlayerName(x, y)) {
+      Lizzie.frame.togglePlayerNameWinrates();
+      return;
+    }
     // Check for board click
     Optional<int[]> boardCoordinates;
     boardCoordinates = boardRenderer.convertScreenToCoordinates(x, y);
