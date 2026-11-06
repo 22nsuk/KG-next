@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Upgrade the bundled Windows ReadBoard from 3.0.6 to the pinned 3.2.0 WebView2 release. Preserve the original executable and full runtime/UI/language directory, validate its active `asInvoker` manifest, and require ready/version/quit in the native pipe smoke. Document Windows 10 1809+ and the separate WebView2 Evergreen prerequisite; keep hosted-update settings preservation and core-update behavior unchanged.
+
 - Preserve reusable analysis when manual KataGo rules already match or the engine rejects a change. Hold incoming analysis while a manual change and its recovery readback are pending, retain displayed results on uncertain failures, and keep startup-default preferences independent of the current engine result.
 
 - Add theme-specific 100% / 140% / 200% and bold coordinate labels to main, comparison and independent main boards, adapting upstream #725. Preserve the default appearance, Korean font selection, coordinate formats and external-board overlay alignment. Recompute margins and stone caches together when label size changes, including same-size images and coordinate visibility changes, and expose the setting through function search.

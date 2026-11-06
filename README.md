@@ -100,6 +100,10 @@ Windows 설치 제품명은 `KG-next`이며 NVIDIA·OpenCL 등 변형에는 백�
 
 **기존 JCEF 127 패키지에서 전환할 때는 새 전체 패키지를 사용하세요.** `windows64.core-update.zip`은 앱 JAR와 실행 설정만 갱신하고 JCEF를 교체하지 않으므로 이 전환에 사용할 수 없습니다. 앱과 같은 JCEF 버전의 런타임이 이미 설치된 경우에만 소형 업데이트를 사용하세요. JAR만 바꾸거나 구 런타임과 섞으면 앱 내 웹 브라우저를 열 수 없습니다. KG-next는 누락된 브라우저 런타임을 자동으로 내려받지 않습니다.
 
+Windows 전체 패키지에는 **ReadBoard 3.2.0**과 한국어 화면·.NET 실행 환경을 포함합니다. ReadBoard는 **Windows 10 1809(빌드 17763) 이상 또는 Windows 11**, **Microsoft Edge WebView2 Evergreen Runtime 123.0.2420.47 이상**이 필요합니다. WebView2는 시스템에 별도로 설치하는 런타임입니다. 없거나 버전이 낮으면 ReadBoard에서 공식 다운로드와 다시 시도를 안내합니다. 오프라인 PC는 미리 [Microsoft 공식 페이지](https://developer.microsoft.com/microsoft-edge/webview2/#download)의 **Evergreen Standalone Installer(x64)**로 설치하세요. [공식 3.2.0 변경 사항](https://github.com/qiyi71w/readboard/releases/tag/v3.2.0)에는 브라우저 보드 캡처 개선과 미니 모드가 포함됩니다.
+
+`core-update.zip`은 기존 ReadBoard를 교체하지 않습니다. **3.0.6에서 전환할 때는 새 전체 패키지를 사용하세요.** 3.0.6의 자체 업데이터는 새 WebView2 패키지를 자동 설치하지 못해 수동 다운로드로 연결합니다. KG-next와 ReadBoard를 모두 종료한 뒤, 기존 `app/readboard/`(구형 배치는 `readboard/`)에 있는 `config.readboard.json`, `config_readboard.txt`, `config_readboard_others.txt` 중 존재하는 파일을 백업하고 새 패키지의 `app/readboard/`에 복원하세요. 설정 형식 변환은 새 ReadBoard가 담당합니다. WebView2 패키지의 호스트 설치를 지원하는 버전부터는 KG-next가 종료 확인 후 이 세 설정 파일을 보존하여 업데이트합니다.
+
 ### 소스 빌드
 
 JDK 17 이상과 Maven이 필요합니다. 저장소의 CI는 JDK 21 환경도 사용합니다.

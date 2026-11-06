@@ -307,7 +307,11 @@ function Stop-NativeReadBoardProcesses {
 function Invoke-NativeReadBoardPipeProbe {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$AppExe
+        [string]$AppExe,
+
+        [int]$TimeoutSeconds = 30,
+
+        [int]$ExitTimeoutSeconds = 10
     )
 
     $assets = Get-NativeReadBoardAssets -AppExe $AppExe
@@ -318,6 +322,9 @@ function Invoke-NativeReadBoardPipeProbe {
     Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
 
     $process = $null
+    $stdoutLines = [System.Collections.Generic.List[string]]::new()
+    $stderrTask = $null
+    $stdoutTailTask = $null
     try {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = $assets.ExePath
@@ -330,22 +337,74 @@ function Invoke-NativeReadBoardPipeProbe {
         $psi.Arguments = 'yzy " " " " " " 0 en -1'
 
         Write-Host "Probing native readboard pipe launch: $($assets.ExePath)"
-        $process = [System.Diagnostics.Process]::Start($psi)
-        Start-Sleep -Seconds 5
-
-        if ($process.HasExited) {
-            $stdout = $process.StandardOutput.ReadToEnd()
-            $stderr = $process.StandardError.ReadToEnd()
-            [System.IO.File]::WriteAllText($stdoutPath, $stdout)
-            [System.IO.File]::WriteAllText($stderrPath, $stderr)
-            throw "Native readboard exited during pipe launch probe with code $($process.ExitCode). Stdout: $stdout Stderr: $stderr"
+        # .NET Framework constructs and flushes StandardInput during Start, using
+        # Console.InputEncoding. Select BOM-free UTF-8 before that first flush;
+        # replacing the writer afterwards is too late. Restore the caller's setting.
+        $inputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+            $process = [System.Diagnostics.Process]::Start($psi)
+        }
+        finally {
+            [Console]::InputEncoding = $inputEncoding
+        }
+        # Drain stderr while waiting for protocol output so diagnostics cannot fill the pipe.
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        $process.StandardInput.AutoFlush = $true
+        foreach ($expectedLine in @('ready', 'version: 220430')) {
+            if ($expectedLine -eq 'version: 220430') {
+                $process.StandardInput.WriteLine('version')
+            }
+            $deadline = [System.Diagnostics.Stopwatch]::StartNew()
+            while ($true) {
+                $remainingMs = [int]($TimeoutSeconds * 1000 - $deadline.ElapsedMilliseconds)
+                if ($remainingMs -le 0) {
+                    throw "Native readboard did not send '$expectedLine' within $TimeoutSeconds seconds. Check the WebView2 Evergreen Runtime and probe logs."
+                }
+                $lineTask = $process.StandardOutput.ReadLineAsync()
+                if (-not $lineTask.Wait($remainingMs)) {
+                    throw "Native readboard did not send '$expectedLine' within $TimeoutSeconds seconds. Check the WebView2 Evergreen Runtime and probe logs."
+                }
+                $line = $lineTask.Result
+                if ($null -eq $line) {
+                    throw "Native readboard closed stdout before '$expectedLine'."
+                }
+                $stdoutLines.Add($line)
+                if ($line -ceq $expectedLine) {
+                    break
+                }
+            }
         }
 
-        Write-Host "Native readboard pipe probe passed. Process id: $($process.Id)"
+        # 220430 is the unchanged wire protocol version, not the helper release tag.
+        $stdoutTailTask = $process.StandardOutput.ReadToEndAsync()
+        $process.StandardInput.WriteLine('quit')
+        # Match ReadBoard.shutdown(): finish the host's input after its last command
+        # so the helper reader can reach EOF rather than remain blocked during close.
+        $process.StandardInput.Close()
+        if (-not $process.WaitForExit($ExitTimeoutSeconds * 1000)) {
+            throw "Native readboard did not exit after quit within $ExitTimeoutSeconds seconds."
+        }
+        if ($process.ExitCode -ne 0) {
+            throw "Native readboard quit with exit code $($process.ExitCode)."
+        }
+        Write-Host "Native readboard pipe probe passed: ready, version: 220430, normal quit."
     }
     finally {
         if ($process -and -not $process.HasExited) {
             Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            [void]$process.WaitForExit(5000)
+        }
+        $stdout = ($stdoutLines -join [System.Environment]::NewLine) + [System.Environment]::NewLine
+        if ($stdoutTailTask -and $stdoutTailTask.Wait(5000)) {
+            $stdout += $stdoutTailTask.Result
+        }
+        [System.IO.File]::WriteAllText($stdoutPath, $stdout)
+        if ($stderrTask -and $stderrTask.Wait(5000)) {
+            [System.IO.File]::WriteAllText($stderrPath, $stderrTask.Result)
+        }
+        if ($process) {
+            $process.Dispose()
         }
         Stop-NativeReadBoardProcesses -ReadBoardExePath $assets.ExePath
     }

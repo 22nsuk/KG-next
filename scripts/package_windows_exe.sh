@@ -81,9 +81,9 @@ JCEF_PLATFORM="${WINDOWS_JCEF_PLATFORM:-windows-amd64}"
 JCEF_RELEASE_TAG="jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83"
 JCEF_ASSET_SHA256="0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875"
 READBOARD_RELEASE_REPO="${READBOARD_RELEASE_REPO:-qiyi71w/readboard}"
-READBOARD_RELEASE_TAG="${READBOARD_RELEASE_TAG:-v3.0.6}"
-READBOARD_ASSET_NAME="${READBOARD_ASSET_NAME:-readboard-github-release-v3.0.6.zip}"
-READBOARD_ASSET_SHA256="${READBOARD_ASSET_SHA256:-1ba4c265f560cd988be24f4ea0eeb29516883f42ece477bd32b72f8bccf6565d}"
+READBOARD_RELEASE_TAG="${READBOARD_RELEASE_TAG:-v3.2.0}"
+READBOARD_ASSET_NAME="${READBOARD_ASSET_NAME:-readboard-webview2-v3.2.0.zip}"
+READBOARD_ASSET_SHA256="${READBOARD_ASSET_SHA256:-6abb1c2764fe14f72f77a2444d314e037d1d1e95c6c95974cd6c9c67de6e9512}"
 READBOARD_RELEASE_API="${READBOARD_RELEASE_API:-https://api.github.com/repos/${READBOARD_RELEASE_REPO}/releases/tags/${READBOARD_RELEASE_TAG}}"
 READBOARD_CACHE_DIR="$ROOT_DIR/.cache/readboard"
 READBOARD_STAGE_DIR="$DIST_DIR/readboard"
@@ -148,10 +148,12 @@ prepare_bundled_readboard_assets() {
     "$READBOARD_STAGE_DIR" \
     "$READBOARD_RELEASE_TAG" \
     "$READBOARD_ASSET_NAME" \
-    "$READBOARD_ASSET_SHA256" <<'PY'
+    "$READBOARD_ASSET_SHA256" \
+    "$ROOT_DIR/scripts" <<'PY'
 import json
 import hashlib
 import os
+from pathlib import Path
 import shutil
 import sys
 import tempfile
@@ -159,6 +161,9 @@ import urllib.request
 import zipfile
 
 api_url, cache_dir, stage_dir, release_tag, asset_name, expected_sha256 = sys.argv[1:7]
+sys.path.insert(0, sys.argv[7])
+from validate_readboard_bundle import validate_bundle
+
 source_dir = os.environ.get("READBOARD_SOURCE_DIR", "").strip()
 github_token = (
     os.environ.get("READBOARD_GITHUB_TOKEN")
@@ -221,29 +226,11 @@ def write_manifest(source):
         handle.write(f"source={source}\n")
         handle.write("requested-execution-level=asInvoker\n")
 
-def patch_readboard_manifest_to_as_invoker(path):
-    require_admin = b'level="requireAdministrator"'
-    as_invoker = b'level="asInvoker"' + (b" " * (len(require_admin) - len(b'level="asInvoker"')))
-    with open(path, "rb") as handle:
-        data = handle.read()
-    patch_count = data.count(require_admin)
-    if patch_count:
-        data = data.replace(require_admin, as_invoker)
-        with open(path, "wb") as handle:
-            handle.write(data)
-    if require_admin in data:
-        raise SystemExit(
-            "Bundled readboard.exe still requests administrator privileges after manifest patch"
-        )
-    if b'level="asInvoker"' not in data:
-        raise SystemExit("Bundled readboard.exe manifest does not request asInvoker")
-    return patch_count
-
 if source_dir:
     if not os.path.isdir(source_dir):
         raise SystemExit(f"READBOARD_SOURCE_DIR does not exist: {source_dir}")
     copy_contents(find_readboard_root(source_dir), stage_dir)
-    write_manifest(f"local:{source_dir}")
+    source = f"local:{source_dir}"
 else:
     tag_cache_dir = os.path.join(cache_dir, release_tag)
     os.makedirs(tag_cache_dir, exist_ok=True)
@@ -290,19 +277,16 @@ else:
         with zipfile.ZipFile(zip_path) as archive:
             archive.extractall(temp_dir)
         copy_contents(find_readboard_root(temp_dir), stage_dir)
-        write_manifest(f"github:{release_tag}")
+        source = f"github:{release_tag}"
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
 
-readboard_exe = os.path.join(stage_dir, "readboard.exe")
-if not os.path.isfile(readboard_exe):
-    raise SystemExit("Windows release must include native readboard.exe")
-manifest_patch_count = patch_readboard_manifest_to_as_invoker(readboard_exe)
+# The WebView2 release already requests asInvoker. Preserve upstream EXE bytes,
+# including the commented administrator-level examples in its embedded manifest.
+validate_bundle(Path(stage_dir))
+write_manifest(source)
 print(f"Prepared native readboard assets {release_tag}/{asset_name} in {stage_dir}")
-print(
-    "Patched native readboard requestedExecutionLevel to asInvoker "
-    f"({manifest_patch_count} replacement(s))"
-)
+print("Verified ReadBoard WebView2 runtime files and asInvoker execution level")
 PY
 }
 
@@ -1027,6 +1011,10 @@ What is bundled:
 - Windows release assets include a packaged Java runtime via jpackage.
 - Native Windows readboard is included in 'readboard/'.
 - Native Windows readboard is pinned to qiyi71w/readboard ${READBOARD_RELEASE_TAG} (${READBOARD_ASSET_NAME}, SHA256 ${READBOARD_ASSET_SHA256}).
+- ReadBoard requires Windows 10 version 1809 (build 17763) or later and Microsoft Edge WebView2 Evergreen Runtime 123.0.2420.47 or later. Its .NET runtime is bundled; the shared WebView2 browser runtime is not.
+- If WebView2 is missing or outdated, ReadBoard offers the official download page and Retry. For offline machines, install Microsoft's Evergreen Standalone Installer (x64) first: https://developer.microsoft.com/microsoft-edge/webview2/#download
+- core-update.zip preserves the installed ReadBoard version. Moving from 3.0.6 requires a new full package; its old updater only offers manual download for WebView2 assets. Exit KG-next and ReadBoard, back up config.readboard.json, config_readboard.txt and config_readboard_others.txt if present in the old readboard directory, then restore them into the new app/readboard directory.
+- For helper versions supporting hosted WebView2 updates, the host waits for exit and preserves those settings before directory replacement. Directory replacement failures attempt rollback; later helper startup failures are reported without automatic rollback.
 - The retired Java readboard helper is not bundled; the app keeps a single native readboard sync entry.
 - The JCEF browser runtime for Yike web page and Yike hall is included in 'jcef-bundle/' (${JCEF_RELEASE_TAG}, SHA256 ${JCEF_ASSET_SHA256}), so these entries do not download browser components on first use.
 EOF
