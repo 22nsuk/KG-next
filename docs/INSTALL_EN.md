@@ -23,6 +23,8 @@ The embedded browser uses JCEF 152.0.6 / Chromium 152.0.7977.83 and requires Win
 
 **Use a new full package when upgrading from a JCEF 127 package.** `windows64.core-update.zip` contains only the application JAR and launcher configuration, so it is suitable only when the installation already has the same JCEF runtime. Replacing the JAR while keeping the old browser runtime prevents embedded web pages from opening. The app does not download a replacement runtime automatically.
 
+Windows full packages also include **ReadBoard 3.2.0** and its self-contained .NET runtime. Board sync requires **Windows 10 version 1809 (build 17763) or later, or Windows 11**, plus **Microsoft Edge WebView2 Evergreen Runtime 123.0.2420.47 or later**. The shared WebView2 browser runtime is not bundled. ReadBoard provides an official download link and Retry when it is missing or outdated. For an offline PC, install the **Evergreen Standalone Installer (x64)** from [Microsoft's download page](https://developer.microsoft.com/microsoft-edge/webview2/#download) before use. See the [bundled helper and upgrade notes](PACKAGES_EN.md#bundled-board-sync-helper).
+
 | Platform | Recommended package | Bundled Java | Bundled KataGo | Best for |
 | --- | --- | --- | --- | --- |
 | Windows x64 | `<date>-windows64.opencl.portable.zip` | Yes | Yes | Main recommendation for regular users, unzip and run |

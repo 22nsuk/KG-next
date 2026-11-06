@@ -37,6 +37,13 @@ Windows 构建、依赖审计、启动与升级测试通过后，将同一批成
 - 软件内“关于”、主窗口标题、安装包启动参数、GitHub release 标题必须显示同一个 release tag，不能停在 `1.0.0`，也不要再把 `1.0.0-` 作为公开 tag 前缀
 - 程序窗口图标、安装包图标、README 展示图标不要混成两套
 
+### ReadBoard 3.2.0
+
+- Windows 完整包使用固定的 `readboard-webview2-v3.2.0.zip` 及 SHA-256；打包器和成品检查共用 `scripts/validate_readboard_bundle.py`，确认 WebView 页面、四语言、字体/许可、OpenCV、.NET 和 WebView2 Loader 齐全，并读取 PE 的实际应用 manifest 验证 `asInvoker`，不修改 exe。
+- Windows `-ProbeBoardSync` 验收须收到 `ready`，再确认 `version: 220430`，最后发送 `quit` 并确认正常退出；只看到进程存活不能通过。`220430` 是协议版本，`3.2.0` 是发布版本；这个检查不证明 WebView 页面已完成渲染。
+- 发布前在 Windows 10 1809+ / Windows 11 实机检查 WebView2 已安装时的窗口、韩文、同步、迷你模式和退出；缺失或低于 123.0.2420.47 时应出现官方安装/更新与重试提示。离线机器需预装 Evergreen Runtime。
+- 分别检查 3.0.6 的新完整包迁移（关闭两程序后备份/恢复三个配置文件）与支持 WebView2 托管更新版本的退出后设置保留；3.0.6 的内置更新器只能转到手动下载，`core-update.zip` 不升级 ReadBoard。Linux 上的文件/协议 fixture 不能代替这项 Windows 实机验收。
+
 ## 二、当前 fail-closed 公开资产集合
 
 当前预发布器会先保持 GitHub Release 为 draft，只有四个平台工作流全部成功、下面的

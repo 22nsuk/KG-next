@@ -143,7 +143,7 @@ jobs:
           grep -q "Release display version: $RELEASE_TAG" "$note_file"
           grep -q "Smart Optimize" "$note_file"
           grep -q "first launch should work offline" "$note_file"
-          grep -q "qiyi71w/readboard v3.0.6" "$note_file"
+          grep -q "qiyi71w/readboard v3.2.0" "$note_file"
           grep -q "JCEF browser runtime" "$note_file"
           grep -q "NVIDIA CUDA package for RTX 20/30/40/50" "$note_file"
           test -f "dist/windows/input-with-katago/engines/katago/windows-x64/katago.exe"
@@ -157,9 +157,9 @@ jobs:
           grep -qx "release-tag=jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
           grep -qx "platform=windows-amd64" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
           grep -qx "sha256=0dc2ce28766d267f551398e24af7a9bec244b888e651bd97a14ac2d128550875" "dist/windows/input-with-katago/jcef-bundle/lizzieyzy-next-jcef-manifest.txt"
-          grep -qx "release-tag=v3.0.6" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
-          grep -qx "asset-name=readboard-github-release-v3.0.6.zip" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
-          grep -qx "sha256=1ba4c265f560cd988be24f4ea0eeb29516883f42ece477bd32b72f8bccf6565d" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
+          grep -qx "release-tag=v3.2.0" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
+          grep -qx "asset-name=readboard-webview2-v3.2.0.zip" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
+          grep -qx "sha256=6abb1c2764fe14f72f77a2444d314e037d1d1e95c6c95974cd6c9c67de6e9512" "dist/windows/input-with-katago/readboard/lizzieyzy-next-readboard-manifest.txt"
           grep -Fqx "KataGo release: $(python3 scripts/katago_asset_catalog.py get katagoReleaseTag)" "dist/windows/input-with-katago/engines/katago/VERSION.txt"
           grep -Fqx "Windows bundle: $(python3 scripts/katago_asset_catalog.py get assets.windows-cpu.assetName)" "dist/windows/input-with-katago/engines/katago/VERSION.txt"
           for spec in 'with-katago|windows-cpu' 'opencl|windows-opencl' 'nvidia|windows-nvidia' 'nvidia.tensorrt|windows-tensorrt'; do
@@ -381,11 +381,7 @@ jobs:
           for readboard_exe in \
             dist/windows/input-*/readboard/readboard.exe \
             dist/windows/app-image-*/*/app/readboard/readboard.exe; do
-            grep -a -q 'level="asInvoker"' "$readboard_exe"
-            if grep -a -q 'level="requireAdministrator"' "$readboard_exe"; then
-              echo "readboard.exe must not request administrator privileges: $readboard_exe"
-              exit 1
-            fi
+            python3 scripts/validate_readboard_bundle.py "$(dirname "$readboard_exe")"
           done
 
       - name: Audit bundled Windows KataGo binary versions

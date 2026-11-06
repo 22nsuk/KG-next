@@ -23,6 +23,8 @@
 
 **从 JCEF 127 旧包升级时，请改用本次完整包。** `windows64.core-update.zip` 只更新应用 JAR 和启动配置，不包含 JCEF；仅适用于已经装有同一 JCEF 运行时的目录。把新版 JAR 覆盖到旧浏览器运行时上会导致内嵌网页无法打开，软件不会自动下载替代运行时。
 
+Windows 完整包同时内置 **ReadBoard 3.2.0** 和独立的 .NET 运行环境。棋盘同步需要 **Windows 10 1809（build 17763）及以上或 Windows 11**，以及 **Microsoft Edge WebView2 Evergreen Runtime 123.0.2420.47 及以上**。共享的 WebView2 浏览器运行时不随包交付；缺失或版本过旧时，ReadBoard 会提供官方下载入口与重试。离线电脑请先从 [Microsoft 官方页面](https://developer.microsoft.com/microsoft-edge/webview2/#download)下载并安装 **Evergreen Standalone Installer（x64）**。已有用户的升级方式见[内置同步工具说明](PACKAGES.md#当前内置同步工具信息)。
+
 | 你的系统 | 推荐下载 | 内置 Java | 内置 KataGo | 适合谁 |
 | --- | --- | --- | --- | --- |
 | Windows 64 位 | `<date>-windows64.nvidia.portable.zip` | 是 | 是 | RTX 20/30/40/50 NVIDIA 显卡，推荐，免安装 |

@@ -181,13 +181,18 @@
 
 ## 当前内置同步工具信息
 
-- Windows 发布包现在内置原生 `readboard/readboard.exe` 和依赖文件，正常使用不需要下载外部同步工具
-- Windows 原生路径：`Lizzieyzy/readboard/`
-- 软件内只保留原生 readboard 同步入口，不再交付或启动旧的 Java 简易同步工具
+- Windows 完整包固定使用 [qiyi71w/readboard v3.2.0](https://github.com/qiyi71w/readboard/releases/tag/v3.2.0)，资产 `readboard-webview2-v3.2.0.zip`，SHA-256 为 `6abb1c2764fe14f72f77a2444d314e037d1d1e95c6c95974cd6c9c67de6e9512`。
+- 完整上游目录位于 `KG-next/app/readboard/`（不同引擎包的应用目录名不同），包括原始 exe、独立 .NET 运行环境、OpenCV、WebView 页面、字体及中英日韩四种语言。exe 保持原始字节，使用普通用户权限（`asInvoker`）。
+- 需要 Windows 10 1809（build 17763）及以上或 Windows 11，以及 WebView2 Evergreen Runtime 123.0.2420.47 及以上。共享浏览器运行时须单独安装，不需要另装 .NET。WebView2 缺失或过旧时 ReadBoard 提供官方下载与重试；离线使用前请安装 Microsoft 的 [Evergreen Standalone Installer（x64）](https://developer.microsoft.com/microsoft-edge/webview2/#download)。
+- `core-update.zip` 保留已安装的 ReadBoard 版本。**从 3.0.6 转换时请使用新完整包。** 3.0.6 的更新器不能托管安装 WebView2 资产，只会打开发布页供手动下载。先退出 KG-next 和 ReadBoard，再备份旧 `app/readboard/`（旧布局为 `readboard/`）中存在的 `config.readboard.json`、`config_readboard.txt`、`config_readboard_others.txt`，并恢复到新包的 `app/readboard/`。配置格式迁移由 ReadBoard 负责。
+- 对支持 WebView2 包托管更新的工具版本，KG-next 确认退出后保留上述三个配置文件并替换目录；目录替换失败时仍走原有回滚路径。替换后工具启动失败会提示错误，不会自动回滚。
+- 原生同步入口与逐行协议保持不变，不交付或启动旧的 Java 简易同步工具。
 
 ## 离线包体与启动性能治理
 
 当前主发布包仍按“下载后离线可用”设计：JCEF 浏览器运行时、默认权重、KataGo、readboard、Java 运行环境等必要组件继续随包交付，不在首次使用时临时下载。
+
+ReadBoard 的 WebView2 Evergreen Runtime 是系统级前置条件，需按上节提前安装；不要把随包的 WebView2 SDK/Loader 当成浏览器运行时本体。
 
 为了让完整离线包更轻、更快，发布脚本会尽量做三类无感优化：
 

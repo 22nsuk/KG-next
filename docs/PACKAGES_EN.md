@@ -142,9 +142,12 @@ Paths:
 
 ## Bundled Board Sync Helper
 
-- Windows release packages now include native `readboard/readboard.exe` and its dependency files, so normal users do not need to download a separate board sync tool
-- Windows native path: `Lizzieyzy/readboard/`
-- The app now keeps only the native readboard sync entry and no longer ships or starts the old simplified Java helper
+- Windows full packages pin [qiyi71w/readboard v3.2.0](https://github.com/qiyi71w/readboard/releases/tag/v3.2.0), asset `readboard-webview2-v3.2.0.zip`, SHA-256 `6abb1c2764fe14f72f77a2444d314e037d1d1e95c6c95974cd6c9c67de6e9512`.
+- The complete upstream directory is included at `KG-next/app/readboard/` (the application directory name varies by backend): executable, self-contained .NET runtime, OpenCV, WebView UI, fonts and four languages including Korean. The executable retains its original bytes and requests normal user privileges (`asInvoker`).
+- ReadBoard requires Windows 10 1809 (build 17763) or later, or Windows 11, and WebView2 Evergreen Runtime 123.0.2420.47 or later. Its shared browser runtime is a separate prerequisite; no separate .NET installation is needed. If WebView2 is missing or outdated, ReadBoard offers its official download page and Retry. Before offline use, install Microsoft's [Evergreen Standalone Installer (x64)](https://developer.microsoft.com/microsoft-edge/webview2/#download).
+- `core-update.zip` preserves the installed ReadBoard version. **Use a new full package to move from 3.0.6.** Its updater cannot host-install the WebView2 asset and instead opens the release page for manual download. Exit both KG-next and ReadBoard, back up any existing `config.readboard.json`, `config_readboard.txt` and `config_readboard_others.txt` from the old `app/readboard/` (or legacy `readboard/`), and restore those settings into the new package's `app/readboard/`. ReadBoard owns settings migration.
+- For helper versions that support hosted WebView2 updates, KG-next confirms helper exit before preserving those three settings files and replacing the directory. Directory replacement failures retain the existing rollback path; a later helper startup failure is reported without an automatic rollback.
+- The native board-sync entry and line protocol remain unchanged. The retired simplified Java helper is not bundled.
 
 ## How To Read Old Versus New Release Layouts
 
