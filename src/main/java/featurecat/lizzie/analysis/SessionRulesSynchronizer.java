@@ -116,8 +116,10 @@ public final class SessionRulesSynchronizer {
       Leelaz primary,
       Leelaz mirror,
       Leelaz engine) {
-    if ((engine == primary || engine == mirror) && history.hasPendingManualRulesIntent()) {
-      return false;
+    if (engine == primary || engine == mirror) {
+      Board board = Lizzie.board;
+      if (history.hasPendingManualRulesIntent()
+          || (board != null && board.isEngineAlignmentPendingForHistory(history))) return false;
     }
     if (target.kind() == BoardHistoryList.SessionRulesKind.UNSPECIFIED) {
       return true;

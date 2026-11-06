@@ -12,6 +12,8 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.LockSupport;
 import javax.swing.SwingUtilities;
 
 /** Owns a manual selection until its cache decision and session rules publication finish. */
@@ -20,6 +22,12 @@ public final class ManualRulesSelection {
   private final KataGoRules requested;
   private final Board board;
   private final BoardHistoryList history;
+  private final GameInfo game;
+  private final Double presetKomi;
+  private final int handicap;
+  private final boolean changesKomi;
+  private volatile double expectedKomi;
+  private volatile long expectedGameRevision;
   private final long primaryGeneration;
   private final Object incarnation;
   private final Leelaz mirror;
@@ -32,16 +40,25 @@ public final class ManualRulesSelection {
   private boolean inheritedUncertainChange;
   private boolean unchanged;
   private volatile boolean done;
+  private volatile boolean applied;
   private volatile Leelaz.EngineRulesOperation operation;
   private RetainedCache primaryCache;
   private RetainedCache mirrorCache;
 
-  private ManualRulesSelection(Leelaz primary, KataGoRules requested, long timeoutMillis) {
+  private ManualRulesSelection(
+      Leelaz primary, KataGoRules requested, Double presetKomi, long timeoutMillis) {
     this.primary = primary;
     this.requested = requested;
     this.timeoutMillis = timeoutMillis;
     board = Lizzie.board;
     history = board.getHistory();
+    game = history.getGameInfo();
+    this.presetKomi = presetKomi;
+    handicap = game.getHandicap();
+    expectedKomi = game.getKomi();
+    expectedGameRevision = game.rulesMetadataRevision();
+    changesKomi = presetKomi != null && handicap <= 0
+        && Double.compare(expectedKomi, presetKomi) != 0;
     primaryGeneration = Lizzie.capturePrimaryEngineGeneration(primary);
     incarnation = primary.engineIncarnationSnapshot();
     mirror = primary.activeComparisonEngine();
@@ -54,10 +71,26 @@ public final class ManualRulesSelection {
   }
 
   static ManualRulesSelection apply(Leelaz primary, KataGoRules requested, long timeoutMillis) {
+    return apply(primary, requested, null, timeoutMillis);
+  }
+
+  /** Changes this game's komi only after a matching rules readback; handicap komi is retained. */
+  public static ManualRulesSelection apply(Leelaz primary, RulePreset preset) {
+    return apply(primary, preset, 30_000L);
+  }
+
+  static ManualRulesSelection apply(Leelaz primary, RulePreset preset, long timeoutMillis) {
+    return apply(primary, preset.rules(), preset.komi(), timeoutMillis);
+  }
+
+  private static ManualRulesSelection apply(
+      Leelaz primary, KataGoRules requested, Double presetKomi, long timeoutMillis) {
     if (primary == null || Lizzie.board == null) return null;
-    ManualRulesSelection selection = new ManualRulesSelection(primary, requested, timeoutMillis);
+    ManualRulesSelection selection =
+        new ManualRulesSelection(primary, requested, presetKomi, timeoutMillis);
     if (!selection.prepare()) return null;
     if (selection.unchanged) {
+      selection.applied = true;
       selection.done = true;
       return selection;
     }
@@ -68,7 +101,7 @@ public final class ManualRulesSelection {
             selection.history, selection.intent.previousTarget());
       }
       selection.operation =
-          primary.applyManualRulesOperation(requested, timeoutMillis, selection::isCurrent);
+          primary.applyManualRulesOperation(requested, timeoutMillis, selection::isCurrentRequest);
       if (selection.operation == null) return null;
       Thread completion =
           new Thread(selection::complete, "lizzie-set-kata-rules-completion");
@@ -89,6 +122,17 @@ public final class ManualRulesSelection {
     return done;
   }
 
+  /** Local selection publication; engine position convergence is owned by the existing coordinator. */
+  public boolean applied() {
+    return done && applied;
+  }
+
+  /** Suppresses feedback from a replaced popup request or a game edited while it was pending. */
+  public boolean isLatestSelection() {
+    return currentIdentity() && currentKomiContext()
+        && (intent == null || history.isLatestManualRulesIntent(intent));
+  }
+
   public Leelaz.EngineRulesOperation operation() {
     return operation;
   }
@@ -99,7 +143,7 @@ public final class ManualRulesSelection {
     boolean succeeded = false;
     try {
       boolean admitted = atCurrentSelection(() -> {
-        if (!primary.isLoaded() || !primary.isStarted()
+        if (!primary.isLoaded() || !primary.isStarted() || !currentKomiContext()
             || primary.activeComparisonEngine() != mirror) return;
         synchronized (history) {
           Runnable prepareEndpoints = () -> {
@@ -134,7 +178,7 @@ public final class ManualRulesSelection {
                     && predecessor.mirrorIncarnation == mirrorIncarnation
                     && (mirror == null || matches(predecessor.previousMirrorRules, previousMirrorRules));
               }
-              unchanged = !pending && !pendingRulesWrite
+              unchanged = !changesKomi && !pending && !pendingRulesWrite
                   && matches(previousRules, requested)
                   && (mirror == null || matches(previousMirrorRules, requested))
                   && compatibleTarget(target, requested);
@@ -205,7 +249,7 @@ public final class ManualRulesSelection {
     BoardHistoryList.SessionRulesTarget[] published = {null};
     boolean[] resume = {false};
     List<Runnable> afterAdmission = new ArrayList<>();
-    atCurrentSelection(() -> {
+    settleAtCurrentSelection(() -> {
       if (!isCurrent()) return;
       Leelaz currentMirror = primary.activeComparisonEngine();
       boolean currentOperation = primary.engineRulesOperation() == settledOperation;
@@ -225,18 +269,31 @@ public final class ManualRulesSelection {
           KataGoRules currentRules = primary.currentConfirmedRules();
           boolean confirmed = operationStillCurrent && result != null && result.isConfirmed()
               && matches(result.observed(), currentRules);
-          boolean selected = confirmed && matches(result.observed(), requested);
+          boolean selected = confirmed && matches(result.observed(), requested) && currentKomiContext();
           KataGoRules observed = confirmed ? result.observed()
               : operationStillCurrent && recovered != null && recovered.isConfirmed()
                   && matches(recovered.observed(), currentRules) ? recovered.observed() : null;
           boolean preserveCache = canPreserveCache(result, observed);
+          if (selected && changesKomi) {
+            long revision = game.applyPresetKomi(expectedGameRevision, expectedKomi, handicap, presetKomi);
+            selected = revision >= 0L;
+            if (selected) {
+              expectedKomi = presetKomi;
+              expectedGameRevision = revision;
+            }
+          }
           if (selected) {
-            if (!preserveCache
+            if (presetKomi != null) {
+              // The board monitor was acquired before the nonblocking selection fences.
+              // Hold ordinary analysis until both engines acknowledge this game's position.
+              board.requireEngineAlignment();
+            }
+            if (changesKomi || !preserveCache
                 || !compatibleTarget(intent.previousTarget(), requested)
                 || (currentMirror != null && !matches(currentMirror.currentConfirmedRules(), requested))) {
               List<WeakReference<BoardData>> currentData = captureRetainedData(history);
               primaryCache.invalidateAtSettlement(primary, currentData);
-              if (Lizzie.config.isDoubleEngineMode()) {
+              if (changesKomi || Lizzie.config.isDoubleEngineMode()) {
                 if (currentMirror != null && currentMirror == mirror
                     && currentMirror.engineIncarnationSnapshot() == mirrorIncarnation) {
                   mirrorCache.invalidateAtSettlement(mirror, currentData);
@@ -246,6 +303,7 @@ public final class ManualRulesSelection {
               }
             }
             published[0] = history.publishManualRulesIfCurrent(intent, observed).orElse(null);
+            applied = published[0] != null;
           } else if (!preserveCache) {
             primaryCache.invalidateAtSettlement(primary, captureRetainedData(history));
           }
@@ -260,14 +318,36 @@ public final class ManualRulesSelection {
           history.finishManualRulesIntent(intent);
         });
       }
-    }, false);
+    });
     for (Runnable action : afterAdmission) action.run();
+    if (applied && changesKomi) {
+      SwingUtilities.invokeLater(() -> {
+        if (!isLatestSelection()) return;
+        game.refreshKomiDisplay();
+        if (Lizzie.frame != null) Lizzie.frame.refresh();
+      });
+    }
     if (published[0] != null && Lizzie.frame != null) {
       Lizzie.frame.synchronizeManualRulesAfterSelection(
           history, published[0], intent, primary, primaryGeneration);
     } else if (resume[0] && currentIdentity() && history.isLatestManualRulesIntent(intent)
         && primary.isPondering()) {
       primary.ponder();
+    }
+  }
+
+  private void settleAtCurrentSelection(Runnable action) {
+    if (presetKomi == null) {
+      atCurrentSelection(action, false);
+      return;
+    }
+    // Navigation takes board before PRIMARY. Never wait for an output/selection fence while
+    // holding board, or acquire board beneath the existing PRIMARY/history fences.
+    while (isCurrent() && !EngineManager.occupiesEngineGameAdmission()) {
+      synchronized (board) {
+        if (atCurrentSelection(action, true)) return;
+      }
+      LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
     }
   }
 
@@ -312,6 +392,16 @@ public final class ManualRulesSelection {
     return Lizzie.board == board && board.getHistory() == history
         && Lizzie.capturePrimaryEngineGenerationSnapshot(primary) == primaryGeneration
         && primary.engineIncarnationSnapshot() == incarnation;
+  }
+
+  private boolean currentKomiContext() {
+    return presetKomi == null || (history.getGameInfo() == game
+        && game.rulesMetadataRevision() == expectedGameRevision
+        && game.getHandicap() == handicap && Double.compare(game.getKomi(), expectedKomi) == 0);
+  }
+
+  private boolean isCurrentRequest() {
+    return isCurrent() && currentKomiContext();
   }
 
   private boolean isCurrent() {

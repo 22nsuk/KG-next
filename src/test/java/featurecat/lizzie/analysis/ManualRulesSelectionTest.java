@@ -45,6 +45,203 @@ class ManualRulesSelectionTest {
   private static final KataGoRules JAPANESE = KataGoRules.parse("japanese").orElseThrow();
 
   @Test
+  void identicalPresetDoesNotWriteCommandsPreferencesOrInvalidateAnalysis() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.history.getGameInfo().setKomiNoMenu(7.5);
+      Lizzie.config.autoLoadKataRules = true;
+      Lizzie.config.kataRules = JAPANESE.toGtpArgument();
+      Path config = Path.of(Lizzie.config.getConfigFilePath());
+      Files.writeString(config,
+          "{\"ui\":{\"auto-load-kata-rules\":true,\"kata-rules\":\"japanese\"}}");
+      String saved = Files.readString(config);
+      var target = f.history.captureSessionRules();
+      var commands = f.transport.commands();
+
+      ManualRulesSelection selection = f.apply(RulePreset.CHINESE, 1_000L);
+
+      assertTrue(selection.unchanged());
+      assertTrue(selection.applied());
+      assertSame(target, f.history.captureSessionRules());
+      assertEquals(commands, f.transport.commands());
+      assertEquals(saved, Files.readString(config));
+      assertEquals(JAPANESE.toGtpArgument(), Lizzie.config.kataRules);
+      f.assertCaches(false, false);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void komiOnlyPresetWaitsForRulesThenRestoresBothEnginesBeforeAllowingAnalysis(boolean comparison)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      if (comparison) f.addMirror(CHINESE);
+      f.history.getGameInfo().setKomiNoMenu(7.5);
+      for (BoardData data : f.cached) data.komi = 7.5;
+      ManualRulesSelection selection = f.apply(RulePreset.CHINESE_7, 1_000L);
+      assertFalse(selection.unchanged());
+      assertEquals(7.5, f.history.getGameInfo().getKomi());
+      f.assertCaches(false, false);
+      assertEquals(0, count(f.transport, "komi"));
+
+      f.confirmChange(CHINESE);
+      await(selection::isDone);
+
+      assertTrue(selection.applied());
+      assertEquals(7.0, f.history.getGameInfo().getKomi());
+      assertTrue(f.history.getGameInfo().changedKomi);
+      assertTrue(Lizzie.board.isEngineAlignmentPending());
+      assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
+      f.primary.sendCommand("kata-analyze 10");
+      assertEquals(0, count(f.transport, "kata-analyze"));
+      if (comparison) assertEquals(0, count(f.mirrorTransport, "kata-analyze"));
+      f.assertCaches(true, true);
+      for (BoardData data : f.cached) assertEquals(7.5, data.komi);
+
+      f.restoreResponses = true;
+      var frozen = Lizzie.board.freezeCurrentPositionForPrimaryEngineExactRestore().orElseThrow();
+      assertTrue(frozen.execute());
+      assertTrue(frozen.completeEngineAlignment());
+      assertEquals(comparison ? 2 : 1, f.restoredSgfs.size());
+      for (String sgf : f.restoredSgfs) assertTrue(sgf.contains("KM[7.0]"), sgf);
+      assertFalse(Lizzie.board.isEngineAlignmentPending());
+      assertTrue(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary));
+      f.primary.sendCommand("kata-analyze 10");
+      assertEquals(1, count(f.transport, "kata-analyze"));
+      if (comparison) assertEquals(1, count(f.mirrorTransport, "kata-analyze"));
+      f.assertCaches(true, true);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"rejected", "recovery-failed", "mismatch", "timeout", "query-failed"})
+  void failedPresetNeverChangesKomiAndKeepsAnalysisPayload(String failure) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.addMirror(CHINESE);
+      f.history.getGameInfo().setKomiNoMenu(7.5);
+      var target = f.history.captureSessionRules();
+      ManualRulesSelection selection = f.apply(
+          RulePreset.JAPANESE, failure.equals("timeout") ? 40L : 1_000L);
+      switch (failure) {
+        case "rejected", "recovery-failed" -> {
+          f.reply(f.primary, f.transport, "kata-set-rules", "rejected", false);
+          f.awaitRecovery();
+          f.reply(f.primary, f.transport, "kata-get-rules",
+              failure.equals("rejected") ? CHINESE.toGtpArgument() : "rejected",
+              failure.equals("rejected"));
+        }
+        case "mismatch" -> f.confirmChange(CHINESE);
+        case "query-failed" -> {
+          f.reply(f.primary, f.transport, "kata-set-rules", "", true);
+          f.reply(f.primary, f.transport, "kata-get-rules", "rejected", false);
+        }
+        default -> { }
+      }
+      await(selection::isDone);
+      assertFalse(selection.applied());
+      assertEquals(7.5, f.history.getGameInfo().getKomi());
+      assertFalse(f.history.getGameInfo().changedKomi);
+      assertSame(target, f.history.captureSessionRules());
+      assertEquals(0, f.frame.synchronizedRules);
+      assertFalse(Lizzie.board.isEngineAlignmentPending());
+      f.assertCaches(failure.equals("timeout") || failure.equals("query-failed"), false);
+    }
+  }
+
+  @Test
+  void handicapPresetChangesRulesWithoutChangingKomiOrDefaults() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.history.getGameInfo().setHandicap(3);
+      f.history.getGameInfo().setKomiNoMenu(0.5);
+      double defaultKomi = GameInfo.DEFAULT_KOMI;
+      ManualRulesSelection selection = f.apply(RulePreset.JAPANESE, 1_000L);
+      f.confirmChange(JAPANESE);
+      await(selection::isDone);
+      assertTrue(selection.applied());
+      assertEquals(0.5, f.history.getGameInfo().getKomi());
+      assertEquals(defaultKomi, GameInfo.DEFAULT_KOMI);
+      assertFalse(f.history.getGameInfo().changedKomi);
+      assertEquals(0, count(f.transport, "komi"));
+      f.assertCaches(true, false);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"komi", "komi-aba", "handicap", "handicap-aba", "game-info", "history", "engine"})
+  void pendingPresetCannotOverwriteAnotherEditOrReplacement(String change) throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.history.getGameInfo().setKomiNoMenu(7.5);
+      ManualRulesSelection selection = f.apply(RulePreset.JAPANESE, 1_000L);
+      switch (change) {
+        case "komi" -> f.history.getGameInfo().setKomiNoMenu(5.5);
+        case "komi-aba" -> {
+          f.history.getGameInfo().setKomiNoMenu(7.0);
+          f.history.getGameInfo().setKomiNoMenu(7.5);
+        }
+        case "handicap" -> f.history.getGameInfo().setHandicap(2);
+        case "handicap-aba" -> {
+          f.history.getGameInfo().setHandicap(2);
+          f.history.getGameInfo().setHandicap(0);
+        }
+        case "game-info" -> f.history.setGameInfo(new GameInfo());
+        case "history" -> Lizzie.board.setHistory(new BoardHistoryList(BoardData.empty(19, 19)));
+        case "engine" -> Lizzie.setPrimaryEngine(new Leelaz(""));
+        default -> throw new AssertionError(change);
+      }
+      if (!change.equals("history") && !change.equals("engine")) {
+        assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.primary),
+            "Metadata edits cannot release the pending rules output fence early");
+      }
+      f.confirmChange(JAPANESE);
+      await(selection::isDone);
+      assertFalse(selection.applied());
+      assertFalse(selection.isLatestSelection());
+      assertEquals(change.equals("komi") ? 5.5 : 7.5, f.history.getGameInfo().getKomi());
+      assertEquals(0, f.frame.synchronizedRules);
+      assertFalse(Lizzie.board.isEngineAlignmentPending());
+    }
+  }
+
+  @Test
+  void presetSettlementReleasesBoardWhileAnOutputOwnerNeedsIt() throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.history.getGameInfo().setKomiNoMenu(7.5);
+      ManualRulesSelection selection = f.apply(RulePreset.CHINESE_7, 1_000L);
+      CountDownLatch outputHeld = new CountDownLatch(1);
+      CountDownLatch acquireBoard = new CountDownLatch(1);
+      FutureTask<Boolean> owner = new FutureTask<>(() ->
+          EngineManager.runIfNoActiveEngineGameAnalysisOutput(() -> {
+            outputHeld.countDown();
+            try {
+              assertTrue(acquireBoard.await(3, TimeUnit.SECONDS));
+              synchronized (Lizzie.board) {
+                assertEquals(7.5, f.history.getGameInfo().getKomi());
+              }
+            } catch (InterruptedException interrupted) {
+              throw new AssertionError(interrupted);
+            }
+          }));
+      Thread output = new Thread(owner, "preset-output-owner");
+      output.start();
+      try {
+        assertTrue(outputHeld.await(3, TimeUnit.SECONDS));
+        f.confirmChange(CHINESE);
+        assertTrue(selection.operation().isDone());
+        assertFalse(selection.isDone());
+        acquireBoard.countDown();
+        assertTrue(owner.get(3, TimeUnit.SECONDS));
+        await(selection::isDone);
+        assertTrue(selection.applied());
+        assertEquals(7.0, f.history.getGameInfo().getKomi());
+      } finally {
+        acquireBoard.countDown();
+        output.join(3_000L);
+        assertFalse(output.isAlive());
+      }
+    }
+  }
+
+  @Test
   void identicalConfirmedRulesPreserveTargetBranchesAndBothCachesWithoutCommands() throws Exception {
     try (Fixture f = new Fixture()) {
       f.addMirror(CHINESE);
@@ -1695,6 +1892,13 @@ class ManualRulesSelectionTest {
 
     ManualRulesSelection apply(KataGoRules rules, long timeout) {
       ManualRulesSelection selection = ManualRulesSelection.apply(primary, rules, timeout);
+      assertNotNull(selection);
+      selections.add(selection);
+      return selection;
+    }
+
+    ManualRulesSelection apply(RulePreset preset, long timeout) {
+      ManualRulesSelection selection = ManualRulesSelection.apply(primary, preset, timeout);
       assertNotNull(selection);
       selections.add(selection);
       return selection;

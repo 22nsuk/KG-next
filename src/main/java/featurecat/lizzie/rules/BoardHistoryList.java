@@ -82,7 +82,7 @@ public class BoardHistoryList {
     }
   }
 
-  private GameInfo gameInfo;
+  private volatile GameInfo gameInfo;
   private BoardHistoryNode head;
   private SessionRulesTarget sessionRulesTarget;
   private SessionRulesTarget analysisOverrideTarget;
@@ -267,7 +267,7 @@ public class BoardHistoryList {
     return gameInfo;
   }
 
-  public void setGameInfo(GameInfo gameInfo) {
+  public synchronized void setGameInfo(GameInfo gameInfo) {
     this.gameInfo = gameInfo;
   }
 

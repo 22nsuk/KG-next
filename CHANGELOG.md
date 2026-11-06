@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Click the main window's rules caption to choose rules and komi for the current game. Keep handicap komi and startup defaults, wait for matching rules confirmation before changing komi, and gate analysis until the current game has been restored to the engine pair. Preserve prior analysis payloads and unchanged/rejected selections. See [Quick rules and komi switching](docs/QUICK_RULE_SWITCHING.md).
+
 - Upgrade the bundled Windows ReadBoard from 3.0.6 to the pinned 3.2.0 WebView2 release. Preserve the original executable and full runtime/UI/language directory, validate its active `asInvoker` manifest, and require ready/version/quit in the native pipe smoke. Document Windows 10 1809+ and the separate WebView2 Evergreen prerequisite; keep hosted-update settings preservation and core-update behavior unchanged.
 
 - Preserve reusable analysis when manual KataGo rules already match or the engine rejects a change. Hold incoming analysis while a manual change and its recovery readback are pending, retain displayed results on uncertain failures, and keep startup-default preferences independent of the current engine result.

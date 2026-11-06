@@ -9677,7 +9677,21 @@ public class LizzieFrame extends JFrame {
     if (matchRulesCaptionBounds == null || !matchRulesCaptionBounds.contains(x, y)) {
       return false;
     }
-    return inspectMatchRules();
+    if (inspectMatchRules()) return true;
+    if (EngineGamePresentation.current().playing()) return false;
+    showRulesQuickMenu(matchRulesCaptionBounds);
+    return true;
+  }
+
+  void showRulesQuickMenu(Rectangle caption) {
+    Leelaz engine = Lizzie.leelaz;
+    String reason = rulesUnavailableReason(engine);
+    if (reason != null) {
+      Utils.showMsg(Lizzie.resourceBundle.getString(reason));
+      return;
+    }
+    new RulesQuickSwitch(engine, Lizzie.board, this, Lizzie.resourceBundle, Utils::showMsg)
+        .menu().show(mainPanel, Utils.zoomIn(caption.x), Utils.zoomIn(caption.y + caption.height));
   }
 
   public void inspectMatchRulesOrSetRules() {
@@ -13670,7 +13684,7 @@ public class LizzieFrame extends JFrame {
     setkatarules.setVisible(true);
   }
 
-  private String rulesUnavailableReason(Leelaz rulesEngine) {
+  String rulesUnavailableReason(Leelaz rulesEngine) {
     if (EngineManager.occupiesEngineGameAdmission())
       return "AnalysisSettings.reuseStatus.engine_game";
     if (isWholeGameAnalysisStartingOrRunning()) return "WholeGameAnalysis.conflict.analysis";

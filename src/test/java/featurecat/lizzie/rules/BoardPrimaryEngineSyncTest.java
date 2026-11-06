@@ -10,6 +10,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import java.awt.Window;
@@ -18,10 +19,48 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class BoardPrimaryEngineSyncTest {
   private static final int BOARD_SIZE = 3;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
+
+  @ParameterizedTest
+  @CsvSource({"100,false", "100,true", "0,false"})
+  void liveGameRestoreUsesEditedKomiWithoutRewritingRetainedAnalysis(int visits, boolean invalid)
+      throws Exception {
+    try (TestHarness harness = TestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardData data = board.getHistory().getData();
+      data.komi = 7.5;
+      data.setPlayouts(visits);
+      data.isChanged = invalid;
+      MoveData move = new MoveData();
+      move.coordinate = "B2";
+      move.playouts = visits;
+      data.bestMoves = List.of(move);
+      board.getHistory().getGameInfo().setKomiNoMenu(7.0);
+      Leelaz engine = new Leelaz("");
+      engine.useRemoteCompute = true;
+      engine.isLoaded = true;
+      setStarted(engine, true);
+      var transport = ExactSnapshotRestoreProtocolFixture.install(
+          engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      Lizzie.leelaz = engine;
+
+      var frozen = board.freezeCurrentPositionForPrimaryEngineExactRestore().orElseThrow();
+      assertTrue(frozen.execute());
+      assertTrue(transport.commands().contains("komi 7.0"), transport.commands().toString());
+      assertTrue(frozen.matchesCurrentBoardAndPrimary());
+      assertEquals(7.5, data.komi, "Retained analysis keeps its original komi provenance");
+      assertEquals(visits, data.getPlayouts());
+      assertEquals("B2", data.bestMoves.get(0).coordinate);
+      assertEquals(invalid, data.isChanged);
+      board.getHistory().getGameInfo().setKomiNoMenu(6.5);
+      assertFalse(frozen.matchesCurrentBoardAndPrimary(), "An acknowledged older komi is stale");
+    }
+  }
 
   @Test
   void resendCurrentPositionToPrimaryEngineReplaysCurrentHistoryAfterReplacement()
