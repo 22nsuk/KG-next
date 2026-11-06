@@ -509,6 +509,23 @@ public final class LoggingRuntime {
     return appender == null ? 0L : appender.droppedCount();
   }
 
+  @FunctionalInterface
+  interface LogFileCapture<T> {
+    T capture() throws IOException;
+  }
+
+  <T> T captureLogFiles(
+      Path activeFile, LogFileCapture<T> capture, java.util.function.BooleanSupplier cancelled)
+      throws IOException {
+    BoundedAsyncAppender owner;
+    synchronized (this) {
+      owner = appenders.values().stream()
+          .filter(appender -> activeFile.equals(appender.activeFile())).findFirst().orElse(null);
+    }
+    // Helpers own their own writers; only host log files can share this runtime's rollover gate.
+    return owner == null ? capture.capture() : owner.captureLogFiles(capture, cancelled);
+  }
+
   void awaitAppAndCrashPersistence() {
     long deadline = System.nanoTime() + LoggingLimits.SHUTDOWN_BUDGET_NANOS;
     BoundedAsyncAppender app = appenders.get(LogStream.APP);

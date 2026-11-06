@@ -98,6 +98,17 @@ public final class DiagnosticBundleExporter {
     String capture(Path workDirectory, ExportSanitizer sanitizer);
   }
 
+  @FunctionalInterface
+  interface LogSourceObserver {
+    void captured(String source, List<FileChannel> inputs) throws IOException;
+  }
+
+  private LogSourceObserver logSourceObserver = (source, inputs) -> {};
+
+  void setLogSourceObserverForTests(LogSourceObserver observer) {
+    logSourceObserver = observer;
+  }
+
   private final Path outputDirectory;
   private final DiagnosticBundleLimits limits;
   private final PartialFileObserver partialFileObserver;
@@ -339,13 +350,14 @@ public final class DiagnosticBundleExporter {
         processSession == null ? null : sanitizer.alias("session", processSession);
     String stage = "collection";
     long stageStarted = System.nanoTime();
-    LOG.info("diagnostic stage={} state=started", stage);
+    // Pin each source before emitting progress events: the first log after midnight can roll it.
     try (FileChannel channel = partial.channel();
         FileLock ownershipLock = partial.ownershipLock()) {
       try {
         try (ZipOutputStream out =
             new ZipOutputStream(new CloseShieldOutputStream(Channels.newOutputStream(channel)))) {
           copyLogSource(
+              request.runtime(),
               out,
               NS_LIZZIE + "app.log",
               "lizzie-app",
@@ -367,6 +379,7 @@ public final class DiagnosticBundleExporter {
               cancel);
           throwIfCancelled(cancel);
           copyLogSource(
+              request.runtime(),
               out,
               NS_LIZZIE + "crash.log",
               "lizzie-crash",
@@ -390,6 +403,7 @@ public final class DiagnosticBundleExporter {
           copyRawTraces(out, request, trace, sanitizer, sources, captureTime, cancel);
           throwIfCancelled(cancel);
           copyLogSource(
+              request.runtime(),
               out,
               NS_READBOARD + "app.log",
               "readboard-app",
@@ -411,6 +425,7 @@ public final class DiagnosticBundleExporter {
               cancel);
           throwIfCancelled(cancel);
           copyLogSource(
+              request.runtime(),
               out,
               NS_READBOARD + "crash.log",
               "readboard-crash",
@@ -547,6 +562,7 @@ public final class DiagnosticBundleExporter {
       }
       throwIfCancelled(cancel);
       copyLogSource(
+          request.runtime(),
           out,
           NS_LIZZIE + scope.fileName(),
           sourceName,
@@ -611,6 +627,7 @@ public final class DiagnosticBundleExporter {
     }
     throwIfCancelled(cancel);
     copyLogSource(
+        request.runtime(),
         out,
         NS_READBOARD + "trace.log",
         "readboard-trace",
@@ -1285,6 +1302,7 @@ public final class DiagnosticBundleExporter {
   }
 
   private void copyLogSource(
+      LoggingRuntime runtime,
       ZipOutputStream out,
       String entryName,
       String sourceName,
@@ -1322,10 +1340,13 @@ public final class DiagnosticBundleExporter {
     LogFileSet logFiles;
     long enumerationStarted = System.nanoTime();
     try {
-      logFiles = listLogFiles(logsDirectory, stem, archiveBoundary, cutoff, jsonLines, cancel);
+      logFiles = runtime.captureLogFiles(logsDirectory.resolve(stem + ".log"),
+          () -> listLogFiles(logsDirectory, stem, archiveBoundary, cutoff, jsonLines, cancel, true),
+          cancel);
     } catch (ExportCancelledException e) {
       throw e;
     } catch (IOException e) {
+      if (e instanceof java.io.InterruptedIOException) throw new ExportCancelledException();
       source.put("enumerationNanos", System.nanoTime() - enumerationStarted);
       source.put("enumerationState", "failed");
       source.put("status", "failed");
@@ -1335,136 +1356,140 @@ public final class DiagnosticBundleExporter {
       sources.put(sourceName, source);
       return;
     }
-    List<SourceFile> files = logFiles.paths();
-    source.put("enumerationNanos", System.nanoTime() - enumerationStarted);
-    source.put("enumerationState", "completed");
-    source.put("candidates", files.size());
-    source.put("filesPruned", logFiles.pruned());
-    source.put("openedFiles", 0);
-    if (files.isEmpty()) {
-      source.put("status", "failed");
-      source.put("failed", true);
-      source.put("included", false);
-      source.put("reason", "missing");
-      sources.put(sourceName, source);
-      return;
-    }
-
-    RecordTail selected = new RecordTail(capBytes);
-    ReadBudget budget = new ReadBudget(scanBudget(capBytes));
-    ReadBudget compressedBudget = new ReadBudget(scanBudget(capBytes));
-    boolean truncated = logFiles.truncated();
-    if (logFiles.truncated()) {
-      source.put("fileListTruncated", true);
-    }
-    int malformedRecords = 0;
-    int readErrors = 0;
-    String lastReadError = null;
-    long readingStarted = System.nanoTime();
-    LOG.info("diagnostic source={} stage=read-filter-sanitize state=started", sourceName);
-    for (int index = 0; index < files.size(); index++) {
-      throwIfCancelled(cancel);
-      if (selected.remaining() <= 0) {
-        truncated = true;
-        break;
+    try (logFiles) {
+      logSourceObserver.captured(sourceName, logFiles.paths().stream()
+          .map(SourceFile::capturedChannel).filter(Objects::nonNull).toList());
+      List<SourceFile> files = logFiles.paths();
+      source.put("enumerationNanos", System.nanoTime() - enumerationStarted);
+      source.put("enumerationState", "completed");
+      source.put("candidates", files.size());
+      source.put("filesPruned", logFiles.pruned());
+      source.put("openedFiles", files.stream()
+          .filter(file -> file.capturedChannel() != null).count());
+      if (files.isEmpty()) {
+        source.put("status", "failed");
+        source.put("failed", true);
+        source.put("included", false);
+        source.put("reason", "missing");
+        sources.put(sourceName, source);
+        return;
       }
-      SourceFile file = files.get(index);
-      try {
-        ReadFileResult result =
-            jsonLines
-                ? readJsonFileTail(
-                    file,
-                    selected.remaining(),
-                    budget,
-                    compressedBudget,
-                    cutoff,
-                    captureTime,
-                    requiredSession,
-                    sanitizer,
-                    cancel)
-                : readFileTail(
-                    file,
-                    selected.remaining(),
-                    budget,
-                    compressedBudget,
-                    cutoff,
-                    captureTime,
-                    requiredSession,
-                    sanitizer,
-                    cancel);
-        malformedRecords += result.malformedRecords();
-        truncated |= result.truncated();
-        selected.prepend(result.records());
-        if (result.newerHistoryOmitted()) {
+
+      RecordTail selected = new RecordTail(capBytes);
+      ReadBudget budget = new ReadBudget(scanBudget(capBytes));
+      ReadBudget compressedBudget = new ReadBudget(scanBudget(capBytes));
+      boolean truncated = logFiles.truncated();
+      if (logFiles.truncated()) {
+        source.put("fileListTruncated", true);
+      }
+      int malformedRecords = 0;
+      int readErrors = 0;
+      String lastReadError = null;
+      long readingStarted = System.nanoTime();
+      LOG.info("diagnostic source={} stage=read-filter-sanitize state=started", sourceName);
+      for (int index = 0; index < files.size(); index++) {
+        throwIfCancelled(cancel);
+        if (selected.remaining() <= 0) {
           truncated = true;
           break;
         }
-      } catch (ExportCancelledException e) {
-        throw e;
-      } catch (SourceLimitExceededException e) {
-        truncated = true;
-        readErrors++;
-        lastReadError = e.reason();
-        break;
-      } catch (IOException e) {
-        readErrors++;
-        // Keep the manifest vocabulary stable and privacy-safe. Runtime exception class names
-        // are an implementation detail; callers only need to distinguish a missing source from
-        // one that was discovered but could not be read.
-        lastReadError = failureReason(e);
+        SourceFile file = files.get(index);
+        try {
+          ReadFileResult result =
+              jsonLines
+                  ? readJsonFileTail(
+                      file,
+                      selected.remaining(),
+                      budget,
+                      compressedBudget,
+                      cutoff,
+                      captureTime,
+                      requiredSession,
+                      sanitizer,
+                      cancel)
+                  : readFileTail(
+                      file,
+                      selected.remaining(),
+                      budget,
+                      compressedBudget,
+                      cutoff,
+                      captureTime,
+                      requiredSession,
+                      sanitizer,
+                      cancel);
+          malformedRecords += result.malformedRecords();
+          truncated |= result.truncated();
+          selected.prepend(result.records());
+          if (result.newerHistoryOmitted()) {
+            truncated = true;
+            break;
+          }
+        } catch (ExportCancelledException e) {
+          throw e;
+        } catch (SourceLimitExceededException e) {
+          truncated = true;
+          readErrors++;
+          lastReadError = e.reason();
+          break;
+        } catch (IOException e) {
+          readErrors++;
+          // Keep the manifest vocabulary stable and privacy-safe. Runtime exception class names
+          // are an implementation detail; callers only need to distinguish a missing source from
+          // one that was discovered but could not be read.
+          lastReadError = failureReason(e);
+        }
+        if (selected.remaining() <= 0 && index + 1 < files.size()) {
+          truncated = true;
+          break;
+        }
       }
-      if (selected.remaining() <= 0 && index + 1 < files.size()) {
-        truncated = true;
-        break;
-      }
-    }
 
-    source.put("readFilterSanitizeNanos", System.nanoTime() - readingStarted);
-    source.put("sanitizerNanos", budget.sanitizerNanos);
-    source.put("openedFiles", budget.openedFiles);
-    LOG.info(
-        "diagnostic source={} stage=read-filter-sanitize state=completed elapsedNanos={}",
-        sourceName,
-        source.getLong("readFilterSanitizeNanos"));
-    source.put("bytes", selected.bytes());
-    source.put("truncated", truncated);
-    source.put("malformedRecordsExcluded", malformedRecords);
-    source.put("scanBudgetBytes", budget.limit());
-    source.put("scannedBytes", budget.consumed());
-    source.put("compressedScanBudgetBytes", compressedBudget.limit());
-    source.put("compressedBytesRead", compressedBudget.consumed());
-    if (readErrors > 0) {
-      source.put("readErrors", readErrors);
-      source.put("reason", lastReadError);
-    }
-    if (selected.bytes() == 0 && readErrors > 0) {
+      source.put("readFilterSanitizeNanos", System.nanoTime() - readingStarted);
+      source.put("sanitizerNanos", budget.sanitizerNanos);
+      LOG.info(
+          "diagnostic source={} stage=read-filter-sanitize state=completed elapsedNanos={}",
+          sourceName,
+          source.getLong("readFilterSanitizeNanos"));
+      source.put("bytes", selected.bytes());
+      source.put("truncated", truncated);
+      source.put("malformedRecordsExcluded", malformedRecords);
+      source.put("scanBudgetBytes", budget.limit());
+      source.put("scannedBytes", budget.consumed());
+      source.put("compressedScanBudgetBytes", compressedBudget.limit());
+      source.put("compressedBytesRead", compressedBudget.consumed());
+      if (readErrors > 0) {
+        source.put("readErrors", readErrors);
+        source.put("reason", lastReadError);
+      }
+      if (selected.bytes() == 0 && readErrors > 0) {
+        writeTailEntry(out, entryName, selected, cancel);
+        source.put("status", "error");
+        source.put("failed", true);
+        source.put("included", false);
+        source.put("reason", lastReadError);
+        sources.put(sourceName, source);
+        return;
+      }
+      if (selected.bytes() == 0 && requiredSession != null) {
+        source.put("status", "omitted");
+        source.put("included", false);
+        source.put("omitted", true);
+        source.put("reason", emptyReason);
+        sources.put(sourceName, source);
+        return;
+      }
+
+      long writingStarted = System.nanoTime();
       writeTailEntry(out, entryName, selected, cancel);
-      source.put("status", "error");
-      source.put("failed", true);
-      source.put("included", false);
-      source.put("reason", lastReadError);
+      source.put("zipEntryNanos", System.nanoTime() - writingStarted);
+      if (truncated) {
+        source.put("status", "truncated");
+        source.put("truncated", true);
+      } else if (readErrors > 0) {
+        source.put("status", "partial");
+      }
       sources.put(sourceName, source);
-      return;
     }
-    if (selected.bytes() == 0 && requiredSession != null) {
-      source.put("status", "omitted");
-      source.put("included", false);
-      source.put("omitted", true);
-      source.put("reason", emptyReason);
-      sources.put(sourceName, source);
-      return;
-    }
-
-    long writingStarted = System.nanoTime();
-    writeTailEntry(out, entryName, selected, cancel);
-    source.put("zipEntryNanos", System.nanoTime() - writingStarted);
-    if (truncated) {
-      source.put("status", "truncated");
-      source.put("truncated", true);
-    } else if (readErrors > 0) {
-      source.put("status", "partial");
-    }
-    sources.put(sourceName, source);
   }
 
   private static ReadFileResult readFileTail(
@@ -1625,9 +1650,8 @@ public final class DiagnosticBundleExporter {
       throw new SourceLimitExceededException("scan-limit");
     }
     FileChannel channel = openVerifiedSource(file);
-    budget.openedFiles++;
     if (isGzip(file.path())) {
-      InputStream raw = Channels.newInputStream(channel);
+      InputStream raw = new SnapshotInputStream(Channels.newInputStream(channel), file.size());
       try {
         InputStream gzip =
             new GZIPInputStream(
@@ -1640,11 +1664,13 @@ public final class DiagnosticBundleExporter {
     }
 
     try {
-      long size = channel.size();
+      long size = Math.min(file.size(), channel.size());
       long start = Math.max(0L, size - budget.remaining());
       channel.position(start);
       return new OpenedLogInput(
-          new BudgetInputStream(Channels.newInputStream(channel), budget, "scan-limit"), start > 0);
+          new BudgetInputStream(
+              new SnapshotInputStream(Channels.newInputStream(channel), size - start),
+              budget, "scan-limit"), start > 0);
     } catch (IOException | RuntimeException e) {
       channel.close();
       throw e;
@@ -1652,6 +1678,8 @@ public final class DiagnosticBundleExporter {
   }
 
   private static FileChannel openVerifiedSource(SourceFile source) throws IOException {
+    if (source.captureFailure() != null) throw source.captureFailure();
+    if (source.capturedChannel() != null) return source.capturedChannel();
     Set<OpenOption> options = Set.of(StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
     FileChannel channel = FileChannel.open(source.path(), options);
     try {
@@ -1685,61 +1713,92 @@ public final class DiagnosticBundleExporter {
       boolean helper,
       BooleanSupplier cancel)
       throws IOException {
+    return listLogFiles(logsDirectory, stem, boundary, cutoff, helper, cancel, false);
+  }
+
+  private static LogFileSet listLogFiles(
+      Path logsDirectory, String stem, LogArchiveBoundary boundary, Instant cutoff,
+      boolean helper, BooleanSupplier cancel, boolean captureInputs) throws IOException {
     BooleanSupplier cancelled = cancel == null ? () -> false : cancel;
     throwIfCancelled(cancelled);
     List<SourceFile> files = new ArrayList<>();
-    if (!Files.isDirectory(logsDirectory, LinkOption.NOFOLLOW_LINKS)) {
-      return new LogFileSet(List.of(), false, 0);
-    }
-    Path logsRoot = logsDirectory.toRealPath();
-    Path active = logsDirectory.resolve(stem + ".log");
-    if (Files.isRegularFile(active, LinkOption.NOFOLLOW_LINKS)) {
-      files.add(inspectSourceFile(logsRoot, active));
-    }
-    Path archive = logsDirectory.resolve("archive");
-    boolean truncated = false;
-    int pruned = 0;
-    if (Files.isDirectory(archive, LinkOption.NOFOLLOW_LINKS)) {
-      Comparator<SourceFile> oldestFirst =
-          Comparator.comparing(SourceFile::lastModified)
-              .thenComparing(source -> source.path().getFileName().toString());
-      PriorityQueue<SourceFile> newestArchives = new PriorityQueue<>(oldestFirst);
-      int visited = 0;
-      String archivePrefix = stem + ".";
-      String archiveSuffix = ".log.gz";
-      try (DirectoryStream<Path> stream = Files.newDirectoryStream(archive)) {
-        for (Path path : stream) {
-          throwIfCancelled(cancelled);
-          if (++visited > MAX_ARCHIVE_DIRECTORY_ENTRIES) {
-            truncated = true;
-            break;
-          }
-          String fileName = path.getFileName().toString();
-          if (fileName.startsWith(archivePrefix)
-              && fileName.endsWith(archiveSuffix)
-              && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
-            SourceFile candidate = inspectSourceFile(logsRoot, path);
-            if (archiveEndsBefore(fileName, stem, cutoff, helper)
-                || boundary.predatesSession(
-                    path, candidate.identity().fileKey(), candidate.identity().creationTime())) {
-              pruned++;
-              continue;
-            }
-            newestArchives.add(candidate);
-            if (newestArchives.size() > MAX_ARCHIVE_FILES_PER_SOURCE) {
-              newestArchives.remove();
+    try {
+      if (!Files.isDirectory(logsDirectory, LinkOption.NOFOLLOW_LINKS)) {
+        return new LogFileSet(List.of(), false, 0);
+      }
+      Path logsRoot = logsDirectory.toRealPath();
+      Path active = logsDirectory.resolve(stem + ".log");
+      if (Files.isRegularFile(active, LinkOption.NOFOLLOW_LINKS)) {
+        SourceFile source = inspectSourceFile(logsRoot, active);
+        files.add(captureInputs ? pinSource(source) : source);
+      }
+      Path archive = logsDirectory.resolve("archive");
+      boolean truncated = false;
+      int pruned = 0;
+      if (Files.isDirectory(archive, LinkOption.NOFOLLOW_LINKS)) {
+        Comparator<SourceFile> oldestFirst =
+            Comparator.comparing(SourceFile::lastModified)
+                .thenComparing(source -> source.path().getFileName().toString());
+        PriorityQueue<SourceFile> newestArchives = new PriorityQueue<>(oldestFirst);
+        int visited = 0;
+        String archivePrefix = stem + ".";
+        String archiveSuffix = ".log.gz";
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(archive)) {
+          for (Path path : stream) {
+            throwIfCancelled(cancelled);
+            if (++visited > MAX_ARCHIVE_DIRECTORY_ENTRIES) {
               truncated = true;
+              break;
+            }
+            String fileName = path.getFileName().toString();
+            if (fileName.startsWith(archivePrefix)
+                && fileName.endsWith(archiveSuffix)
+                && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+              SourceFile candidate = inspectSourceFile(logsRoot, path);
+              if (archiveEndsBefore(fileName, stem, cutoff, helper)
+                  || boundary.predatesSession(
+                      path, candidate.identity().fileKey(), candidate.identity().creationTime())) {
+                pruned++;
+                continue;
+              }
+              newestArchives.add(candidate);
+              if (newestArchives.size() > MAX_ARCHIVE_FILES_PER_SOURCE) {
+                newestArchives.remove();
+                truncated = true;
+              }
             }
           }
         }
+        for (SourceFile source : newestArchives) {
+          throwIfCancelled(cancelled);
+          files.add(captureInputs ? pinSource(source) : source);
+        }
       }
-      files.addAll(newestArchives);
+      files.sort(
+          Comparator.comparing(SourceFile::lastModified)
+              .thenComparing(source -> source.path().getFileName().toString())
+              .reversed());
+      return new LogFileSet(List.copyOf(files), truncated, pruned);
+    } catch (IOException | RuntimeException | Error failure) {
+      try {
+        new LogFileSet(files, false, 0).close();
+      } catch (IOException closeFailure) {
+        failure.addSuppressed(closeFailure);
+      }
+      throw failure;
     }
-    files.sort(
-        Comparator.comparing(SourceFile::lastModified)
-            .thenComparing(source -> source.path().getFileName().toString())
-            .reversed());
-    return new LogFileSet(List.copyOf(files), truncated, pruned);
+  }
+
+  private static SourceFile pinSource(SourceFile source) {
+    try {
+      FileChannel channel = openVerifiedSource(source);
+      return new SourceFile(source.path(), source.identity(), source.size(), source.lastModified(),
+          channel, null);
+    } catch (IOException failure) {
+      // Retain per-file error reporting without reopening an unverified replacement later.
+      return new SourceFile(source.path(), source.identity(), source.size(), source.lastModified(),
+          null, failure);
+    }
   }
 
   private static boolean archiveEndsBefore(
@@ -2347,9 +2406,30 @@ public final class DiagnosticBundleExporter {
 
   private record OutputRoot(Path path, FileIdentity identity) {}
 
-  private record SourceFile(Path path, FileIdentity identity, long size, Instant lastModified) {}
+  private record SourceFile(Path path, FileIdentity identity, long size, Instant lastModified,
+      FileChannel capturedChannel, IOException captureFailure) {
+    SourceFile(Path path, FileIdentity identity, long size, Instant lastModified) {
+      this(path, identity, size, lastModified, null, null);
+    }
+  }
 
-  private record LogFileSet(List<SourceFile> paths, boolean truncated, int pruned) {}
+  private record LogFileSet(List<SourceFile> paths, boolean truncated, int pruned)
+      implements AutoCloseable {
+    @Override
+    public void close() throws IOException {
+      IOException failure = null;
+      for (SourceFile source : paths) {
+        if (source.capturedChannel() == null) continue;
+        try {
+          source.capturedChannel().close();
+        } catch (IOException error) {
+          if (failure == null) failure = error;
+          else failure.addSuppressed(error);
+        }
+      }
+      if (failure != null) throw failure;
+    }
+  }
 
   private record CaptureEventSet(
       List<CaptureEventSource> events, boolean truncated, FileIdentity rootIdentity) {}
@@ -2479,7 +2559,6 @@ public final class DiagnosticBundleExporter {
   private static final class ReadBudget {
     private final long limit;
     private long remaining;
-    private int openedFiles;
     private long sanitizerNanos;
 
     private ReadBudget(long limit) {
@@ -2501,6 +2580,33 @@ public final class DiagnosticBundleExporter {
 
     private void consume(long count) {
       remaining = Math.max(0L, remaining - count);
+    }
+  }
+
+  /** Keeps a pinned file's accepted byte boundary even while its writer continues appending. */
+  private static final class SnapshotInputStream extends java.io.FilterInputStream {
+    private long remaining;
+
+    SnapshotInputStream(InputStream delegate, long size) {
+      super(delegate);
+      remaining = size;
+    }
+
+    @Override
+    public int read() throws IOException {
+      if (remaining <= 0) return -1;
+      int value = in.read();
+      if (value >= 0) remaining--;
+      return value;
+    }
+
+    @Override
+    public int read(byte[] bytes, int offset, int length) throws IOException {
+      if (length == 0) return 0;
+      if (remaining <= 0) return -1;
+      int count = in.read(bytes, offset, (int) Math.min(length, remaining));
+      if (count > 0) remaining -= count;
+      return count;
     }
   }
 

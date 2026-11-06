@@ -46,6 +46,9 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
   private final AtomicBoolean afterAcceptHoldArmed = new AtomicBoolean();
   // Linearizes the shutdown transition with queue admission and publication of its watermark.
   private final Object acceptanceLock = new Object();
+  // Capture the active file and archive handles without racing this writer's rollover.
+  private final java.util.concurrent.locks.ReentrantLock fileAccess =
+      new java.util.concurrent.locks.ReentrantLock();
   // Keeps completion, outstanding, and abandoned accounting as one consistent snapshot.
   private final Object progress = new Object();
   private long outstanding;
@@ -123,6 +126,31 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
 
   void setActiveFile(Path activeFile) {
     this.activeFile = activeFile;
+  }
+
+  Path activeFile() {
+    return activeFile;
+  }
+
+  <T> T captureLogFiles(
+      LoggingRuntime.LogFileCapture<T> capture, java.util.function.BooleanSupplier cancelled)
+      throws java.io.IOException {
+    try {
+      while (true) {
+        if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted()) {
+          throw new java.io.InterruptedIOException("diagnostic export cancelled");
+        }
+        if (fileAccess.tryLock(50, TimeUnit.MILLISECONDS)) break;
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new java.io.InterruptedIOException("diagnostic export cancelled");
+    }
+    try {
+      return capture.capture();
+    } finally {
+      fileAccess.unlock();
+    }
   }
 
   LogStream stream() {
@@ -203,8 +231,13 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
       }
     }
     Appender<ILoggingEvent> current = nested;
-    if (current != null && current.isStarted()) {
-      current.stop();
+    fileAccess.lock();
+    try {
+      if (current != null && current.isStarted()) {
+        current.stop();
+      }
+    } finally {
+      fileAccess.unlock();
     }
     if (interrupted) {
       Thread.currentThread().interrupt();
@@ -307,7 +340,12 @@ final class BoundedAsyncAppender extends UnsynchronizedAppenderBase<ILoggingEven
           if (failWrites) {
             reportWriteFailure();
           } else {
-            nested.doAppend(queued.event);
+            fileAccess.lock();
+            try {
+              nested.doAppend(queued.event);
+            } finally {
+              fileAccess.unlock();
+            }
           }
           persisted =
               nested.isStarted()

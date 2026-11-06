@@ -11,6 +11,7 @@ import java.util.Set;
 import org.json.JSONObject;
 
 public final class DiagnosticBundleRequest {
+  private final LoggingRuntime runtime;
   private final Path logsDirectory;
   private final Path workDirectory;
   private final String applicationLogSessionId;
@@ -78,7 +79,7 @@ public final class DiagnosticBundleRequest {
       String appVersion,
       String readBoardVersion,
       EngineStartupDiagnostic startupFailure) {
-    Objects.requireNonNull(runtime, "runtime");
+    this.runtime = Objects.requireNonNull(runtime, "runtime");
     synchronized (runtime) {
       this.traceSession = runtime.traceSessionSnapshot();
       this.settings = runtime.settings();
@@ -99,6 +100,10 @@ public final class DiagnosticBundleRequest {
     this.appVersion = appVersion == null ? "unknown" : appVersion;
     this.readBoardVersion = readBoardVersion == null ? "unknown" : readBoardVersion;
     this.startupFailure = startupFailure;
+  }
+
+  LoggingRuntime runtime() {
+    return runtime;
   }
 
   public Path logsDirectory() {

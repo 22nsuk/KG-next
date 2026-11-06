@@ -84,7 +84,7 @@ class SwingEngineGameChromeTest {
   }
 
   @Test
-  void failedSaveShowsReachableRetryAndStaleFailureCannotReplaceIdleControls() throws Exception {
+  void staleStartAndSaveFailureCannotReplaceIdleControls() throws Exception {
     BottomToolbar previousToolbar = LizzieFrame.toolbar;
     Menu previousMenu = LizzieFrame.menu;
     JFontMenu previousEngineMenu = Menu.engineMenu;
@@ -108,6 +108,12 @@ class SwingEngineGameChromeTest {
       SwingUtilities.invokeAndWait(
           () -> {
             SwingEngineGameChrome chrome = new SwingEngineGameChrome();
+            EngineGameSnapshot starting =
+                new EngineGameSnapshot.BatchActive(batch, new GameActivity.Starting(view));
+            Lizzie.engineGame.publishSnapshotForTest(starting);
+            chrome.applyOnEdt(
+                new EngineGameChromeTransition(EngineGameChromeTransition.Kind.STARTING, starting));
+            assertFalse(toolbar.settingsEnabled);
             Lizzie.engineGame.publishSnapshotForTest(failed);
             chrome.applyOnEdt(
                 new EngineGameChromeTransition(EngineGameChromeTransition.Kind.SAVE_FAILED, failed));
@@ -126,6 +132,10 @@ class SwingEngineGameChromeTest {
             chrome.applyOnEdt(
                 new EngineGameChromeTransition(EngineGameChromeTransition.Kind.BATCH_ENDED, idle));
             String idleText = toolbar.btnEnginePkStop.getText();
+            chrome.applyOnEdt(
+                new EngineGameChromeTransition(EngineGameChromeTransition.Kind.STARTING, starting));
+            assertTrue(toolbar.settingsEnabled);
+            assertEquals(idleText, toolbar.btnEnginePkStop.getText());
             chrome.applyOnEdt(
                 new EngineGameChromeTransition(EngineGameChromeTransition.Kind.SAVE_FAILED, failed));
 
