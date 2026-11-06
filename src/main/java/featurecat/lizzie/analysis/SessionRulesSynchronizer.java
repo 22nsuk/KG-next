@@ -75,7 +75,8 @@ public final class SessionRulesSynchronizer {
     return synchronize(target, engine, null);
   }
 
-  static boolean permitsOrdinaryAnalysis(Leelaz engine) {
+  /** Shared admission decision, also used by explicit Continue to reacquire failed convergence. */
+  public static boolean permitsOrdinaryAnalysis(Leelaz engine) {
     if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
       return true;
     }
@@ -116,8 +117,10 @@ public final class SessionRulesSynchronizer {
       Leelaz primary,
       Leelaz mirror,
       Leelaz engine) {
-    if ((engine == primary || engine == mirror) && history.hasPendingManualRulesIntent()) {
-      return false;
+    if (engine == primary || engine == mirror) {
+      Board board = Lizzie.board;
+      if (history.hasPendingManualRulesIntent()
+          || (board != null && board.isEngineAlignmentPendingForHistory(history))) return false;
     }
     if (target.kind() == BoardHistoryList.SessionRulesKind.UNSPECIFIED) {
       return true;

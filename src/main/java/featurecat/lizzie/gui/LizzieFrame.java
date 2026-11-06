@@ -9677,7 +9677,21 @@ public class LizzieFrame extends JFrame {
     if (matchRulesCaptionBounds == null || !matchRulesCaptionBounds.contains(x, y)) {
       return false;
     }
-    return inspectMatchRules();
+    if (inspectMatchRules()) return true;
+    if (EngineGamePresentation.current().playing()) return false;
+    showRulesQuickMenu(matchRulesCaptionBounds);
+    return true;
+  }
+
+  void showRulesQuickMenu(Rectangle caption) {
+    Leelaz engine = Lizzie.leelaz;
+    String reason = rulesUnavailableReason(engine);
+    if (reason != null) {
+      Utils.showMsg(Lizzie.resourceBundle.getString(reason));
+      return;
+    }
+    new RulesQuickSwitch(engine, Lizzie.board, this, Lizzie.resourceBundle, Utils::showMsg)
+        .menu().show(mainPanel, Utils.zoomIn(caption.x), Utils.zoomIn(caption.y + caption.height));
   }
 
   public void inspectMatchRulesOrSetRules() {
@@ -13670,7 +13684,7 @@ public class LizzieFrame extends JFrame {
     setkatarules.setVisible(true);
   }
 
-  private String rulesUnavailableReason(Leelaz rulesEngine) {
+  String rulesUnavailableReason(Leelaz rulesEngine) {
     if (EngineManager.occupiesEngineGameAdmission())
       return "AnalysisSettings.reuseStatus.engine_game";
     if (isWholeGameAnalysisStartingOrRunning()) return "WholeGameAnalysis.conflict.analysis";
@@ -14470,13 +14484,31 @@ public class LizzieFrame extends JFrame {
       return;
     }
     pendingForegroundResumeAfterCleanup = false;
+    if (Lizzie.board != null && Lizzie.board.getHistory().hasPendingManualRulesIntent()) {
+      // Its completion owns rules publication and position convergence. Do not supersede it.
+      return;
+    }
     if (failedKifuPositionRetry != null) {
       failedKifuPositionRetry.run();
       return;
     }
     if (pendingKifuEngineSyncRoot != null && pendingKifuEngineSyncRoot == currentHistoryRoot()) {
       pendingManualAnalysisResumeRoot = pendingKifuEngineSyncRoot;
-      if (pendingKifuRulesConsent != null) pendingKifuRulesConsent.run();
+      if (pendingKifuRulesConsent != null) {
+        pendingKifuRulesConsent.run();
+      } else {
+        // A replaced engine/reader can retire the request while leaving its root pending.
+        scheduleEngineSyncAndResumeAfterKifuLoad(
+            0, this::resumeForegroundAnalysisForConfirmedPosition, false);
+      }
+      return;
+    }
+    if (Lizzie.board != null && !SessionRulesSynchronizer.permitsOrdinaryAnalysis(Lizzie.leelaz)) {
+      // A rejected manual selection may have retired an earlier restore's retry callback.
+      // Failed/mismatched rules may also close admission without a pending position marker.
+      // Ordinary forwarding cannot satisfy either gate; reacquire acknowledged convergence.
+      scheduleEngineSyncAndResumeAfterKifuLoad(
+          0, this::resumeForegroundAnalysisForConfirmedPosition, false);
       return;
     }
     pendingManualAnalysisResumeRoot = null;

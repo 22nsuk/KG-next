@@ -8,7 +8,9 @@ import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
+import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.ManualRulesSelection;
 import featurecat.lizzie.analysis.SessionRulesSynchronizer;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -260,6 +262,162 @@ class KifuSnapshotFailureTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void continueReacquiresAlignmentAfterARejectedManualSelection(boolean priorFailure)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.submit(false);
+      if (priorFailure) f.runPending();
+      var advertise = Leelaz.class.getDeclaredMethod("advertiseCommandsForTest", List.class);
+      advertise.setAccessible(true);
+      advertise.invoke(f.engine, List.of("kata-set-rules", "kata-get-rules", "kata-analyze"));
+      var transport = ExactSnapshotRestoreProtocolFixture.install(f.engine, command -> {
+        if (command.startsWith("kata-set-rules")) {
+          return ExactSnapshotRestoreProtocolFixture.Response.error("unsupported rules");
+        }
+        return ExactSnapshotRestoreProtocolFixture.Response.success(
+            command.equals("kata-get-rules") ? "chinese" : "");
+      });
+      assertTrue(f.engine.queryEngineRulesOperation().await(1_000L).isConfirmed());
+      Lizzie.board.getHistory().publishExternalRules("chinese");
+      ManualRulesSelection selection = ManualRulesSelection.apply(
+          f.engine, KataGoRules.parse("japanese").orElseThrow());
+      assertNotNull(selection);
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+      while (!selection.isDone() && System.nanoTime() < deadline) Thread.sleep(5L);
+      assertTrue(selection.isDone());
+      assertFalse(selection.applied());
+      assertNull(field(f.frame, "pendingKifuEngineSyncRoot"));
+      assertNull(field(f.frame, "failedKifuPositionRetry"));
+      assertTrue(Lizzie.board.isEngineAlignmentPending());
+
+      invoke(f.frame, "resumeFromAnalysisControl", new Class<?>[0]);
+      assertSame(f.root, field(f.frame, "pendingKifuEngineSyncRoot"),
+          "Continue must reacquire the abandoned acknowledged-restore owner");
+      f.runPending();
+      assertEquals(priorFailure ? 2 : 1, f.frame.failures);
+      assertNotNull(field(f.frame, "failedKifuPositionRetry"));
+      f.engine.sendCommand("kata-analyze 10");
+      assertFalse(transport.commands().contains("kata-analyze 10"));
+
+      // Replace the unsupported wrapper with a direct engine whose filesystem is known.
+      f.install(f.engine, new ByteArrayOutputStream(), List.of("katago.exe", "gtp"));
+      advertise.invoke(f.engine,
+          List.of("kata-set-rules", "kata-get-rules", "kata-analyze", "loadsgf"));
+      try (var repaired = ExactSnapshotRestoreProtocolFixture.installAsync(f.engine,
+          command -> ExactSnapshotRestoreProtocolFixture.Response.success(
+              command.equals("kata-get-rules") ? "chinese" : ""))) {
+        invoke(f.frame, "resumeFromAnalysisControl", new Class<?>[0]);
+        f.runPending();
+        repaired.awaitResponses();
+        assertFalse(Lizzie.board.isEngineAlignmentPending());
+        assertNull(field(f.frame, "failedKifuPositionRetry"));
+        assertNull(field(f.frame, "pendingKifuEngineSyncRoot"));
+        assertTrue(repaired.commands().stream().anyMatch(line -> line.startsWith("loadsgf ")));
+        f.engine.sendCommand("kata-analyze 10");
+        assertTrue(repaired.commands().contains("kata-analyze 10"));
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"primary", "comparison"})
+  void continueReplacesAStalePendingRequestAfterTheEngineSelectionChanges(String change)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.submit(false);
+      Leelaz replacement = new Leelaz("");
+      f.install(replacement, new ByteArrayOutputStream(), List.of("helper.bat"));
+      replacement.started = true;
+      replacement.isLoaded = true;
+      replacement.isKatago = true;
+      if (change.equals("primary")) {
+        Lizzie.setPrimaryEngine(replacement);
+      } else {
+        Lizzie.config.extraMode = ExtraMode.Double_Engine;
+        Lizzie.leelaz2 = replacement;
+      }
+      f.runPending();
+      assertSame(f.root, field(f.frame, "pendingKifuEngineSyncRoot"));
+      assertTrue(Lizzie.board.isEngineAlignmentPending());
+      Runnable stale = f.executor.pending;
+      var advertise = Leelaz.class.getDeclaredMethod("advertiseCommandsForTest", List.class);
+      advertise.setAccessible(true);
+      for (Leelaz engine : List.of(f.engine, replacement)) {
+        f.install(engine, new ByteArrayOutputStream(), List.of("katago.exe", "gtp"));
+        advertise.invoke(engine, List.of("loadsgf", "kata-analyze"));
+        ExactSnapshotRestoreProtocolFixture.install(
+            engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      }
+
+      invoke(f.frame, "resumeFromAnalysisControl", new Class<?>[0]);
+      assertNotSame(stale, f.executor.pending, "Continue must capture the currently selected engines");
+      f.runPending();
+      assertFalse(Lizzie.board.isEngineAlignmentPending());
+      assertNull(field(f.frame, "pendingKifuEngineSyncRoot"));
+      assertEquals(0, f.frame.failures);
+      assertEquals(1, f.frame.scheduledResumes);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"mismatch", "query-failed"})
+  void continueReconvergesFailedRulesEvenWithoutAPendingPositionMarker(String failure)
+      throws Exception {
+    try (Fixture f = new Fixture()) {
+      f.install(f.engine, new ByteArrayOutputStream(), List.of("katago.exe", "gtp"));
+      var advertise = Leelaz.class.getDeclaredMethod("advertiseCommandsForTest", List.class);
+      advertise.setAccessible(true);
+      advertise.invoke(f.engine,
+          List.of("kata-set-rules", "kata-get-rules", "kata-analyze", "loadsgf"));
+      AtomicReference<String> rules = new AtomicReference<>("chinese");
+      AtomicReference<String> failedSelection = new AtomicReference<>();
+      try (var transport = ExactSnapshotRestoreProtocolFixture.installAsync(f.engine, command -> {
+        if (command.startsWith("kata-set-rules ")) {
+          rules.set("mismatch".equals(failedSelection.get()) ? "goe"
+              : command.substring("kata-set-rules ".length()));
+        }
+        if (command.equals("kata-get-rules")) {
+          return "query-failed".equals(failedSelection.get())
+              ? ExactSnapshotRestoreProtocolFixture.Response.error("readback failed")
+              : ExactSnapshotRestoreProtocolFixture.Response.success(rules.get());
+        }
+        return ExactSnapshotRestoreProtocolFixture.Response.success();
+      })) {
+        assertTrue(f.engine.queryEngineRulesOperation().await(1_000L).isConfirmed());
+        Lizzie.board.getHistory().publishExternalRules("chinese");
+        f.submit(false);
+        f.runPending();
+        assertFalse(Lizzie.board.isEngineAlignmentPending());
+
+        failedSelection.set(failure);
+        ManualRulesSelection selection = ManualRulesSelection.apply(
+            f.engine, KataGoRules.parse("japanese").orElseThrow());
+        assertNotNull(selection);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (!selection.isDone() && System.nanoTime() < deadline) Thread.sleep(5L);
+        assertTrue(selection.isDone());
+        assertFalse(selection.applied());
+        assertFalse(Lizzie.board.isEngineAlignmentPending());
+        assertFalse(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.engine));
+        f.engine.sendCommand("kata-analyze 10");
+        assertFalse(transport.commands().contains("kata-analyze 10"));
+
+        failedSelection.set(null);
+        invoke(f.frame, "resumeFromAnalysisControl", new Class<?>[0]);
+        assertSame(f.root, field(f.frame, "pendingKifuEngineSyncRoot"));
+        f.runPending();
+        assertFalse(Lizzie.board.isEngineAlignmentPending());
+        assertTrue(f.engine.currentConfirmedRules().semanticallyEquals(
+            KataGoRules.parse("chinese").orElseThrow()));
+        assertTrue(SessionRulesSynchronizer.permitsOrdinaryAnalysis(f.engine));
+        f.engine.sendCommand("kata-analyze 10");
+        assertTrue(transport.commands().contains("kata-analyze 10"));
+      }
+    }
+  }
+
   private final class Fixture implements AutoCloseable {
     final Config oldConfig = Lizzie.config;
     final Board oldBoard = Lizzie.board;
@@ -298,7 +456,7 @@ class KifuSnapshotFailureTest {
       board.setHistory(SGFParser.parseSgf("(;SZ[19]KM[7.5]AB[aa]AW[ba]PL[W])", true));
       root = board.getHistory().getStart();
       board.requireEngineAlignment();
-      engine = new Leelaz("");
+      engine = new HeadlessEngine();
       install(engine, output, List.of("helper.bat", "cuda", "gtp", "Elo"));
       engine.started = true;
       engine.isLoaded = true;
@@ -307,7 +465,7 @@ class KifuSnapshotFailureTest {
         advertiseSetPosition(engine);
       }
       EngineManager.isEmpty = false;
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       Lizzie.frame = frame;
       set(frame, "kifuEngineSyncCoordinator", new KifuEngineSyncCoordinator(executor));
       set(frame, "pendingKifuEngineSyncRoot", root);
@@ -380,7 +538,7 @@ class KifuSnapshotFailureTest {
       SwingUtilities.invokeAndWait(() -> {});
       Lizzie.config = oldConfig;
       Lizzie.board = oldBoard;
-      Lizzie.leelaz = oldEngine;
+      Lizzie.setPrimaryEngine(oldEngine);
       Lizzie.leelaz2 = oldSecondary;
       Lizzie.frame = oldFrame;
       Lizzie.engineManager = oldManager;
@@ -393,11 +551,20 @@ class KifuSnapshotFailureTest {
     }
   }
 
+  /** Keeps the real command admission path without requiring presentation widgets for ponder. */
+  private static final class HeadlessEngine extends Leelaz {
+    HeadlessEngine() throws java.io.IOException { super(""); }
+    @Override public void ponder() { sendCommand("kata-analyze 10"); }
+  }
+
   private static final class RecordingFrame extends LizzieFrame {
     int failures;
     RuntimeException lastFailure;
     int scheduledResumes;
     Runnable scheduledAction;
+
+    @Override
+    public void refresh() {}
 
     @Override
     protected void showPositionSyncFailure(RuntimeException failure) {

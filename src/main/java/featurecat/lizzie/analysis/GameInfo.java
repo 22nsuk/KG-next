@@ -18,8 +18,9 @@ public class GameInfo {
   private String playerWhite = "";
   // SGF DT expression, including partial dates and lists; null means no imported DT.
   private String date = LocalDate.now().toString();
-  private double komi = DEFAULT_KOMI;
-  private int handicap = 0;
+  private volatile double komi = DEFAULT_KOMI;
+  private volatile int handicap = 0;
+  private volatile long rulesMetadataRevision;
   private String result = "";
   private EngineGameRecordContext engineGameRecordContext;
   private EngineGameRecord engineGameRecord;
@@ -74,7 +75,12 @@ public class GameInfo {
   }
 
   public void setKomi(double komi) {
-    this.komi = komi;
+    setKomiNoMenu(komi);
+    refreshKomiDisplay();
+  }
+
+  /** Refreshes presentation without replaying an asynchronously captured value into game state. */
+  public void refreshKomiDisplay() {
     if (LizzieFrame.menu != null && LizzieFrame.menu.txtKomi != null) {
       LizzieFrame.menu.txtKomi.setText(String.valueOf(komi));
     }
@@ -83,8 +89,25 @@ public class GameInfo {
     }
   }
 
-  public void setKomiNoMenu(double komi) {
+  public synchronized void setKomiNoMenu(double komi) {
+    if (Double.compare(this.komi, komi) != 0) {
+      this.komi = komi;
+      rulesMetadataRevision++;
+    }
+  }
+
+  /** State-only commit: a delayed preset must not overwrite a newer komi or handicap edit. */
+  synchronized long applyPresetKomi(
+      long expectedRevision, double expectedKomi, int expectedHandicap, double komi) {
+    if (rulesMetadataRevision != expectedRevision || Double.compare(this.komi, expectedKomi) != 0
+        || handicap != expectedHandicap) return -1L;
     this.komi = komi;
+    changedKomi = true;
+    return ++rulesMetadataRevision;
+  }
+
+  public long rulesMetadataRevision() {
+    return rulesMetadataRevision;
   }
 
   public void changeKomi() {
@@ -95,8 +118,11 @@ public class GameInfo {
     return handicap;
   }
 
-  public void setHandicap(int handicap) {
-    this.handicap = handicap;
+  public synchronized void setHandicap(int handicap) {
+    if (this.handicap != handicap) {
+      this.handicap = handicap;
+      rulesMetadataRevision++;
+    }
   }
 
   public boolean hasEngineGameHistory() {
@@ -168,7 +194,7 @@ public class GameInfo {
   }
 
   public void resetAllNoKomi() {
-    this.handicap = 0;
+    setHandicap(0);
     this.playerBlack = "";
     this.playerWhite = "";
     this.date = LocalDate.now().toString();

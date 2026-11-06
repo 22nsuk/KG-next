@@ -128,6 +128,11 @@ public class Board {
     return pendingEngineAlignmentHistory != null && pendingEngineAlignmentHistory == history;
   }
 
+  /** Nonblocking snapshot for analysis admission, which may already hold history/endpoint locks. */
+  public boolean isEngineAlignmentPendingForHistory(BoardHistoryList expected) {
+    return expected != null && pendingEngineAlignmentHistory == expected;
+  }
+
   /** Called only by a restore owner after its captured engine set has confirmed the position. */
   public synchronized void completeEngineAlignment(
       BoardHistoryNode root, BoardHistoryNode node, long revision) {
@@ -1915,15 +1920,7 @@ public class Board {
       capturedBoardWidth = boardWidth;
       capturedBoardHeight = boardHeight;
       position = history.getData().clone();
-      if (position.komi == -999) {
-        if (history.getGameInfo() != null) {
-          position.komi = history.getGameInfo().getKomi();
-        } else if (!Float.isNaN(engine.komi)) {
-          position.komi = engine.komi;
-        } else {
-          position.komi = 0.0;
-        }
-      }
+      position.komi = currentGameKomi(history, position, engine);
       position.addProperty(
           "SZ",
           capturedBoardWidth == capturedBoardHeight
@@ -2056,7 +2053,7 @@ public class Board {
                 && owner.contextRevision == capturedContextRevision
                 && current != null
                 && current.blackToPlay == position.blackToPlay
-                && Double.compare(resolveKomi(currentHistory, current, engine), position.komi) == 0
+                && Double.compare(currentGameKomi(currentHistory, current, engine), position.komi) == 0
                 && java.util.Objects.equals(current.zobrist, position.zobrist)
                 && Arrays.equals(current.stones, position.stones)
                 && Board.boardWidth == capturedBoardWidth
@@ -2077,19 +2074,15 @@ public class Board {
           engine, primaryGeneration, mirror);
     }
 
-    private static double resolveKomi(
-        BoardHistoryList history, BoardData current, Leelaz engine) {
-      if (current.komi != -999) {
-        return current.komi;
-      }
-      if (history.getGameInfo() != null) {
-        return history.getGameInfo().getKomi();
-      }
-      if (!Float.isNaN(engine.komi)) {
-        return engine.komi;
-      }
-      return 0.0;
-    }
+  }
+
+  private static double currentGameKomi(
+      BoardHistoryList history, BoardData current, Leelaz engine) {
+    // BoardData.komi describes retained analysis, even after its evaluation was cleared.
+    // A live-game restore must use the editable game's komi without rewriting that provenance.
+    if (history.getGameInfo() != null) return history.getGameInfo().getKomi();
+    if (current.komi != -999) return current.komi;
+    return Float.isNaN(engine.komi) ? 0.0 : engine.komi;
   }
 
   private boolean isCapturedPrimaryReadyForExactRestore(Leelaz engine) {
