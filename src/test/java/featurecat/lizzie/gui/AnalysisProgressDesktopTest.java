@@ -7,12 +7,14 @@ import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
 import java.awt.Robot;
+import java.awt.Rectangle;
 import java.awt.Window;
 import java.awt.image.BufferedImage;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
@@ -66,6 +68,12 @@ class AnalysisProgressDesktopTest {
       awaitEdt(() -> engine.waitFrame.isShowing() && progressText(engine).endsWith("0/17"));
       assertEquals(17, engine.requests.size());
       DesktopProbeProcess.phase(result, "progress-window-ready");
+      awaitEdt(
+          () ->
+              nameBounds(LizzieFrame.boardRenderer) != null
+                  && nameBounds(Lizzie.frame.independentMainBoard.boardRenderer) != null);
+      int[] originalMainNames = onEdt(() -> namePixels(false));
+      int[] originalIndependentNames = onEdt(() -> namePixels(true));
 
       // Feed the same public result entry point used by the engine reader, off the EDT.
       // Leave nine requests outstanding so completion cannot cause the observed graph repaint.
@@ -75,10 +83,18 @@ class AnalysisProgressDesktopTest {
               engine.waitFrame.isShowing()
                   && progressText(engine).endsWith("8/17")
                   && renderedAnalyzedMoves() == 8);
+      // Read already-published pixels, without refresh(), paintImmediately(), or navigation.
+      // Both windows must update while nine engine requests are still outstanding.
+      awaitEdt(
+          () ->
+              !Arrays.equals(originalMainNames, namePixels(false))
+                  && !Arrays.equals(originalIndependentNames, namePixels(true)));
       onEdt(
           () -> {
             assertTrue(engine.isAnalysisInProgress());
             assertEquals(8, analyzedMoves());
+            assertEquals(4, Lizzie.board.getHistory().getData().moveNumber);
+            assertTrue(Lizzie.board.getHistory().getData().getPlayouts() > 0);
             assertFalse(Lizzie.frame.isEnabled(), "the production progress window owns the frame");
             BufferedImage graph = field(Lizzie.frame, "cachedWinrateImage", BufferedImage.class);
             assertTrue(graph.getWidth() > 100 && graph.getHeight() > 20);
@@ -144,15 +160,19 @@ class AnalysisProgressDesktopTest {
           Lizzie.config.showWinrateGraph = true;
           Lizzie.config.showWinrateLine = true;
           Lizzie.config.showScoreLeadLine = true;
-          StringBuilder sgf = new StringBuilder("(;FF[4]GM[1]SZ[19]KM[7.5]");
+          Lizzie.config.showNameInBoard = true;
+          Lizzie.config.uiConfig.put(NameWinrates.SHOWN_KEY, true);
+          StringBuilder sgf = new StringBuilder("(;FF[4]GM[1]SZ[19]KM[7.5]PB[Black]PW[White]");
           for (int move = 0; move < 17; move++) {
             sgf.append(move % 2 == 0 ? ";B[" : ";W[")
                 .append((char) ('a' + move))
                 .append("d]");
           }
           assertTrue(SGFParser.loadFromString(sgf.append(')').toString(), false));
-          Lizzie.board.goToMoveNumber(0);
+          Lizzie.board.goToMoveNumber(4);
           assertEquals(0, analyzedMoves());
+          Lizzie.frame.toggleIndependentMainBoard();
+          Lizzie.frame.independentMainBoard.setBounds(80, 80, 600, 600);
           Lizzie.frame.refresh();
           return null;
         });
@@ -160,6 +180,22 @@ class AnalysisProgressDesktopTest {
 
   private static String progressText(AnalysisEngine engine) {
     return field(engine.waitFrame, "lblAnalsisProgress", JLabel.class).getText();
+  }
+
+  private static Rectangle nameBounds(BoardRenderer renderer) {
+    return field(renderer, "playerNameBounds", Rectangle.class);
+  }
+
+  private static int[] namePixels(boolean independent) {
+    BoardRenderer renderer = independent
+        ? Lizzie.frame.independentMainBoard.boardRenderer : LizzieFrame.boardRenderer;
+    BufferedImage image = independent
+        ? Lizzie.frame.independentMainBoard.snapshotImage()
+        : field(Lizzie.frame, "cachedImage", BufferedImage.class);
+    Rectangle names = nameBounds(renderer);
+    // Keep the sampled region fixed even when the percentage makes the text wider.
+    Rectangle board = renderer.getBoardBounds();
+    return image.getRGB(board.x, names.y, board.width, names.height, null, 0, board.width);
   }
 
   private static int analyzedMoves() {

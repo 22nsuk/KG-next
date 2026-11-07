@@ -8743,7 +8743,7 @@ public class LizzieFrame extends JFrame {
     notifyWebBoard(false);
   }
 
-  /** Repaints graph progress without rebuilding the board and suggestion surfaces. */
+  /** Repaints progress, including current-position name readings when they are enabled. */
   public void refreshSilentAnalysisProgress() {
     analysisUiRefresh.requestGraph();
   }
@@ -8790,7 +8790,9 @@ public class LizzieFrame extends JFrame {
   }
 
   private void refreshAnalysisSurfaces(boolean includeBoard) {
-    if (includeBoard) {
+    // Silent results can update the displayed node too. Reuse the incremental board path
+    // for its name readings, while keeping graph-only progress cheap when they are hidden.
+    if (includeBoard || (Lizzie.config.showNameInBoard && NameWinrates.shown(Lizzie.config.uiConfig))) {
       refreshIndependentBoards();
       refreshFromInfo = true;
       redrawBoardSurfacesOnly = true;

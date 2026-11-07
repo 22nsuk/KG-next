@@ -81,9 +81,13 @@ rendered arrow direction/color. It also renders the comparison name strip to ver
 slot updates cannot change its percentages. The desktop lane requires this test to run without
 skipping.
 
+`AnalysisProgressDesktopTest` also feeds the production analysis result handler while nine of
+17 requests remain outstanding. It verifies that the graph and the main/independent player-name
+readings update without navigation or an explicit full refresh; engine I/O alone is controlled.
+
 ```bash
 mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \
-  -Dtest=AnalysisReadabilityDesktopTest test
+  -Dtest=AnalysisReadabilityDesktopTest,AnalysisProgressDesktopTest test
 ```
 
 The desktop probe has been verified on Linux Swing and a native Windows desktop using controlled
