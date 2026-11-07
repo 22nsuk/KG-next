@@ -103,10 +103,12 @@ class RulesQuickSwitchDesktopTest {
     byte[] config = Files.readAllBytes(work.resolve("config.txt"));
     JPopupMenu menu = openFromCaption();
     capture(result.resolveSibling("quick-rules-ko-before.png"));
+    long analysisBeforeFirstPreset = count(transport, "kata-analyze");
     edt(() -> { ((JMenuItem) menu.getComponent(2)).doClick(0); return null; });
     await(() -> Lizzie.board.getHistory().getGameInfo().getKomi() == 7.0
         && !Lizzie.board.getHistory().hasPendingManualRulesIntent()
-        && !Lizzie.board.isEngineAlignmentPending() && !restored.isEmpty());
+        && !Lizzie.board.isEngineAlignmentPending() && !restored.isEmpty()
+        && count(transport, "kata-analyze") > analysisBeforeFirstPreset);
     assertTrue(restored.get(0).contains("KM[7.0]"), restored.toString());
     assertArrayEquals(config, Files.readAllBytes(work.resolve("config.txt")));
     assertEquals(RulePreset.GOE.rules().toGtpArgument(), Lizzie.config.kataRules);
@@ -151,11 +153,15 @@ class RulesQuickSwitchDesktopTest {
     assertEquals(9, handicap.getComponentCount());
     capture(result.resolveSibling("quick-rules-handicap-ko.png"));
     int restoredBefore = restored.size();
+    long analysisBeforeHandicapPreset = count(transport, "kata-analyze");
     edt(() -> { ((JMenuItem) handicap.getComponent(2)).doClick(0); return null; });
+    // Alignment clears before the asynchronous analysis-resume callback runs. Wait for its
+    // command too, so the later stale-menu snapshots contain all work from this selection.
     await(() -> rules.get().semanticallyEquals(RulePreset.JAPANESE.rules())
         && !Lizzie.board.getHistory().hasPendingManualRulesIntent()
         && !Lizzie.board.isEngineAlignmentPending()
-        && restored.size() > restoredBefore);
+        && restored.size() > restoredBefore
+        && count(transport, "kata-analyze") > analysisBeforeHandicapPreset);
     assertEquals(0.5, Lizzie.board.getHistory().getGameInfo().getKomi());
     assertTrue(restored.get(restored.size() - 1).contains("KM[0.5]"));
 
