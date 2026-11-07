@@ -8794,7 +8794,8 @@ public class LizzieFrame extends JFrame {
     // for its name readings, while keeping graph-only progress cheap when they are hidden.
     if (includeBoard || (Lizzie.config.showNameInBoard && NameWinrates.shown(Lizzie.config.uiConfig))) {
       refreshIndependentBoards();
-      refreshFromInfo = true;
+      // Silent progress may be the last update in a burst; do not apply the live-info cooldown.
+      refreshFromInfo = includeBoard;
       redrawBoardSurfacesOnly = true;
     }
     redrawWinratePaneOnly = true;

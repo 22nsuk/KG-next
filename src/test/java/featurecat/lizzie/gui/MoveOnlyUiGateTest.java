@@ -932,6 +932,9 @@ class MoveOnlyUiGateTest {
       assertEquals(
           showNames && showNameWinrates,
           (boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertFalse(
+          (boolean) getField(LizzieFrame.class, frame, "refreshFromInfo"),
+          "silent progress must not lose its last graph update to the live-analysis cooldown");
       assertEquals(0, frame.titleUpdates);
 
       AnalysisUiRefreshTest.whileEdtBlocked(() -> {
@@ -945,6 +948,7 @@ class MoveOnlyUiGateTest {
       assertEquals(2, paints.get());
       assertEquals(1, frame.titleUpdates);
       assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertTrue((boolean) getField(LizzieFrame.class, frame, "refreshFromInfo"));
       assertEquals(0, frame.fullRefreshes);
       assertFalse(offEdt.get());
     } finally {
