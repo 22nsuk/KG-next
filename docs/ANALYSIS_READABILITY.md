@@ -47,6 +47,17 @@ produce a fabricated previous-move change. Visits alone, the default 50%, non-fi
 out-of-range percentages are not analysis payloads. Saved and retained payloads remain visible;
 display eligibility is separate from engine-reuse eligibility.
 
+Changing the player to move retains each engine slot's original analysis perspective. The name
+percentages, statistics, title and ordinary graph keep the same black/white interpretation, including
+score and previous-move changes. New analysis replaces only its own slot's perspective. Both slots
+are invalidated by a turn edit, even when the comparison board is hidden.
+
+Copies preserve this perspective. When it differs from the position's player to move, SGF analysis
+headers append the named extension `analysisTurn=B` or `analysisTurn=W` without adding missing
+score fields; candidate values remain unchanged. Files without this extension use their position's turn,
+as before. Older readers do not understand this extension or the retained perspective;
+already-saved files that never recorded it cannot be repaired automatically.
+
 The existing score and winrate perspective calculations remain authoritative. Engine games
 retain their own-engine comparison, sometimes two moves apart, with gain/loss expressed for
 the side that just played. The arrow points toward the new black-winrate boundary, including
@@ -59,6 +70,10 @@ and [PR #730](https://github.com/wimi321/lizzieyzy-next/pull/730). It retains KG
 score-perspective and transactional configuration rules. It does not add a separate broadcast
 window or an additional persistent font-size setting.
 
+`BoardAnalysisTurnTest` covers repeated turn edits, separate engine-slot replacement, copies,
+and repeated SGF save/reopen, including short legacy headers. The desktop readability test compares
+the rendered statistics and name text before and after a real turn-change action.
+
 Focused tests cover missing payloads, saved and invalidated analysis, primary/secondary slot
 ownership, previous-position fallback, percentage rounding, score and winrate perspectives,
 atomic setting publication on save failure, long multilingual names, Unicode truncation,
@@ -70,7 +85,7 @@ coordinate and analysis-provenance regression tests remain applicable.
 
 ```bash
 mvn -B -Dfmt.skip=true -Djava.awt.headless=true \
-  -Dtest=LizzieFrameRegressionTest,WinrateReadingTest,MoveStatusLineTest,BoardNamePlateTest,MoveStatusTextTest,BoardRendererKoreanNameTest,BoardCoordinateStyleTest,MainWindowTitleTest,AnalysisProvenanceDisplayTest,BoardDataAnalysisProvenanceTest,FunctionSearchTest,LocalizationResourceParityTest test
+  -Dtest=BoardAnalysisTurnTest,LizzieFrameRegressionTest,WinrateReadingTest,MoveStatusLineTest,BoardNamePlateTest,MoveStatusTextTest,BoardRendererKoreanNameTest,BoardCoordinateStyleTest,MainWindowTitleTest,AnalysisProvenanceDisplayTest,BoardDataAnalysisProvenanceTest,FunctionSearchTest,LocalizationResourceParityTest test
 ```
 
 `AnalysisReadabilityDesktopTest` starts the production application with an isolated profile and

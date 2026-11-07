@@ -125,6 +125,7 @@ class AnalysisReadabilityDesktopTest {
           return null;
         });
     checkComparisonRendererOwnership();
+    checkRetainedTurnPerspective();
     checkArrowPerspectiveAndDirection();
 
     edt(
@@ -196,6 +197,51 @@ class AnalysisReadabilityDesktopTest {
           for (Window window : Window.getWindows()) window.dispose();
           return null;
         });
+  }
+
+  private static void checkRetainedTurnPerspective() throws Exception {
+    edt(
+        () -> {
+          BoardData data = Lizzie.board.getData();
+          // Equal source labels isolate perspective changes from the invalidation annotation.
+          data.isChanged = true;
+          data.isChanged2 = true;
+          BufferedImage statistics = statisticsPixels();
+          BoardRenderer main = new BoardRenderer(true);
+          BoardRenderer comparison = new BoardRenderer(false);
+          comparison.setOrder(1);
+          for (BoardRenderer renderer : List.of(main, comparison)) {
+            renderer.setLocation(0, 0);
+            renderer.setBoardLength(600, 600);
+          }
+          int[] primaryNames = nameTextPixels(main);
+          int[] secondaryNames = nameTextPixels(comparison);
+          boolean oldCapability = Lizzie.leelaz.canAddPlayer;
+          boolean oldTurn = data.blackToPlay;
+          try {
+            Lizzie.leelaz.canAddPlayer = true;
+            Lizzie.board.changeNextTurn();
+            assertNotEquals(oldTurn, data.blackToPlay);
+            BufferedImage changed = statisticsPixels();
+            assertArrayEquals(
+                statistics.getRGB(0, 0, 600, 120, null, 0, 600),
+                changed.getRGB(0, 0, 600, 120, null, 0, 600),
+                "Statistics must keep the measured percentages, score and move change");
+            assertArrayEquals(primaryNames, nameTextPixels(main));
+            assertArrayEquals(secondaryNames, nameTextPixels(comparison));
+          } finally {
+            if (data.blackToPlay != oldTurn) Lizzie.board.changeNextTurn();
+            Lizzie.leelaz.canAddPlayer = oldCapability;
+          }
+          return null;
+        });
+  }
+
+  private static int[] nameTextPixels(BoardRenderer renderer) throws Exception {
+    int[] pixels = namePixels(renderer);
+    // The centre stones intentionally indicate the new turn; only text must stay unchanged.
+    for (int row = 0; row < 600; row++) Arrays.fill(pixels, row * 600 + 260, row * 600 + 340, 0);
+    return pixels;
   }
 
   private static void checkArrowPerspectiveAndDirection() throws Exception {

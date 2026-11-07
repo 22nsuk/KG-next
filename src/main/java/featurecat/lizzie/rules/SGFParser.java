@@ -2342,7 +2342,7 @@ public class SGFParser {
     // lastMoveDiff = "";
     // }
     //    String wf = "%s棋 胜率: %s %s\n(%s / %s 计算量)";
-    boolean blackWinrate = !data.blackToPlay || Lizzie.config.winrateAlwaysBlack;
+    boolean blackWinrate = !data.analysisBlackToPlay(false) || Lizzie.config.winrateAlwaysBlack;
     String nc = "";
     //        String.format(
     //            wf,
@@ -2357,7 +2357,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = -data.scoreMean - node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false))
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2366,15 +2366,15 @@ public class SGFParser {
       if (data.isSaiData) {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-          if (data.blackToPlay) {
+          if (data.analysisBlackToPlay(false)) {
             score = score - saveContext.komi();
             // else score = -score;
           } else {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
+        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
         String wf =
             "%s "
                 + Lizzie.resourceBundle.getString("SGFParse.winrate")
@@ -2403,15 +2403,15 @@ public class SGFParser {
       } else {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-          if (data.blackToPlay) {
+          if (data.analysisBlackToPlay(false)) {
             score = score - saveContext.komi();
             // else score = -score;
           } else {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
+        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
         String wf =
             "%s "
                 + Lizzie.resourceBundle.getString("SGFParse.winrate")
@@ -2844,7 +2844,7 @@ public class SGFParser {
           String.format(Locale.ENGLISH, "(%s%.1f%%)", diff > 0 ? "+" : "-", Math.abs(diff));
       //  }
     }
-    boolean blackWinrate = !data.blackToPlay || Lizzie.config.winrateAlwaysBlack;
+    boolean blackWinrate = !data.analysisBlackToPlay(true) || Lizzie.config.winrateAlwaysBlack;
     String nc = "";
 
     if (data.isKataData2) {
@@ -2852,7 +2852,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = data.scoreMean + node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true))
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2861,15 +2861,15 @@ public class SGFParser {
       if (data.isSaiData2) {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-          if (data.blackToPlay) {
+          if (data.analysisBlackToPlay(true)) {
             score = score - saveContext.komi();
             // else score = -score;
           } else {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
+        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
         String wf =
             "%s "
                 + Lizzie.resourceBundle.getString("SGFParse.winrate")
@@ -2898,15 +2898,15 @@ public class SGFParser {
       } else {
         double score = -node.getData().scoreMean;
         if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-          if (data.blackToPlay) {
+          if (data.analysisBlackToPlay(true)) {
             score = score - saveContext.komi();
             // else score = -score;
           } else {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.blackToPlay) score = -score;
+          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
+        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
         String wf =
             "%s "
                 + Lizzie.resourceBundle.getString("SGFParse.winrate")
@@ -2991,7 +2991,8 @@ public class SGFParser {
         data.scoreMean,
         data.scoreStdev,
         data.pda,
-        data.rootVisits, data.primaryAnalysisProvenance());
+        data.rootVisits, data.primaryAnalysisProvenance(),
+        data.analysisBlackToPlay(false) == data.blackToPlay ? null : data.analysisBlackToPlay(false));
     return formatAnalysisPayload(header, data, false);
   }
 
@@ -3021,7 +3022,8 @@ public class SGFParser {
         data.scoreMean2,
         data.scoreStdev2,
         data.pda2,
-        data.rootVisits2, data.secondaryAnalysisProvenance());
+        data.rootVisits2, data.secondaryAnalysisProvenance(),
+        data.analysisBlackToPlay(true) == data.blackToPlay ? null : data.analysisBlackToPlay(true));
     return formatAnalysisPayload(header, data, true);
   }
 
@@ -3034,7 +3036,7 @@ public class SGFParser {
       double scoreMean,
       double scoreStdev,
       double pda,
-      int rootVisits, AnalysisProvenance provenance) {
+      int rootVisits, AnalysisProvenance provenance, Boolean analysisTurn) {
     Double wrn = provenance == null ? null : provenance.wrn();
     boolean includeWrn = isHeaderWrn(wrn);
     StringBuilder header = new StringBuilder();
@@ -3055,6 +3057,7 @@ public class SGFParser {
     }
     if (rootVisits >= 0) header.append(" rootVisits=").append(rootVisits);
     if (includeWrn) header.append(" wrn=").append(wrn);
+    if (analysisTurn != null) header.append(" analysisTurn=").append(analysisTurn ? "B" : "W");
     return header;
   }
 
@@ -3615,6 +3618,7 @@ public class SGFParser {
     }
     snapshotData.engineName = moveData.engineName;
     snapshotData.winrate = moveData.winrate;
+    snapshotData.setAnalysisBlackToPlay(false, moveData.analysisBlackToPlay(false));
     snapshotData.setPlayouts(moveData.getPlayouts());
     snapshotData.rootVisits = moveData.rootVisits;
     snapshotData.bestMoves = copyMoveDataListAllowNull(moveData.bestMoves);
@@ -3642,6 +3646,7 @@ public class SGFParser {
     }
     snapshotData.engineName2 = moveData.engineName2;
     snapshotData.winrate2 = moveData.winrate2;
+    snapshotData.setAnalysisBlackToPlay(true, moveData.analysisBlackToPlay(true));
     snapshotData.setPlayouts2(moveData.getPlayouts2());
     snapshotData.rootVisits2 = moveData.rootVisits2;
     snapshotData.bestMoves2 = copyMoveDataListAllowNull(moveData.bestMoves2);
@@ -3677,6 +3682,7 @@ public class SGFParser {
   }
 
   private static void clearPrimaryAnalysisPayload(BoardData data) {
+    data.setAnalysisBlackToPlay(false, null);
     data.engineName = "";
     data.winrate = 50;
     data.setPlayouts(0);
@@ -3698,6 +3704,7 @@ public class SGFParser {
   }
 
   private static void clearSecondaryAnalysisPayload(BoardData data) {
+    data.setAnalysisBlackToPlay(true, null);
     data.engineName2 = "";
     data.winrate2 = 50;
     data.setPlayouts2(0);
@@ -5151,6 +5158,20 @@ public class SGFParser {
 
   private static void applyAnalysisHeader(
       BoardData target, String[] line1, boolean secondaryEngineTag) {
+    // Turn metadata must not pad a short legacy header with fabricated score fields.
+    Boolean analysisTurn = null;
+    boolean hasTurnField = false;
+    for (int i = 3; i < line1.length; i++) {
+      String field = line1[i];
+      hasTurnField |= field.startsWith("analysisTurn=");
+      if (field.equals("analysisTurn=B")) analysisTurn = true;
+      else if (field.equals("analysisTurn=W")) analysisTurn = false;
+    }
+    if (hasTurnField) {
+      List<String> fields = new ArrayList<>(asList(line1));
+      fields.subList(3, fields.size()).removeIf(field -> field.startsWith("analysisTurn="));
+      line1 = fields.toArray(new String[0]);
+    }
     int headerPlayouts = parseAnalysisPlayouts(line1[2]);
     int headerSlots = Math.min(6, line1.length);
     int rootVisits = -1;
@@ -5163,6 +5184,7 @@ public class SGFParser {
         }
       }
     }
+    target.setAnalysisBlackToPlay(secondaryEngineTag, analysisTurn);
     if (rootVisits >= 0) headerPlayouts = rootVisits;
     if (secondaryEngineTag) {
       target.engineName2 = line1[0];

@@ -31,7 +31,8 @@ final class MoveStatusText {
   }
 
   static double blackScore(BoardData data) {
-    return data.scoreMeanIsBlackPerspective || data.blackToPlay ? data.scoreMean : -data.scoreMean;
+    return data.scoreMeanIsBlackPerspective || data.analysisBlackToPlay(false)
+        ? data.scoreMean : -data.scoreMean;
   }
 
   static String currentScore(ResourceBundle strings, BoardData data, boolean withKomi) {
@@ -52,10 +53,11 @@ final class MoveStatusText {
       ResourceBundle strings, BoardData current, BoardData previous, boolean withScore) {
     if (!hasWinrate(current) || !hasWinrate(previous)) return PreviousMove.NONE;
     double currentWR =
-        current.blackToPlay == previous.blackToPlay ? current.winrate : 100 - current.winrate;
+        current.analysisBlackToPlay(false) == previous.analysisBlackToPlay(false)
+            ? current.winrate : 100 - current.winrate;
     Double change =
         withScore && hasScore(current) && hasScore(previous)
-            ? (blackScore(current) - blackScore(previous)) * (previous.blackToPlay ? 1 : -1)
+            ? (blackScore(current) - blackScore(previous)) * (previous.analysisBlackToPlay(false) ? 1 : -1)
             : null;
     double winrateChange = currentWR - previous.winrate;
     return new PreviousMove(
@@ -66,7 +68,7 @@ final class MoveStatusText {
   /** Engine games compare each engine's own readings, sometimes two moves apart. */
   static double engineGameWinrateChange(BoardData current, BoardData previous) {
     if (!hasWinrate(current) || !hasWinrate(previous)) return Double.NaN;
-    double previousWR = current.blackToPlay == previous.blackToPlay
+    double previousWR = current.analysisBlackToPlay(false) == previous.analysisBlackToPlay(false)
         ? previous.winrate : 100 - previous.winrate;
     // The arrow describes the side that just played, opposite the current side to move.
     return previousWR - current.winrate;

@@ -16,6 +16,29 @@ public class BoardData {
   public int[] moveNumberList;
   // Some explicit turn overrides do not advance Board.contextRevision; captures recheck this value.
   public volatile boolean blackToPlay;
+  // Null is the legacy/current-position convention. Retained payloads keep their original turn.
+  private Boolean primaryAnalysisBlackToPlay;
+  private Boolean secondaryAnalysisBlackToPlay;
+
+  public synchronized boolean analysisBlackToPlay(boolean secondary) {
+    Boolean turn = secondary ? secondaryAnalysisBlackToPlay : primaryAnalysisBlackToPlay;
+    return turn == null ? blackToPlay : turn;
+  }
+
+  synchronized void setAnalysisBlackToPlay(boolean secondary, Boolean turn) {
+    if (secondary) secondaryAnalysisBlackToPlay = turn;
+    else primaryAnalysisBlackToPlay = turn;
+  }
+
+  /** A turn edit invalidates live work, but does not reinterpret either saved evaluation. */
+  public synchronized void togglePlayerToMove() {
+    if (getPlayouts() > 0) primaryAnalysisBlackToPlay = analysisBlackToPlay(false);
+    if (getPlayouts2() > 0) secondaryAnalysisBlackToPlay = analysisBlackToPlay(true);
+    blackToPlay = !blackToPlay;
+    properties.put("PL", blackToPlay ? "B" : "W");
+    invalidatePrimaryAnalysis();
+    invalidateSecondaryAnalysis();
+  }
   public boolean dummy;
   // added for change bestmoves when playouts is not increased
 
@@ -506,7 +529,7 @@ public class BoardData {
   }
 
   public double getWinrate() {
-    if (!blackToPlay || !Lizzie.config.winrateAlwaysBlack) {
+    if (!analysisBlackToPlay(false) || !Lizzie.config.winrateAlwaysBlack) {
       return winrate;
     } else {
       return 100 - winrate;
@@ -514,7 +537,7 @@ public class BoardData {
   }
 
   public double getWinrate2() {
-    if (!blackToPlay || !Lizzie.config.winrateAlwaysBlack) {
+    if (!analysisBlackToPlay(true) || !Lizzie.config.winrateAlwaysBlack) {
       return winrate2;
     } else {
       return 100 - winrate2;
@@ -661,6 +684,7 @@ public class BoardData {
     playoutsChanged = true;
     this.estimateArray = compactEstimateArray(estimateArray);
     winrate = moves.get(0).winrate;
+    primaryAnalysisBlackToPlay = blackToPlay;
     if (moves.get(0).isKataData) {
       scoreMean = moves.get(0).scoreMean;
       scoreStdev = moves.get(0).scoreStdev;
@@ -881,6 +905,7 @@ public class BoardData {
     setPlayouts2(totalplayouts);
     this.estimateArray2 = compactEstimateArray(estimateArray);
     winrate2 = moves.get(0).winrate;
+    secondaryAnalysisBlackToPlay = blackToPlay;
     if (moves.get(0).isKataData) {
       scoreMean2 = moves.get(0).scoreMean;
       scoreStdev2 = moves.get(0).scoreStdev;
@@ -1250,6 +1275,7 @@ public class BoardData {
 
   /** The information-clear action keeps ownership available while removing the evaluation. */
   synchronized void clearPrimaryEvaluationState() {
+    primaryAnalysisBlackToPlay = null;
     analysisEditRevision++;
     if (getPlayouts() > 0) bestMoves = new ArrayList<>();
     winrate = 50;
@@ -1261,6 +1287,7 @@ public class BoardData {
   }
 
   synchronized void clearSecondaryEvaluationState() {
+    secondaryAnalysisBlackToPlay = null;
     analysisEditRevision++;
     if (getPlayouts2() > 0) bestMoves2 = new ArrayList<>();
     winrate2 = 50;
@@ -1296,6 +1323,7 @@ public class BoardData {
   }
 
   private void clearPrimaryAnalysisPayloadState() {
+    primaryAnalysisBlackToPlay = null;
     engineName = "";
     winrate = 50;
     setPlayouts(0);
@@ -1318,6 +1346,7 @@ public class BoardData {
   }
 
   private void clearSecondaryAnalysisPayloadState() {
+    secondaryAnalysisBlackToPlay = null;
     engineName2 = "";
     winrate2 = 50;
     setPlayouts2(0);
@@ -1363,6 +1392,8 @@ public class BoardData {
   }
 
   private void copyAnalysisStateFrom(BoardData data, boolean includeComment) {
+    this.primaryAnalysisBlackToPlay = data.analysisBlackToPlay(false);
+    this.secondaryAnalysisBlackToPlay = data.analysisBlackToPlay(true);
     this.winrate = data.winrate;
     this.winrate2 = data.winrate2;
     this.playouts = data.playouts;

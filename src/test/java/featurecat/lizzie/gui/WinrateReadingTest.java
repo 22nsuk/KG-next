@@ -86,6 +86,37 @@ class WinrateReadingTest {
   }
 
   @Test
+  void turnEditsKeepBothReadingsScoresAndMoveChangesInTheirMeasuredPerspective() {
+    for (boolean black : new boolean[] {true, false}) {
+      BoardData previous = saved(55, !black, 3);
+      BoardData data = saved(70, black, 4);
+      data.isKataData = true;
+      data.scoreMean = 4;
+      previous.isKataData = true;
+      previous.scoreMean = 2;
+      data.analysisHeaderSlots2 = 3;
+      data.setPlayouts2(80);
+      data.winrate2 = 60;
+      var change = MoveStatusText.previousMoveStatus(KO, data, previous, true);
+      double engineChange = MoveStatusText.engineGameWinrateChange(data, previous);
+      String title = MainWindowTitle.evaluation(data, false);
+      for (int toggle = 0; toggle < 3; toggle++) {
+        data.togglePlayerToMove();
+        assertEquals(black ? "70.0%" : "30.0%", WinrateReading.of(data).percent(true));
+        assertEquals(black ? "60.0%" : "40.0%", WinrateReading.of(data, true).percent(true));
+        assertEquals(WinrateReading.Source.RETAINED, WinrateReading.of(data).source());
+        assertEquals(WinrateReading.Source.RETAINED, WinrateReading.of(data, true).source());
+        assertEquals(black ? 4 : -4, MoveStatusText.blackScore(data));
+        assertEquals(black ? 4 : -4, WinrateGraph.blackPerspectiveScoreMean(data));
+        assertEquals(title, MainWindowTitle.evaluation(data, false));
+        assertEquals(change, MoveStatusText.previousMoveStatus(KO, data, previous, true));
+        assertEquals(engineChange, MoveStatusText.engineGameWinrateChange(data, previous));
+        assertEquals(70, data.winrate, "The stored payload itself must not be rewritten");
+      }
+    }
+  }
+
+  @Test
   void togglePersistsOnlyItsOwnChoiceAndFailedSaveKeepsThePublishedState(@TempDir Path work)
       throws Exception {
     Config config = ConfigTestHelper.createForTests(work);

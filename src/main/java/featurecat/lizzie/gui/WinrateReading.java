@@ -34,7 +34,7 @@ record WinrateReading(double black, Source source, int moveNumber) {
       Source source =
           invalidated ? Source.RETAINED : headerSlots >= 3 ? Source.SAVED : Source.POSITION;
       return new WinrateReading(
-          data.blackToPlay ? winrate : 100 - winrate, source, data.moveNumber);
+          data.analysisBlackToPlay(secondary) ? winrate : 100 - winrate, source, data.moveNumber);
     }
   }
 
