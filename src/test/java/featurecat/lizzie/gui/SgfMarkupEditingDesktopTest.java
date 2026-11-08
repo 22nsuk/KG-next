@@ -65,7 +65,7 @@ class SgfMarkupEditingDesktopTest {
           Lizzie.frame.setBounds(20, 20, 1180, 820);
           assertTrue(
               SGFParser.loadFromString(
-                  "(;SZ[9]RU[Chinese]AB[cc][dd]LB[aa:A,B:C][bb:][ii:Z]"
+                  "(;SZ[9]RU[Chinese]AB[cc][dd]LB[aa:A,B:C][bb :][ii :Z]CR[gg ]TR[ff ]"
                       + "AR[aa:bb][cc:dd]TB[cc][dd]XX[first,one][second:two])",
                   false));
           Lizzie.frame.refresh();
@@ -81,9 +81,12 @@ class SgfMarkupEditingDesktopTest {
     click(Lizzie.frame.mainPanel, LizzieFrame.boardRenderer, 8, 8);
     selectTool("toolbar.markup-number");
     click(Lizzie.frame.mainPanel, LizzieFrame.boardRenderer, 7, 7);
+    selectTool("toolbar.markup-cross");
+    click(Lizzie.frame.mainPanel, LizzieFrame.boardRenderer, 6, 6);
     edt(
         () -> {
-          assertEquals(List.of("aa:A,B:C", "bb:", "hh:1"), data().getPropertyValues("LB"));
+          assertEquals(List.of("aa:A,B:C", "bb :", "hh:1"), data().getPropertyValues("LB"));
+          assertTrue(data().getPropertyValues("CR").isEmpty());
           assertOtherProperties();
           Lizzie.frame.toggleIndependentMainBoard();
           Lizzie.frame.independentMainBoard.setBounds(40, 40, 680, 680);
@@ -96,11 +99,13 @@ class SgfMarkupEditingDesktopTest {
     selectTool("toolbar.markup-eraser");
     click(independent, independent.boardRenderer, 1, 1);
     selectTool("toolbar.markup-cross");
+    click(independent, independent.boardRenderer, 5, 5);
     click(independent, independent.boardRenderer, 4, 4);
     edt(
         () -> {
           assertEquals(List.of("aa:A,B:C", "hh:1"), data().getPropertyValues("LB"));
           assertEquals(List.of("ee"), data().getPropertyValues("MA"));
+          assertTrue(data().getPropertyValues("TR").isEmpty());
           assertOtherProperties();
           String saved = SGFParser.saveToString(false);
           BoardData reopened = SGFParser.parseSgf(saved, true).getStart().getData();

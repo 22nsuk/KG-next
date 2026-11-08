@@ -464,16 +464,26 @@ public class BoardData {
 
   /** Remove only supported board marks at this point, preserving all other SGF values. */
   public void removeMarkupAt(String point) {
-    properties.entrySet().removeIf(
-        entry -> {
-          if (!SGFParser.isMarkupProperty(entry.getKey())) return false;
-          List<String> remaining = entry.getValue().stream()
-              .filter(value -> !value.equals(point) && !value.startsWith(point + ":"))
-              .toList();
-          if (remaining.isEmpty()) return true;
-          entry.setValue(remaining);
-          return false;
-        });
+    int[] coords = SGFParser.convertSgfPosToCoord(point);
+    if (coords == null) return;
+    properties
+        .entrySet()
+        .removeIf(
+            entry -> {
+              if (!SGFParser.isMarkupProperty(entry.getKey())) return false;
+              List<String> remaining =
+                  entry.getValue().stream()
+                      // Match the renderer and click detection without rewriting surviving raw
+                      // values.
+                      .filter(
+                          value ->
+                              !Arrays.equals(
+                                  coords, SGFParser.convertSgfPosToCoord(value.split(":", 2)[0])))
+                      .toList();
+              if (remaining.isEmpty()) return true;
+              entry.setValue(remaining);
+              return false;
+            });
   }
 
   public void clearMarkup() {

@@ -179,6 +179,44 @@ class SGFPropertyValuesTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"19, aa, 'aa ', bb", "52, 1_2, 01_02, 3_4"})
+  void removingMarksUsesDecodedCoordinatesAndPreservesOtherRawValues(
+      int size, String point, String alias, String other) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open(size)) {
+      for (String key : List.of("LB", "CR", "SQ", "MA", "TR")) {
+        String suffix = key.equals("LB") ? ":A,B:C" : "";
+        String retained = other + suffix;
+        BoardHistoryList history =
+            SGFParser.parseSgf(
+                "(;SZ["
+                    + size
+                    + "]"
+                    + key
+                    + "["
+                    + alias
+                    + suffix
+                    + "]["
+                    + point
+                    + suffix
+                    + "]["
+                    + retained
+                    + "][][a]XX[untouched,raw:value])",
+                true);
+        BoardData data = history.getStart().getData();
+        data.removeMarkupAt(point);
+        assertEquals(List.of(retained, "", "a"), data.getPropertyValues(key), key);
+        assertEquals(List.of("untouched,raw:value"), data.getPropertyValues("XX"));
+
+        Lizzie.board.setHistory(history);
+        BoardData reopened =
+            SGFParser.parseSgf(SGFParser.saveToString(false), true).getStart().getData();
+        assertEquals(data.getPropertyValues(key), reopened.getPropertyValues(key), key);
+        assertEquals(data.getPropertyValues("XX"), reopened.getPropertyValues("XX"));
+      }
+    }
+  }
+
   @Test
   void propertyCopiesAndCapturedSaveDoNotFollowLaterAppends() throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
