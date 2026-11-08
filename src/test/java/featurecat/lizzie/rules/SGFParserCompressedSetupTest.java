@@ -218,6 +218,36 @@ class SGFParserCompressedSetupTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "(;SZ[46341]AB[0_0:46340_46340])",
+        "(;SZ[65536]AW[0_0:65535_65535])",
+        "(;SZ[2147483647:2]AE[0_0:2147483646_1])"
+      })
+  void unrepresentableBoardIsRejectedBeforeRangeExpansion(String invalid) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(5)) {
+      assertTrue(SGFParser.loadFromString("(;SZ[5];B[cc])", false));
+      BoardHistoryList original = Lizzie.board.getHistory();
+      BoardHistoryNode current = original.getCurrentHistoryNode();
+      Stone[] stones = current.getData().stones.clone();
+      assertNull(SGFParser.parseSgf(invalid, true));
+      assertFalse(SGFParser.loadFromString(invalid, false));
+      assertSame(original, Lizzie.board.getHistory());
+      assertFalse(SGFParser.loadFromStringforedit(invalid));
+      assertSame(original, Lizzie.board.getHistory());
+      Path file = directory.resolve("oversized-range.sgf");
+      Files.writeString(file, invalid);
+      assertFalse(SGFParser.load(file.toString(), false, false));
+      assertSame(original, Lizzie.board.getHistory());
+      assertSame(current, original.getCurrentHistoryNode());
+      assertArrayEquals(stones, current.getData().stones);
+      assertEquals(5, Board.boardWidth);
+      assertEquals(5, Board.boardHeight);
+      assertFalse(Lizzie.board.isLoadingFile);
+    }
+  }
+
   private static long count(BoardHistoryNode node, Stone color) {
     return Arrays.stream(node.getData().stones).filter(stone -> stone == color).count();
   }

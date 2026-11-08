@@ -525,6 +525,12 @@ public class SGFParser {
   }
 
   private static String expandSetupRange(String value, int width, int height) {
+    // Use reopen's dimension contract before a short range can expand into billions of points.
+    // Preserve its legacy fallback for dimensions below two; this is not a new heap/engine limit.
+    if (!Board.isValidBoardSize(
+        width < 2 ? DEFAULT_BOARD_SIZE : width, height < 2 ? DEFAULT_BOARD_SIZE : height)) {
+      return null;
+    }
     String[] ends = value.split(":", -1);
     if (ends.length != 2) return null;
     int[] first = setupRangeEndpoint(ends[0], width, height);

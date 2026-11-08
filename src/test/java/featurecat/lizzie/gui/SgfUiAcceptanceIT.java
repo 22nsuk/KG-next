@@ -288,11 +288,7 @@ public final class SgfUiAcceptanceIT {
             SgfUiAcceptanceIT.class,
             "d3-sgf-ui-session-2",
             List.of("-Dlizzie.work.dir=" + sharedProfile),
-            List.of(
-                "session-2",
-                fixture.toString(),
-                first.get("output.path"),
-                first.get("protected.path")),
+            List.of("session-2", firstResult.toString()),
             120);
     Map<String, String> second = parseResult(secondResult, SESSION_TWO_KEYS);
     assertEquals("d3-sgf-ui-session-2", second.get("scenario"));
@@ -368,12 +364,15 @@ public final class SgfUiAcceptanceIT {
             Path.of(args[1]).toAbsolutePath().normalize(),
             Path.of(args[2]).toAbsolutePath().normalize(),
             result);
-      } else if (args.length == 6 && "session-2".equals(args[0])) {
+      } else if (args.length == 4 && "session-2".equals(args[0])) {
+        // Read Unicode save paths from the UTF-8 result rather than round-tripping them through
+        // Windows' native command-line charset (which may not represent the saved directory).
+        Map<String, String> first = readRecords(Path.of(args[1]), SESSION_ONE_KEYS);
         runSessionTwo(
-            Path.of(args[1]).toAbsolutePath().normalize(),
+            Path.of(first.get("fixture.path")).toAbsolutePath().normalize(),
+            Path.of(first.get("output.path")).toAbsolutePath().normalize(),
+            Path.of(first.get("protected.path")).toAbsolutePath().normalize(),
             Path.of(args[2]).toAbsolutePath().normalize(),
-            Path.of(args[3]).toAbsolutePath().normalize(),
-            Path.of(args[4]).toAbsolutePath().normalize(),
             result);
       } else {
         throw new IllegalArgumentException(
@@ -1379,9 +1378,17 @@ public final class SgfUiAcceptanceIT {
     if (root.getData().getNodeKind() != BoardNodeKind.SNAPSHOT) {
       throw new AssertionError("fixture root is not a setup SNAPSHOT");
     }
-    requireStone(root.getData(), "cc", Stone.BLACK);
-    requireStone(root.getData(), "gc", Stone.BLACK);
-    requireStone(root.getData(), "ee", Stone.WHITE);
+    // Independent board oracle: ranges and removals must leave exactly these three stones.
+    for (int x = 0; x < 9; x++) {
+      for (int y = 0; y < 9; y++) {
+        String point = "" + (char) ('a' + x) + (char) ('a' + y);
+        Stone expected =
+            Set.of("cc", "gc").contains(point)
+                ? Stone.BLACK
+                : point.equals("ee") ? Stone.WHITE : Stone.EMPTY;
+        requireStone(root.getData(), point, expected);
+      }
+    }
     if (root.getData().blackToPlay) {
       throw new AssertionError("fixture root PL[W] was not adopted");
     }
@@ -1441,7 +1448,9 @@ public final class SgfUiAcceptanceIT {
     if (!Arrays.equals(left.stones, right.stones)) {
       throw new AssertionError("complete stones changed during UI round-trip");
     }
-    for (String key : List.of("AB", "AW", "PL", "LB", "XX", "GN", "RU")) {
+    // AB/AW/AE spelling can change when save folds setup plus removals into the final board.
+    // The full stones comparison above and the independent coordinate oracle cover their meaning.
+    for (String key : List.of("PL", "LB", "XX", "GN", "RU")) {
       String expectedValue = left.getProperty(key);
       if (expectedValue != null && !expectedValue.equals(right.getProperty(key))) {
         throw new AssertionError("property " + key + " changed during UI round-trip");
