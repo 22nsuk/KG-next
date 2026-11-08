@@ -3341,19 +3341,30 @@ public class KataGoAutoSetupDialog extends JDialog {
     if (displayState == BenchmarkDisplayState.IDLE && !unavailableReason.isBlank()) {
       displayState = BenchmarkDisplayState.UNAVAILABLE;
     }
-    if (displayState == BenchmarkDisplayState.IDLE) {
+    if (displayState == BenchmarkDisplayState.IDLE
+        || displayState == BenchmarkDisplayState.COMPLETE) {
       if (result == null) {
         displayState = BenchmarkDisplayState.EMPTY;
       } else if (benchmarkResultIsHistorical) {
         displayState = BenchmarkDisplayState.STALE;
       } else if (result.nnEvalsPerSecond > 0.0 && result.visitsPerSecond > 0.0) {
-        displayState = BenchmarkDisplayState.COMPLETE;
+        displayState =
+            result.measuredSettings == null
+                ? BenchmarkDisplayState.UNVERIFIED
+                : result.hasMeasuredRecommendation()
+                    ? BenchmarkDisplayState.COMPLETE
+                    : BenchmarkDisplayState.RECOMMENDATION_UNMEASURED;
       } else {
         displayState = BenchmarkDisplayState.LEGACY;
       }
     }
     renderBenchmarkReport(result, displayState, benchmarkTransientStatus);
     List<String> details = new ArrayList<>();
+    if (result != null) {
+      details.add(KataGoRuntimeHelper.formatBenchmarkMeasuredSettings(result));
+      details.add(KataGoRuntimeHelper.formatBenchmarkRecommendedSettings(result));
+      details.add(text("AutoSetup.benchmarkMeasurementScope"));
+    }
     if (targetEntry != null) {
       details.add(
           featurecat.lizzie.util.EngineThreadPolicy.message(
@@ -3508,7 +3519,10 @@ public class KataGoAutoSetupDialog extends JDialog {
             + ", "
             + text("AutoSetup.benchmarkSearchSpeed")
             + " "
-            + lblBenchmarkVisitsValue.getText();
+            + lblBenchmarkVisitsValue.getText()
+            + (result == null
+                ? ""
+                : ", " + KataGoRuntimeHelper.formatBenchmarkMeasuredSettings(result));
     lblBenchmarkReportStatus.getAccessibleContext().setAccessibleName(accessibleSummary);
   }
 
@@ -3546,6 +3560,8 @@ public class KataGoAutoSetupDialog extends JDialog {
         displayState == BenchmarkDisplayState.COMPLETE
                 || displayState == BenchmarkDisplayState.LEGACY
                 || displayState == BenchmarkDisplayState.STALE
+                || displayState == BenchmarkDisplayState.UNVERIFIED
+                || displayState == BenchmarkDisplayState.RECOMMENDATION_UNMEASURED
             ? text("AutoSetup.optimizePerformanceAgain")
             : text("AutoSetup.optimizePerformance");
     if (!buttonText.equals(btnOptimizePerformance.getText())) {
@@ -3593,6 +3609,10 @@ public class KataGoAutoSetupDialog extends JDialog {
         return text("AutoSetup.benchmarkDone");
       case LEGACY:
         return text("AutoSetup.benchmarkLegacyResult");
+      case UNVERIFIED:
+        return text("AutoSetup.benchmarkMeasurementUnverified");
+      case RECOMMENDATION_UNMEASURED:
+        return text("AutoSetup.benchmarkRecommendationUnmeasured");
       case STALE:
         return text("B11SpeedNotice.historicalStatus");
       case RUNNING:
@@ -3619,6 +3639,8 @@ public class KataGoAutoSetupDialog extends JDialog {
         return ERROR_COLOR();
       case LEGACY:
       case STALE:
+      case UNVERIFIED:
+      case RECOMMENDATION_UNMEASURED:
       case RUNNING:
       case CANCELLED:
         return WARN_COLOR();
@@ -7226,6 +7248,8 @@ public class KataGoAutoSetupDialog extends JDialog {
     IDLE,
     EMPTY,
     LEGACY,
+    UNVERIFIED,
+    RECOMMENDATION_UNMEASURED,
     STALE,
     RUNNING,
     COMPLETE,

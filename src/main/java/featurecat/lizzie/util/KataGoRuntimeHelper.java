@@ -18,6 +18,7 @@ import featurecat.lizzie.util.katago.tuning.AppleSiliconHardwareProbe;
 import featurecat.lizzie.util.katago.tuning.AppleSiliconTuningPlanner;
 import featurecat.lizzie.util.katago.tuning.KataGoBenchmarkObservation;
 import featurecat.lizzie.util.katago.tuning.KataGoBenchmarkParser;
+import featurecat.lizzie.util.katago.tuning.KataGoBenchmarkSettings;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import featurecat.lizzie.util.katago.tuning.KataGoExperimentalTuningSelector;
 import featurecat.lizzie.util.katago.tuning.KataGoTuningCandidate;
@@ -711,6 +712,7 @@ public final class KataGoRuntimeHelper {
     public final double visitsPerSecond;
     public final double nnEvalsPerSecond;
     public final double averageBatchSize;
+    public final KataGoBenchmarkSettings measuredSettings;
     private final KataGoTuningProfile tuningProfile;
 
     private BenchmarkResult(
@@ -731,6 +733,7 @@ public final class KataGoRuntimeHelper {
           0.0,
           0.0,
           0.0,
+          null,
           null);
     }
 
@@ -746,7 +749,8 @@ public final class KataGoRuntimeHelper {
         double visitsPerSecond,
         double nnEvalsPerSecond,
         double averageBatchSize,
-        KataGoTuningProfile tuningProfile) {
+        KataGoTuningProfile tuningProfile,
+        KataGoBenchmarkSettings measuredSettings) {
       this.recommendedThreads = recommendedThreads;
       this.currentThreads = currentThreads;
       this.backendLabel = backendLabel;
@@ -759,6 +763,15 @@ public final class KataGoRuntimeHelper {
       this.nnEvalsPerSecond = Math.max(0.0, nnEvalsPerSecond);
       this.averageBatchSize = Math.max(0.0, averageBatchSize);
       this.tuningProfile = tuningProfile;
+      this.measuredSettings = measuredSettings;
+    }
+
+    public boolean hasMeasuredRecommendation() {
+      return measuredSettings != null
+          && measuredSettings.matchesRecommendation(
+              recommendedThreads, nnServerThreadsPerModel, maxBatchSize)
+          && Double.isFinite(visitsPerSecond)
+          && visitsPerSecond > 0.0;
     }
   }
 
@@ -3059,13 +3072,45 @@ public final class KataGoRuntimeHelper {
         stored.optDouble("katago-benchmark-visits-per-second", 0.0),
         stored.optDouble("katago-benchmark-nn-evals-per-second", 0.0),
         stored.optDouble("katago-benchmark-average-batch-size", 0.0),
-        null);
+        null,
+        KataGoBenchmarkSettings.fromJson(
+            stored.optJSONObject("katago-benchmark-measured-settings")));
   }
 
   public static BenchmarkResult getStoredBenchmarkResult(SetupSnapshot snapshot) {
     return snapshot == null
         ? null
         : getStoredBenchmarkResult(EngineThreadPolicy.findSavedEntry(snapshot.savedEntryId));
+  }
+
+  /** A conservative GTP throughput reference; unknown settings are not a match. */
+  public static double getMeasuredBenchmarkSpeed(SetupSnapshot snapshot) {
+    if (snapshot == null) return 0.0;
+    EngineData entry = EngineThreadPolicy.findSavedEntry(snapshot.savedEntryId);
+    BenchmarkResult result = getStoredBenchmarkResult(entry);
+    if (result == null
+        || !result.hasMeasuredRecommendation()
+        // The flat measurement metadata does not prove a fixed Metal candidate's device mapping.
+        || result.measuredSettings.source() == KataGoBenchmarkSettings.Source.EXPERIMENTAL_PROFILE
+        || result.measuredSettings.requiresDeviceMapping()
+        || result.measuredSettings.nnServerThreadsPerModel() <= 0
+        || result.measuredSettings.maxBatchSize() <= 0
+        || !EngineThreadPolicy.environmentStatus(entry).isEmpty()) return 0.0;
+    List<String> launch =
+        applyEntryLaunchPolicy(snapshotSourceCommand(snapshot), snapshot.enginePath, entry);
+    KataGoCommandSpec spec = KataGoCommandSpec.parse(launch);
+    KataGoBenchmarkSettings measured = result.measuredSettings;
+    return spec.overrideValue("numSearchThreads")
+                .orElse("")
+                .equals(String.valueOf(measured.searchThreads()))
+            && spec.overrideValue("numNNServerThreadsPerModel")
+                .orElse("")
+                .equals(String.valueOf(measured.nnServerThreadsPerModel()))
+            && spec.overrideValue("nnMaxBatchSize")
+                .orElse("")
+                .equals(String.valueOf(measured.maxBatchSize()))
+        ? result.visitsPerSecond
+        : 0.0;
   }
 
   public static BenchmarkResult runBenchmark(
@@ -3107,7 +3152,8 @@ public final class KataGoRuntimeHelper {
         result.visitsPerSecond,
         result.nnEvalsPerSecond,
         result.averageBatchSize,
-        result.tuningProfile);
+        result.tuningProfile,
+        result.measuredSettings);
   }
 
   static String resolveBenchmarkBackendLabel(Path enginePath, String reportedBackend) {
@@ -3853,6 +3899,7 @@ public final class KataGoRuntimeHelper {
     KataGoTuningProfile.Metrics metrics =
         observation
             .recommendedMetric()
+            .filter(KataGoBenchmarkObservation.ThreadMetrics::validForMeasurement)
             .map(KataGoTuningProfile.Metrics::from)
             .orElseGet(() -> new KataGoTuningProfile.Metrics(0.0, 0.0, 0.0, 0.0));
     String backend =
@@ -3881,7 +3928,10 @@ public final class KataGoRuntimeHelper {
         metrics.visitsPerSecond(),
         metrics.nnEvalsPerSecond(),
         metrics.averageBatchSize(),
-        profile);
+        profile,
+        metrics.visitsPerSecond() > 0.0
+            ? KataGoBenchmarkSettings.threadSweep(parsed.recommendedThreads)
+            : null);
   }
 
   /** Runs the opt-in Apple Silicon GPU/ANE and batch search. This is never the default path. */
@@ -4145,7 +4195,12 @@ public final class KataGoRuntimeHelper {
         selectedMetrics.visitsPerSecond(),
         selectedMetrics.nnEvalsPerSecond(),
         selectedMetrics.averageBatchSize(),
-        profile);
+        profile,
+        new KataGoBenchmarkSettings(
+            selection.searchThreads(),
+            candidate.devices().size(),
+            candidate.batch(),
+            KataGoBenchmarkSettings.Source.EXPERIMENTAL_PROFILE));
   }
 
   private static ProgressListener layeredProgressListener(
@@ -4187,6 +4242,8 @@ public final class KataGoRuntimeHelper {
       policy.put("katago-benchmark-visits-per-second", result.visitsPerSecond);
       policy.put("katago-benchmark-nn-evals-per-second", result.nnEvalsPerSecond);
       policy.put("katago-benchmark-average-batch-size", result.averageBatchSize);
+      if (result.measuredSettings == null) policy.remove("katago-benchmark-measured-settings");
+      else policy.put("katago-benchmark-measured-settings", result.measuredSettings.toJson());
       policy.put("environment", new JSONObject(target.environment.toString()));
       policy.put(APPLE_AUTO_OPTIMIZE_VERSION_KEY, APPLE_AUTO_OPTIMIZE_VERSION);
       if (result.tuningProfile != null) new KataGoTuningStore(policy).save(result.tuningProfile);
@@ -5345,7 +5402,10 @@ public final class KataGoRuntimeHelper {
       return null;
     }
     String summary = String.join(" | ", summaryLines);
-    KataGoBenchmarkObservation.ThreadMetrics metrics = observation.recommendedMetric().orElse(null);
+    KataGoBenchmarkObservation.Measurement measurement =
+        observation.recommendedMeasurement().orElse(null);
+    KataGoBenchmarkObservation.ThreadMetrics metrics =
+        measurement == null ? null : measurement.metrics();
     return new BenchmarkResult(
         observation.recommendedThreads(),
         observation.currentThreads(),
@@ -5358,7 +5418,8 @@ public final class KataGoRuntimeHelper {
         metrics == null ? 0.0 : metrics.visitsPerSecond(),
         metrics == null ? 0.0 : metrics.nnEvalsPerSecond(),
         metrics == null ? 0.0 : metrics.averageBatchSize(),
-        null);
+        null,
+        measurement == null ? null : measurement.settings());
   }
 
   private static void prependPath(ProcessBuilder processBuilder, Path path) {
@@ -8216,7 +8277,7 @@ public final class KataGoRuntimeHelper {
         || lowered.contains("取消");
   }
 
-  public static String formatBenchmarkResult(BenchmarkResult result) {
+  public static String formatBenchmarkRecommendedSettings(BenchmarkResult result) {
     if (result == null || result.recommendedThreads <= 0) {
       return resource(
           "AutoSetup.benchmarkMissing",
@@ -8236,9 +8297,57 @@ public final class KataGoRuntimeHelper {
     if (result.maxBatchSize > 0) {
       builder.append("  |  nnMaxBatchSize ").append(result.maxBatchSize);
     }
+    return builder.toString();
+  }
+
+  public static String formatBenchmarkMeasuredSettings(BenchmarkResult result) {
+    if (result == null || result.measuredSettings == null) {
+      return resource(
+          "AutoSetup.benchmarkMeasurementUnknown",
+          "The saved speed has no measurement settings. Run the benchmark again to identify them.");
+    }
+    KataGoBenchmarkSettings settings = result.measuredSettings;
+    String origin =
+        switch (settings.source()) {
+          case THREAD_SWEEP ->
+              resource("AutoSetup.benchmarkMeasurementSweep", "Search-thread comparison");
+          case ADDITIONAL_SERVER_THREADS, ADDITIONAL_BATCH_SIZE ->
+              resource("AutoSetup.benchmarkMeasurementAdditional", "Additional settings trial");
+          case EXPERIMENTAL_PROFILE ->
+              resource("AutoSetup.benchmarkMeasurementFixed", "Fixed candidate measurement");
+        };
+    String details =
+        resource("AutoSetup.benchmarkMeasuredSettings", "Measured settings")
+            + " ("
+            + origin
+            + "): numSearchThreads="
+            + settings.searchThreads()
+            + " | nnMaxBatchSize="
+            + (settings.maxBatchSize() > 0
+                ? settings.maxBatchSize()
+                : resource("AutoSetup.benchmarkControlledBatch", "benchmark-controlled"))
+            + " | numNNServerThreadsPerModel="
+            + (settings.nnServerThreadsPerModel() > 0
+                ? settings.nnServerThreadsPerModel()
+                : resource("AutoSetup.benchmarkSettingUnreported", "not reported"));
+    if (!result.hasMeasuredRecommendation()) {
+      details +=
+          "\n"
+              + resource(
+                  "AutoSetup.benchmarkRecommendationUnmeasured",
+                  "No complete measurement is linked to the recommended combination.");
+    }
+    return details;
+  }
+
+  public static String formatBenchmarkResult(BenchmarkResult result) {
+    if (result == null || result.recommendedThreads <= 0)
+      return formatBenchmarkRecommendedSettings(result);
+    StringBuilder builder = new StringBuilder(formatBenchmarkRecommendedSettings(result));
+    builder.append('\n').append(formatBenchmarkMeasuredSettings(result));
     if (result.visitsPerSecond > 0.0) {
       builder
-          .append("  |  ")
+          .append('\n')
           .append(String.format(Locale.ROOT, "%.1f visits/s", result.visitsPerSecond));
     }
     if (result.backendLabel != null && !result.backendLabel.isEmpty()) {

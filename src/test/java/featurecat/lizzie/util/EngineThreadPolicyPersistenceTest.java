@@ -6,6 +6,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.EngineData;
+import featurecat.lizzie.util.katago.tuning.KataGoBenchmarkSettings;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -13,6 +14,8 @@ import java.util.List;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineThreadPolicyPersistenceTest {
   @TempDir Path root;
@@ -80,6 +83,239 @@ class EngineThreadPolicyPersistenceTest {
       assertEquals("renamed A", reloaded.get(1).name);
     } finally {
       Lizzie.config = previous;
+    }
+  }
+
+  @Test
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  void measuredSpeedsKeepTheirTrialSettingsAcrossSaveReloadAndSourceChanges() throws Exception {
+    try (BenchmarkEnvironment env = new BenchmarkEnvironment()) {
+      try (var input =
+          getClass().getResourceAsStream("/featurecat/lizzie/util/benchmark-extra-settings.txt")) {
+        Files.write(root.resolve("benchmark-output"), input.readAllBytes());
+      }
+      EngineData entry = env.entry("Measured settings");
+      Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
+      var result = KataGoRuntimeHelper.runBenchmarkAndApply(env.capture(entry), null, null);
+      assertEquals(420.0, result.visitsPerSecond);
+      assertEquals(350.0, result.nnEvalsPerSecond);
+      assertEquals(10, result.measuredSettings.searchThreads());
+      assertEquals(2, result.measuredSettings.nnServerThreadsPerModel());
+      assertEquals(5, result.measuredSettings.maxBatchSize());
+      assertTrue(result.hasMeasuredRecommendation());
+      JSONObject disk = new JSONObject(Files.readString(root.resolve("config.txt")));
+      Lizzie.config.leelazConfig = disk.getJSONObject("leelaz");
+      var saved = EngineThreadPolicy.findSavedEntry(entry.id);
+      var restored = KataGoRuntimeHelper.getStoredBenchmarkResult(saved);
+      assertEquals(result.measuredSettings, restored.measuredSettings);
+      assertEquals(result.visitsPerSecond, restored.visitsPerSecond);
+      var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(saved);
+      assertEquals(
+          0.0,
+          KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(snapshot),
+          "CFG still selects its own thread count, not the recommendation");
+      EngineThreadPolicy.saveSource(entry.id, EngineThreadPolicy.Source.BENCHMARK);
+      assertEquals(420.0, KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(snapshot));
+      assertTrue(KataGoRuntimeHelper.formatBenchmarkResult(restored).contains("nnMaxBatchSize=5"));
+      assertTrue(KataGoRuntimeHelper.formatBenchmarkResult(restored).contains("420.0 visits/s"));
+
+      Files.writeString(root.resolve("gtp.cfg"), "numSearchThreads=7\nnnMaxBatchSize=32\n");
+      assertEquals(0.0, KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(snapshot));
+      assertEquals(
+          result.measuredSettings,
+          KataGoRuntimeHelper.getStoredBenchmarkResult(EngineThreadPolicy.findSavedEntry(entry.id))
+              .measuredSettings);
+
+      Files.delete(root.resolve("benchmark-output"));
+      KataGoRuntimeHelper.runBenchmarkAndApply(env.capture(entry), null, null);
+      assertFalse(
+          EngineThreadPolicy.findSavedEntry(entry.id)
+              .threadPolicy
+              .has("katago-benchmark-measured-settings"),
+          "A new result without a detailed row cannot inherit the preceding measurement"
+              + " conditions");
+    }
+  }
+
+  @Test
+  void oldSpeedsKeepTheirRecommendationsWithoutInventingMeasurementSettings() {
+    EngineData entry = new EngineData();
+    entry.threadPolicy =
+        new JSONObject()
+            .put("katago-benchmark-threads", 10)
+            .put("katago-benchmark-nn-server-threads", 2)
+            .put("katago-benchmark-batch-size", 5)
+            .put("katago-benchmark-visits-per-second", 386.0);
+    var result = KataGoRuntimeHelper.getStoredBenchmarkResult(entry);
+    assertNotNull(result);
+    assertEquals(10, result.recommendedThreads);
+    assertEquals(386.0, result.visitsPerSecond);
+    assertNull(result.measuredSettings);
+    assertFalse(result.hasMeasuredRecommendation());
+    entry.threadPolicy.put(
+        "katago-benchmark-measured-settings", new JSONObject().put("source", "UNKNOWN"));
+    assertNull(KataGoRuntimeHelper.getStoredBenchmarkResult(entry).measuredSettings);
+    JSONObject incomplete = KataGoBenchmarkSettings.threadSweep(10).toJson();
+    incomplete.remove("requiresDeviceMapping");
+    assertNull(KataGoBenchmarkSettings.fromJson(incomplete));
+    incomplete.put("requiresDeviceMapping", "false");
+    assertNull(KataGoBenchmarkSettings.fromJson(incomplete));
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {2, 4})
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  void perThreadGpuAdviceCannotSupplyAnEstimateFromScalarAgreementAlone(int servers)
+      throws Exception {
+    try (BenchmarkEnvironment env = new BenchmarkEnvironment()) {
+      String output;
+      try (var input =
+          getClass().getResourceAsStream("/featurecat/lizzie/util/benchmark-extra-settings.txt")) {
+        output = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      }
+      StringBuilder deviceAdvice =
+          new StringBuilder(
+                  "To use this, set the following in your config:\n  numNNServerThreadsPerModel = ")
+              .append(servers)
+              .append('\n');
+      for (int i = 0; i < servers; i++)
+        deviceAdvice
+            .append("  cudaDeviceToUseThread")
+            .append(i)
+            .append(" = ")
+            .append(1 + i / 2)
+            .append('\n');
+      output =
+          output.replace(
+              "To use this, set numNNServerThreadsPerModel = 2 in your config.", deviceAdvice);
+      Files.writeString(root.resolve("benchmark-output"), output);
+      EngineData entry = env.entry("Explicit GPU device advice");
+      entry.threadPolicy = new JSONObject().put("source", "BENCHMARK");
+      Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
+      var result = KataGoRuntimeHelper.runBenchmarkAndApply(env.capture(entry), null, null);
+      assertEquals(420.0, result.visitsPerSecond);
+      assertTrue(result.measuredSettings.requiresDeviceMapping());
+      Lizzie.config.leelazConfig =
+          new JSONObject(Files.readString(root.resolve("config.txt"))).getJSONObject("leelaz");
+      var saved = EngineThreadPolicy.findSavedEntry(entry.id);
+      assertEquals(
+          result.measuredSettings,
+          KataGoRuntimeHelper.getStoredBenchmarkResult(saved).measuredSettings);
+      var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(saved);
+      var launch =
+          featurecat.lizzie.util.katago.tuning.KataGoCommandSpec.parse(
+              KataGoRuntimeHelper.applyEntryLaunchPolicy(
+                  snapshot.sourceArguments, snapshot.enginePath, saved));
+      assertEquals("10", launch.overrideValue("numSearchThreads").orElseThrow());
+      assertEquals(
+          String.valueOf(servers),
+          launch.overrideValue("numNNServerThreadsPerModel").orElseThrow());
+      assertEquals("5", launch.overrideValue("nnMaxBatchSize").orElseThrow());
+      assertEquals(0.0, KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(snapshot));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"numSearchThreads=7", "nnMaxBatchSize=32", "numNNServerThreadsPerModel=4"})
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  void explicitSettingsRemainSeparateFromTheMeasuredRecommendation(String override)
+      throws Exception {
+    try (BenchmarkEnvironment env = new BenchmarkEnvironment()) {
+      try (var input =
+          getClass().getResourceAsStream("/featurecat/lizzie/util/benchmark-extra-settings.txt")) {
+        Files.write(root.resolve("benchmark-output"), input.readAllBytes());
+      }
+      EngineData entry = env.entry("Explicit setting");
+      entry.commands += " -override-config " + override;
+      entry.threadPolicy = new JSONObject().put("source", "BENCHMARK");
+      Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
+      var result = KataGoRuntimeHelper.runBenchmarkAndApply(env.capture(entry), null, null);
+      var saved = EngineThreadPolicy.findSavedEntry(entry.id);
+      assertTrue(result.hasMeasuredRecommendation());
+      assertEquals("", EngineThreadPolicy.environmentStatus(saved));
+      assertTrue(saved.commands.contains(override));
+      assertEquals(
+          0.0,
+          KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(
+              KataGoAutoSetupHelper.inspectSavedEngine(saved)));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"complete", "partial", "nonfinite"})
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  void officialAppleWrapperRetainsOnlyCompleteOriginalSearchMeasurements(String row)
+      throws Exception {
+    var hardwareCache = KataGoRuntimeHelper.class.getDeclaredField("cachedAppleHardwareProfile");
+    hardwareCache.setAccessible(true);
+    Object previousHardware = hardwareCache.get(null);
+    try (BenchmarkEnvironment env = new BenchmarkEnvironment()) {
+      String output;
+      try (var input =
+          getClass().getResourceAsStream("/featurecat/lizzie/util/benchmark-extra-settings.txt")) {
+        output = new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      }
+      if (row.equals("partial"))
+        output =
+            output.replace("6 / 6 positions, visits/s = 386", "3 / 6 positions, visits/s = 386");
+      if (row.equals("nonfinite")) output = output.replace("nnEvals/s = 320.0", "nnEvals/s = NaN");
+      Files.writeString(root.resolve("benchmark-output"), output);
+      EngineData entry = env.entry("Official wrapper");
+      Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
+      var snapshot =
+          KataGoAutoSetupHelper.inspectSavedEngine(EngineThreadPolicy.findSavedEntry(entry.id));
+      var method =
+          KataGoRuntimeHelper.class.getDeclaredMethod(
+              "runOfficialAppleSiliconBenchmark",
+              KataGoAutoSetupHelper.SetupSnapshot.class,
+              KataGoAutoSetupHelper.ProgressListener.class,
+              KataGoAutoSetupHelper.DownloadSession.class);
+      method.setAccessible(true);
+      var result = (KataGoRuntimeHelper.BenchmarkResult) method.invoke(null, snapshot, null, null);
+      assertEquals(row.equals("complete") ? 386.0 : 0.0, result.visitsPerSecond);
+      assertFalse(
+          result.hasMeasuredRecommendation(),
+          "The extra NN/batch recommendation is not the original search measurement");
+      if (row.equals("complete")) {
+        assertEquals(KataGoBenchmarkSettings.threadSweep(10), result.measuredSettings);
+      } else {
+        assertNull(result.measuredSettings);
+      }
+    } finally {
+      hardwareCache.set(null, previousHardware);
+    }
+  }
+
+  @Test
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  void scalarAgreementCannotReuseAGpuMeasurementForAnExplicitAneDevice() throws Exception {
+    try (BenchmarkEnvironment env = new BenchmarkEnvironment()) {
+      EngineData entry = env.entry("GPU measurement, explicit ANE launch");
+      entry.commands +=
+          " -override-config numSearchThreads=10,nnMaxBatchSize=5,"
+              + "numNNServerThreadsPerModel=1,metalDeviceToUseModel0Thread0=100";
+      var settings =
+          new KataGoBenchmarkSettings(
+              10, 1, 5, KataGoBenchmarkSettings.Source.EXPERIMENTAL_PROFILE);
+      entry.threadPolicy =
+          new JSONObject()
+              .put("source", "BENCHMARK")
+              .put("katago-benchmark-threads", 10)
+              .put("katago-benchmark-batch-size", 5)
+              .put("katago-benchmark-topology", "GPU 0")
+              .put("katago-benchmark-visits-per-second", 450.0)
+              .put("katago-benchmark-measured-settings", settings.toJson());
+      entry.threadPolicy.put(
+          "environment",
+          EngineThreadPolicy.environment(KataGoAutoSetupHelper.inspectSavedEngine(entry)));
+      Utils.saveEngineSettings(new ArrayList<>(List.of(entry)));
+      assertTrue(KataGoRuntimeHelper.getStoredBenchmarkResult(entry).hasMeasuredRecommendation());
+      assertEquals("", EngineThreadPolicy.environmentStatus(entry));
+      assertEquals(
+          0.0,
+          KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(
+              KataGoAutoSetupHelper.inspectSavedEngine(entry)));
     }
   }
 
@@ -534,7 +770,10 @@ class EngineThreadPolicyPersistenceTest {
               if (root/'fail').exists():
                   print('controlled failure',flush=True)
                   sys.exit(7)
-              print('numSearchThreads = 8: (baseline) (recommended)',flush=True)
+              if (root/'benchmark-output').exists():
+                  print((root/'benchmark-output').read_text(),flush=True)
+              else:
+                  print('numSearchThreads = 8: (baseline) (recommended)',flush=True)
               """);
       assertTrue(engine.toFile().setExecutable(true));
       Files.writeString(root.resolve("gtp.cfg"), "numSearchThreads=3");
