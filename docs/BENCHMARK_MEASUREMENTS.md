@@ -62,7 +62,8 @@ mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true 
 
 The probe covers Korean, English and Simplified Chinese, fresh-completion states,
 recorded/unknown/unmatched settings, accessible descriptions, and wrapped text at
-the configured UI scales of 1 and 1.5. It saves screenshots under
+the configured UI scales of 1 and 1.5. Both cases are required by the desktop CI
+runner; a skipped or missing invocation fails its evidence check. It saves screenshots under
 `target/desktop-smoke/probes/benchmark-settings-*`. The mock engine is not launched
 for these UI checks; the screenshots' engine inspection indicator is fixture state.
 
