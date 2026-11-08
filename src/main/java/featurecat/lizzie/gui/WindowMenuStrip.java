@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import javax.swing.AbstractButton;
 import javax.swing.JButton;
+import javax.swing.JComponent;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JPanel;
@@ -39,10 +40,11 @@ public class WindowMenuStrip extends JPanel {
   private static final String POPUP_LISTENER_KEY = "lizzie.window-menu-strip.popup-listener";
   private JMenu recentlyHiddenMenu;
   private long recentlyHiddenAtMillis;
+  private JComponent combinedToolbar;
 
   public WindowMenuStrip(JMenuBar sourceMenuBar) {
     this.sourceMenuBar = sourceMenuBar;
-    setLayout(new FlowLayout(FlowLayout.LEFT, 8, 4));
+    setLayout(new TopHeaderPanel.WrapLayout(FlowLayout.LEFT, 8, 4));
     setOpaque(false);
     setBorder(new EmptyBorder(2, 10, 2, 10));
     rebuild();
@@ -88,8 +90,16 @@ public class WindowMenuStrip extends JPanel {
         button.installStyle();
       }
     }
+    if (combinedToolbar != null) add(combinedToolbar);
     revalidate();
     repaint();
+  }
+
+  /** Hosts the original compact controls; menu proxies never copy their state or listeners. */
+  void setCombinedToolbar(JComponent toolbar) {
+    if (combinedToolbar == toolbar) return;
+    combinedToolbar = toolbar;
+    rebuild();
   }
 
   public void refreshColors() {
@@ -104,7 +114,7 @@ public class WindowMenuStrip extends JPanel {
 
   @Override
   public Dimension getPreferredSize() {
-    Dimension size = super.getPreferredSize();
+    Dimension size = getLayout().preferredLayoutSize(this);
     return new Dimension(size.width, Math.max(Config.menuHeight + 6, size.height));
   }
 
@@ -113,7 +123,7 @@ public class WindowMenuStrip extends JPanel {
     FlowLayout layout = (FlowLayout) getLayout();
     int required = getInsets().left + getInsets().right + layout.getHgap();
     for (java.awt.Component child : getComponents()) {
-      if (!child.isVisible()) continue;
+      if (!child.isVisible() || child == combinedToolbar) continue;
       Dimension natural =
           child instanceof MenuButton button
               ? button.getUI().getPreferredSize(button)

@@ -25,6 +25,22 @@ class FunctionSearchTest {
           "weak");
 
   @Test
+  void toolbarVisibilityAndCandidateLimitHaveDistinctSearchDestinations() {
+    FunctionSearch search = new FunctionSearch();
+    Map<String, String> queries = Map.of(
+        "도구막대 PDA 숨기기", "menu.showPdaInToolbar",
+        "도구막대 WRN 표시", "menu.showWrnInToolbar",
+        "도구막대 후보 수 상한 표시", "menu.showSuggestionLimit",
+        "후보 수 개수", "toolbar.suggestion-limit");
+    queries.forEach((query, id) -> {
+      assertEquals(id, search.search(query, Locale.KOREAN).get(0).id(), query);
+      assertEquals(FunctionCatalog.TargetType.SETTING, FunctionCatalog.entry(id).targetType());
+    });
+    ResourceBundle korean = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREAN);
+    assertEquals("탐색 폭(WRN)", korean.getString(FunctionCatalog.entry("toolbar.wrn").titleKey()));
+  }
+
+  @Test
   void retiredSharingIsAbsentWhileLocalFilesAndOtherOnlineSourcesRemain() {
     List<String> ids = FunctionCatalog.entries().stream().map(FunctionCatalog.Entry::id).toList();
     assertTrue(ids.stream().noneMatch(id -> id.startsWith("share.")));

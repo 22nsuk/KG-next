@@ -14809,13 +14809,14 @@ public class LizzieFrame extends JFrame {
       windowMenuStrip.setVisible(false);
     } else {
       windowMenuStrip.rebuild();
+      windowMenuStrip.setSize(width, windowMenuStrip.getHeight());
+      windowMenuStrip.doLayout();
       int preferredMenuHeight =
           windowMenuStrip.getPreferredSize().height > 0
               ? windowMenuStrip.getPreferredSize().height
               : Config.menuHeight;
       windowMenuHeight = menuPresentationMode.contentOffset(preferredMenuHeight);
       windowMenuStrip.setBounds(0, 0, width, windowMenuHeight);
-      windowMenuStrip.setPreferredSize(new Dimension(width, windowMenuHeight));
       windowMenuStrip.invalidate();
       windowMenuStrip.revalidate();
       windowMenuStrip.doLayout();

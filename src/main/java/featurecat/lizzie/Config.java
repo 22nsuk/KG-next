@@ -1020,6 +1020,7 @@ public class Config {
 
 
   public boolean showWRNInMenu = true;
+  public boolean showSuggestionLimitInMenu = false;
   public boolean showPDAInMenu = true;
 
   public boolean enginePkPonder = false;
@@ -2106,6 +2107,7 @@ public class Config {
 
 
     showWRNInMenu = uiConfig.optBoolean("show-wrn-in-menu", true);
+    showSuggestionLimitInMenu = uiConfig.optBoolean("show-suggestion-limit-in-menu", false);
     showPDAInMenu = uiConfig.optBoolean("show-pda-in-menu", true);
     disableWRNInGame = uiConfig.optBoolean("disable-wrn-in-game", true);
 

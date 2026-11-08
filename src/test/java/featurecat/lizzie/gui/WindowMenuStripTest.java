@@ -3,9 +3,11 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.awt.Component;
+import java.awt.Dimension;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -14,10 +16,40 @@ import javax.swing.JButton;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
+import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
+import javax.swing.JTextField;
 import org.junit.jupiter.api.Test;
 
 class WindowMenuStripTest {
+  @Test
+  void combinedToolbarKeepsItsControlsAndReservesWrappedHeight() {
+    JMenuBar menuBar = new JMenuBar();
+    menuBar.add(new JMenu("View"));
+    WindowMenuStrip strip = new WindowMenuStrip(menuBar);
+    JPanel controls = new JPanel();
+    JTextField editor = new JTextField("10", 3);
+    controls.add(editor);
+    controls.setPreferredSize(new Dimension(240, 30));
+    strip.setSize(300, 100);
+    strip.setCombinedToolbar(controls);
+    int wrappedHeight = strip.getPreferredSize().height;
+    strip.doLayout();
+    assertTrue(controls.getY() > strip.getComponent(0).getY());
+    assertTrue(controls.getY() + controls.getHeight() <= wrappedHeight);
+
+    strip.rebuild();
+    assertSame(strip, controls.getParent());
+    assertSame(controls, editor.getParent());
+    assertEquals("10", editor.getText());
+    strip.setSize(800, 100);
+    assertTrue(strip.getPreferredSize().height < wrappedHeight);
+
+    strip.setCombinedToolbar(null);
+    assertEquals(1, strip.getComponentCount());
+    assertFalse(strip.isAncestorOf(editor));
+  }
+
   @Test
   void mirrorsProminentToolbarActionsAndDelegatesClicks() {
     JMenuBar menuBar = new JMenuBar();
@@ -39,9 +71,7 @@ class WindowMenuStripTest {
     assertEquals("AI 解说", mirroredButton.getText());
     assertEquals("aiCommentaryToolbarButton", mirroredButton.getName());
     assertEquals("AI 解说", mirroredButton.getAccessibleContext().getAccessibleName());
-    assertEquals(
-        "生成当前棋局解说",
-        mirroredButton.getAccessibleContext().getAccessibleDescription());
+    assertEquals("生成当前棋局解说", mirroredButton.getAccessibleContext().getAccessibleDescription());
 
     mirroredButton.doClick(0);
 
