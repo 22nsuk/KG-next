@@ -105,7 +105,7 @@ public class SGFParser {
 
       boolean returnValue;
       try {
-        value = normalizeStructuralNewlines(value);
+        value = normalizeSgfInput(value);
         if (value == null) {
           SgfObservation.record("open", "failed", null, null);
           return false;
@@ -178,7 +178,7 @@ public class SGFParser {
   }
 
   public static boolean loadFromString(String sgfString, boolean syncPrimaryEngine) {
-    sgfString = normalizeStructuralNewlines(sgfString);
+    sgfString = normalizeSgfInput(sgfString);
     if (sgfString == null) {
       SgfObservation.record("import", "failed", null, null);
       return false;
@@ -385,7 +385,7 @@ public class SGFParser {
   }
 
   public static boolean loadFromStringforedit(String sgfString) {
-    sgfString = normalizeStructuralNewlines(sgfString);
+    sgfString = normalizeSgfInput(sgfString);
     if (sgfString == null) {
       SgfObservation.record("import", "failed", null, null);
       return false;
@@ -459,6 +459,111 @@ public class SGFParser {
       }
     }
     return true;
+  }
+
+  private static String normalizeSgfInput(String value) {
+    value = normalizeStructuralNewlines(value);
+    if (value == null) return null;
+    // Match the parsers' surrounding-text tolerance before reading SZ or setup values.
+    int start = value.indexOf('(');
+    int end = value.lastIndexOf(')');
+    if (start >= 0 && end > start) value = value.substring(start, end + 1);
+    int[] size = parseBoardSize(value);
+    return normalizeSetupRanges(value, size[0], size[1]);
+  }
+
+  /**
+   * Expand ranges before the parsers apply setup points. Keeping properties as individual points lets
+   * handicap recognition and edited-snapshot serialization use their existing contracts.
+   */
+  private static String normalizeSetupRanges(String value, int width, int height) {
+    if (value.indexOf(':') < 0) return value;
+    StringBuilder normalized = null;
+    StringBuilder tagBuilder = new StringBuilder();
+    String tag = "";
+    int valueStart = -1;
+    int copied = 0;
+    boolean escaped = false;
+    for (int i = 0; i < value.length(); i++) {
+      char c = value.charAt(i);
+      if (valueStart >= 0) {
+        if (escaped) {
+          escaped = false;
+        } else if (c == '\\') {
+          escaped = true;
+        } else if (c == ']') {
+          if (isSetupStoneProperty(tag)) {
+            String points = value.substring(valueStart, i);
+            if (points.indexOf(':') >= 0) {
+              String expanded = expandSetupRange(points, width, height);
+              if (expanded == null) return null;
+              if (normalized == null) normalized = new StringBuilder(value.length());
+              normalized.append(value, copied, valueStart - 1).append(expanded);
+              copied = i + 1;
+            }
+          }
+          valueStart = -1;
+        }
+      } else if (c == '[') {
+        if (tagBuilder.length() > 0) {
+          // Match the legacy parsers' Smart-Go name handling, including an empty resulting tag.
+          tag = tagBuilder.toString().replaceAll("[a-z]", "");
+          tagBuilder.setLength(0);
+        }
+        valueStart = i + 1;
+      } else if (c == '(' || c == ')' || c == ';') {
+        tag = "";
+        tagBuilder.setLength(0);
+      } else if (SGF_WHITESPACE.indexOf(c) < 0) {
+        tagBuilder.append(c);
+      }
+    }
+    if (valueStart >= 0 && isSetupStoneProperty(tag) && value.indexOf(':', valueStart) >= 0) {
+      return null;
+    }
+    return normalized == null ? value : normalized.append(value, copied, value.length()).toString();
+  }
+
+  private static String expandSetupRange(String value, int width, int height) {
+    // Use reopen's dimension contract before a short range can expand into billions of points.
+    // Preserve its legacy fallback for dimensions below two; this is not a new heap/engine limit.
+    if (!Board.isValidBoardSize(
+        width < 2 ? DEFAULT_BOARD_SIZE : width, height < 2 ? DEFAULT_BOARD_SIZE : height)) {
+      return null;
+    }
+    String[] ends = value.split(":", -1);
+    if (ends.length != 2) return null;
+    int[] first = setupRangeEndpoint(ends[0], width, height);
+    int[] last = setupRangeEndpoint(ends[1], width, height);
+    if (first == null || last == null || first[0] > last[0] || first[1] > last[1]) {
+      return null;
+    }
+    StringBuilder points = new StringBuilder();
+    for (int x = first[0]; x <= last[0]; x++) {
+      for (int y = first[1]; y <= last[1]; y++) {
+        points.append('[').append(asCoord(x, y, width, height)).append(']');
+      }
+    }
+    return points.toString();
+  }
+
+  private static int[] setupRangeEndpoint(String value, int width, int height) {
+    int[] point;
+    if (width >= 52 || height >= 52) {
+      String[] axes = value.trim().split("_", -1);
+      if (axes.length != 2) return null;
+      try {
+        point = new int[] {Integer.parseInt(axes[0]), Integer.parseInt(axes[1])};
+      } catch (NumberFormatException invalidCoordinate) {
+        return null;
+      }
+    } else {
+      if (value.length() != 2) return null;
+      point = convertSgfPosToCoord(value, width, height);
+    }
+    return point != null && point[0] >= 0 && point[0] < width && point[1] >= 0 && point[1] < height
+        ? point
+        : null;
   }
 
   /** Accept escaped LF/CRLF only between SGF tokens, never inside property values. */
@@ -4117,7 +4222,7 @@ public class SGFParser {
   }
 
   public static BoardHistoryList parseSgf(String value, boolean first) {
-    value = normalizeStructuralNewlines(value);
+    value = normalizeSgfInput(value);
     if (value == null) {
       return null;
     }
@@ -4734,6 +4839,9 @@ public class SGFParser {
   }
 
   public static int parseBranch(BoardHistoryList history, String value) {
+    int[] size = resolveHistoryBoardSize(history);
+    value = normalizeSetupRanges(value, size[0], size[1]);
+    if (value == null) return -1;
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
     int subTreeDepth = 0;

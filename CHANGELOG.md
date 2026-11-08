@@ -7,6 +7,8 @@ All notable maintenance updates to this fork are documented here.
 - Extract KataGo `kata-raw-nn` heat-map parsing from `Leelaz`, exclude pass probability from board rows, and keep in-flight responses connected to the current display lists across heat-map resets.
 ### KG-next
 
+- Preserve compressed SGF setup point lists (`AB`, `AW`, `AE`) through file, clipboard, edit and branch imports, handicap recognition and repeated saves. Reject malformed ranges without retaining a partial import, and keep later edits when saving setup snapshots. Validate board dimensions before expanding ranges, and exercise compressed setup through desktop open, engine synchronization, save and reopen.
+
 - Emphasize previous-move changes with bold, fitted text and gain/loss colors. Add opt-in winrates beside player names through the name strip, View menu and function search; label saved, retained and earlier-position readings, preserve missing-analysis placeholders and comparison-engine ownership, and save the display choice transactionally. See [Analysis readability](docs/ANALYSIS_READABILITY.md).
 
 - Click the main window's rules caption to choose rules and komi for the current game. Keep handicap komi and startup defaults, wait for matching rules confirmation before changing komi, and gate analysis until the current game has been restored to the engine pair. Preserve prior analysis payloads and unchanged/rejected selections. See [Quick rules and komi switching](docs/QUICK_RULE_SWITCHING.md).
