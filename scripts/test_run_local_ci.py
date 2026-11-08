@@ -155,7 +155,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
+            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -240,6 +240,11 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot"),
                 ("featurecat.lizzie.gui.RulesQuickSwitchDesktopTest", "captionPresetsConvergeTheCurrentGameAndKeepHandicapDefaultsAndStaleMenusSafe"),
                 ("featurecat.lizzie.gui.AnalysisReadabilityDesktopTest", "nameWinratesAndMoveSummaryRemainReadableAndInteractive"),
+                *tuple(
+                    ("featurecat.lizzie.gui.ToolbarSettingsDesktopTest",
+                     f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]")
+                    for invocation in range(1, 4)
+                ),
                 *tuple(
                     ("featurecat.lizzie.gui.BenchmarkMeasurementDesktopTest",
                      f"resultCardsKeepMeasuredSettingsAndRecommendationStatusVisible(String)[{invocation}]")

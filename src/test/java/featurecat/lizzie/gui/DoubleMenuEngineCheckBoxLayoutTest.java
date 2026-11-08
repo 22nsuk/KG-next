@@ -23,6 +23,8 @@ class DoubleMenuEngineCheckBoxLayoutTest {
     for (ResourceBundle bundle :
         List.of(
             Lizzie.resourceBundle,
+            ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREAN),
+            ResourceBundle.getBundle("l10n.DisplayStrings", Locale.JAPAN),
             ResourceBundle.getBundle("l10n.DisplayStrings", Locale.SIMPLIFIED_CHINESE))) {
       assertKomiStyleGroup(bundle.getString("Menu.separateLblWrn"));
       assertKomiStyleGroup(bundle.getString("Menu.separateLblPda"));
@@ -38,7 +40,9 @@ class DoubleMenuEngineCheckBoxLayoutTest {
         for (int menuHeight : new int[] {20, 25, 30}) {
           Config.frameFontSize = fontSize;
           Config.menuHeight = menuHeight;
-          assertScalableGroup(fontSize, menuHeight);
+          for (String label : new String[] {"WRN", "탐색 폭(WRN)", "探索幅(WRN)"}) {
+            assertScalableGroup(fontSize, menuHeight, label);
+          }
         }
       }
     } finally {
@@ -85,12 +89,12 @@ class DoubleMenuEngineCheckBoxLayoutTest {
         () -> "label not sitting between checkbox and field: " + panel.getBounds());
   }
 
-  private static void assertScalableGroup(int fontSize, int menuHeight) {
+  private static void assertScalableGroup(int fontSize, int menuHeight, String text) {
     JFontCheckBox enable = new JFontCheckBox();
     JFontLabel label = new JFontLabel();
     JFontTextField field = new JFontTextField();
     Dimension naturalFieldSize = field.getPreferredSize();
-    JPanel panel = Menu.attachDoubleMenuLabeledField(enable, label, field, "WRN");
+    JPanel panel = Menu.attachDoubleMenuLabeledField(enable, label, field, text);
     Dimension preferred = panel.getPreferredSize();
     panel.setSize(preferred);
     panel.doLayout();

@@ -167,9 +167,16 @@ public class TopHeaderPanel extends JPanel {
     }
   }
 
-  private static final class WrapLayout extends FlowLayout {
-    private WrapLayout(int align, int hgap, int vgap) {
+  static final class WrapLayout extends FlowLayout {
+    private final boolean useParentWidth;
+
+    WrapLayout(int align, int hgap, int vgap) {
+      this(align, hgap, vgap, false);
+    }
+
+    WrapLayout(int align, int hgap, int vgap, boolean useParentWidth) {
       super(align, hgap, vgap);
+      this.useParentWidth = useParentWidth;
     }
 
     @Override
@@ -186,7 +193,7 @@ public class TopHeaderPanel extends JPanel {
 
     private Dimension layoutSize(Container target, boolean preferred) {
       synchronized (target.getTreeLock()) {
-        int targetWidth = target.getSize().width;
+        int targetWidth = layoutWidth(target);
         if (targetWidth <= 0) {
           Container parent = target.getParent();
           while (parent != null && targetWidth <= 0) {
@@ -241,6 +248,19 @@ public class TopHeaderPanel extends JPanel {
 
         return dimension;
       }
+    }
+
+    private int layoutWidth(Container target) {
+      Container parent = target.getParent();
+      if (!useParentWidth || parent == null) return target.getWidth();
+      // Root layouts measure preferred heights before assigning new child bounds on resize.
+      int parentWidth =
+          parent.getLayout() instanceof WrapLayout wrap
+              ? wrap.layoutWidth(parent)
+              : parent.getWidth();
+      Insets parentInsets = parent.getInsets();
+      int parentGap = parent.getLayout() instanceof FlowLayout flow ? flow.getHgap() * 2 : 0;
+      return parentWidth - parentInsets.left - parentInsets.right - parentGap;
     }
 
     private void addRow(Dimension dimension, int rowWidth, int rowHeight) {
