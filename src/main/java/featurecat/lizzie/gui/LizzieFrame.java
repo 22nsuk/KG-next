@@ -17184,9 +17184,8 @@ public class LizzieFrame extends JFrame {
       BoardHistoryNode root, WholeGameAnalysisOptions options) {
     try {
       KataGoAutoSetupHelper.SetupSnapshot setup = KataGoAutoSetupHelper.inspectLocalSetup();
-      KataGoRuntimeHelper.BenchmarkResult benchmark =
-          KataGoRuntimeHelper.getStoredBenchmarkResult(setup);
-      if (benchmark == null || benchmark.visitsPerSecond <= 0.0) {
+      double referenceSpeed = KataGoRuntimeHelper.getMeasuredBenchmarkSpeed(setup);
+      if (referenceSpeed <= 0.0) {
         return -1L;
       }
       long requiredVisits = 0L;
@@ -17212,7 +17211,7 @@ public class LizzieFrame extends JFrame {
         }
         node = next;
       }
-      return Math.max(1L, Math.round(requiredVisits * 1000.0 / benchmark.visitsPerSecond));
+      return Math.max(1L, Math.round(requiredVisits * 1000.0 / referenceSpeed));
     } catch (RuntimeException estimateFailure) {
       return -1L;
     }

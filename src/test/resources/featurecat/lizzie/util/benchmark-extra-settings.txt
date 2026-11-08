@@ -1,0 +1,15 @@
+You are currently using the CUDA version of KataGo.
+Your GTP config is currently set to use numSearchThreads = 3
+numSearchThreads = 10: 6 / 6 positions, visits/s = 386.0 nnEvals/s = 320.0 nnBatches/s = 42.0 avgBatchSize = 7.6
+numSearchThreads = 10: +72 Elo (recommended)
+Running additional tests of a few other settings at numSearchThreads = 10.
+Re-measuring the current recommendation as a baseline:
+numSearchThreads = 10: 6 / 6 positions, visits/s = 380.0 nnEvals/s = 315.0 nnBatches/s = 41.0 avgBatchSize = 7.7
+Testing 2 NN server threads per GPU. This also uses more GPU memory:
+numSearchThreads = 10: 6 / 6 positions, visits/s = 401.0 nnEvals/s = 330.0 nnBatches/s = 45.0 avgBatchSize = 7.3
+2 NN server threads per GPU was 5.5% faster, will recommend it.
+Testing a max batch size of 5, half the search threads:
+numSearchThreads = 10: 6 / 6 positions, visits/s = 420.0 nnEvals/s = 350.0 nnBatches/s = 49.0 avgBatchSize = 5.0
+Half batch size was 4.7% faster, will recommend it.
+ADDITIONAL RECOMMENDATION: 2 NN server threads per GPU measured faster. To use this, set numNNServerThreadsPerModel = 2 in your config.
+ADDITIONAL RECOMMENDATION: a smaller batch size measured faster. To use this, set nnMaxBatchSize = 5 in your config.

@@ -13,7 +13,8 @@ public record KataGoBenchmarkObservation(
     List<ThreadMetrics> metrics,
     boolean mpsGraphInitialized,
     boolean coreMlInitialized,
-    boolean failureDetected) {
+    boolean failureDetected,
+    Measurement additionalMeasurement) {
 
   public KataGoBenchmarkObservation {
     backend = backend == null ? "" : backend.trim();
@@ -27,6 +28,29 @@ public record KataGoBenchmarkObservation(
       throw new IllegalArgumentException("max batch size must be between 0 and 65536");
     }
     metrics = metrics == null ? List.of() : List.copyOf(metrics);
+  }
+
+  public KataGoBenchmarkObservation(
+      String backend,
+      int currentThreads,
+      int recommendedThreads,
+      int recommendedNnServerThreadsPerModel,
+      int recommendedMaxBatchSize,
+      List<ThreadMetrics> metrics,
+      boolean mpsGraphInitialized,
+      boolean coreMlInitialized,
+      boolean failureDetected) {
+    this(
+        backend,
+        currentThreads,
+        recommendedThreads,
+        recommendedNnServerThreadsPerModel,
+        recommendedMaxBatchSize,
+        metrics,
+        mpsGraphInitialized,
+        coreMlInitialized,
+        failureDetected,
+        null);
   }
 
   /** Backwards-compatible constructor for benchmark output before KataGo 1.18 extra tuning. */
@@ -72,6 +96,26 @@ public record KataGoBenchmarkObservation(
     return recommendedThreads <= 0 ? Optional.empty() : metricForThreads(recommendedThreads);
   }
 
+  /** Keeps the original search table intact while selecting an attributable extra-trial result. */
+  public Optional<Measurement> recommendedMeasurement() {
+    if (additionalMeasurement != null) return Optional.of(additionalMeasurement);
+    return recommendedMetric()
+        .filter(ThreadMetrics::validForMeasurement)
+        .map(
+            metric ->
+                new Measurement(
+                    metric, KataGoBenchmarkSettings.threadSweep(metric.numSearchThreads())));
+  }
+
+  public record Measurement(ThreadMetrics metrics, KataGoBenchmarkSettings settings) {
+    public Measurement {
+      if (metrics == null
+          || settings == null
+          || metrics.numSearchThreads() != settings.searchThreads())
+        throw new IllegalArgumentException("Measurement and settings must describe the same row");
+    }
+  }
+
   /** Per-thread-count metrics from a completed detailed benchmark row. */
   public record ThreadMetrics(
       int numSearchThreads,
@@ -96,6 +140,16 @@ public record KataGoBenchmarkObservation(
           && positionsCompleted == positionsTotal
           && Double.isFinite(visitsPerSecond)
           && visitsPerSecond > 0.0;
+    }
+
+    public boolean validForMeasurement() {
+      return validForThroughputSelection()
+          && Double.isFinite(nnEvalsPerSecond)
+          && nnEvalsPerSecond >= 0.0
+          && Double.isFinite(nnBatchesPerSecond)
+          && nnBatchesPerSecond >= 0.0
+          && Double.isFinite(averageBatchSize)
+          && averageBatchSize >= 0.0;
     }
   }
 }
