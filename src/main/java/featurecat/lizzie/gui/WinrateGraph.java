@@ -419,7 +419,7 @@ public class WinrateGraph {
     if (data.scoreMeanIsBlackPerspective) {
       return data.scoreMean;
     }
-    return data.blackToPlay ? data.scoreMean : -data.scoreMean;
+    return data.analysisBlackToPlay(false) ? data.scoreMean : -data.scoreMean;
   }
 
   static String baselineMark(RenderableMetrics metrics) {
@@ -986,7 +986,7 @@ public class WinrateGraph {
             if (hasAnalysis) {
               if (data.winrate < 0) {
                 score = lastScore;
-              } else if (!data.blackToPlay) {
+              } else if (!data.analysisBlackToPlay(false)) {
                 score = -score;
               }
             } else {
@@ -1056,7 +1056,7 @@ public class WinrateGraph {
               data = node.getData();
               hasAnalysis = hasPrimaryAnalysisPayload(data);
               lastScore = data.scoreMean;
-              if (!data.blackToPlay && hasAnalysis) {
+              if (!data.analysisBlackToPlay(false) && hasAnalysis) {
                 lastScore = -lastScore;
               }
               // g.setStroke(new BasicStroke(Lizzie.config.winrateStrokeWidth));
@@ -2077,7 +2077,7 @@ public class WinrateGraph {
   private double resolveQuickOverviewWinrate(BoardHistoryNode node, double fallback) {
     double wr = node.getData().winrate;
     if (!hasPrimaryAnalysisPayload(node.getData()) || wr < 0) return fallback;
-    if (!node.getData().blackToPlay) return 100 - wr;
+    if (!node.getData().analysisBlackToPlay(false)) return 100 - wr;
     return wr;
   }
 
@@ -2472,7 +2472,7 @@ public class WinrateGraph {
     double winrate = data.winrate;
     if (winrate < 0) {
       winrate = 100 - fallbackWinrate;
-    } else if (!data.blackToPlay) {
+    } else if (!data.analysisBlackToPlay(false)) {
       winrate = 100 - winrate;
     }
     return Math.max(0, Math.min(100, winrate));

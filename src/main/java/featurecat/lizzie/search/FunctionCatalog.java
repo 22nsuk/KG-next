@@ -629,6 +629,14 @@ public final class FunctionCatalog {
               "Menu.mainPanelSettings",
               "Menu.showNameInBoard"),
           menuEntry(
+              "menu.showNameWinrates",
+              "Menu.showNameWinrates",
+              "FunctionSearch.category.view",
+              TargetType.SETTING,
+              "Menu.viewMenu",
+              "Menu.mainPanelSettings",
+              "Menu.showNameWinrates"),
+          menuEntry(
               "menu.showCommentConrolPane",
               "Menu.showCommentConrolPane",
               "FunctionSearch.category.view",

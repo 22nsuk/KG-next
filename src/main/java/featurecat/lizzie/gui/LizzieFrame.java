@@ -8743,7 +8743,7 @@ public class LizzieFrame extends JFrame {
     notifyWebBoard(false);
   }
 
-  /** Repaints graph progress without rebuilding the board and suggestion surfaces. */
+  /** Repaints progress, including current-position name readings when they are enabled. */
   public void refreshSilentAnalysisProgress() {
     analysisUiRefresh.requestGraph();
   }
@@ -8790,9 +8790,12 @@ public class LizzieFrame extends JFrame {
   }
 
   private void refreshAnalysisSurfaces(boolean includeBoard) {
-    if (includeBoard) {
+    // Silent results can update the displayed node too. Reuse the incremental board path
+    // for its name readings, while keeping graph-only progress cheap when they are hidden.
+    if (includeBoard || (Lizzie.config.showNameInBoard && NameWinrates.shown(Lizzie.config.uiConfig))) {
       refreshIndependentBoards();
-      refreshFromInfo = true;
+      // Silent progress may be the last update in a burst; do not apply the live-info cooldown.
+      refreshFromInfo = includeBoard;
       redrawBoardSurfacesOnly = true;
     }
     redrawWinratePaneOnly = true;
@@ -9383,55 +9386,25 @@ public class LizzieFrame extends JFrame {
       }
       return;
     }
-    double lastWR = 50; // winrate the previous move
-    boolean validLastWinrate = false; // whether it was actually calculated
-    Optional<BoardHistoryNode> previous =
-        Lizzie.board.getHistory().getCurrentHistoryNode().previous();
-    BoardData curData = Lizzie.board.getHistory().getCurrentHistoryNode().getData();
+    BoardHistoryNode currentNode = Lizzie.board.getHistory().getCurrentHistoryNode();
+    Optional<BoardHistoryNode> previous = currentNode.previous();
+    BoardData curData = currentNode.getData();
     EngineGameSnapshot engineGame = EngineGamePresentation.current();
     if (engineGame.playing() && Lizzie.board.getHistory().getMoveNumber() > 3) {
-      previous = Lizzie.board.getHistory().getCurrentHistoryNode().previous().get().previous();
-    } else if (isPlayingAgainstLeelaz || isAnaPlayingAgainstLeelaz)
+      previous = currentNode.previous().flatMap(BoardHistoryNode::previous);
+    } else if (isPlayingAgainstLeelaz || isAnaPlayingAgainstLeelaz) {
       if (Lizzie.board.getHistory().isBlacksTurn() == playerIsBlack && previous.isPresent()) {
         curData = previous.get().getData();
-        previous = Lizzie.board.getHistory().getCurrentHistoryNode().previous().get().previous();
-      }
-    if (previous.isPresent()) {
-      if (MoveStatusText.hasWinrate(previous.get().getData())) {
-        lastWR = previous.get().getData().winrate;
-        validLastWinrate = true;
-      } else {
-        if (previous.get().previous().isPresent()) {
-          BoardData prePreData = previous.get().previous().get().getData();
-          if (MoveStatusText.hasWinrate(prePreData)) {
-            lastWR = 100 - prePreData.winrate;
-            validLastWinrate = true;
-          }
-        }
+        previous = previous.get().previous();
       }
     }
-    if (engineGame.playing() && Lizzie.board.getHistory().getMoveNumber() > 3) {
-      lastWR = 100 - lastWR;
-    }
-    // Leelaz.WinrateStats stats = Lizzie.leelaz.getWinrateStats();
-    double curWR = curData.winrate; // stats.maxWinrate; // winrate on this move
-    boolean validWinrate = MoveStatusText.hasWinrate(curData);
-    //    if (isPlayingAgainstLeelaz
-    //        && playerIsBlack == !Lizzie.board.getHistory().getData().blackToPlay) {
-    //      validWinrate = false;
-    //    }
-
-    if (!validWinrate) {
-      curWR = 100 - lastWR; // display last move's winrate for now (with color difference)
-    }
-    double whiteWR, blackWR;
-    if (curData.blackToPlay) {
-      blackWR = curWR;
-    } else {
-      blackWR = 100 - curWR;
-    }
-
-    whiteWR = 100 - blackWR;
+    BoardData previousData = previous.map(BoardHistoryNode::getData).orElse(null);
+    WinrateReading reading = WinrateReading.forStatistics(curData, previousData,
+        previous.flatMap(BoardHistoryNode::previous).map(BoardHistoryNode::getData).orElse(null));
+    boolean validWinrate = reading.known() && reading.source() != WinrateReading.Source.PREVIOUS;
+    if (curData != currentNode.getData()) reading = reading.asPrevious();
+    double blackWR = reading.black();
+    double whiteWR = 100 - blackWR;
 
     // Background rectangle
     g.setColor(new Color(0, 0, 0, 130));
@@ -9485,59 +9458,38 @@ public class LizzieFrame extends JFrame {
               + Lizzie.resourceBundle.getString("LizzieFrame.komi")
               + Lizzie.leelaz.komi;
     }
+    text = MainWindowTitle.join(" · ", reading.sourceText(Lizzie.resourceBundle), text);
+    MoveStatusText.PreviousMove previousMove = MoveStatusText.previousMoveStatus(
+        Lizzie.resourceBundle, curData, previousData, isKataStyle);
+    int barHeight = engineGame.playing() ? height / 3 : height / 4;
     if (engineGame.playing()) {
-      drawString(
-          g,
-          posX,
-          posY + height * 17 / 20,
-          uiFont,
-          Font.PLAIN,
-          text,
-          height / 4,
-          width * 20 / 21,
-          0,
-          false);
+      drawString(g, posX, posY + height * 17 / 20, uiFont, Font.PLAIN, text,
+          height / 4, width * 20 / 21, 0, false);
     } else {
-      text =
-          MainWindowTitle.join(
-              "  ",
-              text,
-              MoveStatusText.previousMove(
-                  Lizzie.resourceBundle,
-                  curData,
-                  previous.map(BoardHistoryNode::getData).orElse(null),
-                  isKataStyle));
-
-      drawString(
-          g,
-          posX,
-          posY + height * 17 / 20,
-          uiFont,
-          Font.PLAIN,
-          text,
-          height / 4,
-          width * 20 / 21,
-          0,
-          false);
+      int statusHeight = Math.max(1, height - height / 3 - barHeight - 2);
+      MoveStatusLine.draw(g, uiFont, posX, posY + height - statusHeight / 2,
+          statusHeight, width * 20 / 21,
+          Math.round(Config.frameFontSize * Lizzie.javaScaleFactor) + 4, text, previousMove);
     }
 
-    if (validWinrate || validLastWinrate) {
+    if (reading.known()) {
       int maxBarwidth = (int) (width);
       int barWidthB = (int) (blackWR * maxBarwidth / 100);
       int barWidthW = (int) (whiteWR * maxBarwidth / 100);
       int barPosY = posY + height / 3;
       int barPosxB = (int) (posX);
       int barPosxW = barPosxB + barWidthB;
-      int barHeight = height / 3;
 
       // Draw winrate bars
       g.fillRect(barPosxW, barPosY, barWidthW, barHeight);
       g.setColor(Color.BLACK);
       g.fillRect(barPosxB, barPosY, barWidthB, barHeight);
       // Draw change of winrate bars
-      if (validWinrate && previous.map(n -> MoveStatusText.hasWinrate(n.getData())).orElse(false)) {
-        double gain = 100 - lastWR - curWR;
-        double blackLastWR = curData.blackToPlay ? 100 - lastWR : lastWR;
+      if (validWinrate && !previousMove.text().isEmpty()) {
+        double gain = engineGame.playing()
+            ? MoveStatusText.engineGameWinrateChange(curData, previousData)
+            : previousMove.winrateChange();
+        double blackLastWR = WinrateReading.of(previousData).black();
         int lastPosxW = barPosxB + (int) (blackLastWR * maxBarwidth / 100);
         int diffPosX = Math.min(barPosxW, lastPosxW);
         int diffWidth = Math.abs(barPosxW - lastPosxW);
@@ -9547,14 +9499,7 @@ public class LizzieFrame extends JFrame {
           g.setStroke(new BasicStroke(isGig ? 2f : 1f));
           boolean isGain = gain >= 0;
           g.setColor(isGain ? Color.GREEN : Color.RED);
-          boolean rightTri;
-          if (curData.blackToPlay) {
-            if (isGain) rightTri = false;
-            else rightTri = true;
-          } else {
-            if (isGain) rightTri = true;
-            else rightTri = false;
-          }
+          boolean rightTri = barPosxW > lastPosxW;
           if (rightTri) {
             if (diffWidth > 3) g.drawLine(diffPosX, barPosY, diffPosX + diffWidth - 3, barPosY);
             int triStart = Math.max(diffPosX, diffPosX + diffWidth - (isGig ? 7 : 5));
@@ -9586,15 +9531,15 @@ public class LizzieFrame extends JFrame {
 
       int fontHeigt = g.getFontMetrics().getAscent() - g.getFontMetrics().getDescent();
       g.setColor(Color.WHITE);
-      String winStringB = String.format(Locale.ENGLISH, "%.1f%%", blackWR);
-      String winStringW = String.format(Locale.ENGLISH, "%.1f%%", whiteWR);
+      String winStringB = reading.percent(true);
+      String winStringW = reading.percent(false);
       g.drawString(
-          winStringB, barPosxB + 2 * strokeRadius, posY + barHeight - (barHeight - fontHeigt) / 2);
+          winStringB, barPosxB + 2 * strokeRadius, posY + height / 3 - (height / 3 - fontHeigt) / 2);
       int swW = g.getFontMetrics().stringWidth(winStringW);
       g.drawString(
           winStringW,
           barPosxB + maxBarwidth - swW - 2 * strokeRadius,
-          posY + barHeight - (barHeight - fontHeigt) / 2);
+          posY + height / 3 - (height / 3 - fontHeigt) / 2);
       if (shouldDrawMoveNumberDown()) {
         int swB = g.getFontMetrics().stringWidth(winStringB);
         String moveNumber =
@@ -9604,7 +9549,7 @@ public class LizzieFrame extends JFrame {
           g.drawString(
               moveNumber,
               barPosxB + (maxBarwidth - swM) / 2,
-              posY + barHeight - (barHeight - fontHeigt) / 2);
+              posY + height / 3 - (height / 3 - fontHeigt) / 2);
         }
       }
       g.setColor(Color.GRAY);
@@ -10197,7 +10142,7 @@ public class LizzieFrame extends JFrame {
    * @param y y coordinate
    */
   public void onClickedForManul(int x, int y) {
-    if (tryInspectMatchRulesAt(x, y)) {
+    if (tryInspectMatchRulesAt(x, y) || togglePlayerNameWinratesAt(x, y)) {
       return;
     }
     if (isTrialActive()) {
@@ -10272,8 +10217,27 @@ public class LizzieFrame extends JFrame {
     }
   }
 
+  void togglePlayerNameWinrates() {
+    try {
+      NameWinrates.toggle(Lizzie.config);
+      refresh();
+    } catch (IOException failure) {
+      Utils.showMsg(String.format(Lizzie.resourceBundle.getString("EngineThreadPolicy.saveFailed"),
+          failure.getMessage()));
+    }
+  }
+
+  private boolean togglePlayerNameWinratesAt(int x, int y) {
+    boolean hit = boardRenderer != null && boardRenderer.isOnPlayerName(x, y);
+    if (!hit && Lizzie.config.isDoubleEngineMode() && boardRenderer2 != null) {
+      hit = boardRenderer2.isOnPlayerName(x, y);
+    }
+    if (hit) togglePlayerNameWinrates();
+    return hit;
+  }
+
   public void onClicked(int x, int y) {
-    if (tryInspectMatchRulesAt(x, y)) {
+    if (tryInspectMatchRulesAt(x, y) || togglePlayerNameWinratesAt(x, y)) {
       return;
     }
     clearSuggestionPreviewBeforeBoardClick();

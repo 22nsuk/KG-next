@@ -13,7 +13,7 @@ final class MainWindowTitle {
 
   static String evaluation(BoardData data, boolean withKomi) {
     if (!MoveStatusText.hasWinrate(data)) return "";
-    String text = MoveStatusText.decimal(data.blackToPlay ? data.winrate : 100 - data.winrate);
+    String text = MoveStatusText.decimal(data.analysisBlackToPlay(false) ? data.winrate : 100 - data.winrate);
     if (MoveStatusText.hasScore(data)) {
       double score = MoveStatusText.blackScore(data) + (withKomi ? data.getKomi() : 0);
       if (Double.isFinite(score)) text += " " + MoveStatusText.decimal(score);

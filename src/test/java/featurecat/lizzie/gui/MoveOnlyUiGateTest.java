@@ -900,12 +900,16 @@ class MoveOnlyUiGateTest {
     }
   }
 
-  @Test
-  void silentAndOrdinaryAnalysisRequestsShareTheProductionFrameRefreshBoundary() throws Exception {
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.CsvSource({"false,false", "true,false", "false,true", "true,true"})
+  void silentAndOrdinaryAnalysisRequestsShareTheProductionFrameRefreshBoundary(
+      boolean showNames, boolean showNameWinrates) throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {
       TrackingLizzieFrame frame = configuredFrame();
       Lizzie.frame = frame;
+      Lizzie.config.showNameInBoard = showNames;
+      Lizzie.config.uiConfig = new org.json.JSONObject().put(NameWinrates.SHOWN_KEY, showNameWinrates);
       AnalysisUiRefreshTestSupport.install(frame);
       var paints = new java.util.concurrent.atomic.AtomicInteger();
       var offEdt = new java.util.concurrent.atomic.AtomicBoolean();
@@ -925,7 +929,12 @@ class MoveOnlyUiGateTest {
       AnalysisUiRefreshTestSupport.awaitIdle(frame);
       assertEquals(1, paints.get(), "silent progress must not post one repaint per result");
       assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawWinratePaneOnly"));
-      assertFalse((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertEquals(
+          showNames && showNameWinrates,
+          (boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertFalse(
+          (boolean) getField(LizzieFrame.class, frame, "refreshFromInfo"),
+          "silent progress must not lose its last graph update to the live-analysis cooldown");
       assertEquals(0, frame.titleUpdates);
 
       AnalysisUiRefreshTest.whileEdtBlocked(() -> {
@@ -939,6 +948,7 @@ class MoveOnlyUiGateTest {
       assertEquals(2, paints.get());
       assertEquals(1, frame.titleUpdates);
       assertTrue((boolean) getField(LizzieFrame.class, frame, "redrawBoardSurfacesOnly"));
+      assertTrue((boolean) getField(LizzieFrame.class, frame, "refreshFromInfo"));
       assertEquals(0, frame.fullRefreshes);
       assertFalse(offEdt.get());
     } finally {

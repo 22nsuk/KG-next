@@ -7172,9 +7172,8 @@ public class Board {
     if (Lizzie.leelaz != null && Lizzie.leelaz.canAddPlayer) {
       synchronized (this) {
         BoardData data = getHistory().getCurrentHistoryNode().getData();
-        data.blackToPlay = !data.blackToPlay;
+        data.togglePlayerToMove();
       }
-      clearbestmoves();
       if (Lizzie.leelaz.isPondering()) Lizzie.leelaz.ponder();
     } else {
       this.pass();
