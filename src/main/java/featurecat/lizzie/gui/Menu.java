@@ -8407,7 +8407,7 @@ public class Menu extends JMenuBar {
       btnMarkupClear.addActionListener(
           new ActionListener() {
             public void actionPerformed(ActionEvent e) {
-              Lizzie.board.getHistory().getData().getProperties().clear();
+              Lizzie.board.getHistory().getData().clearMarkup();
               Lizzie.frame.refresh();
             }
           });

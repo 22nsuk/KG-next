@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
@@ -59,7 +60,7 @@ class SGFParserDateTest {
 
   private static void assertDate(String expected, String sgf) {
     var properties = SGFParser.parseSgf(sgf, false).getStart().getData().getProperties();
-    assertEquals(expected, properties.get("DT"));
+    assertEquals(expected == null ? null : List.of(expected), properties.get("DT"));
     if (expected == null) {
       assertFalse(properties.containsKey("DT"));
     }

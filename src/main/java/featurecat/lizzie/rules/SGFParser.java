@@ -60,8 +60,6 @@ public class SGFParser {
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  private static final String[] listProps =
-      new String[] {"LB", "CR", "SQ", "MA", "TR", "AB", "AW", "AE"};
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
   private static final Field BLACK_ZOBRIST_FIELD = resolveZobristField("blackZobrist");
   private static final Field WHITE_ZOBRIST_FIELD = resolveZobristField("whiteZobrist");
@@ -272,7 +270,7 @@ public class SGFParser {
     if (history == null || history.getStart() == null || history.getStart().getData() == null) {
       throw new IllegalStateException("Cannot adopt rules without a parsed SGF history");
     }
-    Map<String, String> properties = history.getStart().getData().getProperties();
+    Map<String, List<String>> properties = history.getStart().getData().getProperties();
     String rawRules =
         properties.containsKey("RU") ? history.getStart().getData().getProperty("RU") : null;
     return history.publishExternalRules(rawRules);
@@ -313,7 +311,7 @@ public class SGFParser {
     return parseSgfKomi(rawKomi, null);
   }
 
-  private static Optional<Double> parseSgfKomi(String rawKomi, Map<String, String> rootProperties) {
+  private static Optional<Double> parseSgfKomi(String rawKomi, Map<String, List<String>> rootProperties) {
     if (Utils.isBlank(rawKomi)) {
       return Optional.empty();
     }
@@ -330,7 +328,7 @@ public class SGFParser {
   }
 
   private static Optional<Double> normalizeSgfKomi(
-      Double komi, Map<String, String> rootProperties) {
+      Double komi, Map<String, List<String>> rootProperties) {
     if (komi == null) {
       return Optional.empty();
     }
@@ -357,7 +355,7 @@ public class SGFParser {
     return komi;
   }
 
-  private static double normalizeFoxSgfKomi(double komi, Map<String, String> rootProperties) {
+  private static double normalizeFoxSgfKomi(double komi, Map<String, List<String>> rootProperties) {
     if (Math.abs(komi) >= 50) {
       komi = komi / 100;
       if (isChineseRules(rootProperties) && komi <= 4 && komi >= -4) {
@@ -367,20 +365,20 @@ public class SGFParser {
     return komi;
   }
 
-  private static boolean isFoxSgf(Map<String, String> rootProperties) {
+  private static boolean isFoxSgf(Map<String, List<String>> rootProperties) {
     return rootPropertyContains(rootProperties, "AP", "foxwq");
   }
 
-  private static boolean isChineseRules(Map<String, String> rootProperties) {
+  private static boolean isChineseRules(Map<String, List<String>> rootProperties) {
     return rootPropertyContains(rootProperties, "RU", "chinese");
   }
 
   private static boolean rootPropertyContains(
-      Map<String, String> rootProperties, String propertyName, String needle) {
+      Map<String, List<String>> rootProperties, String propertyName, String needle) {
     if (rootProperties == null) {
       return false;
     }
-    String value = rootProperties.get(propertyName);
+    String value = getOrDefault(rootProperties, propertyName, null);
     return value != null && value.toLowerCase(Locale.ROOT).contains(needle);
   }
 
@@ -677,8 +675,8 @@ public class SGFParser {
     // Comment of the game head
     String headComment = "";
     // Game properties
-    Map<String, String> gameProperties = new HashMap<String, String>();
-    Map<String, String> pendingProps = new HashMap<String, String>();
+    Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
+    Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
     PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
@@ -729,7 +727,7 @@ public class SGFParser {
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
             currentNodeHasMove = false;
-            pendingProps = new HashMap<String, String>();
+            pendingProps = new HashMap<String, List<String>>();
           } else {
             if (i > 0) {
               // Allow the comment tag includes '('
@@ -786,11 +784,9 @@ public class SGFParser {
           tagBuilder = new StringBuilder();
           String tagContent = tagContentBuilder.toString();
           // We got tag, we can parse this tag now.
-          if (tag.equals("DD")) {
-            if (tagContent.equals("true")) {
-              appendDummyPlaceholder(Lizzie.board.getHistory());
-              currentNodeHasDummy = true;
-            }
+          if (tag.equals("DD") && "true".equals(tagContent)) {
+            appendDummyPlaceholder(Lizzie.board.getHistory());
+            currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
               Lizzie.board.getHistory().previous();
@@ -815,6 +811,7 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(Lizzie.board.getHistory(), pendingProps);
             }
+            flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
           } else if (tag.equals("C")) {
             // Support comment
             boolean rootSetupContext =
@@ -824,7 +821,7 @@ public class SGFParser {
             if (rootSetupContext) {
               headComment = tagContent;
             } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
               bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
@@ -978,8 +975,9 @@ public class SGFParser {
                     getSetupPropertyTargetNode(
                         Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, false, tag)) {
+              } else if (!"FIT".equals(tag)
+                  && shouldBufferLeadingSetupMetadata(
+                      currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else if (!"FIT".equals(tag)) {
                 boolean firstProp =
@@ -1030,7 +1028,7 @@ public class SGFParser {
                       Lizzie.board.getHistory(), target, move[0], move[1], Stone.EMPTY);
                 }
               } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
@@ -1081,7 +1079,7 @@ public class SGFParser {
     if (parsedKomi.isPresent()
         && (Lizzie.config.readKomi
             || isSetupOrHandicapGame(Lizzie.board.getHistory())
-            || parseHandicapProperty(gameProperties.get("HA")) > 0)) {
+            || parseHandicapProperty(getOrDefault(gameProperties, "HA", null)) > 0)) {
       //      if (!hasHandicap && komi == 0) {
       //        if (isChineseRule) komi = 7.5;
       //        else komi = 6.5;
@@ -1094,8 +1092,8 @@ public class SGFParser {
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
     gameInfo.setResult(result);
-    gameInfo.setDate(decodeGameInfoText(gameProperties.get("DT")));
-    gameInfo.setHandicap(parseHandicapProperty(gameProperties.get("HA")));
+    gameInfo.setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
+    gameInfo.setHandicap(parseHandicapProperty(getOrDefault(gameProperties, "HA", null)));
     // Rewind to game start
     while (Lizzie.board.previousMove(false))
       ;
@@ -1684,24 +1682,24 @@ public class SGFParser {
       BoardData rootData = history.getData().clone();
       // Property values are SGF-encoded, while GameInfo holds plain text. Encode directly
       // into the detached root so delimiters in metadata can never be parsed as properties.
-      if (handicap != 0) rootData.addProperty("HA", handicap.toString());
-      rootData.addProperty("KM", komi.toString());
-      rootData.addProperty("PW", Escaping(playerW));
-      rootData.addProperty("PB", Escaping(playerB));
+      if (handicap != 0) rootData.setProperty("HA", handicap.toString());
+      rootData.setProperty("KM", komi.toString());
+      rootData.setProperty("PW", Escaping(playerW));
+      rootData.setProperty("PB", Escaping(playerB));
       if (date == null) {
         rootData.getProperties().remove("DT");
       } else {
-        rootData.addProperty("DT", Escaping(date));
+        rootData.setProperty("DT", Escaping(date));
       }
       if (!LizzieFrame.isSavingRaw) {
         if (!saveContext.dataType().isEmpty()) {
-          rootData.addProperty("DZ", saveContext.dataType());
+          rootData.setProperty("DZ", saveContext.dataType());
         }
-        rootData.addProperty("AP", Escaping("KG-next: " + Lizzie.nextVersion));
+        rootData.setProperty("AP", Escaping("KG-next: " + Lizzie.nextVersion));
       }
-      rootData.addProperty("RE", Escaping(result));
-      rootData.addProperty("SZ", boardSizeTag);
-      rootData.addProperty("CA", "UTF-8");
+      rootData.setProperty("RE", Escaping(result));
+      rootData.setProperty("SZ", boardSizeTag);
+      rootData.setProperty("CA", "UTF-8");
       if (rootData.isSnapshotNode()) {
         builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
       } else {
@@ -1968,7 +1966,7 @@ public class SGFParser {
     if (!data.isSnapshotNode()) {
       return false;
     }
-    Map<String, String> properties = data.getProperties();
+    Map<String, List<String>> properties = data.getProperties();
     return properties.containsKey("AB")
         || properties.containsKey("AW")
         || properties.containsKey("AE");
@@ -1976,11 +1974,11 @@ public class SGFParser {
 
   private static String materializedRootSnapshotProperties(
       BoardData rootData, Stone[] stones, SaveContext saveContext) {
-    Map<String, String> properties = new LinkedHashMap<String, String>();
-    Map<String, String> rootSetup =
+    Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
+    Map<String, List<String>> rootSetup =
         collectCurrentRootSetup(stones, rootData.blackToPlay, saveContext);
     boolean setupInserted = false;
-    for (Map.Entry<String, String> entry : rootData.getProperties().entrySet()) {
+    for (Map.Entry<String, List<String>> entry : rootData.getProperties().entrySet()) {
       String key = entry.getKey();
       if (isRootSetupSerializationProperty(key)) {
         if (!setupInserted) {
@@ -1989,7 +1987,7 @@ public class SGFParser {
         }
         continue;
       }
-      addProperty(properties, key, entry.getValue());
+      addPropertyValues(properties, key, entry.getValue());
     }
     if (!setupInserted) {
       addProperties(properties, rootSetup);
@@ -1997,9 +1995,9 @@ public class SGFParser {
     return propertiesString(properties);
   }
 
-  private static Map<String, String> collectCurrentRootSetup(
+  private static Map<String, List<String>> collectCurrentRootSetup(
       Stone[] stones, boolean blackToPlay, SaveContext saveContext) {
-    Map<String, String> setup = new LinkedHashMap<String, String>();
+    Map<String, List<String>> setup = new LinkedHashMap<String, List<String>>();
     for (int index = 0; index < stones.length; index++) {
       Stone stone = stones[index];
       if (stone.isBlack()) {
@@ -2017,7 +2015,7 @@ public class SGFParser {
   }
 
   private static String materializedSetupProperties(BoardHistoryNode node, SaveContext saveContext) {
-    Map<String, String> properties = new LinkedHashMap<String, String>();
+    Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
     BoardData data = node.getData();
     addProperty(properties, "PL", data.blackToPlay ? "B" : "W");
     appendSetupStoneDelta(properties, node, saveContext);
@@ -2031,13 +2029,13 @@ public class SGFParser {
                 addSemanticallyMatchingSetupValues(properties, node, key, value, saveContext);
                 return;
               }
-              addProperty(properties, key, value);
+              addPropertyValues(properties, key, value);
             });
     return propertiesString(properties);
   }
 
   private static void appendSetupStoneDelta(
-      Map<String, String> properties, BoardHistoryNode node, SaveContext saveContext) {
+      Map<String, List<String>> properties, BoardHistoryNode node, SaveContext saveContext) {
     Stone[] currentStones = node.getData().stones;
     Stone[] previousStones = node.previous().get().getData().stones;
     for (int index = 0; index < currentStones.length; index++) {
@@ -2058,7 +2056,7 @@ public class SGFParser {
   }
 
   private static void addSemanticallyMatchingSetupValues(
-      Map<String, String> properties, BoardHistoryNode node, String key, String rawValues,
+      Map<String, List<String>> properties, BoardHistoryNode node, String key, List<String> rawValues,
       SaveContext saveContext) {
     if (rawValues == null || rawValues.isEmpty()) {
       return;
@@ -2066,8 +2064,7 @@ public class SGFParser {
     Stone[] currentStones = node.getData().stones;
     Stone[] previousStones = node.previous().get().getData().stones;
     boolean keepExplicitRemovedStoneMetadata = node.hasRemovedStone();
-    String[] values = rawValues.split(",");
-    for (String value : values) {
+    for (String value : rawValues) {
       String normalizedValue = value.trim();
       int[] coord = saveContext.parseCoord(normalizedValue);
       if (!matchesMaterializedSetupSemantics(
@@ -2106,29 +2103,13 @@ public class SGFParser {
     return keepExplicitRemovedStoneMetadata;
   }
 
-  private static void addSetupProperty(Map<String, String> properties, String key, String value) {
+  private static void addSetupProperty(Map<String, List<String>> properties, String key, String value) {
     if (value == null || value.isEmpty()) {
       return;
     }
-    String existing = properties.get(key);
-    if (existing == null || existing.isEmpty()) {
-      properties.put(key, value);
-      return;
+    if (!properties.getOrDefault(key, List.of()).contains(value)) {
+      addProperty(properties, key, value);
     }
-    if (containsSetupValue(existing, value)) {
-      return;
-    }
-    properties.put(key, existing + "," + value);
-  }
-
-  private static boolean containsSetupValue(String existing, String value) {
-    String[] entries = existing.split(",");
-    for (String entry : entries) {
-      if (entry.equals(value)) {
-        return true;
-      }
-    }
-    return false;
   }
 
   private static boolean isSetupStoneProperty(String key) {
@@ -3393,10 +3374,6 @@ public class SGFParser {
     }
   }
 
-  public static boolean isListProperty(String key) {
-    return asList(listProps).contains(key);
-  }
-
   public static boolean isMarkupProperty(String key) {
     return asList(markupProps).contains(key);
   }
@@ -3408,8 +3385,9 @@ public class SGFParser {
    * @param defaultValue
    * @return
    */
-  public static String getOrDefault(Map<String, String> props, String key, String defaultValue) {
-    return props.getOrDefault(key, defaultValue);
+  public static String getOrDefault(Map<String, List<String>> props, String key, String defaultValue) {
+    List<String> values = props.get(key);
+    return values == null || values.isEmpty() ? defaultValue : values.get(values.size() - 1);
   }
 
   /**
@@ -3418,12 +3396,20 @@ public class SGFParser {
    * @param key
    * @param value
    */
-  public static void addProperty(Map<String, String> props, String key, String value) {
-    if (SGFParser.isListProperty(key)) {
-      // Label and add/remove stones
-      props.merge(key, value, (old, val) -> old + "," + val);
+  public static void addProperty(Map<String, List<String>> props, String key, String value) {
+    addPropertyValues(props, key, List.of(value));
+  }
+
+  private static void addPropertyValues(
+      Map<String, List<String>> props, String key, List<String> values) {
+    List<String> previous = props.get(key);
+    if (previous == null) {
+      props.put(key, List.copyOf(values));
     } else {
-      props.put(key, value);
+      List<String> combined = new ArrayList<>(previous.size() + values.size());
+      combined.addAll(previous);
+      combined.addAll(values);
+      props.put(key, List.copyOf(combined));
     }
   }
 
@@ -3432,8 +3418,8 @@ public class SGFParser {
    *
    * @return
    */
-  public static void addProperties(Map<String, String> props, Map<String, String> addProps) {
-    addProps.forEach((key, value) -> addProperty(props, key, value));
+  public static void addProperties(Map<String, List<String>> props, Map<String, List<String>> addProps) {
+    addProps.forEach((key, values) -> addPropertyValues(props, key, values));
   }
 
   /**
@@ -3441,7 +3427,7 @@ public class SGFParser {
    *
    * @return
    */
-  public static void addProperties(Map<String, String> props, String propsStr) {
+  public static void addProperties(Map<String, List<String>> props, String propsStr) {
     boolean inTag = false, escaping = false;
     String tag = "";
     StringBuilder tagBuilder = new StringBuilder();
@@ -3534,7 +3520,7 @@ public class SGFParser {
    *
    * @return
    */
-  public static String propertiesString(Map<String, String> props) {
+  public static String propertiesString(Map<String, List<String>> props) {
     StringBuilder sb = new StringBuilder();
     if (props.containsKey("CA")) {
       sb.append(nodeString("CA", props.get("CA")));
@@ -3550,36 +3536,26 @@ public class SGFParser {
   }
 
   /**
-   * Get node string by the key and value
+   * Get node string by the key and its separate raw values
    *
    * @param key
-   * @param value
+   * @param values
    * @return
    */
-  public static String nodeString(String key, String value) {
-    StringBuilder sb = new StringBuilder();
-    if (SGFParser.isListProperty(key)) {
-      // Label and add/remove stones
-      sb.append(key);
-      String[] vals = value.split(",");
-      for (String val : vals) {
-        sb.append("[").append(val).append("]");
-      }
-    } else {
-      sb.append(key).append("[").append(value).append("]");
-    }
+  public static String nodeString(String key, List<String> values) {
+    StringBuilder sb = new StringBuilder(key);
+    for (String value : values) sb.append('[').append(value).append(']');
     return sb.toString();
   }
 
-  private static void processPendingPros(BoardHistoryList history, Map<String, String> props) {
-    props.forEach((key, value) -> history.addNodeProperty(key, value));
-    props = new HashMap<String, String>();
+  private static void processPendingPros(BoardHistoryList history, Map<String, List<String>> props) {
+    props.forEach((key, values) -> values.forEach(value -> history.addNodeProperty(key, value)));
   }
 
   private static final class PendingSetupMetadata {
     private final AnalysisImport analysisImport;
     private String comment;
-    private final Map<String, String> properties = new LinkedHashMap<String, String>();
+    private final Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
     private final List<PendingAnalysisPayload> analysisPayloads =
         new ArrayList<PendingAnalysisPayload>();
 
@@ -3615,12 +3591,9 @@ public class SGFParser {
   private static boolean shouldBufferLeadingSetupMetadata(
       boolean currentNodeHasMove,
       boolean currentNodeHasSetupSnapshot,
-      boolean rootSetupContext,
-      String tag) {
-    return !currentNodeHasMove
-        && !currentNodeHasSetupSnapshot
-        && !rootSetupContext
-        && isLeadingSetupMetadataTag(tag);
+      boolean rootSetupContext) {
+    // Unknown properties also belong to the move/setup that follows on this SGF node.
+    return !currentNodeHasMove && !currentNodeHasSetupSnapshot && !rootSetupContext;
   }
 
   private static void bufferLeadingSetupMetadata(
@@ -3660,7 +3633,7 @@ public class SGFParser {
     if (!Utils.isBlank(pendingSetupMetadata.comment)) {
       current.getData().comment = pendingSetupMetadata.comment;
     }
-    pendingSetupMetadata.properties.forEach(history::addNodeProperty);
+    processPendingPros(history, pendingSetupMetadata.properties);
     applyPendingSetupAnalysisPayloads(current.getData(), pendingSetupMetadata);
     pendingSetupMetadata.clear();
   }
@@ -3676,7 +3649,7 @@ public class SGFParser {
       target.getData().comment = pendingSetupMetadata.comment;
     }
     pendingSetupMetadata.properties.forEach(
-        (key, value) -> addNodePropertyOnNode(history, target, key, value));
+        (key, values) -> values.forEach(value -> addNodePropertyOnNode(history, target, key, value)));
     applyPendingSetupAnalysisPayloads(target.getData(), pendingSetupMetadata);
     pendingSetupMetadata.clear();
   }
@@ -3699,11 +3672,12 @@ public class SGFParser {
     if (moveData.getProperties().isEmpty()) {
       return;
     }
-    Map<String, String> properties = new LinkedHashMap<String, String>(moveData.getProperties());
-    properties.forEach(snapshotData::addProperty);
-    moveData.setProperties(new LinkedHashMap<String, String>());
+    Map<String, List<String>> properties =
+        new LinkedHashMap<String, List<String>>(moveData.getProperties());
+    properties.forEach((key, values) -> values.forEach(value -> snapshotData.addProperty(key, value)));
+    moveData.setProperties(new LinkedHashMap<String, List<String>>());
     if (properties.containsKey("PL")) {
-      applyCurrentPlayerProperty(snapshotData, properties.get("PL"));
+      applyCurrentPlayerProperty(snapshotData, getOrDefault(properties, "PL", null));
     }
     if (properties.containsKey("MN")) {
       rollbackMoveNodeMnState(moveNode);
@@ -4138,7 +4112,7 @@ public class SGFParser {
   }
 
   private static boolean hasRootSetupStoneProperties(BoardData rootData) {
-    Map<String, String> properties = rootData.getProperties();
+    Map<String, List<String>> properties = rootData.getProperties();
     return properties.containsKey("AB")
         || properties.containsKey("AW")
         || properties.containsKey("AE");
@@ -4158,7 +4132,7 @@ public class SGFParser {
   private static void appendSetupSnapshot(
       BoardHistoryList history,
       boolean newBranch,
-      Map<String, String> pendingProps,
+      Map<String, List<String>> pendingProps,
       boolean transferLeadingMoveMetadata,
       AnalysisImport analysisImport) {
     BoardData current = history.getData();
@@ -4460,8 +4434,8 @@ public class SGFParser {
     // Comment of the game head
     String headComment = "";
     // Game properties
-    Map<String, String> gameProperties = new HashMap<String, String>();
-    Map<String, String> pendingProps = new HashMap<String, String>();
+    Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
+    Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
     PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
@@ -4512,7 +4486,7 @@ public class SGFParser {
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
             currentNodeHasMove = false;
-            pendingProps = new HashMap<String, String>();
+            pendingProps = new HashMap<String, List<String>>();
           } else {
             if (i > 0) {
               // Allow the comment tag includes '('
@@ -4567,11 +4541,9 @@ public class SGFParser {
           tagBuilder = new StringBuilder();
           String tagContent = tagContentBuilder.toString();
           // We got tag, we can parse this tag now.
-          if (tag.equals("DD")) {
-            if ("true".equals(tagContent)) {
-              appendDummyPlaceholder(history);
-              currentNodeHasDummy = true;
-            }
+          if (tag.equals("DD") && "true".equals(tagContent)) {
+            appendDummyPlaceholder(history);
+            currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
               history.previous();
@@ -4597,6 +4569,7 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(history, pendingProps);
             }
+            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
           } else if (tag.equals("C")) {
             // Support comment
             boolean rootSetupContext =
@@ -4605,7 +4578,7 @@ public class SGFParser {
             if (rootSetupContext) {
               headComment = tagContent;
             } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
               bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
@@ -4715,7 +4688,7 @@ public class SGFParser {
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(history, target, tag, tagContent);
               } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, false, tag)) {
+                  currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else {
                 boolean firstProp = history.getCurrentHistoryNode().hasVariations();
@@ -4753,7 +4726,7 @@ public class SGFParser {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY, false);
                 }
               } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
@@ -4814,14 +4787,14 @@ public class SGFParser {
       if (gameProperties.size() > 0) {
         history.getData().addProperties(gameProperties);
       }
-      history.getGameInfo().setDate(decodeGameInfoText(gameProperties.get("DT")));
+      history.getGameInfo().setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
           parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();
       if (parsedKomi.isPresent()
           && (Lizzie.config.readKomi
               || isSetupOrHandicapGame(history)
-              || parseHandicapProperty(gameProperties.get("HA")) > 0)) {
+              || parseHandicapProperty(getOrDefault(gameProperties, "HA", null)) > 0)) {
         history.getGameInfo().setKomiNoMenu(parsedKomi.get());
       }
     }
@@ -4850,8 +4823,8 @@ public class SGFParser {
     // Comment of the game head
     String headComment = "";
     // Game properties
-    Map<String, String> gameProperties = new HashMap<String, String>();
-    Map<String, String> pendingProps = new HashMap<String, String>();
+    Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
+    Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
     PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
     boolean inTag = false,
@@ -4892,7 +4865,7 @@ public class SGFParser {
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
             currentNodeHasMove = false;
-            pendingProps = new HashMap<String, String>();
+            pendingProps = new HashMap<String, List<String>>();
           } else {
             if (i > 0) {
               // Allow the comment tag includes '('
@@ -4946,12 +4919,10 @@ public class SGFParser {
           tagBuilder = new StringBuilder();
           String tagContent = tagContentBuilder.toString();
           // We got tag, we can parse this tag now.
-          if (tag.equals("DD")) {
-            if ("true".equals(tagContent)) {
-              appendDummyPlaceholder(history);
-              subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
-              currentNodeHasDummy = true;
-            }
+          if (tag.equals("DD") && "true".equals(tagContent)) {
+            appendDummyPlaceholder(history);
+            subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
+            currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
               history.previous();
@@ -4974,6 +4945,7 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(history, pendingProps);
             }
+            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
           } else if (tag.equals("C")) {
             // Support comment
             boolean rootSetupContext =
@@ -4981,7 +4953,7 @@ public class SGFParser {
             if (rootSetupContext) {
               headComment = tagContent;
             } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
               bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
@@ -5080,7 +5052,7 @@ public class SGFParser {
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(history, target, tag, tagContent);
               } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, false, tag)) {
+                  currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else {
                 boolean firstProp = (subTreeStepMap.get(subTreeDepth) == 0);
@@ -5116,7 +5088,7 @@ public class SGFParser {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY);
                 }
               } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext, tag)) {
+                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
                 bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =

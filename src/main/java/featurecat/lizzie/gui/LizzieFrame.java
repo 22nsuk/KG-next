@@ -617,8 +617,6 @@ public class LizzieFrame extends JFrame {
   private int lastLabel;
   private int lastNumLabel;
   private boolean hasMarkup;
-  private String markupKey;
-  private String markupValue;
   public ArrayList<String> priorityMoveCoords = new ArrayList<String>();
 
   public AnalysisEngine analysisEngine;
@@ -16909,32 +16907,7 @@ public class LizzieFrame extends JFrame {
       if (boardCoordinates.isPresent()) {
         int[] coords = boardCoordinates.get();
         BoardData data = Lizzie.board.getHistory().getData();
-        data.getProperties()
-            .forEach(
-                (key, value) -> {
-                  if (SGFParser.isListProperty(key)) {
-                    String[] labels = value.split(",");
-                    for (String label : labels) {
-                      String[] moves = label.split(":");
-                      int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
-                      if (move != null && (move[0] == coords[0] && move[1] == coords[1])) {
-                        markupKey = key;
-                        markupValue = value;
-                      }
-                    }
-                  }
-                });
-        String newValue = "";
-        String[] labels = markupValue.split(",");
-        for (String label : labels) {
-          String[] moves = label.split(":");
-          int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
-          if (move != null && (move[0] != coords[0] || move[1] != coords[1])) {
-            newValue += label + ",";
-          }
-        }
-        if (newValue.endsWith(",")) newValue = newValue.substring(0, newValue.length() - 1);
-        data.getProperties().replace(markupKey, newValue);
+        data.removeMarkupAt(SGFParser.asCoord(coords));
         refresh();
         return true;
       } else return false;
@@ -16961,23 +16934,22 @@ public class LizzieFrame extends JFrame {
         data.getProperties()
             .forEach(
                 (key, value) -> {
-                  if (SGFParser.isListProperty(key)) {
-                    String[] labels = value.split(",");
-                    for (String label : labels) {
-                      String[] moves = label.split(":");
+                  if (SGFParser.isMarkupProperty(key)) {
+                    for (String label : value) {
+                      String[] moves = label.split(":", 2);
                       int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
                       if (move != null && (move[0] == coords[0] && move[1] == coords[1])) {
                         hasMarkup = true;
                         break;
                       }
                       if (markupType == 1) {
-                        if ("LB".equals(key) && moves.length > 1) {
+                        if ("LB".equals(key) && moves.length > 1 && !moves[1].isEmpty()) {
                           // Label
                           if (moves[1].charAt(0) > lastLabel) lastLabel = moves[1].charAt(0);
                         }
                       }
                       if (markupType == 7) {
-                        if ("LB".equals(key) && moves.length > 1) {
+                        if ("LB".equals(key) && moves.length > 1 && !moves[1].isEmpty()) {
                           // Number
                           try {
                             lastNumLabel = Math.max(lastNumLabel, Integer.parseInt(moves[1]));
@@ -16996,23 +16968,23 @@ public class LizzieFrame extends JFrame {
           lastLabel = lastLabel + 1;
           if (lastLabel >= 91 && lastLabel <= 96) lastLabel = 97;
           String value = SGFParser.asCoord(coords) + ":" + ((char) lastLabel);
-          data.getProperties().merge("LB", value, (old, val) -> old + "," + val);
+          data.addProperty("LB", value);
         } else if (markupType == 7) {
           lastNumLabel = lastNumLabel + 1;
           String value = SGFParser.asCoord(coords) + ":" + lastNumLabel;
-          data.getProperties().merge("LB", value, (old, val) -> old + "," + val);
+          data.addProperty("LB", value);
         } else if (markupType == 2) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("CR", value, (old, val) -> old + "," + val);
+          data.addProperty("CR", value);
         } else if (markupType == 3) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("MA", value, (old, val) -> old + "," + val);
+          data.addProperty("MA", value);
         } else if (markupType == 4) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("SQ", value, (old, val) -> old + "," + val);
+          data.addProperty("SQ", value);
         } else if (markupType == 5) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("TR", value, (old, val) -> old + "," + val);
+          data.addProperty("TR", value);
         }
         refresh();
         return true;
