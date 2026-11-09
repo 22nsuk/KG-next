@@ -234,13 +234,14 @@ public class BoardRenderer {
     return x >= 0 && y >= 0 && x < boardWidth && y < boardHeight;
   }
 
-  static List<String> remainingMarkupEntries(String propertyValue, int boardWidth, int boardHeight) {
+  static List<String> remainingMarkupEntries(
+      List<String> propertyValues, int boardWidth, int boardHeight) {
     List<String> remaining = new ArrayList<String>();
-    if (propertyValue == null || propertyValue.isEmpty()) {
+    if (propertyValues == null || propertyValues.isEmpty()) {
       return remaining;
     }
-    for (String label : propertyValue.split(",")) {
-      String[] moves = label.split(":");
+    for (String label : propertyValues) {
+      String[] moves = label.split(":", 2);
       int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
       if (move != null && isMarkupOnBoard(move[0], move[1], boardWidth, boardHeight)) {
         remaining.add(label);
@@ -3998,12 +3999,12 @@ public class BoardRenderer {
     data.getProperties()
         .forEach(
             (key, value) -> {
-              if (!SGFParser.isListProperty(key)) {
+              if (!SGFParser.isMarkupProperty(key)) {
                 return;
               }
               for (String label :
                   remainingMarkupEntries(value, Board.boardWidth, Board.boardHeight)) {
-                String[] moves = label.split(":");
+                String[] moves = label.split(":", 2);
                 int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
                 if (move == null) {
                   continue;

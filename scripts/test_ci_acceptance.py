@@ -247,6 +247,17 @@ class CliTest(unittest.TestCase):
 
 
 class WorkflowContractTest(unittest.TestCase):
+    def test_desktop_job_covers_compile_and_all_three_passes_with_overhead(self):
+        text = (WORKFLOWS / "ci.yml").read_text()
+        job = text.split("\n  desktop-smoke:\n", 1)[1].split("\n  analysis-provenance-ui:\n", 1)[0]
+        job_minutes = int(re.search(r"^    timeout-minutes: (\d+)$", job, re.M).group(1))
+        step_minutes = [int(value) for value in re.findall(r"^        timeout-minutes: (\d+)$", job, re.M)]
+        self.assertEqual(len(step_minutes), 2, "compile and test execution must both be bounded")
+        self.assertGreater(job_minutes, sum(step_minutes), "reserve time for setup and artifacts too")
+        self.assertIn("for attempt in 1 2 3; do", job)
+        self.assertIn("--profile portable --group desktop --require-clean", job)
+        self.assertNotIn("continue-on-error", job)
+
     def test_aggregate_is_always_scheduled_and_depends_on_every_job(self):
         text = (WORKFLOWS / "ci.yml").read_text()
         jobs = set(re.findall(r"^  ([a-z0-9-]+):$", text.split("\njobs:\n", 1)[1], re.M))

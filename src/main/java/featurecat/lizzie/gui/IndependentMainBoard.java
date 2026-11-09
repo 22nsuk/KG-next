@@ -87,8 +87,6 @@ public class IndependentMainBoard extends JFrame {
   private JPanel mainPanel;
   private int lastLabel;
   private boolean hasMarkup;
-  private String markupKey;
-  private String markupValue;
 
   public IndependentMainBoard() {
     // super(owner);
@@ -1144,17 +1142,16 @@ public class IndependentMainBoard extends JFrame {
         data.getProperties()
             .forEach(
                 (key, value) -> {
-                  if (SGFParser.isListProperty(key)) {
-                    String[] labels = value.split(",");
-                    for (String label : labels) {
-                      String[] moves = label.split(":");
+                  if (SGFParser.isMarkupProperty(key)) {
+                    for (String label : value) {
+                      String[] moves = label.split(":", 2);
                       int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
                       if (move != null && (move[0] == coords[0] && move[1] == coords[1])) {
                         hasMarkup = true;
                         break;
                       }
                       if (Lizzie.frame.markupType == 1) {
-                        if ("LB".equals(key) && moves.length > 1) {
+                        if ("LB".equals(key) && moves.length > 1 && !moves[1].isEmpty()) {
                           // Label
                           if (moves[1].charAt(0) > lastLabel) lastLabel = moves[1].charAt(0);
                         }
@@ -1170,19 +1167,19 @@ public class IndependentMainBoard extends JFrame {
           lastLabel = lastLabel + 1;
           if (lastLabel >= 91 && lastLabel <= 96) lastLabel = 97;
           String value = SGFParser.asCoord(coords) + ":" + ((char) lastLabel);
-          data.getProperties().merge("LB", value, (old, val) -> old + "," + val);
+          data.addProperty("LB", value);
         } else if (Lizzie.frame.markupType == 2) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("CR", value, (old, val) -> old + "," + val);
+          data.addProperty("CR", value);
         } else if (Lizzie.frame.markupType == 3) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("MA", value, (old, val) -> old + "," + val);
+          data.addProperty("MA", value);
         } else if (Lizzie.frame.markupType == 4) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("SQ", value, (old, val) -> old + "," + val);
+          data.addProperty("SQ", value);
         } else if (Lizzie.frame.markupType == 5) {
           String value = SGFParser.asCoord(coords);
-          data.getProperties().merge("TR", value, (old, val) -> old + "," + val);
+          data.addProperty("TR", value);
         }
         refresh();
         return true;
@@ -1198,32 +1195,7 @@ public class IndependentMainBoard extends JFrame {
       if (boardCoordinates.isPresent()) {
         int[] coords = boardCoordinates.get();
         BoardData data = Lizzie.board.getHistory().getData();
-        data.getProperties()
-            .forEach(
-                (key, value) -> {
-                  if (SGFParser.isListProperty(key)) {
-                    String[] labels = value.split(",");
-                    for (String label : labels) {
-                      String[] moves = label.split(":");
-                      int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
-                      if (move != null && (move[0] == coords[0] && move[1] == coords[1])) {
-                        markupKey = key;
-                        markupValue = value;
-                      }
-                    }
-                  }
-                });
-        String newValue = "";
-        String[] labels = markupValue.split(",");
-        for (String label : labels) {
-          String[] moves = label.split(":");
-          int[] move = SGFParser.convertSgfPosToCoord(moves[0]);
-          if (move != null && (move[0] != coords[0] || move[1] != coords[1])) {
-            newValue += label + ",";
-          }
-        }
-        if (newValue.endsWith(",")) newValue = newValue.substring(0, newValue.length() - 1);
-        data.getProperties().replace(markupKey, newValue);
+        data.removeMarkupAt(SGFParser.asCoord(coords));
         refresh();
         return true;
       } else return false;

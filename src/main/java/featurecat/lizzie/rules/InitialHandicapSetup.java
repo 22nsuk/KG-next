@@ -1,5 +1,6 @@
 package featurecat.lizzie.rules;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -78,16 +79,16 @@ public final class InitialHandicapSetup {
       if (curr.extraStones != null && !curr.extraStones.isEmpty()) {
         return false;
       }
-      Map<String, String> currProps = currData.getProperties();
+      Map<String, List<String>> currProps = currData.getProperties();
       if (currProps != null) {
         if (currProps.containsKey("AB") || currProps.containsKey("AW") || currProps.containsKey("AE")) {
           return false;
         }
-        String currPl = currProps.get("PL");
+        String currPl = currData.getProperty("PL");
         if (currPl != null && !currPl.trim().isEmpty() && !"W".equalsIgnoreCase(currPl.trim())) {
           return false;
         }
-        String currHaStr = currProps.get("HA");
+        String currHaStr = currData.getProperty("HA");
         if (currHaStr != null) {
           int currHa = parseExplicitHandicap(currHaStr);
           if (currHa < 2 || (resolvedHandicap > 0 && resolvedHandicap != currHa)) {
@@ -106,12 +107,12 @@ public final class InitialHandicapSetup {
     }
 
     // Check node properties: no AW/AE, and explicit PL must be 'W' if present
-    Map<String, String> nodeProps = data.getProperties();
+    Map<String, List<String>> nodeProps = data.getProperties();
     if (nodeProps != null) {
       if (nodeProps.containsKey("AW") || nodeProps.containsKey("AE")) {
         return false;
       }
-      String pl = nodeProps.get("PL");
+      String pl = data.getProperty("PL");
       if (pl != null && !pl.trim().isEmpty() && !"W".equalsIgnoreCase(pl.trim())) {
         return false;
       }
@@ -149,12 +150,8 @@ public final class InitialHandicapSetup {
 
     // If AB property is explicitly present, reject duplicate or invalid coordinates
     if (nodeProps != null && nodeProps.containsKey("AB")) {
-      String abStr = nodeProps.get("AB");
-      if (abStr == null || abStr.trim().isEmpty()) {
-        return false;
-      }
-      String[] parts = abStr.split(",");
-      if (parts.length != resolvedHandicap) {
+      List<String> parts = nodeProps.get("AB");
+      if (parts == null || parts.size() != resolvedHandicap) {
         return false;
       }
       boolean[] seen = new boolean[area];

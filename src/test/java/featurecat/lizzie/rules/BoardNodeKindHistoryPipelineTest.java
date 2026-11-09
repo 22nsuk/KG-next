@@ -3312,10 +3312,10 @@ class BoardNodeKindHistoryPipelineTest {
 
   @Test
   void propertiesStringSerializesCharsetBeforeLocalizedProperties() {
-    Map<String, String> props = new LinkedHashMap<>();
-    props.put("PB", "黑棋");
-    props.put("PW", "白棋");
-    props.put("CA", "UTF-8");
+    Map<String, List<String>> props = new LinkedHashMap<>();
+    props.put("PB", List.of("黑棋"));
+    props.put("PW", List.of("白棋"));
+    props.put("CA", List.of("UTF-8"));
 
     assertEquals("CA[UTF-8]PB[黑棋]PW[白棋]", SGFParser.propertiesString(props));
   }
@@ -3456,8 +3456,8 @@ class BoardNodeKindHistoryPipelineTest {
       String firstSave = SGFParser.saveToString(false);
       BoardHistoryList roundTrip = SGFParser.parseSgf(firstSave, false);
       BoardData roundTripRoot = roundTrip.getStart().getData();
-      List<String> abValues = List.of(roundTripRoot.getProperty("AB").split(","));
-      List<String> awValues = List.of(roundTripRoot.getProperty("AW").split(","));
+      List<String> abValues = roundTripRoot.getPropertyValues("AB");
+      List<String> awValues = roundTripRoot.getPropertyValues("AW");
 
       assertArrayEquals(rootStones, roundTripRoot.stones, "root export should keep full board.");
       assertEquals(2, abValues.size());
@@ -3479,9 +3479,9 @@ class BoardNodeKindHistoryPipelineTest {
           roundTripRoot.stones,
           secondRoundTripRoot.stones,
           "root board should stay round-trip stable.");
-      assertEquals(roundTripRoot.getProperty("AB"), secondRoundTripRoot.getProperty("AB"));
-      assertEquals(roundTripRoot.getProperty("AW"), secondRoundTripRoot.getProperty("AW"));
-      assertEquals(roundTripRoot.getProperty("AE"), secondRoundTripRoot.getProperty("AE"));
+      assertEquals(roundTripRoot.getPropertyValues("AB"), secondRoundTripRoot.getPropertyValues("AB"));
+      assertEquals(roundTripRoot.getPropertyValues("AW"), secondRoundTripRoot.getPropertyValues("AW"));
+      assertEquals(roundTripRoot.getPropertyValues("AE"), secondRoundTripRoot.getPropertyValues("AE"));
       assertEquals(roundTripRoot.getProperty("LB"), secondRoundTripRoot.getProperty("LB"));
     } finally {
       env.close();

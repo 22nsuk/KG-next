@@ -7,7 +7,6 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -133,7 +132,7 @@ public final class GameEditSnapshot {
       BoardHistoryNode node, List<BoardHistoryNode> children,
       BoardNodeKind kind, List<Stone> stones, List<Integer> move,
       Stone color, boolean blackToPlay, boolean dummy, int moveNumber, int moveMNNumber,
-      String comment, Map<String, String> properties, long analysisEditRevision,
+      String comment, Map<String, List<String>> properties, long analysisEditRevision,
       boolean removedStone, List<ExtraStone> extraStones) {
     static NodeState capture(NodeStructure structure) {
       BoardHistoryNode node = structure.node();
@@ -147,7 +146,7 @@ public final class GameEditSnapshot {
         }
       }
       synchronized (data) {
-        Map<String, String> properties = new LinkedHashMap<>(data.getProperties());
+        Map<String, List<String>> properties = BoardData.copyProperties(data.getProperties());
         // Normal engine adoption removes imported KGP; these properties describe analysis.
         properties.keySet().removeIf(GameEditSnapshot::isAnalysisProperty);
         List<Integer> move = data.lastMove == null || data.lastMove.isEmpty() ? List.of()
@@ -206,10 +205,10 @@ public final class GameEditSnapshot {
       return true;
     }
 
-    private boolean matchesProperties(Map<String, String> current) {
+    private boolean matchesProperties(Map<String, List<String>> current) {
       if (current.isEmpty()) return properties.isEmpty();
       int count = 0;
-      for (Map.Entry<String, String> entry : current.entrySet()) {
+      for (Map.Entry<String, List<String>> entry : current.entrySet()) {
         if (isAnalysisProperty(entry.getKey())) continue;
         if (!properties.containsKey(entry.getKey())
             || !Objects.equals(properties.get(entry.getKey()), entry.getValue())) return false;

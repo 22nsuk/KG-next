@@ -141,7 +141,7 @@ public final class ExactSnapshotEngineRestore {
       }
       snapshot = anchor.data.clone();
       int[] size = resolveSnapshotBoardSize(snapshot);
-      snapshot.addProperty("SZ", formatBoardSizeTag(size[0], size[1]));
+      snapshot.setProperty("SZ", formatBoardSizeTag(size[0], size[1]));
       tail = List.copyOf(RestorePlan.captureTail(target, anchor.node, size[0], size[1]));
       this.komi = komi;
       initialHandicap = InitialHandicapSetup.isInitialHandicap(anchor.node, handicap, size[0], size[1])
@@ -209,7 +209,7 @@ public final class ExactSnapshotEngineRestore {
     snapshot.komi = sourceData.komi;
     snapshot.setProperties(sourceData.getProperties());
     int[] boardSize = resolveSnapshotBoardSize(sourceData);
-    snapshot.addProperty("SZ", formatBoardSizeTag(boardSize[0], boardSize[1]));
+    snapshot.setProperty("SZ", formatBoardSizeTag(boardSize[0], boardSize[1]));
     return snapshot;
   }
 

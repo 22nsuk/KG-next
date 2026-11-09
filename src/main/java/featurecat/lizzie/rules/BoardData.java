@@ -35,7 +35,7 @@ public class BoardData {
     if (getPlayouts() > 0) primaryAnalysisBlackToPlay = analysisBlackToPlay(false);
     if (getPlayouts2() > 0) secondaryAnalysisBlackToPlay = analysisBlackToPlay(true);
     blackToPlay = !blackToPlay;
-    properties.put("PL", blackToPlay ? "B" : "W");
+    setProperty("PL", blackToPlay ? "B" : "W");
     invalidatePrimaryAnalysis();
     invalidateSecondaryAnalysis();
   }
@@ -255,8 +255,8 @@ public class BoardData {
 
   private BoardNodeKind nodeKind;
 
-  // Node properties
-  private Map<String, String> properties = new LinkedHashMap<String, String>();
+  // Ordered raw SGF values. Replace lists on updates so captured values stay stable.
+  private Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
 
   private BoardData(
       BoardNodeKind nodeKind,
@@ -430,6 +430,16 @@ public class BoardData {
    */
   public void addProperty(String key, String value) {
     SGFParser.addProperty(properties, key, value);
+    applyPropertyValue(key, value);
+  }
+
+  /** Replace a programmatically updated property, rather than append an imported SGF value. */
+  public void setProperty(String key, String value) {
+    properties.put(key, List.of(value));
+    applyPropertyValue(key, value);
+  }
+
+  private void applyPropertyValue(String key, String value) {
     if ("N".equals(key) && comment.isEmpty()) {
       comment = value;
     } else if ("MN".equals(key)) {
@@ -444,7 +454,40 @@ public class BoardData {
    * @return
    */
   public String getProperty(String key) {
-    return properties.get(key);
+    return getOrDefault(key, null);
+  }
+
+  /** The separate raw values of a property; scalar consumers use getProperty for the last value. */
+  public List<String> getPropertyValues(String key) {
+    return properties.getOrDefault(key, List.of());
+  }
+
+  /** Remove only supported board marks at this point, preserving all other SGF values. */
+  public void removeMarkupAt(String point) {
+    int[] coords = SGFParser.convertSgfPosToCoord(point);
+    if (coords == null) return;
+    properties
+        .entrySet()
+        .removeIf(
+            entry -> {
+              if (!SGFParser.isMarkupProperty(entry.getKey())) return false;
+              List<String> remaining =
+                  entry.getValue().stream()
+                      // Match the renderer and click detection without rewriting surviving raw
+                      // values.
+                      .filter(
+                          value ->
+                              !Arrays.equals(
+                                  coords, SGFParser.convertSgfPosToCoord(value.split(":", 2)[0])))
+                      .toList();
+              if (remaining.isEmpty()) return true;
+              entry.setValue(remaining);
+              return false;
+            });
+  }
+
+  public void clearMarkup() {
+    properties.keySet().removeIf(SGFParser::isMarkupProperty);
   }
 
   /**
@@ -463,11 +506,11 @@ public class BoardData {
    *
    * @return
    */
-  public Map<String, String> getProperties() {
+  public Map<String, List<String>> getProperties() {
     return properties;
   }
 
-  public void setProperties(Map<String, String> properties) {
+  public void setProperties(Map<String, List<String>> properties) {
     this.properties = copyProperties(properties);
   }
 
@@ -476,7 +519,7 @@ public class BoardData {
    *
    * @return
    */
-  public void addProperties(Map<String, String> addProps) {
+  public void addProperties(Map<String, List<String>> addProps) {
     SGFParser.addProperties(this.properties, addProps);
   }
 
@@ -1410,8 +1453,10 @@ public class BoardData {
     this.secondaryOwnershipProvenance = data.secondaryOwnershipProvenance;
     this.importedPrimaryAnalysis = data.importedPrimaryAnalysis;
     this.importedSecondaryAnalysis = data.importedSecondaryAnalysis;
-    if (data.properties.containsKey("KGP")) properties.put("KGP", data.properties.get("KGP"));
-    else properties.remove("KGP");
+    if (data.properties.containsKey("KGP")) {
+      List<String> provenance = data.properties.get("KGP");
+      properties.put("KGP", provenance == null ? null : List.copyOf(provenance));
+    } else properties.remove("KGP");
     this.scoreMean = data.scoreMean;
     this.scoreMean2 = data.scoreMean2;
     this.scoreStdev = data.scoreStdev;
@@ -1475,9 +1520,11 @@ public class BoardData {
     return moves == null ? null : new ArrayList<MoveData>(moves);
   }
 
-  private static Map<String, String> copyProperties(Map<String, String> properties) {
-    return properties == null
-        ? new LinkedHashMap<String, String>()
-        : new LinkedHashMap<String, String>(properties);
+  static Map<String, List<String>> copyProperties(Map<String, List<String>> properties) {
+    Map<String, List<String>> copy = new LinkedHashMap<>();
+    if (properties != null) {
+      properties.forEach((key, values) -> copy.put(key, values == null ? null : List.copyOf(values)));
+    }
+    return copy;
   }
 }

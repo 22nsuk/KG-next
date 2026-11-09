@@ -10,6 +10,13 @@ import org.junit.jupiter.api.Test;
 
 class BoardRendererMarkupPaintTest {
   @Test
+  void labelPunctuationAndEmptyLabelsRemainSingleEntries() {
+    assertEquals(List.of("aa:A,B:C", "bb:", "cc:한국어\\]표식\\\\끝"),
+        BoardRenderer.remainingMarkupEntries(
+            List.of("aa:A,B:C", "bb:", "cc:한국어\\]표식\\\\끝"), 19, 19));
+  }
+
+  @Test
   void lastFileAndLastRankOnNineteenAreOnBoard() {
     assertTrue(BoardRenderer.isMarkupOnBoard(18, 0, 19, 19));
     assertTrue(BoardRenderer.isMarkupOnBoard(0, 18, 19, 19));
@@ -20,17 +27,17 @@ class BoardRendererMarkupPaintTest {
 
   @Test
   void remainingPointsAfterLastFileStillPaint() {
-    assertEquals(List.of("sa", "dd"), BoardRenderer.remainingMarkupEntries("sa,dd", 19, 19));
-    assertEquals(List.of("as", "pd"), BoardRenderer.remainingMarkupEntries("as,pd", 19, 19));
-    assertEquals(List.of("ss:A", "dd:B"), BoardRenderer.remainingMarkupEntries("ss:A,dd:B", 19, 19));
+    assertEquals(List.of("sa", "dd"), BoardRenderer.remainingMarkupEntries(List.of("sa","dd"), 19, 19));
+    assertEquals(List.of("as", "pd"), BoardRenderer.remainingMarkupEntries(List.of("as","pd"), 19, 19));
+    assertEquals(List.of("ss:A", "dd:B"), BoardRenderer.remainingMarkupEntries(List.of("ss:A","dd:B"), 19, 19));
   }
 
   @Test
   void lastFileAndLastRankOnThirteenAreOnBoard() {
     assertTrue(BoardRenderer.isMarkupOnBoard(12, 0, 13, 13));
     assertTrue(BoardRenderer.isMarkupOnBoard(0, 12, 13, 13));
-    assertEquals(List.of("ma", "dd"), BoardRenderer.remainingMarkupEntries("ma,dd", 13, 13));
-    assertEquals(List.of("dd"), BoardRenderer.remainingMarkupEntries("ss,dd", 13, 13));
+    assertEquals(List.of("ma", "dd"), BoardRenderer.remainingMarkupEntries(List.of("ma","dd"), 13, 13));
+    assertEquals(List.of("dd"), BoardRenderer.remainingMarkupEntries(List.of("ss","dd"), 13, 13));
   }
 
   @Test

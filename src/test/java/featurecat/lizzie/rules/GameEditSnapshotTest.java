@@ -33,6 +33,28 @@ import org.junit.jupiter.params.provider.ValueSource;
 class GameEditSnapshotTest {
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void propertyListsAreCopiedAndValueOrderIsPartOfTheGame(boolean strict) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      onEdt(() -> {
+        Board board = fixture.board();
+        List<String> values = new ArrayList<>(List.of("first,one", "second:two", ""));
+        board.getData().getProperties().put("XX", values);
+        BoardData clone = board.getData().clone();
+        GameEditSnapshot saved = GameEditSnapshot.capture(board);
+        Collections.swap(values, 0, 1);
+        assertFalse(matches(saved, board, strict));
+        assertEquals(List.of("first,one", "second:two", ""), clone.getPropertyValues("XX"));
+        Collections.swap(values, 0, 1);
+        assertTrue(matches(saved, board, strict));
+        values.add("later");
+        assertFalse(matches(saved, board, strict));
+        return null;
+      });
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void metadataKeepsValueEqualityAndIgnoresGeneratedSaveSnapshots(boolean strict) throws Exception {
     try (var fixture = RulesLayerTestHarness.open()) {
       onEdt(() -> {
@@ -130,9 +152,9 @@ class GameEditSnapshotTest {
         properties.put("XX", null);
         var saved = GameEditSnapshot.capture(board);
         for (String key : List.of("KGP", "LZ", "LZ2", "LZOP", "LZOP2")) {
-          properties.put(key, "analysis");
+          properties.put(key, List.of("analysis"));
           assertTrue(matches(saved, board, strict));
-          properties.put(key, "new analysis");
+          properties.put(key, List.of("new analysis"));
           assertTrue(matches(saved, board, strict));
           properties.remove(key);
           assertTrue(matches(saved, board, strict));
@@ -143,7 +165,7 @@ class GameEditSnapshotTest {
         properties.remove("YY");
         properties.put("XX", null);
         assertTrue(matches(saved, board, strict));
-        properties.put("XX", "authored value");
+        properties.put("XX", List.of("authored value"));
         assertFalse(matches(saved, board, strict));
         return null;
       });

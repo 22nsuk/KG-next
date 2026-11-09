@@ -1324,7 +1324,7 @@ public class Board {
    *
    * @param properties
    */
-  public void addNodeProperties(Map<String, String> properties) {
+  public void addNodeProperties(Map<String, List<String>> properties) {
     synchronized (this) {
       history.getData().addProperties(properties);
     }
@@ -1921,7 +1921,7 @@ public class Board {
       capturedBoardHeight = boardHeight;
       position = history.getData().clone();
       position.komi = currentGameKomi(history, position, engine);
-      position.addProperty(
+      position.setProperty(
           "SZ",
           capturedBoardWidth == capturedBoardHeight
               ? String.valueOf(capturedBoardWidth)
