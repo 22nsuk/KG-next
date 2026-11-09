@@ -1353,7 +1353,7 @@ class TrackingProductionCutoverTest {
       AnalysisUiRefreshTestSupport.awaitIdle(environment.frame);
       assertEquals(120, candidate("A1").playouts);
 
-      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+      AnalysisUiRefreshTestSupport.whileEdtBlocked(() -> {
         assertTrue(environment.frame.removeTrackingPoint("A1"));
         // Retire before the pending UI work runs: its latest snapshot has no context.
         environment.frame.trackingAnalysisController().contextChanged(null);

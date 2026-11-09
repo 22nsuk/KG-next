@@ -922,7 +922,7 @@ class MoveOnlyUiGateTest {
         };
         paints.set(0);
       });
-      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+      AnalysisUiRefreshTestSupport.whileEdtBlocked(() -> {
         for (int i = 0; i < 1000; i++) frame.refreshSilentAnalysisProgress();
         assertEquals(0, paints.get());
       });
@@ -937,7 +937,7 @@ class MoveOnlyUiGateTest {
           "silent progress must not lose its last graph update to the live-analysis cooldown");
       assertEquals(0, frame.titleUpdates);
 
-      AnalysisUiRefreshTest.whileEdtBlocked(() -> {
+      AnalysisUiRefreshTestSupport.whileEdtBlocked(() -> {
         frame.refresh(1);
         for (int i = 0; i < 1000; i++) {
           frame.refreshSilentAnalysisProgress();
