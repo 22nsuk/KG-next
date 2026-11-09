@@ -672,13 +672,11 @@ public class SGFParser {
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, BoardHistoryNode> subTreeStepMap = new HashMap<Integer, BoardHistoryNode>();
-    // Comment of the game head
-    String headComment = "";
     // Game properties
     Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
+    PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -689,7 +687,6 @@ public class SGFParser {
     boolean inProp = false;
     int topLevelNodeCount = 0;
     boolean allowRootSetupOnCurrentNode = false;
-    boolean rootNodeHasDummy = false;
 
     String tag = "";
     StringBuilder tagBuilder = new StringBuilder();
@@ -719,7 +716,7 @@ public class SGFParser {
       switch (c) {
         case '(':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
             currentNodeHasDummy = false;
             subTreeDepth += 1;
             // Initialize the step count
@@ -737,7 +734,7 @@ public class SGFParser {
           break;
         case ')':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
             currentNodeHasDummy = false;
             if (isMultiGo) {
               // Restore to the variation node
@@ -811,18 +808,11 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(Lizzie.board.getHistory(), pendingProps);
             }
-            flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
           } else if (tag.equals("C")) {
             // Support comment
-            boolean rootSetupContext =
-                !rootNodeHasDummy
-                    && isRootSetupContext(
-                        Lizzie.board.getHistory(), moveStart, allowRootSetupOnCurrentNode);
-            if (rootSetupContext) {
-              headComment = tagContent;
-            } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
@@ -833,13 +823,8 @@ public class SGFParser {
             if (isSecondaryEngineAnalysisTag(tag)) {
               isExtraMode2 = true;
             }
-            boolean rootSetupContext =
-                !rootNodeHasDummy
-                    && isRootSetupContext(
-                        Lizzie.board.getHistory(), moveStart, allowRootSetupOnCurrentNode);
-            if (shouldBufferLeadingSetupAnalysis(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupAnalysis(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeAnalysis(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
@@ -865,8 +850,8 @@ public class SGFParser {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
                       Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(
-                  Lizzie.board.getHistory(), target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(
+                  Lizzie.board.getHistory(), target, pendingNodeMetadata);
               addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
               if (move != null) {
                 addExtraStoneOnNode(Lizzie.board.getHistory(), target, move[0], move[1], color);
@@ -889,8 +874,8 @@ public class SGFParser {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
                       Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(
-                  Lizzie.board.getHistory(), target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(
+                  Lizzie.board.getHistory(), target, pendingNodeMetadata);
               applyCurrentPlayerPropertyOnNode(Lizzie.board.getHistory(), target, tagContent);
             }
           } else if (tag.equals("PB")) {
@@ -946,7 +931,9 @@ public class SGFParser {
           //            }
           //          }
           else {
-            if (moveStart) {
+            if (allowRootSetupOnCurrentNode && isRootGameProperty(tag)) {
+              addProperty(gameProperties, tag, tagContent);
+            } else if (moveStart) {
               // Other SGF node properties
               if ("AE".equals(tag)) {
                 // remove a stone
@@ -962,8 +949,8 @@ public class SGFParser {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
                         Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(
-                    Lizzie.board.getHistory(), target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(
+                    Lizzie.board.getHistory(), target, pendingNodeMetadata);
                 addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
@@ -976,9 +963,8 @@ public class SGFParser {
                         Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
               } else if (!"FIT".equals(tag)
-                  && shouldBufferLeadingSetupMetadata(
-                      currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+                  && shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else if (!"FIT".equals(tag)) {
                 boolean firstProp =
                     Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
@@ -1001,11 +987,6 @@ public class SGFParser {
                 int[] move = convertSgfPosToCoord(tagContent);
                 applyRootSetupProperty(
                     Lizzie.board.getHistory(), tag, tagContent, move, Stone.EMPTY);
-              } else if (rootNodeHasDummy && isLeadingSetupMetadataTag(tag)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
-              } else if (rootSetupContext) {
-                if ("N".equals(tag) && headComment.isEmpty()) headComment = tagContent;
-                else addProperty(gameProperties, tag, tagContent);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch =
@@ -1019,17 +1000,16 @@ public class SGFParser {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
                         Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(
-                    Lizzie.board.getHistory(), target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(
+                    Lizzie.board.getHistory(), target, pendingNodeMetadata);
                 addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
                   removeStoneOnNode(
                       Lizzie.board.getHistory(), target, move[0], move[1], Stone.EMPTY);
                 }
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+              } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
@@ -1044,12 +1024,10 @@ public class SGFParser {
             // support C[a;b;c;]
             tagContentBuilder.append(c);
           } else if (!(subTreeDepth > 1 && !isMultiGo)) {
-            flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
             currentNodeHasDummy = false;
             topLevelNodeCount += 1;
             allowRootSetupOnCurrentNode = topLevelNodeCount == 1;
-            rootNodeHasDummy =
-                allowRootSetupOnCurrentNode && nodeStartsWithDummy(value, i + 1);
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
             currentNodeHasMove = false;
@@ -1073,7 +1051,7 @@ public class SGFParser {
           }
       }
     }
-    flushPendingSetupMetadataToCurrentNode(Lizzie.board.getHistory(), pendingSetupMetadata);
+    flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
     Optional<Double> parsedKomi =
         parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();
     if (parsedKomi.isPresent()
@@ -1097,10 +1075,6 @@ public class SGFParser {
     // Rewind to game start
     while (Lizzie.board.previousMove(false))
       ;
-    // Set AW/AB Comment
-    if (!headComment.isEmpty()) {
-      Lizzie.board.comment(headComment);
-    }
     if (gameProperties.size() > 0) {
       Lizzie.board.addNodeProperties(gameProperties);
     }
@@ -3552,19 +3526,19 @@ public class SGFParser {
     props.forEach((key, values) -> values.forEach(value -> history.addNodeProperty(key, value)));
   }
 
-  private static final class PendingSetupMetadata {
+  private static final class PendingNodeMetadata {
     private final AnalysisImport analysisImport;
     private String comment;
     private final Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
     private final List<PendingAnalysisPayload> analysisPayloads =
         new ArrayList<PendingAnalysisPayload>();
 
-    private PendingSetupMetadata(AnalysisImport analysisImport) {
+    private PendingNodeMetadata(AnalysisImport analysisImport) {
       this.analysisImport = analysisImport;
     }
 
     private boolean isEmpty() {
-      return Utils.isBlank(comment) && properties.isEmpty() && analysisPayloads.isEmpty();
+      return comment == null && properties.isEmpty() && analysisPayloads.isEmpty();
     }
 
     private void clear() {
@@ -3584,74 +3558,67 @@ public class SGFParser {
     }
   }
 
-  private static boolean isLeadingSetupMetadataTag(String tag) {
-    return "C".equals(tag) || "MN".equals(tag) || isMarkupProperty(tag);
+  /** Root/game information is distinct from the position metadata of the first SGF node. */
+  private static boolean isRootGameProperty(String tag) {
+    // FF[4] root/game-info properties, plus the existing DZ/KO game extensions.
+    return switch (tag) {
+      case "AP", "CA", "FF", "GM", "ST", "SZ",
+          "AN", "BR", "BT", "CP", "DT", "EV", "GN", "GC", "ON", "OT", "PB", "PC",
+          "PW", "RE", "RO", "RU", "SO", "TM", "US", "WR", "WT", "HA", "KM",
+          "DZ", "KO" -> true;
+      default -> false;
+    };
   }
 
-  private static boolean shouldBufferLeadingSetupMetadata(
-      boolean currentNodeHasMove,
-      boolean currentNodeHasSetupSnapshot,
-      boolean rootSetupContext) {
-    // Unknown properties also belong to the move/setup that follows on this SGF node.
-    return !currentNodeHasMove && !currentNodeHasSetupSnapshot && !rootSetupContext;
+  private static boolean shouldBufferNodeMetadata(
+      boolean currentNodeHasMove, boolean currentNodeHasSetupSnapshot) {
+    // The first node may also produce a move, pass or dummy. Without an action, the node
+    // boundary flushes metadata to the current position, including root setup.
+    return !currentNodeHasMove && !currentNodeHasSetupSnapshot;
   }
 
-  private static void bufferLeadingSetupMetadata(
-      PendingSetupMetadata pendingSetupMetadata, String tag, String tagContent) {
+  private static void bufferNodeMetadata(
+      PendingNodeMetadata pendingNodeMetadata, String tag, String tagContent) {
     if ("C".equals(tag)) {
-      pendingSetupMetadata.comment = tagContent;
+      pendingNodeMetadata.comment = tagContent;
       return;
     }
-    addProperty(pendingSetupMetadata.properties, tag, tagContent);
+    addProperty(pendingNodeMetadata.properties, tag, tagContent);
   }
 
-  private static boolean shouldBufferLeadingSetupAnalysis(
-      boolean currentNodeHasMove, boolean currentNodeHasSetupSnapshot, boolean rootSetupContext) {
-    return !currentNodeHasMove && !currentNodeHasSetupSnapshot && !rootSetupContext;
+  private static void bufferNodeAnalysis(
+      PendingNodeMetadata pendingNodeMetadata, String tag, String tagContent) {
+    pendingNodeMetadata.analysisPayloads.add(new PendingAnalysisPayload(tag, tagContent));
   }
 
-  private static void bufferLeadingSetupAnalysis(
-      PendingSetupMetadata pendingSetupMetadata, String tag, String tagContent) {
-    pendingSetupMetadata.analysisPayloads.add(new PendingAnalysisPayload(tag, tagContent));
-  }
-
-  private static void applyPendingSetupAnalysisPayloads(
-      BoardData target, PendingSetupMetadata pendingSetupMetadata) {
-    if (target == null || pendingSetupMetadata.analysisPayloads.isEmpty()) {
+  private static void applyPendingAnalysisPayloads(
+      BoardData target, PendingNodeMetadata pendingNodeMetadata) {
+    if (target == null || pendingNodeMetadata.analysisPayloads.isEmpty()) {
       return;
     }
-    pendingSetupMetadata.analysisPayloads.forEach(
-        payload -> pendingSetupMetadata.analysisImport.applyTag(target, payload.tag, payload.content));
+    pendingNodeMetadata.analysisPayloads.forEach(
+        payload -> pendingNodeMetadata.analysisImport.applyTag(target, payload.tag, payload.content));
   }
 
-  private static void flushPendingSetupMetadataToCurrentNode(
-      BoardHistoryList history, PendingSetupMetadata pendingSetupMetadata) {
-    if (pendingSetupMetadata == null || pendingSetupMetadata.isEmpty()) {
-      return;
-    }
-    BoardHistoryNode current = history.getCurrentHistoryNode();
-    if (!Utils.isBlank(pendingSetupMetadata.comment)) {
-      current.getData().comment = pendingSetupMetadata.comment;
-    }
-    processPendingPros(history, pendingSetupMetadata.properties);
-    applyPendingSetupAnalysisPayloads(current.getData(), pendingSetupMetadata);
-    pendingSetupMetadata.clear();
+  private static void flushPendingNodeMetadataToCurrentNode(
+      BoardHistoryList history, PendingNodeMetadata pendingNodeMetadata) {
+    movePendingNodeMetadataToTarget(history, history.getCurrentHistoryNode(), pendingNodeMetadata);
   }
 
-  private static void movePendingSetupMetadataToTarget(
+  private static void movePendingNodeMetadataToTarget(
       BoardHistoryList history,
       BoardHistoryNode target,
-      PendingSetupMetadata pendingSetupMetadata) {
-    if (pendingSetupMetadata == null || pendingSetupMetadata.isEmpty()) {
+      PendingNodeMetadata pendingNodeMetadata) {
+    if (pendingNodeMetadata == null || pendingNodeMetadata.isEmpty()) {
       return;
     }
-    if (!Utils.isBlank(pendingSetupMetadata.comment)) {
-      target.getData().comment = pendingSetupMetadata.comment;
+    if (pendingNodeMetadata.comment != null) {
+      target.getData().comment = pendingNodeMetadata.comment;
     }
-    pendingSetupMetadata.properties.forEach(
+    pendingNodeMetadata.properties.forEach(
         (key, values) -> values.forEach(value -> addNodePropertyOnNode(history, target, key, value)));
-    applyPendingSetupAnalysisPayloads(target.getData(), pendingSetupMetadata);
-    pendingSetupMetadata.clear();
+    applyPendingAnalysisPayloads(target.getData(), pendingNodeMetadata);
+    pendingNodeMetadata.clear();
   }
 
   private static void moveLeadingSetupMetadataToSnapshot(
@@ -3816,41 +3783,6 @@ public class SGFParser {
       moveNode.resetMoveNumberList(moveData.moveNumber);
     }
     moveData.moveMNNumber = -1;
-  }
-
-  /** Inspect only this node, respecting escaped property text, before assigning root payload. */
-  private static boolean nodeStartsWithDummy(String value, int start) {
-    StringBuilder tag = new StringBuilder();
-    StringBuilder content = new StringBuilder();
-    boolean inValue = false;
-    boolean escaping = false;
-    for (int i = start; i < value.length(); i++) {
-      char c = value.charAt(i);
-      if (inValue) {
-        if (escaping) {
-          content.append(c == 'n' ? '\n' : c);
-          escaping = false;
-        } else if (c == '\\') {
-          escaping = true;
-          if (!"C".contentEquals(tag)) content.append(c);
-        } else if (c == ']') {
-          if ("B".contentEquals(tag) || "W".contentEquals(tag)) return false;
-          if ("DD".contentEquals(tag) && "true".contentEquals(content)) return true;
-          inValue = false;
-          tag.setLength(0);
-        } else {
-          content.append(c);
-        }
-      } else if (c == ';' || c == '(' || c == ')') {
-        return false;
-      } else if (c == '[') {
-        inValue = true;
-        content.setLength(0);
-      } else if (c >= 'A' && c <= 'Z') {
-        tag.append(c);
-      }
-    }
-    return false;
   }
 
   private static boolean isRootSetupContext(
@@ -4431,13 +4363,11 @@ public class SGFParser {
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, BoardHistoryNode> subTreeStepMap = new HashMap<Integer, BoardHistoryNode>();
-    // Comment of the game head
-    String headComment = "";
     // Game properties
     Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
+    PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4448,7 +4378,6 @@ public class SGFParser {
     boolean inProp = false;
     int topLevelNodeCount = 0;
     boolean allowRootSetupOnCurrentNode = false;
-    boolean rootNodeHasDummy = false;
     String tag = "";
     StringBuilder tagBuilder = new StringBuilder();
     StringBuilder tagContentBuilder = new StringBuilder();
@@ -4478,7 +4407,7 @@ public class SGFParser {
       switch (c) {
         case '(':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             subTreeDepth += 1;
             // Initialize the step count
@@ -4496,7 +4425,7 @@ public class SGFParser {
           break;
         case ')':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             if (isMultiGo) {
               // Restore to the variation node
@@ -4569,29 +4498,19 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(history, pendingProps);
             }
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {
             // Support comment
-            boolean rootSetupContext =
-                !rootNodeHasDummy
-                    && isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode);
-            if (rootSetupContext) {
-              headComment = tagContent;
-            } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
               target.getData().comment = tagContent;
             }
           } else if (isAnalysisTag(tag)) {
-            boolean rootSetupContext =
-                !rootNodeHasDummy
-                    && isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode);
-            if (shouldBufferLeadingSetupAnalysis(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupAnalysis(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeAnalysis(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
@@ -4612,7 +4531,7 @@ public class SGFParser {
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
               addNodePropertyOnNode(history, target, tag, tagContent);
               if (move != null) {
                 addExtraStoneOnNode(history, target, move[0], move[1], color);
@@ -4631,7 +4550,7 @@ public class SGFParser {
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
               applyCurrentPlayerPropertyOnNode(history, target, tagContent);
             }
           } else if (tag.equals("PB")) {
@@ -4664,7 +4583,9 @@ public class SGFParser {
               e.printStackTrace();
             }
           } else {
-            if (moveStart) {
+            if (allowRootSetupOnCurrentNode && isRootGameProperty(tag)) {
+              addProperty(gameProperties, tag, tagContent);
+            } else if (moveStart) {
               // Other SGF node properties
               if ("AE".equals(tag)) {
                 // remove a stone
@@ -4677,7 +4598,7 @@ public class SGFParser {
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
@@ -4687,9 +4608,8 @@ public class SGFParser {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(history, target, tag, tagContent);
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+              } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 boolean firstProp = history.getCurrentHistoryNode().hasVariations();
                 if (firstProp) {
@@ -4704,11 +4624,6 @@ public class SGFParser {
               if ("AE".equals(tag) && rootSetupContext) {
                 int[] move = convertSgfPosToCoord(tagContent);
                 applyRootSetupProperty(history, tag, tagContent, move, Stone.EMPTY, false);
-              } else if (rootNodeHasDummy && isLeadingSetupMetadataTag(tag)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
-              } else if (rootSetupContext) {
-                if ("N".equals(tag) && headComment.isEmpty()) headComment = tagContent;
-                else addProperty(gameProperties, tag, tagContent);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = history.getCurrentHistoryNode().hasVariations();
@@ -4719,15 +4634,14 @@ public class SGFParser {
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY, false);
                 }
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+              } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
@@ -4741,12 +4655,10 @@ public class SGFParser {
             // support C[a;b;c;]
             tagContentBuilder.append(c);
           } else if (!(subTreeDepth > 1 && !isMultiGo)) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             topLevelNodeCount += 1;
             allowRootSetupOnCurrentNode = !isBranch && topLevelNodeCount == 1;
-            rootNodeHasDummy =
-                allowRootSetupOnCurrentNode && nodeStartsWithDummy(value, i + 1);
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
             currentNodeHasMove = false;
@@ -4770,7 +4682,7 @@ public class SGFParser {
           }
       }
     }
-    flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+    flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
 
     if (isBranch) {
       resolveImportedInitialBranches(history, importParent, existingChildren);
@@ -4780,10 +4692,6 @@ public class SGFParser {
       while (history.previous().isPresent())
         ;
 
-      // Set AW/AB Comment
-      if (!headComment.isEmpty()) {
-        history.getData().comment = headComment;
-      }
       if (gameProperties.size() > 0) {
         history.getData().addProperties(gameProperties);
       }
@@ -4820,13 +4728,10 @@ public class SGFParser {
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, Integer> subTreeStepMap = new HashMap<Integer, Integer>();
-    // Comment of the game head
-    String headComment = "";
     // Game properties
-    Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
-    PendingSetupMetadata pendingSetupMetadata = new PendingSetupMetadata(analysisImport);
+    PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
     boolean inTag = false,
         isMultiGo = false,
         escaping = false,
@@ -4857,7 +4762,7 @@ public class SGFParser {
       switch (c) {
         case '(':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             subTreeDepth += 1;
             // Initialize the step count
@@ -4875,7 +4780,7 @@ public class SGFParser {
           break;
         case ')':
           if (!inTag) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             if (isMultiGo) {
               // Restore to the variation node
@@ -4945,27 +4850,19 @@ public class SGFParser {
             if (newBranch) {
               processPendingPros(history, pendingProps);
             }
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {
             // Support comment
-            boolean rootSetupContext =
-                isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode);
-            if (rootSetupContext) {
-              headComment = tagContent;
-            } else if (shouldBufferLeadingSetupMetadata(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
               target.getData().comment = tagContent;
             }
           } else if (isAnalysisTag(tag)) {
-            boolean rootSetupContext =
-                isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode);
-            if (shouldBufferLeadingSetupAnalysis(
-                currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-              bufferLeadingSetupAnalysis(pendingSetupMetadata, tag, tagContent);
+            if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+              bufferNodeAnalysis(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
@@ -4986,7 +4883,7 @@ public class SGFParser {
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
               addNodePropertyOnNode(history, target, tag, tagContent);
               if (move != null) {
                 addExtraStoneOnNode(history, target, move[0], move[1], color);
@@ -5005,7 +4902,7 @@ public class SGFParser {
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-              movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+              movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
               applyCurrentPlayerPropertyOnNode(history, target, tagContent);
             }
           } else if (tag.equals("PB")) {
@@ -5041,7 +4938,7 @@ public class SGFParser {
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
@@ -5051,9 +4948,8 @@ public class SGFParser {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 addNodePropertyOnNode(history, target, tag, tagContent);
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, false)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+              } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 boolean firstProp = (subTreeStepMap.get(subTreeDepth) == 0);
                 if (firstProp) {
@@ -5068,9 +4964,6 @@ public class SGFParser {
               if ("AE".equals(tag) && rootSetupContext) {
                 int[] move = convertSgfPosToCoord(tagContent);
                 applyRootSetupProperty(history, tag, tagContent, move, Stone.EMPTY);
-              } else if (rootSetupContext) {
-                if ("N".equals(tag) && headComment.isEmpty()) headComment = tagContent;
-                else addProperty(gameProperties, tag, tagContent);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch = (subTreeStepMap.get(subTreeDepth) <= 1);
@@ -5081,15 +4974,14 @@ public class SGFParser {
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
-                movePendingSetupMetadataToTarget(history, target, pendingSetupMetadata);
+                movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
                 int[] move = convertSgfPosToCoord(tagContent);
                 if (move != null) {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY);
                 }
-              } else if (shouldBufferLeadingSetupMetadata(
-                  currentNodeHasMove, currentNodeHasSetupSnapshot, rootSetupContext)) {
-                bufferLeadingSetupMetadata(pendingSetupMetadata, tag, tagContent);
+              } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
+                bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
@@ -5103,7 +4995,7 @@ public class SGFParser {
             // support C[a;b;c;]
             tagContentBuilder.append(c);
           } else if (!(subTreeDepth > 1 && !isMultiGo)) {
-            flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             addPassForMove = true;
             currentNodeHasSetupSnapshot = false;
@@ -5128,7 +5020,7 @@ public class SGFParser {
           }
       }
     }
-    flushPendingSetupMetadataToCurrentNode(history, pendingSetupMetadata);
+    flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
     resolveImportedInitialBranches(history, importParent, existingChildren);
     history.toBranchTop();
     return history.getCurrentHistoryNode().numberOfChildren() - 1;

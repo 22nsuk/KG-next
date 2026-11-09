@@ -9,11 +9,14 @@ import featurecat.lizzie.Lizzie;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.stream.Stream;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class SGFPropertyValuesTest {
@@ -30,6 +33,94 @@ class SGFPropertyValuesTest {
   private static final String MARKS = String.join("", PROPERTIES);
 
   @TempDir Path directory;
+
+  static Stream<Arguments> firstNodeCases() {
+    return Stream.of("detached", "string", "edit", "file")
+        .flatMap(
+            entry ->
+                Stream.of("", "AB[bb]PL[W]", "B[bb]", "W[]", "DD[true]", "DD[true]B[bb]")
+                    .map(action -> Arguments.of(entry, action)));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"detached", "string", "edit", "file"})
+  void firstNodeGameInformationStaysOnRootRegardlessOfMoveOrder(String entrypoint)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      String info = "RU[Chinese]DT[2026-11-09]EV[event]GC[game comment]";
+      for (boolean before : List.of(true, false)) {
+        BoardHistoryList history =
+            read(
+                "(;SZ[5]"
+                    + (before ? info : "")
+                    + "LB[aa:A]B[bb]LB[cc:B]"
+                    + (before ? "" : info)
+                    + ";W[dd])",
+                entrypoint);
+        for (int round = 0; round < 2; round++) {
+          BoardData root = history.getStart().getData();
+          BoardData move = history.getStart().next().orElseThrow().getData();
+          assertEquals("Chinese", root.getProperty("RU"));
+          assertEquals("2026-11-09", history.getGameInfo().getDate());
+          assertEquals("event", root.getProperty("EV"));
+          assertEquals("game comment", root.getProperty("GC"));
+          for (String key : List.of("RU", "DT", "EV", "GC"))
+            assertTrue(move.getPropertyValues(key).isEmpty(), key);
+          assertEquals(List.of("aa:A", "cc:B"), move.getPropertyValues("LB"));
+          assertTrue(root.getPropertyValues("LB").isEmpty());
+          Lizzie.board.setHistory(history);
+          history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @MethodSource("firstNodeCases")
+  void firstNodeMetadataKeepsItsOwner(String entrypoint, String action) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+      BoardHistoryList history =
+          read(
+              "(;SZ[5]RU[Chinese]DT[2026-11-09]PB[Black]PW[White]KM[6.5]"
+                  + "C[note;B[ee\\]]N[name]MN[7]LB[aa:A]XX[first]"
+                  + "LZ[Main 45 100 2.5 1.2 0]"
+                  + action
+                  + "LB[cc:B]XX[second][]LZ2[Sub 41 150 2.1 0.5 0.8])",
+              entrypoint);
+      boolean rootOwnsMetadata = action.isEmpty() || action.startsWith("AB");
+      for (int round = 0; round < 2; round++) {
+        BoardData root = history.getStart().getData();
+        BoardData owner =
+            rootOwnsMetadata
+                ? root
+                : history.getStart().getVariations().stream()
+                    .map(BoardHistoryNode::getData)
+                    .filter(data -> data.dummy == action.equals("DD[true]"))
+                    .findFirst()
+                    .orElseThrow();
+        assertEquals(List.of("aa:A", "cc:B"), owner.getPropertyValues("LB"));
+        assertEquals(List.of("first", "second", ""), owner.getPropertyValues("XX"));
+        assertEquals("note;B[ee]", owner.comment);
+        assertEquals("name", owner.getProperty("N"));
+        assertEquals("7", owner.getProperty("MN"));
+        assertEquals(100, owner.getPlayouts());
+        assertEquals(150, owner.getPlayouts2());
+        assertEquals("Chinese", root.getProperty("RU"));
+        assertEquals("2026-11-09", history.getGameInfo().getDate());
+        assertEquals("Black", history.getGameInfo().getPlayerBlack());
+        if (!rootOwnsMetadata) {
+          for (String key : List.of("LB", "XX", "N", "MN"))
+            assertTrue(root.getPropertyValues(key).isEmpty(), key);
+          assertTrue(root.comment.isEmpty());
+          assertEquals(0, root.getPlayouts());
+          assertEquals(0, root.getPlayouts2());
+        }
+        Lizzie.board.setHistory(history);
+        history = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      }
+    }
+  }
 
   @ParameterizedTest
   @CsvSource({

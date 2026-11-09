@@ -130,6 +130,31 @@ class SgfMarkupEditingDesktopTest {
           Files.writeString(result.resolveSibling("cleared.sgf"), saved);
           return null;
         });
+    DesktopProbeProcess.phase(result, "first-node-move-markup");
+    edt(
+        () -> {
+          assertTrue(SGFParser.loadFromString("(;SZ[9]LB[aa:A]B[bb]LB[cc:B])", false));
+          assertTrue(Lizzie.board.nextMove(false));
+          assertEquals(List.of("aa:A", "cc:B"), data().getPropertyValues("LB"));
+          assertTrue(
+              Lizzie.board.getHistory().getStart().getData().getPropertyValues("LB").isEmpty());
+          Lizzie.frame.refresh();
+          return null;
+        });
+    selectTool("toolbar.markup-eraser");
+    click(independent, independent.boardRenderer, 0, 0);
+    edt(
+        () -> {
+          assertEquals(List.of("cc:B"), data().getPropertyValues("LB"));
+          BoardData reopened =
+              SGFParser.parseSgf(SGFParser.saveToString(false), true)
+                  .getStart()
+                  .next()
+                  .orElseThrow()
+                  .getData();
+          assertEquals(List.of("cc:B"), reopened.getPropertyValues("LB"));
+          return null;
+        });
     Files.writeString(result, "PASS");
   }
 
@@ -157,7 +182,7 @@ class SgfMarkupEditingDesktopTest {
 
   private static void click(Component component, BoardRenderer renderer, int column, int row)
       throws Exception {
-    new Robot().waitForIdle();
+    // dispatchEvent and the coordinate check run synchronously on the EDT; no native input is queued.
     edt(
         () -> {
           int x =
