@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static featurecat.lizzie.gui.AnalysisUiRefreshTestSupport.whileEdtBlocked;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,13 +16,14 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.LockSupport;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class SwingRefreshCoalescerTest {
   @Test
@@ -38,9 +40,12 @@ class SwingRefreshCoalescerTest {
               firstRun.countDown();
             });
 
-    for (int i = 0; i < 100; i++) {
-      coalescer.request();
-    }
+    whileEdtBlocked(() -> {
+      for (int i = 0; i < 100; i++) {
+        coalescer.request();
+      }
+      assertEquals(0, runs.get(), "the whole burst must precede its first callback");
+    });
 
     assertTrue(firstRun.await(2, TimeUnit.SECONDS));
     SwingUtilities.invokeAndWait(() -> {});
@@ -50,61 +55,43 @@ class SwingRefreshCoalescerTest {
 
   @Test
   void laterRequestRunsAfterMinimumInterval() throws Exception {
+    int minimumIntervalMillis = 30;
     AtomicInteger runs = new AtomicInteger();
-    CountDownLatch runsCompleted = new CountDownLatch(2);
-    SwingRefreshCoalescer coalescer =
-        new SwingRefreshCoalescer(
-            30,
-            () -> {
-              runs.incrementAndGet();
-              runsCompleted.countDown();
-            });
-
-    coalescer.request();
-    while (runs.get() == 0) {
-      Thread.sleep(2L);
-    }
-    coalescer.request();
-
-    assertTrue(runsCompleted.await(2, TimeUnit.SECONDS));
-    assertEquals(2, runs.get());
-  }
-
-  @Test
-  void requestArrivingDuringTaskIsNotLost() throws Exception {
-    AtomicInteger runs = new AtomicInteger();
-    CountDownLatch taskStarted = new CountDownLatch(1);
-    CountDownLatch releaseFirstTask = new CountDownLatch(1);
+    AtomicLong firstRequestNanos = new AtomicLong();
+    AtomicLong secondRunNanos = new AtomicLong();
     CountDownLatch secondRun = new CountDownLatch(1);
     SwingRefreshCoalescer coalescer =
         new SwingRefreshCoalescer(
-            5,
+            minimumIntervalMillis,
             () -> {
-              int run = runs.incrementAndGet();
-              if (run == 1) {
-                taskStarted.countDown();
-                try {
-                  releaseFirstTask.await(2, TimeUnit.SECONDS);
-                } catch (InterruptedException e) {
-                  Thread.currentThread().interrupt();
-                }
-              } else {
+              if (runs.incrementAndGet() == 2) {
+                secondRunNanos.set(System.nanoTime());
                 secondRun.countDown();
               }
             });
 
-    coalescer.request();
-    assertTrue(taskStarted.await(2, TimeUnit.SECONDS));
-    coalescer.request();
-    releaseFirstTask.countDown();
+    SwingUtilities.invokeAndWait(() -> {
+      firstRequestNanos.set(System.nanoTime());
+      coalescer.request();
+      assertEquals(1, runs.get(), "an idle EDT request completes before returning");
+      coalescer.request();
+    });
 
     assertTrue(secondRun.await(2, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {});
     assertEquals(2, runs.get());
+    // Start before the first request, not inside its callback: time spent entering that
+    // callback must not make a correctly rate-limited second run look too early.
+    assertTrue(
+        secondRunNanos.get() - firstRequestNanos.get()
+            >= TimeUnit.MILLISECONDS.toNanos(minimumIntervalMillis),
+        "the next batch must respect the configured minimum interval");
   }
 
   @ParameterizedTest
-  @ValueSource(ints = {0, 33})
-  void slowCallbackYieldsToMouseInputBeforeCoalescedFollowUp(int minimumIntervalMillis)
+  @CsvSource({"0, false", "0, true", "33, false", "33, true"})
+  void slowCallbackYieldsToMouseInputBeforeCoalescedFollowUp(
+      int minimumIntervalMillis, boolean inputRequestsRefresh)
       throws Exception {
     AtomicInteger runs = new AtomicInteger();
     AtomicInteger version = new AtomicInteger();
@@ -139,10 +126,12 @@ class SwingRefreshCoalescerTest {
                 public void mousePressed(MouseEvent event) {
                   if (!SwingUtilities.isEventDispatchThread()) callbacksOnEdt.set(false);
                   runsAtInput.set(runs.get());
-                  // A request between the old callback and its queued continuation must join
-                  // that continuation, not run inline or schedule a duplicate refresh.
-                  version.set(1001);
-                  coalescer.request();
+                  if (inputRequestsRefresh) {
+                    // A request between the old callback and its queued continuation must join
+                    // that continuation, not run inline or schedule a duplicate refresh.
+                    version.set(1001);
+                    coalescer.request();
+                  }
                   inputHandled.countDown();
                 }
               });
@@ -180,8 +169,9 @@ class SwingRefreshCoalescerTest {
     assertTrue(callbackReleased.get(), "fixture must release the blocked callback");
     assertTrue(callbacksOnEdt.get());
     assertEquals(1, runsAtInput.get(), "queued mouse input must precede the follow-up refresh");
-    assertEquals(2, runs.get(), "background burst and input request must share one follow-up");
-    assertEquals(1001, adoptedVersion.get(), "follow-up must adopt the latest requested state");
+    assertEquals(2, runs.get(), "the background burst must produce exactly one follow-up");
+    assertEquals(inputRequestsRefresh ? 1001 : 1000, adoptedVersion.get(),
+        "follow-up must adopt the latest state even when input does not request a refresh");
   }
 
   @Test
