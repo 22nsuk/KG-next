@@ -319,10 +319,25 @@ class AnalysisTableRefreshDesktopTest {
     header(table, 3);
     assertEquals(5, table.getValueAt(0, 1));
     if (kata) {
+      // Use mixed signed values so the assertion cannot accidentally pass on move order.
+      List<NodeInfo> scoreRows =
+          fixture.main.stream()
+              .map(node -> engine == 1 ? node.nodeInfoMain : node.nodeInfoMain2)
+              .toList();
+      double[] leads = {0, -7, 10, 3, -5};
+      double[] losses = {-5, -3, -2, -10, -4};
+      for (int i = 0; i < scoreRows.size(); i++) {
+        scoreRows.get(i).scoreLead = leads[i];
+        scoreRows.get(i).scoreMeanDiff = losses[i];
+      }
+      tick(frame.timer);
       header(table, 8);
-      assertEquals(1, table.getValueAt(0, 1), "best-score ascending compares both rows");
+      assertNumericOrder(table, 8, true);
       header(table, 8);
-      assertEquals(5, table.getValueAt(0, 1));
+      assertNumericOrder(table, 8, false);
+      // Keep the later filter/threshold scenarios on their original fixture.
+      for (BoardHistoryNode node : fixture.main) fillNode(node, node.getData().moveNumber != 2);
+      tick(frame.timer);
     }
     header(table, 0);
     header(table, 0);
@@ -447,6 +462,16 @@ class AnalysisTableRefreshDesktopTest {
     assertEquals(0, history.reads, "table reads re-traversed history outside a refresh");
     assertEquals(
         table.getRowCount() + 1, Files.readString(file, StandardCharsets.UTF_16).lines().count());
+  }
+
+  private static void assertNumericOrder(JTable table, int column, boolean ascending) {
+    List<Double> displayed = new ArrayList<>();
+    for (int row = 0; row < table.getRowCount(); row++) {
+      displayed.add(Double.parseDouble(table.getValueAt(row, column).toString()));
+    }
+    List<Double> expected = new ArrayList<>(displayed);
+    expected.sort(ascending ? Double::compare : java.util.Comparator.reverseOrder());
+    assertEquals(expected, displayed, "header must sort the displayed score in column " + column);
   }
 
   private static void tick(Timer timer) {

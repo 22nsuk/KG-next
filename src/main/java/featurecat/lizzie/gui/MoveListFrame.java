@@ -7241,7 +7241,7 @@ public class MoveListFrame extends JFrame {
           case 5 -> isKatago ? row -> row.winrate : row -> row.winrate - row.diffWinrate;
           case 6 -> isKatago ? row -> row.winrate - row.diffWinrate : row -> row.previousPlayouts;
           case 7 -> isKatago ? row -> row.scoreLead : row -> row.playouts;
-          case 8 -> isKatago ? row -> row.scoreLead - row.scoreMeanDiff : row -> row.percentsMatch;
+          case 8 -> isKatago ? row -> -row.scoreLead - row.scoreMeanDiff : row -> row.percentsMatch;
           case 9 -> row -> row.previousPlayouts;
           case 10 -> row -> row.playouts;
           case 11 -> row -> row.percentsMatch;
