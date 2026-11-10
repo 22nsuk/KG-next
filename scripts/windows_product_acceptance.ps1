@@ -829,6 +829,9 @@ function Get-VerifiedStartupProcessTree {
                     $parent = @($all | Where-Object { [int]$_.ProcessId -eq [int]$process.ParentProcessId })[0]
                     $parentCreation = Get-ProcessCreationIdentity -Value $parent.CreationDate
                     $childCreation = Get-ProcessCreationIdentity -Value $process.CreationDate
+                    # ParentProcessId can refer to an older, already exited incarnation.
+                    # Exclude that relation before requiring an image from a foreign process.
+                    if ($null -ne $childCreation -and $childCreation -lt $parentCreation) { continue }
                     if ($null -eq $childCreation -or -not $process.ExecutablePath) {
                         [void]$missing.Add($processId)
                         if (-not $pending.ContainsKey($processId)) {
@@ -836,8 +839,6 @@ function Get-VerifiedStartupProcessTree {
                         }
                         continue
                     }
-                    # ParentProcessId can refer to an older, already exited incarnation.
-                    if ($childCreation -lt $parentCreation) { continue }
                     [void]$ids.Add($processId)
                     $changed = $true
                 }

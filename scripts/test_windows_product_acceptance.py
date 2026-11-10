@@ -309,7 +309,9 @@ namespace FixtureLauncher {
         )
         if result.returncode:
             diagnostics = []
-            for path in sorted(self.root.rglob("fixture-*.txt")):
+            diagnostic_paths = set(self.root.rglob("fixture-*.txt"))
+            diagnostic_paths.update(self.root.rglob("startup-process-observation-*.json"))
+            for path in sorted(diagnostic_paths):
                 diagnostics.append(f"{path}: {path.read_text(encoding='utf-8', errors='replace')}")
             result.stderr += "\n" + "\n".join(diagnostics)
         return result
@@ -1237,11 +1239,13 @@ function Get-CimInstance {
     if ($script:case -eq 'external-recovered' -and $later) { $image='C:\Windows\System32\nvidia-smi.exe' }
     $time=if (-not $later -and $script:case -in @('time-missing','time-missing-gone')) { $null } else { $script:created.AddSeconds(3) }
     if ($script:case -eq 'creation-restored' -and $script:reads -eq 2) { $time=$null }
-    if ($script:case -eq 'older-child') { $time=$script:created.AddMilliseconds(500) }
+    if ($script:case -in @('older-child','older-child-missing-image','older-branch-missing-image')) { $time=$script:created.AddMilliseconds(500) }
+    if ($script:case -in @('older-child-missing-image','older-branch-missing-image')) { $image=$null }
     if ($later -and $script:case -eq 'child-reused') { $time=$time.AddTicks(10) }
     $parent=if ($later -and $script:case -eq 'child-parent-changed') { 4242 } else { 4243 }
     if ($script:case -eq 'unrelated') { $parent=9000; $image=$null }
     if (-not $gone) { Row 4244 $parent $image $time }
+    if ($script:case -eq 'older-branch-missing-image') { Row 4245 4244 $null $script:created.AddSeconds(4) }
     if ($script:case -eq 'duplicate') { Row 4244 4243 $image $time }
     if ($script:case -eq 'orphan' -or ($later -and $script:case -eq 'new-orphan')) { Row 4245 4244 'C:\external\helper.exe' $script:created.AddSeconds(4) }
     if ($script:case -eq 'old-grandchild') {
@@ -1333,11 +1337,15 @@ $evidence=@(Get-ChildItem -LiteralPath $PSScriptRoot -Filter 'startup-process-ob
         self.assertEqual("fixture evidence write error", value["message"])
         self.assertEqual([], value["ids"])
 
-    def test_recovered_process_older_than_parent_is_not_reported_as_bound(self) -> None:
-        value = self.observe("older-child")
-        self.assertIsNone(value["message"])
-        self.assertEqual([4242, 4243], value["ids"])
-        self.assertEqual("not-bound", value["evidence"][0]["resolutions"][0]["state"])
+    def test_process_predating_parent_does_not_require_an_image_or_own_its_branch(self) -> None:
+        for case in ("older-child", "older-child-missing-image", "older-branch-missing-image"):
+            with self.subTest(case=case):
+                value = self.observe(case)
+                self.assertIsNone(value["message"])
+                self.assertEqual([4242, 4243], value["ids"])
+                self.assertEqual(1, value["reads"])
+                self.assertEqual(0, value["waits"])
+                self.assertEqual([], value["evidence"])
 
     def test_identity_changes_and_query_failure_never_adopt_candidate(self) -> None:
         for case in ("child-reused", "child-parent-changed", "root-reused", "parent-reused",
