@@ -12,6 +12,7 @@ import featurecat.lizzie.search.FunctionCatalog;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dialog;
+import java.awt.KeyEventDispatcher;
 import java.awt.KeyboardFocusManager;
 import java.awt.Point;
 import java.awt.Robot;
@@ -267,43 +268,82 @@ public final class FunctionSearchInputTest {
     EngineGameSnapshot beforeGame = runOnEdt(() -> Lizzie.engineGame.current());
     Object beforeNode = currentBoardNode();
     String beforeConfig = currentConfig();
+    List<String> inputEvents = new ArrayList<>();
+    AtomicReference<KeyEvent> composingEnterEvent = new AtomicReference<>();
+    KeyboardFocusManager focusManager = KeyboardFocusManager.getCurrentKeyboardFocusManager();
+    KeyEventDispatcher enterTrace =
+        event -> {
+          if (event.getKeyCode() == KeyEvent.VK_ENTER && inputEvents.size() < 16) {
+            if (event.getID() == KeyEvent.KEY_PRESSED) {
+              composingEnterEvent.compareAndSet(null, event);
+            }
+            Window focused = focusManager.getFocusedWindow();
+            inputEvents.add(
+                "key:id="
+                    + event.getID()
+                    + ";when="
+                    + event.getWhen()
+                    + ";modifiers="
+                    + event.getModifiersEx()
+                    + ";source="
+                    + event.getComponent().getClass().getName()
+                    + ";ownerIsSource="
+                    + (focusManager.getFocusOwner() == event.getComponent())
+                    + ";focusedWindow="
+                    + (focused == null ? "null" : focused.getClass().getName()));
+          }
+          return false;
+        };
     try {
-      // The game owner is controlled; the input component, menu action and destination are real.
+      // Control availability through the game snapshot; use the real input, menu action and dialog.
       runOnEdtAction(EngineGameSnapshotFixtures::publishPlaying);
       focusMainPanel();
       sendShortcut(robot);
       FunctionSearchDialog dialog = awaitSearch("Korean game-parameter search");
       JTextField input = searchInput(dialog);
       await(input::isFocusOwner, "Korean search input focus", UI_TIMEOUT_MILLIS);
+      runOnEdtAction(() -> focusManager.addKeyEventDispatcher(enterTrace));
 
       // Exercise Swing's composition/commit delivery, not an installed OS input method.
       String query = "대국 파라미터";
       runOnEdtAction(
-          () ->
-              input.dispatchEvent(
-                  new InputMethodEvent(
-                      input,
-                      InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
-                      new AttributedString(query).getIterator(),
-                      query.length() - 1,
-                      null,
-                      null)));
+          () -> {
+            InputMethodEvent composition =
+                new InputMethodEvent(
+                    input,
+                    InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                    new AttributedString(query).getIterator(),
+                    query.length() - 1,
+                    null,
+                    null);
+            inputEvents.add("composition:when=" + composition.getWhen());
+            input.dispatchEvent(composition);
+          });
       press(robot, KeyEvent.VK_ENTER);
       robot.waitForIdle();
+      KeyEvent composingEnter = runOnEdt(composingEnterEvent::get);
+      assertNotNull(composingEnter, "composition Enter was not delivered");
+      assertTrue(composingEnter.getComponent() == input, "composition Enter missed the search input");
       if (!runOnEdt(dialog::isShowing)) {
         throw new AssertionError("composition Enter activated Korean search prematurely");
       }
       evidence.put("korean.composition-enter-retained", "true");
       runOnEdtAction(
-          () ->
-              input.dispatchEvent(
-                  new InputMethodEvent(
-                      input,
-                      InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
-                      new AttributedString("터").getIterator(),
-                      1,
-                      null,
-                      null)));
+          () -> {
+            // Tie the delayed composition commit to the physical Enter that caused it.
+            // The implicit EDT timestamp can be ahead of native key time on X11.
+            InputMethodEvent commit =
+                new InputMethodEvent(
+                    input,
+                    InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
+                    composingEnter.getWhen(),
+                    new AttributedString("터").getIterator(),
+                    1,
+                    null,
+                    null);
+            inputEvents.add("commit:when=" + commit.getWhen());
+            input.dispatchEvent(commit);
+          });
       await(
           () -> query.equals(runOnEdtUnchecked(input::getText)),
           "Korean committed query",
@@ -339,10 +379,41 @@ public final class FunctionSearchInputTest {
           runOnEdt(parameters::getTitle));
       evidence.put("korean.query.real-dialog", "true");
       assertBoardAndConfigUnchanged(beforeNode, beforeConfig, "Korean game-parameter navigation");
-      await(parameters::isFocused, "game-parameter dialog focus", UI_TIMEOUT_MILLIS);
+      try {
+        await(parameters::isFocused, "game-parameter dialog focus", UI_TIMEOUT_MILLIS);
+      } catch (AssertionError failure) {
+        evidence.put("korean.query.focus.actual", focusDescription());
+        evidence.put(
+            "korean.query.game-state",
+            runOnEdt(
+                () ->
+                    "transaction="
+                        + (Lizzie.engineGame.transaction() != null)
+                        + ";parameters="
+                        + Lizzie.engineGame.parameterState()));
+        evidence.put(
+            "korean.query.focus.target",
+            runOnEdt(
+                () ->
+                    "showing="
+                        + parameters.isShowing()
+                        + ";focusableWindow="
+                        + parameters.isFocusableWindow()
+                        + ";initial="
+                        + parameters.getFocusTraversalPolicy().getInitialComponent(parameters)
+                        + ";defaultButtonEnabled="
+                        + parameters.getRootPane().getDefaultButton().isEnabled()));
+        throw failure;
+      }
       press(robot, KeyEvent.VK_ESCAPE);
       await(() -> !parameters.isShowing(), "game-parameter Escape", UI_TIMEOUT_MILLIS);
+      evidence.put("korean.input.events", runOnEdt(() -> String.join(" | ", inputEvents)));
+    } catch (AssertionError failure) {
+      evidence.put("korean.input.events", runOnEdt(() -> String.join(" | ", inputEvents)));
+      evidence.put("korean.input.focus.actual", focusDescription());
+      throw failure;
     } finally {
+      runOnEdtAction(() -> focusManager.removeKeyEventDispatcher(enterTrace));
       runOnEdtAction(() -> Lizzie.engineGame.publishSnapshotForTest(beforeGame));
       runOnEdtAction(
           () -> {

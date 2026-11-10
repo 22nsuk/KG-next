@@ -99,6 +99,11 @@ class AnalysisWindowLifecycleDesktopTest {
       edt(
           () -> {
             original.setBounds(bounds);
+            return null;
+          });
+      awaitBounds(original, bounds);
+      edt(
+          () -> {
             table(original).setAutoResizeMode(JTable.AUTO_RESIZE_OFF);
             table(original).getColumnModel().getColumn(0).setWidth(121);
             if (!analysis) ((MoveListFrame) original).sortnum = 4;
@@ -121,6 +126,7 @@ class AnalysisWindowLifecycleDesktopTest {
       if (!analysis) assertEquals(4, position.getInt(0));
 
       JFrame reopened = edt(() -> open(analysis));
+      awaitBounds(reopened, bounds);
       edt(
           () -> {
             assertNotSame(original, reopened);
@@ -353,6 +359,20 @@ class AnalysisWindowLifecycleDesktopTest {
     ExtraMode previous = Lizzie.config.extraMode;
     Lizzie.config.extraMode = next;
     Lizzie.frame.extraMode(next, previous);
+  }
+
+  private static void awaitBounds(JFrame frame, Rectangle expected) throws Exception {
+    // X11 can deliver intermediate configure events after setBounds/setVisible return.
+    // Drain native events, then require the exact requested/restored rectangle before closing.
+    new Robot().waitForIdle();
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    Rectangle actual;
+    do {
+      actual = edt(frame::getBounds);
+      if (expected.equals(actual)) return;
+      Thread.sleep(20);
+    } while (System.nanoTime() < deadline);
+    assertEquals(expected, actual, "native window did not reach the saved bounds");
   }
 
   private static void awaitTick(JFrame frame) throws Exception {
