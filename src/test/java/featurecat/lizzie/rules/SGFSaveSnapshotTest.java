@@ -7,8 +7,11 @@ import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.gui.LizzieFrame;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
@@ -42,8 +45,10 @@ class SGFSaveSnapshotTest {
 
   @TempDir Path tempDirectory;
 
-  @Test
-  void engineMoveWaitsForTopologyCaptureAndCannotEnterTheSavedTree() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void engineMoveWaitsForTopologyCaptureAndCannotEnterTheSavedTree(boolean currentBranch)
+      throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       Board board = Lizzie.board;
       BoardHistoryList history = board.getHistory();
@@ -52,18 +57,28 @@ class SGFSaveSnapshotTest {
       AtomicBoolean firstRead = new AtomicBoolean(true);
       BoardHistoryNode root =
           new BoardHistoryNode(history.getData()) {
-            @Override
-            public List<BoardHistoryNode> getVariations() {
+            private void pauseTopologyRead() {
               if (SwingUtilities.isEventDispatchThread() && firstRead.getAndSet(false)) {
                 readingChildren.countDown();
                 await(releaseCapture);
               }
+            }
+
+            @Override
+            public List<BoardHistoryNode> getVariations() {
+              pauseTopologyRead();
               return super.getVariations();
+            }
+
+            @Override
+            public Optional<BoardHistoryNode> next(boolean includeDummy) {
+              pauseTopologyRead();
+              return super.next(includeDummy);
             }
           };
       history.setHead(root);
       var worker = Executors.newSingleThreadExecutor();
-      CompletableFuture<String> saved = captureAsync(board);
+      CompletableFuture<String> saved = captureAsync(board, currentBranch);
       try {
         assertTrue(readingChildren.await(5, TimeUnit.SECONDS));
         CountDownLatch committing = new CountDownLatch(1);
@@ -91,8 +106,10 @@ class SGFSaveSnapshotTest {
     }
   }
 
-  @Test
-  void payloadCopyReleasesHistoryLockButKeepsTheFrozenTopology() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void payloadCopyReleasesHistoryLockButKeepsTheFrozenTopology(boolean currentBranch)
+      throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       Board board = Lizzie.board;
       BoardHistoryList history = board.getHistory();
@@ -111,7 +128,7 @@ class SGFSaveSnapshotTest {
           };
       history.setHead(root);
       var worker = Executors.newSingleThreadExecutor();
-      CompletableFuture<String> saved = captureAsync(board);
+      CompletableFuture<String> saved = captureAsync(board, currentBranch);
       try {
         assertTrue(cloningPayload.await(5, TimeUnit.SECONDS));
         var move =
@@ -153,12 +170,12 @@ class SGFSaveSnapshotTest {
     }
   }
 
-  private static CompletableFuture<String> captureAsync(Board board) {
+  private static CompletableFuture<String> captureAsync(Board board, boolean currentBranch) {
     CompletableFuture<String> result = new CompletableFuture<>();
     SwingUtilities.invokeLater(
         () -> {
           try {
-            result.complete(SGFParser.saveSnapshot(board, true, false, false));
+            result.complete(SGFParser.saveSnapshot(board, true, false, currentBranch));
           } catch (Throwable failure) {
             result.completeExceptionally(failure);
           }
@@ -175,8 +192,10 @@ class SGFSaveSnapshotTest {
     }
   }
 
-  @Test
-  void selectedBranchKeepsAncestorPathAndContinuationWithoutMutatingLiveTree() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void selectedBranchKeepsAncestorPathAndContinuationWithoutMutatingLiveTree(boolean comments)
+      throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       BoardHistoryList history =
           SGFParser.parseSgf(
@@ -186,22 +205,159 @@ class SGFSaveSnapshotTest {
       var fork = root.next().orElseThrow();
       var selected = fork.getVariation(1).orElseThrow();
       history.setHead(selected);
+      fork.getData().setPlayouts(100);
+      fork.getData().winrate = 67;
+      selected.getData().setPlayouts(200);
+      selected.getData().winrate = 60;
+      selected.getData().engineName = "branch-comment-engine";
       var originalProperties = new LinkedHashMap<>(root.getData().getProperties());
-      String saved = capture(true, false, true);
+      String expectedComment = "";
+      if (comments) {
+        var full = SGFParser.parseSgf(capture(true, true, false), true);
+        expectedComment =
+            full.getStart().next().orElseThrow().getVariation(1).orElseThrow().getData().comment;
+        assertTrue(expectedComment.contains("branch-comment-engine"));
+        assertTrue(expectedComment.contains("branch"));
+      }
+      String saved = capture(true, comments, true);
       assertTrue(saved.contains(";B[aa]"));
       assertTrue(saved.contains(";W[dd]"));
       assertTrue(saved.contains(";B[ee]"));
       assertFalse(saved.contains(";W[bb]"));
       assertFalse(saved.contains(";B[cc]"));
-      assertFalse(saved.contains("C[branch]"));
+      assertFalse(saved.contains("C[root]"));
+      var reopened = SGFParser.parseSgf(saved, true);
+      assertEquals(
+          expectedComment,
+          reopened.getStart().next().orElseThrow().next().orElseThrow().getData().comment);
       assertSame(history, Lizzie.board.getHistory());
       assertSame(selected, history.getCurrentHistoryNode());
       assertSame(root, history.getStart());
       assertEquals(2, fork.numberOfChildren());
       assertEquals("root", root.getData().comment);
+      assertEquals("", fork.getData().comment);
       assertEquals("branch", selected.getData().comment);
       assertEquals(originalProperties, root.getData().getProperties());
-      assertEquals("黑方", SGFParser.parseSgf(saved, true).getGameInfo().getPlayerBlack());
+      assertEquals("黑方", reopened.getGameInfo().getPlayerBlack());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void rawBranchCaptureDoesNotVisitOrCopyExcludedSubtrees(boolean comments) throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      var history =
+          SGFParser.parseSgf(
+              "(;SZ[5];B[aa](;W[bb];B[cc])(;W[dd](;B[ee])(;B[bc])))", true);
+      List<BoardHistoryNode> copied = new ArrayList<>();
+      List<BoardHistoryNode> childrenRead = new ArrayList<>();
+      BoardHistoryNode root = observeSaveTraversal(history.getStart(), copied, childrenRead);
+      var fork = root.next().orElseThrow();
+      var main = fork.getVariation(0).orElseThrow();
+      var selected = fork.getVariation(1).orElseThrow();
+      Set<BoardHistoryNode> retained =
+          Set.of(root, fork, selected, selected.next().orElseThrow());
+      Set<BoardHistoryNode> excluded =
+          Set.of(main, main.next().orElseThrow(), selected.getVariation(1).orElseThrow());
+      history.setHead(selected);
+      Lizzie.board.setHistory(history);
+      childrenRead.clear();
+
+      capture(true, comments, true);
+
+      assertEquals(4, copied.size(), "copy only the exported ancestor path and continuation");
+      assertEquals(retained, Set.copyOf(copied));
+      assertTrue(
+          childrenRead.stream().noneMatch(excluded::contains),
+          "excluded subtrees must not be traversed during topology capture");
+
+      copied.clear();
+      childrenRead.clear();
+      capture(true, comments, false);
+      assertEquals(7, copied.size(), "full exports still capture every branch");
+      assertTrue(copied.containsAll(retained));
+      assertTrue(copied.containsAll(excluded));
+      assertTrue(childrenRead.containsAll(excluded));
+    }
+  }
+
+  private static BoardHistoryNode observeSaveTraversal(
+      BoardHistoryNode original, List<BoardHistoryNode> copied, List<BoardHistoryNode> childrenRead) {
+    BoardHistoryNode observed =
+        new BoardHistoryNode(original.getData()) {
+          @Override
+          BoardHistoryNode copyForSave() {
+            copied.add(this);
+            return super.copyForSave();
+          }
+
+          @Override
+          public List<BoardHistoryNode> getVariations() {
+            childrenRead.add(this);
+            return super.getVariations();
+          }
+
+          @Override
+          public Optional<BoardHistoryNode> next(boolean includeDummy) {
+            childrenRead.add(this);
+            return super.next(includeDummy);
+          }
+        };
+    for (BoardHistoryNode child : original.getVariations()) {
+      observeSaveTraversal(child, copied, childrenRead).reparentAsLastVariationOf(observed);
+    }
+    return observed;
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void branchKeepsNonterminalDummyAndExplicitlySelectedTerminalDummy(boolean selectTerminal)
+      throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      var history = SGFParser.parseSgf("(;SZ[5];B[aa];DD[true];DD[true])", true);
+      var move = history.getStart().next().orElseThrow();
+      var nonterminal = move.next(true).orElseThrow();
+      var terminal = nonterminal.next(true).orElseThrow();
+      assertFalse(nonterminal.isEndDummay());
+      assertTrue(terminal.isEndDummay());
+      history.setHead(selectTerminal ? terminal : move);
+      Lizzie.board.setHistory(history);
+
+      var saved = SGFParser.parseSgf(capture(true, false, true), true);
+      var savedDummy = saved.getStart().next(true).orElseThrow().next(true).orElseThrow();
+      assertTrue(savedDummy.getData().dummy);
+      assertEquals(selectTerminal, savedDummy.next(true).isPresent());
+      if (selectTerminal) assertTrue(savedDummy.next(true).orElseThrow().isEndDummay());
+      assertSame(selectTerminal ? terminal : move, history.getCurrentHistoryNode());
+      assertSame(terminal, nonterminal.next(true).orElseThrow());
+    }
+  }
+
+  @Test
+  void standardBranchSaveDoesNotRedirectGeneratedCommentsToTheSelectedSibling() throws Exception {
+    try (var ignored = RulesLayerTestHarness.open()) {
+      var history =
+          SGFParser.parseSgf("(;SZ[5];B[aa](;W[bb]C[main])(;W[dd]C[side]))", true);
+      var fork = history.getStart().next().orElseThrow();
+      var main = fork.getVariation(0).orElseThrow();
+      var selected = fork.getVariation(1).orElseThrow();
+      fork.getData().setPlayouts(100);
+      fork.getData().winrate = 67;
+      fork.getData().engineName = "game-comment-engine";
+      history.setHead(selected);
+      Lizzie.board.setHistory(history);
+      Lizzie.board.isGameBoard = true;
+
+      var full = SGFParser.parseSgf(capture(false, false, false), true);
+      assertTrue(
+          full.getStart().next().orElseThrow().getVariation(0).orElseThrow().getData().comment
+              .contains("game-comment-engine"));
+      var branch = SGFParser.parseSgf(capture(false, false, true), true);
+      assertEquals(
+          "side", branch.getStart().next().orElseThrow().next().orElseThrow().getData().comment);
+      assertEquals("main", main.getData().comment);
+      assertEquals("side", selected.getData().comment);
+      assertSame(selected, history.getCurrentHistoryNode());
     }
   }
 

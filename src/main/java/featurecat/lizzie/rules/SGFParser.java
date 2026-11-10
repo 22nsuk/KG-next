@@ -1147,13 +1147,15 @@ public class SGFParser {
     return original == null ? new GameInfo() : original.copyForSave();
   }
 
-  private static BoardHistoryList captureSaveHistory(BoardHistoryList source) {
+  private static BoardHistoryList captureSaveHistory(
+      BoardHistoryList source, boolean currentBranchOnly) {
     try (var phase = new SgfPhase("save-capture")) {
-      return copySaveHistory(source);
+      return copySaveHistory(source, currentBranchOnly);
     }
   }
 
-  private static BoardHistoryList copySaveHistory(BoardHistoryList source) {
+  private static BoardHistoryList copySaveHistory(
+      BoardHistoryList source, boolean currentBranchOnly) {
     BoardHistoryList copy;
     BoardHistoryNode current;
     Map<BoardHistoryNode, List<BoardHistoryNode>> topology = new IdentityHashMap<>();
@@ -1165,13 +1167,29 @@ public class SGFParser {
       copy = source.shallowCopy();
       current = source.getCurrentHistoryNode();
       copy.setGameInfo(copyGameInfo(source.getGameInfo()));
-      ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
-      pending.add(source.getStart());
-      while (!pending.isEmpty()) {
-        BoardHistoryNode original = pending.removeFirst();
-        List<BoardHistoryNode> children = List.copyOf(original.getVariations());
-        topology.put(original, children);
-        pending.addAll(children);
+      if (currentBranchOnly) {
+        BoardHistoryNode selected = current;
+        while (selected.previous().isPresent()) {
+          BoardHistoryNode parent = selected.previous().get();
+          topology.put(parent, List.of(selected));
+          selected = parent;
+        }
+        // Resolve terminal dummy nodes against the live topology once. Pruning can turn a
+        // retained nonterminal dummy into a leaf, but it must still appear in the saved path.
+        for (BoardHistoryNode node = current; node != null; ) {
+          BoardHistoryNode next = node.next().orElse(null);
+          topology.put(node, next == null ? List.of() : List.of(next));
+          node = next;
+        }
+      } else {
+        ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
+        pending.add(source.getStart());
+        while (!pending.isEmpty()) {
+          BoardHistoryNode original = pending.removeFirst();
+          List<BoardHistoryNode> children = List.copyOf(original.getVariations());
+          topology.put(original, children);
+          pending.addAll(children);
+        }
       }
     }
     Map<BoardHistoryNode, BoardHistoryNode> nodes = new IdentityHashMap<>();
@@ -1574,8 +1592,13 @@ public class SGFParser {
       // game while holding the structural monitor or after the payload has already been copied.
       board.updateWinrate();
     }
+    // Standard saves may generate comments on a node's original first child. Keep their full
+    // topology; raw branch exports only need the selected ancestors and first-child continuation.
+    boolean captureBranchOnly = captureSnapshot && mainTrunkOnly && LizzieFrame.isSavingRaw;
     BoardHistoryList history =
-        captureSnapshot ? captureSaveHistory(sourceHistory) : sourceHistory.shallowCopy();
+        captureSnapshot
+            ? captureSaveHistory(sourceHistory, captureBranchOnly)
+            : sourceHistory.shallowCopy();
     try (var phase = new SgfPhase("save-serialize")) {
       SaveContext saveContext = SaveContext.capture(board, sourceHistory, history);
       String boardSizeTag = formatBoardSizeTag(saveContext.boardWidth(), saveContext.boardHeight());
@@ -1642,7 +1665,7 @@ public class SGFParser {
 
       // move to the first move
       Map<BoardHistoryNode, BoardHistoryNode> selectedBranch = new IdentityHashMap<>();
-      if (mainTrunkOnly) {
+      if (mainTrunkOnly && !captureBranchOnly) {
         BoardHistoryNode selected = history.getCurrentHistoryNode();
         while (selected.previous().isPresent()) {
           BoardHistoryNode parent = selected.previous().get();
@@ -1759,7 +1782,7 @@ public class SGFParser {
         if (cur != rootNode) {
           builder = generateNode(saveContext, cur, forUpload, builder);
         }
-        if (mainTrunkOnly) {
+        if (mainTrunkOnly && !captureBranchOnly) {
           BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
           if (next != null) stack.push(next);
         } else {
