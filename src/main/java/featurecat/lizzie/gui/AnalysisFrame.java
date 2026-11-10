@@ -6,6 +6,8 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.enginegame.EngineGamePresentation;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.theme.MorandiPalette;
 import featurecat.lizzie.util.Utils;
@@ -26,8 +28,6 @@ import java.awt.event.WindowEvent;
 import java.awt.event.WindowStateListener;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.ResourceBundle;
@@ -235,7 +235,7 @@ public class AnalysisFrame extends JFrame {
             100,
             new ActionListener() {
               public void actionPerformed(ActionEvent evt) {
-                dataModel.getColumnCount();
+                if (Lizzie.config.showBestMovesList) refreshTableData();
                 repaint();
                 // table.validate();
                 // table.updateUI();
@@ -327,6 +327,7 @@ public class AnalysisFrame extends JFrame {
           public void mouseMoved(MouseEvent e) {
             // TODO Auto-generated method stub
             if (!Lizzie.config.anaFrameUseMouseMove || clickOrder != -1) return;
+            if (!tableContextIsCurrent()) return;
             Point p = e.getPoint();
             int row = table.rowAtPoint(p);
             if (row < 0) {
@@ -471,6 +472,8 @@ public class AnalysisFrame extends JFrame {
           public void mouseReleased(MouseEvent e) {
             int pick = header.columnAtPoint(e.getPoint());
             sortnum = pick;
+            refreshTableData();
+            table.repaint();
           }
         });
   }
@@ -708,6 +711,7 @@ public class AnalysisFrame extends JFrame {
   }
 
   private void handleTableClick(int row, int col) {
+    if (!tableContextIsCurrent()) return;
     LizzieFrame.boardRenderer.startNormalBoard();
     if (table.getValueAt(row, 1).toString().startsWith("pass")) return;
     String coordsName = Board.maybeConvertOtherCoordsToNormal(table.getValueAt(row, 1).toString());
@@ -736,6 +740,7 @@ public class AnalysisFrame extends JFrame {
   }
 
   private void handleTableRightClick(int row, int col) {
+    if (!tableContextIsCurrent()) return;
     if (table.getValueAt(row, 1).toString().startsWith("pass")) return;
     if (selectedorder != row) {
       String coordsName =
@@ -758,171 +763,161 @@ public class AnalysisFrame extends JFrame {
     super.dispose();
   }
 
-  public AbstractTableModel getTableModel() {
-    return new AbstractTableModel() {
-      ArrayList<MoveData> data2 = new ArrayList<MoveData>();
-      List<MoveData> bestMoves;
+  private record TableData(
+      BoardHistoryList history,
+      BoardHistoryNode node,
+      BoardHistoryNode next,
+      Leelaz engine,
+      List<MoveData> rows,
+      int columns,
+      int totalVisits,
+      double scoreOffset) {}
 
+  // Only the EDT refresh paths prepare rows. Cell reads, rendering and clicks share them.
+  private TableData tableData;
+
+  private void refreshTableData() {
+    BoardHistoryList history = Lizzie.board.getHistory();
+    BoardHistoryNode node = history.getCurrentHistoryNode();
+    Leelaz engine = index == 1 ? Lizzie.leelaz : Lizzie.leelaz2;
+    List<MoveData> source = index == 1 ? node.getData().bestMoves : node.getData().bestMoves2;
+    if (index == 1
+        && EngineGamePresentation.current().playing()
+        && Lizzie.config.showPreviousBestmovesInEngineGame) {
+      source = List.of();
+      if (node.previous().isPresent() && engine != null) {
+        source = engine.getBestMoves();
+        if (source.isEmpty()) source = node.previous().get().getData().bestMoves;
+      }
+    }
+    ArrayList<MoveData> rows = new ArrayList<>();
+    if (!Lizzie.frame.isInPlayMode()) {
+      if (source != null) for (MoveData move : source) rows.add(copyTableMove(move));
+      if (Lizzie.config.anaFrameShowNext && node.next().isPresent() && !rows.isEmpty()) {
+        addActualMove(rows, node.next().get());
+      }
+    }
+    rows.sort(
+        (left, right) -> {
+          return switch (sortnum) {
+            case 2 -> compareTableValue(right.lcb, left.lcb);
+            case 3 -> compareTableValue(right.winrate, left.winrate);
+            case 4, 5 -> Integer.compare(right.playouts, left.playouts);
+            case 6 -> compareTableValue(right.policy, left.policy);
+            case 7 -> compareTableValue(right.scoreMean, left.scoreMean);
+            case 8 -> compareTableValue(right.scoreStdev, left.scoreStdev);
+            default -> 0;
+          };
+        });
+    int columns =
+        engine != null && (engine.isKatago || engine.isSai)
+                || (index == 1
+                    ? Lizzie.board.isContainsKataData()
+                    : Lizzie.board.isContainsKataData2())
+            ? 9
+            : 7;
+    double scoreOffset = 0;
+    if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+      boolean addKomi = history.isBlacksTurn();
+      if (EngineGamePresentation.current().playingGenmove()) addKomi = !addKomi;
+      scoreOffset = (addKomi ? 1 : -1) * node.getData().getKomi();
+    }
+    tableData =
+        new TableData(
+            history,
+            node,
+            node.next().orElse(null),
+            engine,
+            rows,
+            columns,
+            MoveData.getAllocationVisits(rows),
+            scoreOffset);
+    if (table != null) table.revalidate();
+  }
+
+  private static int compareTableValue(double left, double right) {
+    return left < right ? -1 : left > right ? 1 : 0;
+  }
+
+  private static MoveData copyTableMove(MoveData source) {
+    MoveData copy = new MoveData();
+    copy.coordinate = source.coordinate;
+    copy.order = source.order;
+    copy.playouts = source.playouts;
+    copy.edgeVisits = source.edgeVisits;
+    copy.isSymmetry = source.isSymmetry;
+    copy.winrate = source.winrate;
+    copy.lcb = source.lcb;
+    copy.policy = source.policy;
+    copy.scoreMean = source.scoreMean;
+    copy.scoreStdev = source.scoreStdev;
+    return copy;
+  }
+
+  private void addActualMove(ArrayList<MoveData> rows, BoardHistoryNode next) {
+    if (!LizzieFrame.hasRealMoveCoordinates(next.getData())) return;
+    int[] coords = next.getData().lastMove.get();
+    MoveData best = rows.get(0);
+    MoveData match = null;
+    for (MoveData move : rows) {
+      int[] candidate = Board.convertNameToCoordinates(move.coordinate);
+      if (candidate[0] == coords[0] && candidate[1] == coords[1]) {
+        match = move;
+        break;
+      }
+    }
+    if (match != null && match.order == 0) {
+      match.isNextMove = true;
+      match.winrate = best.winrate;
+      match.bestWinrate = best.winrate;
+      match.bestScoreMean = best.scoreMean;
+      return;
+    }
+    BoardData nextData = next.getData();
+    boolean analyzed = !(index == 1 ? nextData.bestMoves : nextData.bestMoves2).isEmpty();
+    if (match == null && !analyzed) return;
+    int nextVisits = index == 1 ? nextData.getPlayouts() : nextData.getPlayouts2();
+    MoveData actual = match == null ? new MoveData() : copyTableMove(match);
+    // Synthetic actual-move rows retain the existing legacy-visits allocation policy.
+    actual.edgeVisits = -1;
+    actual.isSymmetry = false;
+    if (match == null || (analyzed && nextVisits > match.playouts)) {
+      actual.coordinate = Board.convertCoordinatesToName(coords[0], coords[1]);
+      actual.playouts = match == null ? 0 : nextVisits;
+      actual.winrate = 100.0 - (index == 1 ? nextData.winrate : nextData.winrate2);
+      actual.scoreMean = -(index == 1 ? nextData.scoreMean : nextData.scoreMean2);
+      actual.scoreStdev = index == 1 ? nextData.scoreStdev : nextData.scoreStdev2;
+      actual.lcb = -10000;
+      if (match == null) {
+        actual.policy = -10000;
+        actual.order = -100;
+      }
+    }
+    actual.isNextMove = true;
+    actual.bestWinrate = best.winrate;
+    actual.bestScoreMean = best.scoreMean;
+    rows.add(0, actual);
+  }
+
+  private boolean tableContextIsCurrent() {
+    if (tableData.history == Lizzie.board.getHistory()
+        && tableData.node == Lizzie.board.getHistory().getCurrentHistoryNode()
+        && tableData.next == tableData.node.next().orElse(null)
+        && tableData.engine == (index == 1 ? Lizzie.leelaz : Lizzie.leelaz2)) return true;
+    refreshTableData();
+    repaint();
+    return false;
+  }
+
+  public AbstractTableModel getTableModel() {
+    refreshTableData();
+    return new AbstractTableModel() {
       public int getColumnCount() {
-        Leelaz leelaz = null;
-        if (index == 1) {
-          leelaz = Lizzie.leelaz;
-        } else if (index == 2) {
-          leelaz = Lizzie.leelaz2;
-        }
-        if (leelaz != null && (leelaz.isKatago || leelaz.isSai)) return 9;
-        else if (index == 1
-            ? Lizzie.board.isContainsKataData()
-            : Lizzie.board.isContainsKataData2()) return 9;
-        else return 7;
+        return tableData.columns;
       }
 
       public int getRowCount() {
-        data2 = new ArrayList<MoveData>();
-        if (index == 1) {
-          if (EngineGamePresentation.current().playing()
-              && Lizzie.config.showPreviousBestmovesInEngineGame) {
-            if (Lizzie.board.getHistory().getCurrentHistoryNode().previous().isPresent())
-              if ((bestMoves = Lizzie.leelaz.getBestMoves()).isEmpty())
-                bestMoves =
-                    Lizzie.board
-                        .getHistory()
-                        .getCurrentHistoryNode()
-                        .previous()
-                        .get()
-                        .getData()
-                        .bestMoves;
-
-          } else bestMoves = Lizzie.board.getHistory().getCurrentHistoryNode().getData().bestMoves;
-          if (bestMoves != null)
-            for (int i = 0; i < bestMoves.size(); i++) {
-              // if (!Lizzie.board.getData().bestMoves.get(i).coordinate.contains("ass"))
-              data2.add(bestMoves.get(i));
-            }
-        } else if (index == 2) {
-          if (Lizzie.board.getData().bestMoves2 != null) {
-            for (int i = 0; i < Lizzie.board.getData().bestMoves2.size(); i++) {
-              // if (!Lizzie.board.getData().bestMoves2.get(i).coordinate.contains("ass"))
-              data2.add(Lizzie.board.getData().bestMoves2.get(i));
-            }
-          }
-        }
-        if (Lizzie.config.anaFrameShowNext
-            && Lizzie.board.getHistory().getCurrentHistoryNode().next().isPresent()) {
-          BoardHistoryNode next = Lizzie.board.getHistory().getCurrentHistoryNode().next().get();
-          if (LizzieFrame.hasRealMoveCoordinates(next.getData())) {
-            int[] coords = next.getData().lastMove.get();
-            boolean hasData = false;
-            for (MoveData move : data2) {
-              if (Board.convertNameToCoordinates(move.coordinate)[0] == coords[0]
-                  && Board.convertNameToCoordinates(move.coordinate)[1] == coords[1]) {
-                if (move.order == 0) {
-                  move.winrate = data2.get(0).winrate;
-                  move.isNextMove = true;
-                  move.bestWinrate = data2.get(0).winrate;
-                  move.bestScoreMean = data2.get(0).scoreMean;
-                } else {
-                  if (index == 1) {
-                    if (data2.size() > 0
-                        && !hasData
-                        && !next.getData().bestMoves.isEmpty()
-                        && next.getData().getPlayouts() > move.playouts) {
-                      MoveData curMove = new MoveData();
-                      curMove.playouts = next.getData().getPlayouts();
-                      curMove.coordinate = Board.convertCoordinatesToName(coords[0], coords[1]);
-                      curMove.winrate = 100.0 - next.getData().winrate;
-                      curMove.policy = move.policy;
-                      curMove.scoreMean = -next.getData().scoreMean;
-                      curMove.scoreStdev = next.getData().scoreStdev;
-                      curMove.order = move.order;
-                      curMove.isNextMove = true;
-                      curMove.lcb = -10000;
-                      curMove.bestWinrate = data2.get(0).winrate;
-                      curMove.bestScoreMean = data2.get(0).scoreMean;
-                      data2.add(0, curMove);
-                      hasData = true;
-                      break;
-                    }
-                  } else {
-                    if (data2.size() > 0
-                        && !hasData
-                        && !next.getData().bestMoves2.isEmpty()
-                        && next.getData().getPlayouts2() > move.playouts) {
-                      MoveData curMove = new MoveData();
-                      curMove.playouts = next.getData().getPlayouts2();
-                      curMove.coordinate = Board.convertCoordinatesToName(coords[0], coords[1]);
-                      curMove.winrate = 100.0 - next.getData().winrate2;
-                      curMove.policy = move.policy;
-                      curMove.scoreMean = -next.getData().scoreMean2;
-                      curMove.scoreStdev = next.getData().scoreStdev2;
-                      curMove.order = move.order;
-                      curMove.isNextMove = true;
-                      curMove.lcb = -10000;
-                      curMove.bestWinrate = data2.get(0).winrate;
-                      curMove.bestScoreMean = data2.get(0).scoreMean;
-                      data2.add(0, curMove);
-                      hasData = true;
-                      break;
-                    }
-                  }
-                  MoveData curMove = new MoveData();
-                  curMove.order = move.order;
-                  curMove.playouts = move.playouts;
-                  curMove.coordinate = move.coordinate;
-                  curMove.winrate = move.winrate;
-                  curMove.policy = move.policy;
-                  curMove.scoreMean = move.scoreMean;
-                  curMove.scoreStdev = move.scoreStdev;
-                  curMove.order = move.order;
-                  curMove.isNextMove = true;
-                  curMove.lcb = move.lcb;
-                  curMove.bestWinrate = data2.get(0).winrate;
-                  curMove.bestScoreMean = data2.get(0).scoreMean;
-                  data2.add(0, curMove);
-                }
-                hasData = true;
-                break;
-              }
-            }
-            if (index == 1) {
-              if (data2.size() > 0 && !hasData && !next.getData().bestMoves.isEmpty()) {
-                MoveData curMove = new MoveData();
-                curMove.playouts = 0;
-                curMove.coordinate = Board.convertCoordinatesToName(coords[0], coords[1]);
-                curMove.winrate = 100.0 - next.getData().winrate;
-                curMove.policy = -10000;
-                curMove.scoreMean = -next.getData().scoreMean;
-                curMove.scoreStdev = next.getData().scoreStdev;
-                curMove.order = -100;
-                curMove.isNextMove = true;
-                curMove.lcb = -10000;
-                curMove.bestWinrate = data2.get(0).winrate;
-                curMove.bestScoreMean = data2.get(0).scoreMean;
-                data2.add(0, curMove);
-              }
-            } else {
-              if (data2.size() > 0 && !hasData && !next.getData().bestMoves2.isEmpty()) {
-                MoveData curMove = new MoveData();
-                curMove.playouts = 0;
-                curMove.coordinate = Board.convertCoordinatesToName(coords[0], coords[1]);
-                curMove.winrate = 100.0 - next.getData().winrate2;
-                curMove.policy = -10000;
-                curMove.scoreMean = -next.getData().scoreMean2;
-                curMove.scoreStdev = next.getData().scoreStdev2;
-                curMove.order = -100;
-                curMove.isNextMove = true;
-                curMove.lcb = -10000;
-                curMove.bestWinrate = data2.get(0).winrate;
-                curMove.bestScoreMean = data2.get(0).scoreMean;
-                data2.add(0, curMove);
-              }
-            }
-          }
-        }
-
-        if (Lizzie.frame.isInPlayMode()) return 0;
-
-        return data2.size();
+        return tableData.rows.size();
       }
 
       public String getColumnName(int column) {
@@ -939,57 +934,8 @@ public class AnalysisFrame extends JFrame {
       }
 
       public Object getValueAt(int row, int col) {
-
-        // Collections.sort(data2) ;
-        Collections.sort(
-            data2,
-            new Comparator<MoveData>() {
-
-              @Override
-              public int compare(MoveData s1, MoveData s2) {
-                // 降序
-                //            	  if (sortnum == 0) {
-                //                      if (s1.order > s2.order) return 1;
-                //                      if (s1.order < s2.order) return -1;
-                //                    }
-                if (sortnum == 2) {
-                  if (s1.lcb < s2.lcb) return 1;
-                  if (s1.lcb > s2.lcb) return -1;
-                }
-                if (sortnum == 3) {
-                  if (s1.winrate < s2.winrate) return 1;
-                  if (s1.winrate > s2.winrate) return -1;
-                }
-                if (sortnum == 4) {
-                  if (s1.playouts < s2.playouts) return 1;
-                  if (s1.playouts > s2.playouts) return -1;
-                }
-                if (sortnum == 5) {
-                  if (s1.playouts < s2.playouts) return 1;
-                  if (s1.playouts > s2.playouts) return -1;
-                }
-                if (sortnum == 6) {
-                  if (s1.policy < s2.policy) return 1;
-                  if (s1.policy > s2.policy) return -1;
-                }
-                if (sortnum == 7) {
-                  if (s1.scoreMean < s2.scoreMean) return 1;
-                  if (s1.scoreMean > s2.scoreMean) return -1;
-                }
-                if (sortnum == 8) {
-                  if (s1.scoreStdev < s2.scoreStdev) return 1;
-                  if (s1.scoreStdev > s2.scoreStdev) return -1;
-                }
-                return 0;
-              }
-            });
-
-        // featurecat.lizzie.analysis.MoveDataSorter MoveDataSorter = new
-        // MoveDataSorter(data2);
-        // ArrayList sortedMoveData = MoveDataSorter.getSortedMoveDataByPolicy();
-        //   double maxlcb = 0;
-        int totalPlayouts = MoveData.getAllocationVisits(data2);
-        MoveData data = data2.get(row);
+        TableData prepared = tableData;
+        MoveData data = prepared.rows.get(row);
         switch (col) {
           case 0:
             if (data.order == -100)
@@ -1019,33 +965,12 @@ public class AnalysisFrame extends JFrame {
             else return Utils.getPlayoutsString(data.playouts);
           case 5:
             return String.format(
-                Locale.ENGLISH, "%.1f", data.allocationRatio(totalPlayouts) * 100);
+                Locale.ENGLISH, "%.1f", data.allocationRatio(prepared.totalVisits) * 100);
           case 6:
             if (data.isNextMove && data.policy < -1000) return "--";
             return String.format(Locale.ENGLISH, "%.2f", data.policy);
           case 7:
-            double score = data.scoreMean;
-            if (EngineGamePresentation.current().playingGenmove()) {
-              if (!Lizzie.board.getHistory().isBlacksTurn()) {
-                if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-                  score = score + Lizzie.board.getData().getKomi();
-                }
-              } else {
-                if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-                  score = score - Lizzie.board.getData().getKomi();
-                }
-              }
-            } else {
-              if (Lizzie.board.getHistory().isBlacksTurn()) {
-                if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-                  score = score + Lizzie.board.getData().getKomi();
-                }
-              } else {
-                if (Lizzie.config.showKataGoScoreLeadWithKomi) {
-                  score = score - Lizzie.board.getData().getKomi();
-                }
-              }
-            }
+            double score = data.scoreMean + prepared.scoreOffset;
             if (data.isNextMove && data.order != 0) {
               return CandidateTableText.valueWithDifference(
                   score, data.scoreMean - data.bestScoreMean);

@@ -111,6 +111,11 @@ DESKTOP_REQUIRED_TESTS = (
          f"closedWindowsReleaseTimersAndReopenCleanly(String)[{invocation}]")
         for invocation in range(1, 3)
     ),
+    *tuple(
+        ("featurecat.lizzie.gui.AnalysisTableRefreshDesktopTest",
+         f"preparedRowsStayConsistentAndRefreshFromRealEvents(String)[{invocation}]")
+        for invocation in range(1, 3)
+    ),
     ("featurecat.lizzie.gui.SgfMarkupEditingDesktopTest", "editsMarksWithoutSplittingLabelsOrRemovingOtherSgfProperties"),
     *tuple(
         ("featurecat.lizzie.gui.ToolbarSettingsDesktopTest",
@@ -733,7 +738,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
+                    "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
                     "test",
                 ),
                 group="desktop",

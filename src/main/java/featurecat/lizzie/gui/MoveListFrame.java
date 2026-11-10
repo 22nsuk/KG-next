@@ -8,6 +8,7 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.NodeInfo;
 import featurecat.lizzie.enginegame.EngineGamePresentation;
@@ -1231,6 +1232,7 @@ public class MoveListFrame extends JFrame {
                 Lizzie.config.movelistSelectedIndexTop = 2;
                 break;
             }
+            if (index > 0) refreshTableData();
             Lizzie.config.uiConfig.put(
                 "movelist-selected-indextop", Lizzie.config.movelistSelectedIndexTop);
           }
@@ -1250,15 +1252,17 @@ public class MoveListFrame extends JFrame {
                   }
                 }
                 if (Lizzie.config.moveListFilterCurrent) updateCurrentLastMove();
+                int activeTable = topPanel.isVisible() ? topPanel.getSelectedIndex() : -1;
+                if (activeTable == 1 || activeTable == 2) refreshTableData();
                 bottomPanel.repaint();
                 statisticsPanel.repaint();
-                if (selectedIndexTop == 1) {
+                if (activeTable == 1) {
                   minTable1.revalidate();
                   minTable1.repaint();
                   minTable2.revalidate();
                   minTable2.repaint();
                 }
-                if (selectedIndexTop == 2) {
+                if (activeTable == 2) {
                   table.revalidate();
                   table.repaint();
                 }
@@ -1332,6 +1336,8 @@ public class MoveListFrame extends JFrame {
         new ItemListener() {
           @Override
           public void itemStateChanged(ItemEvent e) {
+            refreshTableData();
+            table.revalidate();
             repaint();
           }
         });
@@ -1340,6 +1346,8 @@ public class MoveListFrame extends JFrame {
         new ItemListener() {
           @Override
           public void itemStateChanged(ItemEvent e) {
+            refreshTableData();
+            table.revalidate();
             repaint();
           }
         });
@@ -1365,6 +1373,7 @@ public class MoveListFrame extends JFrame {
             Lizzie.config.moveListSelectedBranch = showBranch.getSelectedIndex();
             Lizzie.config.uiConfig.put(
                 "moveList-selected-branch", Lizzie.config.moveListSelectedBranch);
+            refreshTableData();
             table.revalidate();
             minTable1.revalidate();
             minTable2.revalidate();
@@ -1800,6 +1809,7 @@ public class MoveListFrame extends JFrame {
             } else {
               issorted = !issorted;
             }
+            refreshTableData();
             table.repaint();
           }
         });
@@ -1820,7 +1830,9 @@ public class MoveListFrame extends JFrame {
             } else {
               issorted = !issorted;
             }
+            refreshTableData();
             minTable1.repaint();
+            minTable2.repaint();
           }
         });
     headerMint2.addMouseListener(
@@ -1840,9 +1852,12 @@ public class MoveListFrame extends JFrame {
             } else {
               issorted = !issorted;
             }
+            refreshTableData();
+            minTable1.repaint();
             minTable2.repaint();
           }
         });
+    refreshTableData();
     Utils.changeFontRecursive(bottomPanel, Config.sysDefaultFontName);
   }
 
@@ -2059,6 +2074,7 @@ public class MoveListFrame extends JFrame {
     //	          new Dimension(getWidth(), isShowingWinrateGraph ? getHeight() / 4 + 95 : 100));
     // TODO Auto-generated method stub
     if (Lizzie.config.isShowingMoveList) {
+      if (!topPanel.isVisible() && topPanel.getSelectedIndex() > 0) refreshTableData();
       topPanel.setVisible(true);
       bottomPanel.setPreferredSize(
           new Dimension(getWidth(), isShowingWinrateGraph ? getHeight() / 4 + 95 : 100));
@@ -6828,13 +6844,7 @@ public class MoveListFrame extends JFrame {
       String coordsName =
           Board.maybeConvertOtherCoordsToNormal(table.getValueAt(row, 2).toString());
       int[] coords = Board.convertNameToCoordinates(coordsName);
-      if (Lizzie.config.moveListTopCurNode
-          && row == 0
-          && Lizzie.board.getHistory().getCurrentHistoryNode().previous().isPresent()
-          && (showBranch.getSelectedIndex() == 1
-              || (showBranch.getSelectedIndex() == 0
-                  && Lizzie.board.getHistory().getCurrentHistoryNode().isMainTrunk()))
-          && Lizzie.board.getHistory().getCurrentHistoryNode().previous().get().nodeInfo.analyzed) {
+      if (row == 0 && tableData.currentPinned) {
         setBackground(new Color(220, 220, 220));
         setForeground(new Color(0, 0, 0));
       } else if (coords[0] == Lizzie.frame.clickbadmove[0]
@@ -7082,7 +7092,7 @@ public class MoveListFrame extends JFrame {
   }
 
   private void handleTableDoubleClick(int row, int col) {
-    if (Lizzie.config.isAutoAna) return;
+    if (Lizzie.config.isAutoAna || !tableContextIsCurrent()) return;
     table.repaint();
     int moveNumber = Integer.parseInt(table.getValueAt(row, 1).toString());
     String coordsName = Board.maybeConvertOtherCoordsToNormal(table.getValueAt(row, 2).toString());
@@ -7097,7 +7107,7 @@ public class MoveListFrame extends JFrame {
   }
 
   private void handleTableDoubleClickMin1(int row, int col) {
-    if (Lizzie.config.isAutoAna) return;
+    if (Lizzie.config.isAutoAna || !tableContextIsCurrent()) return;
     tablePanelMin1.repaint();
     int moveNumber = Integer.parseInt(minTable1.getValueAt(row, 0).toString());
     // Lizzie.board.goToMoveNumber(1);
@@ -7113,7 +7123,7 @@ public class MoveListFrame extends JFrame {
   }
 
   private void handleTableDoubleClickMin2(int row, int col) {
-    if (Lizzie.config.isAutoAna) return;
+    if (Lizzie.config.isAutoAna || !tableContextIsCurrent()) return;
     tablePanelMin2.repaint();
     int moveNumber = Integer.parseInt(minTable2.getValueAt(row, 0).toString().trim());
     // Lizzie.board.goToMoveNumber(1);
@@ -7134,57 +7144,144 @@ public class MoveListFrame extends JFrame {
     super.dispose();
   }
 
-  public AbstractTableModel getTableModel() {
+  private record TableData(
+      BoardHistoryList history,
+      BoardHistoryNode node,
+      BoardHistoryNode end,
+      int branch,
+      boolean pkBoard,
+      List<NodeInfo> full,
+      List<NodeInfo> black,
+      List<NodeInfo> white,
+      boolean currentPinned) {}
 
+  private TableData tableData;
+
+  private void refreshTableData() {
+    // Models are constructed before the filter controls during window initialization.
+    if (showBranch == null) return;
+    BoardHistoryList history = Lizzie.board.getHistory();
+    BoardHistoryNode current = history.getCurrentHistoryNode();
+    int branch = showBranch.getSelectedIndex();
+    ArrayList<NodeInfo> full = new ArrayList<>();
+    ArrayList<NodeInfo> black = new ArrayList<>();
+    ArrayList<NodeInfo> white = new ArrayList<>();
+    BoardHistoryNode end = branch == 0 ? history.getMainEnd() : history.getEnd();
+    BoardHistoryNode node = end;
+    while (node != null) {
+      NodeInfo source = tableNodeInfo(node, branch);
+      if (source.analyzed
+          && Math.abs(source.diffWinrate) >= Lizzie.config.moveListWinrateThreshold
+          && source.playouts >= Lizzie.config.moveListVisitsThreshold
+          && source.previousPlayouts >= Lizzie.config.moveListVisitsThreshold
+          && (!isKatago
+              || Math.abs(source.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)) {
+        NodeInfo row = copyTableNode(source);
+        (row.isBlack ? black : white).add(row);
+        if (row.isBlack ? checkBlack.isSelected() : checkWhite.isSelected()) full.add(row);
+      }
+      node = node.previous().orElse(null);
+    }
+    sortTableRows(full, false);
+    sortTableRows(black, true);
+    sortTableRows(white, true);
+    BoardHistoryNode previous = current.previous().orElse(null);
+    boolean pinned =
+        Lizzie.config.moveListTopCurNode
+            && previous != null
+            && (branch == 1 || current.isMainTrunk())
+            && (isMainEngine ? previous.nodeInfo : previous.nodeInfo2).analyzed;
+    if (pinned) full.add(0, copyTableNode(tableNodeInfo(previous, branch)));
+    tableData =
+        new TableData(
+            history, current, end, branch, Lizzie.board.isPkBoard, full, black, white, pinned);
+  }
+
+  private NodeInfo tableNodeInfo(BoardHistoryNode node, int branch) {
+    return branch == 0
+        ? (isMainEngine ? node.nodeInfoMain : node.nodeInfoMain2)
+        : (isMainEngine ? node.nodeInfo : node.nodeInfo2);
+  }
+
+  private static NodeInfo copyTableNode(NodeInfo source) {
+    NodeInfo copy = new NodeInfo();
+    copy.coords = source.coords == null ? null : source.coords.clone();
+    copy.moveNum = source.moveNum;
+    copy.isBlack = source.isBlack;
+    copy.winrate = source.winrate;
+    copy.diffWinrate = source.diffWinrate;
+    copy.playouts = source.playouts;
+    copy.previousPlayouts = source.previousPlayouts;
+    copy.scoreMeanDiff = source.scoreMeanDiff;
+    copy.scoreLead = source.scoreLead;
+    copy.percentsMatch = source.percentsMatch;
+    return copy;
+  }
+
+  private void sortTableRows(List<NodeInfo> rows, boolean minimal) {
+    int column =
+        minimal
+            ? switch (sortnum) {
+              case 0 -> 1;
+              case 2 -> 3;
+              case 3 -> isKatago ? 4 : 8;
+              case 4 -> isKatago ? 11 : 2;
+              default -> 2;
+            }
+            : sortnum;
+    java.util.function.ToDoubleFunction<NodeInfo> key =
+        switch (column) {
+          case 0 -> row -> row.isBlack ? 0 : 1;
+          case 1 -> row -> row.moveNum;
+          case 3 -> row -> isOriginOrder ? Math.abs(row.diffWinrate) : row.diffWinrate;
+          case 4 ->
+              isKatago
+                  ? row -> isOriginOrder ? Math.abs(row.scoreMeanDiff) : row.scoreMeanDiff
+                  : row -> row.winrate;
+          case 5 -> isKatago ? row -> row.winrate : row -> row.winrate - row.diffWinrate;
+          case 6 -> isKatago ? row -> row.winrate - row.diffWinrate : row -> row.previousPlayouts;
+          case 7 -> isKatago ? row -> row.scoreLead : row -> row.playouts;
+          case 8 -> isKatago ? row -> row.scoreLead - row.scoreMeanDiff : row -> row.percentsMatch;
+          case 9 -> row -> row.previousPlayouts;
+          case 10 -> row -> row.playouts;
+          case 11 -> row -> row.percentsMatch;
+          default -> null;
+        };
+    if (key == null) return;
+    Comparator<NodeInfo> order =
+        (left, right) -> {
+          double leftValue = key.applyAsDouble(left);
+          double rightValue = key.applyAsDouble(right);
+          return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+        };
+    if (column > 1) order = order.reversed();
+    if (issorted) order = order.reversed();
+    rows.sort(order);
+  }
+
+  private boolean tableContextIsCurrent() {
+    if (tableData != null
+        && tableData.history == Lizzie.board.getHistory()
+        && tableData.node == Lizzie.board.getHistory().getCurrentHistoryNode()
+        && tableData.branch == showBranch.getSelectedIndex()
+        && tableData.end
+            == (tableData.branch == 0
+                ? tableData.history.getMainEnd()
+                : tableData.history.getEnd())) return true;
+    refreshTableData();
+    repaint();
+    return false;
+  }
+
+  public AbstractTableModel getTableModel() {
+    if (tableData == null) refreshTableData();
     return new AbstractTableModel() {
       public int getColumnCount() {
-        if (isKatago) return 12;
-        else return 9;
+        return isKatago ? 12 : 9;
       }
 
       public int getRowCount() {
-        int row = 0;
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                  : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack && checkBlack.isSelected()
-                || !nodeInfoThis.isBlack && checkWhite.isSelected())
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) row = row + 1;
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0
-                ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack && checkBlack.isSelected()
-              || !nodeInfoThis.isBlack && checkWhite.isSelected())
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  row = row + 1;
-        if (Lizzie.config.moveListTopCurNode
-            && Lizzie.board.getHistory().getCurrentHistoryNode().previous().isPresent()
-            && (showBranch.getSelectedIndex() == 1
-                || (showBranch.getSelectedIndex() == 0
-                    && Lizzie.board.getHistory().getCurrentHistoryNode().isMainTrunk()))
-            && Lizzie.board.getHistory().getCurrentHistoryNode().previous().get().nodeInfo.analyzed)
-          return row + 1;
-        else return row;
+        return tableData == null ? 0 : tableData.full.size();
       }
 
       public String getColumnName(int column) {
@@ -7235,307 +7332,10 @@ public class MoveListFrame extends JFrame {
       }
 
       public Object getValueAt(int row, int col) {
-        ArrayList<NodeInfo> data2 = new ArrayList<NodeInfo>();
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                  : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack && checkBlack.isSelected()
-                || !nodeInfoThis.isBlack && checkWhite.isSelected())
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) data2.add(nodeInfoThis);
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0
-                ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack && checkBlack.isSelected()
-              || !nodeInfoThis.isBlack && checkWhite.isSelected())
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  data2.add(nodeInfoThis);
-        Collections.sort(
-            data2,
-            new Comparator<NodeInfo>() {
-
-              @Override
-              public int compare(NodeInfo s1, NodeInfo s2) {
-                // 降序
-                if (isKatago) {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s2.isBlack) return 1;
-                      if (!s2.isBlack) return -1;
-                    }
-                    if (sortnum == 1) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      return 1;
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return 1;
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return -1;
-                      } else {
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return 1;
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return -1;
-                      }
-                    }
-                    if (sortnum == 5) {
-                      if (s1.winrate < s2.winrate) return 1;
-                      if (s1.winrate > s2.winrate) return -1;
-                    }
-                    if (sortnum == 6) {
-                      if (s1.winrate - s1.diffWinrate < s2.winrate - s2.diffWinrate) return 1;
-                      if (s1.winrate - s1.diffWinrate > s2.winrate - s2.diffWinrate) return -1;
-                    }
-                    if (sortnum == 7) {
-                      if (s1.scoreLead < s2.scoreLead) return 1;
-                      if (s1.scoreLead > s2.scoreLead) return -1;
-                    }
-                    if (sortnum == 8) {
-                      if (s1.scoreLead - s1.scoreMeanDiff < s2.scoreLead - s2.scoreMeanDiff)
-                        return 1;
-                      if (s1.scoreLead - s1.scoreMeanDiff > s2.scoreLead - s2.scoreMeanDiff)
-                        return -1;
-                    }
-                    if (sortnum == 9) {
-                      if (s1.previousPlayouts < s2.previousPlayouts) return 1;
-                      if (s1.previousPlayouts > s2.previousPlayouts) return -1;
-                    }
-                    if (sortnum == 10) {
-                      if (s1.playouts < s2.playouts) return 1;
-                      if (s1.playouts > s2.playouts) return -1;
-                    }
-                    if (sortnum == 11) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-
-                  } else {
-                    if (sortnum == 0) {
-                      if (!s2.isBlack) return 1;
-                      if (s2.isBlack) return -1;
-                    }
-                    if (sortnum == 1) {
-                      if (s1.moveNum < s2.moveNum) return 1;
-                      if (s1.moveNum > s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      return 1;
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return 1;
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return -1;
-                      } else {
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return 1;
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return -1;
-                      }
-                    }
-                    if (sortnum == 5) {
-                      if (s1.winrate > s2.winrate) return 1;
-                      if (s1.winrate < s2.winrate) return -1;
-                    }
-                    if (sortnum == 6) {
-                      if (s1.winrate - s1.diffWinrate > s2.winrate - s2.diffWinrate) return 1;
-                      if (s1.winrate - s1.diffWinrate < s2.winrate - s2.diffWinrate) return -1;
-                    }
-                    if (sortnum == 7) {
-                      if (s1.scoreLead > s2.scoreLead) return 1;
-                      if (s1.scoreLead < s2.scoreLead) return -1;
-                    }
-                    if (sortnum == 8) {
-                      if (s1.scoreLead - s1.scoreMeanDiff > s2.scoreLead - s2.scoreLead) return 1;
-                      if (s1.scoreLead - s1.scoreLead < s2.scoreLead - s2.scoreLead) return -1;
-                    }
-                    if (sortnum == 9) {
-                      if (s1.previousPlayouts > s2.previousPlayouts) return 1;
-                      if (s1.previousPlayouts < s2.previousPlayouts) return -1;
-                    }
-                    if (sortnum == 10) {
-                      if (s1.playouts > s2.playouts) return 1;
-                      if (s1.playouts < s2.playouts) return -1;
-                    }
-                    if (sortnum == 11) {
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                    }
-                  }
-                  return 0;
-                } else {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s2.isBlack) return 1;
-                      if (!s2.isBlack) return -1;
-                    }
-                    if (sortnum == 1) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      return 1;
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.winrate < s2.winrate) return 1;
-                      if (s1.winrate > s2.winrate) return -1;
-                    }
-                    if (sortnum == 5) {
-                      if (s1.winrate - s1.diffWinrate < s2.winrate - s2.diffWinrate) return 1;
-                      if (s1.winrate - s1.diffWinrate > s2.winrate - s2.diffWinrate) return -1;
-                    }
-                    if (sortnum == 6) {
-                      if (s1.previousPlayouts < s2.previousPlayouts) return 1;
-                      if (s1.previousPlayouts > s2.previousPlayouts) return -1;
-                    }
-                    if (sortnum == 7) {
-                      if (s1.playouts < s2.playouts) return 1;
-                      if (s1.playouts > s2.playouts) return -1;
-                    }
-                    if (sortnum == 8) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-
-                  } else {
-                    if (sortnum == 0) {
-                      if (!s2.isBlack) return 1;
-                      if (s2.isBlack) return -1;
-                    }
-                    if (sortnum == 1) {
-                      if (s1.moveNum < s2.moveNum) return 1;
-                      if (s1.moveNum > s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      return 1;
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.winrate > s2.winrate) return 1;
-                      if (s1.winrate < s2.winrate) return -1;
-                    }
-                    if (sortnum == 5) {
-                      if (s1.winrate - s1.diffWinrate > s2.winrate - s2.diffWinrate) return 1;
-                      if (s1.winrate - s1.diffWinrate < s2.winrate - s2.diffWinrate) return -1;
-                    }
-                    if (sortnum == 6) {
-                      if (s1.previousPlayouts > s2.previousPlayouts) return 1;
-                      if (s1.previousPlayouts < s2.previousPlayouts) return -1;
-                    }
-                    if (sortnum == 7) {
-                      if (s1.playouts > s2.playouts) return 1;
-                      if (s1.playouts < s2.playouts) return -1;
-                    }
-                    if (sortnum == 8) {
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                    }
-                  }
-                  return 0;
-                }
-              }
-            });
-        if (Lizzie.config.moveListTopCurNode
-            && Lizzie.board.getHistory().getCurrentHistoryNode().previous().isPresent()
-            && (showBranch.getSelectedIndex() == 1
-                || (showBranch.getSelectedIndex() == 0
-                    && Lizzie.board.getHistory().getCurrentHistoryNode().isMainTrunk()))
-            && (isMainEngine
-                ? Lizzie.board
-                    .getHistory()
-                    .getCurrentHistoryNode()
-                    .previous()
-                    .get()
-                    .nodeInfo
-                    .analyzed
-                : Lizzie.board
-                    .getHistory()
-                    .getCurrentHistoryNode()
-                    .previous()
-                    .get()
-                    .nodeInfo2
-                    .analyzed)) {
-
-          data2.add(
-              0,
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine
-                      ? Lizzie.board
-                          .getHistory()
-                          .getCurrentHistoryNode()
-                          .previous()
-                          .get()
-                          .nodeInfoMain
-                      : Lizzie.board
-                          .getHistory()
-                          .getCurrentHistoryNode()
-                          .previous()
-                          .get()
-                          .nodeInfoMain2)
-                  : (isMainEngine
-                      ? Lizzie.board.getHistory().getCurrentHistoryNode().previous().get().nodeInfo
-                      : Lizzie.board
-                          .getHistory()
-                          .getCurrentHistoryNode()
-                          .previous()
-                          .get()
-                          .nodeInfo2));
-        }
-        NodeInfo data = data2.get(row);
+        TableData prepared = tableData;
+        NodeInfo data = prepared.full.get(row);
         if (isKatago) {
-          if (Lizzie.board.isPkBoard) {
+          if (prepared.pkBoard) {
             switch (col) {
               case 0:
                 if (data.isBlack) return Lizzie.resourceBundle.getString("Movelistframe.black");
@@ -7609,17 +7409,17 @@ public class MoveListFrame extends JFrame {
                     "%.1f",
                     // Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
                     data.percentsMatch * 100);
-              //                if (data.previousPlayouts > 0
-              //                    && data.moveNum <= (Lizzie.config.matchAiLastMove + 1)
-              //                    && data.moveNum > Lizzie.config.matchAiFirstMove)
-              //                  return data.isMatchAi ? "是" : "否";
-              //                else return "无";
+                //                if (data.previousPlayouts > 0
+                //                    && data.moveNum <= (Lizzie.config.matchAiLastMove + 1)
+                //                    && data.moveNum > Lizzie.config.matchAiFirstMove)
+                //                  return data.isMatchAi ? "是" : "否";
+                //                else return "无";
               default:
                 return "";
             }
           }
         } else {
-          if (Lizzie.board.isPkBoard) {
+          if (prepared.pkBoard) {
             switch (col) {
               case 0:
                 if (data.isBlack) return Lizzie.resourceBundle.getString("Movelistframe.black");
@@ -7677,11 +7477,11 @@ public class MoveListFrame extends JFrame {
                     "%.1f",
                     // Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
                     data.percentsMatch * 100);
-              //                if (data.previousPlayouts > 0
-              //                    && data.moveNum <= (Lizzie.config.matchAiLastMove + 1)
-              //                    && data.moveNum > Lizzie.config.matchAiFirstMove)
-              //                  return data.isMatchAi ? "是" : "否";
-              //                else return "无";
+                //                if (data.previousPlayouts > 0
+                //                    && data.moveNum <= (Lizzie.config.matchAiLastMove + 1)
+                //                    && data.moveNum > Lizzie.config.matchAiFirstMove)
+                //                  return data.isMatchAi ? "是" : "否";
+                //                else return "无";
               default:
                 return "";
             }
@@ -7692,53 +7492,29 @@ public class MoveListFrame extends JFrame {
   }
 
   public AbstractTableModel getTableModelMin1() {
+    return getMiniTableModel(true);
+  }
+
+  public AbstractTableModel getTableModelMin2() {
+    return getMiniTableModel(false);
+  }
+
+  private AbstractTableModel getMiniTableModel(boolean black) {
+    if (tableData == null) refreshTableData();
     return new AbstractTableModel() {
       public int getColumnCount() {
-        if (isKatago) return 5;
-        else return 4;
+        return isKatago ? 5 : 4;
       }
 
       public int getRowCount() {
-        int row = 0;
-
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                  : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) row = row + 1;
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0
-                ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  row = row + 1;
-        return row;
+        return tableData == null ? 0 : (black ? tableData.black : tableData.white).size();
       }
 
       public String getColumnName(int column) {
         if (isKatago) {
           if (column == 0)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnBlack");
+            return Lizzie.resourceBundle.getString(
+                black ? "Movelistframe.minTableColumnBlack" : "Movelistframe.minTableColumnWhite");
           if (column == 1)
             return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnCoords");
           if (column == 2)
@@ -7749,7 +7525,8 @@ public class MoveListFrame extends JFrame {
             return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnAiScore");
         } else {
           if (column == 0)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnBlack");
+            return Lizzie.resourceBundle.getString(
+                black ? "Movelistframe.minTableColumnBlack" : "Movelistframe.minTableColumnWhite");
           if (column == 1)
             return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnCoords");
           if (column == 2)
@@ -7761,147 +7538,10 @@ public class MoveListFrame extends JFrame {
       }
 
       public Object getValueAt(int row, int col) {
-        ArrayList<NodeInfo> data2 = new ArrayList<NodeInfo>();
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                  : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) data2.add(nodeInfoThis);
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0
-                ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  data2.add(nodeInfoThis);
-        Collections.sort(
-            data2,
-            new Comparator<NodeInfo>() {
-              @Override
-              public int compare(NodeInfo s1, NodeInfo s2) {
-                // 降序
-                if (isKatago) {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return 1;
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return -1;
-                      } else {
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return 1;
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-                  } else {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return -1;
-                      if (s1.moveNum < s2.moveNum) return 1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return -1;
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return 1;
-                      } else {
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return -1;
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return 1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                    }
-                  }
-                  return 0;
-                } else {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-                  } else {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return -1;
-                      if (s1.moveNum < s2.moveNum) return 1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                    }
-                  }
-                  return 0;
-                }
-              }
-            });
-
-        NodeInfo data = data2.get(row);
+        TableData prepared = tableData;
+        NodeInfo data = (black ? prepared.black : prepared.white).get(row);
         if (isKatago) {
-          if (Lizzie.board.isPkBoard) {
+          if (prepared.pkBoard) {
             switch (col) {
               case 0:
                 return data.moveNum;
@@ -7947,7 +7587,7 @@ public class MoveListFrame extends JFrame {
             }
           }
         } else {
-          if (Lizzie.board.isPkBoard) {
+          if (prepared.pkBoard) {
             switch (col) {
               case 0:
                 return data.moveNum;
@@ -7962,300 +7602,6 @@ public class MoveListFrame extends JFrame {
                 return String.format(
                     "%.1f",
                     //   Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
-                    data.percentsMatch * 100);
-              default:
-                return "";
-            }
-          } else {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.maybeConvertNormalCoordsToOther(
-                    Board.convertCoordinatesToName(data.coords[0], data.coords[1]));
-              case 2:
-                return (data.diffWinrate > 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate))
-                    + (data.diffWinrate > 0 ? "↑" : "↓");
-              case 3:
-                return String.format(
-                    "%.1f",
-                    // Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
-                    data.percentsMatch * 100);
-              default:
-                return "";
-            }
-          }
-        }
-      }
-    };
-  }
-
-  public AbstractTableModel getTableModelMin2() {
-    return new AbstractTableModel() {
-      public int getColumnCount() {
-        if (isKatago) return 5;
-        else return 4;
-      }
-
-      public int getRowCount() {
-        int row = 0;
-
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0
-                  ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                  : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-          if (nodeInfoThis.analyzed)
-            if (!nodeInfoThis.isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) row = row + 1;
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0
-                ? (isMainEngine ? lastNode.nodeInfoMain : lastNode.nodeInfoMain2)
-                : (isMainEngine ? lastNode.nodeInfo : lastNode.nodeInfo2);
-        if (nodeInfoThis.analyzed)
-          if (!nodeInfoThis.isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  row = row + 1;
-        return row;
-      }
-
-      public String getColumnName(int column) {
-        if (isKatago) {
-          if (column == 0)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnWhite");
-          if (column == 1)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnCoords");
-          if (column == 2)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnWinDiff");
-          if (column == 3)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnScoreDiff");
-          if (column == 4)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnAiScore");
-        } else {
-          if (column == 0)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnWhite");
-          if (column == 1)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnCoords");
-          if (column == 2)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnWinDiff");
-          if (column == 3)
-            return Lizzie.resourceBundle.getString("Movelistframe.minTableColumnAiScore");
-        }
-        return "";
-      }
-
-      public Object getValueAt(int row, int col) {
-        ArrayList<NodeInfo> data2 = new ArrayList<NodeInfo>();
-        BoardHistoryNode lastNode =
-            showBranch.getSelectedIndex() == 0
-                ? Lizzie.board.getHistory().getMainEnd()
-                : Lizzie.board.getHistory().getEnd();
-        while (lastNode.previous().isPresent()) {
-          NodeInfo nodeInfoThis =
-              showBranch.getSelectedIndex() == 0 ? lastNode.nodeInfoMain : lastNode.nodeInfo;
-          if (nodeInfoThis.analyzed)
-            if (!nodeInfoThis.isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                  if (!isKatago
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.moveListScoreThreshold) data2.add(nodeInfoThis);
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis =
-            showBranch.getSelectedIndex() == 0 ? lastNode.nodeInfoMain : lastNode.nodeInfo;
-        if (nodeInfoThis.analyzed)
-          if (!nodeInfoThis.isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.moveListWinrateThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.moveListVisitsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.moveListVisitsThreshold)
-                if (!isKatago
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.moveListScoreThreshold)
-                  data2.add(nodeInfoThis);
-        Collections.sort(
-            data2,
-            new Comparator<NodeInfo>() {
-              @Override
-              public int compare(NodeInfo s1, NodeInfo s2) {
-                // 降序
-                if (isKatago) {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return 1;
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return -1;
-                      } else {
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return 1;
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return -1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-                  } else {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return -1;
-                      if (s1.moveNum < s2.moveNum) return 1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return -1;
-                        if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return 1;
-                      } else {
-                        if (s1.scoreMeanDiff < s2.scoreMeanDiff) return -1;
-                        if (s1.scoreMeanDiff > s2.scoreMeanDiff) return 1;
-                      }
-                    }
-                    if (sortnum == 4) {
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                    }
-                  }
-                  return 0;
-                } else {
-                  if (!issorted) {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return 1;
-                      if (s1.moveNum < s2.moveNum) return -1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return 1;
-                        if (s1.diffWinrate > s2.diffWinrate) return -1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (s1.percentsMatch < s2.percentsMatch) return 1;
-                      if (s1.percentsMatch > s2.percentsMatch) return -1;
-                    }
-                  } else {
-                    if (sortnum == 0) {
-                      if (s1.moveNum > s2.moveNum) return -1;
-                      if (s1.moveNum < s2.moveNum) return 1;
-                    }
-                    if (sortnum == 2) {
-                      if (isOriginOrder) {
-                        if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                        if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                      } else {
-                        if (s1.diffWinrate < s2.diffWinrate) return -1;
-                        if (s1.diffWinrate > s2.diffWinrate) return 1;
-                      }
-                    }
-                    if (sortnum == 3) {
-                      if (s1.percentsMatch < s2.percentsMatch) return -1;
-                      if (s1.percentsMatch > s2.percentsMatch) return 1;
-                    }
-                  }
-                  return 0;
-                }
-              }
-            });
-        NodeInfo data = data2.get(row);
-        if (isKatago) {
-          if (Lizzie.board.isPkBoard) {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.maybeConvertNormalCoordsToOther(
-                    Board.convertCoordinatesToName(data.coords[0], data.coords[1]));
-              case 2:
-                return (data.diffWinrate < 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate))
-                    + (data.diffWinrate < 0 ? "↑" : "↓");
-              case 3:
-                return (data.scoreMeanDiff < 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.scoreMeanDiff))
-                    + (data.scoreMeanDiff < 0 ? "↑" : "↓");
-              case 4:
-                return "-";
-              default:
-                return "";
-            }
-          } else {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.maybeConvertNormalCoordsToOther(
-                    Board.convertCoordinatesToName(data.coords[0], data.coords[1]));
-              case 2:
-                return (data.diffWinrate > 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate))
-                    + (data.diffWinrate > 0 ? "↑" : "↓");
-              case 3:
-                return (data.scoreMeanDiff > 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.scoreMeanDiff))
-                    + (data.scoreMeanDiff > 0 ? "↑" : "↓");
-              case 4:
-                return String.format(
-                    "%.1f",
-                    // Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
-                    data.percentsMatch * 100);
-              default:
-                return "";
-            }
-          }
-        } else {
-          if (Lizzie.board.isPkBoard) {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.maybeConvertNormalCoordsToOther(
-                    Board.convertCoordinatesToName(data.coords[0], data.coords[1]));
-              case 2:
-                return (data.diffWinrate < 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate))
-                    + (data.diffWinrate < 0 ? "↑" : "↓");
-              case 3:
-                return String.format(
-                    "%.1f",
-                    // Math.pow(data.percentsMatch, (double) 1 / Lizzie.config.matchAiTemperature)
                     data.percentsMatch * 100);
               default:
                 return "";
