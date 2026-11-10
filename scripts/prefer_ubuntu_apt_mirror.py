@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Prefer the hosted runner's existing official HTTPS archive, keeping its fallbacks."""
+"""Configure hosted Ubuntu mirrors and optionally bound CI package acquisition."""
 
 from collections.abc import Mapping
+import argparse
 import os
 from pathlib import Path
 import platform
 import re
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -32,10 +34,11 @@ def require_hosted_ubuntu_x64(
         raise ValueError("APT mirror preference is restricted to GitHub-hosted Ubuntu x64 runners")
 
 
-def prefer_official_archive(content: str) -> str:
+def mirrorlist_with_priority(content: str, *, prefer_archive: bool = True) -> str:
     # Match the runner's explicit metadata; moving lines alone does not change apt priority.
     # https://github.com/actions/runner-images/blob/main/images/ubuntu/scripts/build/configure-apt-sources.sh
     entries = {}
+    priorities = PREFERRED_PRIORITIES if prefer_archive else DEFAULT_PRIORITIES
     updated = []
     for number, line in enumerate(content.splitlines(keepends=True), 1):
         if not line.strip() or line.startswith("#"):
@@ -46,18 +49,18 @@ def prefer_official_archive(content: str) -> str:
             raise ValueError(f"Unexpected hosted-runner mirrorlist entry at line {number}")
         uri = match[1]
         entries[uri] = int(match[3])
-        updated.append(f"{uri}{match[2]}{PREFERRED_PRIORITIES[uri]}{match[4]}")
+        updated.append(f"{uri}{match[2]}{priorities[uri]}{match[4]}")
     if entries not in (DEFAULT_PRIORITIES, PREFERRED_PRIORITIES):
         raise ValueError("Expected all three runner mirrors with known explicit priorities")
     return "".join(updated)
 
 
-def configure_mirror_file(path: Path) -> None:
+def configure_mirror_file(path: Path, *, prefer_archive: bool = True) -> None:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Expected an existing regular hosted-runner apt-mirrors.txt")
     original = path.read_text(encoding="utf-8")
     print("APT mirrorlist before:\n" + original, end="\n")
-    updated = prefer_official_archive(original)
+    updated = mirrorlist_with_priority(original, prefer_archive=prefer_archive)
     if updated != original:
         temporary = None
         try:
@@ -77,13 +80,45 @@ def configure_mirror_file(path: Path) -> None:
     print("APT mirrorlist after (all fallback URIs retained):\n" + updated, end="\n")
 
 
-def main() -> int:
+def install_packages(packages: list[str]) -> None:
+    if not packages or any(not re.fullmatch(r"[a-z0-9][a-z0-9+.-]*", name) for name in packages):
+        raise ValueError("Expected package names, not apt options")
+    configure_mirror_file(MIRROR_FILE)
+    subprocess.run(["apt-config", "dump", "Acquire::Retries", "Acquire::http::Timeout",
+                    "Acquire::https::Timeout"], check=True)
+    subprocess.run(["apt-get", "update"], check=True)
+    for prefer_archive in (True, False):
+        if not prefer_archive:
+            # Retain the runner's existing URIs, signed indexes and downloaded archives.
+            configure_mirror_file(MIRROR_FILE, prefer_archive=False)
+        result = subprocess.run(
+            ["timeout", "--kill-after=10s", "180s", "apt-get", "--download-only", "install",
+             "-y", *packages], check=False)
+        if result.returncode == 0:
+            break
+        # APT network errors and a bounded slow download permit one alternate-mirror attempt.
+        # Cancellation, kill escalation and unexpected launcher failures must still stop the job.
+        if not prefer_archive or result.returncode not in (100, 124):
+            raise subprocess.CalledProcessError(result.returncode, result.args)
+        print(f"APT download failed ({result.returncode}); retrying runner-default mirror priority",
+              flush=True)
+    # Only acquisition is time-bounded: never interrupt dpkg while installing packages.
+    subprocess.run(["apt-get", "--no-download", "install", "-y", *packages], check=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--install", nargs="+", metavar="PACKAGE")
+    args = parser.parse_args(argv)
     try:
         distribution = platform.freedesktop_os_release().get("ID", "") if sys.platform == "linux" else ""
         require_hosted_ubuntu_x64(os.environ, platform.system(), platform.machine(), distribution)
-        configure_mirror_file(MIRROR_FILE)
-    except (OSError, ValueError) as error:
-        print(f"APT mirror preference refused: {error}", file=sys.stderr)
+        if args.install:
+            install_packages(args.install)
+        else:
+            configure_mirror_file(MIRROR_FILE)
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"APT preparation failed: {error}", file=sys.stderr)
         return 1
     return 0
 
