@@ -3288,31 +3288,47 @@ public class LizzieFrame extends JFrame {
 
   public void toggleBestMoves() {
     if (analysisFrame == null || !analysisFrame.isVisible()) {
+      disposeAnalysisFrames();
       analysisFrame = new AnalysisFrame(1);
       if (Lizzie.config.isDoubleEngineMode()) {
-        if (analysisFrame2 == null || !analysisFrame2.isVisible()) {
-          analysisFrame2 = new AnalysisFrame(2);
-          analysisFrame2.setVisible(true);
-        }
+        analysisFrame2 = new AnalysisFrame(2);
+        analysisFrame2.setVisible(true);
       }
       analysisFrame.setVisible(true);
       if (Lizzie.config.uiConfig.optBoolean("suggestions-always-ontop", false))
         analysisFrame.setAlwaysOnTop(true);
+      Lizzie.config.uiConfig.put("show-suggestions-frame", true);
     } else {
-      analysisFrame.setVisible(false);
-      if (Lizzie.config.isDoubleEngineMode() && analysisFrame2 != null) {
-        analysisFrame2.setVisible(false);
-      }
-      Lizzie.frame.suggestionclick = LizzieFrame.outOfBoundCoordinate;
-      Lizzie.frame.refresh();
-      try {
-        Lizzie.config.persist();
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
+      closeBestMoves(analysisFrame);
     }
-    Lizzie.config.uiConfig.put("show-suggestions-frame", analysisFrame.isVisible());
+  }
+
+  void closeBestMoves(AnalysisFrame source) {
+    // A queued close from a retired window must not close its replacement.
+    if (source != null && source != analysisFrame && source != analysisFrame2) {
+      source.dispose();
+      return;
+    }
+    Lizzie.config.uiConfig.put("show-suggestions-frame", false);
+    suggestionclick = outOfBoundCoordinate;
+    try {
+      // Persist reads the current primary window's geometry and column widths.
+      Lizzie.config.persist();
+    } catch (IOException e) {
+      e.printStackTrace();
+    } finally {
+      disposeAnalysisFrames();
+    }
+    refresh();
+  }
+
+  private void disposeAnalysisFrames() {
+    AnalysisFrame primary = analysisFrame;
+    AnalysisFrame secondary = analysisFrame2;
+    analysisFrame = null;
+    analysisFrame2 = null;
+    if (primary != null) primary.dispose();
+    if (secondary != null) secondary.dispose();
   }
 
   public void toggleAlwaysOntop() {
@@ -3334,7 +3350,8 @@ public class LizzieFrame extends JFrame {
     subBoardLengthmouse = 0;
     subMaxSize = 0;
     if (previousMode == ExtraMode.Double_Engine && currentMode != ExtraMode.Double_Engine) {
-      if (analysisFrame2 != null && analysisFrame2.isVisible()) analysisFrame2.setVisible(false);
+      if (analysisFrame2 != null) analysisFrame2.dispose();
+      analysisFrame2 = null;
     }
     if (currentMode == ExtraMode.Four_Sub) {
       Lizzie.frame.subBoardRenderer2 = new SubBoardRenderer(false);
@@ -3401,7 +3418,8 @@ public class LizzieFrame extends JFrame {
         LizzieFrame.menu.changeEngineIcon(EngineManager.currentEngineNo2, 2);
       }
       LizzieFrame.menu.setEngineMenuone2status(false);
-      if (moveListFrame2 != null && moveListFrame2.isVisible()) moveListFrame2.setVisible(false);
+      if (moveListFrame2 != null) moveListFrame2.dispose();
+      moveListFrame2 = null;
     }
 
     if (currentMode == ExtraMode.Thinking) {
@@ -3580,32 +3598,45 @@ public class LizzieFrame extends JFrame {
 
   public void toggleBadMoves() {
     if (moveListFrame == null || !moveListFrame.isVisible()) {
+      disposeMoveListFrames();
       Lizzie.config.uiConfig.put("show-badmoves-frame", true);
       moveListFrame = new MoveListFrame(1);
       if (Lizzie.config.isDoubleEngineMode()) {
-        if (moveListFrame2 == null || !moveListFrame2.isVisible()) {
-          moveListFrame2 = new MoveListFrame(2);
-          moveListFrame2.setVisible(true);
-          if (Lizzie.config.badmovesalwaysontop) moveListFrame2.setAlwaysOnTop(true);
-        }
+        moveListFrame2 = new MoveListFrame(2);
+        moveListFrame2.setVisible(true);
+        if (Lizzie.config.badmovesalwaysontop) moveListFrame2.setAlwaysOnTop(true);
       }
       moveListFrame.setVisible(true);
       if (Lizzie.config.badmovesalwaysontop) moveListFrame.setAlwaysOnTop(true);
     } else {
-      Lizzie.config.uiConfig.put("show-badmoves-frame", false);
-      moveListFrame.setVisible(false);
-      if (Lizzie.config.isDoubleEngineMode() && moveListFrame2 != null) {
-        moveListFrame2.setVisible(false);
-      }
-      clickbadmove = LizzieFrame.outOfBoundCoordinate;
-      Lizzie.frame.refresh();
-      try {
-        Lizzie.config.persist();
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
+      closeBadMoves(moveListFrame);
     }
+  }
+
+  void closeBadMoves(MoveListFrame source) {
+    if (source != null && source != moveListFrame && source != moveListFrame2) {
+      source.dispose();
+      return;
+    }
+    Lizzie.config.uiConfig.put("show-badmoves-frame", false);
+    clickbadmove = outOfBoundCoordinate;
+    try {
+      Lizzie.config.persist();
+    } catch (IOException e) {
+      e.printStackTrace();
+    } finally {
+      disposeMoveListFrames();
+    }
+    refresh();
+  }
+
+  private void disposeMoveListFrames() {
+    MoveListFrame primary = moveListFrame;
+    MoveListFrame secondary = moveListFrame2;
+    moveListFrame = null;
+    moveListFrame2 = null;
+    if (primary != null) primary.dispose();
+    if (secondary != null) secondary.dispose();
   }
 
   static String buildDefaultAiMoveTimeSettings(int seconds) {
@@ -10872,6 +10903,8 @@ public class LizzieFrame extends JFrame {
 
   @Override
   public void dispose() {
+    disposeAnalysisFrames();
+    disposeMoveListFrames();
     stopHumanSlPreparation();
     if (variationTreeImages != null) variationTreeImages.close();
     requestedVariationTreeView = null;
@@ -11686,52 +11719,36 @@ public class LizzieFrame extends JFrame {
   }
 
   public boolean resetMovelistFrameandAnalysisFrame() {
-    boolean setFrame = false;
-    if (Lizzie.config.uiConfig.optBoolean("show-suggestions-frame", false)) {
-      if (analysisFrame == null) toggleBestMoves();
-      else {
-        SwingUtilities.invokeLater(
-            new Runnable() {
-              public void run() {
-                toggleBestMoves();
-                toggleBestMoves();
-              }
-            });
-      }
-      setFrame = true;
-    } else if (analysisFrame != null && analysisFrame.isVisible()) {
+    AnalysisFrame previousAnalysis = analysisFrame;
+    MoveListFrame previousMoveList = moveListFrame;
+    boolean showAnalysis =
+        Lizzie.config.uiConfig.optBoolean("show-suggestions-frame", false)
+            || (previousAnalysis != null && previousAnalysis.isVisible());
+    boolean showMoveList =
+        Lizzie.config.uiConfig.optBoolean("show-badmoves-frame", false)
+            || (previousMoveList != null && previousMoveList.isVisible());
+    if (showAnalysis || showMoveList) {
       SwingUtilities.invokeLater(
-          new Runnable() {
-            public void run() {
-              toggleBestMoves();
+          () -> {
+            if (Lizzie.frame != this || !isDisplayable()) return;
+            // A close or replacement after this request takes precedence over the reset.
+            if (showAnalysis
+                && analysisFrame == previousAnalysis
+                && (Lizzie.config.uiConfig.optBoolean("show-suggestions-frame", false)
+                    || (analysisFrame != null && analysisFrame.isVisible()))) {
+              if (previousAnalysis != null) closeBestMoves(previousAnalysis);
               toggleBestMoves();
             }
-          });
-      setFrame = true;
-    }
-    if (Lizzie.config.uiConfig.optBoolean("show-badmoves-frame", false)) {
-      if (moveListFrame == null) toggleBadMoves();
-      else {
-        SwingUtilities.invokeLater(
-            new Runnable() {
-              public void run() {
-                toggleBestMoves();
-                toggleBestMoves();
-              }
-            });
-      }
-      setFrame = true;
-    } else if (moveListFrame != null && moveListFrame.isVisible()) {
-      SwingUtilities.invokeLater(
-          new Runnable() {
-            public void run() {
-              toggleBestMoves();
-              toggleBestMoves();
+            if (showMoveList
+                && moveListFrame == previousMoveList
+                && (Lizzie.config.uiConfig.optBoolean("show-badmoves-frame", false)
+                    || (moveListFrame != null && moveListFrame.isVisible()))) {
+              if (previousMoveList != null) closeBadMoves(previousMoveList);
+              toggleBadMoves();
             }
           });
-      setFrame = true;
     }
-    return setFrame;
+    return showAnalysis || showMoveList;
   }
 
   /**

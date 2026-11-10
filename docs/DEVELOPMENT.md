@@ -190,6 +190,7 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 - `SavedGameSaveDesktopTest` 的真实保存按钮在磁盘任务等待期间保持窗口响应、完成后才发布 SGF/缩略图/索引并刷新列表的场景
 - `ThemeSaveDesktopTest` 的主题保存与颜色重置失败保留窗口、编辑值和原文件，并在恢复写入权限后成功重试的场景
 - `AnalysisProgressDesktopTest` 的分析进度窗口仍打开时实时绘制胜率与目差曲线，并在最后结果到达后完成窗口收尾的场景
+- `AnalysisWindowLifecycleDesktopTest` 的候选／恶手窗口关闭、重开、双引擎模式退出与重建；检查计时器和窗口释放、位置与列宽保存、过期关闭事件及保存失败后的清理
 
 分析进度用例使用真实 Swing 窗口和图表，以受控 JSON 结果代替引擎计算；它在 17 个结果中只送入 8 个时
 检查已绘制的曲线点，避免把完成后的重绘误认为实时刷新。韩文窗口和曲线截图保存在
