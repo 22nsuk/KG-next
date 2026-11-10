@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import featurecat.lizzie.Lizzie;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Stream;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
@@ -33,6 +35,53 @@ class SGFPropertyValuesTest {
   private static final String MARKS = String.join("", PROPERTIES);
 
   @TempDir Path directory;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"detached", "string", "edit", "file"})
+  void smartGoNamesKeepMetadataSetupMovesAndValuesAcrossImportPaths(String entrypoint)
+      throws Exception {
+    String standard =
+        "(;SZ[5]PB[Alice lowerCase]PW[Bob]AB[aa][ab]PL[W]"
+            + "C[PlayerBlack is value text]XX[first,one][second:two][]Xé_2[mixedCase]"
+            + ";W[ee]LB[ee:A,z];B[])";
+    String smartGo =
+        "(;SZ[5]PlayerBlack[Alice lowerCase]PlayerWhite[Bob]AddBlack[aa:ab]PL[W]"
+            + "Comment[PlayerBlack is value text]eXtraX[first,one][second:two][]"
+            + "preXéz_2tail[mixedCase];White[ee]LaBel[ee:A,z];Black[])";
+    try (var ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList expected = SGFParser.parseSgf(standard, true);
+      BoardHistoryList actual = read(smartGo, entrypoint);
+      assertNotNull(actual);
+      assertEquals("Alice lowerCase", actual.getGameInfo().getPlayerBlack());
+      assertEquals("Bob", actual.getGameInfo().getPlayerWhite());
+      assertEquals(
+          List.of("first,one", "second:two", ""),
+          actual.getStart().getData().getPropertyValues("XX"));
+      assertEquals("mixedCase", actual.getStart().getData().getProperty("Xé_2"));
+      assertEquals(
+          List.of("ee:A,z"),
+          actual.getStart().next().orElseThrow().getData().getPropertyValues("LB"));
+      SGFParserSemanticRoundTripTest.assertTreeSemanticsEqual(expected, actual);
+    }
+  }
+
+  @Test
+  void propertyStringNamesStripOnlyAsciiLowercaseAndDistinguishEmptyNamesFromRepeatedValues() {
+    Map<String, List<String>> properties = new LinkedHashMap<>();
+    SGFParser.addProperties(
+        properties,
+        "PlayerBlack[Alice a-z]preXéz_2tail[first,one][second:two][]LZOP2[digits]"
+            + "XX[before]note[separate][continued]XX[after]`az{[boundaries]");
+    assertEquals(
+        Map.of(
+            "PB", List.of("Alice a-z"),
+            "Xé_2", List.of("first,one", "second:two", ""),
+            "LZOP2", List.of("digits"),
+            "XX", List.of("before", "after"),
+            "", List.of("separate", "continued"),
+            "`{", List.of("boundaries")),
+        properties);
+  }
 
   static Stream<Arguments> firstNodeCases() {
     return Stream.of("detached", "string", "edit", "file")
@@ -164,14 +213,22 @@ class SGFPropertyValuesTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"before", "after"})
-  void branchSetupRetainsValuesOnItsOwnNodeAndLeavesExistingBranchAlone(String order)
+  @CsvSource({"before,false", "after,false", "before,true", "after,true"})
+  void branchSetupRetainsValuesOnItsOwnNodeAndLeavesExistingBranchAlone(
+      String order, boolean smartGoNames)
       throws Exception {
     try (var ignored = RulesLayerTestHarness.open()) {
       BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[ee]XX[original])", true);
       BoardHistoryNode original = history.getStart().next().orElseThrow();
-      String setup = "AB[aa:ab]PL[W]";
-      String branch = ";" + (order.equals("before") ? MARKS + setup : setup + MARKS) + ";W[dd]";
+      String marks =
+          smartGoNames ? MARKS.replace("LB[", "LaBel[").replace("XX[", "eXtraX[") : MARKS;
+      String setup = (smartGoNames ? "AddBlack" : "AB") + "[aa:ab]PL[W]";
+      String branch =
+          ";"
+              + (order.equals("before") ? marks + setup : setup + marks)
+              + ";"
+              + (smartGoNames ? "White" : "W")
+              + "[dd]";
       assertTrue(SGFParser.parseBranch(history, branch) >= 0);
       assertEquals("original", original.getData().getProperty("XX"));
       BoardHistoryNode added = history.getStart().getVariation(1).orElseThrow();

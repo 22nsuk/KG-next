@@ -470,6 +470,23 @@ public class SGFParser {
     return normalizeSetupRanges(value, size[0], size[1]);
   }
 
+  /** Smart-Go names such as PlayerBlack become PB by removing only ASCII lowercase letters. */
+  private static String normalizePropertyName(String name) {
+    StringBuilder normalized = null;
+    for (int i = 0; i < name.length(); i++) {
+      char c = name.charAt(i);
+      if (c >= 'a' && c <= 'z') {
+        if (normalized == null) {
+          normalized = new StringBuilder(name.length());
+          normalized.append(name, 0, i);
+        }
+      } else if (normalized != null) {
+        normalized.append(c);
+      }
+    }
+    return normalized == null ? name : normalized.toString();
+  }
+
   /**
    * Expand ranges before the parsers apply setup points. Keeping properties as individual points lets
    * handicap recognition and edited-snapshot serialization use their existing contracts.
@@ -505,7 +522,7 @@ public class SGFParser {
       } else if (c == '[') {
         if (tagBuilder.length() > 0) {
           // Match the legacy parsers' Smart-Go name handling, including an empty resulting tag.
-          tag = tagBuilder.toString().replaceAll("[a-z]", "");
+          tag = normalizePropertyName(tagBuilder.toString());
           tagBuilder.setLength(0);
         }
         valueStart = i + 1;
@@ -761,11 +778,7 @@ public class SGFParser {
             inTag = true;
             String tagTemp = tagBuilder.toString();
             if (!tagTemp.isEmpty()) {
-              // Ignore small letters in tags for the long format Smart-Go file.
-              // (ex) "PlayerBlack" ==> "PB"
-              // It is the default format of mgt, an old SGF tool.
-              // (Mgt is still supported in Debian and Ubuntu.)
-              tag = tagTemp.replaceAll("[a-z]", "");
+              tag = normalizePropertyName(tagTemp);
             }
             tagContentBuilder = new StringBuilder();
           } else {
@@ -3455,7 +3468,7 @@ public class SGFParser {
           inTag = true;
           String tagTemp = tagBuilder.toString();
           if (!tagTemp.isEmpty()) {
-            tag = tagTemp.replaceAll("[a-z]", "");
+            tag = normalizePropertyName(tagTemp);
           }
           tagContentBuilder = new StringBuilder();
           break;
@@ -4473,11 +4486,7 @@ public class SGFParser {
             inTag = true;
             String tagTemp = tagBuilder.toString();
             if (!tagTemp.isEmpty()) {
-              // Ignore small letters in tags for the long format Smart-Go file.
-              // (ex) "PlayerBlack" ==> "PB"
-              // It is the default format of mgt, an old SGF tool.
-              // (Mgt is still supported in Debian and Ubuntu.)
-              tag = tagTemp.replaceAll("[a-z]", "");
+              tag = normalizePropertyName(tagTemp);
             }
             tagContentBuilder = new StringBuilder();
           } else {
@@ -4827,11 +4836,7 @@ public class SGFParser {
             inTag = true;
             String tagTemp = tagBuilder.toString();
             if (!tagTemp.isEmpty()) {
-              // Ignore small letters in tags for the long format Smart-Go file.
-              // (ex) "PlayerBlack" ==> "PB"
-              // It is the default format of mgt, an old SGF tool.
-              // (Mgt is still supported in Debian and Ubuntu.)
-              tag = tagTemp.replaceAll("[a-z]", "");
+              tag = normalizePropertyName(tagTemp);
             }
             tagContentBuilder = new StringBuilder();
           } else {
