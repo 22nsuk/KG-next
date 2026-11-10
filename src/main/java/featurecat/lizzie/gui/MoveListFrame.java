@@ -264,8 +264,7 @@ public class MoveListFrame extends JFrame {
     addWindowListener(
         new WindowAdapter() {
           public void windowClosing(WindowEvent e) {
-            Lizzie.frame.toggleBadMoves();
-            if (timer != null) timer.stop();
+            Lizzie.frame.closeBadMoves(MoveListFrame.this);
           }
         });
 
@@ -7127,6 +7126,12 @@ public class MoveListFrame extends JFrame {
     Lizzie.board.goToMoveNumber(moveNumber - 1);
     Lizzie.frame.clickbadmove = coords;
     Lizzie.frame.refresh();
+  }
+
+  @Override
+  public void dispose() {
+    if (timer != null) timer.stop();
+    super.dispose();
   }
 
   public AbstractTableModel getTableModel() {
