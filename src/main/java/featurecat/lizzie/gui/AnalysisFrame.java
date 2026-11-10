@@ -73,8 +73,7 @@ public class AnalysisFrame extends JFrame {
     addWindowListener(
         new WindowAdapter() {
           public void windowClosing(WindowEvent e) {
-            Lizzie.frame.toggleBestMoves();
-            if (timer != null) timer.stop();
+            Lizzie.frame.closeBestMoves(AnalysisFrame.this);
           }
         });
 
@@ -751,6 +750,12 @@ public class AnalysisFrame extends JFrame {
       Lizzie.frame.refresh();
       selectedorder = -1;
     }
+  }
+
+  @Override
+  public void dispose() {
+    if (timer != null) timer.stop();
+    super.dispose();
   }
 
   public AbstractTableModel getTableModel() {
