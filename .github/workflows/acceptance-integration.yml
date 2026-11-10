@@ -122,10 +122,7 @@ jobs:
           cache: maven
       - name: Install isolated display dependencies
         run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py
-          apt-config dump Acquire::Retries Acquire::http::Timeout Acquire::https::Timeout
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth fonts-dejavu-core fonts-noto-cjk
+          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py --install xvfb xauth fonts-dejavu-core fonts-noto-cjk
       - uses: actions/download-artifact@v6
         if: needs.prepare-source-archive.outputs.has_source == 'true'
         with:

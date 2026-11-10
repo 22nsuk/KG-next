@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.awt.Component;
 import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Insets;
 import java.awt.Point;
 import java.awt.event.ActionEvent;
 import java.awt.event.MouseWheelEvent;
@@ -12,17 +14,51 @@ import javax.swing.BorderFactory;
 import javax.swing.JScrollBar;
 import javax.swing.JTable;
 import javax.swing.SwingUtilities;
+import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.DefaultTableModel;
+import javax.swing.table.TableModel;
 import org.junit.jupiter.api.Test;
 
 class SuggestionTableScrollPaneTest {
+  // These geometry tests do not paint cells. Control measured height, rather than assuming
+  // Dialog 12 has the same metrics on every host; real font safety is tested separately.
+  private static FontMetrics geometryMetrics(Font font) {
+    return new FontMetrics(font) {
+      @Override
+      public int getHeight() {
+        return 15;
+      }
+    };
+  }
+
+  private static JTable geometryTable(TableModel model) {
+    JTable table =
+        new JTable(model) {
+          @Override
+          public FontMetrics getFontMetrics(Font font) {
+            return geometryMetrics(font);
+          }
+        };
+    table.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
+    table.setRowMargin(1);
+    DefaultTableCellRenderer renderer =
+        new DefaultTableCellRenderer() {
+          @Override
+          public FontMetrics getFontMetrics(Font font) {
+            return geometryMetrics(font);
+          }
+        };
+    renderer.setBorder(BorderFactory.createEmptyBorder(1, 1, 1, 1));
+    table.setDefaultRenderer(Object.class, renderer);
+    return table;
+  }
+
   private static final class Fixture {
     final JTable table;
     final SuggestionTableScrollPane pane;
 
     Fixture(int rows) {
-      table = new JTable(new DefaultTableModel(rows, 6));
-      table.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
+      table = geometryTable(new DefaultTableModel(rows, 6));
       pane = new SuggestionTableScrollPane(table);
       pane.setColumnHeaderView(table.getTableHeader());
       pane.setBorder(BorderFactory.createLineBorder(java.awt.Color.GRAY));
@@ -90,21 +126,40 @@ class SuggestionTableScrollPaneTest {
             assertEquals(c[2], f.extent(), "budget " + c[0]);
             f.aligned();
           }
-          f.table.setRowMargin(8);
-          f.pane.refreshStyle(25);
-          f.budget(174);
-          Component renderer =
-              f.table
-                  .getDefaultRenderer(Object.class)
-                  .getTableCellRendererComponent(f.table, "Text", false, false, 0, 0);
-          int safe =
-              renderer.getFontMetrics(renderer.getFont()).getHeight()
-                  + ((javax.swing.JComponent) renderer).getInsets().top
-                  + ((javax.swing.JComponent) renderer).getInsets().bottom
-                  + 8
-                  + 2;
-          assertTrue(f.table.getRowHeight() >= safe);
-          f.aligned();
+        });
+  }
+
+  @Test
+  void realFontAndRendererInsetsPreventUnsafeTightening() throws Exception {
+    edt(
+        () -> {
+          JTable table = new JTable(new DefaultTableModel(20, 6));
+          SuggestionTableScrollPane pane = new SuggestionTableScrollPane(table);
+          pane.setBorder(BorderFactory.createLineBorder(java.awt.Color.GRAY));
+          pane.refreshStyle(25);
+          pane.setSize(450, 250);
+          pane.doLayout();
+          for (int fontSize : new int[] {12, 24}) {
+            table.setFont(new Font(Font.DIALOG, Font.PLAIN, fontSize));
+            // Make the measured safety floor, rather than the default 25, own the height.
+            table.setRowMargin(25);
+            Component renderer = (Component) table.getDefaultRenderer(Object.class);
+            Insets insets = ((javax.swing.JComponent) renderer).getInsets();
+            int safe =
+                renderer.getFontMetrics(table.getFont()).getHeight()
+                    + insets.top
+                    + insets.bottom
+                    + table.getRowMargin()
+                    + 2;
+            assertTrue(safe > 25);
+            pane.refreshStyle(25);
+            pane.setSize(450, safe * 7 - 1 + pane.getInsets().top + pane.getInsets().bottom);
+            pane.doLayout();
+            assertEquals(table.getFont(), renderer.getFont());
+            assertEquals(safe, table.getRowHeight(), "must not tighten below actual cell content");
+            assertEquals(safe * 6, pane.getViewport().getHeight());
+            assertEquals(0, pane.getViewport().getViewPosition().y);
+          }
         });
   }
 
@@ -286,7 +341,7 @@ class SuggestionTableScrollPaneTest {
           int[] count = {20};
           int[] generation = {0};
           JTable table =
-              new JTable(
+              geometryTable(
                   new javax.swing.table.AbstractTableModel() {
                     public int getRowCount() {
                       return count[0];
@@ -300,7 +355,6 @@ class SuggestionTableScrollPaneTest {
                       return generation[0] + ":" + (count[0] - row);
                     }
                   });
-          table.setFont(new Font(Font.DIALOG, Font.PLAIN, 12));
           SuggestionTableScrollPane pane = new SuggestionTableScrollPane(table);
           pane.setBorder(BorderFactory.createLineBorder(java.awt.Color.GRAY));
           pane.refreshStyle(25);

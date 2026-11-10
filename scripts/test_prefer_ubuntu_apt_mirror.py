@@ -28,15 +28,15 @@ HOSTED = {
 
 class PreferUbuntuAptMirrorTest(unittest.TestCase):
     def test_swaps_priorities_without_removing_or_reordering_fallbacks(self):
-        self.assertEqual(EXPECTED, mirrors.prefer_official_archive(ORIGINAL))
+        self.assertEqual(EXPECTED, mirrors.mirrorlist_with_priority(ORIGINAL))
 
     def test_preserves_comments_blank_lines_and_metadata_spacing(self):
         original = "# runner mirrors\n\n" + ORIGINAL.replace("\t", "\t \t")
         expected = "# runner mirrors\n\n" + EXPECTED.replace("\t", "\t \t")
-        self.assertEqual(expected, mirrors.prefer_official_archive(original))
+        self.assertEqual(expected, mirrors.mirrorlist_with_priority(original))
 
     def test_repeated_configuration_is_idempotent(self):
-        self.assertEqual(EXPECTED, mirrors.prefer_official_archive(EXPECTED))
+        self.assertEqual(EXPECTED, mirrors.mirrorlist_with_priority(EXPECTED))
 
     def test_rejects_unexpected_lists_instead_of_guessing_or_adding_sources(self):
         malformed = (
@@ -53,7 +53,7 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
         )
         for original in malformed:
             with self.subTest(original=original), self.assertRaises(ValueError):
-                mirrors.prefer_official_archive(original)
+                mirrors.mirrorlist_with_priority(original)
 
     def test_invalid_file_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -107,10 +107,92 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     mirrors.require_hosted_ubuntu_x64(HOSTED, system, machine, distro)
 
+    def test_download_budget_falls_back_once_and_installs_only_complete_archives(self):
+        for results in ((0,), (124, 0), (100, 0), (124, 100), (100, 124), (137,), (130,), (127,)):
+            with self.subTest(results=results), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "apt-mirrors.txt"
+                path.write_text(ORIGINAL, encoding="utf-8")
+                remaining = iter(results)
+                priorities = []
+                calls = []
+
+                def run(command, *, check):
+                    calls.append(command)
+                    if command[0] == "timeout":
+                        self.assertFalse(check)
+                        self.assertEqual(
+                            ["timeout", "--kill-after=10s", "120s", "apt-get", "--download-only",
+                             "install", "-y", "xvfb", "fonts-noto-cjk"], command)
+                        priorities.append(path.read_text(encoding="utf-8"))
+                        return mirrors.subprocess.CompletedProcess(command, next(remaining))
+                    self.assertTrue(check)
+                    return mirrors.subprocess.CompletedProcess(command, 0)
+
+                with mock.patch.object(mirrors, "MIRROR_FILE", path), \
+                        mock.patch.object(mirrors.subprocess, "run", side_effect=run):
+                    if results[-1] == 0:
+                        mirrors.install_packages(["xvfb", "fonts-noto-cjk"])
+                        self.assertEqual(
+                            ["apt-get", "--no-download", "install", "-y", "xvfb", "fonts-noto-cjk"],
+                            calls[-1])
+                    else:
+                        with self.assertRaises(mirrors.subprocess.CalledProcessError) as error:
+                            mirrors.install_packages(["xvfb", "fonts-noto-cjk"])
+                        self.assertEqual(results[-1], error.exception.returncode)
+                        self.assertFalse(any("--no-download" in call for call in calls))
+                self.assertEqual([EXPECTED] if len(results) == 1 else [EXPECTED, ORIGINAL], priorities)
+                self.assertEqual(1, calls.count(["apt-get", "update"]))
+
+    def test_invalid_package_or_mirror_cannot_start_apt(self):
+        with mock.patch.object(mirrors.subprocess, "run") as run, \
+                tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "apt-mirrors.txt"
+            path.write_text(ORIGINAL.replace("priority:2", "unexpected:2"), encoding="utf-8")
+            with mock.patch.object(mirrors, "MIRROR_FILE", path):
+                for packages in ([], ["--allow-unauthenticated"], ["xvfb;echo"], ["xvfb"]):
+                    with self.subTest(packages=packages), self.assertRaises(ValueError):
+                        mirrors.install_packages(packages)
+            run.assert_not_called()
+
+    def test_update_and_install_failures_propagate_without_download_retry(self):
+        for stage in ("update", "install"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as temporary:
+                path = Path(temporary) / "apt-mirrors.txt"
+                path.write_text(ORIGINAL, encoding="utf-8")
+                calls = []
+
+                def run(command, *, check):
+                    calls.append(command)
+                    if command == ["apt-get", "update"] and stage == "update" or (
+                        "--no-download" in command and stage == "install"
+                    ):
+                        raise mirrors.subprocess.CalledProcessError(100, command)
+                    return mirrors.subprocess.CompletedProcess(command, 0)
+
+                with mock.patch.object(mirrors, "MIRROR_FILE", path), \
+                        mock.patch.object(mirrors.subprocess, "run", side_effect=run):
+                    with self.assertRaises(mirrors.subprocess.CalledProcessError):
+                        mirrors.install_packages(["xvfb"])
+                self.assertEqual(0 if stage == "update" else 1,
+                                 sum(command[0] == "timeout" for command in calls))
+                self.assertEqual(EXPECTED, path.read_text(encoding="utf-8"))
+
+    def test_main_routes_explicit_install_and_preserves_mirror_only_callers(self):
+        with mock.patch.object(mirrors, "require_hosted_ubuntu_x64"), \
+                mock.patch.object(mirrors, "configure_mirror_file") as configure, \
+                mock.patch.object(mirrors, "install_packages") as install:
+            self.assertEqual(0, mirrors.main([]))
+            configure.assert_called_once_with(mirrors.MIRROR_FILE)
+            install.assert_not_called()
+            configure.reset_mock()
+            self.assertEqual(0, mirrors.main(["--install", "xvfb", "fonts-noto-cjk"]))
+            configure.assert_not_called()
+            install.assert_called_once_with(["xvfb", "fonts-noto-cjk"])
+
     def test_main_fails_before_accessing_files_outside_hosted_runner(self):
         with mock.patch.dict(os.environ, {}, clear=True), \
                 mock.patch.object(mirrors, "configure_mirror_file") as configure:
-            self.assertEqual(1, mirrors.main())
+            self.assertEqual(1, mirrors.main([]))
             configure.assert_not_called()
 
 
