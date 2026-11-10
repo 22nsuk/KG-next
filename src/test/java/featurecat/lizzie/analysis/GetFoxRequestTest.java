@@ -22,6 +22,31 @@ import org.junit.jupiter.api.Test;
 
 class GetFoxRequestTest {
   @Test
+  void normalizeFoxSgfPayloadKeepsOversizedNumbersAsText() throws Exception {
+    GetFoxRequest request = new GetFoxRequest(null);
+    Method normalizeMethod =
+        GetFoxRequest.class.getDeclaredMethod("normalizeFoxSgfPayload", String.class);
+    normalizeMethod.setAccessible(true);
+
+    // Exercise the production response parser without constructing a resource-exhaustion payload.
+    String integer = "9".repeat(1001);
+    String decimal = "0." + "1".repeat(1000);
+    String payload =
+        "{\"chess\":\"(;GM[1]FF[4]SZ[19];B[pd])\",\"unknown\":["
+            + integer
+            + ","
+            + decimal
+            + "],\"result\":0,\"komi\":6.5}";
+    JSONObject normalized = new JSONObject((String) normalizeMethod.invoke(request, payload));
+
+    assertEquals(integer, normalized.getJSONArray("unknown").get(0));
+    assertEquals(decimal, normalized.getJSONArray("unknown").get(1));
+    assertEquals(0, normalized.getInt("result"));
+    assertEquals(6.5, normalized.getDouble("komi"));
+    assertEquals("(;GM[1]FF[4]CA[UTF-8]SZ[19];B[pd])", normalized.getString("chess"));
+  }
+
+  @Test
   void normalizeFoxSgfPayloadPromotesLeadingSetupNodesIntoRoot() throws Exception {
     GetFoxRequest request = new GetFoxRequest(null);
     Method normalizeMethod =
