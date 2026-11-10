@@ -901,28 +901,32 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
             run = textwrap.dedent(step.split("        run: |\n", 1)[1])
             commands = [line.split() for line in run.replace("\\\n", " ").splitlines()
                         if line.strip() and not line.lstrip().startswith("#")]
-            yield name, step, commands, packages
+            bounded = filename == "ci.yml" and name == "Install Linux display dependencies"
+            yield name, step, commands, packages, bounded
 
     def test_linux_display_installs_prefer_the_existing_official_mirror(self):
-        for name, step, commands, packages in self.display_dependency_steps():
+        for name, step, commands, packages, bounded in self.display_dependency_steps():
             with self.subTest(step=name):
                 self.assertNotIn("continue-on-error", step)
-                self.assertEqual([
-                    ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH",
-                     "python3", "scripts/prefer_ubuntu_apt_mirror.py"],
+                helper = ["sudo", "--preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH",
+                          "python3", "scripts/prefer_ubuntu_apt_mirror.py"]
+                expected = [[*helper, "--install", *packages]] if bounded else [
+                    helper,
                     ["apt-config", "dump", "Acquire::Retries", "Acquire::http::Timeout",
                      "Acquire::https::Timeout"],
                     ["sudo", "apt-get", "update"],
                     ["sudo", "apt-get", "install", "-y", *packages],
-                ], commands)
+                ]
+                self.assertEqual(expected, commands)
 
     def test_linux_display_installs_preserve_the_complete_dependency_lists(self):
-        for name, _step, commands, packages in self.display_dependency_steps():
+        for name, _step, commands, packages, bounded in self.display_dependency_steps():
             with self.subTest(step=name):
-                installs = [command for command in commands if "install" in command]
+                install_arg = "--install" if bounded else "install"
+                installs = [command for command in commands if install_arg in command]
                 self.assertEqual(1, len(installs))
-                arguments = installs[0][installs[0].index("install") + 1:]
-                self.assertEqual(["-y", *packages], arguments)
+                arguments = installs[0][installs[0].index(install_arg) + 1:]
+                self.assertEqual(packages if bounded else ["-y", *packages], arguments)
 
     def test_fox_preparation_is_bounded_and_helper_changes_trigger_both_platforms(self):
         workflow = (
