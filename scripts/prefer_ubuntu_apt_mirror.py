@@ -59,7 +59,7 @@ def configure_mirror_file(path: Path, *, prefer_archive: bool = True) -> None:
     if path.is_symlink() or not path.is_file():
         raise ValueError("Expected an existing regular hosted-runner apt-mirrors.txt")
     original = path.read_text(encoding="utf-8")
-    print("APT mirrorlist before:\n" + original, end="\n")
+    print("APT mirrorlist before:\n" + original, end="\n", flush=True)
     updated = mirrorlist_with_priority(original, prefer_archive=prefer_archive)
     if updated != original:
         temporary = None
@@ -77,7 +77,7 @@ def configure_mirror_file(path: Path, *, prefer_archive: bool = True) -> None:
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
-    print("APT mirrorlist after (all fallback URIs retained):\n" + updated, end="\n")
+    print("APT mirrorlist after (all fallback URIs retained):\n" + updated, end="\n", flush=True)
 
 
 def install_packages(packages: list[str]) -> None:
@@ -91,8 +91,9 @@ def install_packages(packages: list[str]) -> None:
         if not prefer_archive:
             # Retain the runner's existing URIs, signed indexes and downloaded archives.
             configure_mirror_file(MIRROR_FILE, prefer_archive=False)
+        # Two acquisition attempts leave time for update/install within Fox's five-minute step.
         result = subprocess.run(
-            ["timeout", "--kill-after=10s", "180s", "apt-get", "--download-only", "install",
+            ["timeout", "--kill-after=10s", "120s", "apt-get", "--download-only", "install",
              "-y", *packages], check=False)
         if result.returncode == 0:
             break

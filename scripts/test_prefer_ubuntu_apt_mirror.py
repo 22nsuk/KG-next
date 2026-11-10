@@ -121,7 +121,7 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
                     if command[0] == "timeout":
                         self.assertFalse(check)
                         self.assertEqual(
-                            ["timeout", "--kill-after=10s", "180s", "apt-get", "--download-only",
+                            ["timeout", "--kill-after=10s", "120s", "apt-get", "--download-only",
                              "install", "-y", "xvfb", "fonts-noto-cjk"], command)
                         priorities.append(path.read_text(encoding="utf-8"))
                         return mirrors.subprocess.CompletedProcess(command, next(remaining))
