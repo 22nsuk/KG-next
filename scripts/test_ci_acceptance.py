@@ -18,10 +18,6 @@ from scripts import ci_acceptance as ci
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-CORE_JOBS = {
-    "repository-checks", "script-tests", "windows-script-tests", "java-linux", "java17-web",
-    "java-windows", "desktop-smoke", "analysis-provenance-ui", "engine-process",
-}
 WORKFLOW_FILES = {
     "fox-search": "fox-search.yml",
     "b11-speed-notice": "b11-speed-notice.yml",
@@ -33,7 +29,7 @@ WORKFLOW_FILES = {
 def results(required="true", result="success"):
     return {
         "repository-checks": {"result": "success", "outputs": {"acceptance_required": required}},
-        **{job: {"result": result} for job in ci.ACCEPTANCE_JOBS},
+        **{job: {"result": result} for job in ci.EXECUTION_JOBS},
     }
 
 
@@ -51,7 +47,7 @@ class SelectionTest(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertFalse(ci.documentation_only(["README.md", path]))
 
-    def test_no_changed_files_need_no_supplemental_execution(self):
+    def test_no_changed_files_need_only_repository_checks(self):
         self.assertTrue(ci.documentation_only([]))
 
     def test_main_and_merge_queue_run_all_acceptance(self):
@@ -100,7 +96,7 @@ class ExecutionGateTest(unittest.TestCase):
         ci.require_acceptance(results())
 
     def test_selected_failures_cancellations_skips_missing_and_unknown_fail(self):
-        for job in ci.ACCEPTANCE_JOBS:
+        for job in ci.EXECUTION_JOBS:
             for status in ("failure", "cancelled", "skipped", "neutral", "", None, "in_progress"):
                 with self.subTest(job=job, status=status):
                     value = results()
@@ -117,10 +113,22 @@ class ExecutionGateTest(unittest.TestCase):
         ci.require_acceptance(results("false", "success"))
 
     def test_unselected_failure_is_not_hidden(self):
-        for status in ("failure", "cancelled", "neutral", "", None):
+        for job in ci.EXECUTION_JOBS:
+            for status in ("failure", "cancelled", "neutral", "", None, "in_progress"):
+                value = results("false", "skipped")
+                value[job]["result"] = status
+                with self.subTest(job=job, status=status), self.assertRaises(ValueError):
+                    ci.require_acceptance(value)
             value = results("false", "skipped")
-            value[ci.ACCEPTANCE_JOBS[0]]["result"] = status
-            with self.subTest(status=status), self.assertRaises(ValueError):
+            del value[job]
+            with self.subTest(job=job, status="absent"), self.assertRaises(ValueError):
+                ci.require_acceptance(value)
+
+    def test_undeclared_dependency_cannot_escape_the_gate(self):
+        for required in ("true", "false"):
+            value = results(required)
+            value["new-job"] = {"result": "failure"}
+            with self.subTest(required=required), self.assertRaises(ValueError):
                 ci.require_acceptance(value)
 
     def test_failed_or_missing_plan_fails_closed(self):
@@ -129,8 +137,10 @@ class ExecutionGateTest(unittest.TestCase):
             value["repository-checks"]["result"] = status
             with self.subTest(status=status), self.assertRaises(ValueError):
                 ci.require_acceptance(value)
-        for value in ({}, {"repository-checks": None}, {"repository-checks": {"result": "success"}}):
-            with self.subTest(value=value), self.assertRaises(ValueError):
+        for owner in (None, {}, {"result": "success"}, {"result": "success", "outputs": []}):
+            value = results("false", "skipped")
+            value["repository-checks"] = owner
+            with self.subTest(owner=owner), self.assertRaises(ValueError):
                 ci.require_acceptance(value)
 
     def test_invalid_output_does_not_authorize_skip(self):
@@ -269,11 +279,24 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("if: ${{ always() }}", gate)
         dependencies = set(re.search(r"needs: \[([^\]]+)\]", gate).group(1).split(", "))
         self.assertEqual(dependencies, jobs - {"ci-required"})
-        self.assertTrue(CORE_JOBS <= dependencies)
-        self.assertTrue(set(ci.ACCEPTANCE_JOBS) <= dependencies)
-        self.assertIn("from scripts.run_local_ci import require_successful_job_results", gate)
+        self.assertEqual(dependencies, {"repository-checks", *ci.EXECUTION_JOBS})
         self.assertIn("NEEDS_JSON: ${{ toJSON(needs) }}", gate)
         self.assertIn("python3 scripts/ci_acceptance.py check", gate)
+
+    def test_only_execution_jobs_are_conditional_on_the_repository_plan(self):
+        text = (WORKFLOWS / "ci.yml").read_text()
+        jobs = dict(re.findall(r"^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:|\Z)", text,
+                               re.M | re.S))
+        repository = jobs["repository-checks"]
+        self.assertNotRegex(repository, r"(?m)^    (?:if|needs):")
+        self.assertIn("python3 scripts/ci_acceptance.py plan", repository)
+        self.assertIn("--profile portable --group repository --require-clean", repository)
+        for name in ci.EXECUTION_JOBS:
+            with self.subTest(job=name):
+                self.assertRegex(jobs[name], r"(?m)^    needs: repository-checks$")
+                self.assertIn("    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}\n",
+                              jobs[name])
+                self.assertNotIn("continue-on-error", jobs[name])
 
     def test_top_level_ci_is_unfiltered_and_covers_merge_queue(self):
         text = (WORKFLOWS / "ci.yml").read_text()

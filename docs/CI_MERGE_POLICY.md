@@ -7,9 +7,10 @@ PR을 병합하는 것만으로 GitHub의 보호 설정이 활성화되지는 �
 
 ## 하나의 필수 검사
 
-main의 필수 상태 검사는 **`ci-required`** 하나로 유지한다. 기존 repository,
+main의 필수 상태 검사는 **`ci-required`** 하나로 유지한다. 모든 PR에서
+`repository-checks`의 성공을 요구한다. 문서 전용으로 판정된 PR을 제외하면
 script, Linux/Windows Java, Java 17, desktop, analysis-provenance UI와
-engine-process matrix의 필수 성공 판정은 바꾸지 않는다.
+engine-process matrix도 모두 성공해야 한다.
 
 Fox Search Regression, B11 Speed Notice UI, Native Windows Engine Acceptance,
 Acceptance integration(SGF UI·Linux CPU)은
@@ -53,24 +54,53 @@ JDI 감시는 클래스 전체의 메서드 진입 이벤트 대신 지정 메�
 중단점을 설치한다. 프로세스를 강제 종료하는 `vm.exit`와 cleanup 실패 주입은
 유지하며, 목표 메서드에 도달하지 못하거나 먼저 종료되면 검사가 실패한다.
 
-### 보조 검사의 변경 범위 선택
+### 문서 전용 PR과 전체 검사의 선택
 
 `repository-checks`가 전체 Git 이력을 받아 PR base/head의 merge-base부터
 head까지를 NUL 구분 파일명으로 비교한다. API의 파일 수 제한에 의존하지 않고,
 삭제된 경로와 이름 변경 전후 경로를 모두 검사한다. diff나 SHA 해석이 실패하면
-선택 job이 실패한다. 실패를 문서 변경으로 간주하지 않는다.
+repository job이 실패한다. 실패를 문서 변경으로 간주하지 않는다.
 
 PR 변경이 **루트 Markdown 및 `docs/`의 Markdown/reStructuredText뿐**일 때만
-네 보조 검사를 생략한다. 그 외 코드·테스트·자원·엔진 카탈로그·빌드 도구·설정·
-알 수 없는 경로의 변경은 네 검사를 모두 실행한다. 기존의 세밀한 파일 목록보다
-실행량이 늘어나는 보수적 정책이다. 공유 GUI·테스트 도우미·빌드 의존성 변경을
-놓치지 않고 파일별 의존성 목록의 유지 부담을 줄이기 위해 선택했다.
+`repository-checks`와 `ci-required`를 실행한다. repository 검사는 줄바꿈·로컬 링크·
+엔진/모델 메타데이터와 CI 선택 정책을 검사하고, 문서를 실제로 읽는 다음 기존
+Python 검사도 실행한다. 이 네 모듈은 portable scripts 그룹에서 repository 그룹으로
+옮겨 전체 CI에서도 한 번만 실행한다.
 
-main push와 merge queue의 `merge_group`은 보조 검사도 모두 실행한다.
-merge queue 이벤트 지원은 queue를 활성화하는 설정이 아니다.
-기본 CI는 문서 PR에서도 실행한다. 생략 가능한 보조 검사 이름을 별도의 필수
-검사로 등록하지 않는다. 경로 필터로 워크플로 자체를 실행하지 않으면 필수 검사가
-보고되지 않아 관련 없는 PR까지 대기할 수 있기 때문이다.
+- `test_validate_kg_metadata.py`: 메타데이터, 다국어 README, 패키지·지원 링크
+- `test_windows_download_guidance.py`: 하드웨어별 Windows 다운로드 안내
+- `test_validate_release_workflow_identity.py`: 릴리스 workflow와 체크리스트의 식별 정보
+- `test_macos_signing_security.py`: macOS 서명 실패 처리와 문서의 일치
+
+코드·테스트·자원·엔진 카탈로그·빌드 도구·설정·알 수 없는 경로가 하나라도 바뀌면
+기존 전체 검사를 실행한다. main push와 merge queue의 `merge_group`도 항상 전체
+검사를 실행한다. merge queue 이벤트 지원은 queue를 활성화하는 설정이 아니다.
+문서 PR에서는 native Windows·Java·desktop 실행을 생략하므로 플랫폼 검증을
+문서 PR마다 반복하지 않으며, 문서 소비 검사와 병합 후 main 전체 검사가 그 범위를 맡는다.
+
+`ci_acceptance.py`가 모든 실행 job의 결과를 한 곳에서 판정한다. repository 검사가
+성공하고 전체 실행 필요 출력(`acceptance_required`)이 정확히 `false`일 때만
+선택 job의 `skipped`를 허용한다.
+문서 PR도 실패·취소·결과 누락·알 수 없는 결과는 거부하며, dependency 목록이 정책과
+달라도 실패한다. 선택 출력이 없거나 잘못되면 생략을 허용하지 않는다.
+`ci-required`는 `always()`와 모든 job에 대한 `needs`를 유지한다.
+생략 가능한 job을 별도의 필수 검사로 등록하거나 workflow 자체에 경로 필터를
+걸지 않는다. 필수 검사 결과가 보고되지 않아 PR이 계속 대기하는 상황을 피하기 위해서다.
+
+### 캐시와 desktop 증거 보관
+
+Native Windows Engine Acceptance에도 기존 Java job과 같은 Maven 의존성 캐시를
+사용한다. 고정 native CPU 엔진과 SDK는 매번 빌드·audit하며 캐시로 대체하지 않는다.
+전체 Java 검증의 JaCoCo 산출물과 CPU archive 전달용 artifact는 그대로 유지한다.
+
+성공한 desktop artifact는 7일 보관한다. 최초 전체 검사의 이미지는 모두 유지하고,
+추가 두 반복의 `races-1/**/*.png`, `races-1/**/*.bmp`, `races-2/**/*.png`,
+`races-2/**/*.bmp`만 업로드에서 제외한다. 테스트 중 이미지 생성·읽기 검증과
+각 반복의 XML·텍스트·SGF·로그·result·lifecycle 증거는 그대로 유지한다.
+실패·취소 시에는 진행 중인 `races/`를 포함한 전체 desktop 증거를 14일 보관하도록
+업로드를 시도한다. artifact 이름과 반복별 경로도 유지한다.
+작은 local CI JSON/Markdown 요약은 성공 여부와 무관하게 14일 보관하며, 실행 SHA·
+명령·결과·JUnit 집계로 해당 실행을 식별한다.
 
 ## 저장소 보호 적용 순서
 

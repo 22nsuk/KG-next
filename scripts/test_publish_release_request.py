@@ -943,7 +943,7 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         self.assertIn("Fox keyboard traversal probe did not execute successfully", workflow)
         self.assertNotIn("continue-on-error", workflow)
 
-    def test_mirror_preference_keeps_native_execution_and_required_gate_wiring(self):
+    def test_mirror_preference_keeps_native_execution(self):
         root = SCRIPT_PATH.parents[1]
         ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         acceptance = (root / ".github/workflows/acceptance-integration.yml").read_text(encoding="utf-8")
@@ -952,14 +952,6 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
             "--profile ${{ matrix.profile }} --group engine-process --require-clean",
         ):
             self.assertIn(required, ci)
-        gate = ci.split("\n  ci-required:\n", 1)[1]
-        needs = set(re.search(r"needs: \[([^\]]+)\]", gate).group(1).split(", "))
-        self.assertEqual(needs, {
-            "repository-checks", "script-tests", "windows-script-tests", "java-linux",
-            "java17-web", "java-windows", "desktop-smoke", "analysis-provenance-ui",
-            "engine-process", "fox-search", "b11-speed-notice", "native-windows",
-            "sgf-cpu-acceptance",
-        })
         self.assertIn("'--scenario', 'sgf-ui', '--scenario', 'real-cpu-engine'", acceptance)
         from scripts import run_local_ci
         self.assertIn("scripts.test_prefer_ubuntu_apt_mirror", run_local_ci.UNITTEST_MODULES)
@@ -976,8 +968,6 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
         self.assertIn("-Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports", job)
         self.assertIn("if: always()", job)
         self.assertNotIn("continue-on-error", job)
-        self.assertIn("ANALYSIS_UI: ${{ needs.analysis-provenance-ui.result }}", ci)
-        self.assertIn('"analysis-provenance-ui": os.environ["ANALYSIS_UI"]', ci)
         inline = textwrap.dedent(job.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0])
         source = (root / "src/test/java/featurecat/lizzie/gui/WholeGameAnalysisDialogLayoutTest.java").read_text(encoding="utf-8")
         methods = re.findall(r"(?m)^  void (\w+)\(", source)

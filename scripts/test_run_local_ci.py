@@ -106,6 +106,23 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertIn("Run full Windows verification gate", [step.name for step in steps])
         self.assertNotIn("Verify local Markdown links", [step.name for step in steps])
 
+    def test_document_consumers_run_once_in_the_portable_repository_group(self):
+        consumers = (
+            "scripts/test_validate_kg_metadata.py",
+            "scripts.test_windows_download_guidance",
+            "scripts.test_validate_release_workflow_identity",
+            "scripts.test_macos_signing_security",
+        )
+        for profile in ("portable", "all"):
+            for group in ("all", "repository", "scripts"):
+                steps = run_local_ci.build_steps(profile, "mvn", "bash", "pwsh", group)
+                for consumer in consumers:
+                    with self.subTest(profile=profile, group=group, consumer=consumer):
+                        selected = [step for step in steps
+                                    if step.command[1:] in ((consumer,), ("-m", "unittest", consumer))]
+                        self.assertEqual([] if group == "scripts" else ["repository"],
+                                         [step.group for step in selected])
+
     def test_java_profiles_run_credentials_in_full_verify_without_a_duplicate_test_step(self):
         for profile in ("windows", "portable", "all"):
             with self.subTest(profile=profile):
@@ -568,26 +585,6 @@ class RunLocalCiTest(unittest.TestCase):
             self.assertFalse(surefire.exists())
             self.assertFalse(failsafe.exists())
             self.assertTrue((classes / "keep.class").is_file())
-
-    def test_required_job_results_reject_failure_cancellation_and_skip(self):
-        required = {
-            "repository-checks": "success",
-            "script-tests": "success",
-            "windows-script-tests": "success",
-            "java-linux": "success",
-            "java-windows": "success",
-            "desktop-smoke": "success",
-            "engine-process": "success",
-        }
-        run_local_ci.require_successful_job_results(required)
-        for status in ("failure", "cancelled", "skipped"):
-            with self.subTest(status=status):
-                rejected = dict(required)
-                rejected["engine-process"] = status
-                with self.assertRaisesRegex(
-                    RuntimeError, f"engine-process={status}"
-                ):
-                    run_local_ci.require_successful_job_results(rejected)
 
     def test_setup_failure_cannot_be_reported_as_pass(self):
         self.assertEqual("FAIL", run_local_ci.overall_result(False, []))

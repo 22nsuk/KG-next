@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select supplemental CI on the PR diff and reject missing execution evidence."""
+"""Select CI execution on the PR diff and reject missing execution evidence."""
 
 from __future__ import annotations
 
@@ -13,7 +13,11 @@ import sys
 from typing import Any, Mapping, Sequence
 
 
-ACCEPTANCE_JOBS = ("fox-search", "b11-speed-notice", "native-windows", "sgf-cpu-acceptance")
+EXECUTION_JOBS = (
+    "script-tests", "windows-script-tests", "java-linux", "java17-web", "java-windows",
+    "desktop-smoke", "analysis-provenance-ui", "engine-process",
+    "fox-search", "b11-speed-notice", "native-windows", "sgf-cpu-acceptance",
+)
 
 
 def documentation_only(paths: Sequence[str]) -> bool:
@@ -57,22 +61,28 @@ def acceptance_required(event_name: str, event: Mapping[str, Any], repository: P
 
 
 def require_acceptance(needs: Mapping[str, Any]) -> None:
+    expected = {"repository-checks", *EXECUTION_JOBS}
+    if set(needs) != expected:
+        raise ValueError(
+            f"CI dependency set differs: missing={sorted(expected - set(needs))}, "
+            f"unexpected={sorted(set(needs) - expected)}"
+        )
     owner = needs.get("repository-checks")
     if not isinstance(owner, dict) or owner.get("result") != "success":
-        raise ValueError("Acceptance selection did not complete successfully")
+        raise ValueError("Repository checks and execution selection did not complete successfully")
     outputs = owner.get("outputs")
     required = outputs.get("acceptance_required") if isinstance(outputs, dict) else None
     if required not in ("true", "false"):
-        raise ValueError("Acceptance selection is missing or invalid")
+        raise ValueError("Execution selection is missing or invalid")
     failures = []
-    for job in ACCEPTANCE_JOBS:
+    for job in EXECUTION_JOBS:
         record = needs.get(job)
         result = record.get("result") if isinstance(record, dict) else None
         allowed = {"success"} if required == "true" else {"success", "skipped"}
         if result not in allowed:
             failures.append(f"{job}={result!r}")
     if failures:
-        raise ValueError("Supplemental acceptance did not pass: " + ", ".join(failures))
+        raise ValueError("Selected CI execution did not pass: " + ", ".join(failures))
 
 
 def main() -> int:
@@ -86,13 +96,13 @@ def main() -> int:
             value = "true" if required else "false"
             with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8", newline="\n") as output:
                 output.write(f"acceptance_required={value}\n")
-            print(f"Supplemental acceptance required: {value}")
+            print(f"Full CI execution required: {value}")
         else:
             needs = json.loads(os.environ["NEEDS_JSON"])
             if not isinstance(needs, dict):
                 raise ValueError("CI dependency results must be an object")
             require_acceptance(needs)
-            print("Supplemental acceptance matches the successful selection")
+            print("CI execution matches the successful repository checks and selection")
     except (KeyError, OSError, ValueError, subprocess.SubprocessError) as failure:
         print(f"CI acceptance gate failed: {failure}", file=sys.stderr)
         return 1
