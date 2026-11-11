@@ -187,6 +187,17 @@ class AnalysisTableRefreshDesktopTest {
     assertEquals("0.0", table.getValueAt(0, 5));
     first.winrate = 60 + offset;
     first.edgeVisits = 100;
+    for (int column : new int[] {0, 1}) {
+      header(table, 3);
+      assertEquals("C3", normalCoordinate(table, 0, 1));
+      assertEquals(0, tableLayoutRequests(table, () -> header(table, column)));
+      for (int row = 0; row < source.size(); row++) {
+        assertEquals(
+            source.get(row).coordinate,
+            normalCoordinate(table, row, 1),
+            "order and coordinate headers must restore source order without changing layout");
+      }
+    }
     frame.sortnum = -1;
     tick(frame.timer);
 
@@ -258,7 +269,9 @@ class AnalysisTableRefreshDesktopTest {
     root.setPreviousForChild(deeper);
     tick(frame.timer);
     history.setHead(deeper);
-    click(table, 0, 1);
+    assertTrue(
+        tableLayoutRequests(table, () -> click(table, 0, 1)) > 0,
+        "a stale click that refreshes fewer rows must still request layout");
     assertSame(
         LizzieFrame.outOfBoundCoordinate,
         Lizzie.frame.suggestionclick,
