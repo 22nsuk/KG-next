@@ -115,6 +115,7 @@ class RunLocalCiTest(unittest.TestCase):
                 self.assertFalse(any(arg.startswith("-Dtest=") for arg in steps[0].command))
                 self.assertIn("-DskipTests=false", steps[0].command)
                 self.assertIn("-DskipITs=false", steps[0].command)
+                self.assertNotIn("-Djacoco.skip=true", steps[0].command)
 
     def test_windows_scripts_require_native_product_fixtures(self):
         steps = run_local_ci.build_steps("windows", "mvn", None, "pwsh", "scripts")
@@ -159,176 +160,67 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertIn(script, run_local_ci.PY_COMPILE_FILES)
         self.assertIn("scripts/summarize_measured_analysis.py", run_local_ci.PY_COMPILE_FILES)
 
-    def test_desktop_plan_selects_all_required_classes(self):
-        steps = run_local_ci.build_steps("portable", "mvn", None, None, "desktop")
-
-        self.assertEqual(1, len(steps))
-        self.assertIn(
-            "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
-            steps[0].command,
+    def test_selection_preserves_whole_classes_and_parameter_invocations(self):
+        selections = {
+            "example.WholeClassTest": run_local_ci.TestSelection(("requiredCase",)),
+            "example.OptionalClassTest": run_local_ci.TestSelection(()),
+            "example.SelectedMethodsTest": run_local_ci.TestSelection((
+                "parameterized(boolean)[1]", "parameterized(boolean)[2]", "plainCase",
+            ), whole_class=False),
+        }
+        self.assertEqual(
+            "WholeClassTest,OptionalClassTest,SelectedMethodsTest#parameterized+plainCase",
+            run_local_ci.surefire_test_selection(selections),
         )
         self.assertEqual(
-            (
-                ("featurecat.lizzie.rules.ManualScoreResultTest", "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes"),
-                ("featurecat.lizzie.rules.ManualScoreResultTest", "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult"),
-                ("featurecat.lizzie.gui.AnalysisProgressDesktopTest", "progressWindowShowsGraphBeforeAnalysisCompletes"),
-                ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedThemeSavePreservesFilesAndAllowsRetry"),
-                ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedColorResetKeepsDialogOpenAndAllowsRetry"),
-                ("featurecat.lizzie.gui.SavedGameLoadDesktopTest", "failedSavedListOpensPreserveCurrentGameAndAllowRetry"),
-                ("featurecat.lizzie.gui.SavedGameSaveDesktopTest", "pendingSaveKeepsTheListResponsiveAndPublishesAfterDiskCompletion"),
-                *tuple(
-                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-                     f"editsDuringExitSaveCancelShutdownAndRetrySavesCurrentGame(String)[{invocation}]")
-                    for invocation in range(1, 6)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-                     f"explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String)[{invocation}]")
-                    for invocation in range(1, 5)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-                     f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]")
-                    for invocation in range(1, 7)
-                ),
-                ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-                 "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown"),
-                ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-                 "unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown"),
-                ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
-                ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
-                *tuple(
-                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest", method)
-                    for method in (
-                        "verifiedCompletionWritesOriginalNodeAfterCursorMoves",
-                        "followUpRetainsFrozenEvidenceAndOriginalTarget",
-                        "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
-                        "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
-                        "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
-                        "oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest",
-                        "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
-                        "disposalDropsAnAnswerAlreadyQueuedOnEdt",
-                        "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
-                        "cancelledFollowUpRestoresQuestionAndLastVerifiedAnswer",
-                        "settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork",
-                    )
-                ),
-                *tuple(
-                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
-                     f"{method}(boolean)[{invocation}]")
-                    for method in (
-                        "replacementDropsOldCompletionOrFailureAlreadyQueuedOnEdt",
-                        "deletedOrEditedTargetRejectsPendingAnswer",
-                        "rangeAndWholeGameRejectEditsOutsideSelectedEvidence",
-                    )
-                    for invocation in range(1, 3)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
-                     f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]")
-                    for invocation in range(1, 5)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.HumanSlStrengthDialogTest", method)
-                    for method in (
-                        "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
-                        "explicitSupplementReturnsFrozenAnalysisResult",
-                        "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
-                        "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
-                        "decliningOrClosingDownloadConsentPreservesHumanSelection",
-                        "downloadFailureAndCancellationPreserveHumanSelection",
-                        "cancelEscapeAndCloseRetireLateManualCompletion",
-                        "changedGameRejectsLateManualResult",
-                    )
-                ),
-                ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
-                ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
-                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
-                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
-                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmSavesStartupRulesAndClosesAfterMatchingReadback"),
-                ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot"),
-                ("featurecat.lizzie.gui.RulesQuickSwitchDesktopTest", "captionPresetsConvergeTheCurrentGameAndKeepHandicapDefaultsAndStaleMenusSafe"),
-                ("featurecat.lizzie.gui.AnalysisReadabilityDesktopTest", "nameWinratesAndMoveSummaryRemainReadableAndInteractive"),
-                *tuple(
-                    ("featurecat.lizzie.gui.AnalysisWindowLifecycleDesktopTest",
-                     f"closedWindowsReleaseTimersAndReopenCleanly(String)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.AnalysisTableRefreshDesktopTest",
-                     f"preparedRowsStayConsistentAndRefreshFromRealEvents(String)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.BlunderSidebarPersistenceDesktopTest",
-                     f"savesAndRestartsWithCurrentAndLegacyPreferences(boolean)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.StartupCommentLayoutDesktopTest",
-                     f"createsAndUpdatesCommentsOnEdt(boolean)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.StartupCommentLayoutDesktopTest",
-                     f"propagatesWindowConstructionFailureToCaller(boolean)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                ("featurecat.lizzie.gui.SgfMarkupEditingDesktopTest", "editsMarksWithoutSplittingLabelsOrRemovingOtherSgfProperties"),
-                *tuple(
-                    ("featurecat.lizzie.gui.ToolbarSettingsDesktopTest",
-                     f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]")
-                    for invocation in range(1, 4)
-                ),
-                *tuple(
-                    ("featurecat.lizzie.gui.BenchmarkMeasurementDesktopTest",
-                     f"resultCardsKeepMeasuredSettingsAndRecommendationStatusVisible(String)[{invocation}]")
-                    for invocation in range(1, 3)
-                ),
-                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "threadCheckboxReceivesMouseAtEverySupportedFontSize"),
-                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft"),
-                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange"),
-                ("featurecat.lizzie.gui.SetKataEnginesHitTest", "dedicatedPdaControlsRemainReadableAndReachableAtEverySupportedFontSize"),
-                *tuple(
-                    (
-                        "featurecat.lizzie.gui.SetKataEnginesHitTest",
-                        f"dedicatedPdaRejectsInvalidDraftsBeforeChangingPreferencesOrEngine(boolean)[{case}]",
-                    )
-                    for case in range(1, 3)
-                ),
-                ("featurecat.lizzie.gui.FunctionSearchInputTest", "koreanInputChain"),
-                ("featurecat.lizzie.gui.MessageThemeTest", "localizedMessagesFitTheirContentAndEscapeClosesTheModalAtEveryFontSize"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "koreanFieldsHaveDistinctLabelsAndSupportTabEnterAndEscape"),
-                ("featurecat.lizzie.gui.NewEngineGameParametersDesktopTest", "openingDialogRejectsInvalidDraftsThenPersistsAndCapturesPositions"),
-                ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused"),
-                ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuHidesThePanelOutsideAnAnalysisGame"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWaitsForEveryConfirmationWithoutChangingThePanelThenCloses"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "failureKeepsThePanelOpenAndASuccessfulRetryClosesIt"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "repeatedOkCannotDismissAnUnconfirmedRequestOrHideItsFailure"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWithoutEditsAndEscCloseWithoutSendingAndDropTheDraft"),
-                ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "panelShrinksBackAfterATemporaryLabelUnlessTheUserResizedIt"),
-                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
-                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
-                ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
-                (
-                    "featurecat.lizzie.gui.FunctionSearchNavigationTest",
-                    "navigationPreservesRealStateAcrossNativeAndCustomMenus",
-                ),
-                (
-                    "featurecat.lizzie.gui.ConfigDialog2NavigationTest",
-                    "blackWinrateRemainsReachableAcrossRebuildsAndRecreation",
-                ),
-
-                ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
-                ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
-                ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
-                ("featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest", "opensAndNavigatesSgfBeforeAnyEngineHasStarted"),
-                ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
-                ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
-            ),
-            run_local_ci.DESKTOP_REQUIRED_TESTS,
+            (("example.WholeClassTest", "requiredCase"),
+             ("example.SelectedMethodsTest", "parameterized(boolean)[1]"),
+             ("example.SelectedMethodsTest", "parameterized(boolean)[2]"),
+             ("example.SelectedMethodsTest", "plainCase")),
+            run_local_ci.required_test_cases(selections),
         )
+        with self.assertRaisesRegex(ValueError, "at least one case"):
+            run_local_ci.surefire_test_selection({
+                "example.EmptyTest": run_local_ci.TestSelection((), whole_class=False),
+            })
+
+    def test_display_plans_select_every_required_case_without_unused_coverage(self):
+        for group, profile, required in (
+            ("desktop", "portable", run_local_ci.DESKTOP_REQUIRED_TESTS),
+            ("desktop-races", "portable", run_local_ci.DESKTOP_RACE_REQUIRED_TESTS),
+            ("engine-process", "portable", run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS),
+            ("tensorrt-ui", "windows", run_local_ci.TENSORRT_UI_REQUIRED_TESTS),
+        ):
+            with self.subTest(group=group):
+                step, = run_local_ci.build_steps(profile, "mvn", None, None, group)
+                selector = next(arg.removeprefix("-Dtest=") for arg in step.command
+                                if arg.startswith("-Dtest="))
+                selected = {item.partition("#")[0]: item.partition("#")[2].split("+")
+                            if "#" in item else [] for item in selector.split(",")}
+                for classname, case in required:
+                    methods = selected[classname.rsplit(".", 1)[-1]]
+                    self.assertTrue(not methods or case.split("(", 1)[0] in methods,
+                                    (classname, case))
+                self.assertEqual(len(required), len(set(required)))
+                self.assertIn("-Djacoco.skip=true", step.command)
+                self.assertIn("-Dlizzie.desktop.required=true", step.command)
+                self.assertEqual("test", step.command[-1])
+
+    def test_desktop_plan_preserves_whole_classes_and_overwrite_dialog_selection(self):
+        step, = run_local_ci.build_steps("portable", "mvn", None, None, "desktop")
+        selector = next(arg.removeprefix("-Dtest=") for arg in step.command
+                        if arg.startswith("-Dtest="))
+        selected = selector.split(",")
+        self.assertEqual(36, len(selected))
+        self.assertEqual(107, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertEqual(
+            ["AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+"
+             "decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame"],
+            [item for item in selected if "#" in item],
+        )
+        # These whole classes include cases outside the required-success list.
+        self.assertIn("SetKataPDAParameterTest", selected)
+        self.assertIn("MessageThemeTest", selected)
 
     def test_desktop_races_select_all_required_invocations_without_full_suite_repeats(self):
         step, = run_local_ci.build_steps("portable", "mvn", None, None, "desktop-races")
@@ -359,29 +251,20 @@ class RunLocalCiTest(unittest.TestCase):
             step.command,
         )
 
-    def test_engine_process_plan_selects_exact_required_methods(self):
-        steps = run_local_ci.build_steps(
-            "portable", "mvn", None, None, "engine-process"
-        )
-
-        self.assertEqual(1, len(steps))
-        self.assertIn(
-            "-Dtest=EngineProcessSmokeTest#restoresSnapshotAnalyzesAndQuits,"
-            "EngineProcessFailureTest#rejectsSnapshotErrorWithoutTailOrAnalysis+"
-            "retiresSnapshotTimeoutAndRejectsLateResponse+recoversSnapshotAfterPeerCrash+"
-            "isolatesLateOutputAfterEngineSwitch+drainsPeerPipeBurstAndRemainsResponsive+"
-            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest,ContributeSshShutdownDesktopTest",
-            steps[0].command,
+    def test_engine_process_plan_keeps_partial_engine_and_whole_contribution_classes(self):
+        step, = run_local_ci.build_steps("portable", "mvn", None, None, "engine-process")
+        selector = next(arg.removeprefix("-Dtest=") for arg in step.command
+                        if arg.startswith("-Dtest="))
+        selected = selector.split(",")
+        self.assertEqual(7, len(selected))
+        self.assertEqual(
+            {"EngineProcessSmokeTest", "EngineProcessFailureTest"},
+            {item.partition("#")[0] for item in selected if "#" in item},
         )
         self.assertIn(
             "-Dsurefire.reportsDirectory="
-            + str(
-                run_local_ci.REPO_ROOT
-                / "target"
-                / "engine-process-smoke"
-                / "surefire-reports"
-            ),
-            steps[0].command,
+            + str(run_local_ci.REPO_ROOT / "target/engine-process-smoke/surefire-reports"),
+            step.command,
         )
         self.assertEqual(23, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
 
@@ -798,8 +681,12 @@ class RunLocalCiTest(unittest.TestCase):
             stale = desktop_reports / "TEST-stale.xml"
             stale.write_text('<testsuite tests="1"><testcase classname="stale" name="stale"/></testsuite>')
 
-            *navigation, config, chinese, english, offline, winrate, variation, invalidation = run_local_ci.DESKTOP_REQUIRED_TESTS
-            passed_navigation = [(case, "") for case in navigation]
+            required = run_local_ci.DESKTOP_REQUIRED_TESTS
+            winrate = (
+                "featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest",
+                "opensAndNavigatesSgfBeforeAnyEngineHasStarted",
+            )
+            self.assertIn(winrate, required)
 
             def suite_xml(*cases: tuple[tuple[str, str], str]) -> str:
                 testcases = "".join(
@@ -836,7 +723,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertFalse(stale.exists())
 
                 missing_winrate = suite_xml(
-                    *passed_navigation, (config, ""), (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
+                    *((case, "") for case in required if case != winrate),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(missing_winrate)):
                     self.assertEqual(1, run_local_ci.run(args))
@@ -846,8 +733,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(0, summary["junit"]["skipped"])
 
                 skipped_winrate = suite_xml(
-                    *passed_navigation, (config, ""), (winrate, "<skipped/>"),
-                    (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
+                    *((case, "<skipped/>" if case == winrate else "") for case in required),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(skipped_winrate)):
                     self.assertEqual(1, run_local_ci.run(args))
@@ -857,8 +743,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(1, summary["junit"]["skipped"])
 
                 pass_xml = suite_xml(
-                    *passed_navigation, (config, ""), (winrate, ""),
-                    (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
+                    *((case, "") for case in required),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(pass_xml)):
                     self.assertEqual(0, run_local_ci.run(args))
@@ -866,7 +751,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual("PASS", summary["result"])
                     self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS), summary["junit"]["tests"])
 
-                for missing in (*navigation, offline, variation, invalidation):
+                for missing in required:
                     incomplete = suite_xml(
                         *((case, "") for case in run_local_ci.DESKTOP_REQUIRED_TESTS
                           if case != missing)

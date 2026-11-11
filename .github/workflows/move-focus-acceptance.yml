@@ -62,7 +62,7 @@ jobs:
         shell: pwsh
         run: |
           $model = "$env:GITHUB_WORKSPACE/upstream-katago/cpp/tests/models/g170-b6c96-s175395328-d26788732.bin.gz"
-          mvn -B '-Dfmt.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dlizzie.focus.acceptance=true' "-Dlizzie.focus.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.focus.model=$model" '-Dlizzie.acceptance.engineGameParameters=true' "-Dlizzie.acceptance.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.acceptance.model=$model" '-Dtest=MoveFocusNativeAcceptanceIT,EngineGameParametersAcceptanceIT' test
+          mvn -B '-Dfmt.skip=true' '-Djacoco.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dlizzie.focus.acceptance=true' "-Dlizzie.focus.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.focus.model=$model" '-Dlizzie.acceptance.engineGameParameters=true' "-Dlizzie.acceptance.engine=$env:RUNNER_TEMP/focus-engine/katago.exe" "-Dlizzie.acceptance.model=$model" '-Dtest=MoveFocusNativeAcceptanceIT,EngineGameParametersAcceptanceIT' test
           if ($LASTEXITCODE -ne 0) { throw 'Native engine acceptance failed' }
           [xml]$report = Get-Content 'target/surefire-reports/TEST-featurecat.lizzie.gui.MoveFocusNativeAcceptanceIT.xml'
           if ([int]$report.testsuite.tests -ne 1 -or [int]$report.testsuite.failures -ne 0 -or [int]$report.testsuite.errors -ne 0 -or [int]$report.testsuite.skipped -ne 0) {
