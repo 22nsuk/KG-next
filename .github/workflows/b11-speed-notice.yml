@@ -25,7 +25,7 @@ jobs:
       - name: Check actual Swing windows at four scales and all supported locales
         shell: pwsh
         run: |
-          mvn -B '-Dfmt.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dtest=B11SpeedNoticeDesktopTest,B11SpeedNoticePanelTest' test
+          mvn -B '-Dfmt.skip=true' '-Djacoco.skip=true' '-Djava.awt.headless=false' '-Dlizzie.desktop.required=true' '-Dtest=B11SpeedNoticeDesktopTest,B11SpeedNoticePanelTest' test
           if ($LASTEXITCODE -ne 0) { throw 'B11 window acceptance failed' }
           [xml]$report = Get-Content 'target/surefire-reports/TEST-featurecat.lizzie.gui.B11SpeedNoticeDesktopTest.xml'
           if ([int]$report.testsuite.tests -ne 4 -or [int]$report.testsuite.failures -ne 0 -or [int]$report.testsuite.errors -ne 0 -or [int]$report.testsuite.skipped -ne 0) {

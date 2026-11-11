@@ -121,6 +121,10 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `desktop-races` | 48 个 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
+显示测试的类选择和强制成功用例在 `scripts/run_local_ci.py` 中按类统一声明；
+`whole_class` 保留整类执行（包括未列为强制成功的其他用例），部分方法选择由强制用例名生成。
+参数化用例的每次 invocation 仍分别核验；`DESKTOP_RACE_METHODS` 单独决定需要追加重复的边界。
+
 例如仅运行无 Java 的仓库检查：
 
 ```bash
@@ -282,7 +286,10 @@ Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）、main push 和 mer
 Linux/Xvfb 与原生 Windows 两个 matrix leg。
 Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘要独立上传。
 两平台 Java job 保留全量测试、`LoggingProviderSmokeIT`、shaded JAR 和 JaCoCo；
-验证成功但 coverage artifact 缺失仍失败。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
+验证成功但 coverage artifact 缺失仍失败。单独执行的 desktop/races、engine-process、
+analysis-provenance、Fox、B11、native move-focus 和 `run_acceptance.py` UI/实引擎验收只保留
+JUnit/探针证据，不生成或合并 coverage 报告，因此这些 Maven 调用显式设置 `-Djacoco.skip=true`；
+TensorRT UI 也沿用这一设置。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
 `ci-required` 要求上述八项、`engine-process` matrix 及选中的 Fox/B11/native Windows/SGF-CPU 补充检查成功。

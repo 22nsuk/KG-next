@@ -29,163 +29,236 @@ WINDOWS_JAVA_REQUIRED_TESTS = (
     ("featurecat.lizzie.analysis.remote.PlatformCredentialStoreTest",
      "windowsDpapiRoundTripsAcrossRealNativeCalls"),
 )
-DESKTOP_REQUIRED_TESTS = (
-    ("featurecat.lizzie.rules.ManualScoreResultTest", "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes"),
-    ("featurecat.lizzie.rules.ManualScoreResultTest", "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult"),
-    ("featurecat.lizzie.gui.AnalysisProgressDesktopTest", "progressWindowShowsGraphBeforeAnalysisCompletes"),
-    ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedThemeSavePreservesFilesAndAllowsRetry"),
-    ("featurecat.lizzie.gui.ThemeSaveDesktopTest", "failedColorResetKeepsDialogOpenAndAllowsRetry"),
-    ("featurecat.lizzie.gui.SavedGameLoadDesktopTest", "failedSavedListOpensPreserveCurrentGameAndAllowRetry"),
-    ("featurecat.lizzie.gui.SavedGameSaveDesktopTest", "pendingSaveKeepsTheListResponsiveAndPublishesAfterDiskCompletion"),
-    *tuple(
-        ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-         f"editsDuringExitSaveCancelShutdownAndRetrySavesCurrentGame(String)[{invocation}]")
-        for invocation in range(1, 6)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-         f"explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String)[{invocation}]")
-        for invocation in range(1, 5)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-         f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]")
-        for invocation in range(1, 7)
-    ),
-    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-     "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown"),
-    ("featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest",
-     "unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown"),
-    ("featurecat.lizzie.gui.EngineGameSaveDesktopTest", "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire"),
-    ("featurecat.lizzie.gui.OfficialStrongestModelDesktopTest", "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile"),
-    *tuple(
-        ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest", method)
-        for method in (
-            "verifiedCompletionWritesOriginalNodeAfterCursorMoves",
-            "followUpRetainsFrozenEvidenceAndOriginalTarget",
-            "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
-            "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
-            "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
-            "oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest",
-            "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
-            "disposalDropsAnAnswerAlreadyQueuedOnEdt",
-            "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
-            "cancelledFollowUpRestoresQuestionAndLastVerifiedAnswer",
-            "settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork",
-        )
-    ),
-    *tuple(
-        ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
-         f"{method}(boolean)[{invocation}]")
-        for method in (
-            "replacementDropsOldCompletionOrFailureAlreadyQueuedOnEdt",
-            "deletedOrEditedTargetRejectsPendingAnswer",
-            "rangeAndWholeGameRejectEditsOutsideSelectedEvidence",
-        )
-        for invocation in range(1, 3)
-    ),
-    *tuple(
-        ("featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest",
-         f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]")
-        for invocation in range(1, 5)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.HumanSlStrengthDialogTest", method)
-        for method in (
-            "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
-            "explicitSupplementReturnsFrozenAnalysisResult",
-            "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
-            "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
-            "decliningOrClosingDownloadConsentPreservesHumanSelection",
-            "downloadFailureAndCancellationPreserveHumanSelection",
-            "cancelEscapeAndCloseRetireLateManualCompletion",
-            "changedGameRejectsLateManualResult",
-        )
-    ),
-    ("featurecat.lizzie.gui.VariationPreviewVisibilityTest", "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages"),
-    ("featurecat.lizzie.gui.RulesDialogLayoutTest", "bothEditorsFitTranslationsAndFontSizes"),
-    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields"),
-    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass"),
-    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmSavesStartupRulesAndClosesAfterMatchingReadback"),
-    ("featurecat.lizzie.gui.SetKataRulesWindowTest", "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot"),
-    ("featurecat.lizzie.gui.RulesQuickSwitchDesktopTest", "captionPresetsConvergeTheCurrentGameAndKeepHandicapDefaultsAndStaleMenusSafe"),
-    ("featurecat.lizzie.gui.AnalysisReadabilityDesktopTest", "nameWinratesAndMoveSummaryRemainReadableAndInteractive"),
-    *tuple(
-        ("featurecat.lizzie.gui.AnalysisWindowLifecycleDesktopTest",
-         f"closedWindowsReleaseTimersAndReopenCleanly(String)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.AnalysisTableRefreshDesktopTest",
-         f"preparedRowsStayConsistentAndRefreshFromRealEvents(String)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.BlunderSidebarPersistenceDesktopTest",
-         f"savesAndRestartsWithCurrentAndLegacyPreferences(boolean)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.StartupCommentLayoutDesktopTest",
-         f"createsAndUpdatesCommentsOnEdt(boolean)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.StartupCommentLayoutDesktopTest",
-         f"propagatesWindowConstructionFailureToCaller(boolean)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    ("featurecat.lizzie.gui.SgfMarkupEditingDesktopTest", "editsMarksWithoutSplittingLabelsOrRemovingOtherSgfProperties"),
-    *tuple(
-        ("featurecat.lizzie.gui.ToolbarSettingsDesktopTest",
-         f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]")
-        for invocation in range(1, 4)
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.BenchmarkMeasurementDesktopTest",
-         f"resultCardsKeepMeasuredSettingsAndRecommendationStatusVisible(String)[{invocation}]")
-        for invocation in range(1, 3)
-    ),
-    ("featurecat.lizzie.gui.SetKataEnginesHitTest", "threadCheckboxReceivesMouseAtEverySupportedFontSize"),
-    ("featurecat.lizzie.gui.SetKataEnginesHitTest", "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft"),
-    ("featurecat.lizzie.gui.SetKataEnginesHitTest", "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange"),
-    ("featurecat.lizzie.gui.SetKataEnginesHitTest", "dedicatedPdaControlsRemainReadableAndReachableAtEverySupportedFontSize"),
-    *tuple(
-        (
-            "featurecat.lizzie.gui.SetKataEnginesHitTest",
-            f"dedicatedPdaRejectsInvalidDraftsBeforeChangingPreferencesOrEngine(boolean)[{case}]",
-        )
-        for case in range(1, 3)
-    ),
-    ("featurecat.lizzie.gui.FunctionSearchInputTest", "koreanInputChain"),
-    ("featurecat.lizzie.gui.MessageThemeTest", "localizedMessagesFitTheirContentAndEscapeClosesTheModalAtEveryFontSize"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "koreanFieldsHaveDistinctLabelsAndSupportTabEnterAndEscape"),
-    ("featurecat.lizzie.gui.NewEngineGameParametersDesktopTest", "openingDialogRejectsInvalidDraftsThenPersistsAndCapturesPositions"),
-    ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused"),
-    ("featurecat.lizzie.gui.EngineGameParameterControlsTest", "gameMenuHidesThePanelOutsideAnAnalysisGame"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWaitsForEveryConfirmationWithoutChangingThePanelThenCloses"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "failureKeepsThePanelOpenAndASuccessfulRetryClosesIt"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "repeatedOkCannotDismissAnUnconfirmedRequestOrHideItsFailure"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "okWithoutEditsAndEscCloseWithoutSendingAndDropTheDraft"),
-    ("featurecat.lizzie.gui.EngineGameParametersDialogTest", "panelShrinksBackAfterATemporaryLabelUnlessTheUserResizedIt"),
-    ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
-    ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
-    ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
-    (
-        "featurecat.lizzie.gui.FunctionSearchNavigationTest",
+
+
+@dataclass(frozen=True)
+class TestSelection:
+    required_cases: tuple[str, ...]
+    whole_class: bool = True
+
+
+def required_test_cases(selections: Mapping[str, TestSelection]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (classname, case)
+        for classname, selection in selections.items()
+        for case in selection.required_cases
+    )
+
+
+def surefire_test_selection(selections: Mapping[str, TestSelection]) -> str:
+    selectors = []
+    for classname, selection in selections.items():
+        selector = classname.rsplit(".", 1)[-1]
+        if not selection.whole_class:
+            methods = dict.fromkeys(case.split("(", 1)[0] for case in selection.required_cases)
+            if not methods:
+                raise ValueError(f"Method selection requires at least one case: {classname}")
+            selector += "#" + "+".join(methods)
+        selectors.append(selector)
+    return ",".join(selectors)
+
+
+# Declare each selected class once. Whole-class selections also run non-required cases;
+# method selections derive their Maven selector from the required invocation names.
+DESKTOP_TESTS = {
+    "featurecat.lizzie.rules.ManualScoreResultTest": TestSelection((
+        "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes",
+        "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult",
+    )),
+    "featurecat.lizzie.gui.FunctionSearchNavigationTest": TestSelection((
         "navigationPreservesRealStateAcrossNativeAndCustomMenus",
-    ),
-    (
-        "featurecat.lizzie.gui.ConfigDialog2NavigationTest",
+    )),
+    "featurecat.lizzie.gui.ConfigDialog2NavigationTest": TestSelection((
         "blackWinrateRemainsReachableAcrossRebuildsAndRecreation",
-    ),
-    ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
-    ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
-    ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
-    ("featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest", "opensAndNavigatesSgfBeforeAnyEngineHasStarted"),
-    ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
-    ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
-)
+    )),
+    "featurecat.lizzie.gui.FunctionSearchInputTest": TestSelection((
+        "koreanInputChain",
+        "chineseInputChain",
+        "englishInputChain",
+    )),
+    "featurecat.lizzie.gui.OfflineBoardAcceptanceTest": TestSelection((
+        "editsAndImportsWithNoEngine",
+    )),
+    "featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest": TestSelection((
+        "opensAndNavigatesSgfBeforeAnyEngineHasStarted",
+    )),
+    "featurecat.lizzie.gui.VariationTreePublicationTest": TestSelection((
+        "onlyCurrentTreeCanPublish",
+    )),
+    "featurecat.lizzie.gui.VariationTreeInvalidationTest": TestSelection((
+        "branchReorderAndLiveFirstSyncRespectCurrentTree",
+    )),
+    "featurecat.lizzie.rules.AutomaticSaveSafetyTest": TestSelection((
+        "closingOverwriteDialogPreservesSavedGame",
+        "decliningOverwritePreservesSavedGame",
+        "confirmingOverwriteReplacesSavedGame",
+    ), whole_class=False),
+    "featurecat.lizzie.gui.SetKataRulesWindowTest": TestSelection((
+        "unchangedTerritoryRulesRoundTripWithoutRewritingHiddenFields",
+        "presetButtonsComposeExactPresetsAndTerritoryLocksFriendlyPass",
+        "confirmSavesStartupRulesAndClosesAfterMatchingReadback",
+        "confirmClosesWhenTheOperationCompletesAfterItsConfirmedSnapshot",
+    )),
+    "featurecat.lizzie.gui.RulesQuickSwitchDesktopTest": TestSelection((
+        "captionPresetsConvergeTheCurrentGameAndKeepHandicapDefaultsAndStaleMenusSafe",
+    )),
+    "featurecat.lizzie.gui.AnalysisReadabilityDesktopTest": TestSelection((
+        "nameWinratesAndMoveSummaryRemainReadableAndInteractive",
+    )),
+    "featurecat.lizzie.gui.AnalysisWindowLifecycleDesktopTest": TestSelection((
+        *tuple(
+            f"closedWindowsReleaseTimersAndReopenCleanly(String)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.AnalysisTableRefreshDesktopTest": TestSelection((
+        *tuple(
+            f"preparedRowsStayConsistentAndRefreshFromRealEvents(String)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.BlunderSidebarPersistenceDesktopTest": TestSelection((
+        *tuple(
+            f"savesAndRestartsWithCurrentAndLegacyPreferences(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.StartupCommentLayoutDesktopTest": TestSelection((
+        *tuple(
+            f"createsAndUpdatesCommentsOnEdt(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"propagatesWindowConstructionFailureToCaller(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.SgfMarkupEditingDesktopTest": TestSelection((
+        "editsMarksWithoutSplittingLabelsOrRemovingOtherSgfProperties",
+    )),
+    "featurecat.lizzie.gui.ToolbarSettingsDesktopTest": TestSelection((
+        *tuple(
+            f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]"
+            for invocation in range(1, 4)
+        ),
+    )),
+    "featurecat.lizzie.gui.BenchmarkMeasurementDesktopTest": TestSelection((
+        *tuple(
+            f"resultCardsKeepMeasuredSettingsAndRecommendationStatusVisible(String)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.SetKataEnginesHitTest": TestSelection((
+        "threadCheckboxReceivesMouseAtEverySupportedFontSize",
+        "acknowledgedOverrideReopensCheckedAndLateQueryKeepsDraft",
+        "autoloadSelectedDraftsStayUneditedWhenOnlyThreadsChange",
+        "dedicatedPdaControlsRemainReadableAndReachableAtEverySupportedFontSize",
+        *tuple(
+            f"dedicatedPdaRejectsInvalidDraftsBeforeChangingPreferencesOrEngine(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+    )),
+    "featurecat.lizzie.gui.SetKataPDAParameterTest": TestSelection(()),
+    "featurecat.lizzie.gui.RulesDialogLayoutTest": TestSelection((
+        "bothEditorsFitTranslationsAndFontSizes",
+    )),
+    "featurecat.lizzie.gui.VariationPreviewVisibilityTest": TestSelection((
+        "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages",
+    )),
+    "featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest": TestSelection((
+        "verifiedCompletionWritesOriginalNodeAfterCursorMoves",
+        "followUpRetainsFrozenEvidenceAndOriginalTarget",
+        "savedCommentaryFollowUpUsesSavedNodeAfterNavigation",
+        "ungroundedDraftIsNeverDisplayedOrSavedDuringCorrection",
+        "oversizedCommentPreservesSgfAndAllowsAnotherRequest",
+        "oversizedTransportReplyPreservesSgfAndAllowsAnotherRequest",
+        "cancellationDropsAnAnswerAlreadyQueuedOnEdt",
+        "disposalDropsAnAnswerAlreadyQueuedOnEdt",
+        "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
+        "cancelledFollowUpRestoresQuestionAndLastVerifiedAnswer",
+        "settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork",
+        *tuple(
+            f"replacementDropsOldCompletionOrFailureAlreadyQueuedOnEdt(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"deletedOrEditedTargetRejectsPendingAnswer(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"rangeAndWholeGameRejectEditsOutsideSelectedEvidence(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"recordedContinuationOrRecentHistoryChangeRejectsPendingAnswer(RecordedChange)[{invocation}]"
+            for invocation in range(1, 5)
+        ),
+    )),
+    "featurecat.lizzie.gui.OfficialStrongestModelDesktopTest": TestSelection((
+        "refreshedStrongestIsOptionalAndNeverReplacesTheActiveUserProfile",
+    )),
+    "featurecat.lizzie.gui.HumanSlStrengthDialogTest": TestSelection((
+        "modelSelectionIsManualAndBackgroundPreferenceSurvivesRestart",
+        "explicitSupplementReturnsFrozenAnalysisResult",
+        "manualSupplementPreservesCustomHumanSelectionWhenInstallingOrReusingFixedModel",
+        "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
+        "decliningOrClosingDownloadConsentPreservesHumanSelection",
+        "downloadFailureAndCancellationPreserveHumanSelection",
+        "cancelEscapeAndCloseRetireLateManualCompletion",
+        "changedGameRejectsLateManualResult",
+    )),
+    "featurecat.lizzie.gui.SavedGameLoadDesktopTest": TestSelection((
+        "failedSavedListOpensPreserveCurrentGameAndAllowRetry",
+    )),
+    "featurecat.lizzie.gui.SavedGameSaveDesktopTest": TestSelection((
+        "pendingSaveKeepsTheListResponsiveAndPublishesAfterDiskCompletion",
+    )),
+    "featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest": TestSelection((
+        *tuple(
+            f"editsDuringExitSaveCancelShutdownAndRetrySavesCurrentGame(String)[{invocation}]"
+            for invocation in range(1, 6)
+        ),
+        *tuple(
+            f"explicitAnalysisInvalidationDuringExitSaveCancelsShutdown(String)[{invocation}]"
+            for invocation in range(1, 5)
+        ),
+        *tuple(
+            f"ordinaryAnalysisUpdatesDuringExitSaveDoNotCancelShutdown(String)[{invocation}]"
+            for invocation in range(1, 7)
+        ),
+        "commentEditOverlappingAnalysisDuringExitSaveCancelsShutdown",
+        "unchangedCommentEditorAfterAnalysisUpdateDoesNotCancelShutdown",
+    )),
+    "featurecat.lizzie.gui.EngineGameSaveDesktopTest": TestSelection((
+        "failedSaveKeepsKoreanRetryAndStopReachableAfterEnginesRetire",
+    )),
+    "featurecat.lizzie.gui.ThemeSaveDesktopTest": TestSelection((
+        "failedThemeSavePreservesFilesAndAllowsRetry",
+        "failedColorResetKeepsDialogOpenAndAllowsRetry",
+    )),
+    "featurecat.lizzie.gui.AnalysisProgressDesktopTest": TestSelection((
+        "progressWindowShowsGraphBeforeAnalysisCompletes",
+    )),
+    "featurecat.lizzie.gui.EngineGameParameterControlsTest": TestSelection((
+        "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused",
+        "gameMenuHidesThePanelOutsideAnAnalysisGame",
+    )),
+    "featurecat.lizzie.gui.EngineGameParametersDialogTest": TestSelection((
+        "koreanFieldsHaveDistinctLabelsAndSupportTabEnterAndEscape",
+        "okWaitsForEveryConfirmationWithoutChangingThePanelThenCloses",
+        "failureKeepsThePanelOpenAndASuccessfulRetryClosesIt",
+        "repeatedOkCannotDismissAnUnconfirmedRequestOrHideItsFailure",
+        "okWithoutEditsAndEscCloseWithoutSendingAndDropTheDraft",
+        "panelShrinksBackAfterATemporaryLabelUnlessTheUserResizedIt",
+    )),
+    "featurecat.lizzie.gui.NewEngineGameParametersDesktopTest": TestSelection((
+        "openingDialogRejectsInvalidDraftsThenPersistsAndCapturesPositions",
+    )),
+    "featurecat.lizzie.gui.MessageThemeTest": TestSelection((
+        "localizedMessagesFitTheirContentAndEscapeClosesTheModalAtEveryFontSize",
+    )),
+}
+
 # Repeat actual worker/EDT and window-lifecycle boundaries after the full desktop pass.
 # Empty method tuples select the whole class; parameter invocations remain individually required.
 DESKTOP_RACE_METHODS = {
@@ -202,81 +275,67 @@ DESKTOP_RACE_METHODS = {
         "changedGameRejectsLateManualResult",
     ),
 }
-DESKTOP_RACE_REQUIRED_TESTS = tuple(
-    (classname, name) for classname, name in DESKTOP_REQUIRED_TESTS
-    if classname in DESKTOP_RACE_METHODS
-    and (not DESKTOP_RACE_METHODS[classname]
-         or name.split("(", 1)[0] in DESKTOP_RACE_METHODS[classname])
-)
-ENGINE_PROCESS_REQUIRED_TESTS = (
-    ("featurecat.lizzie.gui.ContributeSshShutdownDesktopTest", "stopsRemoteChildrenOnUserStopFatalErrorAndRetry"),
-    ("featurecat.lizzie.gui.ContributeSavedEngineSelectionDesktopTest", "selectSavedEngineSaveReloadAndStartContribution"),
-    *tuple(
-        ("featurecat.lizzie.gui.ContributeStartupDesktopTest", method)
-        for method in (
-            "serverRejectionUsesOneLaunchAndRetainsFailure",
-            "outputOrderingReadinessAndRetryBudget",
-            "stderrEofKeepsProcessAliveUntilExitOrFatalError",
-            "stopRestartAndValidGameDisplay",
-            "permanentOutputSurvivesPausedEdt",
-            "normalExitSurvivesPausedEdtWithoutMaskingFailures",
-            "queuedGamesSurviveCleanExitButNotReplacement",
-            "modalNotificationsDoNotBlockDrainOrStopReplacement",
-        )
-    ),
-    *tuple(
-        ("featurecat.lizzie.gui.ContributionLocalClearDesktopTest",
-         f"contributionClearsLocallyAndHonorsRealOccupancy(String)[{invocation}]")
-        for invocation in range(1, 4)
-    ),
-    *tuple(
-        ("featurecat.lizzie.analysis.ContributeCertificateRecoveryTest", method)
-        for method in (
-            "remoteCommandsNeverAcquireClientCertificatePaths",
-            "pureCommandsRemainUserOwned",
-            "localRecoveryUsesCertificateBesideExecutable",
-        )
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessSmokeTest",
-        "restoresSnapshotAnalyzesAndQuits",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "rejectsSnapshotErrorWithoutTailOrAnalysis",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "retiresSnapshotTimeoutAndRejectsLateResponse",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "recoversSnapshotAfterPeerCrash",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "isolatesLateOutputAfterEngineSwitch",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "drainsPeerPipeBurstAndRemainsResponsive",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessFailureTest",
-        "cleansUpPeerThatRefusesQuit",
-    ),
-)
-TENSORRT_UI_REQUIRED_TESTS = (
-    (
-        "featurecat.lizzie.gui.TensorRtRepairAcceptanceTest",
-        "englishRepairFlow",
-    ),
-    (
-        "featurecat.lizzie.gui.TensorRtRepairAcceptanceTest",
-        "chineseRepairFlow",
-    ),
-)
+DESKTOP_RACE_TESTS = {
+    classname: TestSelection(
+        tuple(case for case in DESKTOP_TESTS[classname].required_cases
+              if not methods or case.split("(", 1)[0] in methods),
+        whole_class=not methods,
+    )
+    for classname, methods in DESKTOP_RACE_METHODS.items()
+}
 
+ENGINE_PROCESS_TESTS = {
+    "featurecat.lizzie.gui.EngineProcessSmokeTest": TestSelection((
+        "restoresSnapshotAnalyzesAndQuits",
+    ), whole_class=False),
+    "featurecat.lizzie.gui.EngineProcessFailureTest": TestSelection((
+        "rejectsSnapshotErrorWithoutTailOrAnalysis",
+        "retiresSnapshotTimeoutAndRejectsLateResponse",
+        "recoversSnapshotAfterPeerCrash",
+        "isolatesLateOutputAfterEngineSwitch",
+        "drainsPeerPipeBurstAndRemainsResponsive",
+        "cleansUpPeerThatRefusesQuit",
+    ), whole_class=False),
+    "featurecat.lizzie.gui.ContributeStartupDesktopTest": TestSelection((
+        "serverRejectionUsesOneLaunchAndRetainsFailure",
+        "outputOrderingReadinessAndRetryBudget",
+        "stderrEofKeepsProcessAliveUntilExitOrFatalError",
+        "stopRestartAndValidGameDisplay",
+        "permanentOutputSurvivesPausedEdt",
+        "normalExitSurvivesPausedEdtWithoutMaskingFailures",
+        "queuedGamesSurviveCleanExitButNotReplacement",
+        "modalNotificationsDoNotBlockDrainOrStopReplacement",
+    )),
+    "featurecat.lizzie.gui.ContributionLocalClearDesktopTest": TestSelection((
+        *tuple(
+            f"contributionClearsLocallyAndHonorsRealOccupancy(String)[{invocation}]"
+            for invocation in range(1, 4)
+        ),
+    )),
+    "featurecat.lizzie.analysis.ContributeCertificateRecoveryTest": TestSelection((
+        "remoteCommandsNeverAcquireClientCertificatePaths",
+        "pureCommandsRemainUserOwned",
+        "localRecoveryUsesCertificateBesideExecutable",
+    )),
+    "featurecat.lizzie.gui.ContributeSavedEngineSelectionDesktopTest": TestSelection((
+        "selectSavedEngineSaveReloadAndStartContribution",
+    )),
+    "featurecat.lizzie.gui.ContributeSshShutdownDesktopTest": TestSelection((
+        "stopsRemoteChildrenOnUserStopFatalErrorAndRetry",
+    )),
+}
+
+TENSORRT_UI_TESTS = {
+    "featurecat.lizzie.gui.TensorRtRepairAcceptanceTest": TestSelection((
+        "englishRepairFlow",
+        "chineseRepairFlow",
+    ), whole_class=False),
+}
+
+DESKTOP_REQUIRED_TESTS = required_test_cases(DESKTOP_TESTS)
+DESKTOP_RACE_REQUIRED_TESTS = required_test_cases(DESKTOP_RACE_TESTS)
+ENGINE_PROCESS_REQUIRED_TESTS = required_test_cases(ENGINE_PROCESS_TESTS)
+TENSORRT_UI_REQUIRED_TESTS = required_test_cases(TENSORRT_UI_TESTS)
 
 
 PY_COMPILE_FILES = (
@@ -739,7 +798,7 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=TensorRtRepairAcceptanceTest#englishRepairFlow+chineseRepairFlow",
+                    f"-Dtest={surefire_test_selection(TENSORRT_UI_TESTS)}",
                     "test",
                 ),
                 group="tensorrt-ui",
@@ -748,13 +807,10 @@ def build_steps(
 
     if group in {"desktop", "desktop-races"}:
         report_root = REPO_ROOT / "target" / "desktop-smoke"
-        test_selection = "ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest"
+        selections = DESKTOP_TESTS
         if group == "desktop-races":
             report_root /= "races"
-            test_selection = ",".join(
-                classname.rsplit(".", 1)[-1] + ("#" + "+".join(methods) if methods else "")
-                for classname, methods in DESKTOP_RACE_METHODS.items()
-            )
+            selections = DESKTOP_RACE_TESTS
         evidence_dir = report_root / "probes"
         reports_dir = report_root / "surefire-reports"
         return [
@@ -764,11 +820,12 @@ def build_steps(
                     maven,
                     "-B",
                     "-Dfmt.skip=true",
+                    "-Djacoco.skip=true",
                     "-Djava.awt.headless=false",
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    f"-Dtest={test_selection}",
+                    f"-Dtest={surefire_test_selection(selections)}",
                     "test",
                 ),
                 group=group,
@@ -777,13 +834,6 @@ def build_steps(
     if group == "engine-process":
         evidence_dir = REPO_ROOT / "target" / "engine-process-smoke" / "probes"
         reports_dir = REPO_ROOT / "target" / "engine-process-smoke" / "surefire-reports"
-        test_selection = (
-            "-Dtest=EngineProcessSmokeTest#restoresSnapshotAnalyzesAndQuits,"
-            "EngineProcessFailureTest#rejectsSnapshotErrorWithoutTailOrAnalysis+"
-            "retiresSnapshotTimeoutAndRejectsLateResponse+recoversSnapshotAfterPeerCrash+"
-            "isolatesLateOutputAfterEngineSwitch+drainsPeerPipeBurstAndRemainsResponsive+"
-            "cleansUpPeerThatRefusesQuit,ContributeStartupDesktopTest,ContributionLocalClearDesktopTest,ContributeCertificateRecoveryTest,ContributeSavedEngineSelectionDesktopTest,ContributeSshShutdownDesktopTest"
-        )
         return [
             Step(
                 "Run engine process tests",
@@ -791,11 +841,12 @@ def build_steps(
                     maven,
                     "-B",
                     "-Dfmt.skip=true",
+                    "-Djacoco.skip=true",
                     "-Djava.awt.headless=false",
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    test_selection,
+                    f"-Dtest={surefire_test_selection(ENGINE_PROCESS_TESTS)}",
                     "test",
                 ),
                 group="engine-process",

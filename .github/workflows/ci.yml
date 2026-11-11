@@ -316,7 +316,7 @@ jobs:
           LC_ALL: C.UTF-8
         run: |
           xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp' \
-            mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \
+            mvn -B -Dfmt.skip=true -Djacoco.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \
               -Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports \
               -Dtest=WholeGameAnalysisDialogLayoutTest test
       - name: Require every analysis UI case to execute

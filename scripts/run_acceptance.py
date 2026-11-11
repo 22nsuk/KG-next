@@ -320,6 +320,7 @@ def build_plan(
         maven,
         "-B",
         "-Dfmt.skip=true",
+        "-Djacoco.skip=true",
         "-Djava.awt.headless=false",
         "-Dlizzie.desktop.required=true",
         f"-Dlizzie.desktop.evidence.dir={output / 'probes'}",

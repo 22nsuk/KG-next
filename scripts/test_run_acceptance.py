@@ -169,6 +169,7 @@ class AcceptanceRunnerTest(unittest.TestCase):
         )
         self.assertNotIn("SgfUiAcceptanceIT", selector)
         self.assertNotIn("RealCpuEngineAcceptanceIT", selector)
+        self.assertIn("-Djacoco.skip=true", plan.command)
 
 
     def test_opt_in_scenarios_use_exact_methods_and_d3_needs_no_assets(self) -> None:

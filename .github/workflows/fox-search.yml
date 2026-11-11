@@ -49,7 +49,7 @@ jobs:
           LC_ALL: C.UTF-8
         run: >-
           xvfb-run -a -s '-screen 0 1920x1080x24 -nolisten tcp'
-          mvn -B -Dfmt.skip=true -Djava.awt.headless=false
+          mvn -B -Dfmt.skip=true -Djacoco.skip=true -Djava.awt.headless=false
           -Dlizzie.desktop.required=true
           -Dlizzie.desktop.evidence.dir=target/fox-search/probes
           '-Dtest=GetFoxRequestTest,FoxKifuDownload*Test,LocalizationResourceParityTest' test
@@ -57,7 +57,7 @@ jobs:
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
         run: >-
-          mvn -B '-Dfmt.skip=true' '-Djava.awt.headless=false'
+          mvn -B '-Dfmt.skip=true' '-Djacoco.skip=true' '-Djava.awt.headless=false'
           '-Dlizzie.desktop.required=true'
           '-Dlizzie.desktop.evidence.dir=target/fox-search/probes'
           '-Dtest=GetFoxRequestTest,FoxKifuDownload*Test,LocalizationResourceParityTest' test
