@@ -44,6 +44,7 @@ import java.awt.geom.AffineTransform;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -1022,6 +1023,22 @@ public class Lizzie {
   }
 
   public static void start(int index, boolean loadDefault) {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      try {
+        // Construction publishes startup listeners and shows the window. Keep it on the same
+        // thread as their layout callbacks, while preserving synchronous startup for main().
+        SwingUtilities.invokeAndWait(() -> start(index, loadDefault));
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new IllegalStateException("Interrupted while creating the application window", failure);
+      } catch (InvocationTargetException failure) {
+        Throwable cause = failure.getCause();
+        if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+        if (cause instanceof Error) throw (Error) cause;
+        throw new IllegalStateException("Failed to create the application window", cause);
+      }
+      return;
+    }
     setBoard(new Board());
     frame = new LizzieFrame();
     LizzieFrame.toolbar.setPopupMenu();
