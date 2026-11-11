@@ -777,6 +777,7 @@ public class AnalysisFrame extends JFrame {
   private TableData tableData;
 
   private void refreshTableData() {
+    TableData previous = tableData;
     BoardHistoryList history = Lizzie.board.getHistory();
     BoardHistoryNode node = history.getCurrentHistoryNode();
     Leelaz engine = index == 1 ? Lizzie.leelaz : Lizzie.leelaz2;
@@ -797,18 +798,20 @@ public class AnalysisFrame extends JFrame {
         addActualMove(rows, node.next().get());
       }
     }
-    rows.sort(
-        (left, right) -> {
-          return switch (sortnum) {
-            case 2 -> compareTableValue(right.lcb, left.lcb);
-            case 3 -> compareTableValue(right.winrate, left.winrate);
-            case 4, 5 -> Integer.compare(right.playouts, left.playouts);
-            case 6 -> compareTableValue(right.policy, left.policy);
-            case 7 -> compareTableValue(right.scoreMean, left.scoreMean);
-            case 8 -> compareTableValue(right.scoreStdev, left.scoreStdev);
-            default -> 0;
-          };
-        });
+    if (sortnum >= 2 && sortnum <= 8) {
+      rows.sort(
+          (left, right) -> {
+            return switch (sortnum) {
+              case 2 -> compareTableValue(right.lcb, left.lcb);
+              case 3 -> compareTableValue(right.winrate, left.winrate);
+              case 4, 5 -> Integer.compare(right.playouts, left.playouts);
+              case 6 -> compareTableValue(right.policy, left.policy);
+              case 7 -> compareTableValue(right.scoreMean, left.scoreMean);
+              case 8 -> compareTableValue(right.scoreStdev, left.scoreStdev);
+              default -> 0;
+            };
+          });
+    }
     int columns =
         engine != null && (engine.isKatago || engine.isSai)
                 || (index == 1
@@ -832,7 +835,10 @@ public class AnalysisFrame extends JFrame {
             columns,
             MoveData.getAllocationVisits(rows),
             scoreOffset);
-    if (table != null) table.revalidate();
+    if (table != null
+        && (previous == null
+            || previous.rows.size() != rows.size()
+            || previous.columns != columns)) table.revalidate();
   }
 
   private static int compareTableValue(double left, double right) {
