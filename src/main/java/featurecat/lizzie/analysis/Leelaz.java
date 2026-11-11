@@ -5676,11 +5676,12 @@ public class Leelaz {
     private ParsedAnalysisInfo(
         List<MoveData> moves,
         int totalPlayouts,
-        List<Double> estimateArray,
+        List<Double> immutableOwnership,
         boolean kata, int rootVisits) {
       this.moves = List.copyOf(moves);
       this.totalPlayouts = totalPlayouts;
-      this.estimateArray = estimateArray == null ? null : List.copyOf(estimateArray);
+      // The parser supplies immutable primitive-backed ownership (or null); do not rebox it.
+      this.estimateArray = immutableOwnership;
       this.kata = kata;
       this.rootVisits = rootVisits;
     }

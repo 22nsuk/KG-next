@@ -212,6 +212,61 @@ class MoveDataParseTest {
   }
 
   @Test
+  void rootOwnershipPreservesLargeArraysAndFollowingFrameFields() {
+    StringBuilder line = new StringBuilder("info move C3 visits 8 pv C3 ownership");
+    List<Double> expected = new ArrayList<>();
+    for (int index = 0; index < 361; index++) {
+      double value = (index % 9 - 4) / 8.0;
+      expected.add(value);
+      line.append(' ').append(value);
+    }
+    line.append(" ownershipStdev ignored-token info move D4 visits 4 pv D4"
+        + " rootInfo visits 12 winrate 0.6");
+
+    KataGoAnalysisPayload payload = KataGoAnalysisPayload.parse(line.toString());
+
+    assertEquals(expected.size(), payload.ownership.size());
+    for (int index = 0; index < expected.size(); index++) {
+      assertEquals(expected.get(index), payload.ownership.get(index), 1e-12);
+    }
+    assertEquals(2, payload.moves.size());
+    assertEquals("D4", payload.moves.get(1).coordinate);
+    assertEquals(12, payload.totalVisits());
+    assertEquals(60.0, payload.rootWinrate, 1e-9);
+    assertThrows(UnsupportedOperationException.class, () -> payload.ownership.set(0, 0.0));
+    List<Double> retained = List.copyOf(payload.ownership);
+
+    KataGoAnalysisPayload next = KataGoAnalysisPayload.parse("ownership 0.75 -0.75");
+    assertEquals(2, next.ownership.size());
+    assertEquals(0.75, next.ownership.get(0), 1e-12);
+    assertEquals(-0.75, next.ownership.get(1), 1e-12);
+    assertEquals(retained, payload.ownership, "later frames must not change a retained snapshot");
+  }
+
+  @Test
+  void rootOwnershipKeepsLastBlockAndDistinguishesAbsentFromEmpty() {
+    assertNull(KataGoAnalysisPayload.parse("ownershipStdev ignored-token").ownership);
+    assertEquals(List.of(), KataGoAnalysisPayload.parse("ownership").ownership);
+    assertEquals(List.of(),
+        KataGoAnalysisPayload.parse("ownership 0.25 -0.25 ownership ownershipStdev 0.1").ownership);
+
+    KataGoAnalysisPayload payload = KataGoAnalysisPayload.parse(
+        "ownership 0.25 -0.25 ownershipStdev ignored-token ownership -0.0 -1e-1 1E-2 NaN");
+    assertEquals(4, payload.ownership.size());
+    assertEquals(Double.doubleToRawLongBits(-0.0),
+        Double.doubleToRawLongBits(payload.ownership.get(0)));
+    assertEquals(-0.1, payload.ownership.get(1), 1e-12);
+    assertEquals(0.01, payload.ownership.get(2), 1e-12);
+    assertTrue(Double.isNaN(payload.ownership.get(3)));
+  }
+
+  @Test
+  void malformedRootOwnershipRejectsTheFrame() {
+    assertThrows(NumberFormatException.class, () -> KataGoAnalysisPayload.parse(
+        "info move C3 visits 8 pv C3 rootInfo visits 8 ownership 0.5 1e+ -0.5"));
+  }
+
+  @Test
   void preservesZeroEdgeAndSeparatePvStatistics() {
     MoveData move =
         MoveData.fromInfoKatago(

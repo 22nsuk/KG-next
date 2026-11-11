@@ -62,15 +62,23 @@ public final class KataGoAnalysisPayload {
         }
       } else if (tokens.matches("ownership") || tokens.matches("ownershipStdev")) {
         boolean retain = tokens.matches("ownership");
-        List<Double> values = retain ? new ArrayList<>() : null;
+        double[] values = null;
+        int size = 0;
         while (tokens.next()) {
           if (tokens.isTopLevelBoundary()) {
             tokens.rewind();
             break;
           }
-          if (retain) values.add(tokens.fastDouble());
+          if (retain) {
+            double value = tokens.fastDouble();
+            if (values == null) values = new double[32];
+            else if (size == values.length) values = java.util.Arrays.copyOf(values, size * 2);
+            values[size++] = value;
+          }
         }
-        if (retain) ownership = BoardData.compactEstimateArray(values);
+        if (retain) {
+          ownership = values == null ? List.of() : BoardData.compactEstimateArray(values, size);
+        }
       }
     }
     return new KataGoAnalysisPayload(moves, rootVisits, rootWinrate, rootScoreMean, ownership);
