@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
@@ -40,6 +41,7 @@ class LeelazOrdinaryResponseSettlementTest {
       Lizzie.leelaz = engine;
       Lizzie.config = allocate(Config.class);
       Lizzie.config.enableLizzieCache = true;
+      Lizzie.config.showKataGoEstimate = true;
       Lizzie.config.limitPlayout = true;
       Lizzie.config.limitPlayouts = 500;
       Lizzie.board = new Board();
@@ -72,9 +74,21 @@ class LeelazOrdinaryResponseSettlementTest {
       assertEquals(51.0, Lizzie.board.getData().winrate, 0.001);
       assertEquals(2.5, Lizzie.board.getData().scoreMean, 0.001);
       parseInfo(engine, "info move D4 visits 40 winrate 0.66 scoreLead 3.5 prior 0.2 pv D4 C3"
-          + " rootInfo visits 100 winrate 0.9 scoreLead 20");
+          + " rootInfo visits 100 winrate 0.9 scoreLead 20 ownership 0.5 -0.5");
       assertEquals(66.0, Lizzie.board.getData().winrate, 0.001);
       assertEquals(List.of("D4", "C3"), Lizzie.board.getData().bestMoves.get(0).variation);
+      List<Double> previousOwnership = Lizzie.board.getData().estimateArray;
+      List<MoveData> previousMoves = engine.getBestMoves();
+      int previousRefreshes = frame.analysisRefreshCount;
+      assertEquals(List.of(0.5, -0.5), previousOwnership);
+
+      parseInfo(engine, "info move D4 visits 200 winrate 0.8 pv D4"
+          + " rootInfo visits 200 ownership 0.25 1e+ -0.25");
+      assertSame(previousMoves, engine.getBestMoves(), "malformed ownership rejects the whole frame");
+      assertSame(previousOwnership, Lizzie.board.getData().estimateArray);
+      assertEquals(100, Lizzie.board.getData().rootVisits);
+      assertEquals(66.0, Lizzie.board.getData().winrate, 0.001);
+      assertEquals(previousRefreshes, frame.analysisRefreshCount);
 
       engine.sendCommand("kata-analyze W 11");
       engine.setResponseUpToDate();
@@ -87,7 +101,10 @@ class LeelazOrdinaryResponseSettlementTest {
       parseInfo(engine, "info move D4 visits 50000 winrate 0.8 pv D4 rootInfo visits 50");
       assertEquals(50, Lizzie.board.getData().rootVisits);
       assertEquals(80.0, Lizzie.board.getData().winrate, 0.001);
-      parseInfo(engine, "info move D4 visits 50000 winrate 0.8 pv D4 rootInfo visits 501");
+      parseInfo(engine, "info move D4 visits 50000 winrate 0.8 pv D4 rootInfo visits 501"
+          + " ownership -0.25 0.25");
+      assertEquals(List.of(-0.25, 0.25), Lizzie.board.getData().estimateArray);
+      assertEquals(List.of(0.5, -0.5), previousOwnership);
       org.junit.jupiter.api.Assertions.assertTrue(engine.isStopPonderingByLimit());
       org.junit.jupiter.api.Assertions.assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("stop\n"));
     } finally {
