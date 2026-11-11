@@ -718,15 +718,16 @@ public class BoardHistoryList {
       BoardHistoryNode curNode = this.head;
       if (addLast) curNode = head.getLast();
 
-      Stone[] stones = curNode.getData().stones.clone();
-      Zobrist zobrist = curNode.getData().zobrist.clone();
+      // BoardData.pass owns the copies; a pass does not modify the current position.
+      Stone[] stones = curNode.getData().stones;
+      Zobrist zobrist = curNode.getData().zobrist;
 
       int moveNumber = curNode.getData().moveNumber + 1;
 
       int[] moveNumberList =
           newBranch && curNode.next(true).map(s -> s.getData()).isPresent()
               ? new int[Board.boardWidth * Board.boardHeight]
-              : curNode.getData().moveNumberList.clone();
+              : curNode.getData().moveNumberList;
       // build the new game state
       BoardData newState =
           BoardData.pass(
