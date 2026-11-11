@@ -33,9 +33,11 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
+import javax.swing.JComponent;
 import javax.swing.JDialog;
 import javax.swing.JFrame;
 import javax.swing.JTable;
+import javax.swing.RepaintManager;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 import javax.swing.table.JTableHeader;
@@ -155,6 +157,19 @@ class AnalysisTableRefreshDesktopTest {
     assertEquals("66.7", table.getValueAt(0, 5), "edge visits and symmetry own allocation");
     assertFalse(source.get(0).isNextMove, "actual-move display must not mutate engine data");
     pureReadsAndExport(history, table, export);
+    assertEquals(
+        0,
+        tableLayoutRequests(table, () -> {
+          for (int repeat = 0; repeat < 10; repeat++) tick(frame.timer);
+        }),
+        "unchanged table dimensions must not request layout on every timer tick");
+    Leelaz displayedEngine = engine == 1 ? Lizzie.leelaz : Lizzie.leelaz2;
+    displayedEngine.isKatago = !kata;
+    assertTrue(tableLayoutRequests(table, () -> tick(frame.timer)) > 0);
+    assertEquals(kata ? 7 : 9, table.getModel().getColumnCount());
+    displayedEngine.isKatago = kata;
+    assertTrue(tableLayoutRequests(table, () -> tick(frame.timer)) > 0);
+    assertEquals(kata ? 9 : 7, table.getModel().getColumnCount());
 
     header(table, 3);
     assertEquals("C3", normalCoordinate(table, 0, 1));
@@ -166,7 +181,7 @@ class AnalysisTableRefreshDesktopTest {
     assertEquals(
         String.format(Locale.ENGLISH, "%.1f", 60.0 + offset), table.getValueAt(actualRow, 3));
     assertEquals("66.7", table.getValueAt(actualRow, 5));
-    tick(frame.timer);
+    assertEquals(0, tableLayoutRequests(table, () -> tick(frame.timer)));
     assertEquals("D4", normalCoordinate(table, 0, 1));
     assertEquals("90.0", table.getValueAt(0, 3));
     assertEquals("0.0", table.getValueAt(0, 5));
@@ -208,7 +223,7 @@ class AnalysisTableRefreshDesktopTest {
     deeper.getData().setPlayouts2(3000);
     deeper.getData().winrate = 45;
     deeper.getData().winrate2 = 35;
-    tick(frame.timer);
+    assertTrue(tableLayoutRequests(table, () -> tick(frame.timer)) > 0);
     assertEquals(5, table.getRowCount());
     assertEquals("Q16", normalCoordinate(table, 0, 1));
     int visits = engine == 1 ? 2000 : 3000;
@@ -478,6 +493,25 @@ class AnalysisTableRefreshDesktopTest {
   private static void tick(Timer timer) {
     for (var listener : timer.getActionListeners()) {
       listener.actionPerformed(new ActionEvent(timer, ActionEvent.ACTION_PERFORMED, "refresh"));
+    }
+  }
+
+  private static int tableLayoutRequests(JTable table, Runnable operation) {
+    assertTrue(SwingUtilities.isEventDispatchThread());
+    RepaintManager previous = RepaintManager.currentManager(table);
+    int[] requests = {0};
+    RepaintManager.setCurrentManager(new RepaintManager() {
+      @Override
+      public synchronized void addInvalidComponent(JComponent component) {
+        if (component == table) requests[0]++;
+        super.addInvalidComponent(component);
+      }
+    });
+    try {
+      operation.run();
+      return requests[0];
+    } finally {
+      RepaintManager.setCurrentManager(previous);
     }
   }
 
