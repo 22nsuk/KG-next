@@ -36,16 +36,14 @@ public class SetThreshold extends JDialog {
 
   private JButton btnConfirm;
   private JButton btnCancel;
-  private boolean fromMoveList;
 
   private int originMoveListWinrateThreshold = Lizzie.config.moveListWinrateThreshold;
   private int originMoveListScoreThreshold = Lizzie.config.moveListScoreThreshold;
   private int originMoveListVisitsThreshold = Lizzie.config.moveListVisitsThreshold;
   private boolean originMoveListTopCurNode = Lizzie.config.moveListTopCurNode;
 
-  public SetThreshold(Window owner, boolean fromMoveList) {
+  public SetThreshold(Window owner) {
     super(owner);
-    this.fromMoveList = fromMoveList;
     initComponents();
     try {
       this.setIconImage(ImageIO.read(getClass().getResourceAsStream("/assets/logo.png")));
@@ -79,21 +77,15 @@ public class SetThreshold extends JDialog {
   }
 
   private void initContentPanel() {
-    GridLayout gridLayout = new GridLayout(fromMoveList ? 4 : 3, 2, 4, 4);
+    GridLayout gridLayout = new GridLayout(4, 2, 4, 4);
     dropWinRateChooser.setFont(
         new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
     dropScoreMeanChooser.setFont(
         new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
     playoutsChooser.setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
-    if (fromMoveList) {
-      dropWinRateChooser.setValue(Lizzie.config.moveListWinrateThreshold);
-      dropScoreMeanChooser.setValue(Lizzie.config.moveListScoreThreshold);
-      playoutsChooser.setValue(Lizzie.config.moveListVisitsThreshold);
-    } else {
-      dropWinRateChooser.setValue(Lizzie.config.blunderWinThreshold);
-      dropScoreMeanChooser.setValue(Lizzie.config.blunderScoreThreshold);
-      playoutsChooser.setValue(Lizzie.config.blunderPlayoutsThreshold);
-    }
+    dropWinRateChooser.setValue(Lizzie.config.moveListWinrateThreshold);
+    dropScoreMeanChooser.setValue(Lizzie.config.moveListScoreThreshold);
+    playoutsChooser.setValue(Lizzie.config.moveListVisitsThreshold);
     contentPanel.setLayout(gridLayout);
     contentPanel.add(
         new JFontLabel(Lizzie.resourceBundle.getString("Movelistframe.lblDropWinrate")));
@@ -102,54 +94,52 @@ public class SetThreshold extends JDialog {
     contentPanel.add(dropScoreMeanChooser);
     contentPanel.add(new JFontLabel(Lizzie.resourceBundle.getString("Movelistframe.lblPlayouts")));
     contentPanel.add(playoutsChooser);
-    if (fromMoveList) {
-      chkTopCurrentMove = new JCheckBox();
-      chkTopCurrentMove.setSelected(Lizzie.config.moveListTopCurNode);
-      contentPanel.add(
-          new JFontLabel(Lizzie.resourceBundle.getString("Movelistframe.chkTopCurrentMove")));
-      contentPanel.add(chkTopCurrentMove);
-      dropWinRateChooser.addChangeListener(
-          new ChangeListener() {
-            public void stateChanged(ChangeEvent e) {
-              Lizzie.config.saveThreshold(
-                  (int) dropWinRateChooser.getValue(),
-                  (int) dropScoreMeanChooser.getValue(),
-                  (int) playoutsChooser.getValue(),
-                  chkTopCurrentMove.isSelected());
-            }
-          });
-      dropScoreMeanChooser.addChangeListener(
-          new ChangeListener() {
-            public void stateChanged(ChangeEvent e) {
-              Lizzie.config.saveThreshold(
-                  (int) dropWinRateChooser.getValue(),
-                  (int) dropScoreMeanChooser.getValue(),
-                  (int) playoutsChooser.getValue(),
-                  chkTopCurrentMove.isSelected());
-            }
-          });
-      playoutsChooser.addChangeListener(
-          new ChangeListener() {
-            public void stateChanged(ChangeEvent e) {
-              Lizzie.config.saveThreshold(
-                  (int) dropWinRateChooser.getValue(),
-                  (int) dropScoreMeanChooser.getValue(),
-                  (int) playoutsChooser.getValue(),
-                  chkTopCurrentMove.isSelected());
-            }
-          });
-      chkTopCurrentMove.addActionListener(
-          new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-              Lizzie.config.saveThreshold(
-                  (int) dropWinRateChooser.getValue(),
-                  (int) dropScoreMeanChooser.getValue(),
-                  (int) playoutsChooser.getValue(),
-                  chkTopCurrentMove.isSelected());
-            }
-          });
-    }
+    chkTopCurrentMove = new JCheckBox();
+    chkTopCurrentMove.setSelected(Lizzie.config.moveListTopCurNode);
+    contentPanel.add(
+        new JFontLabel(Lizzie.resourceBundle.getString("Movelistframe.chkTopCurrentMove")));
+    contentPanel.add(chkTopCurrentMove);
+    dropWinRateChooser.addChangeListener(
+        new ChangeListener() {
+          public void stateChanged(ChangeEvent e) {
+            Lizzie.config.saveThreshold(
+                (int) dropWinRateChooser.getValue(),
+                (int) dropScoreMeanChooser.getValue(),
+                (int) playoutsChooser.getValue(),
+                chkTopCurrentMove.isSelected());
+          }
+        });
+    dropScoreMeanChooser.addChangeListener(
+        new ChangeListener() {
+          public void stateChanged(ChangeEvent e) {
+            Lizzie.config.saveThreshold(
+                (int) dropWinRateChooser.getValue(),
+                (int) dropScoreMeanChooser.getValue(),
+                (int) playoutsChooser.getValue(),
+                chkTopCurrentMove.isSelected());
+          }
+        });
+    playoutsChooser.addChangeListener(
+        new ChangeListener() {
+          public void stateChanged(ChangeEvent e) {
+            Lizzie.config.saveThreshold(
+                (int) dropWinRateChooser.getValue(),
+                (int) dropScoreMeanChooser.getValue(),
+                (int) playoutsChooser.getValue(),
+                chkTopCurrentMove.isSelected());
+          }
+        });
+    chkTopCurrentMove.addActionListener(
+        new ActionListener() {
+          @Override
+          public void actionPerformed(ActionEvent e) {
+            Lizzie.config.saveThreshold(
+                (int) dropWinRateChooser.getValue(),
+                (int) dropScoreMeanChooser.getValue(),
+                (int) playoutsChooser.getValue(),
+                chkTopCurrentMove.isSelected());
+          }
+        });
     dialogPane.add(contentPanel, BorderLayout.CENTER);
   }
 
@@ -166,12 +156,6 @@ public class SetThreshold extends JDialog {
     btnConfirm.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            if (!fromMoveList) {
-              Lizzie.config.saveThreshold(
-                  (int) dropWinRateChooser.getValue(),
-                  (int) dropScoreMeanChooser.getValue(),
-                  (int) playoutsChooser.getValue());
-            }
             setVisible(false);
           }
         });
@@ -187,13 +171,11 @@ public class SetThreshold extends JDialog {
     btnCancel.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            if (fromMoveList) {
-              Lizzie.config.saveThreshold(
-                  originMoveListWinrateThreshold,
-                  originMoveListScoreThreshold,
-                  originMoveListVisitsThreshold,
-                  originMoveListTopCurNode);
-            }
+            Lizzie.config.saveThreshold(
+                originMoveListWinrateThreshold,
+                originMoveListScoreThreshold,
+                originMoveListVisitsThreshold,
+                originMoveListTopCurNode);
             setVisible(false);
           }
         });

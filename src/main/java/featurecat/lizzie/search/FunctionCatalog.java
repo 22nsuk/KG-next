@@ -643,14 +643,6 @@ public final class FunctionCatalog {
               "Menu.mainPanelSettings",
               "Menu.showNameWinrates"),
           menuEntry(
-              "menu.showCommentConrolPane",
-              "Menu.showCommentConrolPane",
-              "FunctionSearch.category.view",
-              TargetType.SETTING,
-              "Menu.viewMenu",
-              "Menu.mainPanelSettings",
-              "Menu.showCommentConrolPane"),
-          menuEntry(
               "menu.alwaysOnTop",
               "Menu.alwaysOnTop",
               "FunctionSearch.category.view",

@@ -358,9 +358,7 @@ public class LizzieFrame extends JFrame {
   private boolean cachedIsCommentArea = true;
   // private BufferedImage cachedCommentImage = new BufferedImage(1, 1, TYPE_INT_ARGB);
   public JScrollPane commentScrollPane;
-  public JPanel commentBlunderControlPane;
   public SidebarPanel sidebarPanel;
-  public JPanel blunderContentPane;
   private ProblemListSnapshot problemListSnapshot;
   private final List<Consumer<ProblemListSnapshot>> problemListListeners = new ArrayList<>();
   private boolean problemSidebarRefreshPending = false;
@@ -410,20 +408,6 @@ public class LizzieFrame extends JFrame {
   /** Web 试下模式下的渲染节点覆盖。null 表示无 override，渲染端读 Board.history 当前节点。 */
   private volatile featurecat.lizzie.rules.BoardHistoryNode displayNodeOverride;
 
-  private TableModel blunderModelBlack;
-  private TableModel blunderModelWhite;
-  public JTable blunderTabelBlack;
-  private JTable blunderTabelWhite;
-  private int blunderSortNum = 2;
-  private boolean blunderIsSorted = false;
-  private boolean blunderSortIsOriginOrder = true;
-
-  private JPanel tablePanelMinBlack;
-  private JPanel tablePanelMinWhite;
-  public JScrollPane minScrollpaneBlack;
-  public JScrollPane minScrollpaneWhite;
-  //  private boolean isMouseOverComment = false;
-  //  private boolean isMouseOverBlunderControl = false;
   private JPaintTextPane commentTextPane;
   private JPaintTextPane commentTextArea;
   private String cachedComment = "";
@@ -480,14 +464,9 @@ public class LizzieFrame extends JFrame {
   public JScrollPane listScrollpane;
   public JTable listTable;
   public int listTableColum5Width;
-  private int blunderTableColum0Width;
-  private int blunderTableColum2Width;
-  public int blunderTableColum3Width;
   javax.swing.Timer tableTimer;
-  // javax.swing.Timer blunderTableTimer;
   private TableModel listDataModel;
   private boolean scoreColumnIsHidden = false;
-  private boolean scoreIsHiddenInBlunderTable = false;
 
   public int selectedorder = -1;
   public int clickOrder = -1;
@@ -647,10 +626,6 @@ public class LizzieFrame extends JFrame {
   public volatile boolean isAutoReplying = false;
   public boolean isBatchAnalysisMode = false;
   // int testFontSize = 12;
-  private Color blunderBackground =
-      Lizzie.config.useMorandiColors ? MorandiPalette.BG_SECONDARY : new Color(225, 225, 225);
-  private Color blunderForeground =
-      Lizzie.config.useMorandiColors ? MorandiPalette.TEXT_PRIMARY : Color.BLACK;
   private Color listTableBackground =
       Lizzie.config.useMorandiColors ? MorandiPalette.TABLE_ROW_ODD : new Color(0, 0, 0, 10);
   public boolean isAutoAnalyzingDiffNode = false;
@@ -933,7 +908,7 @@ public class LizzieFrame extends JFrame {
             setCommentEditable(false);
           }
         });
-    listScrollpane.getVerticalScrollBar().setUI(new DemoScrollBarUI2(false));
+    listScrollpane.getVerticalScrollBar().setUI(new DemoScrollBarUI2());
     hiddenColumn(1, listTable);
     listTable.getColumnModel().getColumn(0).setPreferredWidth(10);
     listTable.getColumnModel().getColumn(2).setPreferredWidth(30);
@@ -941,9 +916,6 @@ public class LizzieFrame extends JFrame {
     listTable.getColumnModel().getColumn(4).setPreferredWidth(45);
     listTable.getColumnModel().getColumn(5).setPreferredWidth(30);
     listTableColum5Width = 30;
-    blunderTableColum0Width = 30;
-    blunderTableColum2Width = 50;
-    blunderTableColum3Width = 50;
     boolean persisted = Lizzie.config.persistedUi != null;
     boolean hasSetBounds = false;
     if (persisted) {
@@ -996,13 +968,6 @@ public class LizzieFrame extends JFrame {
         listTable.getColumnModel().getColumn(5).setPreferredWidth(listTableColum5Width);
       }
 
-      if (Lizzie.config.persistedUi.optJSONArray("main-window-blunder") != null
-          && Lizzie.config.persistedUi.optJSONArray("main-window-blunder").length() == 3) {
-        JSONArray value = Lizzie.config.persistedUi.getJSONArray("main-window-blunder");
-        blunderTableColum0Width = value.getInt(0);
-        blunderTableColum2Width = value.getInt(1);
-        blunderTableColum3Width = value.getInt(2);
-      }
     }
     if (!hasSetBounds) {
       setSize(1065, 700);
@@ -1067,27 +1032,6 @@ public class LizzieFrame extends JFrame {
                   }
                   ((SuggestionTableScrollPane) listScrollpane).refreshData();
                 }
-                if (Lizzie.config.isShowingBlunderTabel) {
-                  if (Lizzie.leelaz != null && Lizzie.leelaz.isLoaded()) {
-                    if (Lizzie.board.isKataBoard || Lizzie.leelaz.isKatago || Lizzie.leelaz.isSai) {
-                      if (scoreIsHiddenInBlunderTable) {
-                        resumColumn(3, blunderTabelBlack, blunderTableColum3Width);
-                        resumColumn(3, blunderTabelWhite, blunderTableColum3Width);
-                        scoreIsHiddenInBlunderTable = false;
-                      }
-                    } else {
-                      if (!scoreIsHiddenInBlunderTable) {
-                        blunderTableColum3Width =
-                            blunderTabelBlack.getColumnModel().getColumn(3).getWidth();
-                        hiddenColumn(3, blunderTabelBlack);
-                        hiddenColumn(3, blunderTabelWhite);
-                        scoreIsHiddenInBlunderTable = true;
-                      }
-                    }
-                  }
-                  blunderTabelBlack.revalidate();
-                  blunderTabelWhite.revalidate();
-                }
               }
             });
     tableTimer.start();
@@ -1133,424 +1077,7 @@ public class LizzieFrame extends JFrame {
     commentScrollPane = new JScrollPane();
     configureCommentDisplaySurface(commentTextPane, commentScrollPane);
     configureCommentDisplaySurface(commentTextArea, commentScrollPane);
-    commentBlunderControlPane = new JPanel();
-    commentBlunderControlPane.setBackground(Color.BLACK);
-    commentBlunderControlPane.setVisible(false);
-    commentBlunderControlPane.setLayout(null);
-
-    blunderContentPane = new JPanel(new GridLayout(1, 2));
     sidebarPanel = new SidebarPanel(this, commentScrollPane, commentEditPane);
-    blunderContentPane.setBackground(Color.GRAY);
-    blunderContentPane.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(false, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-
-    setBlunderSort();
-    blunderModelBlack = getBlunderModel(true);
-    blunderModelWhite = getBlunderModel(false);
-    blunderTabelBlack = new JTable(blunderModelBlack);
-    blunderTabelWhite = new JTable(blunderModelWhite);
-
-    hiddenColumn(1, blunderTabelBlack);
-    hiddenColumn(1, blunderTabelWhite);
-
-    JPopupMenu exportBlunderBlack = new JPopupMenu();
-    final JMenuItem exportMenuBlunderBlack =
-        new JFontMenuItem(Lizzie.resourceBundle.getString("JTabel.export"));
-    exportBlunderBlack.add(exportMenuBlunderBlack);
-    exportMenuBlunderBlack.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            try {
-              JFileChooser chooser = new JFileChooser();
-              FileNameExtensionFilter filter = new FileNameExtensionFilter("(*.xls)", "xls");
-              chooser.setFileFilter(filter);
-              int option = chooser.showSaveDialog(Lizzie.frame);
-              if (option == JFileChooser.APPROVE_OPTION) {
-                File file = chooser.getSelectedFile();
-                String fname = chooser.getName(file);
-                if (fname.indexOf(".xlsx") == -1) {
-                  Utils.exportTable(
-                      blunderTabelBlack,
-                      chooser.getCurrentDirectory() + File.separator + fname + ".xls");
-                }
-              }
-
-            } catch (IOException e1) {
-              // TODO Auto-generated catch block
-              e1.printStackTrace();
-            }
-          }
-        });
-
-    blunderTabelBlack.addMouseListener(
-        new MouseAdapter() {
-          public void mouseClicked(MouseEvent e) {
-            if (e.getButton() == MouseEvent.BUTTON3) {
-              exportBlunderBlack.show(blunderTabelBlack, e.getX(), e.getY());
-              return;
-            }
-            int row = blunderTabelBlack.rowAtPoint(e.getPoint());
-            int col = blunderTabelBlack.columnAtPoint(e.getPoint());
-            if (row >= 0 && col >= 0) {
-              try {
-                blunderTabelBlack.repaint();
-                int movenumber = Integer.parseInt(blunderTabelBlack.getValueAt(row, 0).toString());
-                int[] coords =
-                    Board.convertNameToCoordinates(blunderTabelBlack.getValueAt(row, 1).toString());
-                Lizzie.board.goToMoveNumber(movenumber - 1);
-                Lizzie.frame.clickbadmove = coords;
-                Lizzie.frame.repaint();
-              } catch (Exception ex) {
-                ex.printStackTrace();
-              }
-            }
-          }
-        });
-
-    JPopupMenu exportBlunderWhite = new JPopupMenu();
-    final JMenuItem exportMenuBlunderWhite =
-        new JFontMenuItem(Lizzie.resourceBundle.getString("JTabel.export"));
-    exportBlunderWhite.add(exportMenuBlunderWhite);
-    exportMenuBlunderWhite.addActionListener(
-        new ActionListener() {
-          public void actionPerformed(ActionEvent e) {
-            try {
-              JFileChooser chooser = new JFileChooser();
-              FileNameExtensionFilter filter = new FileNameExtensionFilter("(*.xls)", "xls");
-              chooser.setFileFilter(filter);
-              int option = chooser.showSaveDialog(Lizzie.frame);
-              if (option == JFileChooser.APPROVE_OPTION) {
-                File file = chooser.getSelectedFile();
-                String fname = chooser.getName(file);
-                if (fname.indexOf(".xlsx") == -1) {
-                  Utils.exportTable(
-                      blunderTabelWhite,
-                      chooser.getCurrentDirectory() + File.separator + fname + ".xls");
-                }
-              }
-
-            } catch (IOException e1) {
-              // TODO Auto-generated catch block
-              e1.printStackTrace();
-            }
-          }
-        });
-
-    blunderTabelWhite.addMouseListener(
-        new MouseAdapter() {
-          public void mouseClicked(MouseEvent e) {
-            if (e.getButton() == MouseEvent.BUTTON3) {
-              exportBlunderWhite.show(blunderTabelWhite, e.getX(), e.getY());
-              return;
-            }
-            int row = blunderTabelWhite.rowAtPoint(e.getPoint());
-            int col = blunderTabelWhite.columnAtPoint(e.getPoint());
-            if (row >= 0 && col >= 0) {
-              try {
-                blunderTabelWhite.repaint();
-                int movenumber = Integer.parseInt(blunderTabelWhite.getValueAt(row, 0).toString());
-                int[] coords =
-                    Board.convertNameToCoordinates(blunderTabelWhite.getValueAt(row, 1).toString());
-                Lizzie.board.goToMoveNumber(movenumber - 1);
-                Lizzie.frame.clickbadmove = coords;
-                Lizzie.frame.repaint();
-              } catch (Exception ex) {
-                ex.printStackTrace();
-              }
-            }
-          }
-        });
-
-    blunderTabelBlack
-        .getTableHeader()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseReleased(MouseEvent e) {
-                int pick = blunderTabelBlack.getTableHeader().columnAtPoint(e.getPoint());
-                if (pick == blunderSortNum) {
-                  if (blunderSortNum == 2 || blunderSortNum == 3) {
-                    if (blunderSortIsOriginOrder) {
-                      blunderSortIsOriginOrder = false;
-                      blunderIsSorted = false;
-                    } else if (!blunderIsSorted) blunderIsSorted = true;
-                    else {
-                      blunderSortIsOriginOrder = true;
-                      blunderIsSorted = false;
-                    }
-                  } else {
-                    blunderIsSorted = !blunderIsSorted;
-                  }
-                } else {
-                  blunderSortNum = pick;
-                  blunderSortIsOriginOrder = true;
-                  blunderIsSorted = false;
-                }
-                Lizzie.config.saveBlunderTableSortSettings(
-                    blunderSortNum, blunderIsSorted, blunderSortIsOriginOrder);
-                blunderTabelBlack.repaint();
-                blunderTabelWhite.repaint();
-              }
-            });
-    blunderTabelBlack
-        .getTableHeader()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                commentBlunderControlPane.setVisible(false);
-              }
-
-              public void mouseEntered(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                setBlunderControlPane(false, true);
-                commentBlunderControlPane.setVisible(true);
-              }
-            });
-    blunderTabelBlack.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(false, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-
-    blunderTabelWhite
-        .getTableHeader()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseReleased(MouseEvent e) {
-                int pick = blunderTabelWhite.getTableHeader().columnAtPoint(e.getPoint());
-                if (pick == blunderSortNum) {
-                  if (blunderSortNum == 2 || blunderSortNum == 3) {
-                    if (blunderSortIsOriginOrder) {
-                      blunderSortIsOriginOrder = false;
-                      blunderIsSorted = false;
-                    } else if (!blunderIsSorted) blunderIsSorted = true;
-                    else {
-                      blunderSortIsOriginOrder = true;
-                      blunderIsSorted = false;
-                    }
-                  } else {
-                    blunderIsSorted = !blunderIsSorted;
-                  }
-                } else {
-                  blunderSortNum = pick;
-                  blunderSortIsOriginOrder = true;
-                  blunderIsSorted = false;
-                }
-                Lizzie.config.saveBlunderTableSortSettings(
-                    blunderSortNum, blunderIsSorted, blunderSortIsOriginOrder);
-                blunderTabelWhite.repaint();
-                blunderTabelBlack.repaint();
-              }
-            });
-    blunderTabelWhite
-        .getTableHeader()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                commentBlunderControlPane.setVisible(false);
-              }
-            });
-    blunderTabelWhite.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(false, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-
-    setTabelStyle(
-        blunderTabelBlack,
-        blunderTableColum0Width,
-        blunderTableColum2Width,
-        blunderTableColum3Width);
-    setTabelStyle(
-        blunderTabelWhite,
-        blunderTableColum0Width,
-        blunderTableColum2Width,
-        blunderTableColum3Width);
-
-    minScrollpaneBlack = new JScrollPane(blunderTabelBlack);
-    minScrollpaneWhite = new JScrollPane(blunderTabelWhite);
-    minScrollpaneBlack.getViewport().setBackground(blunderBackground);
-    minScrollpaneWhite.getViewport().setBackground(blunderBackground);
-    minScrollpaneBlack.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(false, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-    minScrollpaneWhite.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(false, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-    tablePanelMinBlack = new JPanel(new BorderLayout());
-    tablePanelMinWhite = new JPanel(new BorderLayout());
-    tablePanelMinBlack.add(minScrollpaneBlack);
-    tablePanelMinWhite.add(minScrollpaneWhite);
-    blunderContentPane.add(tablePanelMinBlack);
-    blunderContentPane.add(tablePanelMinWhite);
-    minScrollpaneBlack.setBackground(
-        Lizzie.config.useMorandiColors ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
-    minScrollpaneBlack.getVerticalScrollBar().setUI(new DemoScrollBarUI2(true));
-    //    minScrollpaneBlack.setVerticalScrollBarPolicy(
-    //        javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
-    minScrollpaneWhite.setBackground(
-        Lizzie.config.useMorandiColors ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
-    minScrollpaneWhite.getVerticalScrollBar().setUI(new DemoScrollBarUI2(true));
-    //    minScrollpaneWhite.setVerticalScrollBarPolicy(
-    //        javax.swing.ScrollPaneConstants.VERTICAL_SCROLLBAR_ALWAYS);
-    minScrollpaneBlack
-        .getVerticalScrollBar()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                commentBlunderControlPane.setVisible(false);
-              }
-
-              public void mouseEntered(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                setBlunderControlPane(false, true);
-                commentBlunderControlPane.setVisible(true);
-              }
-            });
-    minScrollpaneWhite
-        .getVerticalScrollBar()
-        .addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                commentBlunderControlPane.setVisible(false);
-              }
-
-              public void mouseEntered(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                setBlunderControlPane(false, true);
-                commentBlunderControlPane.setVisible(true);
-              }
-            });
-    commentBlunderControlPane.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-
-    commentTextArea.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(true, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
-
-    commentTextPane.addMouseListener(
-        new MouseAdapter() {
-          public void mouseExited(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            commentBlunderControlPane.setVisible(false);
-          }
-
-          public void mouseEntered(MouseEvent e) {
-            if (Lizzie.config.hideBlunderControlPane) {
-              return;
-            }
-            setBlunderControlPane(true, true);
-            commentBlunderControlPane.setVisible(true);
-          }
-        });
 
     commentScrollPane.setBorder(BorderFactory.createEmptyBorder());
     commentScrollPane.setViewportView(commentTextArea);
@@ -1719,7 +1246,6 @@ public class LizzieFrame extends JFrame {
     basePanel.add(humanSlTrainingBar, Integer.valueOf(13));
     leftoverDragHandles = new InFrameLeftoverDragHandles(this);
     leftoverDragHandles.install(basePanel);
-    basePanel.add(commentBlunderControlPane, Integer.valueOf(10));
     basePanel.add(tempGamePanelAll, Integer.valueOf(9));
     basePanel.add(varTreeScrollPane, Integer.valueOf(8));
     basePanel.add(listScrollpane, Integer.valueOf(7));
@@ -1764,7 +1290,6 @@ public class LizzieFrame extends JFrame {
     Lizzie.engineStartupStatus.addListener(this::updateEngineStartupStatus);
     mainPanel.setVisible(false);
     commentScrollPane.setVisible(false);
-    blunderContentPane.setVisible(false);
     installGraphicsConfigurationScaleListener();
     humanSlPreparationTimer = new javax.swing.Timer(1000, event -> pollHumanSlPreparation());
     humanSlPreparationTimer.start();
@@ -1887,251 +1412,6 @@ public class LizzieFrame extends JFrame {
     reSetLoc();
     refreshContainer();
     repaint();
-  }
-
-  private void setBlunderSort() {
-    // TODO Auto-generated method stub
-    if (Lizzie.config.blunderTabelOnlyAfter) {
-      blunderSortNum = Lizzie.config.blunderSortNumAF;
-      blunderIsSorted = Lizzie.config.blunderIsSortedAF;
-      blunderSortIsOriginOrder = Lizzie.config.blunderSortIsOriginOrderAF;
-    } else {
-      blunderSortNum = Lizzie.config.blunderSortNumNAF;
-      blunderIsSorted = Lizzie.config.blunderIsSortedNAF;
-      blunderSortIsOriginOrder = Lizzie.config.blunderSortIsOriginOrderNAF;
-    }
-  }
-
-  private AbstractTableModel getBlunderModel(boolean isBlack) {
-    return new AbstractTableModel() {
-      public int getColumnCount() {
-        return 4;
-      }
-
-      public int getRowCount() {
-        int row = 0;
-        BoardHistoryNode lastNode = Lizzie.board.getHistory().getEnd();
-        while (!Lizzie.config.blunderTabelOnlyAfter && lastNode.previous().isPresent()
-            || (Lizzie.config.blunderTabelOnlyAfter
-                && lastNode != Lizzie.board.getHistory().getCurrentHistoryNode()
-                && lastNode.previous().isPresent())) {
-          NodeInfo nodeInfoThis = lastNode.nodeInfo;
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack == isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.blunderWinThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.blunderPlayoutsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.blunderPlayoutsThreshold)
-                  if (!lastNode.getData().isKataData
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.blunderScoreThreshold) row = row + 1;
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis = lastNode.nodeInfo;
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack == isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.blunderWinThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.blunderPlayoutsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.blunderPlayoutsThreshold)
-                if (!lastNode.getData().isKataData
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.blunderScoreThreshold)
-                  row = row + 1;
-        return row;
-      }
-
-      public String getColumnName(int column) {
-        switch (column) {
-          case 0:
-            return isBlack
-                ? Lizzie.resourceBundle.getString("BlunderTabel.black")
-                : Lizzie.resourceBundle.getString("BlunderTabel.white");
-          case 1:
-            return Lizzie.resourceBundle.getString("BlunderTabel.coords");
-          case 2:
-            return Lizzie.resourceBundle.getString("BlunderTabel.winRate");
-          case 3:
-            return Lizzie.resourceBundle.getString("BlunderTabel.score");
-        }
-        return "";
-      }
-
-      public Object getValueAt(int row, int col) {
-        ArrayList<NodeInfo> data2 = new ArrayList<NodeInfo>();
-        BoardHistoryNode lastNode = Lizzie.board.getHistory().getEnd();
-        while (!Lizzie.config.blunderTabelOnlyAfter && lastNode.previous().isPresent()
-            || (Lizzie.config.blunderTabelOnlyAfter
-                && lastNode != Lizzie.board.getHistory().getCurrentHistoryNode()
-                && lastNode.previous().isPresent())) {
-          NodeInfo nodeInfoThis = lastNode.nodeInfo;
-          if (nodeInfoThis.analyzed)
-            if (nodeInfoThis.isBlack == isBlack)
-              if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.blunderWinThreshold)
-                if (nodeInfoThis.playouts >= Lizzie.config.blunderPlayoutsThreshold
-                    && nodeInfoThis.previousPlayouts >= Lizzie.config.blunderPlayoutsThreshold)
-                  if (!lastNode.getData().isKataData
-                      || Math.abs(nodeInfoThis.scoreMeanDiff)
-                          >= Lizzie.config.blunderScoreThreshold) data2.add(nodeInfoThis);
-          lastNode = lastNode.previous().get();
-        }
-        NodeInfo nodeInfoThis = lastNode.nodeInfo;
-        if (nodeInfoThis.analyzed)
-          if (nodeInfoThis.isBlack == isBlack)
-            if (Math.abs(nodeInfoThis.diffWinrate) >= Lizzie.config.blunderWinThreshold)
-              if (nodeInfoThis.playouts >= Lizzie.config.blunderPlayoutsThreshold
-                  && nodeInfoThis.previousPlayouts >= Lizzie.config.blunderPlayoutsThreshold)
-                if (!lastNode.getData().isKataData
-                    || Math.abs(nodeInfoThis.scoreMeanDiff) >= Lizzie.config.blunderScoreThreshold)
-                  data2.add(nodeInfoThis);
-        Collections.sort(
-            data2,
-            new Comparator<NodeInfo>() {
-              @Override
-              public int compare(NodeInfo s1, NodeInfo s2) {
-                // 降序
-                if (!blunderIsSorted) {
-                  if (blunderSortNum == 0) {
-                    if (s1.moveNum > s2.moveNum) return 1;
-                    if (s1.moveNum < s2.moveNum) return -1;
-                  }
-                  if (blunderSortNum == 2) {
-                    if (blunderSortIsOriginOrder) {
-                      if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return 1;
-                      if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return -1;
-                    } else {
-                      if (s1.diffWinrate < s2.diffWinrate) return 1;
-                      if (s1.diffWinrate > s2.diffWinrate) return -1;
-                    }
-                  }
-                  if (blunderSortNum == 3) {
-                    if (blunderSortIsOriginOrder) {
-                      if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return 1;
-                      if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return -1;
-                    } else {
-                      if (s1.scoreMeanDiff < s2.scoreMeanDiff) return 1;
-                      if (s1.scoreMeanDiff > s2.scoreMeanDiff) return -1;
-                    }
-                  }
-                } else {
-                  if (blunderSortNum == 0) {
-                    if (s1.moveNum > s2.moveNum) return -1;
-                    if (s1.moveNum < s2.moveNum) return 1;
-                  }
-                  if (blunderSortNum == 2) {
-                    if (blunderSortIsOriginOrder) {
-                      if (Math.abs(s1.diffWinrate) < Math.abs(s2.diffWinrate)) return -1;
-                      if (Math.abs(s1.diffWinrate) > Math.abs(s2.diffWinrate)) return 1;
-                    } else {
-                      if (s1.diffWinrate < s2.diffWinrate) return -1;
-                      if (s1.diffWinrate > s2.diffWinrate) return 1;
-                    }
-                  }
-                  if (blunderSortNum == 3) {
-                    if (blunderSortIsOriginOrder) {
-                      if (Math.abs(s1.scoreMeanDiff) < Math.abs(s2.scoreMeanDiff)) return -1;
-                      if (Math.abs(s1.scoreMeanDiff) > Math.abs(s2.scoreMeanDiff)) return 1;
-                    } else {
-                      if (s1.scoreMeanDiff < s2.scoreMeanDiff) return -1;
-                      if (s1.scoreMeanDiff > s2.scoreMeanDiff) return 1;
-                    }
-                  }
-                }
-                return 0;
-              }
-            });
-        if (data2.size() > row) {
-          NodeInfo data = data2.get(row);
-          if (Lizzie.board.isPkBoard) {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.convertCoordinatesToName(data.coords[0], data.coords[1]);
-              case 2:
-                return (data.diffWinrate < 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate));
-              case 3:
-                return (data.scoreMeanDiff < 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.scoreMeanDiff));
-              default:
-                return "";
-            }
-          } else {
-            switch (col) {
-              case 0:
-                return data.moveNum;
-              case 1:
-                return Board.convertCoordinatesToName(data.coords[0], data.coords[1]);
-              case 2:
-                return (data.diffWinrate > 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.diffWinrate));
-
-              case 3:
-                return (data.scoreMeanDiff > 0 ? "+" : "-")
-                    + String.format(Locale.ENGLISH, "%.2f", Math.abs(data.scoreMeanDiff));
-              default:
-                return "";
-            }
-          }
-        } else return "";
-      }
-    };
-  }
-
-  private void setTabelStyle(JTable table, int column0, int column1, int column2) {
-    // TODO Auto-generated method stub
-
-    table.getColumnModel().getColumn(0).setPreferredWidth(column0);
-    table.getColumnModel().getColumn(2).setPreferredWidth(column1);
-    table.getColumnModel().getColumn(3).setPreferredWidth(column2);
-    table
-        .getTableHeader()
-        .setPreferredSize(
-            new Dimension(
-                table.getColumnModel().getTotalColumnWidth(),
-                Lizzie.config.isFrameFontSmall()
-                    ? 20
-                    : (Lizzie.config.isFrameFontMiddle() ? 24 : 28)));
-    table
-        .getTableHeader()
-        .setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
-    table.setRowHeight(Config.menuHeight - 4);
-    table.setFont(new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize));
-
-    //    table.getTableHeader().setBackground(new Color(51, 102, 255));
-    ////    ((DefaultTableCellRenderer) table.getTableHeader().getDefaultRenderer())
-    ////        .setHorizontalAlignment(JLabel.CENTER);
-
-    DefaultTableCellRenderer cellRenderer = new DefaultTableCellRenderer();
-    cellRenderer.setBackground(
-        Lizzie.config.useMorandiColors ? MorandiPalette.WARM_GRAY : new Color(178, 178, 178));
-    DefaultTableCellRenderer cellRenderer2 = new DefaultTableCellRenderer();
-    cellRenderer2.setBackground(
-        Lizzie.config.useMorandiColors ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
-    cellRenderer.setHorizontalAlignment(SwingConstants.CENTER);
-    cellRenderer2.setHorizontalAlignment(SwingConstants.CENTER);
-    /** 循环修改表头列 */
-    for (int i = 0; i < table.getColumnCount(); i++) {
-      TableColumn column = table.getTableHeader().getColumnModel().getColumn(i);
-      if (i == 2) column.setHeaderRenderer(cellRenderer);
-      else column.setHeaderRenderer(cellRenderer2);
-    }
-
-    DefaultTableCellRenderer tcr = new BlunderTableCellRenderer();
-    table.setDefaultRenderer(Object.class, tcr);
-    table.getTableHeader().setReorderingAllowed(false);
-    tcr.setHorizontalAlignment(JLabel.CENTER);
-  }
-
-  public void setBlunderControlPane(boolean fromComment, boolean resetPos) {
-    if (!Lizzie.config.showComment) {
-      hideCommentPanel();
-      return;
-    }
-    if (Lizzie.config.isShowingBlunderTabel) {
-      sidebarPanel.switchTo("BLUNDERS");
-    } else {
-      sidebarPanel.switchTo("COMMENTS");
-    }
-    sidebarPanel.setVisible(true);
   }
 
   public featurecat.lizzie.rules.BoardHistoryNode getDisplayNode() {
@@ -2274,19 +1554,16 @@ public class LizzieFrame extends JFrame {
     sidebarPanel.setVisible(Lizzie.config.showComment);
     if (Lizzie.config.isShowingBlunderTabel) {
       sidebarPanel.switchTo("BLUNDERS");
-      blunderContentPane.setVisible(true);
       commentScrollPane.setVisible(false);
       requestProblemListRefresh();
     } else {
       sidebarPanel.switchTo("COMMENTS");
-      blunderContentPane.setVisible(false);
       commentScrollPane.setVisible(true);
     }
   }
 
   public void hideCommentPanel() {
     if (commentScrollPane != null) commentScrollPane.setVisible(false);
-    if (blunderContentPane != null) blunderContentPane.setVisible(false);
     if (commentEditPane != null) commentEditPane.setVisible(false);
     if (sidebarPanel != null) {
       sidebarPanel.setVisible(false);
@@ -8717,8 +7994,6 @@ public class LizzieFrame extends JFrame {
 
   public void refreshPanelColors() {
     boolean useMorandi = Lizzie.config.useMorandiColors;
-    blunderBackground = useMorandi ? MorandiPalette.BG_SECONDARY : new Color(225, 225, 225);
-    blunderForeground = useMorandi ? MorandiPalette.TEXT_PRIMARY : Color.BLACK;
     listTableBackground = useMorandi ? MorandiPalette.TABLE_ROW_ODD : new Color(0, 0, 0, 10);
     if (tempGamePanelAll != null)
       tempGamePanelAll.setBackground(
@@ -8732,12 +8007,6 @@ public class LizzieFrame extends JFrame {
     if (topPanel != null)
       topPanel.setBackground(useMorandi ? MorandiPalette.TOOLBAR_BG : new Color(232, 232, 232));
     refreshSuggestionTableStyle();
-    if (minScrollpaneBlack != null)
-      minScrollpaneBlack.setBackground(
-          useMorandi ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
-    if (minScrollpaneWhite != null)
-      minScrollpaneWhite.setBackground(
-          useMorandi ? MorandiPalette.COOL_GRAY : new Color(158, 158, 158));
     if (commentEditTextPane != null) commentEditTextPane.setForeground(Color.WHITE);
     if (windowMenuStrip != null) {
       windowMenuStrip.refreshColors();
@@ -16468,7 +15737,6 @@ public class LizzieFrame extends JFrame {
       setHideListScrollpane(false);
     }
     commentScrollPane.setVisible(false);
-    blunderContentPane.setVisible(false);
     sidebarPanel.setVisible(false);
     Lizzie.config.showVariationGraph = false;
     Lizzie.frame.varTreeScrollPane.setVisible(false);
@@ -21645,150 +20913,6 @@ public class LizzieFrame extends JFrame {
     // TODO Auto-generated method stub
     LizzieFrame.boardRenderer.removeSelectedRect();
     if (independentMainBoard != null) independentMainBoard.boardRenderer.removeSelectedRect();
-  }
-
-  class BlunderTableCellRenderer extends DefaultTableCellRenderer {
-    public Component getTableCellRendererComponent(
-        JTable table, Object value, boolean isSelected, boolean hasFocus, int row, int column) {
-      String coordStr = table.getValueAt(row, 1).toString();
-      int[] coords = Board.convertNameToCoordinates(coordStr);
-      if (coords[0] == Lizzie.frame.clickbadmove[0] && coords[1] == Lizzie.frame.clickbadmove[1]) {
-        setBackground(
-            Lizzie.config.useMorandiColors
-                ? MorandiPalette.MUDED_YELLOW
-                : new Color(238, 221, 130));
-      } else setBackground(blunderBackground);
-      try {
-        double diffWinrate =
-            Float.parseFloat(
-                table
-                    .getValueAt(row, 2)
-                    .toString()
-                    .substring(0, table.getValueAt(row, 2).toString().length() - 1));
-        if (Lizzie.board.isKataBoard || Lizzie.leelaz.isKatago) {
-          double scoreDiff =
-              Float.parseFloat(
-                  table
-                      .getValueAt(row, 3)
-                      .toString()
-                      .substring(0, table.getValueAt(row, 3).toString().length() - 1));
-          if (column == 3) {
-            if (scoreDiff >= 1.5)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 170, 170));
-            else if (scoreDiff <= Lizzie.config.scoreLossThreshold5)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_PURPLE
-                      : new Color(165, 25, 160));
-            else if (scoreDiff <= Lizzie.config.scoreLossThreshold4)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_RED
-                      : new Color(175, 16, 19));
-            else if (scoreDiff <= Lizzie.config.scoreLossThreshold3)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_GREEN
-                      : new Color(105, 162, 34));
-            else if (scoreDiff <= Lizzie.config.scoreLossThreshold2)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_YELLOW
-                      : new Color(150, 150, 0));
-            else if (scoreDiff <= Lizzie.config.scoreLossThreshold1)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_ORANGE
-                      : new Color(180, 120, 45));
-            else
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 150, 0));
-          } else if (column == 2) {
-            if (diffWinrate >= 3)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 170, 170));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold5)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_PURPLE
-                      : new Color(165, 25, 160));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold4)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_RED
-                      : new Color(175, 16, 19));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold3)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_GREEN
-                      : new Color(105, 162, 34));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold2)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_YELLOW
-                      : new Color(150, 150, 0));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold1)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_ORANGE
-                      : new Color(180, 120, 45));
-            else
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 150, 0));
-          } else setForeground(blunderForeground);
-        } else {
-          if (column == 2) {
-            if (diffWinrate >= 3)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 170, 170));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold5)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_PURPLE
-                      : new Color(165, 25, 160));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold4)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_RED
-                      : new Color(175, 16, 19));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold3)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_GREEN
-                      : new Color(105, 162, 34));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold2)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_YELLOW
-                      : new Color(150, 150, 0));
-            else if (diffWinrate <= Lizzie.config.winLossThreshold1)
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_ORANGE
-                      : new Color(180, 120, 45));
-            else
-              setForeground(
-                  Lizzie.config.useMorandiColors
-                      ? MorandiPalette.MUDED_TEAL
-                      : new Color(0, 150, 0));
-          } else setForeground(blunderForeground);
-        }
-        return super.getTableCellRendererComponent(table, value, false, false, row, column);
-      } catch (Exception e) {
-        return super.getTableCellRendererComponent(table, value, false, false, row, column);
-      }
-    }
   }
 
   public void showAnalyzeGenmoveInfo() {

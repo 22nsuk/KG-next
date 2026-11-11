@@ -1027,20 +1027,6 @@ public class Menu extends JMenuBar {
           showNameWinrates.setState(NameWinrates.shown(Lizzie.config.uiConfig));
         });
 
-    final JFontCheckBoxMenuItem showCommentConrolPane =
-        new JFontCheckBoxMenuItem(resourceBundle.getString("Menu.showCommentConrolPane"));
-    showCommentConrolPane.setToolTipText(
-        resourceBundle.getString("Menu.showCommentConrolPane.tooltip"));
-    showCommentConrolPane.addActionListener(
-        new ActionListener() {
-          @Override
-          public void actionPerformed(ActionEvent e) {
-            Lizzie.config.hideBlunderControlPane = !Lizzie.config.hideBlunderControlPane;
-            Lizzie.config.uiConfig.put(
-                "hide-blunder-table-control-pane", Lizzie.config.hideBlunderControlPane);
-          }
-        });
-
     final JFontCheckBoxMenuItem alwaysOnTop =
         new JFontCheckBoxMenuItem(
             resourceBundle.getString("Menu.alwaysOnTop")); // ("总在最前(Ctrl+Z)");
@@ -1083,7 +1069,6 @@ public class Menu extends JMenuBar {
     mainPanelSettings.add(appendWinrateToComment);
     mainPanelSettings.add(showNameInBoard);
     mainPanelSettings.add(showNameWinrates);
-    mainPanelSettings.add(showCommentConrolPane);
     mainPanelSettings.add(alwaysOnTop);
     mainPanelSettings.addSeparator();
     mainPanelSettings.add(showNewBoardConfirmDialog);
@@ -2798,8 +2783,6 @@ public class Menu extends JMenuBar {
             if (Lizzie.config.uiConfig.optBoolean("mains-always-ontop", false))
               alwaysOnTop.setState(true);
             else alwaysOnTop.setState(false);
-            if (!Lizzie.config.hideBlunderControlPane) showCommentConrolPane.setState(true);
-            else showCommentConrolPane.setState(false);
             if (Lizzie.config.showSubBoard) subboard.setState(true);
             else subboard.setState(false);
             if (Lizzie.config.showWinrateGraph) winrateGraph.setState(true);
@@ -6274,8 +6257,6 @@ public class Menu extends JMenuBar {
         AutoAnalyzeMenu.ACTION_PROPERTY, "menu.appendWinrateToComment");
     showNameInBoard.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showNameInBoard");
     showNameWinrates.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showNameWinrates");
-    showCommentConrolPane.putClientProperty(
-        AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showCommentConrolPane");
     alwaysOnTop.putClientProperty(AutoAnalyzeMenu.ACTION_PROPERTY, "menu.alwaysOnTop");
     showNewBoardConfirmDialog.putClientProperty(
         AutoAnalyzeMenu.ACTION_PROPERTY, "menu.showNewBoardConfirmDialog");

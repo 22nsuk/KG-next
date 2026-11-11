@@ -1386,7 +1386,7 @@ public class MoveListFrame extends JFrame {
     btnSetTabelThreshold.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            SetThreshold setThreshold = new SetThreshold(thisDialog, true);
+            SetThreshold setThreshold = new SetThreshold(thisDialog);
             setThreshold.setVisible(true);
           }
         });

@@ -62,7 +62,7 @@ class SuggestionTableScrollPaneTest {
       pane = new SuggestionTableScrollPane(table);
       pane.setColumnHeaderView(table.getTableHeader());
       pane.setBorder(BorderFactory.createLineBorder(java.awt.Color.GRAY));
-      pane.getVerticalScrollBar().setUI(new DemoScrollBarUI2(false));
+      pane.getVerticalScrollBar().setUI(new DemoScrollBarUI2());
       pane.refreshStyle(25);
       pane.setSize(450, 250);
       layout();
