@@ -40,7 +40,7 @@ class RunLocalCiTest(unittest.TestCase):
             summary = json.loads((temporary_path / "local-ci-summary.json").read_text(encoding="utf-8"))
             commands = [step["command"] for step in summary["steps"]]
             self.assertEqual(1, sum(command[-1] == "verify" for command in commands))
-            self.assertTrue(any(command[-1] == "test" for command in commands))
+            self.assertFalse(any(command[-1] == "test" for command in commands))
             self.assertEqual("all", summary["group"])
             self.assertEqual("PASS", summary["result"])
 
@@ -106,6 +106,16 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertIn("Run full Windows verification gate", [step.name for step in steps])
         self.assertNotIn("Verify local Markdown links", [step.name for step in steps])
 
+    def test_java_profiles_run_credentials_in_full_verify_without_a_duplicate_test_step(self):
+        for profile in ("windows", "portable", "all"):
+            with self.subTest(profile=profile):
+                steps = run_local_ci.build_steps(profile, "mvn", None, None, "java")
+                self.assertEqual(1, len(steps))
+                self.assertEqual("verify", steps[0].command[-1])
+                self.assertFalse(any(arg.startswith("-Dtest=") for arg in steps[0].command))
+                self.assertIn("-DskipTests=false", steps[0].command)
+                self.assertIn("-DskipITs=false", steps[0].command)
+
     def test_windows_scripts_require_native_product_fixtures(self):
         steps = run_local_ci.build_steps("windows", "mvn", None, "pwsh", "scripts")
         fixtures = [step for step in steps if "scripts.test_windows_product_acceptance" in step.command]
@@ -155,7 +165,7 @@ class RunLocalCiTest(unittest.TestCase):
         self.assertEqual(1, len(steps))
         self.assertIn(
             "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,"
-            "EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
+            "FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
             steps[0].command,
         )
         self.assertEqual(
@@ -301,21 +311,15 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
                 ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
-                *tuple(
-                    (
-                        "featurecat.lizzie.gui.FunctionSearchNavigationTest",
-                        f"navigationPreservesRealStateAcrossNativeAndCustomMenus()[{repetition}]",
-                    )
-                    for repetition in range(1, 6)
+                (
+                    "featurecat.lizzie.gui.FunctionSearchNavigationTest",
+                    "navigationPreservesRealStateAcrossNativeAndCustomMenus",
                 ),
                 (
                     "featurecat.lizzie.gui.ConfigDialog2NavigationTest",
                     "blackWinrateRemainsReachableAcrossRebuildsAndRecreation",
                 ),
-                (
-                    "featurecat.lizzie.gui.EngineProcessSmokeTest",
-                    "restoresSnapshotAnalyzesAndQuits",
-                ),
+
                 ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
                 ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
                 ("featurecat.lizzie.gui.OfflineBoardAcceptanceTest", "editsAndImportsWithNoEngine"),
@@ -324,6 +328,35 @@ class RunLocalCiTest(unittest.TestCase):
                 ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
             ),
             run_local_ci.DESKTOP_REQUIRED_TESTS,
+        )
+
+    def test_desktop_races_select_all_required_invocations_without_full_suite_repeats(self):
+        step, = run_local_ci.build_steps("portable", "mvn", None, None, "desktop-races")
+        selection = next(arg.removeprefix("-Dtest=") for arg in step.command if arg.startswith("-Dtest="))
+        selected = dict(
+            (item.partition("#")[0], item.partition("#")[2].split("+") if "#" in item else [])
+            for item in selection.split(",")
+        )
+        self.assertEqual(
+            {"StartupCommentLayoutDesktopTest", "ShutdownSaveRaceDesktopTest",
+             "AnalysisWindowLifecycleDesktopTest", "VariationTreePublicationTest",
+             "VariationTreeInvalidationTest", "SavedGameSaveDesktopTest",
+             "TeacherDialogRequestOwnershipTest", "HumanSlStrengthDialogTest"},
+            set(selected),
+        )
+        required = run_local_ci.DESKTOP_RACE_REQUIRED_TESTS
+        self.assertEqual(48, len(required))
+        self.assertTrue(set(required) <= set(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        for classname, name in required:
+            methods = selected[classname.rsplit(".", 1)[-1]]
+            self.assertTrue(not methods or name.split("(", 1)[0] in methods)
+        for classname, methods in selected.items():
+            for method in methods:
+                self.assertTrue(any(c.endswith("." + classname) and n.split("(", 1)[0] == method
+                                    for c, n in required), (classname, method))
+        self.assertIn(
+            "-Dsurefire.reportsDirectory=" + str(run_local_ci.REPO_ROOT / "target/desktop-smoke/races/surefire-reports"),
+            step.command,
         )
 
     def test_engine_process_plan_selects_exact_required_methods(self):
@@ -567,6 +600,51 @@ class RunLocalCiTest(unittest.TestCase):
             summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
             self.assertEqual("FAIL", summary["result"])
 
+    def test_java_gate_requires_native_dpapi_success_on_windows_for_every_profile(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "target"
+            report = target / "surefire-reports" / "TEST-credentials.xml"
+            logging_class, logging_name = run_local_ci.JAVA_REQUIRED_TESTS[0]
+            native_class, native_name = run_local_ci.WINDOWS_JAVA_REQUIRED_TESTS[0]
+
+            def complete_step(command, **kwargs):
+                report.parent.mkdir(parents=True, exist_ok=True)
+                native_case = (
+                    f'<testcase classname="{native_class}" name="{native_name}">{status}</testcase>'
+                    if status != "missing" else ""
+                )
+                report.write_text(
+                    f'<testsuite tests="{1 + bool(native_case)}" skipped="{int(status == "<skipped/>")}" '
+                    f'failures="{int(status == "<failure/>")}" errors="{int(status == "<error/>")}">'
+                    f'<testcase classname="{logging_class}" name="{logging_name}"/>{native_case}</testsuite>',
+                    encoding="utf-8",
+                )
+                return subprocess.CompletedProcess(command, 0)
+
+            for host in ("win32", "linux"):
+                for profile in ("windows", "portable", "all"):
+                    statuses = ("", "missing", "<skipped/>")
+                    if host == "win32":
+                        statuses += ("<failure/>", "<error/>")
+                    for status in statuses:
+                        with (
+                            self.subTest(host=host, profile=profile, status=status),
+                            patch.object(run_local_ci.sys, "platform", host),
+                            patch.object(run_local_ci.platform, "platform", return_value=host),
+                            patch.object(run_local_ci, "java_major_version", return_value=(21, "Java21")),
+                            patch.object(run_local_ci, "git_output", return_value="fixture"),
+                            patch.object(run_local_ci.subprocess, "run", side_effect=complete_step),
+                            patch.object(run_local_ci, "reset_junit_reports", partial(run_local_ci.reset_junit_reports, target)),
+                            patch.object(run_local_ci, "collect_junit_summary", partial(run_local_ci.collect_junit_summary, target)),
+                        ):
+                            args = run_local_ci.parse_args([
+                                "--profile", profile, "--group", "java", "--maven", "mvn",
+                                "--summary-dir", str(root / "summary"),
+                            ])
+                            expected = int(host == "win32" and status != "")
+                            self.assertEqual(expected, run_local_ci.run(args))
+
     def test_collect_junit_summary_combines_surefire_and_failsafe(self):
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary)
@@ -720,7 +798,7 @@ class RunLocalCiTest(unittest.TestCase):
             stale = desktop_reports / "TEST-stale.xml"
             stale.write_text('<testsuite tests="1"><testcase classname="stale" name="stale"/></testsuite>')
 
-            *navigation, config, engine, chinese, english, offline, variation, invalidation = run_local_ci.DESKTOP_REQUIRED_TESTS
+            *navigation, config, chinese, english, offline, winrate, variation, invalidation = run_local_ci.DESKTOP_REQUIRED_TESTS
             passed_navigation = [(case, "") for case in navigation]
 
             def suite_xml(*cases: tuple[tuple[str, str], str]) -> str:
@@ -757,21 +835,21 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(0, summary["junit"]["tests"])
                     self.assertFalse(stale.exists())
 
-                missing_engine = suite_xml(
+                missing_winrate = suite_xml(
                     *passed_navigation, (config, ""), (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
-                with patch.object(run_local_ci, "build_steps", return_value=make_step(missing_engine)):
+                with patch.object(run_local_ci, "build_steps", return_value=make_step(missing_winrate)):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
                     self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS) - 1, summary["junit"]["tests"])
                     self.assertEqual(0, summary["junit"]["skipped"])
 
-                skipped_engine = suite_xml(
-                    *passed_navigation, (config, ""), (engine, "<skipped/>"),
+                skipped_winrate = suite_xml(
+                    *passed_navigation, (config, ""), (winrate, "<skipped/>"),
                     (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
-                with patch.object(run_local_ci, "build_steps", return_value=make_step(skipped_engine)):
+                with patch.object(run_local_ci, "build_steps", return_value=make_step(skipped_winrate)):
                     self.assertEqual(1, run_local_ci.run(args))
                     summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text())
                     self.assertEqual("FAIL", summary["result"])
@@ -779,7 +857,7 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual(1, summary["junit"]["skipped"])
 
                 pass_xml = suite_xml(
-                    *passed_navigation, (config, ""), (engine, ""),
+                    *passed_navigation, (config, ""), (winrate, ""),
                     (chinese, ""), (english, ""), (offline, ""), (variation, ""), (invalidation, ""),
                 )
                 with patch.object(run_local_ci, "build_steps", return_value=make_step(pass_xml)):
@@ -799,7 +877,15 @@ class RunLocalCiTest(unittest.TestCase):
                         self.assertEqual(1, run_local_ci.run(args))
 
 
-    def test_engine_process_gate_rejects_missing_or_skipped_required_cases(self):
+    def test_engine_process_and_desktop_races_reject_missing_or_skipped_required_cases(self):
+        for group, directory, required in (
+            ("engine-process", "engine-process-smoke", run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS),
+            ("desktop-races", "desktop-smoke/races", run_local_ci.DESKTOP_RACE_REQUIRED_TESTS),
+        ):
+            with self.subTest(group=group):
+                self.check_required_display_cases(group, directory, required)
+
+    def check_required_display_cases(self, group, directory, required):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             subprocess.run(["git", "init", "-q", temporary], check=True)
@@ -819,7 +905,7 @@ class RunLocalCiTest(unittest.TestCase):
                 ],
                 check=True,
             )
-            process_reports = root / "target/engine-process-smoke/surefire-reports"
+            process_reports = root / "target" / directory / "surefire-reports"
             desktop_report = root / "target/desktop-smoke/surefire-reports/TEST-stale.xml"
             java_report = root / "target/surefire-reports/TEST-stale.xml"
             process_reports.mkdir(parents=True)
@@ -855,7 +941,7 @@ class RunLocalCiTest(unittest.TestCase):
                         "--profile",
                         "portable",
                         "--group",
-                        "engine-process",
+                        group,
                         "--summary-dir",
                         str(root / "summary"),
                     ]
@@ -882,7 +968,6 @@ class RunLocalCiTest(unittest.TestCase):
                 )
                 return result, summary
 
-            required = run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS
             result, summary = run_with_report(suite_xml(required[:-1]))
             self.assertEqual(1, result)
             self.assertEqual("FAIL", summary["result"])

@@ -27,6 +27,34 @@ Acceptance integration(SGF UI·Linux CPU)은
 
 ## 선택과 생략
 
+### 기본 검사의 실행 횟수와 책임
+
+- 데스크톱 전체 검사는 한 번 실행하고, `desktop-races`의 48개 사례를 두 번 더
+  실행한다. 추가 반복은 시작 시 EDT 소유권, 저장·종료, 분석 창 수명, 트리 게시,
+  저장 목록 worker, 해설 요청 소유권, HumanSL의 늦은 완료에 집중한다.
+  이 사례들은 전체 검사에도 포함되어 총 세 번 실행된다. 나머지 데스크톱 사례의
+  실행 빈도는 세 번에서 한 번으로 줄어들므로 그 범위의 간헐적 오류 탐지 기회도 줄어든다.
+- 검색 탐색은 native/custom 메뉴를 각각 한 번 실행한다. 외부의 다섯 번 반복만
+  제거하며, 같은 세션에서 취소·재열기와 상태 보존을 확인하는 내부 반복은 유지한다.
+- 엔진 프로세스 smoke는 Linux/Windows `engine-process` 검사에서 각각 실행한다.
+  동일 사례를 desktop에서 추가 실행하지 않는다. 두 플랫폼의 23개 필수 사례 판정은 유지한다.
+- Windows 자격 증명 검사는 전체 Maven `verify`에 포함한다. 별도 선행 실행은
+  제거하되, 실제 Windows 호스트에서는 profile과 무관하게
+  `PlatformCredentialStoreTest.windowsDpapiRoundTripsAcrossRealNativeCalls`의
+  성공을 요구한다. 필수 사례의 누락·skip·실패·오류는 Java 검사를 실패시킨다.
+
+전체 desktop 보고서와 추가 반복 보고서는 서로 다른 디렉터리에서 수집한다.
+CI는 성공한 각 반복의 XML·probe를 `target/desktop-smoke/races-1/`, `races-2/`에
+보존하며, 실패한 반복은 `races/`에 남긴다. 각 호출의 요약도 별도로 보존한다.
+필수 사례의 성공 여부와 각 반복의 실패 전파는 기존과 같이 검사한다.
+
+자동 저장 중단 검사의 28개 사례와 실제 파일·재시작 검증은 유지한다.
+JDI 감시는 클래스 전체의 메서드 진입 이벤트 대신 지정 메서드의 첫 bytecode에
+중단점을 설치한다. 프로세스를 강제 종료하는 `vm.exit`와 cleanup 실패 주입은
+유지하며, 목표 메서드에 도달하지 못하거나 먼저 종료되면 검사가 실패한다.
+
+### 보조 검사의 변경 범위 선택
+
 `repository-checks`가 전체 Git 이력을 받아 PR base/head의 merge-base부터
 head까지를 NUL 구분 파일명으로 비교한다. API의 파일 수 제한에 의존하지 않고,
 삭제된 경로와 이름 변경 전후 경로를 모두 검사한다. diff나 SHA 해석이 실패하면

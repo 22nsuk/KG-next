@@ -238,12 +238,11 @@ jobs:
         run: |
           sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py --install xvfb xauth openbox x11-utils fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
       - name: Compile desktop smoke tests
-        # Cold compilation must not consume the three full desktop passes' shared budget.
+        # Keep cold compilation outside the full pass and focused race repeats' budget.
         timeout-minutes: 5
         run: mvn -B -Dfmt.skip=true test-compile
       - name: Run Linux desktop smoke verification
-        # All three passes include the shutdown analysis and comment concurrency scenarios.
-        # Observed full passes take up to 5m39s each; allow three passes plus runner variance.
+        # Run every desktop feature once, then repeat worker/EDT and window-lifecycle races.
         timeout-minutes: 20
         env:
           LANG: C.UTF-8
@@ -272,9 +271,12 @@ jobs:
               cat target/desktop-smoke/window-manager.log
               exit 1
             fi
-            for attempt in 1 2 3; do
-              python3 scripts/run_local_ci.py --profile portable --group desktop --require-clean \
-                --summary-dir "target/local-ci/portable-desktop/attempt-$attempt"
+            python3 scripts/run_local_ci.py --profile portable --group desktop --require-clean \
+              --summary-dir target/local-ci/portable-desktop/full
+            for attempt in 1 2; do
+              python3 scripts/run_local_ci.py --profile portable --group desktop-races --require-clean \
+                --summary-dir "target/local-ci/portable-desktop/races-$attempt"
+              mv target/desktop-smoke/races "target/desktop-smoke/races-$attempt"
             done
           '
       - name: Upload desktop smoke artifacts

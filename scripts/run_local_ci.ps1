@@ -1,7 +1,7 @@
 param(
   [ValidateSet('Windows', 'Portable', 'All')]
   [string]$Profile = 'All',
-  [ValidateSet('All', 'Repository', 'Scripts', 'Java', 'Desktop', 'EngineProcess', 'TensorRtUi')]
+  [ValidateSet('All', 'Repository', 'Scripts', 'Java', 'Desktop', 'DesktopRaces', 'EngineProcess', 'TensorRtUi')]
   [string]$Group = 'All',
   [switch]$DryRun,
   [switch]$RequireClean,
@@ -30,7 +30,7 @@ function Test-Java21([string]$JavaHome, [bool]$RequireJpackage = $false) {
 }
 
 $requiresJpackage = $Group -eq 'TensorRtUi'
-if ($Group -in @('All', 'Java', 'Desktop', 'EngineProcess', 'TensorRtUi') -and -not $DryRun -and -not (Test-Java21 $env:JAVA_HOME $requiresJpackage)) {
+if ($Group -in @('All', 'Java', 'Desktop', 'DesktopRaces', 'EngineProcess', 'TensorRtUi') -and -not $DryRun -and -not (Test-Java21 $env:JAVA_HOME $requiresJpackage)) {
   $jdkCandidates = @(
     Get-ChildItem -Path (Join-Path $repoRoot '.tools\jdk-21*') -Directory -ErrorAction SilentlyContinue
     Get-ChildItem -Path (Join-Path $env:SystemDrive 'jdk21\jdk-21*') -Directory -ErrorAction SilentlyContinue
@@ -55,7 +55,7 @@ if (-not $python) {
   throw 'Python 3 was not found. Set LIZZIE_PYTHON or add python to PATH.'
 }
 
-$runnerGroup = if ($Group -eq 'TensorRtUi') { 'tensorrt-ui' } elseif ($Group -eq 'EngineProcess') { 'engine-process' } else { $Group.ToLowerInvariant() }
+$runnerGroup = if ($Group -eq 'TensorRtUi') { 'tensorrt-ui' } elseif ($Group -eq 'DesktopRaces') { 'desktop-races' } elseif ($Group -eq 'EngineProcess') { 'engine-process' } else { $Group.ToLowerInvariant() }
 
 $arguments = @(
   (Join-Path $PSScriptRoot 'run_local_ci.py'),

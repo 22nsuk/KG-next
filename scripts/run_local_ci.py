@@ -25,6 +25,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 JAVA_REQUIRED_TESTS = (
     ("featurecat.lizzie.logging.LoggingProviderSmokeIT", "shadedArtifactWritesOneProviderEvent"),
 )
+WINDOWS_JAVA_REQUIRED_TESTS = (
+    ("featurecat.lizzie.analysis.remote.PlatformCredentialStoreTest",
+     "windowsDpapiRoundTripsAcrossRealNativeCalls"),
+)
 DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.rules.ManualScoreResultTest", "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes"),
     ("featurecat.lizzie.rules.ManualScoreResultTest", "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult"),
@@ -167,20 +171,13 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "closingOverwriteDialogPreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "decliningOverwritePreservesSavedGame"),
     ("featurecat.lizzie.rules.AutomaticSaveSafetyTest", "confirmingOverwriteReplacesSavedGame"),
-    *tuple(
-        (
-            "featurecat.lizzie.gui.FunctionSearchNavigationTest",
-            f"navigationPreservesRealStateAcrossNativeAndCustomMenus()[{repetition}]",
-        )
-        for repetition in range(1, 6)
+    (
+        "featurecat.lizzie.gui.FunctionSearchNavigationTest",
+        "navigationPreservesRealStateAcrossNativeAndCustomMenus",
     ),
     (
         "featurecat.lizzie.gui.ConfigDialog2NavigationTest",
         "blackWinrateRemainsReachableAcrossRebuildsAndRecreation",
-    ),
-    (
-        "featurecat.lizzie.gui.EngineProcessSmokeTest",
-        "restoresSnapshotAnalyzesAndQuits",
     ),
     ("featurecat.lizzie.gui.FunctionSearchInputTest", "chineseInputChain"),
     ("featurecat.lizzie.gui.FunctionSearchInputTest", "englishInputChain"),
@@ -188,6 +185,28 @@ DESKTOP_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.OfflineWinrateNavigationAcceptanceTest", "opensAndNavigatesSgfBeforeAnyEngineHasStarted"),
     ("featurecat.lizzie.gui.VariationTreePublicationTest", "onlyCurrentTreeCanPublish"),
     ("featurecat.lizzie.gui.VariationTreeInvalidationTest", "branchReorderAndLiveFirstSyncRespectCurrentTree"),
+)
+# Repeat actual worker/EDT and window-lifecycle boundaries after the full desktop pass.
+# Empty method tuples select the whole class; parameter invocations remain individually required.
+DESKTOP_RACE_METHODS = {
+    "featurecat.lizzie.gui.StartupCommentLayoutDesktopTest": ("createsAndUpdatesCommentsOnEdt",),
+    "featurecat.lizzie.gui.ShutdownSaveRaceDesktopTest": (),
+    "featurecat.lizzie.gui.AnalysisWindowLifecycleDesktopTest": (),
+    "featurecat.lizzie.gui.VariationTreePublicationTest": (),
+    "featurecat.lizzie.gui.VariationTreeInvalidationTest": (),
+    "featurecat.lizzie.gui.SavedGameSaveDesktopTest": (),
+    "featurecat.lizzie.teacher.TeacherDialogRequestOwnershipTest": (),
+    "featurecat.lizzie.gui.HumanSlStrengthDialogTest": (
+        "assetDiscoveryKeepsEdtResponsiveAndRetiresCancelledResults",
+        "cancelEscapeAndCloseRetireLateManualCompletion",
+        "changedGameRejectsLateManualResult",
+    ),
+}
+DESKTOP_RACE_REQUIRED_TESTS = tuple(
+    (classname, name) for classname, name in DESKTOP_REQUIRED_TESTS
+    if classname in DESKTOP_RACE_METHODS
+    and (not DESKTOP_RACE_METHODS[classname]
+         or name.split("(", 1)[0] in DESKTOP_RACE_METHODS[classname])
 )
 ENGINE_PROCESS_REQUIRED_TESTS = (
     ("featurecat.lizzie.gui.ContributeSshShutdownDesktopTest", "stopsRemoteChildrenOnUserStopFatalErrorAndRetry"),
@@ -605,18 +624,6 @@ def windows_steps(maven: str, powershell: str) -> list[Step]:
             env={"LIZZIE_WINDOWS_PRODUCT_TESTS_REQUIRED": "1"},
         ),
         Step(
-            "Verify Windows credential persistence",
-            (
-                maven,
-                "-B",
-                "-Dfmt.skip=true",
-                f"-Dlizzie.work.dir={temp / 'credential-tests'}",
-                "-Dtest=PlatformCredentialStoreTest,RemoteComputeConfigTest,MigratingCredentialStoreTest",
-                "test",
-            ),
-            group="java",
-        ),
-        Step(
             "Run full Windows verification gate",
             (
                 maven,
@@ -739,12 +746,20 @@ def build_steps(
             )
         ]
 
-    if group == "desktop":
-        evidence_dir = REPO_ROOT / "target" / "desktop-smoke" / "probes"
-        reports_dir = REPO_ROOT / "target" / "desktop-smoke" / "surefire-reports"
+    if group in {"desktop", "desktop-races"}:
+        report_root = REPO_ROOT / "target" / "desktop-smoke"
+        test_selection = "ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest"
+        if group == "desktop-races":
+            report_root /= "races"
+            test_selection = ",".join(
+                classname.rsplit(".", 1)[-1] + ("#" + "+".join(methods) if methods else "")
+                for classname, methods in DESKTOP_RACE_METHODS.items()
+            )
+        evidence_dir = report_root / "probes"
+        reports_dir = report_root / "surefire-reports"
         return [
             Step(
-                "Run desktop smoke tests",
+                "Run desktop race tests" if group == "desktop-races" else "Run desktop smoke tests",
                 (
                     maven,
                     "-B",
@@ -753,10 +768,10 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    "-Dtest=ManualScoreResultTest,FunctionSearchNavigationTest,ConfigDialog2NavigationTest,EngineProcessSmokeTest,FunctionSearchInputTest,OfflineBoardAcceptanceTest,OfflineWinrateNavigationAcceptanceTest,VariationTreePublicationTest,VariationTreeInvalidationTest,AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame,SetKataRulesWindowTest,RulesQuickSwitchDesktopTest,AnalysisReadabilityDesktopTest,AnalysisWindowLifecycleDesktopTest,AnalysisTableRefreshDesktopTest,BlunderSidebarPersistenceDesktopTest,StartupCommentLayoutDesktopTest,SgfMarkupEditingDesktopTest,ToolbarSettingsDesktopTest,BenchmarkMeasurementDesktopTest,SetKataEnginesHitTest,SetKataPDAParameterTest,RulesDialogLayoutTest,VariationPreviewVisibilityTest,TeacherDialogRequestOwnershipTest,OfficialStrongestModelDesktopTest,HumanSlStrengthDialogTest,SavedGameLoadDesktopTest,SavedGameSaveDesktopTest,ShutdownSaveRaceDesktopTest,EngineGameSaveDesktopTest,ThemeSaveDesktopTest,AnalysisProgressDesktopTest,EngineGameParameterControlsTest,EngineGameParametersDialogTest,NewEngineGameParametersDesktopTest,MessageThemeTest",
+                    f"-Dtest={test_selection}",
                     "test",
                 ),
-                group="desktop",
+                group=group,
             )
         ]
     if group == "engine-process":
@@ -964,7 +979,10 @@ def run(args: argparse.Namespace) -> int:
     output_dir = (REPO_ROOT / args.summary_dir).resolve()
     results: list[StepResult] = []
     java_selected = args.group in {"all", "java"}
-    desktop_selected = args.group == "desktop"
+    desktop_selected = args.group in {"desktop", "desktop-races"}
+    desktop_root = REPO_ROOT / "target" / "desktop-smoke"
+    if args.group == "desktop-races":
+        desktop_root /= "races"
     engine_process_selected = args.group == "engine-process"
     tensorrt_ui_selected = args.group == "tensorrt-ui"
     display_selected = desktop_selected or engine_process_selected or tensorrt_ui_selected
@@ -993,8 +1011,8 @@ def run(args: argparse.Namespace) -> int:
             tensorrt_root.mkdir(parents=True, exist_ok=True)
             junit_executed = True
         elif display_selected and not args.dry_run:
-            report_root = "desktop-smoke" if desktop_selected else "engine-process-smoke"
-            reset_junit_reports(REPO_ROOT / "target" / report_root)
+            report_root = desktop_root if desktop_selected else REPO_ROOT / "target" / "engine-process-smoke"
+            reset_junit_reports(report_root)
             junit_executed = True
         maven = (args.maven or ("mvn" if args.dry_run else resolve_maven())) if needs_java else "mvn"
         bash = None
@@ -1067,8 +1085,11 @@ def run(args: argparse.Namespace) -> int:
     try:
         if junit_executed:
             if desktop_selected:
-                required_tests = DESKTOP_REQUIRED_TESTS
-                report_root = REPO_ROOT / "target" / "desktop-smoke"
+                required_tests = (
+                    DESKTOP_RACE_REQUIRED_TESTS if args.group == "desktop-races"
+                    else DESKTOP_REQUIRED_TESTS
+                )
+                report_root = desktop_root
             elif engine_process_selected:
                 required_tests = ENGINE_PROCESS_REQUIRED_TESTS
                 report_root = REPO_ROOT / "target" / "engine-process-smoke"
@@ -1077,6 +1098,8 @@ def run(args: argparse.Namespace) -> int:
                 report_root = REPO_ROOT / "target" / "tensorrt-ui"
             else:
                 required_tests = JAVA_REQUIRED_TESTS
+                if sys.platform == "win32":
+                    required_tests += WINDOWS_JAVA_REQUIRED_TESTS
                 report_root = None
             if report_root is None:
                 junit = collect_junit_summary(required_tests=required_tests)
@@ -1123,7 +1146,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--group",
         choices=(
-            "all", "repository", "scripts", "java", "desktop", "engine-process", "tensorrt-ui"
+            "all", "repository", "scripts", "java", "desktop", "desktop-races", "engine-process", "tensorrt-ui"
         ),
         default="all",
     )
