@@ -9883,10 +9883,8 @@ public class LizzieFrame extends JFrame {
     if (targetNode == null) {
       return false;
     }
-    BoardHistoryNode currentNode = Lizzie.board.getHistory().getCurrentHistoryNode();
-    BoardHistoryNode previousHoverNode = winrateGraph.mouseOverNode;
-    winrateGraph.setMouseOverNode(targetNode);
-    if (targetNode != currentNode || previousHoverNode != targetNode) {
+    if (winrateGraph.mouseOverNode != targetNode) {
+      winrateGraph.setMouseOverNode(targetNode);
       redrawWinratePaneOnly = true;
       refreshWinratePane = true;
       if (mainPanel != null) mainPanel.repaint();
