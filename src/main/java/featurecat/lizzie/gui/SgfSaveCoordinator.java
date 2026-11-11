@@ -30,7 +30,7 @@ import javax.swing.SwingUtilities;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import org.json.JSONObject;
 
-/** Captures SGF on the UI thread, keeping mutable board/engine state out of background I/O. */
+/** Captures on the UI thread; the save worker serializes detached inputs and writes their SGF. */
 public final class SgfSaveCoordinator {
   enum Mode {
     NORMAL(false, false, false, true),
@@ -89,11 +89,24 @@ public final class SgfSaveCoordinator {
   public static CompletableFuture<Path> saveCaptured(
       Path target, String snapshot, BooleanSupplier stillCurrent,
       Consumer<Path> success, Consumer<Throwable> failure) {
+    return saveCaptured(target, () -> snapshot, stillCurrent, success, failure);
+  }
+
+  public static CompletableFuture<Path> saveCaptured(
+      Path target, SGFParser.SaveSnapshot snapshot, BooleanSupplier stillCurrent,
+      Consumer<Path> success, Consumer<Throwable> failure) {
+    return saveCaptured(target, snapshot::serialize, stillCurrent, success, failure);
+  }
+
+  private static CompletableFuture<Path> saveCaptured(
+      Path target, SgfSaveQueue.IOOperation<String> snapshot, BooleanSupplier stillCurrent,
+      Consumer<Path> success, Consumer<Throwable> failure) {
     Path destination = target.toAbsolutePath().normalize();
     return submitSave(
         () -> {
+          String sgf = snapshot.run();
           Files.createDirectories(destination.getParent());
-          AtomicSgfFileWriter.write(destination, snapshot);
+          AtomicSgfFileWriter.write(destination, sgf);
           return destination;
         },
         stillCurrent, success, failure);
@@ -147,7 +160,7 @@ public final class SgfSaveCoordinator {
     try {
       requireCurrentGame(board, history, root);
       String name = history.getGameInfo().getSaveFileName();
-      String snapshot = SGFParser.saveSnapshot(board, false, false, false);
+      SGFParser.SaveSnapshot snapshot = SGFParser.captureSnapshot(board, false, false, false);
       requireCurrentGame(board, history, root);
       String timestamp = new SimpleDateFormat("yyyy-MM-dd-HH-mmss").format(new Date());
       // Player names are display text, not paths (including on Windows).
@@ -158,7 +171,7 @@ public final class SgfSaveCoordinator {
       String prefix = timestamp + (safeName.isEmpty() ? "" : "(" + safeName + ")") + "-";
       Path directory = Lizzie.config.getWorkDirectory().toPath().resolve("MyGames");
       submitSave(
-          () -> writePlayedGame(directory, prefix, snapshot),
+          () -> writePlayedGame(directory, prefix, snapshot.serialize()),
           () -> true,
           ignored -> {},
           failure -> playedGameSaveFailed(onFailure, failure));
@@ -210,10 +223,11 @@ public final class SgfSaveCoordinator {
     BoardHistoryNode root = history.getStart();
     JSONObject filesystem = Lizzie.config.persisted.getJSONObject("filesystem");
     try {
-      String snapshot = SGFParser.saveSnapshot(board, mode.raw, mode.comments, mode.branch);
+      SGFParser.SaveSnapshot snapshot =
+          SGFParser.captureSnapshot(board, mode.raw, mode.comments, mode.branch);
       SAVES.submit(
           target.toPath(),
-          snapshot,
+          snapshot::serialize,
           () ->
               Lizzie.board == board && board.getHistory() == history && history.getStart() == root,
           () -> {

@@ -56,9 +56,18 @@ final class SgfSaveQueue {
       BooleanSupplier stillCurrent,
       Runnable success,
       Consumer<Throwable> failure) {
+    return submit(path, () -> snapshot, stillCurrent, success, failure);
+  }
+
+  CompletableFuture<Void> submit(
+      Path path,
+      IOOperation<String> snapshot,
+      BooleanSupplier stillCurrent,
+      Runnable success,
+      Consumer<Throwable> failure) {
     return submit(
         () -> {
-          writer.write(path, snapshot);
+          writer.write(path, snapshot.run());
           return null;
         },
         stillCurrent,

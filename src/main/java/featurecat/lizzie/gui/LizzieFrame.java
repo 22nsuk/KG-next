@@ -281,7 +281,7 @@ public class LizzieFrame extends JFrame {
     private final String analyzedLabel = Lizzie.resourceBundle.getString("Leelaz.analyzed");
     private final String timestamp = new SimpleDateFormat("yyyyMMddHHmmss").format(new Date());
     private boolean quickMode;
-    private String snapshot;
+    private SGFParser.SaveSnapshot snapshot;
     private boolean inFlight;
     private final Runnable saved;
 
@@ -3492,20 +3492,21 @@ public class LizzieFrame extends JFrame {
     if (pending.inFlight) return true;
     try {
       if (pending.snapshot == null) {
-        pending.snapshot = SGFParser.captureSave(pending.board, pending.history, false);
+        pending.snapshot = SGFParser.captureSaveSnapshot(pending.board, pending.history, false);
       }
     } catch (IOException | RuntimeException failure) {
       batchAnalysisSaveFailed(pending, failure);
       return true;
     }
-    String snapshot = pending.snapshot;
+    SGFParser.SaveSnapshot snapshot = pending.snapshot;
     pending.inFlight = true;
     SgfSaveCoordinator.submitSave(
         () -> {
+          String sgf = snapshot.serialize();
           Path output =
               BottomToolbar.resolveAutoAnalyzeOutput(
                   pending.source, pending.workDirectory, pending.analyzedLabel, pending.timestamp);
-          AtomicSgfFileWriter.write(output, snapshot);
+          AtomicSgfFileWriter.write(output, sgf);
           return output;
         },
         () -> true,
@@ -15024,7 +15025,7 @@ public class LizzieFrame extends JFrame {
   }
 
   private record SavedGameCapture(
-      String sgf, RenderedImage preview, String time, int moveNumber, String moves) {}
+      SGFParser.SaveSnapshot sgf, RenderedImage preview, String time, int moveNumber, String moves) {}
 
   private SavedGameCapture captureSavedGame(boolean automatic, boolean add) throws IOException {
     Board board = Lizzie.board;
@@ -15032,7 +15033,7 @@ public class LizzieFrame extends JFrame {
     BoardHistoryNode root = history.getStart();
     int moveNumber = board.getCurrentMovenumber();
     String moves = board.moveListToString(add ? board.getMoveList() : board.getmovelistForSaveLoad());
-    String sgf = SGFParser.captureSave(board, history, automatic);
+    SGFParser.SaveSnapshot sgf = SGFParser.captureSaveSnapshot(board, history, automatic);
     RenderedImage preview = null;
     try {
       preview = (RenderedImage) saveMainBoardToImageOri();
@@ -15137,7 +15138,7 @@ public class LizzieFrame extends JFrame {
                           Config.SavedBoardSave metadata = config.prepareTempBoardSave(candidate);
                           return () -> {
                             var intent = featurecat.lizzie.util.AutomaticSaveIntent.write(
-                                directory.toPath(), index, capture.sgf(), candidate);
+                                directory.toPath(), index, capture.sgf().serialize(), candidate);
                             writeGameRecord(
                                 savedGameFile(directory, true, index, "sgf").toPath(),
                                 savedGameFile(directory, true, index, "bmp").toPath(), capture, metadata);
@@ -15241,8 +15242,9 @@ public class LizzieFrame extends JFrame {
       Path sgfFile, Path imageFile, SavedGameCapture capture, Config.SavedBoardSave metadata)
       throws IOException {
     try {
+      String sgf = capture.sgf().serialize();
       Files.createDirectories(sgfFile.toAbsolutePath().getParent());
-      AtomicSgfFileWriter.write(sgfFile, capture.sgf());
+      AtomicSgfFileWriter.write(sgfFile, sgf);
       // These are individual atomic replacements, not a multi-file crash transaction.
       // A failed metadata write leaves the complete new SGF available for manual recovery.
       metadata.write();

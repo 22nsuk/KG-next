@@ -42,6 +42,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
 import java.util.StringTokenizer;
@@ -1111,22 +1112,66 @@ public class SGFParser {
     }
   }
 
-  /** Capture the complete write payload before leaving the UI thread. No background caller may
-   * serialize the live board or borrow the process-wide raw export flags. */
+  /** Synchronous compatibility export; file-save callers use {@link #captureSnapshot}. */
   public static String saveSnapshot(Board board, boolean raw, boolean comments, boolean currentBranch)
       throws IOException {
+    return captureSnapshot(board, raw, comments, currentBranch).serialize();
+  }
+
+  /** Freezes the tree and export settings on the EDT, without formatting SGF. */
+  public static SaveSnapshot captureSnapshot(
+      Board board, boolean raw, boolean comments, boolean currentBranch) throws IOException {
     if (!SwingUtilities.isEventDispatchThread()) {
       throw new IllegalStateException("SGF save snapshots must be captured on the event thread");
     }
-    boolean originalRaw = LizzieFrame.isSavingRaw;
-    boolean originalComments = LizzieFrame.isSavingRawComment;
-    try {
-      LizzieFrame.isSavingRaw = raw;
-      LizzieFrame.isSavingRawComment = comments;
-      return serialize(board, board.getHistory(), false, false, currentBranch, currentBranch, true);
-    } finally {
-      LizzieFrame.isSavingRaw = originalRaw;
-      LizzieFrame.isSavingRawComment = originalComments;
+    return prepareSave(
+        board, board.getHistory(), false, false, currentBranch, currentBranch, true, raw, comments);
+  }
+
+  /**
+   * Exclusively owns a detached tree and the settings needed to render it. File-save workers
+   * serialize once; retries reuse the completed text. Neither the tree nor live owners escape.
+   */
+  public static final class SaveSnapshot {
+    private BoardHistoryList history;
+    private final SaveContext context;
+    private final boolean forUpload;
+    private final boolean fromAutoSave;
+    private final boolean mainTrunkOnly;
+    private final boolean stripRootMetadata;
+    private final boolean captureBranchOnly;
+    private String serialized;
+    private Exception failure;
+
+    private SaveSnapshot(
+        BoardHistoryList history, SaveContext context, boolean forUpload, boolean fromAutoSave,
+        boolean mainTrunkOnly, boolean stripRootMetadata, boolean captureBranchOnly) {
+      this.history = history;
+      this.context = context;
+      this.forUpload = forUpload;
+      this.fromAutoSave = fromAutoSave;
+      this.mainTrunkOnly = mainTrunkOnly;
+      this.stripRootMetadata = stripRootMetadata;
+      this.captureBranchOnly = captureBranchOnly;
+    }
+
+    public synchronized String serialize() throws IOException {
+      if (serialized != null) return serialized;
+      if (failure instanceof IOException io) throw io;
+      if (failure instanceof RuntimeException runtime) throw runtime;
+      try {
+        serialized = SGFParser.serialize(
+            history, context, forUpload, fromAutoSave, mainTrunkOnly,
+            stripRootMetadata, captureBranchOnly);
+        return serialized;
+      } catch (IOException | RuntimeException error) {
+        // Rendering generates comments on the private tree. Never retry a partially rendered
+        // tree or recapture a game which may have changed since this request was accepted.
+        failure = error;
+        throw error;
+      } finally {
+        history = null;
+      }
     }
   }
 
@@ -1177,7 +1222,8 @@ public class SGFParser {
     // Freeze only references/metadata here: payload commits may acquire other owners' locks, so
     // never acquire a BoardData monitor while holding the history monitor.
     synchronized (source) {
-      copy = source.shallowCopy();
+      // A save owns data, not the live history's engine-authorization references.
+      copy = new BoardHistoryList(null);
       current = source.getCurrentHistoryNode();
       copy.setGameInfo(copyGameInfo(source.getGameInfo()));
       if (currentBranchOnly) {
@@ -1242,6 +1288,22 @@ public class SGFParser {
     return board != null && board == Lizzie.board && board.getHistory() == history;
   }
 
+  /** Resource bundles are fixed per language; switching languages replaces the global reference. */
+  private record SaveOptions(
+      boolean raw, boolean comments, boolean appendWinrate, boolean doubleEngine,
+      boolean winrateAlwaysBlack, boolean scoreLeadWithKomi, ResourceBundle bundle,
+      String appVersion) {
+    static SaveOptions capture(boolean raw, boolean comments) {
+      var config = Lizzie.config;
+      return new SaveOptions(
+          raw, comments, config != null && config.appendWinrateToComment,
+          config != null && config.isDoubleEngineMode(),
+          config != null && config.winrateAlwaysBlack,
+          config != null && config.showKataGoScoreLeadWithKomi,
+          Lizzie.resourceBundle, Lizzie.nextVersion);
+    }
+  }
+
   /** Serialization decisions belong to the captured history, not to a newly opened game. */
   private record SaveContext(
       Board board,
@@ -1253,7 +1315,9 @@ public class SGFParser {
       double komi,
       String dataType,
       int boardWidth,
-      int boardHeight) {
+      int boardHeight,
+      SaveOptions options,
+      String rules) {
     static SaveContext current() {
       Board board = Lizzie.board;
       BoardHistoryList history = board.getHistory();
@@ -1262,6 +1326,12 @@ public class SGFParser {
 
     static SaveContext capture(
         Board board, BoardHistoryList sourceHistory, BoardHistoryList snapshot) {
+      return capture(board, sourceHistory, snapshot,
+          SaveOptions.capture(LizzieFrame.isSavingRaw, LizzieFrame.isSavingRawComment));
+    }
+
+    static SaveContext capture(
+        Board board, BoardHistoryList sourceHistory, BoardHistoryList snapshot, SaveOptions options) {
       boolean current = isCurrentSaveHistory(board, sourceHistory);
       GameInfo info = snapshot.getGameInfo();
       EngineGameRecordContext engineContext = engineGameContext(info);
@@ -1298,13 +1368,27 @@ public class SGFParser {
       int[] boardSize = resolveHistoryBoardSize(snapshot);
       return new SaveContext(
           board, sourceHistory, engineGame, pk, current && board.isGameBoard,
-          snapshot.isBlacksTurn(), info.getKomi(), dataType, boardSize[0], boardSize[1]);
+          snapshot.isBlacksTurn(), info.getKomi(), dataType, boardSize[0], boardSize[1], options,
+          current && Lizzie.leelaz != null && Lizzie.leelaz.isKatago
+              ? rulesLabel(Lizzie.leelaz.rulesSummary, options.bundle()) : "");
     }
 
     SaveContext withBoardSize(int[] boardSize) {
       return new SaveContext(
           board, sourceHistory, engineGameHistory, pkBoard, gameBoard,
-          blackToPlay, komi, dataType, boardSize[0], boardSize[1]);
+          blackToPlay, komi, dataType, boardSize[0], boardSize[1], options, rules);
+    }
+
+    SaveContext detached() {
+      return new SaveContext(
+          null, null, engineGameHistory, pkBoard, gameBoard, blackToPlay, komi,
+          dataType, boardWidth, boardHeight, options, rules);
+    }
+
+    double winrate(BoardData data, boolean secondary) {
+      double value = secondary ? data.winrate2 : data.winrate;
+      return options.winrateAlwaysBlack() && data.analysisBlackToPlay(secondary)
+          ? 100 - value : value;
     }
 
     boolean ownsCurrentHistory() {
@@ -1454,43 +1538,45 @@ public class SGFParser {
   }
 
   private static void appendMatchRulesComment(
-      BoardHistoryList history, GameInfo gameInfo, EngineGameRecordContext engineContext) {
+      BoardHistoryList history, GameInfo gameInfo, EngineGameRecordContext engineContext,
+      ResourceBundle bundle) {
     MatchRulesSnapshot snapshot = EngineGamePresentation.historyMatchRules(gameInfo);
-    if (snapshot != null && Lizzie.resourceBundle != null) {
+    if (snapshot != null && bundle != null) {
       BoardHistoryNode start = history.getStart();
       start.getData().comment =
           MatchRulesTexts.replaceSgfComment(
-              start.getData().comment, snapshot, Lizzie.resourceBundle);
+              start.getData().comment, snapshot, bundle);
       return;
     }
     if (engineContext != null) {
-      appendEngineGameSideRules(history, engineContext.black(), "SGFParse.blackRules");
-      appendEngineGameSideRules(history, engineContext.white(), "SGFParse.whiteRules");
+      appendEngineGameSideRules(history, engineContext.black(), "SGFParse.blackRules", bundle);
+      appendEngineGameSideRules(history, engineContext.white(), "SGFParse.whiteRules", bundle);
     }
   }
 
   private static void appendEngineGameSideRules(
-      BoardHistoryList history, EngineGameParticipantDescriptor side, String resourceKey) {
-    if (side == null || !side.katago() || Lizzie.resourceBundle == null) {
+      BoardHistoryList history, EngineGameParticipantDescriptor side, String resourceKey,
+      ResourceBundle bundle) {
+    if (side == null || !side.katago() || bundle == null) {
       return;
     }
-    String rules = rulesLabel(side.rulesSummary());
+    String rules = rulesLabel(side.rulesSummary(), bundle);
     if (rules.isEmpty()) {
       return;
     }
     BoardHistoryNode start = history.getStart();
     if (start.getData().comment.equals("")) {
-      start.getData().comment += Lizzie.resourceBundle.getString(resourceKey) + rules;
+      start.getData().comment += bundle.getString(resourceKey) + rules;
     } else {
-      start.getData().comment += "\n" + Lizzie.resourceBundle.getString(resourceKey) + rules;
+      start.getData().comment += "\n" + bundle.getString(resourceKey) + rules;
     }
   }
 
-  private static String rulesLabel(KataGoRules.Summary summary) {
-    if (summary == null || Lizzie.resourceBundle == null) {
+  private static String rulesLabel(KataGoRules.Summary summary, ResourceBundle bundle) {
+    if (summary == null || bundle == null) {
       return "";
     }
-    return Lizzie.resourceBundle.getString(summary.labelKey());
+    return bundle.getString(summary.labelKey());
   }
 
   public static void appendAiScoreBlunder() {
@@ -1581,9 +1667,18 @@ public class SGFParser {
   /** Freezes the exact source history without installing it as the board's current history. */
   public static String captureSave(
       Board board, BoardHistoryList sourceHistory, boolean isAutoSave) throws IOException {
-    // Automatic/temporary saves need the same detached tree as manual saves. Finish
-    // serialization before opening any file, so a failed capture cannot truncate the old SGF.
-    return serialize(board, sourceHistory, false, isAutoSave, false, false, true);
+    return captureSaveSnapshot(board, sourceHistory, isAutoSave).serialize();
+  }
+
+  /**
+   * Freezes an exact history on its owner thread. Completed engine games also call this from
+   * their terminal owner before retirement; ordinary UI saves capture on the EDT.
+   */
+  public static SaveSnapshot captureSaveSnapshot(
+      Board board, BoardHistoryList sourceHistory, boolean isAutoSave) throws IOException {
+    return prepareSave(
+        board, sourceHistory, false, isAutoSave, false, false, true,
+        LizzieFrame.isSavingRaw, LizzieFrame.isSavingRawComment);
   }
 
   private static String serialize(
@@ -1595,9 +1690,18 @@ public class SGFParser {
       boolean stripRootMetadata,
       boolean captureSnapshot)
       throws IOException {
+    return prepareSave(
+        board, sourceHistory, forUpload, fromAutoSave, mainTrunkOnly, stripRootMetadata,
+        captureSnapshot, LizzieFrame.isSavingRaw, LizzieFrame.isSavingRawComment).serialize();
+  }
+
+  private static SaveSnapshot prepareSave(
+      Board board, BoardHistoryList sourceHistory, boolean forUpload, boolean fromAutoSave,
+      boolean mainTrunkOnly, boolean stripRootMetadata, boolean captureSnapshot,
+      boolean raw, boolean comments) throws IOException {
     maybeCaptureEngineGameSaveSnapshot(board, sourceHistory);
     if (captureSnapshot
-        && !LizzieFrame.isSavingRaw
+        && !raw
         && sourceHistory.getGameInfo().hasEngineGameHistory()
         && sourceHistory.getGameInfo().engineGameRecord() == null
         && isCurrentSaveHistory(board, sourceHistory)) {
@@ -1607,13 +1711,25 @@ public class SGFParser {
     }
     // Standard saves may generate comments on a node's original first child. Keep their full
     // topology; raw branch exports only need the selected ancestors and first-child continuation.
-    boolean captureBranchOnly = captureSnapshot && mainTrunkOnly && LizzieFrame.isSavingRaw;
+    boolean captureBranchOnly = captureSnapshot && mainTrunkOnly && raw;
     BoardHistoryList history =
         captureSnapshot
             ? captureSaveHistory(sourceHistory, captureBranchOnly)
             : sourceHistory.shallowCopy();
+    SaveContext context = SaveContext.capture(
+        board, sourceHistory, history, SaveOptions.capture(raw, comments));
+    if (!captureSnapshot && !raw && context.engineGameHistory() && context.ownsCurrentHistory()) {
+      board.updateWinrate();
+    }
+    return new SaveSnapshot(
+        history, captureSnapshot ? context.detached() : context, forUpload, fromAutoSave,
+        mainTrunkOnly, stripRootMetadata, captureBranchOnly);
+  }
+
+  private static String serialize(
+      BoardHistoryList history, SaveContext saveContext, boolean forUpload, boolean fromAutoSave,
+      boolean mainTrunkOnly, boolean stripRootMetadata, boolean captureBranchOnly) throws IOException {
     try (var phase = new SgfPhase("save-serialize")) {
-      SaveContext saveContext = SaveContext.capture(board, sourceHistory, history);
       String boardSizeTag = formatBoardSizeTag(saveContext.boardWidth(), saveContext.boardHeight());
 
       // collect game info
@@ -1629,26 +1745,24 @@ public class SGFParser {
 
       // add SGF header
       StringBuilder builder = new StringBuilder("(;");
-      if (!LizzieFrame.isSavingRaw) {
+      if (!saveContext.options().raw()) {
         if (engineGameHistory) {
-          if (!captureSnapshot && saveContext.ownsCurrentHistory()) board.updateWinrate();
-          appendTime(gameInfo, history);
-          appendMatchRulesComment(history, gameInfo, engineContext);
+          appendTime(gameInfo, history, saveContext.options().bundle());
+          appendMatchRulesComment(history, gameInfo, engineContext, saveContext.options().bundle());
         } else {
-          if (saveContext.ownsCurrentHistory()
-              && Lizzie.leelaz != null && Lizzie.leelaz.isKatago && !fromAutoSave) {
-            String rules = rulesLabel(Lizzie.leelaz.rulesSummary);
+          if (!fromAutoSave) {
+            String rules = saveContext.rules();
             if (!rules.isEmpty()) {
               if (history.getStart().getData().comment.equals(""))
                 history.getStart().getData().comment +=
-                    Lizzie.resourceBundle.getString("SGFParse.rules") + rules;
+                    saveContext.options().bundle().getString("SGFParse.rules") + rules;
               else if (!history
                   .getStart()
                   .getData()
                   .comment
-                  .contains(Lizzie.resourceBundle.getString("SGFParse.rules")))
+                  .contains(saveContext.options().bundle().getString("SGFParse.rules")))
                 history.getStart().getData().comment =
-                    Lizzie.resourceBundle.getString("SGFParse.rules")
+                    saveContext.options().bundle().getString("SGFParse.rules")
                         + rules
                         + "\n\n"
                         + history.getStart().getData().comment;
@@ -1657,12 +1771,12 @@ public class SGFParser {
                 int leftIndex =
                     oldComment.indexOf(
                         "\n",
-                        oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")));
+                        oldComment.indexOf(saveContext.options().bundle().getString("SGFParse.rules")));
                 history.getStart().getData().comment =
                     oldComment.substring(
                             0,
-                            oldComment.indexOf(Lizzie.resourceBundle.getString("SGFParse.rules")))
-                        + Lizzie.resourceBundle.getString("SGFParse.rules")
+                            oldComment.indexOf(saveContext.options().bundle().getString("SGFParse.rules")))
+                        + saveContext.options().bundle().getString("SGFParse.rules")
                         + rules
                         + (leftIndex > 0 ? oldComment.substring(leftIndex) : "");
               }
@@ -1701,11 +1815,11 @@ public class SGFParser {
       } else {
         rootData.setProperty("DT", Escaping(date));
       }
-      if (!LizzieFrame.isSavingRaw) {
+      if (!saveContext.options().raw()) {
         if (!saveContext.dataType().isEmpty()) {
           rootData.setProperty("DZ", saveContext.dataType());
         }
-        rootData.setProperty("AP", Escaping("KG-next: " + Lizzie.nextVersion));
+        rootData.setProperty("AP", Escaping("KG-next: " + saveContext.options().appVersion()));
       }
       rootData.setProperty("RE", Escaping(result));
       rootData.setProperty("SZ", boardSizeTag);
@@ -1754,7 +1868,8 @@ public class SGFParser {
         if (forUpload) {
           coment =
               removeWinrateComment(
-                  history.getData().isKataData, history.getData().isSaiData, coment);
+                  history.getData().isKataData, history.getData().isSaiData, coment,
+                  saveContext.options().bundle());
         }
         builder.append("C[").append(Escaping(coment)).append(']');
       }
@@ -1845,11 +1960,11 @@ public class SGFParser {
   }
 
   private static void appendTime(GameInfo info) {
-    appendTime(info, Lizzie.board == null ? null : Lizzie.board.getHistory());
+    appendTime(info, Lizzie.board == null ? null : Lizzie.board.getHistory(), Lizzie.resourceBundle);
   }
 
-  private static void appendTime(GameInfo info, BoardHistoryList history) {
-    if (history == null || Lizzie.resourceBundle == null) {
+  private static void appendTime(GameInfo info, BoardHistoryList history, ResourceBundle bundle) {
+    if (history == null || bundle == null) {
       return;
     }
     BoardHistoryNode node = history.getCurrentHistoryNode();
@@ -1867,9 +1982,9 @@ public class SGFParser {
     }
     node.getData().comment +=
         "\n"
-            + Lizzie.resourceBundle.getString("SGFParse.moveTime")
+            + bundle.getString("SGFParse.moveTime")
             + moveTimeMs / 1000f
-            + Lizzie.resourceBundle.getString("SGFParse.seconds");
+            + bundle.getString("SGFParse.seconds");
   }
 
   //
@@ -1918,7 +2033,8 @@ public class SGFParser {
               sourceBoard != null && sourceBoard.isPkBoard,
               sourceBoard != null && sourceBoard.isGameBoard,
               data.blackToPlay, data.komi == -999 ? GameInfo.DEFAULT_KOMI : data.komi,
-              "", boardSize[0], boardSize[1]);
+              "", boardSize[0], boardSize[1],
+              SaveOptions.capture(LizzieFrame.isSavingRaw, LizzieFrame.isSavingRawComment), "");
     }
     return generateNode(saveContext, node, forUpload, builder);
   }
@@ -2130,11 +2246,11 @@ public class SGFParser {
       StringBuilder builder, BoardHistoryNode node, boolean forUpload, boolean includeAnalysisData,
       SaveContext saveContext)
       throws IOException {
-    if (!LizzieFrame.isSavingRaw) {
+    if (!saveContext.options().raw()) {
       appendStandardSerializedComment(builder, node, forUpload, includeAnalysisData, saveContext);
       return;
     }
-    if (LizzieFrame.isSavingRawComment) {
+    if (saveContext.options().comments()) {
       appendRawSerializedComment(builder, node, forUpload, saveContext);
     }
   }
@@ -2150,7 +2266,8 @@ public class SGFParser {
     }
     if (forUpload) {
       curComment =
-          removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment);
+          removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment,
+              saveContext.options().bundle());
     }
     if (!curComment.isEmpty()) {
       builder.append("C[").append(Escaping(curComment)).append(']');
@@ -2163,7 +2280,7 @@ public class SGFParser {
   private static void prepareCommentForSave(BoardHistoryNode node, SaveContext saveContext)
       throws IOException {
     BoardData data = node.getData();
-    if (Lizzie.config.appendWinrateToComment) {
+    if (saveContext.options().appendWinrate()) {
       if (!saveContext.engineGameHistory() && !saveContext.pkBoard()) {
         if (saveContext.gameBoard()) {
           updateGameComment(node, data, saveContext);
@@ -2172,7 +2289,7 @@ public class SGFParser {
             return;
           }
           if (data.getPlayouts() > 0) data.setGeneratedComment(() -> formatComment(node, saveContext));
-          if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
+          if (saveContext.options().doubleEngine() && data.getPlayouts2() > 0) {
             data.setGeneratedComment(() -> formatComment2(node, saveContext));
           }
         }
@@ -2189,7 +2306,8 @@ public class SGFParser {
     if (node.next().isEmpty()) return;
     BoardData destination = node.next().get().getData();
     destination.setGeneratedComment(() -> mergeAnalysisComment(
-        destination.comment, data.getPlayouts() > 0 ? formatCommentForGame(node, saveContext) : ""));
+        destination.comment, data.getPlayouts() > 0 ? formatCommentForGame(node, saveContext) : "",
+        saveContext.options().bundle()));
   }
 
   private static String getSerializedComment(BoardHistoryNode node, SaveContext saveContext)
@@ -2203,12 +2321,13 @@ public class SGFParser {
     BoardHistoryNode previous = node.previous().get();
     String source = previous.previous().isEmpty()
         ? formatCommentPk(previous, saveContext) : previous.getData().comment;
-    return mergeAnalysisComment(node.getData().comment, splitWinrateComment(source).matchInfo);
+    return mergeAnalysisComment(node.getData().comment, splitWinrateComment(source, saveContext.options().bundle()).matchInfo,
+        saveContext.options().bundle());
   }
 
   private static boolean shouldFormatSnapshotCommentForSave(
       BoardHistoryNode node, SaveContext saveContext) {
-    return Lizzie.config.appendWinrateToComment
+    return saveContext.options().appendWinrate()
         && node.getData().isSnapshotNode()
         && !saveContext.engineGameHistory()
         && !saveContext.pkBoard()
@@ -2222,7 +2341,7 @@ public class SGFParser {
     if (data.getPlayouts() > 0) {
       curComment = formatComment(node, saveContext);
     }
-    if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
+    if (saveContext.options().doubleEngine() && data.getPlayouts2() > 0) {
       curComment = formatComment2(node, saveContext);
     }
     return curComment;
@@ -2238,7 +2357,7 @@ public class SGFParser {
         curComment = formatSnapshotCommentForExport(node, saveContext);
       } else {
         if (data.getPlayouts() > 0) data.setGeneratedComment(() -> formatComment(node, saveContext));
-        if (Lizzie.config.isDoubleEngineMode() && data.getPlayouts2() > 0) {
+        if (saveContext.options().doubleEngine() && data.getPlayouts2() > 0) {
           data.setGeneratedComment(() -> formatComment2(node, saveContext));
         }
         curComment = data.comment;
@@ -2246,7 +2365,8 @@ public class SGFParser {
     }
     if (forUpload) {
       curComment =
-          removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment);
+          removeWinrateComment(node.getData().isKataData, node.getData().isSaiData, curComment,
+              saveContext.options().bundle());
     }
     if (!curComment.isEmpty()) {
       builder.append("C[").append(Escaping(curComment)).append(']');
@@ -2282,8 +2402,8 @@ public class SGFParser {
   }
 
   private static String removeWinrateComment(
-      boolean isKataData, boolean isSaiData, String curComment) {
-    return curComment.replaceAll(winrateCommentRegex(isKataData, isSaiData), "");
+      boolean isKataData, boolean isSaiData, String curComment, ResourceBundle bundle) {
+    return curComment.replaceAll(winrateCommentRegex(isKataData, isSaiData, bundle), "");
   }
 
   /** Personal commentary plus the current-language formatComment match-info block. */
@@ -2302,12 +2422,16 @@ public class SGFParser {
    * using the same language-dependent pattern the writer already uses.
    */
   public static WinrateCommentSplit splitWinrateComment(String comment) {
-    if (comment == null || comment.isEmpty() || Lizzie.resourceBundle == null) {
+    return splitWinrateComment(comment, Lizzie.resourceBundle);
+  }
+
+  private static WinrateCommentSplit splitWinrateComment(String comment, ResourceBundle bundle) {
+    if (comment == null || comment.isEmpty() || bundle == null) {
       return new WinrateCommentSplit(comment == null ? "" : comment, "");
     }
     boolean[][] variants = {{true, false}, {true, true}, {false, false}};
     for (boolean[] variant : variants) {
-      String wp = winrateCommentRegex(variant[0], variant[1]);
+      String wp = winrateCommentRegex(variant[0], variant[1], bundle);
       Matcher matcher = Pattern.compile(wp).matcher(comment);
       if (matcher.find()) {
         String matchInfo = matcher.group().trim();
@@ -2317,64 +2441,70 @@ public class SGFParser {
     return new WinrateCommentSplit(comment, "");
   }
 
-  private static String winrateCommentRegex(boolean isKataData, boolean isSaiData) {
+  private static String winrateCommentRegex(
+      boolean isKataData, boolean isSaiData, ResourceBundle bundle) {
     // Stored summaries retain their score label when the display preference changes.
     String lead =
-        "(?:" + Pattern.quote(Lizzie.resourceBundle.getString("SGFParse.leadWithKomi"))
-            + "|" + Pattern.quote(Lizzie.resourceBundle.getString("SGFParse.leadJustScore")) + ")";
+        "(?:" + Pattern.quote(bundle.getString("SGFParse.leadWithKomi"))
+            + "|" + Pattern.quote(bundle.getString("SGFParse.leadJustScore")) + ")";
     if (!isKataData) {
       return "("
-          + Lizzie.resourceBundle.getString("SGFParse.black")
+          + bundle.getString("SGFParse.black")
           + " |"
-          + Lizzie.resourceBundle.getString("SGFParse.white")
+          + bundle.getString("SGFParse.white")
           + " )"
-          + Lizzie.resourceBundle.getString("SGFParse.winrate")
+          + bundle.getString("SGFParse.winrate")
           + " [0-9\\.\\-]+%* \\(*[0-9.\\-+]*%*\\)*\n\\("
           + ".*"
           + " / [0-9\\.]*[kmKM]* "
-          + Lizzie.resourceBundle.getString("SGFParse.playouts")
+          + bundle.getString("SGFParse.playouts")
           + "\\)\\n"
-          + Lizzie.resourceBundle.getString("SGFParse.komi")
+          + bundle.getString("SGFParse.komi")
           + ".*";
     }
     if (isSaiData) {
       return "("
-          + Lizzie.resourceBundle.getString("SGFParse.black")
+          + bundle.getString("SGFParse.black")
           + " |"
-          + Lizzie.resourceBundle.getString("SGFParse.white")
+          + bundle.getString("SGFParse.white")
           + " )"
-          + Lizzie.resourceBundle.getString("SGFParse.winrate")
+          + bundle.getString("SGFParse.winrate")
           + " [0-9\\.\\-]+%* \\(*[0-9.\\-+]*%*\\)*\n"
           + lead
           + " [0-9\\.\\-+]* \\(*[0-9.\\-+]*\\)*\n\\("
           + ".*"
           + " / [0-9\\.]*[kmKM]* "
-          + Lizzie.resourceBundle.getString("SGFParse.playouts")
+          + bundle.getString("SGFParse.playouts")
           + "\\)\\n"
-          + Lizzie.resourceBundle.getString("SGFParse.komi")
+          + bundle.getString("SGFParse.komi")
           + ".*";
     }
     return "("
-        + Lizzie.resourceBundle.getString("SGFParse.black")
+        + bundle.getString("SGFParse.black")
         + " |"
-        + Lizzie.resourceBundle.getString("SGFParse.white")
+        + bundle.getString("SGFParse.white")
         + " )"
-        + Lizzie.resourceBundle.getString("SGFParse.winrate")
+        + bundle.getString("SGFParse.winrate")
         + " [0-9\\.\\-]+%* \\(*[0-9.\\-+]*%*\\)*\n"
         + lead
         + " [0-9\\.\\-+]* \\(*[0-9.\\-+]*\\)* "
-        + Lizzie.resourceBundle.getString("SGFParse.stdev")
+        + bundle.getString("SGFParse.stdev")
         + " [0-9\\.\\-+]*\n\\("
         + ".*"
         + " / [0-9\\.]*[kmKM]* "
-        + Lizzie.resourceBundle.getString("SGFParse.playouts")
+        + bundle.getString("SGFParse.playouts")
         + "\\)\\n"
-        + Lizzie.resourceBundle.getString("SGFParse.komi")
+        + bundle.getString("SGFParse.komi")
         + ".*";
   }
 
   private static String mergeAnalysisComment(String comment, String summary) {
-    WinrateCommentSplit split = splitWinrateComment(comment);
+    return mergeAnalysisComment(comment, summary, Lizzie.resourceBundle);
+  }
+
+  private static String mergeAnalysisComment(
+      String comment, String summary, ResourceBundle bundle) {
+    WinrateCommentSplit split = splitWinrateComment(comment, bundle);
     if (!split.matchInfo.isEmpty()) return comment.replace(split.matchInfo, summary);
     if (summary.isEmpty()) return comment;
     return comment.isEmpty() ? summary : comment + "\n\n" + summary;
@@ -2400,14 +2530,14 @@ public class SGFParser {
     Optional<BoardData> lastNode = node.previous().flatMap(n -> Optional.of(n.getData()));
     boolean validLastWinrate = lastNode.isPresent();
 
-    double lastWR = validLastWinrate ? lastNode.get().getWinrate() : 50;
+    double lastWR = validLastWinrate ? saveContext.winrate(lastNode.get(), false) : 50;
     // Current winrate
     boolean validWinrate = (data.getPlayouts() > 0);
     double curWR;
-    if (Lizzie.config.winrateAlwaysBlack) {
-      curWR = validWinrate ? data.getWinrate() : lastWR;
+    if (saveContext.options().winrateAlwaysBlack()) {
+      curWR = validWinrate ? saveContext.winrate(data, false) : lastWR;
     } else {
-      curWR = validWinrate ? data.getWinrate() : 100 - lastWR;
+      curWR = validWinrate ? saveContext.winrate(data, false) : 100 - lastWR;
     }
 
     // Last move difference winrate
@@ -2420,7 +2550,7 @@ public class SGFParser {
       // lastHandicapedWR);
       //      } else {
       double diff;
-      if (Lizzie.config.winrateAlwaysBlack) {
+      if (saveContext.options().winrateAlwaysBlack()) {
         diff = lastWR - curWR;
       } else {
         diff = 100 - lastWR - curWR;
@@ -2433,7 +2563,7 @@ public class SGFParser {
     // lastMoveDiff = "";
     // }
     //    String wf = "%s棋 胜率: %s %s\n(%s / %s 计算量)";
-    boolean blackWinrate = !data.analysisBlackToPlay(false) || Lizzie.config.winrateAlwaysBlack;
+    boolean blackWinrate = !data.analysisBlackToPlay(false) || saveContext.options().winrateAlwaysBlack();
     String nc = "";
     //        String.format(
     //            wf,
@@ -2448,7 +2578,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = -data.scoreMean - node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false))
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(false))
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2456,7 +2586,7 @@ public class SGFParser {
       }
       if (data.isSaiData) {
         double score = -node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.analysisBlackToPlay(false)) {
             score = score - saveContext.komi();
             // else score = -score;
@@ -2464,26 +2594,26 @@ public class SGFParser {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(false)) score = -score;
+        } else if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(false)) score = -score;
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2493,7 +2623,7 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = -node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.analysisBlackToPlay(false)) {
             score = score - saveContext.komi();
             // else score = -score;
@@ -2501,21 +2631,21 @@ public class SGFParser {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(false)) score = -score;
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(false)) score = -score;
+        } else if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(false)) score = -score;
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s "
-                + Lizzie.resourceBundle.getString("SGFParse.stdev")
+                + saveContext.options().bundle().getString("SGFParse.stdev")
                 + " %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         double scoreStdev = node.getData().scoreStdev;
 
@@ -2523,8 +2653,8 @@ public class SGFParser {
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2533,24 +2663,24 @@ public class SGFParser {
                 engine,
                 playouts,
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance(), saveContext.options().bundle()));
       }
     } else {
       String wf =
           "%s "
-              + Lizzie.resourceBundle.getString("SGFParse.winrate")
+              + saveContext.options().bundle().getString("SGFParse.winrate")
               + " %s %s\n(%s / %s "
-              + Lizzie.resourceBundle.getString("SGFParse.playouts")
+              + saveContext.options().bundle().getString("SGFParse.playouts")
               + ")\n"
-              + Lizzie.resourceBundle.getString("SGFParse.komi")
+              + saveContext.options().bundle().getString("SGFParse.komi")
               + " %s";
 
       nc =
           String.format(
               wf,
               blackWinrate
-                  ? Lizzie.resourceBundle.getString("SGFParse.black")
-                  : Lizzie.resourceBundle.getString("SGFParse.white"),
+                  ? saveContext.options().bundle().getString("SGFParse.black")
+                  : saveContext.options().bundle().getString("SGFParse.white"),
               String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
               lastMoveDiff,
               engine,
@@ -2558,7 +2688,7 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    return mergeAnalysisComment(data.comment, nc);
+    return mergeAnalysisComment(data.comment, nc, saveContext.options().bundle());
   }
 
   private static String formatCommentForGame(BoardHistoryNode node) {
@@ -2582,10 +2712,10 @@ public class SGFParser {
     // Current winrate
     boolean validWinrate = (data.getPlayouts() > 0);
     double curWR;
-    //  if (Lizzie.config.winrateAlwaysBlack) {
+    //  if (saveContext.options().winrateAlwaysBlack()) {
     curWR = validWinrate ? data.winrate : lastWR;
     //  } else {
-    //    curWR = validWinrate ? data.getWinrate() : 100 - lastWR;
+    //    curWR = validWinrate ? saveContext.winrate(data, false) : 100 - lastWR;
     //  }
 
     // Last move difference winrate
@@ -2598,7 +2728,7 @@ public class SGFParser {
       // lastHandicapedWR);
       //      } else {
       double diff;
-      //  if (Lizzie.config.winrateAlwaysBlack) {
+      //  if (saveContext.options().winrateAlwaysBlack()) {
       //      diff = lastWR - curWR;
       //   } else {
       diff = 100 - lastWR - curWR;
@@ -2627,7 +2757,7 @@ public class SGFParser {
       if (node.previous().isPresent()) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = -data.scoreMean - node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && saveContext.blackToPlay())
+          if (saveContext.options().winrateAlwaysBlack() && saveContext.blackToPlay())
             diff = -diff;
           // if (!blackWinrate) diff = -diff;
           diffScore =
@@ -2645,7 +2775,7 @@ public class SGFParser {
       }
       if (data.isSaiData) {
         double score = data.scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.blackToPlay) {
             score = score + saveContext.komi();
             // else score = -score;
@@ -2656,22 +2786,22 @@ public class SGFParser {
         }
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.white")
-                    : Lizzie.resourceBundle.getString("SGFParse.black"),
+                    ? saveContext.options().bundle().getString("SGFParse.white")
+                    : saveContext.options().bundle().getString("SGFParse.black"),
                 String.format(Locale.ENGLISH, "%.1f%%", curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2681,7 +2811,7 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.blackToPlay) {
             score = score + saveContext.komi();
             // else score = -score;
@@ -2692,25 +2822,25 @@ public class SGFParser {
         }
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s "
-                + Lizzie.resourceBundle.getString("SGFParse.stdev")
+                + saveContext.options().bundle().getString("SGFParse.stdev")
                 + " %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         double scoreStdev = node.getData().scoreStdev;
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.white")
-                    : Lizzie.resourceBundle.getString("SGFParse.black"),
+                    ? saveContext.options().bundle().getString("SGFParse.white")
+                    : saveContext.options().bundle().getString("SGFParse.black"),
                 String.format(Locale.ENGLISH, "%.1f%%", curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2719,24 +2849,24 @@ public class SGFParser {
                 engine,
                 playouts,
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance(), saveContext.options().bundle()));
       }
     } else {
       String wf =
           "%s "
-              + Lizzie.resourceBundle.getString("SGFParse.winrate")
+              + saveContext.options().bundle().getString("SGFParse.winrate")
               + " %s %s\n(%s / %s "
-              + Lizzie.resourceBundle.getString("SGFParse.playouts")
+              + saveContext.options().bundle().getString("SGFParse.playouts")
               + ")\n"
-              + Lizzie.resourceBundle.getString("SGFParse.komi")
+              + saveContext.options().bundle().getString("SGFParse.komi")
               + " %s";
 
       nc =
           String.format(
               wf,
               blackWinrate
-                  ? Lizzie.resourceBundle.getString("SGFParse.white")
-                  : Lizzie.resourceBundle.getString("SGFParse.black"),
+                  ? saveContext.options().bundle().getString("SGFParse.white")
+                  : saveContext.options().bundle().getString("SGFParse.black"),
               String.format(Locale.ENGLISH, "%.1f%%", curWR),
               lastMoveDiff,
               engine,
@@ -2785,7 +2915,7 @@ public class SGFParser {
       }
       if (data.isSaiData) {
         double score = data.scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.blackToPlay) {
             score = score + saveContext.komi();
             // else score = -score;
@@ -2796,22 +2926,22 @@ public class SGFParser {
         }
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2821,7 +2951,7 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.blackToPlay) {
             score = score + saveContext.komi();
             // else score = -score;
@@ -2832,25 +2962,25 @@ public class SGFParser {
         }
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s "
-                + Lizzie.resourceBundle.getString("SGFParse.stdev")
+                + saveContext.options().bundle().getString("SGFParse.stdev")
                 + " %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         double scoreStdev = node.getData().scoreStdev;
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2859,24 +2989,24 @@ public class SGFParser {
                 engine,
                 playouts,
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance()));
+                    + getPdaWrnString(data.pda, data.primaryAnalysisProvenance(), saveContext.options().bundle()));
       }
     } else {
       String wf =
           "%s "
-              + Lizzie.resourceBundle.getString("SGFParse.winrate")
+              + saveContext.options().bundle().getString("SGFParse.winrate")
               + " %s %s\n(%s / %s "
-              + Lizzie.resourceBundle.getString("SGFParse.playouts")
+              + saveContext.options().bundle().getString("SGFParse.playouts")
               + ")\n"
-              + Lizzie.resourceBundle.getString("SGFParse.komi")
+              + saveContext.options().bundle().getString("SGFParse.komi")
               + " %s";
 
       nc =
           String.format(
               wf,
               blackWinrate
-                  ? Lizzie.resourceBundle.getString("SGFParse.black")
-                  : Lizzie.resourceBundle.getString("SGFParse.white"),
+                  ? saveContext.options().bundle().getString("SGFParse.black")
+                  : saveContext.options().bundle().getString("SGFParse.white"),
               String.format(Locale.ENGLISH, "%.1f%%", curWR),
               lastMoveDiff,
               engine,
@@ -2884,13 +3014,13 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    return mergeAnalysisComment(data.comment, nc);
+    return mergeAnalysisComment(data.comment, nc, saveContext.options().bundle());
   }
 
-  private static String getPdaWrnString(double pda, AnalysisProvenance provenance) {
-    String line = pda != 0 ? " " + Lizzie.resourceBundle.getString("SGFParse.pda") + pda : "";
+  private static String getPdaWrnString(double pda, AnalysisProvenance provenance, ResourceBundle bundle) {
+    String line = pda != 0 ? " " + bundle.getString("SGFParse.pda") + pda : "";
     Double wrn = provenance == null ? null : provenance.wrn();
-    line += wrn != null ? " " + Lizzie.resourceBundle.getString("SGFParse.wrn") + wrn : "";
+    line += wrn != null ? " " + bundle.getString("SGFParse.wrn") + wrn : "";
     return line;
   }
 
@@ -2905,16 +3035,16 @@ public class SGFParser {
     Optional<BoardData> lastNode = node.previous().flatMap(n -> Optional.of(n.getData()));
     boolean validLastWinrate = lastNode.isPresent();
 
-    double lastWR = validLastWinrate ? lastNode.get().getWinrate2() : 50;
+    double lastWR = validLastWinrate ? saveContext.winrate(lastNode.get(), true) : 50;
     if (saveContext.engineGameHistory() && node.moveNumberOfNode() > 2) {
       lastWR = 100 - lastWR;
     }
     boolean validWinrate = (data.getPlayouts2() > 0);
     double curWR;
-    if (Lizzie.config.winrateAlwaysBlack) {
-      curWR = validWinrate ? data.getWinrate2() : lastWR;
+    if (saveContext.options().winrateAlwaysBlack()) {
+      curWR = validWinrate ? saveContext.winrate(data, true) : lastWR;
     } else {
-      curWR = validWinrate ? data.getWinrate2() : 100 - lastWR;
+      curWR = validWinrate ? saveContext.winrate(data, true) : 100 - lastWR;
     }
 
     String lastMoveDiff = "";
@@ -2926,7 +3056,7 @@ public class SGFParser {
       // lastHandicapedWR);
       //	      } else {
       double diff;
-      if (Lizzie.config.winrateAlwaysBlack) {
+      if (saveContext.options().winrateAlwaysBlack()) {
         diff = lastWR - curWR;
       } else {
         diff = 100 - lastWR - curWR;
@@ -2935,7 +3065,7 @@ public class SGFParser {
           String.format(Locale.ENGLISH, "(%s%.1f%%)", diff > 0 ? "+" : "-", Math.abs(diff));
       //  }
     }
-    boolean blackWinrate = !data.analysisBlackToPlay(true) || Lizzie.config.winrateAlwaysBlack;
+    boolean blackWinrate = !data.analysisBlackToPlay(true) || saveContext.options().winrateAlwaysBlack();
     String nc = "";
 
     if (data.isKataData2) {
@@ -2943,7 +3073,7 @@ public class SGFParser {
       if (validLastWinrate && validWinrate) {
         if (node.previous().get().getData().getPlayouts() > 0) {
           double diff = data.scoreMean + node.previous().get().getData().scoreMean;
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true))
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(true))
             diff = -diff;
           diffScore =
               String.format(Locale.ENGLISH, "(%s%.1f)", diff > 0 ? "+" : "-", Math.abs(diff));
@@ -2951,7 +3081,7 @@ public class SGFParser {
       }
       if (data.isSaiData2) {
         double score = -node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.analysisBlackToPlay(true)) {
             score = score - saveContext.komi();
             // else score = -score;
@@ -2959,26 +3089,26 @@ public class SGFParser {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(true)) score = -score;
+        } else if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(true)) score = -score;
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -2988,7 +3118,7 @@ public class SGFParser {
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
       } else {
         double score = -node.getData().scoreMean;
-        if (Lizzie.config.showKataGoScoreLeadWithKomi) {
+        if (saveContext.options().scoreLeadWithKomi()) {
           if (data.analysisBlackToPlay(true)) {
             score = score - saveContext.komi();
             // else score = -score;
@@ -2996,29 +3126,29 @@ public class SGFParser {
             score = score + saveContext.komi();
             //   else score = -score;
           }
-          if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
-        } else if (Lizzie.config.winrateAlwaysBlack && data.analysisBlackToPlay(true)) score = -score;
+          if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(true)) score = -score;
+        } else if (saveContext.options().winrateAlwaysBlack() && data.analysisBlackToPlay(true)) score = -score;
         String wf =
             "%s "
-                + Lizzie.resourceBundle.getString("SGFParse.winrate")
+                + saveContext.options().bundle().getString("SGFParse.winrate")
                 + " %s %s\n"
-                + (Lizzie.config.showKataGoScoreLeadWithKomi
-                    ? Lizzie.resourceBundle.getString("SGFParse.leadWithKomi")
-                    : Lizzie.resourceBundle.getString("SGFParse.leadJustScore"))
+                + (saveContext.options().scoreLeadWithKomi()
+                    ? saveContext.options().bundle().getString("SGFParse.leadWithKomi")
+                    : saveContext.options().bundle().getString("SGFParse.leadJustScore"))
                 + " %s %s "
-                + Lizzie.resourceBundle.getString("SGFParse.stdev")
+                + saveContext.options().bundle().getString("SGFParse.stdev")
                 + " %s\n(%s / %s "
-                + Lizzie.resourceBundle.getString("SGFParse.playouts")
+                + saveContext.options().bundle().getString("SGFParse.playouts")
                 + ")\n"
-                + Lizzie.resourceBundle.getString("SGFParse.komi")
+                + saveContext.options().bundle().getString("SGFParse.komi")
                 + " %s";
         double scoreStdev = node.getData().scoreStdev2;
         nc =
             String.format(
                 wf,
                 blackWinrate
-                    ? Lizzie.resourceBundle.getString("SGFParse.black")
-                    : Lizzie.resourceBundle.getString("SGFParse.white"),
+                    ? saveContext.options().bundle().getString("SGFParse.black")
+                    : saveContext.options().bundle().getString("SGFParse.white"),
                 String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
                 lastMoveDiff,
                 String.format(Locale.ENGLISH, "%.1f", score),
@@ -3027,24 +3157,25 @@ public class SGFParser {
                 engine,
                 playouts,
                 String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data))
-                    + getPdaWrnString(data.pda2, data.secondaryAnalysisProvenance()));
+                    + getPdaWrnString(
+                        data.pda2, data.secondaryAnalysisProvenance(), saveContext.options().bundle()));
       }
     } else {
       String wf =
           "%s "
-              + Lizzie.resourceBundle.getString("SGFParse.winrate")
+              + saveContext.options().bundle().getString("SGFParse.winrate")
               + " %s %s\n(%s / %s "
-              + Lizzie.resourceBundle.getString("SGFParse.playouts")
+              + saveContext.options().bundle().getString("SGFParse.playouts")
               + ")\n"
-              + Lizzie.resourceBundle.getString("SGFParse.komi")
+              + saveContext.options().bundle().getString("SGFParse.komi")
               + " %s";
 
       nc =
           String.format(
               wf,
               blackWinrate
-                  ? Lizzie.resourceBundle.getString("SGFParse.black")
-                  : Lizzie.resourceBundle.getString("SGFParse.white"),
+                  ? saveContext.options().bundle().getString("SGFParse.black")
+                  : saveContext.options().bundle().getString("SGFParse.white"),
               String.format(Locale.ENGLISH, "%.1f%%", 100 - curWR),
               lastMoveDiff,
               engine,
@@ -3052,7 +3183,7 @@ public class SGFParser {
               String.format(Locale.ENGLISH, "%.1f", saveContext.komiFor(data)));
     }
 
-    return mergeAnalysisComment(data.comment, nc);
+    return mergeAnalysisComment(data.comment, nc, saveContext.options().bundle());
   }
 
   /** Format Comment with following format: <Winrate> <Playouts> */

@@ -2835,11 +2835,12 @@ public class BottomToolbar extends JPanel {
         () -> Lizzie.frame == frame && LizzieFrame.toolbar == this && Lizzie.board == board
             && board.getHistory() == history && history.getStart() == root;
     try {
-      String snapshot = SGFParser.captureSave(board, history, false);
+      SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(board, history, false);
       SgfSaveCoordinator.submitSave(
           () -> {
+            String sgf = snapshot.serialize();
             Path output = resolveAutoAnalyzeOutput(sourceFile, workDirectory, analyzedLabel, timestamp);
-            AtomicSgfFileWriter.write(output, snapshot);
+            AtomicSgfFileWriter.write(output, sgf);
             return output;
           },
           current,

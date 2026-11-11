@@ -103,7 +103,7 @@ public final class SgfPerformanceProbe {
                 "One queued EDT callback at a time, every 20ms; queue delay, not display FPS")
             .put(
                 "savePath",
-                "captureSave on EDT, AtomicSgfFileWriter off EDT, immediate open after write")
+                "captureSaveSnapshot on EDT, serialization and atomic write off EDT, immediate reopen")
             .put(
                 "legacyReader",
                 "Reference old detect + InputStreamReader.ready/read character loop only; not old full-app latency");
@@ -173,7 +173,9 @@ public final class SgfPerformanceProbe {
             "save",
             warmup,
             () -> {
-              String payload = onEdt(() -> SGFParser.captureSave(Lizzie.board, false));
+              var snapshot = onEdt(() -> SGFParser.captureSaveSnapshot(
+                  Lizzie.board, Lizzie.board.getHistory(), false));
+              String payload = snapshot.serialize();
               try (var phase = new SgfPhase("probe-atomic-write")) {
                 AtomicSgfFileWriter.write(save, payload);
               }

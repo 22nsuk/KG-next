@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.logging.LogCategories;
+import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.util.AtomicSgfFileWriter;
 import featurecat.lizzie.util.AtomicTextFileWriter;
 import java.awt.image.BufferedImage;
@@ -42,7 +43,7 @@ final class CompletedEngineGameFiles {
   // The image is an exclusively owned pixel copy captured on the EDT, never a live UI cache.
   record Request(
       Path directory, String primaryFolder, String fallbackFolder,
-      String sgfName, String sgf, String summaryName, String summary,
+      String sgfName, SGFParser.SaveSnapshot sgf, String summaryName, String summary,
       Path savedSgf, Path savedSummary, BufferedImage image) {
     boolean hasWrites() {
       return (sgf != null && savedSgf == null) || (summary != null && savedSummary == null);
@@ -60,7 +61,7 @@ final class CompletedEngineGameFiles {
     Path[] target = {request.directory()};
     try {
       if (request.sgf() != null && sgf == null) {
-        sgf = write(request, request.sgfName(), request.sgf(), true, writer, target);
+        sgf = write(request, request.sgfName(), request.sgf().serialize(), true, writer, target);
         if (request.image() != null) {
           Path image = sgf.resolveSibling(sgf.getFileName().toString().replaceFirst("\\.sgf$", ".png"));
           try {

@@ -1222,6 +1222,36 @@ public class BoardData {
     return data;
   }
 
+  /** Save workers must not share candidates which renderers can still reorder or edit. */
+  synchronized BoardData copyForSave() {
+    BoardData copy = clone();
+    detachSaveMoves(copy.bestMoves);
+    detachSaveMoves(copy.bestMoves2);
+    // Only the two serialized candidate lists belong to a save; display-only lists are unused.
+    copy.bestMovesOutOfRange = List.of();
+    copy.bestMoves2OutOfRange = List.of();
+    return copy;
+  }
+
+  private static void detachSaveMoves(List<MoveData> moves) {
+    if (moves == null) return;
+    for (int i = 0; i < moves.size(); i++) {
+      MoveData source = moves.get(i);
+      if (source == null) continue;
+      MoveData copy = new MoveData();
+      copy.coordinate = source.coordinate;
+      copy.playouts = source.playouts;
+      copy.edgeVisits = source.edgeVisits;
+      copy.winrate = source.winrate;
+      copy.policy = source.policy;
+      copy.scoreMean = source.scoreMean;
+      copy.order = source.order;
+      copy.variation = source.variation == null ? null : new ArrayList<>(source.variation);
+      copy.pvVisits = source.pvVisits == null ? null : new ArrayList<>(source.pvVisits);
+      moves.set(i, copy);
+    }
+  }
+
   public boolean hasPrimaryAnalysisPayload() {
     return getPlayouts() > 0
         || analysisHeaderSlots > 0
