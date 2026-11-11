@@ -56,6 +56,9 @@ public class VariationPreviewVisibilityTest {
 
   private static void exercise(Path result) throws Exception {
     assertTrue(Lizzie.frame.isShowing());
+    // Window visibility precedes the queued first paint that initializes the board geometry.
+    Lizzie.frame.mainPanel.paintImmediately(
+        0, 0, Lizzie.frame.mainPanel.getWidth(), Lizzie.frame.mainPanel.getHeight());
     Lizzie.config.showBranch = true;
     Lizzie.config.showSuggestionVariations = true;
     Lizzie.config.showBlackCandidates = true;
