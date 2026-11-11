@@ -245,7 +245,6 @@ public class ConfigDialog2 extends JDialog {
   private JCheckBox chkShowSubBoard;
   private JCheckBox chkShowStatus;
   private JCheckBox chkShowCoordinates;
-  private JCheckBox chkHideCommentControlPane;
   private JRadioButton rdoShowMoveNumberNo;
   private JRadioButton rdoShowMoveNumberAll;
   private JRadioButton rdoShowMoveNumberLast;
@@ -826,14 +825,6 @@ public class ConfigDialog2 extends JDialog {
     chkAppendWinrateToComment.setBounds(837, 606, 26, 23);
     uiTab.add(chkAppendWinrateToComment);
 
-    JLabel lblHideCommentControlPane =
-        new JLabel(resourceBundle.getString("LizzieConfig.title.hideCommentControlPane"));
-    lblHideCommentControlPane.setBounds(608, 636, 221, 16);
-    uiTab.add(lblHideCommentControlPane);
-    chkHideCommentControlPane = new JCheckBox("");
-    chkHideCommentControlPane.setBounds(837, 633, 26, 23);
-    uiTab.add(chkHideCommentControlPane);
-
     JLabel lblShowSuggestionMoveOrder =
         new JLabel(
             resourceBundle.getString("LizzieConfig.lblShowSuggestionMoveOrder")); // ("显示选点右上方角标");
@@ -1033,7 +1024,6 @@ public class ConfigDialog2 extends JDialog {
     chkShowMoveAllInBranch.setSelected(Lizzie.config.showMoveAllInBranch);
     // chkDynamicWinrateGraphWidth.setSelected(Lizzie.config.dynamicWinrateGraphWidth);
     chkAppendWinrateToComment.setSelected(Lizzie.config.appendWinrateToComment);
-    chkHideCommentControlPane.setSelected(Lizzie.config.hideBlunderControlPane);
     chkShowSuggLabel.setSelected(Lizzie.config.showSuggestionOrder);
     chkMaxValueReverseColor.setSelected(Lizzie.config.showSuggestionMaxRed);
     chkShowVairationsOnMouse.setSelected(Lizzie.config.showSuggestionVariations);
@@ -3187,12 +3177,6 @@ public class ConfigDialog2 extends JDialog {
               configText("ConfigDialog2.modern.play.commentPanel", "显示评论/问题手面板"),
               configText("ConfigDialog2.modern.play.commentPanelSub", "展示棋谱评论、问题手列表和分析说明"),
               chkShowComment);
-          addToggleRow(
-              operation,
-              "config.play.hide-panel-controls",
-              configText("ConfigDialog2.modern.play.hidePanelControls", "隐藏面板顶部控制条"),
-              configText("ConfigDialog2.modern.play.hidePanelControlsSub", "隐藏评论/问题手面板上方的小按钮和筛选条"),
-              chkHideCommentControlPane);
           addToggleRow(
               operation,
               "config.play.coordinates",
@@ -6795,14 +6779,6 @@ public class ConfigDialog2 extends JDialog {
       Lizzie.config.appendWinrateToComment = chkAppendWinrateToComment.isSelected();
       Lizzie.config.uiConfig.putOpt(
           "append-winrate-to-comment", Lizzie.config.appendWinrateToComment);
-      Lizzie.config.hideBlunderControlPane = chkHideCommentControlPane.isSelected();
-      Lizzie.config.uiConfig.putOpt(
-          "hide-blunder-table-control-pane", Lizzie.config.hideBlunderControlPane);
-      if (Lizzie.config.hideBlunderControlPane
-          && Lizzie.frame != null
-          && Lizzie.frame.commentBlunderControlPane != null) {
-        Lizzie.frame.commentBlunderControlPane.setVisible(false);
-      }
       Lizzie.config.showSuggestionOrder = chkShowSuggLabel.isSelected();
       Lizzie.config.uiConfig.putOpt("show-suggestion-order", Lizzie.config.showSuggestionOrder);
       Lizzie.config.showSuggestionMaxRed = chkMaxValueReverseColor.isSelected();

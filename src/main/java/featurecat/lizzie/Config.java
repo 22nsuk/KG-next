@@ -1266,23 +1266,11 @@ public class Config {
   public int minPlayoutsForNextMove = 30;
 
   public boolean isShowingBlunderTabel = false;
-  public boolean blunderTabelOnlyAfter = false;
   public String problemListMetric = "winrate";
   public String problemListSideFilter = "black";
   public double problemListWinrateThreshold = 10.0;
-  public boolean hideBlunderControlPane = false;
-  public boolean allowCloseCommentControlHint = true;
-
-  public int blunderSortNumNAF = 2;
-  public boolean blunderIsSortedNAF = false;
-  public boolean blunderSortIsOriginOrderNAF = true;
-
-  public int blunderSortNumAF = 0;
-  public boolean blunderIsSortedAF = false;
-  public boolean blunderSortIsOriginOrderAF = true;
 
   public int blunderWinThreshold = 0;
-  public int blunderScoreThreshold = 0;
   public int blunderPlayoutsThreshold = 0;
 
   public boolean autoAnaDiffEnable = false;
@@ -1784,21 +1772,10 @@ public class Config {
     showListPane = uiConfig.optBoolean("show-list-pane", true);
 
     isShowingBlunderTabel = uiConfig.optBoolean("is-showing-blunder-table", false);
-    blunderTabelOnlyAfter = uiConfig.optBoolean("blunder-table-only-after", false);
     problemListMetric = uiConfig.optString("problem-list-metric", "winrate");
     problemListSideFilter = uiConfig.optString("problem-list-side-filter", "black");
     problemListWinrateThreshold = uiConfig.optDouble("problem-list-winrate-threshold", 10.0);
-    allowCloseCommentControlHint = uiConfig.optBoolean("allow-close-comment-control-hint", true);
-    hideBlunderControlPane = uiConfig.optBoolean("hide-blunder-table-control-pane", false);
-    blunderSortNumNAF = uiConfig.optInt("blunder-sort-num-NAF", 2);
-    blunderIsSortedNAF = uiConfig.optBoolean("blunder-is-sorted-NAF", false);
-    blunderSortIsOriginOrderNAF = uiConfig.optBoolean("blunder-sort-is-origin-order-NAF", true);
-    blunderSortNumAF = uiConfig.optInt("blunder-sort-num-AF", 0);
-    blunderIsSortedAF = uiConfig.optBoolean("blunder-is-sorted-AF", false);
-    blunderSortIsOriginOrderAF = uiConfig.optBoolean("blunder-sort-is-origin-order-AF", true);
-
     blunderWinThreshold = uiConfig.optInt("blunder-win-threshold", 0);
-    blunderScoreThreshold = uiConfig.optInt("blunder-score-threshold", 0);
     blunderPlayoutsThreshold = uiConfig.optInt("blunder-playouts-threshold", 0);
 
     autoAnaDiffEnable = uiConfig.optBoolean("auto-ana-diff-enable", false);
@@ -2898,24 +2875,6 @@ public class Config {
     return showBranch || showBestMovesTemporarily;
   }
 
-  public void saveBlunderTableSortSettings(int sortNum, boolean isSorted, boolean isOriginOrder) {
-    if (blunderTabelOnlyAfter) {
-      blunderSortNumAF = sortNum;
-      blunderIsSortedAF = isSorted;
-      blunderSortIsOriginOrderAF = isOriginOrder;
-      uiConfig.put("blunder-sort-num-AF", blunderSortNumAF);
-      uiConfig.put("blunder-is-sorted-AF", blunderIsSortedAF);
-      uiConfig.put("blunder-sort-is-origin-order-AF", blunderSortIsOriginOrderAF);
-    } else {
-      blunderSortNumNAF = sortNum;
-      blunderIsSortedNAF = isSorted;
-      blunderSortIsOriginOrderNAF = isOriginOrder;
-      uiConfig.put("blunder-sort-num-NAF", blunderSortNumNAF);
-      uiConfig.put("blunder-is-sorted-NAF", blunderIsSortedNAF);
-      uiConfig.put("blunder-sort-is-origin-order-NAF", blunderSortIsOriginOrderNAF);
-    }
-  }
-
   /**
    * Scans the current directory as well as the current PATH to find a reasonable default leelaz
    * binary.
@@ -3164,7 +3123,6 @@ public class Config {
     JSONArray mainPos = new JSONArray();
     JSONArray mainOhter = new JSONArray();
     JSONArray mainList = new JSONArray();
-    JSONArray mainBlunder = new JSONArray();
     int list1 = Lizzie.frame.listTable.getColumnModel().getColumn(0).getWidth();
     int list2 = Lizzie.frame.listTable.getColumnModel().getColumn(2).getWidth();
     int list3 = Lizzie.frame.listTable.getColumnModel().getColumn(3).getWidth();
@@ -3177,15 +3135,6 @@ public class Config {
       mainList.put(list4);
       mainList.put(length);
     }
-    int blunder1 = Lizzie.frame.blunderTabelBlack.getColumnModel().getColumn(0).getWidth();
-    int blunder2 = Lizzie.frame.blunderTabelBlack.getColumnModel().getColumn(2).getWidth();
-    int length2 = Lizzie.frame.blunderTabelBlack.getColumnModel().getColumn(3).getWidth();
-    if (length2 > 0) {
-      mainBlunder.put(blunder1);
-      mainBlunder.put(blunder2);
-      mainBlunder.put(length2);
-    }
-
     if (!windowIsMaximized) {
       mainPos.put(Lizzie.frame.getX());
       mainPos.put(Lizzie.frame.getY());
@@ -3219,7 +3168,6 @@ public class Config {
     persistedUi.put("main-window-position", mainPos);
     persistedUi.put("main-window-other", mainOhter);
     persistedUi.put("main-window-list", mainList);
-    persistedUi.put("main-window-blunder", mainBlunder);
 
     JSONArray gtpPos = new JSONArray();
     gtpPos.put(Lizzie.gtpConsole.getX());
@@ -3826,15 +3774,6 @@ public class Config {
       // TODO Auto-generated catch block
       logConfig("save", "config", "failed", 0, e);
     }
-  }
-
-  public void saveThreshold(int winRateDiff, int scoreDiff, int playouts) {
-    blunderWinThreshold = winRateDiff;
-    blunderScoreThreshold = scoreDiff;
-    blunderPlayoutsThreshold = playouts;
-    uiConfig.put("blunder-win-threshold", blunderWinThreshold);
-    uiConfig.put("blunder-score-threshold", blunderScoreThreshold);
-    uiConfig.put("blunder-playouts-threshold", blunderPlayoutsThreshold);
   }
 
   public void saveThreshold(int winRateDiff, int scoreDiff, int playouts, boolean topCurrentMove) {

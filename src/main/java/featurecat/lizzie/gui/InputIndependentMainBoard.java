@@ -396,8 +396,6 @@ public class InputIndependentMainBoard implements KeyListener {
               Lizzie.frame.listScrollpane.setVisible(false);
             if (Lizzie.frame.commentScrollPane.isVisible())
               Lizzie.frame.commentScrollPane.setVisible(false);
-            if (Lizzie.frame.blunderContentPane.isVisible())
-              Lizzie.frame.blunderContentPane.setVisible(false);
             Lizzie.frame.drawControls();
             // Lizzie.frame.showControls = true;
           }

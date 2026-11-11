@@ -1,6 +1,5 @@
 package featurecat.lizzie.gui;
 
-import featurecat.lizzie.Lizzie;
 import java.awt.AlphaComposite;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -9,8 +8,6 @@ import java.awt.Graphics2D;
 import java.awt.Insets;
 import java.awt.Rectangle;
 import java.awt.RenderingHints;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
 import java.io.IOException;
 import javax.imageio.ImageIO;
 import javax.swing.ImageIcon;
@@ -21,12 +18,6 @@ import javax.swing.plaf.basic.BasicScrollBarUI;
 
 // 自定义滚动条UI
 public class DemoScrollBarUI2 extends BasicScrollBarUI {
-  private boolean needAddAction;
-
-  public DemoScrollBarUI2(boolean needAddAction) {
-    this.needAddAction = needAddAction;
-  }
-
   @Override
   protected void configureScrollBarColors() {
 
@@ -86,8 +77,7 @@ public class DemoScrollBarUI2 extends BasicScrollBarUI {
     // //      }
     //
     //    g2.setPaint(gp);
-    if (needAddAction) g.setColor(new Color(215, 215, 215));
-    else g2.setColor(new Color(235, 235, 235));
+    g2.setColor(new Color(235, 235, 235));
     // 填充Track
 
     g2.fillRect(trackBounds.x, trackBounds.y, trackBounds.width, trackBounds.height);
@@ -112,8 +102,7 @@ public class DemoScrollBarUI2 extends BasicScrollBarUI {
     g.translate(thumbBounds.x, thumbBounds.y);
 
     // 设置把手颜色
-    if (needAddAction) g.setColor(Color.GRAY);
-    else g.setColor(new Color(180, 180, 180));
+    g.setColor(new Color(180, 180, 180));
 
     // 画一个圆角矩形
 
@@ -174,24 +163,6 @@ public class DemoScrollBarUI2 extends BasicScrollBarUI {
         e.printStackTrace();
       }
       JButton button = new JButton(down);
-      if (needAddAction)
-        button.addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                Lizzie.frame.commentBlunderControlPane.setVisible(false);
-              }
-
-              public void mouseEntered(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                Lizzie.frame.setBlunderControlPane(false, true);
-                Lizzie.frame.commentBlunderControlPane.setVisible(true);
-              }
-            });
       button.setMargin(new Insets(0, 0, -2, 0));
       button.setBorderPainted(false);
 
@@ -229,24 +200,6 @@ public class DemoScrollBarUI2 extends BasicScrollBarUI {
         e.printStackTrace();
       }
       JButton button = new JButton(up);
-      if (needAddAction)
-        button.addMouseListener(
-            new MouseAdapter() {
-              public void mouseExited(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                Lizzie.frame.commentBlunderControlPane.setVisible(false);
-              }
-
-              public void mouseEntered(MouseEvent e) {
-                if (Lizzie.config.hideBlunderControlPane) {
-                  return;
-                }
-                Lizzie.frame.setBlunderControlPane(false, true);
-                Lizzie.frame.commentBlunderControlPane.setVisible(true);
-              }
-            });
       button.setMargin(new Insets(-2, 0, 0, 0));
 
       button.setBorderPainted(false);

@@ -35,7 +35,6 @@ final class ConfigSettingTargets {
         target("config.play.click-review", SettingSection.PLAY, "ConfigDialog2.modern.play.clickReview", "ConfigDialog2.modern.play.clickReviewSub", "game"),
         target("config.play.drag-stone", SettingSection.PLAY, "ConfigDialog2.modern.play.drag", "ConfigDialog2.modern.play.dragSub", "game"),
         target("config.play.comment-panel", SettingSection.PLAY, "ConfigDialog2.modern.play.commentPanel", "ConfigDialog2.modern.play.commentPanelSub", "game"),
-        target("config.play.hide-panel-controls", SettingSection.PLAY, "ConfigDialog2.modern.play.hidePanelControls", "ConfigDialog2.modern.play.hidePanelControlsSub", "game"),
         target("config.play.coordinates", SettingSection.PLAY, "ConfigDialog2.modern.play.coordinates", "ConfigDialog2.modern.play.coordinatesSub", "game"),
         target("config.play.freeze-sub-board", SettingSection.PLAY, "ConfigDialog2.modern.play.freezeSubBoard", "ConfigDialog2.modern.play.freezeSubBoardSub", "game"),
         target("config.interaction.move-rectangle", SettingSection.PLAY, "ConfigDialog2.modern.interaction.moveRect", "ConfigDialog2.modern.interaction.moveRectSub", "game"),

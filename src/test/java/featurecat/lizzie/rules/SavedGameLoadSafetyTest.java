@@ -402,7 +402,6 @@ class SavedGameLoadSafetyTest {
       frame.mainPanel.setSize(1024, 768);
       frame.commentScrollPane = new JScrollPane();
       frame.commentEditPane = new JScrollPane();
-      frame.blunderContentPane = new JPanel();
       frame.sidebarPanel = RulesLayerTestHarness.allocate(QuietSidebar.class);
       setFrameField("varTreeScrollPane", new JScrollPane());
       frame.listScrollpane = new JScrollPane();

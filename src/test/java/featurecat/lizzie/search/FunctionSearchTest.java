@@ -1,6 +1,8 @@
 package featurecat.lizzie.search;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -69,13 +71,15 @@ class FunctionSearchTest {
             "FunctionSearch.category.sync",
             "FunctionSearch.category.view"),
         FunctionCatalog.categoryKeys());
-    assertEquals(77, FunctionCatalog.configSettingTargets().size());
     assertEquals(
-        77,
+        FunctionCatalog.configSettingTargets().size(),
         FunctionCatalog.configSettingTargets().stream()
             .map(FunctionCatalog.ConfigSettingTarget::id)
             .distinct()
             .count());
+    assertNull(FunctionCatalog.entry("config.play.hide-panel-controls"));
+    assertNull(FunctionCatalog.entry("menu.showCommentConrolPane"));
+    assertNotNull(FunctionCatalog.entry("config.play.comment-panel"));
     for (FunctionCatalog.ConfigSettingTarget target : FunctionCatalog.configSettingTargets()) {
       FunctionCatalog.Entry entry = FunctionCatalog.entry(target.id());
       assertEquals(FunctionCatalog.TargetType.SETTING, entry.targetType(), target.id());
