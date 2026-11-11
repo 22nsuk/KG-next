@@ -90,6 +90,8 @@ class WinrateGraphVariationHitTest {
       LizzieFrame.winrateGraph = graph;
 
       int[] point = renderedGraphPoint(graph, fixture.mainFuture);
+      CountingHistory history = (CountingHistory) fixture.board.getHistory();
+      history.mainEndReadCount = 0;
       boolean handled = frame.processMouseMoveOnWinrateGraph(point[0], point[1]);
 
       assertTrue(
@@ -98,6 +100,8 @@ class WinrateGraphVariationHitTest {
           fixture.mainFuture,
           graph.mouseOverNode,
           "hover should resolve the main-trunk node that remains visible after the fork.");
+      assertEquals(
+          1, history.mainEndReadCount, "one anchor hit should validate the rendered state once.");
     } finally {
       env.close();
     }
@@ -761,10 +765,22 @@ class WinrateGraphVariationHitTest {
           uniqueColumnPixel(graph, fixture.unanalyzed, origParams[1] + origParams[3] / 2);
       int[] top = uniqueColumnPixel(graph, fixture.unanalyzed, origParams[1]);
 
+      CountingHistory history = (CountingHistory) fixture.board.getHistory();
+      history.mainEndReadCount = 0;
       assertSame(
+          fixture.unanalyzed,
           graph.resolveMoveTargetNode(mid[0], mid[1]),
+          "the semantic column should resolve the unanalyzed node at mid-graph Y.");
+      assertEquals(
+          1, history.mainEndReadCount, "one semantic hit should validate the rendered state once.");
+      assertSame(
+          fixture.unanalyzed,
           graph.resolveMoveTargetNode(top[0], top[1]),
           "unique semantic columns should resolve the same node independent of Y.");
+      assertEquals(
+          2,
+          history.mainEndReadCount,
+          "the next hit should independently validate the rendered state.");
       assertHoverClickDragResolveSameNode(
           fixture.board,
           fixture.current,
@@ -782,7 +798,7 @@ class WinrateGraphVariationHitTest {
     TrackingBoard board = allocate(TrackingBoard.class);
     board.startStonelist = new ArrayList<>();
     board.hasStartStone = false;
-    BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+    BoardHistoryList history = new CountingHistory();
     history.add(moveNode(0, 0, Stone.BLACK, false, 1, 60));
     history.add(moveNode(1, 0, Stone.WHITE, true, 2, 55));
     BoardHistoryNode fork = history.getCurrentHistoryNode();
@@ -872,7 +888,7 @@ class WinrateGraphVariationHitTest {
     TrackingBoard board = allocate(TrackingBoard.class);
     board.startStonelist = new ArrayList<>();
     board.hasStartStone = false;
-    BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+    BoardHistoryList history = new CountingHistory();
     history.add(moveNode(0, 0, Stone.BLACK, false, 1, 60, 1));
     history.add(moveNode(1, 0, Stone.WHITE, true, 2, 55, 1));
     history.add(moveNode(2, 0, Stone.BLACK, false, 3, 50, 0));
@@ -1389,6 +1405,20 @@ class WinrateGraphVariationHitTest {
       this.mainThird = mainThird;
       this.mainFourth = mainFourth;
       this.mainFuture = mainFuture;
+    }
+  }
+
+  private static final class CountingHistory extends BoardHistoryList {
+    private int mainEndReadCount;
+
+    private CountingHistory() {
+      super(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+    }
+
+    @Override
+    public BoardHistoryNode getMainEnd() {
+      mainEndReadCount++;
+      return super.getMainEnd();
     }
   }
 
