@@ -264,14 +264,15 @@ unchanged. `SgfUiFilenameFieldTest` checks the lookup without a desktop; the
 full Linux keyboard flow must still pass separately. No production behavior was
 changed to accommodate the probe.
 
-No throughput improvement is claimed. Disk I/O has moved off the event thread;
-tree capture and serialization remain on it to preserve the existing serializer's
-board, rules and formatting context.
+No throughput improvement is claimed. File-save serialization and disk I/O run
+on the worker; tree capture remains on its requesting owner. The detached save
+input carries the board, rules and formatting values needed after capture.
 
 The subsequent [SGF measurement and interactive read path](SGF_PERFORMANCE.md)
 records these phases separately. Chooser, single-file drop and recent-file SGF
-reads/decode run on a bounded worker; parsing and serialization retain their
-existing context. Opening immediately after a save waits for its publication.
+reads/decode run on a bounded worker. Parsing and synchronous string exports retain
+their existing calling context. Opening immediately after a file save waits for
+its serialization, write and publication.
 
 ## Edit-protection comparison measurement (2026-10-31)
 
