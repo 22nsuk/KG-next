@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import javax.swing.JPanel;
 import org.junit.jupiter.api.Test;
 
 class WinrateGraphQuickOverviewHitTest {
@@ -61,6 +62,9 @@ class WinrateGraphQuickOverviewHitTest {
       Lizzie.board = fixture.board;
       Lizzie.frame = frame;
       LizzieFrame.winrateGraph = graph;
+      CountingPanel panel = new CountingPanel();
+      frame.mainPanel = panel;
+      panel.repaintRequests = 0;
 
       int[] point = renderedQuickOverviewPoint(graph, fixture.variationStart);
       boolean handled = frame.processMouseMoveOnWinrateGraph(point[0], point[1]);
@@ -70,6 +74,35 @@ class WinrateGraphQuickOverviewHitTest {
           fixture.variationStart,
           graph.mouseOverNode,
           "hover should follow the variation point that quick overview actually draws.");
+      assertEquals(1, panel.repaintRequests);
+      Field refresh = LizzieFrame.class.getDeclaredField("refreshWinratePane");
+      refresh.setAccessible(true);
+      for (int repeat = 0; repeat < 10; repeat++) {
+        assertTrue(frame.processMouseMoveOnWinrateGraph(point[0], point[1]));
+      }
+      assertEquals(1, panel.repaintRequests, "the same historical hover needs only one redraw");
+      assertTrue(refresh.getBoolean(frame), "pending graph refresh must remain pending");
+      refresh.setBoolean(frame, false);
+      assertTrue(frame.processMouseMoveOnWinrateGraph(point[0], point[1]));
+      assertFalse(refresh.getBoolean(frame), "unchanged hover must not force another graph redraw");
+      assertEquals(1, panel.repaintRequests);
+
+      BoardHistoryNode current = fixture.board.getHistory().getCurrentHistoryNode();
+      int[] currentPoint = renderedQuickOverviewPoint(graph, current);
+      assertTrue(frame.processMouseMoveOnWinrateGraph(currentPoint[0], currentPoint[1]));
+      assertSame(current, graph.mouseOverNode);
+      assertEquals(2, panel.repaintRequests, "changing the hover target must repaint");
+      assertTrue(frame.processMouseMoveOnWinrateGraph(currentPoint[0], currentPoint[1]));
+      assertEquals(2, panel.repaintRequests);
+
+      Lizzie.config.showMouseOverWinrateGraph = true;
+      int[] blank = quickOverviewBlankPoint(graph);
+      assertFalse(frame.onMouseMoved(blank[0], blank[1]));
+      assertNull(graph.mouseOverNode);
+      assertEquals(3, panel.repaintRequests, "leaving the graph must clear the hover display");
+      assertTrue(frame.processMouseMoveOnWinrateGraph(point[0], point[1]));
+      assertSame(fixture.variationStart, graph.mouseOverNode);
+      assertEquals(4, panel.repaintRequests, "re-entering the same point must repaint");
     } finally {
       env.close();
     }
@@ -1122,6 +1155,16 @@ class WinrateGraphQuickOverviewHitTest {
 
     @Override
     public void refresh() {}
+  }
+
+  private static final class CountingPanel extends JPanel {
+    int repaintRequests;
+
+    @Override
+    public void repaint() {
+      repaintRequests++;
+      super.repaint();
+    }
   }
 
   private static final class TestEnvironment implements AutoCloseable {

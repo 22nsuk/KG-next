@@ -2195,7 +2195,11 @@ public class WinrateGraph {
     if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
       return null;
     }
-    QuickOverviewLayout quickOverviewLayout = currentQuickOverviewLayout();
+    // Validate once per lookup so later events still observe in-place analysis updates.
+    if (!hasFreshRenderedSources()) {
+      return null;
+    }
+    QuickOverviewLayout quickOverviewLayout = renderedQuickOverviewLayout;
     if (quickOverviewLayout != null && isInsideQuickOverview(quickOverviewLayout, x, y)) {
       QuickOverviewPoint point = directQuickOverviewPointHit(quickOverviewLayout, x, y);
       if (point == null && !isFrameTryingMode()) {
@@ -2206,7 +2210,7 @@ public class WinrateGraph {
     if (!isInsideGraphBounds(x, y)) {
       return null;
     }
-    List<GraphPoint> points = currentGraphPoints();
+    List<GraphPoint> points = renderedGraphPoints;
     GraphPoint point = directGraphPointHit(points, x, y);
     if (point == null) {
       point = columnGraphPointHit(points, x, y);
@@ -2214,7 +2218,7 @@ public class WinrateGraph {
     if (point != null) {
       return point.node;
     }
-    return resolveSemanticGraphNavigationTarget(x);
+    return resolveSemanticGraphNavigationTarget(renderedGraphNavigationTargets, x);
   }
 
   public int moveNumber(int x, int y) {
@@ -2676,8 +2680,8 @@ public class WinrateGraph {
     return graphPointHitOnMoveNumber(points, targetMoveNumber.intValue(), targetX, targetY);
   }
 
-  private BoardHistoryNode resolveSemanticGraphNavigationTarget(int targetX) {
-    List<GraphNavigationTarget> targets = currentGraphNavigationTargets();
+  private BoardHistoryNode resolveSemanticGraphNavigationTarget(
+      List<GraphNavigationTarget> targets, int targetX) {
     if (targets.isEmpty()) {
       return null;
     }
@@ -2870,13 +2874,6 @@ public class WinrateGraph {
       return Collections.emptyList();
     }
     return renderedGraphPoints;
-  }
-
-  private List<GraphNavigationTarget> currentGraphNavigationTargets() {
-    if (!hasFreshRenderedSources()) {
-      return Collections.emptyList();
-    }
-    return renderedGraphNavigationTargets;
   }
 
   private List<GraphNavigationTarget> buildGraphNavigationTargets(BoardHistoryNode currentNode) {
