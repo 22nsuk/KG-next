@@ -1,7 +1,10 @@
 package featurecat.lizzie.rules;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +14,68 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PassVariationNumberingTest {
+  @ParameterizedTest
+  @ValueSource(strings = {"normal", "branch", "dummy", "append", "engine-game"})
+  void newHistoryPassOwnsItsPositionState(String entrypoint) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      // Keep addOrGoto's separate branch-number reset from masking the pass input's reset.
+      Lizzie.config.newMoveNumberInBranch = false;
+      BoardHistoryList history = env.board().getHistory();
+      history.place(0, 0, Stone.BLACK);
+      history.place(1, 1, Stone.WHITE);
+      BoardHistoryNode parent = env.current();
+      BoardData source = parent.getData();
+      source.blackCaptures = 3;
+      source.whiteCaptures = 4;
+      if (entrypoint.equals("branch")) {
+        history.place(2, 2, Stone.BLACK);
+        assertTrue(history.previous().isPresent());
+      } else if (entrypoint.equals("append")) {
+        assertTrue(history.previous().isPresent());
+        history.place(3, 3, Stone.WHITE);
+      }
+      BoardHistoryNode cursor = env.current();
+      Stone[] stones = source.stones.clone();
+      int[] numbers = source.moveNumberList.clone();
+      Zobrist hash = source.zobrist.clone();
+
+      switch (entrypoint) {
+        case "normal" -> history.pass(Stone.BLACK);
+        case "branch" -> history.pass(Stone.BLACK, true);
+        case "dummy" -> history.pass(Stone.BLACK, false, true);
+        case "append" -> history.pass(Stone.BLACK, false, false, false, true);
+        case "engine-game" -> history.passForEngineGame(Stone.BLACK, true);
+        default -> throw new IllegalArgumentException(entrypoint);
+      }
+      BoardData pass =
+          entrypoint.equals("append")
+              ? parent.next(true).orElseThrow().getData()
+              : history.getData();
+      if (entrypoint.equals("append")) assertSame(cursor, env.current());
+      assertTrue(pass.isPassNode());
+      assertEquals(entrypoint.equals("dummy"), pass.dummy);
+      assertEquals(Stone.BLACK, pass.lastMoveColor);
+      assertFalse(pass.blackToPlay);
+      assertEquals(3, pass.moveNumber);
+      assertEquals(3, pass.blackCaptures);
+      assertEquals(4, pass.whiteCaptures);
+      assertArrayEquals(stones, pass.stones);
+      assertArrayEquals(
+          entrypoint.equals("branch") ? new int[numbers.length] : numbers, pass.moveNumberList);
+      assertEquals(hash, pass.zobrist);
+      assertNotSame(source.stones, pass.stones);
+      assertNotSame(source.moveNumberList, pass.moveNumberList);
+      assertNotSame(source.zobrist, pass.zobrist);
+
+      pass.stones[Board.getIndex(0, 0)] = Stone.WHITE;
+      pass.moveNumberList[Board.getIndex(0, 0)] = 99;
+      pass.zobrist.toggleStone(0, 0, Stone.BLACK);
+      assertArrayEquals(stones, source.stones);
+      assertArrayEquals(numbers, source.moveNumberList);
+      assertEquals(hash, source.zobrist);
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"false,true,1", "true,true,1", "false,false,1", "true,false,1",
       "false,true,2", "true,true,2", "false,false,2", "true,false,2"})
