@@ -3,10 +3,12 @@ package featurecat.lizzie.rules;
 import static org.junit.jupiter.api.Assertions.*;
 
 import com.sun.jdi.Bootstrap;
+import com.sun.jdi.ReferenceType;
 import com.sun.jdi.VirtualMachine;
+import com.sun.jdi.event.BreakpointEvent;
+import com.sun.jdi.event.ClassPrepareEvent;
 import com.sun.jdi.event.Event;
 import com.sun.jdi.event.EventSet;
-import com.sun.jdi.event.MethodEntryEvent;
 import com.sun.jdi.event.VMDeathEvent;
 import com.sun.jdi.event.VMDisconnectEvent;
 import com.sun.jdi.request.EventRequest;
@@ -504,19 +506,24 @@ class AutomaticSaveInterruptionTest {
     VirtualMachine vm = connector.launch(arguments);
     Process process = vm.process();
     try {
-      var request = vm.eventRequestManager().createMethodEntryRequest();
+      var request = vm.eventRequestManager().createClassPrepareRequest();
       request.addClassFilter(owner);
       request.setSuspendPolicy(EventRequest.SUSPEND_ALL);
       request.enable();
-      vm.resume();
+      for (var type : vm.classesByName(owner)) {
+        if (type.isPrepared()) installEntryBreakpoints(vm, type, method);
+      }
+      // Resume the initial VMStartEvent only in the loop, just like each class-prepare event.
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
       boolean reached = false;
       while (!reached && System.nanoTime() < deadline) {
         EventSet events = vm.eventQueue().remove(1000);
         if (events == null) continue;
         for (Event event : events) {
-          if (event instanceof MethodEntryEvent
-              && ((MethodEntryEvent) event).method().name().equals(method)) reached = true;
+          if (event instanceof ClassPrepareEvent prepared) {
+            installEntryBreakpoints(vm, prepared.referenceType(), method);
+          }
+          if (event instanceof BreakpointEvent) reached = true;
           if (event instanceof VMDeathEvent || event instanceof VMDisconnectEvent) {
             fail("Writer exited before interruption point " + owner + "." + method);
           }
@@ -530,6 +537,7 @@ class AutomaticSaveInterruptionTest {
         Path marker = directory.resolve("save/automatic-save-intent.json");
         Files.writeString(marker, Files.readString(marker) + "\n");
         request.disable();
+        for (var breakpoint : vm.eventRequestManager().breakpointRequests()) breakpoint.disable();
         vm.resume();
       } else {
         // JDI exit terminates the VM without application finally blocks or shutdown hooks.
@@ -539,6 +547,21 @@ class AutomaticSaveInterruptionTest {
       assertEquals(failCleanup ? 0 : INTERRUPTED, process.exitValue());
     } finally {
       if (process.isAlive()) process.destroyForcibly().waitFor(10, TimeUnit.SECONDS);
+    }
+  }
+
+  private static void installEntryBreakpoints(VirtualMachine vm, ReferenceType owner, String name) {
+    var methods = owner.methods().stream().filter(method -> method.name().equals(name)).toList();
+    assertFalse(methods.isEmpty(), "Missing interruption point " + owner.name() + "." + name);
+    // Match every overload, as the former method-entry request did. Stop before its first
+    // instruction without observing every other method entered while this class is loaded.
+    for (var method : methods) {
+      var location = method.locationOfCodeIndex(0);
+      assertNotNull(location, "Interruption point has no executable location: " + method);
+      assertEquals(0, location.codeIndex(), "Interruption point must precede the method body");
+      var breakpoint = vm.eventRequestManager().createBreakpointRequest(location);
+      breakpoint.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+      breakpoint.enable();
     }
   }
 

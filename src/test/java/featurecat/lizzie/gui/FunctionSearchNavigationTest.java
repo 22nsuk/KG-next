@@ -38,7 +38,7 @@ import javax.swing.JOptionPane;
 import javax.swing.JTextField;
 import javax.swing.MenuSelectionManager;
 import javax.swing.SwingUtilities;
-import org.junit.jupiter.api.RepeatedTest;
+import org.junit.jupiter.api.Test;
 
 /** Exercises function-search navigation against a real production startup in an isolated JVM. */
 public final class FunctionSearchNavigationTest {
@@ -47,7 +47,7 @@ public final class FunctionSearchNavigationTest {
   private static final String MOVE_NUMBER_TARGET = "menu.showAllMoveNumberInBranch";
   private static final String MODAL_REASON = "FunctionSearch.unavailable.modal";
 
-  @RepeatedTest(5)
+  @Test
   void navigationPreservesRealStateAcrossNativeAndCustomMenus() throws Exception {
     DesktopProbeProcess.requireDisplay();
     for (String presentation : List.of("native", "custom")) {

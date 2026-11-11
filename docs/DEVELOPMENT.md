@@ -107,17 +107,18 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 可只查看计划执行的步骤。`LIZZIE_PYTHON`、`LIZZIE_MAVEN`、`LIZZIE_BASH`
 和 `LIZZIE_POWERSHELL` 可用于指定工具路径。
 
-按职责选择 `--group all|repository|scripts|java|desktop|engine-process`（PowerShell 为
-`-Group All|Repository|Scripts|Java|Desktop|EngineProcess`），默认 `all` 保持原完整 headless 调用，
-不包含 `desktop` 或 `engine-process`。所有组都需要 Python 和 Git，并执行 `git diff --check`；
+按职责选择 `--group all|repository|scripts|java|desktop|desktop-races|engine-process`（PowerShell 为
+`-Group All|Repository|Scripts|Java|Desktop|DesktopRaces|EngineProcess`），默认 `all` 保持原完整 headless 调用，
+不包含 `desktop`、`desktop-races` 或 `engine-process`。所有组都需要 Python 和 Git，并执行 `git diff --check`；
 `--require-clean` / `-RequireClean` 保留运行前后的干净工作树检查。
 
 | Group | Portable | Windows | 额外工具 |
 | --- | --- | --- | --- |
 | `repository` | 换行自测、换行、Markdown 链接 | 换行 | 无 |
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux x86_64 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
-| `java` | 原完整 Maven verify | 凭据专项，再执行原完整 Maven verify | Maven、JDK 21；不查找 Bash/PowerShell |
-| `desktop` | 生产窗口导航 / 搜索输入 / 引擎进程生命周期 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
+| `java` | 原完整 Maven verify | 完整 Maven verify（包括凭据测试） | Maven、JDK 21；不查找 Bash/PowerShell |
+| `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
+| `desktop-races` | 48 个 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 例如仅运行无 Java 的仓库检查：
@@ -130,7 +131,7 @@ bash scripts/run_local_ci.sh --profile portable --group repository --summary-dir
 pwsh -File scripts/run_local_ci.ps1 -Profile Windows -Group Scripts -SummaryDir target/local-ci/windows-scripts
 ```
 
-`profile=all` 合并并去重两套检查，只执行一次 Windows 全量 verify 和凭据专项，
+`profile=all` 合并并去重两套检查，只执行一次 Windows 全量 verify（含凭据测试），
 不表示跨 OS 验收。不要在同一 checkout 并行运行两个写入 `target` 的 Maven 调用；
 需要并行时使用独立 worktree。
 
@@ -152,6 +153,15 @@ GitHub Ubuntu runner 还为 root 所有的 CI 专用 `unshare` 副本加载允�
 执行器还检查本次 XML 中 `LoggingProviderSmokeIT.shadedArtifactWritesOneProviderEvent`
 确实成功执行：关键用例缺失，或关键类任一用例 skipped/失败/报错，均使预检失败并写出失败摘要。
 其他需要显示环境的可选用例仍可在 headless gate 跳过；不固定全仓测试或 skip 数量。
+Windows 主机（不论 profile）还要求 `PlatformCredentialStoreTest.windowsDpapiRoundTripsAcrossRealNativeCalls`
+在同一次 verify 中成功执行；缺失、跳过或失败均使 Java gate 失败。不再单独重复执行凭据专项。
+
+CI 的 desktop job 先执行一次完整 `desktop`，再执行两次 `desktop-races`。
+搜索导航仍覆盖 native/custom 两种菜单和内部状态转换循环，仅移除外层五次重复。
+引擎 smoke 由 Linux/Windows `engine-process` 两个 job 负责，不在 desktop 重跑。
+完整 desktop 报告与 race 报告分别写入 `target/desktop-smoke/` 和其 `races/` 子目录；
+CI 每次 race 成功后把后者保留为 `races-1/`、`races-2/`，失败时保留当前 `races/`。
+频率调整及必需成功规则见 [CI 合并策略](CI_MERGE_POLICY.md)。
 
 `ConfigReadFailurePreservationTest` 与 `WorkDirectoryReadFailurePreservationTest` 使用真实文件权限，
 并先确认读取或创建文件确实被拒绝；不会因为权限限制未生效而跳过。Linux/macOS 应使用普通用户运行，
@@ -176,7 +186,6 @@ LANG=C.UTF-8 LC_ALL=C.UTF-8 xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp
 
 - `FunctionSearchNavigationTest.navigationPreservesRealStateAcrossNativeAndCustomMenus`
 - `ConfigDialog2NavigationTest.blackWinrateRemainsReachableAcrossRebuildsAndRecreation`
-- `EngineProcessSmokeTest.restoresSnapshotAnalyzesAndQuits`
 - `FunctionSearchInputTest.chineseInputChain`
 - `FunctionSearchInputTest.englishInputChain`
 - `FunctionSearchInputTest.koreanInputChain`

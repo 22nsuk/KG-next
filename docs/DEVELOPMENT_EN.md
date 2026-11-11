@@ -67,6 +67,20 @@ only use it when Shift switches that IME to ASCII. It does not change production
 input handling and is not a test of Chinese composition. Leave it unset on
 ordinary ASCII-input desktops and hosted CI.
 
+### CI feedback groups
+
+The local runner shares its test selection and required-success checks with GitHub Actions:
+`python3 scripts/run_local_ci.py --profile portable --group desktop` runs the full desktop
+suite once. `--group desktop-races` selects 48 worker/EDT, save, request-ownership and window
+lifecycle cases. CI runs the full suite once and this focused group twice more. Function-search
+navigation still exercises both native and custom menus and its internal state transitions.
+The Linux and Windows `engine-process` jobs retain the engine smoke case.
+
+The `java` group runs one full Maven `verify`, including credential tests. On Windows hosts,
+the native DPAPI round-trip must succeed in that run, regardless of the selected profile.
+Missing or skipped required cases fail the gate. See [CI merge policy](CI_MERGE_POLICY.md)
+for repetition scope and report retention. Run Maven calls serially within one checkout.
+
 ### Configuration saves
 
 Use `Config.updateConfigSections` for a settings transaction. Its callback edits fresh
