@@ -6,6 +6,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.gui.LizzieFrame;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +31,16 @@ import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class AnalysisWrnSgfTest {
+  private static final String KATA_MATCH_INFO =
+      "White win rate: 38.9% (-22.2%)\n"
+          + "lead: -8.9 (-2.8) stdev: 13.4\n"
+          + "(KataGo / 4.5k visits)\nkomi: 7.5";
+  private static final String SAI_MATCH_INFO =
+      "Black win rate: 55.0% (+1.0%)\n"
+          + "lead: 2.0 (+0.5)\n(Sai / 1k visits)\nkomi: 7.5";
+  private static final String LEELA_MATCH_INFO =
+      "White win rate: 48.0% (-2.0%)\n(Leela / 2k visits)\nkomi: 7.5";
+
   private RulesLayerTestHarness harness;
   private ResourceBundle previousResources;
 
@@ -468,6 +479,82 @@ class AnalysisWrnSgfTest {
       String wrn = Lizzie.resourceBundle.getString("SGFParse.wrn");
       assertEquals(1, data.comment.split(Pattern.quote(wrn), -1).length - 1, data.comment);
       assertEquals(data.comment, format(formatter, node));
+    }
+  }
+
+  @Test
+  void commentSplitKeepsFirstSummaryAndAllSurroundingPersonalText() {
+    String before = "  Personal $1 \\path\n";
+    String between = "\nMiddle note\n";
+    String after = "\n마지막 메모\nSecond line  \n";
+    String secondSummary = KATA_MATCH_INFO.replace("38.9%", "40.0%");
+
+    var split = SGFParser.splitWinrateComment(
+        before + KATA_MATCH_INFO + between + secondSummary + after);
+
+    assertEquals(KATA_MATCH_INFO, split.matchInfo);
+    assertEquals((before + between + after).trim(), split.personalComment);
+  }
+
+  @Test
+  void commentSplitKeepsVariantPriorityAndUnmatchedWhitespace() {
+    String personal = "  Personal $1 \\path\n";
+    var kata = SGFParser.splitWinrateComment(
+        personal + LEELA_MATCH_INFO + "\n" + SAI_MATCH_INFO + "\n" + KATA_MATCH_INFO);
+    assertEquals(KATA_MATCH_INFO, kata.matchInfo);
+    assertEquals((personal + LEELA_MATCH_INFO + "\n" + SAI_MATCH_INFO).trim(), kata.personalComment);
+
+    var sai = SGFParser.splitWinrateComment(kata.personalComment);
+    assertEquals(SAI_MATCH_INFO, sai.matchInfo);
+    assertEquals((personal + LEELA_MATCH_INFO).trim(), sai.personalComment);
+
+    var leela = SGFParser.splitWinrateComment(sai.personalComment);
+    assertEquals(LEELA_MATCH_INFO, leela.matchInfo);
+    assertEquals(personal.trim(), leela.personalComment);
+
+    String unmatched = "  Personal $1 \\path\n\n";
+    var plain = SGFParser.splitWinrateComment(unmatched);
+    assertEquals("", plain.matchInfo);
+    assertEquals(unmatched, plain.personalComment);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void uploadSerializationRemovesSummariesAndPreservesPersonalWhitespace(boolean raw)
+      throws Exception {
+    BoardHistoryList history = parse(";B[aa];W[bb];B[cc]");
+    Lizzie.board.setHistory(history);
+    String before = "  Personal $1 \\path\n";
+    String after = "\n마지막 메모\nSecond line  \n";
+    String[] comments = {
+        before + KATA_MATCH_INFO + after,
+        before + SAI_MATCH_INFO + after,
+        before + LEELA_MATCH_INFO + after,
+        before + after
+    };
+    BoardHistoryNode node = history.getStart();
+    for (int i = 0; i < comments.length; i++) {
+      node.getData().isKataData = i < 2;
+      node.getData().isSaiData = i == 1;
+      node.getData().setAuthoredComment(comments[i]);
+      if (i + 1 < comments.length) node = node.next().orElseThrow();
+    }
+    boolean previousRawComments = LizzieFrame.isSavingRawComment;
+    try {
+      LizzieFrame.isSavingRaw = raw;
+      LizzieFrame.isSavingRawComment = true;
+      BoardHistoryNode saved = SGFParser.parseSgf(SGFParser.saveToString(true), true).getStart();
+      node = history.getStart();
+      for (int i = 0; i < comments.length; i++) {
+        assertEquals(before + after, saved.getData().comment);
+        assertEquals(comments[i], node.getData().comment);
+        if (i + 1 < comments.length) {
+          saved = saved.next().orElseThrow();
+          node = node.next().orElseThrow();
+        }
+      }
+    } finally {
+      LizzieFrame.isSavingRawComment = previousRawComments;
     }
   }
 
