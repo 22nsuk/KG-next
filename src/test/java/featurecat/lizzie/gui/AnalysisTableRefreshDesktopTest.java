@@ -252,9 +252,9 @@ class AnalysisTableRefreshDesktopTest {
     Lizzie.config.showBestMovesList = false;
     AnalysisFrame graphOnly = new AnalysisFrame(engine);
     graphOnly.timer.stop();
-    history.reads = 0;
+    history.edtReads = 0;
     tick(graphOnly.timer);
-    assertEquals(0, history.reads, "graph-only ticks do not prepare hidden candidates");
+    assertEquals(0, history.edtReads, "graph-only ticks do not prepare hidden candidates");
     graphOnly.dispose();
     Lizzie.config.showBestMovesList = true;
     return frame;
@@ -347,18 +347,18 @@ class AnalysisTableRefreshDesktopTest {
         "color ties keep the source order");
     int sort = frame.sortnum;
     frame.topPanel.setSelectedIndex(0);
-    history.reads = 0;
+    history.edtReads = 0;
     tick(frame.timer);
-    assertEquals(0, history.reads, "statistics-only ticks do not prepare hidden tables");
+    assertEquals(0, history.edtReads, "statistics-only ticks do not prepare hidden tables");
     frame.topPanel.setSelectedIndex(2);
     assertEquals(sort, frame.sortnum, "statistics round trips retain the selected sort");
     Object beforeHide = table.getValueAt(rowFor(table, 1, 5), 3);
     frame.hideMove.doClick(0);
     assertFalse(frame.topPanel.isVisible());
     changed.diffWinrate = -0.5;
-    history.reads = 0;
+    history.edtReads = 0;
     tick(frame.timer);
-    assertEquals(0, history.reads, "collapsed-list ticks do not prepare hidden rows");
+    assertEquals(0, history.edtReads, "collapsed-list ticks do not prepare hidden rows");
     assertEquals(beforeHide, table.getValueAt(rowFor(table, 1, 5), 3));
     frame.hideMove.doClick(0);
     assertTrue(frame.topPanel.isVisible());
@@ -450,7 +450,8 @@ class AnalysisTableRefreshDesktopTest {
 
   private static void pureReadsAndExport(CountingHistory history, JTable table, Path file)
       throws Exception {
-    history.reads = 0;
+    assertTrue(SwingUtilities.isEventDispatchThread(), "table reads are measured on the EDT");
+    history.edtReads = 0;
     for (int repeat = 0; repeat < 3; repeat++) {
       for (int row = 0; row < table.getRowCount(); row++) {
         for (int column = 0; column < table.getModel().getColumnCount(); column++) {
@@ -459,7 +460,7 @@ class AnalysisTableRefreshDesktopTest {
       }
     }
     Utils.exportTable(table, file.toString());
-    assertEquals(0, history.reads, "table reads re-traversed history outside a refresh");
+    assertEquals(0, history.edtReads, "table reads re-traversed history outside a refresh");
     assertEquals(
         table.getRowCount() + 1, Files.readString(file, StandardCharsets.UTF_16).lines().count());
   }
@@ -635,39 +636,45 @@ class AnalysisTableRefreshDesktopTest {
   }
 
   private static final class CountingHistory extends BoardHistoryList {
-    int reads;
+    int edtReads;
 
     CountingHistory(BoardData data) {
       super(data);
     }
 
+    private void recordRead() {
+      // The real application's scheduled title/move-list updater also reads this history.
+      // Only EDT reads belong to the table operations and timer callbacks under test.
+      if (SwingUtilities.isEventDispatchThread()) edtReads++;
+    }
+
     @Override
     public BoardHistoryNode getCurrentHistoryNode() {
-      reads++;
+      recordRead();
       return super.getCurrentHistoryNode();
     }
 
     @Override
     public BoardHistoryNode getMainEnd() {
-      reads++;
+      recordRead();
       return super.getMainEnd();
     }
 
     @Override
     public BoardHistoryNode getEnd() {
-      reads++;
+      recordRead();
       return super.getEnd();
     }
 
     @Override
     public BoardHistoryNode getStart() {
-      reads++;
+      recordRead();
       return super.getStart();
     }
 
     @Override
     public BoardData getData() {
-      reads++;
+      recordRead();
       return super.getData();
     }
   }
