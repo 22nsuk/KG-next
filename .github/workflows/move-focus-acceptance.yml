@@ -33,6 +33,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: maven
       - name: Select MSVC 14.44 x64 toolchain
         shell: pwsh
         run: |

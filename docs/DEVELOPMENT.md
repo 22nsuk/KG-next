@@ -114,7 +114,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 
 | Group | Portable | Windows | 额外工具 |
 | --- | --- | --- | --- |
-| `repository` | 换行自测、换行、Markdown 链接 | 换行 | 无 |
+| `repository` | 换行自测、换行、Markdown 链接、引擎/模型元数据、直接消费文档的 Python 检查 | 换行、引擎/模型元数据 | Portable 的签名清理 fixture 使用 POSIX Bash；不查找 Maven/PowerShell |
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux x86_64 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 完整 Maven verify（包括凭据测试） | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
@@ -165,6 +165,10 @@ CI 的 desktop job 先执行一次完整 `desktop`，再执行两次 `desktop-ra
 引擎 smoke 由 Linux/Windows `engine-process` 两个 job 负责，不在 desktop 重跑。
 完整 desktop 报告与 race 报告分别写入 `target/desktop-smoke/` 和其 `races/` 子目录；
 CI 每次 race 成功后把后者保留为 `races-1/`、`races-2/`，失败时保留当前 `races/`。
+成功 artifact 只排除两个额外重复目录中的 PNG/BMP，保留首次完整执行的所有图片、
+每次重复的 XML/文本/SGF/日志和独立摘要；生成图片及其读取验证仍照常执行。
+成功 desktop artifact 保留 7 天，失败或取消时尝试上传完整目录并保留 14 天；
+所有 local CI JSON/Markdown 摘要保留 14 天，artifact 名称及执行 SHA 记录不变。
 频率调整及必需成功规则见 [CI 合并策略](CI_MERGE_POLICY.md)。
 
 `ConfigReadFailurePreservationTest` 与 `WorkDirectoryReadFailurePreservationTest` 使用真实文件权限，
@@ -280,8 +284,13 @@ pwsh -NoProfile -File scripts/run_local_ci.ps1 -Profile Windows -Group EnginePro
 设置 `java.awt.headless=false` 不会替代可用显示；显示不可用时 runner 必须失败，不能以 skip 通过。
 
 
-Actions 的 `ci.yml` 对所有 PR（包括仅文档改动）、main push 和 merge_group 执行
-`repository-checks`、`script-tests`、`windows-script-tests`、`java-linux`、`java17-web`、
+Actions 的 `ci.yml` 对所有 PR 执行 `repository-checks` 和 `ci-required`。
+`repository-checks` 还执行直接读取文档的元数据/README、Windows 下载指导、
+release workflow/checklist identity、macOS signing security 四个现有 Python 模块；
+这些模块已移出 portable scripts 组，因此完整 CI 也只执行一次。
+只有根目录 Markdown 和 `docs/` 下 Markdown/reStructuredText 的改动可跳过其余执行 job。
+含代码、资源、配置或未知路径的 PR，以及所有 main push 和 merge_group，仍执行
+`script-tests`、`windows-script-tests`、`java-linux`、`java17-web`、
 `java-windows`、`desktop-smoke`、`analysis-provenance-ui`，以及 `engine-process` 的
 Linux/Xvfb 与原生 Windows 两个 matrix leg。
 Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘要独立上传。
@@ -292,8 +301,11 @@ JUnit/探针证据，不生成或合并 coverage 报告，因此这些 Maven 调
 TensorRT UI 也沿用这一设置。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
 
-`ci-required` 要求上述八项、`engine-process` matrix 及选中的 Fox/B11/native Windows/SGF-CPU 补充检查成功。
-失败、取消、必需执行的跳过、缺失或未知结果均不能通过；只有成功的文档专用判定允许补充检查跳过。
+`ci-required` 由 `ci_acceptance.py` 统一核验 repository 及所有选中的执行 job。
+repository 及文档消费检查必须成功；只有成功的文档专用判定才允许其余 job 跳过。
+失败、取消、必需执行的跳过、缺失或未知结果均不能通过，dependency 列表不一致也失败。
+workflow 自身保持无路径过滤，汇总 gate 始终依赖所有 job 并使用 `always()`。
+Native Windows Engine Acceptance 补齐 Maven 依赖缓存，固定 native CPU 引擎仍每次构建、audit 并执行原生用例。
 发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
 该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
@@ -308,8 +320,8 @@ TensorRT UI 也沿用这一设置。各组失败时仍尝试上传本组摘要�
   [ruleset 列表](https://api.github.com/repos/22nsuk/KG-next/rulesets)，在仓库设置和 PR 合并框确认
   目标、检查来源、严格模式和管理员适用范围。权限错误或无法读取不能解释为“没有保护”。
 - Fox、B11、Native Windows Engine Acceptance 和 Acceptance integration 通过 workflow_call 接入 CI，不再独立按 PR 路径触发。
-  仅常规文档文本 PR 可跳过这四个补充检查；其他变更及 main push/merge_group 全部执行。
-  不要将可跳过的补充检查单独设为必需状态。规则模板、启用与回退步骤见
+  常规文档文本 PR 只执行 repository 与汇总 gate；其他变更及 main push/merge_group 全部执行。
+  不要将可跳过的执行 job 单独设为必需状态。规则模板、启用与回退步骤见
   [CI 合并策略](CI_MERGE_POLICY.md)。提交模板不会自动启用服务器规则。
 
 2026-10-28 检查 `22nsuk/KG-next` 的 main `23a648d5` 时，`protected=false`，ruleset 列表为空；

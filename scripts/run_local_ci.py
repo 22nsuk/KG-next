@@ -456,7 +456,6 @@ DIRECT_PYTHON_TESTS = (
     "scripts/test_build_katago_linux_cuda.py",
     "scripts/test_build_katago_source.py",
     "scripts/test_katago_asset_catalog.py",
-    "scripts/test_validate_kg_metadata.py",
     "scripts/test_stage_katago_source_release.py",
     "scripts/test_build_katago_macos_dependencies.py",
     "scripts/test_package_katago_source_macos.py",
@@ -481,14 +480,11 @@ UNITTEST_MODULES = (
     "scripts.test_release_asset_topology",
     "scripts.test_run_local_ci",
     "scripts.test_validate_release_notes",
-    "scripts.test_macos_signing_security",
     "scripts.test_r2_release",
     "scripts.test_validate_windows_release_assets",
-    "scripts.test_validate_release_workflow_identity",
     "scripts.test_upload_release_assets",
     "scripts.test_transfer_pinned_source_assets",
     "scripts.test_verify_saved_release_assets",
-    "scripts.test_windows_download_guidance",
 )
 
 BASH_SYNTAX_FILES = (
@@ -706,6 +702,23 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
         Step("Verify repository line endings", (python, "scripts/check_line_endings.py"), group="repository"),
         Step("Verify KG-next engine and model metadata", (python, "scripts/validate_kg_metadata.py"), group="repository"),
         Step("Verify local Markdown links", (python, "scripts/check_markdown_links.py"), group="repository"),
+        # These tests consume repository prose and must also run on documentation-only PRs.
+        Step(
+            "Test KG-next metadata and documentation",
+            (python, "scripts/test_validate_kg_metadata.py"), group="repository",
+        ),
+        Step(
+            "Verify Windows download guidance",
+            (python, "-m", "unittest", "scripts.test_windows_download_guidance"), group="repository",
+        ),
+        Step(
+            "Verify release workflow and checklist identity",
+            (python, "-m", "unittest", "scripts.test_validate_release_workflow_identity"), group="repository",
+        ),
+        Step(
+            "Verify macOS signing and documentation",
+            (python, "-m", "unittest", "scripts.test_macos_signing_security"), group="repository",
+        ),
         Step("Compile release helper Python", (python, "-m", "py_compile", *PY_COMPILE_FILES)),
     ]
     steps.extend(
@@ -950,12 +963,6 @@ def reset_junit_reports(root: Path = REPO_ROOT / "target") -> None:
             shutil.rmtree(directory)
 
 
-
-
-def require_successful_job_results(results: Mapping[str, str]) -> None:
-    rejected = [f"{name}={result}" for name, result in results.items() if result != "success"]
-    if rejected:
-        raise RuntimeError("Required CI jobs did not succeed: " + ", ".join(rejected))
 
 
 def overall_result(success: bool, results: Sequence[StepResult]) -> str:
