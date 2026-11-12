@@ -280,19 +280,37 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     int generation = activeProcessGeneration;
     String requestId = "humansl-ready-" + nextRequestId.getAndIncrement();
     JSONObject readinessRequest = buildHumanSlRequest(requestId, positionNode, profile, 1, 1);
+    Stone[] readinessStones = positionNode.getData().stones.clone();
     try {
       JSONObject response =
           request(readinessRequest, timeout == null ? Duration.ofSeconds(180) : timeout);
-      if (response == null || !requestId.equals(response.optString("id", ""))) {
+      if (response == null
+          || !requestId.equals(response.optString("id", ""))
+          || KataGoAnalysisResponse.kind(response) != KataGoAnalysisResponse.Kind.FINAL
+          || !hasUsableHumanPolicy(
+              response,
+              readinessRequest.getInt("boardXSize"),
+              readinessRequest.getInt("boardYSize"),
+              readinessStones)) {
         stopActiveProcess(
             generation,
             false,
-            withStartupDiagnostics("HumanSL engine returned an invalid readiness response."));
+            withStartupDiagnostics(
+                "HumanSL engine returned no usable final humanPolicy for readiness."));
         return false;
       }
-      unavailableReason = null;
-      reportStartupStage(StartupStage.READY, "");
-      return true;
+      synchronized (this) {
+        if (generation == activeProcessGeneration && isStarted()) {
+          unavailableReason = null;
+          reportStartupStage(StartupStage.READY, "");
+          return true;
+        }
+      }
+      stopActiveProcess(
+          generation,
+          false,
+          withStartupDiagnostics("HumanSL engine stopped before readiness completed."));
+      return false;
     } catch (TimeoutException | IOException e) {
       stopActiveProcess(
           generation,
@@ -1192,6 +1210,29 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     return null;
   }
 
+  private static boolean hasUsableHumanPolicy(
+      JSONObject response, int boardWidth, int boardHeight, Stone[] stones) {
+    Object policy = extractHumanPolicy(response);
+    if (policy instanceof JSONArray && isNumericPolicy((JSONArray) policy)) {
+      JSONArray array = (JSONArray) policy;
+      int boardArea = boardWidth * boardHeight;
+      if (array.length() != boardArea + 1) return false;
+      boolean usable = false;
+      for (int i = 0; i < array.length(); i++) {
+        double probability = ((Number) array.get(i)).doubleValue();
+        if (!Double.isFinite(probability) || (probability < 0.0 && probability != -1.0)) {
+          return false;
+        }
+        if (probability > 0.0
+            && (i == boardArea || isEmpty(stones, boardHeight, i % boardWidth, i / boardWidth))) {
+          usable = true;
+        }
+      }
+      return usable;
+    }
+    return !policyMoves(policy, boardWidth, boardHeight, stones, true).isEmpty();
+  }
+
   private static List<HumanLikeMoveSelector.Candidate> policyMoves(
       Object policy, int boardWidth, int boardHeight, boolean allowPass) {
     return policyMoves(policy, boardWidth, boardHeight, null, allowPass);
@@ -1237,7 +1278,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
         if (pair.length() >= 2) {
           String move = pair.optString(0, "");
           if ((allowPass || !"pass".equalsIgnoreCase(move.trim()))
-              && isLegalPolicyMove(move, stones, boardHeight)) {
+              && isLegalPolicyMove(move, stones, boardWidth, boardHeight)) {
             addPolicyMove(moves, move, pair.opt(1));
           }
         }
@@ -1248,7 +1289,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
       JSONObject object = (JSONObject) policy;
       for (String key : object.keySet()) {
         if ((allowPass || !"pass".equalsIgnoreCase(key.trim()))
-            && isLegalPolicyMove(key, stones, boardHeight)) {
+            && isLegalPolicyMove(key, stones, boardWidth, boardHeight)) {
           addPolicyMove(moves, key, object.opt(key));
         }
       }
@@ -1290,10 +1331,35 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
         JSONObject response = new JSONObject(line);
         String id = response.optString("id", "");
         CompletableFuture<JSONObject> future = pendingResponses.get(id);
-        if (future != null) {
-          future.complete(response);
+        if (future == null && !(id.isEmpty() && response.has("error"))) {
+          continue;
+        }
+        KataGoAnalysisResponse.Kind kind = KataGoAnalysisResponse.kind(response);
+        switch (kind) {
+          case WARNING:
+          case ERROR:
+          case NO_RESULTS:
+            String diagnostic = KataGoAnalysisResponse.diagnostic(response);
+            recordStartupDiagnostic(diagnostic);
+            if (kind == KataGoAnalysisResponse.Kind.WARNING
+                && !KataGoAnalysisResponse.warningChangesRequest(response)) {
+              break;
+            }
+            IOException responseFailure = new IOException(diagnostic);
+            if (future == null) throw responseFailure;
+            future.completeExceptionally(responseFailure);
+            break;
+          case FINAL:
+            future.complete(response);
+            break;
+          case ACTION:
+          case PARTIAL:
+            // A control acknowledgement or interim result does not finish an analysis request.
+            break;
         }
       }
+    } catch (IOException e) {
+      failure = e;
     } catch (Exception e) {
       failure = new IOException("HumanSL analysis reader stopped.", e);
     } finally {
@@ -1426,7 +1492,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
       return null;
     }
     double probability = ((Number) value).doubleValue();
-    if (Double.isNaN(probability) || probability < 0.0) {
+    if (!Double.isFinite(probability) || probability < 0.0) {
       return null;
     }
     return probability;
@@ -1441,14 +1507,22 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     return new int[] {x, y};
   }
 
-  private static boolean isLegalPolicyMove(String move, Stone[] stones, int boardHeight) {
-    if (move == null || stones == null || "pass".equalsIgnoreCase(move.trim())) {
-      return true;
-    }
-    int[] coords = Board.convertNameToCoordinates(move.trim());
-    return coords != null
-        && coords != featurecat.lizzie.gui.LizzieFrame.outOfBoundCoordinate
-        && Board.isValid(coords[0], coords[1])
+  private static boolean isLegalPolicyMove(
+      String move, Stone[] stones, int boardWidth, int boardHeight) {
+    if (move == null) return false;
+    String normalized = move.trim();
+    if ("pass".equalsIgnoreCase(normalized)) return true;
+    int[] coords = Board.asCoordinates(normalized, boardHeight).orElse(null);
+    if (coords == null
+        || coords[0] < 0
+        || coords[0] >= boardWidth
+        || coords[1] < 0
+        || coords[1] >= boardHeight) return false;
+    // Board's user-input parser can shorten an out-of-range row (A33 -> A3).
+    // Engine policy coordinates must name the actual point, using the request's dimensions.
+    String gtpName = Board.coordsAsName(coords[0]) + (boardHeight - coords[1]);
+    String numericName = "(" + coords[0] + "," + coords[1] + ")";
+    return (normalized.equalsIgnoreCase(gtpName) || normalized.equals(numericName))
         && isEmpty(stones, boardHeight, coords[0], coords[1]);
   }
 

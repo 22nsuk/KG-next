@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -41,6 +42,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class HumanSlAnalysisRunnerTest {
   private static final int BOARD_SIZE = 3;
@@ -719,17 +722,21 @@ class HumanSlAnalysisRunnerTest {
     }
   }
 
-  @Test
-  void verifyReady_requiresARealHumanSlResponse() throws Exception {
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"humanPolicy\":{\"A3\":1.0}}",
+        "{\"rootInfo\":{\"humanPolicy\":{\"A3\":1.0}}}",
+        "{\"humanPolicy\":[[\"A3\",1.0]]}",
+        "{\"humanPolicy\":[1,-1,0,0,0,0,0,0,0,0]}",
+        "{\"humanPolicy\":[0,0,0,0,0,0,0,0,0,1]}"
+      })
+  void verifyReady_requiresARealHumanSlResponse(String payload) throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
       boardWithHistory(history);
       FakeProcess process =
-          new FakeProcess(
-              request ->
-                  new JSONObject()
-                      .put("id", request.getString("id"))
-                      .put("humanPolicy", new JSONObject().put("A3", 1.0)));
+          new FakeProcess(request -> new JSONObject(payload).put("id", request.getString("id")));
       HumanSlAnalysisRunner runner = new HumanSlAnalysisRunner(fakeCommand, ignored -> process);
       List<HumanSlAnalysisRunner.StartupStage> stages =
           java.util.Collections.synchronizedList(
@@ -742,6 +749,246 @@ class HumanSlAnalysisRunnerTest {
       assertEquals(1, process.sentRequests.get(0).getInt("maxVisits"));
       assertTrue(stages.contains(HumanSlAnalysisRunner.StartupStage.READY));
       runner.close();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{}",
+        "{\"policy\":{\"A3\":1.0}}",
+        "{\"humanPolicy\":null}",
+        "{\"humanPolicy\":{}}",
+        "{\"humanPolicy\":[]}",
+        "{\"humanPolicy\":{\"A3\":0.0}}",
+        "{\"humanPolicy\":{\"A33\":1.0}}",
+        "{\"humanPolicy\":{\"D1\":1.0}}",
+        "{\"humanPolicy\":{\"A3\":1e999}}",
+        "{\"humanPolicy\":[1.0]}",
+        "{\"humanPolicy\":[0,-1,0,0,0,0,0,0,0,0]}",
+        "{\"humanPolicy\":[1,-0.2,0,0,0,0,0,0,0,0]}",
+        "{\"humanPolicy\":[1,1e999,0,0,0,0,0,0,0,0]}",
+        "{\"error\":\"Human model failed\",\"field\":\"humanSLProfile\"}",
+        "{\"warning\":\"Unused field: clientTag\",\"field\":\"clientTag\"}",
+        "{\"warning\":\"Unused humanSLProfile\",\"field\":\"overrideSettings\"}",
+        "{\"action\":\"terminate\",\"terminateId\":\"old-request\"}",
+        "{\"noResults\":true,\"isDuringSearch\":false}",
+        "{\"noResults\":\"false\",\"humanPolicy\":{\"A3\":1.0}}",
+        "{\"isDuringSearch\":\"false\",\"humanPolicy\":{\"A3\":1.0}}",
+        "{\"isDuringSearch\":true,\"humanPolicy\":{\"A3\":1.0}}"
+      })
+  void verifyReady_rejectsResponsesWithoutUsableFinalHumanPolicy(String payload) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      FakeProcess process =
+          new FakeProcess(request -> new JSONObject(payload).put("id", request.getString("id")));
+      List<HumanSlAnalysisRunner.StartupStage> stages =
+          new java.util.concurrent.CopyOnWriteArrayList<>();
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        runner.setStartupListener((stage, detail) -> stages.add(stage));
+        assertFalse(
+            runner.verifyReady(history.getCurrentHistoryNode(), "rank_3k", Duration.ofMillis(100)));
+        assertFalse(stages.contains(HumanSlAnalysisRunner.StartupStage.READY));
+        assertFalse(runner.isStarted());
+        assertTrue(
+            runner.getUnavailableReason() != null && !runner.getUnavailableReason().isEmpty());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"warning\":\"Unused field: clientTag\",\"field\":\"clientTag\"}",
+        "{\"action\":\"terminate\",\"terminateId\":\"old-request\"}",
+        "{\"isDuringSearch\":true,\"humanPolicy\":{\"B2\":1.0}}",
+        "{\"id\":\"old-request\",\"error\":\"Old failure\"}",
+        "{\"id\":\"old-request\",\"warning\":\"Rules replaced\",\"field\":\"rules\"}",
+        "{\"id\":\"old-request\",\"noResults\":true}"
+      })
+  void request_waitsForFinalAnalysisAfterNonTerminalOrUnownedResponses(String envelope)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      FakeProcess process =
+          new FakeProcess(
+              request -> {
+                JSONObject response = new JSONObject(envelope);
+                if (!response.has("id")) response.put("id", request.getString("id"));
+                return response;
+              },
+              request ->
+                  new JSONObject()
+                      .put("id", request.getString("id"))
+                      .put("humanPolicy", new JSONObject().put("A3", 1.0)));
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        JSONObject response =
+            runner.request(new JSONObject().put("id", "current"), Duration.ofSeconds(1));
+        assertEquals(1.0, response.getJSONObject("humanPolicy").getDouble("A3"));
+        assertTrue(runner.isStarted());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"error\":\"Invalid profile\",\"field\":\"humanSLProfile\"}",
+        "{\"warning\":\"Rules replaced\",\"field\":\"rules\"}",
+        "{\"warning\":\"Unused humanSLProfile\",\"field\":\"overrideSettings\"}",
+        "{\"noResults\":true}"
+      })
+  void request_rejectsErrorsChangedSettingsAndNoResultsWithDiagnostics(String envelope)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      JSONObject diagnostic = new JSONObject(envelope);
+      FakeProcess process =
+          new FakeProcess(request -> new JSONObject(envelope).put("id", request.getString("id")));
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        IOException failure =
+            assertThrows(
+                IOException.class,
+                () -> runner.request(new JSONObject().put("id", "current"), Duration.ofSeconds(1)));
+        assertTrue(failure.getMessage().contains(diagnostic.optString("field", "noResults")));
+        assertTrue(
+            failure
+                .getMessage()
+                .contains(
+                    diagnostic.optString("error", diagnostic.optString("warning", "noResults"))));
+      }
+    }
+  }
+
+  @Test
+  void request_generalErrorFailsPendingRequestAndStopsProcess() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      FakeProcess process =
+          new FakeProcess(request -> new JSONObject().put("error", "Engine failure"));
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        IOException failure =
+            assertThrows(
+                IOException.class,
+                () -> runner.request(new JSONObject().put("id", "current"), Duration.ofSeconds(1)));
+        assertTrue(failure.getMessage().contains("Engine failure"));
+        assertFalse(runner.isStarted());
+      }
+    }
+  }
+
+  @Test
+  void request_errorOnlyCompletesItsMatchingPendingRequest() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      FakeProcess process = new FakeProcess(request -> null);
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        ExecutorService workers = Executors.newFixedThreadPool(2);
+        try {
+          Future<IOException> failed =
+              workers.submit(
+                  () -> assertThrows(
+                      IOException.class,
+                      () -> runner.request(
+                          new JSONObject().put("id", "failed"), Duration.ofSeconds(5))));
+          Future<JSONObject> healthy =
+              workers.submit(
+                  () -> runner.request(
+                      new JSONObject().put("id", "healthy"), Duration.ofSeconds(5)));
+          waitForRequest(process, 2, 1, TimeUnit.SECONDS);
+          process.emitLine("{\"id\":\"failed\",\"error\":\"Invalid profile\"}");
+          process.emitLine("{\"id\":\"healthy\",\"humanPolicy\":{\"A3\":1.0}}");
+
+          assertTrue(failed.get(1, TimeUnit.SECONDS).getMessage().contains("Invalid profile"));
+          assertEquals(
+              1.0,
+              healthy.get(1, TimeUnit.SECONDS).getJSONObject("humanPolicy").getDouble("A3"));
+          assertTrue(runner.isStarted());
+        } finally {
+          runner.cancelActiveRequests();
+          shutdownWorker(workers);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void verifyReady_cannotPublishAStoppedOrReplacedGeneration(boolean restart) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      List<HumanSlAnalysisRunner.StartupStage> stages =
+          new java.util.concurrent.CopyOnWriteArrayList<>();
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(
+              fakeCommand,
+              ignored ->
+                  new FakeProcess(
+                      request ->
+                          new JSONObject()
+                              .put("id", request.getString("id"))
+                              .put("humanPolicy", new JSONObject().put("A3", 1.0)))) {
+            @Override
+            public JSONObject request(JSONObject request, Duration timeout)
+                throws IOException, TimeoutException {
+              JSONObject response = super.request(request, timeout);
+              cancelActiveRequests();
+              if (restart) assertTrue(start());
+              return response;
+            }
+          }) {
+        runner.setStartupListener((stage, detail) -> stages.add(stage));
+        assertFalse(
+            runner.verifyReady(history.getCurrentHistoryNode(), "rank_3k", Duration.ofSeconds(1)));
+        assertFalse(stages.contains(HumanSlAnalysisRunner.StartupStage.READY));
+        assertEquals(restart, runner.isStarted());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {"{\"humanPolicy\":{\"A3\":1.0}}", "{\"humanPolicy\":[1,0,0,0,0,0,0,0,0,0]}"})
+  void verifyReady_validatesTheRequestedPositionSnapshot(String payload) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      FakeProcess process =
+          new FakeProcess(
+              request -> {
+                Board.boardWidth = 19;
+                Board.boardHeight = 19;
+                history.getStart().getData().stones[0] = Stone.BLACK;
+                return new JSONObject(payload).put("id", request.getString("id"));
+              });
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        assertTrue(runner.verifyReady(history.getStart(), "rank_3k", Duration.ofSeconds(1)));
+      }
+    }
+  }
+
+  @Test
+  void verifyReady_rejectsPolicyWhoseOnlyCandidateIsOccupied() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      data.stones[0] = Stone.BLACK;
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      FakeProcess process =
+          new FakeProcess(
+              request ->
+                  new JSONObject()
+                      .put("id", request.getString("id"))
+                      .put("humanPolicy", new JSONObject().put("A3", 1.0)));
+      try (HumanSlAnalysisRunner runner =
+          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+        assertFalse(runner.verifyReady(history.getStart(), "rank_3k", Duration.ofSeconds(1)));
+        assertFalse(runner.isStarted());
+      }
     }
   }
 
@@ -1101,7 +1348,7 @@ class HumanSlAnalysisRunnerTest {
         java.util.Collections.synchronizedList(new ArrayList<JSONObject>());
     private volatile boolean alive = true;
 
-    private FakeProcess(ResponseFactory responseFactory) throws IOException {
+    private FakeProcess(ResponseFactory... responseFactories) throws IOException {
       this.stdout = new PipedInputStream();
       this.stdoutWriter = new PipedOutputStream(stdout);
       this.stdin =
@@ -1121,10 +1368,11 @@ class HumanSlAnalysisRunnerTest {
             private void handleLine(String line) throws IOException {
               JSONObject request = new JSONObject(line);
               sentRequests.add(request);
-              JSONObject response = responseFactory.response(request);
-              if (response != null) {
-                stdoutWriter.write((response.toString() + "\n").getBytes(StandardCharsets.UTF_8));
-                stdoutWriter.flush();
+              for (ResponseFactory responseFactory : responseFactories) {
+                JSONObject response = responseFactory.response(request);
+                if (response != null) {
+                  emitLine(response.toString());
+                }
               }
             }
           };
