@@ -10,8 +10,7 @@ import java.util.Optional;
 
 /** Node structure for the board history / sgf tree */
 public class BoardHistoryNode {
-  private static final ThreadLocal<Integer> DETACHED_HISTORY_MUTATION_DEPTH =
-      ThreadLocal.withInitial(() -> 0);
+  private static final ThreadLocal<Boolean> DETACHED_BRANCH_NUMBERING = new ThreadLocal<>();
 
   private Optional<BoardHistoryNode> previous;
   public ArrayList<BoardHistoryNode> variations;
@@ -30,23 +29,23 @@ public class BoardHistoryNode {
   // Save the children for restore to branch
   private int fromBackChildren;
 
-  static void runWithoutGlobalMoveSideEffects(Runnable action) {
+  static void runWithoutGlobalMoveSideEffects(boolean newMoveNumberInBranch, Runnable action) {
     Objects.requireNonNull(action, "action");
-    int previousDepth = DETACHED_HISTORY_MUTATION_DEPTH.get();
-    DETACHED_HISTORY_MUTATION_DEPTH.set(previousDepth + 1);
+    Boolean previous = DETACHED_BRANCH_NUMBERING.get();
+    DETACHED_BRANCH_NUMBERING.set(newMoveNumberInBranch);
     try {
       action.run();
     } finally {
-      if (previousDepth == 0) {
-        DETACHED_HISTORY_MUTATION_DEPTH.remove();
+      if (previous == null) {
+        DETACHED_BRANCH_NUMBERING.remove();
       } else {
-        DETACHED_HISTORY_MUTATION_DEPTH.set(previousDepth);
+        DETACHED_BRANCH_NUMBERING.set(previous);
       }
     }
   }
 
   private static boolean suppressGlobalMoveSideEffects() {
-    return DETACHED_HISTORY_MUTATION_DEPTH.get() > 0;
+    return DETACHED_BRANCH_NUMBERING.get() != null;
   }
 
   /** Initializes a new list node */
@@ -235,16 +234,17 @@ public class BoardHistoryNode {
     if (!this.previous.isPresent() && !tsumego) {
       data.moveMNNumber = 1;
     }
-    if (Lizzie.config.newMoveNumberInBranch && !variations.isEmpty() && !changeMove) {
+    if ((suppressSideEffects ? DETACHED_BRANCH_NUMBERING.get() : Lizzie.config.newMoveNumberInBranch)
+        && !variations.isEmpty() && !changeMove) {
       if (!newBranch) {
-        data.moveNumberList = new int[Board.boardWidth * Board.boardHeight];
+        data.moveNumberList = new int[data.stones.length];
         data.moveMNNumber = -1;
       }
       if (data.moveMNNumber == -1) {
         data.moveMNNumber = data.dummy ? 0 : 1;
       }
       data.lastMove.ifPresent(
-          m -> data.moveNumberList[Board.getIndex(m[0], m[1])] = data.moveMNNumber);
+          m -> data.moveNumberList[data.zobrist.index(m[0], m[1])] = data.moveMNNumber);
     }
     BoardHistoryNode node = new BoardHistoryNode(data);
     if (changeMove) {
@@ -502,7 +502,7 @@ public class BoardHistoryNode {
     data.moveMNNumber = start;
     if (data.isMoveNode() && !data.dummy) {
       int[] move = data.lastMove.get();
-      moveNumberList[Board.getIndex(move[0], move[1])] = start;
+      moveNumberList[data.zobrist.index(move[0], move[1])] = start;
     }
     Optional<BoardHistoryNode> node = this.previous();
     int moveNumber = start;
@@ -511,7 +511,7 @@ public class BoardHistoryNode {
       if (nodeData.isMoveNode()) {
         int[] move = nodeData.lastMove.get();
         moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-        moveNumberList[Board.getIndex(move[0], move[1])] = moveNumber;
+        moveNumberList[data.zobrist.index(move[0], move[1])] = moveNumber;
       }
       node = node.get().previous();
     }

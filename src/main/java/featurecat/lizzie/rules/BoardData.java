@@ -305,7 +305,7 @@ public class BoardData {
 
     int[] boardArray = new int[width * height];
     return snapshot(
-        stones, Optional.empty(), Stone.EMPTY, true, new Zobrist(), 0, boardArray, 0, 0, 50, 0);
+        stones, Optional.empty(), Stone.EMPTY, true, new Zobrist(width, height), 0, boardArray, 0, 0, 50, 0);
   }
 
   /** Creates an explicit history move node. */

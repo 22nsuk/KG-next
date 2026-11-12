@@ -22,7 +22,6 @@ import featurecat.lizzie.util.EncodingDetector;
 import featurecat.lizzie.util.SgfFileReader;
 import featurecat.lizzie.util.Utils;
 import java.io.*;
-import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
@@ -55,15 +54,10 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 public class SGFParser {
-  private static final int DEFAULT_BOARD_SIZE = 19;
-  private static final Pattern BOARD_SIZE_VALUE_PATTERN = Pattern.compile("[\\d:]+");
-  private static final Pattern RECT_BOARD_SIZE_PATTERN = Pattern.compile("([\\d]+):([\\d]+)");
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
-  private static final Field BLACK_ZOBRIST_FIELD = resolveZobristField("blackZobrist");
-  private static final Field WHITE_ZOBRIST_FIELD = resolveZobristField("whiteZobrist");
 
   private static boolean isExtraMode2 = false;
 
@@ -330,6 +324,11 @@ public class SGFParser {
 
   private static Optional<Double> normalizeSgfKomi(
       Double komi, Map<String, List<String>> rootProperties) {
+    return normalizeSgfKomi(komi, rootProperties, Board.boardWidth * Board.boardHeight);
+  }
+
+  private static Optional<Double> normalizeSgfKomi(
+      Double komi, Map<String, List<String>> rootProperties, int area) {
     if (komi == null) {
       return Optional.empty();
     }
@@ -337,7 +336,7 @@ public class SGFParser {
         isFoxSgf(rootProperties)
             ? normalizeFoxSgfKomi(komi, rootProperties)
             : normalizeLegacySgfKomi(komi);
-    return Math.abs(komi) < Board.boardWidth * Board.boardHeight
+    return Math.abs(komi) < area
         ? Optional.of(komi)
         : Optional.empty();
   }
@@ -421,32 +420,6 @@ public class SGFParser {
     return convertSgfPosToCoord(pos, Board.boardWidth, Board.boardHeight);
   }
 
-  private static int[] convertSgfPosToCoord(String pos, int boardWidth, int boardHeight) {
-    if (pos.length() < 2) return null;
-    if (isPassPos(pos)) return null;
-    if (boardHeight >= 52 || boardWidth >= 52) {
-      String[] params = pos.trim().split("_");
-      if (params.length == 2) {
-        try {
-          int[] ret = new int[2];
-          ret[0] = Integer.parseInt(params[0]);
-          ret[1] = Integer.parseInt(params[1]);
-          return ret;
-        } catch (NumberFormatException e) {
-          e.printStackTrace();
-          return null;
-        }
-      } else {
-        return null;
-      }
-    } else {
-      int[] ret = new int[2];
-      ret[0] = alphabet.indexOf(pos.charAt(0));
-      ret[1] = alphabet.indexOf(pos.charAt(1));
-      return ret;
-    }
-  }
-
   public static boolean isSGF(String value) {
     final Pattern SGF_PATTERN = Pattern.compile("(?s).*?(\\(\\s*;{0,1}.*\\))(?s).*?");
     Matcher sgfMatcher = SGF_PATTERN.matcher(value);
@@ -460,201 +433,18 @@ public class SGFParser {
     return true;
   }
 
-  private static String normalizeSgfInput(String value) {
-    value = normalizeStructuralNewlines(value);
-    if (value == null) return null;
-    // Match the parsers' surrounding-text tolerance before reading SZ or setup values.
-    int start = value.indexOf('(');
-    int end = value.lastIndexOf(')');
-    if (start >= 0 && end > start) value = value.substring(start, end + 1);
-    int[] size = parseBoardSize(value);
-    return normalizeSetupRanges(value, size[0], size[1]);
-  }
+  private static String normalizeSgfInput(String value) { return SgfDocument.normalizeInput(value); }
 
-  /** Smart-Go names such as PlayerBlack become PB by removing only ASCII lowercase letters. */
-  private static String normalizePropertyName(String name) {
-    StringBuilder normalized = null;
-    for (int i = 0; i < name.length(); i++) {
-      char c = name.charAt(i);
-      if (c >= 'a' && c <= 'z') {
-        if (normalized == null) {
-          normalized = new StringBuilder(name.length());
-          normalized.append(name, 0, i);
-        }
-      } else if (normalized != null) {
-        normalized.append(c);
-      }
-    }
-    return normalized == null ? name : normalized.toString();
-  }
+  private static String normalizePropertyName(String name) { return SgfDocument.normalizePropertyName(name); }
 
-  /**
-   * Expand ranges before the parsers apply setup points. Keeping properties as individual points lets
-   * handicap recognition and edited-snapshot serialization use their existing contracts.
-   */
   private static String normalizeSetupRanges(String value, int width, int height) {
-    if (value.indexOf(':') < 0) return value;
-    StringBuilder normalized = null;
-    StringBuilder tagBuilder = new StringBuilder();
-    String tag = "";
-    int valueStart = -1;
-    int copied = 0;
-    boolean escaped = false;
-    for (int i = 0; i < value.length(); i++) {
-      char c = value.charAt(i);
-      if (valueStart >= 0) {
-        if (escaped) {
-          escaped = false;
-        } else if (c == '\\') {
-          escaped = true;
-        } else if (c == ']') {
-          if (isSetupStoneProperty(tag)) {
-            String points = value.substring(valueStart, i);
-            if (points.indexOf(':') >= 0) {
-              String expanded = expandSetupRange(points, width, height);
-              if (expanded == null) return null;
-              if (normalized == null) normalized = new StringBuilder(value.length());
-              normalized.append(value, copied, valueStart - 1).append(expanded);
-              copied = i + 1;
-            }
-          }
-          valueStart = -1;
-        }
-      } else if (c == '[') {
-        if (tagBuilder.length() > 0) {
-          // Match the legacy parsers' Smart-Go name handling, including an empty resulting tag.
-          tag = normalizePropertyName(tagBuilder.toString());
-          tagBuilder.setLength(0);
-        }
-        valueStart = i + 1;
-      } else if (c == '(' || c == ')' || c == ';') {
-        tag = "";
-        tagBuilder.setLength(0);
-      } else if (SGF_WHITESPACE.indexOf(c) < 0) {
-        tagBuilder.append(c);
-      }
-    }
-    if (valueStart >= 0 && isSetupStoneProperty(tag) && value.indexOf(':', valueStart) >= 0) {
-      return null;
-    }
-    return normalized == null ? value : normalized.append(value, copied, value.length()).toString();
+    return SgfDocument.normalizeSetupRanges(value, width, height);
   }
 
-  private static String expandSetupRange(String value, int width, int height) {
-    // Use reopen's dimension contract before a short range can expand into billions of points.
-    // Preserve its legacy fallback for dimensions below two; this is not a new heap/engine limit.
-    if (!Board.isValidBoardSize(
-        width < 2 ? DEFAULT_BOARD_SIZE : width, height < 2 ? DEFAULT_BOARD_SIZE : height)) {
-      return null;
-    }
-    String[] ends = value.split(":", -1);
-    if (ends.length != 2) return null;
-    int[] first = setupRangeEndpoint(ends[0], width, height);
-    int[] last = setupRangeEndpoint(ends[1], width, height);
-    if (first == null || last == null || first[0] > last[0] || first[1] > last[1]) {
-      return null;
-    }
-    StringBuilder points = new StringBuilder();
-    for (int x = first[0]; x <= last[0]; x++) {
-      for (int y = first[1]; y <= last[1]; y++) {
-        points.append('[').append(asCoord(x, y, width, height)).append(']');
-      }
-    }
-    return points.toString();
-  }
+  private static int[] parseBoardSizeTagValue(String value) { return SgfDocument.parseBoardSizeTagValue(value); }
 
-  private static int[] setupRangeEndpoint(String value, int width, int height) {
-    int[] point;
-    if (width >= 52 || height >= 52) {
-      String[] axes = value.trim().split("_", -1);
-      if (axes.length != 2) return null;
-      try {
-        point = new int[] {Integer.parseInt(axes[0]), Integer.parseInt(axes[1])};
-      } catch (NumberFormatException invalidCoordinate) {
-        return null;
-      }
-    } else {
-      if (value.length() != 2) return null;
-      point = convertSgfPosToCoord(value, width, height);
-    }
-    return point != null && point[0] >= 0 && point[0] < width && point[1] >= 0 && point[1] < height
-        ? point
-        : null;
-  }
-
-  /** Accept escaped LF/CRLF only between SGF tokens, never inside property values. */
-  private static String normalizeStructuralNewlines(String value) {
-    int start = value.indexOf('(');
-    if (start < 0) {
-      return value;
-    }
-    StringBuilder normalized = null;
-    int copied = 0;
-    int depth = 0;
-    boolean inValue = false;
-    boolean escaped = false;
-    char previous = 0;
-    for (int i = start; i < value.length(); i++) {
-      char c = value.charAt(i);
-      // Keep legacy surrounding-text tolerance, but inspect every adjacent collection tree.
-      if (depth == 0 && c != '(' && c != '\\' && !Character.isWhitespace(c)) {
-        break;
-      }
-      if (inValue) {
-        if (escaped) {
-          escaped = false;
-        } else if (c == '\\') {
-          escaped = true;
-        } else if (c == ']') {
-          inValue = false;
-          previous = c;
-        }
-        continue;
-      }
-      if (c == '\\') {
-        int end;
-        if (value.startsWith("\\r\\n", i)) {
-          end = i + 4;
-        } else if (value.startsWith("\\n", i)) {
-          end = i + 2;
-        } else {
-          return null;
-        }
-        int next = end;
-        while (next < value.length() && Character.isWhitespace(value.charAt(next))) {
-          next++;
-        }
-        if (Character.isLetter(previous)
-            && next < value.length() && Character.isLetter(value.charAt(next))) {
-          return null;
-        }
-        if (normalized == null) {
-          normalized = new StringBuilder(value.length());
-        }
-        normalized.append(value, copied, i).append('\n');
-        copied = end;
-        i = end - 1;
-        continue;
-      }
-      if (c == '[') {
-        inValue = true;
-      } else if (c == '(') {
-        depth++;
-      } else if (c == ')') {
-        depth--;
-      }
-      if (!Character.isWhitespace(c)) {
-        previous = c;
-      }
-    }
-    if (normalized == null) {
-      return value;
-    }
-    // Compatibility must not turn a truncated escaped tree into a successful partial import.
-    if (depth != 0 || inValue) {
-      return null;
-    }
-    return normalized.append(value, copied, value.length()).toString();
+  private static int[] convertSgfPosToCoord(String pos, int width, int height) {
+    return SgfDocument.convertSgfPosToCoord(pos, width, height);
   }
 
   private static boolean parse(String value) {
@@ -667,25 +457,15 @@ public class SGFParser {
     }
   }
 
-  // Token parsing and live history construction are interleaved in this legacy parser.
+  // Syntax is detached first; the interactive owner applies the document to its live history.
   private static boolean parseIntoCurrentBoard(String value) {
-    // Drop anything outside "(;...)"
-    final Pattern SGF_PATTERN = Pattern.compile("(?s).*?(\\(\\s*;{0,1}.*\\))(?s).*?");
-    Matcher sgfMatcher = SGF_PATTERN.matcher(value);
-    if (sgfMatcher.matches()) {
-      value = sgfMatcher.group(1);
-    } else {
-      value = "(;" + value.substring(1);
-      Matcher sgfMatcher2 = SGF_PATTERN.matcher(value);
-      if (sgfMatcher2.matches()) {
-        value = sgfMatcher2.group(1);
-      } else {
-        return false;
-      }
+    SgfDocument document = SgfDocument.parseNormalized(value);
+    if (document == null && !value.isEmpty()) {
+      // Preserve the live loader's legacy leading-node fragment tolerance.
+      document = SgfDocument.parseNormalized("(;" + value.substring(1));
     }
-
-    int[] boardSize = parseBoardSize(value);
-    Lizzie.board.reopen(boardSize[0], boardSize[1]);
+    if (document == null) return false;
+    Lizzie.board.reopen(document.width(), document.height());
 
     int subTreeDepth = 0;
     // Save the variation step count
@@ -695,23 +475,17 @@ public class SGFParser {
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
     AnalysisImport analysisImport = new AnalysisImport();
     PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
-    boolean inTag = false,
-        isMultiGo = false,
-        escaping = false,
+    boolean isMultiGo = false,
         moveStart = false,
         currentNodeHasMove = false,
         addPassForMove = true,
         currentNodeHasSetupSnapshot = false;
-    boolean inProp = false;
     int topLevelNodeCount = 0;
     boolean allowRootSetupOnCurrentNode = false;
 
-    String tag = "";
-    StringBuilder tagBuilder = new StringBuilder();
-    StringBuilder tagContentBuilder = new StringBuilder();
     // MultiGo 's branch: (Main Branch (Main Branch) (Branch) )
     // Other 's branch: (Main Branch (Branch) Main Branch)
-    isMultiGo = hasMultiGoBranchSuffix(value);
+    isMultiGo = document.multiGo();
 
     String blackPlayer = "", whitePlayer = "";
     String result = "";
@@ -720,80 +494,41 @@ public class SGFParser {
     Double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
-    int len = value.length();
     boolean currentNodeHasDummy = false;
-    for (int i = 0; i < len; i++) {
-      char c = value.charAt(i);
-      if (escaping) {
-        // Preserve the raw SGF text until GameInfo decodes it; other payloads keep their
-        // existing escape handling.
-        tagContentBuilder.append(c == 'n' && !isGameInfoTextProperty(tag) ? '\n' : c);
-        escaping = false;
-        continue;
-      }
-      switch (c) {
+    for (SgfDocument.Event event : document.events()) {
+      switch (event.kind()) {
         case '(':
-          if (!inTag) {
-            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
-            currentNodeHasDummy = false;
-            subTreeDepth += 1;
-            // Initialize the step count
-            subTreeStepMap.put(subTreeDepth, Lizzie.board.getHistory().getCurrentHistoryNode());
-            addPassForMove = true;
-            currentNodeHasSetupSnapshot = false;
-            currentNodeHasMove = false;
-            pendingProps = new HashMap<String, List<String>>();
-          } else {
-            if (i > 0) {
-              // Allow the comment tag includes '('
-              tagContentBuilder.append(c);
-            }
-          }
+          flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+          currentNodeHasDummy = false;
+          subTreeDepth += 1;
+          // Initialize the step count
+          subTreeStepMap.put(subTreeDepth, Lizzie.board.getHistory().getCurrentHistoryNode());
+          addPassForMove = true;
+          currentNodeHasSetupSnapshot = false;
+          currentNodeHasMove = false;
+          pendingProps = new HashMap<String, List<String>>();
           break;
         case ')':
-          if (!inTag) {
-            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
-            currentNodeHasDummy = false;
-            if (isMultiGo) {
-              // Restore to the variation node
-              // int varStep = subTreeStepMap.get(subTreeDepth);
-              BoardHistoryNode node = subTreeStepMap.get(subTreeDepth);
-              //  for (int s = 0; s < varStep; s++)
-              while (Lizzie.board.getHistory().getCurrentHistoryNode() != node) {
-                if (!Lizzie.board.getHistory().previous().isPresent()) break;
-              }
-              //  System.out.println(subTreeDepth+" | "+varStep);
+          flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+          currentNodeHasDummy = false;
+          if (isMultiGo) {
+            // Restore to the variation node
+            // int varStep = subTreeStepMap.get(subTreeDepth);
+            BoardHistoryNode node = subTreeStepMap.get(subTreeDepth);
+            //  for (int s = 0; s < varStep; s++)
+            while (Lizzie.board.getHistory().getCurrentHistoryNode() != node) {
+              if (!Lizzie.board.getHistory().previous().isPresent()) break;
             }
-            subTreeDepth -= 1;
-          } else {
-            // Allow the comment tag includes '('
-            tagContentBuilder.append(c);
+            //  System.out.println(subTreeDepth+" | "+varStep);
           }
+          subTreeDepth -= 1;
           break;
-        case '[':
-          if (!inProp) {
-            inProp = true;
-            if (subTreeDepth > 1 && !isMultiGo) {
-              break;
-            }
-            inTag = true;
-            String tagTemp = tagBuilder.toString();
-            if (!tagTemp.isEmpty()) {
-              tag = normalizePropertyName(tagTemp);
-            }
-            tagContentBuilder = new StringBuilder();
-          } else {
-            tagContentBuilder.append(c);
-          }
-          break;
-        case ']':
+        case 'P':
           if (subTreeDepth > 1 && !isMultiGo) {
             break;
           }
-          inTag = false;
-          inProp = false;
-          tagBuilder = new StringBuilder();
-          String tagContent = tagContentBuilder.toString();
+          String tag = event.name();
+          String tagContent = event.legacyValue();
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(Lizzie.board.getHistory());
@@ -1034,10 +769,7 @@ public class SGFParser {
           }
           break;
         case ';':
-          if (inProp) {
-            // support C[a;b;c;]
-            tagContentBuilder.append(c);
-          } else if (!(subTreeDepth > 1 && !isMultiGo)) {
+          if (!(subTreeDepth > 1 && !isMultiGo)) {
             flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
             currentNodeHasDummy = false;
             topLevelNodeCount += 1;
@@ -1048,21 +780,7 @@ public class SGFParser {
           }
           break;
         default:
-          if (subTreeDepth > 1 && !isMultiGo) {
-            break;
-          }
-          if (inTag) {
-            if (c == '\\') {
-              escaping = true;
-              if (!tag.equals("C") && !isAnalysisPayloadTag(tag)) tagContentBuilder.append(c);
-              continue;
-            }
-            tagContentBuilder.append(c);
-          } else {
-            if (c != '\n' && c != '\r' && c != '\t' && c != ' ') {
-              tagBuilder.append(c);
-            }
-          }
+          throw new IllegalArgumentException("Unknown SGF event: " + event.kind());
       }
     }
     flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
@@ -4026,10 +3744,10 @@ public class SGFParser {
 
   private static void removeStoneWithoutRefresh(BoardHistoryList history, int x, int y) {
     synchronized (history) {
-      if (!Board.isValid(x, y)) {
+      if (!history.isValid(x, y)) {
         return;
       }
-      int index = Board.getIndex(x, y);
+      int index = history.getIndex(x, y);
       Stone[] stones = history.getStones();
       if (stones[index] == Stone.EMPTY) {
         return;
@@ -4066,7 +3784,7 @@ public class SGFParser {
 
   private static void applyRootSetupProperty(
       BoardHistoryList history, String tag, String tagContent, int[] move, Stone color) {
-    applyRootSetupProperty(history, tag, tagContent, move, color, true);
+    applyRootSetupProperty(history, tag, tagContent, move, color, isCurrentBoardHistory(history));
   }
 
   private static void applyRootSetupProperty(
@@ -4085,7 +3803,7 @@ public class SGFParser {
       removeStone(history, move[0], move[1], color, refreshUi);
       return;
     }
-    if (history.getStones()[Board.getIndex(move[0], move[1])] == Stone.EMPTY) {
+    if (history.getStones()[history.getIndex(move[0], move[1])] == Stone.EMPTY) {
       history.addExtraStone(move[0], move[1], color);
     }
   }
@@ -4289,144 +4007,40 @@ public class SGFParser {
     return text.toString();
   }
 
+  /** Options captured by the requester; a detached import never consults changing UI settings. */
+  public record ParseOptions(
+      boolean readKomi, boolean noCapture, boolean canSuicidal, boolean newMoveNumberInBranch,
+      int limitBranchLength, int maxSuggestions, double defaultKomi) {
+    public static ParseOptions capture() {
+      var config = Lizzie.config;
+      return new ParseOptions(
+          config == null || config.readKomi, config != null && config.noCapture,
+          Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal,
+          config != null && config.newMoveNumberInBranch,
+          config == null ? 0 : config.limitBranchLength,
+          config != null && config.limitMaxSuggestion > 0 && !config.showNoSuggCircle
+              ? config.limitMaxSuggestion : 361,
+          GameInfo.DEFAULT_KOMI);
+    }
+  }
+
   public static BoardHistoryList parseSgf(String value, boolean first) {
-    value = normalizeSgfInput(value);
-    if (value == null) {
-      return null;
-    }
-    BoardHistoryList history = null;
+    return parseSgf(value, first, ParseOptions.capture());
+  }
 
-    // Drop anything outside "(;...)"
-    final Pattern SGF_PATTERN = Pattern.compile("(?s).*?(\\(\\s*;{0,1}.*\\))(?s).*?");
-    Matcher sgfMatcher = SGF_PATTERN.matcher(value);
-    if (sgfMatcher.matches()) {
-      value = sgfMatcher.group(1);
-    } else {
-      return history;
-    }
+  /** Builds a private history without replacing the live board dimensions or coordinate hash table. */
+  public static BoardHistoryList parseSgf(String value, boolean first, ParseOptions options) {
+    SgfDocument document = SgfDocument.parse(value);
+    return document == null ? null : buildHistory(document, first, options);
+  }
 
-    int[] boardSize = parseBoardSize(value);
-    int boardWidth = boardSize[0];
-    int boardHeight = boardSize[1];
-    ParseBoardContext boardContext = captureParseBoardContext();
-    boolean switchedBoardContext =
-        boardContext.boardWidth != boardWidth || boardContext.boardHeight != boardHeight;
-    try {
-      if (switchedBoardContext) {
-        applyParseBoardContext(boardWidth, boardHeight);
-      }
-      String detachedSgf = value;
-      BoardHistoryList detachedHistory =
-          new BoardHistoryList(BoardData.empty(boardWidth, boardHeight));
-      BoardHistoryNode.runWithoutGlobalMoveSideEffects(
-          () -> parseValue(detachedSgf, detachedHistory, false, first));
-      history = detachedHistory;
-    } finally {
-      if (switchedBoardContext) {
-        restoreParseBoardContext(boardContext);
-      }
-    }
-
+  /** Applies captured import policy to immutable syntax; publishing the result is the caller's job. */
+  public static BoardHistoryList buildHistory(SgfDocument document, boolean first, ParseOptions options) {
+    BoardHistoryList history = new BoardHistoryList(BoardData.empty(document.width(), document.height()));
+    history.getGameInfo().setKomiNoMenu(options.defaultKomi());
+    BoardHistoryNode.runWithoutGlobalMoveSideEffects(options.newMoveNumberInBranch(),
+        () -> parseValue(document, history, false, first, options));
     return history;
-  }
-
-  private static ParseBoardContext captureParseBoardContext() {
-    return new ParseBoardContext(
-        Board.boardWidth,
-        Board.boardHeight,
-        readZobristTable(BLACK_ZOBRIST_FIELD),
-        readZobristTable(WHITE_ZOBRIST_FIELD));
-  }
-
-  private static void applyParseBoardContext(int boardWidth, int boardHeight) {
-    Board.boardWidth = boardWidth;
-    Board.boardHeight = boardHeight;
-    Zobrist.init();
-  }
-
-  private static void restoreParseBoardContext(ParseBoardContext context) {
-    Board.boardWidth = context.boardWidth;
-    Board.boardHeight = context.boardHeight;
-    writeZobristTable(BLACK_ZOBRIST_FIELD, context.blackZobrist);
-    writeZobristTable(WHITE_ZOBRIST_FIELD, context.whiteZobrist);
-  }
-
-  private static Field resolveZobristField(String fieldName) {
-    try {
-      Field field = Zobrist.class.getDeclaredField(fieldName);
-      field.setAccessible(true);
-      return field;
-    } catch (ReflectiveOperationException ex) {
-      throw new IllegalStateException("Failed to access Zobrist." + fieldName, ex);
-    }
-  }
-
-  private static long[] readZobristTable(Field field) {
-    try {
-      return (long[]) field.get(null);
-    } catch (IllegalAccessException ex) {
-      throw new IllegalStateException("Failed to read Zobrist table.", ex);
-    }
-  }
-
-  private static void writeZobristTable(Field field, long[] table) {
-    try {
-      field.set(null, table);
-    } catch (IllegalAccessException ex) {
-      throw new IllegalStateException("Failed to restore Zobrist table.", ex);
-    }
-  }
-
-  private static final class ParseBoardContext {
-    private final int boardWidth;
-    private final int boardHeight;
-    private final long[] blackZobrist;
-    private final long[] whiteZobrist;
-
-    private ParseBoardContext(
-        int boardWidth, int boardHeight, long[] blackZobrist, long[] whiteZobrist) {
-      this.boardWidth = boardWidth;
-      this.boardHeight = boardHeight;
-      this.blackZobrist = blackZobrist;
-      this.whiteZobrist = whiteZobrist;
-    }
-  }
-
-  private static int[] parseBoardSize(String value) {
-    // Size is needed before creating the history. Scan property boundaries so a name such
-    // as PW[SZ[3] cannot resize the board; '[' is legal unescaped text inside a value.
-    StringBuilder tag = new StringBuilder();
-    int valueStart = -1;
-    boolean escaped = false;
-    for (int i = 0; i < value.length(); i++) {
-      char c = value.charAt(i);
-      if (valueStart >= 0) {
-        if (escaped) {
-          escaped = false;
-        } else if (c == '\\') {
-          escaped = true;
-        } else if (c == ']') {
-          if ("SZ".contentEquals(tag)) {
-            String size = value.substring(valueStart, i);
-            if (BOARD_SIZE_VALUE_PATTERN.matcher(size).matches()) {
-              int[] parsedBoardSize = parseBoardSizeTagValue(size);
-              return parsedBoardSize != null
-                  ? parsedBoardSize
-                  : new int[] {DEFAULT_BOARD_SIZE, DEFAULT_BOARD_SIZE};
-            }
-          }
-          valueStart = -1;
-          tag.setLength(0);
-        }
-      } else if (c == '[') {
-        valueStart = i + 1;
-      } else if (c == '(' || c == ')' || c == ';') {
-        tag.setLength(0);
-      } else if (SGF_WHITESPACE.indexOf(c) < 0) {
-        tag.append(c);
-      }
-    }
-    return new int[] {DEFAULT_BOARD_SIZE, DEFAULT_BOARD_SIZE};
   }
 
   static int[] resolveHistoryBoardSize(BoardHistoryList history) {
@@ -4460,6 +4074,10 @@ public class SGFParser {
     if (boardArea <= 0) {
       return new int[] {fallbackBoardWidth, fallbackBoardHeight};
     }
+    Zobrist geometry = rootData.zobrist;
+    if (geometry != null && (long) geometry.width() * geometry.height() == boardArea) {
+      return new int[] {geometry.width(), geometry.height()};
+    }
     if (fallbackBoardWidth > 0
         && fallbackBoardHeight > 0
         && fallbackBoardWidth * fallbackBoardHeight == boardArea) {
@@ -4478,34 +4096,6 @@ public class SGFParser {
     return new int[] {boardArea, 1};
   }
 
-  private static int[] parseBoardSizeTagValue(String rawSzValue) {
-    if (rawSzValue == null) {
-      return null;
-    }
-    String normalizedValue = rawSzValue.split(",")[0].trim();
-    if (normalizedValue.isEmpty()) {
-      return null;
-    }
-    Matcher rectSizeMatcher = RECT_BOARD_SIZE_PATTERN.matcher(normalizedValue);
-    try {
-      if (rectSizeMatcher.matches()) {
-        int boardWidth = Integer.parseInt(rectSizeMatcher.group(1));
-        int boardHeight = Integer.parseInt(rectSizeMatcher.group(2));
-        if (boardWidth > 0 && boardHeight > 0) {
-          return new int[] {boardWidth, boardHeight};
-        }
-        return null;
-      }
-      int squareBoardSize = Integer.parseInt(normalizedValue);
-      if (squareBoardSize <= 0) {
-        return null;
-      }
-      return new int[] {squareBoardSize, squareBoardSize};
-    } catch (NumberFormatException ex) {
-      return null;
-    }
-  }
-
   private static String formatBoardSizeTag(int boardWidth, int boardHeight) {
     return boardWidth + (boardWidth != boardHeight ? ":" + boardHeight : "");
   }
@@ -4518,7 +4108,7 @@ public class SGFParser {
   }
 
   private static BoardHistoryList parseValue(
-      String value, BoardHistoryList history, boolean isBranch, boolean firstTime) {
+      SgfDocument document, BoardHistoryList history, boolean isBranch, boolean firstTime, ParseOptions options) {
 
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
@@ -4528,24 +4118,18 @@ public class SGFParser {
     // Game properties
     Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
-    AnalysisImport analysisImport = new AnalysisImport();
+    AnalysisImport analysisImport = new AnalysisImport(options);
     PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
-    boolean inTag = false,
-        isMultiGo = false,
-        escaping = false,
+    boolean isMultiGo = false,
         moveStart = false,
         currentNodeHasMove = false,
         addPassForMove = true,
         currentNodeHasSetupSnapshot = false;
-    boolean inProp = false;
     int topLevelNodeCount = 0;
     boolean allowRootSetupOnCurrentNode = false;
-    String tag = "";
-    StringBuilder tagBuilder = new StringBuilder();
-    StringBuilder tagContentBuilder = new StringBuilder();
     // MultiGo 's branch: (Main Branch (Main Branch) (Branch) )
     // Other 's branch: (Main Branch (Branch) Main Branch)
-    isMultiGo = hasMultiGoBranchSuffix(value);
+    isMultiGo = document.multiGo();
     if (isBranch) {
       subTreeDepth += 1;
       // Initialize the step count
@@ -4557,76 +4141,38 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     boolean currentNodeHasDummy = false;
     // Support unicode characters (UTF-8)
-    for (int i = 0; i < value.length(); i++) {
-      char c = value.charAt(i);
-      if (escaping) {
-        // Preserve the raw SGF text until GameInfo decodes it; other payloads keep their
-        // existing escape handling.
-        tagContentBuilder.append(c == 'n' && !isGameInfoTextProperty(tag) ? '\n' : c);
-        escaping = false;
-        continue;
-      }
-      switch (c) {
+    for (SgfDocument.Event event : document.events()) {
+      switch (event.kind()) {
         case '(':
-          if (!inTag) {
-            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
-            currentNodeHasDummy = false;
-            subTreeDepth += 1;
-            // Initialize the step count
-            subTreeStepMap.put(subTreeDepth, history.getCurrentHistoryNode());
-            addPassForMove = true;
-            currentNodeHasSetupSnapshot = false;
-            currentNodeHasMove = false;
-            pendingProps = new HashMap<String, List<String>>();
-          } else {
-            if (i > 0) {
-              // Allow the comment tag includes '('
-              tagContentBuilder.append(c);
-            }
-          }
+          flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
+          currentNodeHasDummy = false;
+          subTreeDepth += 1;
+          // Initialize the step count
+          subTreeStepMap.put(subTreeDepth, history.getCurrentHistoryNode());
+          addPassForMove = true;
+          currentNodeHasSetupSnapshot = false;
+          currentNodeHasMove = false;
+          pendingProps = new HashMap<String, List<String>>();
           break;
         case ')':
-          if (!inTag) {
-            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
-            currentNodeHasDummy = false;
-            if (isMultiGo) {
-              // Restore to the variation node
-              // int varStep = subTreeStepMap.get(subTreeDepth);
-              //   for (int s = 0; s < varStep; s++)
-              while (history.getCurrentHistoryNode() != subTreeStepMap.get(subTreeDepth)) {
-                if (!history.previous().isPresent()) break;
-              }
+          flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
+          currentNodeHasDummy = false;
+          if (isMultiGo) {
+            // Restore to the variation node
+            // int varStep = subTreeStepMap.get(subTreeDepth);
+            //   for (int s = 0; s < varStep; s++)
+            while (history.getCurrentHistoryNode() != subTreeStepMap.get(subTreeDepth)) {
+              if (!history.previous().isPresent()) break;
             }
-            subTreeDepth -= 1;
-          } else {
-            // Allow the comment tag includes '('
-            tagContentBuilder.append(c);
           }
+          subTreeDepth -= 1;
           break;
-        case '[':
-          if (!inProp) {
-            inProp = true;
-            if (subTreeDepth > 1 && !isMultiGo) {
-              break;
-            }
-            inTag = true;
-            String tagTemp = tagBuilder.toString();
-            if (!tagTemp.isEmpty()) {
-              tag = normalizePropertyName(tagTemp);
-            }
-            tagContentBuilder = new StringBuilder();
-          } else {
-            tagContentBuilder.append(c);
-          }
-          break;
-        case ']':
+        case 'P':
           if (subTreeDepth > 1 && !isMultiGo) {
             break;
           }
-          inTag = false;
-          inProp = false;
-          tagBuilder = new StringBuilder();
-          String tagContent = tagContentBuilder.toString();
+          String tag = event.name();
+          String tagContent = event.legacyValue();
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -4638,7 +4184,7 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = convertSgfPosToCoord(tagContent);
+            int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
@@ -4650,7 +4196,7 @@ public class SGFParser {
               history.pass(color, newBranch, false);
 
             } else {
-              history.place(move[0], move[1], color, newBranch);
+              history.place(move[0], move[1], color, newBranch, false, false, options.noCapture(), options.canSuicidal());
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -4675,7 +4221,7 @@ public class SGFParser {
               analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
-            int[] move = convertSgfPosToCoord(tagContent);
+            int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
             Stone color = tag.equals("AB") ? Stone.BLACK : Stone.WHITE;
             if (isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode)) {
               applyRootSetupProperty(history, tag, tagContent, move, color);
@@ -4758,7 +4304,7 @@ public class SGFParser {
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
-                int[] move = convertSgfPosToCoord(tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
                 if (move != null) {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY, false);
                 }
@@ -4780,7 +4326,7 @@ public class SGFParser {
               boolean rootSetupContext =
                   isRootSetupContext(history, moveStart, allowRootSetupOnCurrentNode);
               if ("AE".equals(tag) && rootSetupContext) {
-                int[] move = convertSgfPosToCoord(tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
                 applyRootSetupProperty(history, tag, tagContent, move, Stone.EMPTY, false);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
@@ -4794,7 +4340,7 @@ public class SGFParser {
                     getSetupPropertyTargetNode(history, currentNodeHasSetupSnapshot);
                 movePendingNodeMetadataToTarget(history, target, pendingNodeMetadata);
                 addNodePropertyOnNode(history, target, tag, tagContent);
-                int[] move = convertSgfPosToCoord(tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
                 if (move != null) {
                   removeStoneOnNode(history, target, move[0], move[1], Stone.EMPTY, false);
                 }
@@ -4809,10 +4355,7 @@ public class SGFParser {
           }
           break;
         case ';':
-          if (inProp) {
-            // support C[a;b;c;]
-            tagContentBuilder.append(c);
-          } else if (!(subTreeDepth > 1 && !isMultiGo)) {
+          if (!(subTreeDepth > 1 && !isMultiGo)) {
             flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             topLevelNodeCount += 1;
@@ -4823,21 +4366,7 @@ public class SGFParser {
           }
           break;
         default:
-          if (subTreeDepth > 1 && !isMultiGo) {
-            break;
-          }
-          if (inTag) {
-            if (c == '\\') {
-              escaping = true;
-              if (!tag.equals("C") && !isAnalysisPayloadTag(tag)) tagContentBuilder.append(c);
-              continue;
-            }
-            tagContentBuilder.append(c);
-          } else {
-            if (c != '\n' && c != '\r' && c != '\t' && c != ' ') {
-              tagBuilder.append(c);
-            }
-          }
+          throw new IllegalArgumentException("Unknown SGF event: " + event.kind());
       }
     }
     flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
@@ -4856,9 +4385,9 @@ public class SGFParser {
       history.getGameInfo().setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
-          parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();
+          parsedKomiTag ? normalizeSgfKomi(komi, gameProperties, history.getData().stones.length) : Optional.empty();
       if (parsedKomi.isPresent()
-          && (Lizzie.config.readKomi
+          && (options.readKomi()
               || isSetupOrHandicapGame(history)
               || parseHandicapProperty(getOrDefault(gameProperties, "HA", null)) > 0)) {
         history.getGameInfo().setKomiNoMenu(parsedKomi.get());
@@ -5192,11 +4721,7 @@ public class SGFParser {
 
   /** The existing branch-format heuristic only needs the final two non-whitespace characters. */
   private static boolean hasMultiGoBranchSuffix(String value) {
-    int last = value.length() - 1;
-    if (last < 1 || value.charAt(last) != ')') return false;
-    int previous = last - 1;
-    while (previous >= 0 && SGF_WHITESPACE.indexOf(value.charAt(previous)) >= 0) previous--;
-    return previous >= 0 && value.charAt(previous) == ')';
+    return SgfDocument.hasMultiGoBranchSuffix(value);
   }
 
   private static String[] analysisFields(String value) {
@@ -5211,6 +4736,12 @@ public class SGFParser {
   }
 
   private static final class AnalysisImport {
+    private final ParseOptions options;
+
+    private AnalysisImport() { this(ParseOptions.capture()); }
+
+    private AnalysisImport(ParseOptions options) { this.options = options; }
+
     // A matching digest can belong to an earlier import. Only payloads replaced by this parser
     // call permit KGP to restore invalidation; metadata alone cannot validate live analysis.
     private final Set<BoardData> primaryReplacements =
@@ -5248,7 +4779,7 @@ public class SGFParser {
       if (numPlayouts > 0 && detailStart >= 0) {
         double stdev = extractAnalysisScoreStdev(line1);
         ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(
-            tagContent, detailStart + 1, stdev, secondaryEngine);
+            tagContent, detailStart + 1, stdev, secondaryEngine, options);
         applyParsedAnalysisInfo(target, parsed, secondaryEngine);
       }
       target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent), parseHeaderWrn(line1));
@@ -5411,7 +4942,7 @@ public class SGFParser {
   }
 
   private static ParsedAnalysisInfo parseAnalysisInfoForDetachedNode(
-      String line, int start, double stdev, boolean secondaryEngineTag) {
+      String line, int start, double stdev, boolean secondaryEngineTag, ParseOptions options) {
     // Keep the legacy literal separators, including ownership occurring inside a token.
     int ownership = line.indexOf("ownership", start);
     int analysisEnd = ownership < 0 ? line.length() : ownership;
@@ -5419,15 +4950,13 @@ public class SGFParser {
     int maxSuggestions =
         secondaryEngineTag
             ? 361
-            : (Lizzie.config.limitMaxSuggestion > 0 && !Lizzie.config.showNoSuggCircle
-                ? Lizzie.config.limitMaxSuggestion
-                : 361);
+            : options.maxSuggestions();
     while (start < analysisEnd && maxSuggestions > 0) {
       int separator = line.indexOf(" info ", start);
       if (separator < 0 || separator + " info ".length() > analysisEnd) separator = analysisEnd;
       AnalysisTokens tokens = new AnalysisTokens(line, start, separator);
       if (tokens.advance()) {
-        bestMoves.add(parseMoveDataFromAnalysis(tokens, bestMoves.size()));
+        bestMoves.add(parseMoveDataFromAnalysis(tokens, bestMoves.size(), options.limitBranchLength()));
         maxSuggestions--;
       }
       start = separator + " info ".length();
@@ -5474,14 +5003,14 @@ public class SGFParser {
     }
   }
 
-  private static MoveData parseMoveDataFromAnalysis(AnalysisTokens tokens, int order) {
+  private static MoveData parseMoveDataFromAnalysis(AnalysisTokens tokens, int order, int limit) {
     MoveData result = new MoveData();
     result.order = order;
     do {
       String key = tokens.value();
       if (!tokens.advance()) break;
       if ("pv".equals(key)) {
-        captureVariationTokens(result, tokens);
+        captureVariationTokens(result, tokens, limit);
         break;
       }
       applyMoveDataToken(result, key, tokens.value());
@@ -5494,9 +5023,8 @@ public class SGFParser {
     return result;
   }
 
-  private static void captureVariationTokens(MoveData target, AnalysisTokens tokens) {
+  private static void captureVariationTokens(MoveData target, AnalysisTokens tokens, int limit) {
     target.variation = new ArrayList<>();
-    int limit = Lizzie.config.limitBranchLength;
     do {
       if (tokens.is("pvVisits")) {
         target.pvVisits = new ArrayList<>();
