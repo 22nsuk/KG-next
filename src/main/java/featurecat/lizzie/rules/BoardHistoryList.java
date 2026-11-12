@@ -3,6 +3,7 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -848,16 +849,31 @@ public class BoardHistoryList {
           return;
         }
       }
-      // load a copy of the data at the current node of history
-      Stone[] stones = curNode.getData().stones.clone();
-      Zobrist zobrist = curNode.getData().zobrist.clone();
-      Optional<int[]> lastMove = Optional.of(new int[] {x, y});
-      int moveNumber = curNode.getData().moveNumber + 1;
-      int moveMNNumber = curNode.getData().nextMoveMNNumber(newBranch);
-      int[] moveNumberList =
-          newBranch && curNode.next(true).map(s -> s.getData()).isPresent()
-              ? new int[getData().stones.length]
-              : curNode.getData().moveNumberList.clone();
+      BoardData parent = curNode.getData();
+      int moveNumber = parent.moveNumber + 1;
+      int moveMNNumber = parent.nextMoveMNNumber(newBranch);
+      // The factory detaches the parent buffers once. Mutate only this unpublished candidate;
+      // rejected moves discard it without touching the parent or any existing variation.
+      BoardData newState =
+          BoardData.move(
+              parent.stones,
+              new int[] {x, y},
+              color,
+              color.equals(Stone.WHITE),
+              parent.zobrist,
+              moveNumber,
+              parent.moveNumberList,
+              parent.blackCaptures,
+              parent.whiteCaptures,
+              nextWinrate,
+              0);
+      newState.moveMNNumber = moveMNNumber;
+      Stone[] stones = newState.stones;
+      Zobrist zobrist = newState.zobrist;
+      int[] moveNumberList = newState.moveNumberList;
+      if (newBranch && curNode.next(true).isPresent()) {
+        Arrays.fill(moveNumberList, 0);
+      }
 
       moveNumberList[getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
 
@@ -883,24 +899,8 @@ public class BoardHistoryList {
         }
       }
 
-      int bc = curNode.getData().blackCaptures;
-      int wc = curNode.getData().whiteCaptures;
-      if (color.isBlack()) bc += capturedStones;
-      else wc += capturedStones;
-      BoardData newState =
-          BoardData.move(
-              stones,
-              lastMove.get(),
-              color,
-              color.equals(Stone.WHITE),
-              zobrist,
-              moveNumber,
-              moveNumberList,
-              bc,
-              wc,
-              nextWinrate,
-              0);
-      newState.moveMNNumber = moveMNNumber;
+      if (color.isBlack()) newState.blackCaptures += capturedStones;
+      else newState.whiteCaptures += capturedStones;
 
       // don't make this coordinate if it is suicidal or violates superko
       if (violatesKoRule(curNode, newState)) {

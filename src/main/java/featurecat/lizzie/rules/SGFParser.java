@@ -4998,8 +4998,12 @@ public class SGFParser {
     }
 
     boolean is(String expected) {
-      return tokenEnd - tokenStart == expected.length()
-          && text.regionMatches(tokenStart, expected, 0, expected.length());
+      return is(tokenStart, tokenEnd, expected);
+    }
+
+    boolean is(int start, int end, String expected) {
+      return end - start == expected.length()
+          && text.regionMatches(start, expected, 0, expected.length());
     }
   }
 
@@ -5007,13 +5011,14 @@ public class SGFParser {
     MoveData result = new MoveData();
     result.order = order;
     do {
-      String key = tokens.value();
+      int keyStart = tokens.tokenStart;
+      int keyEnd = tokens.tokenEnd;
       if (!tokens.advance()) break;
-      if ("pv".equals(key)) {
+      if (tokens.is(keyStart, keyEnd, "pv")) {
         captureVariationTokens(result, tokens, limit);
         break;
       }
-      applyMoveDataToken(result, key, tokens.value());
+      applyMoveDataToken(result, tokens, keyStart, keyEnd);
     } while (tokens.advance());
     if ((result.variation == null || result.variation.isEmpty())
         && !Utils.isBlank(result.coordinate)) {
@@ -5035,25 +5040,26 @@ public class SGFParser {
     } while (tokens.advance());
   }
 
-  private static void applyMoveDataToken(MoveData target, String key, String value) {
-    if ("move".equals(key)) {
-      target.coordinate = value;
-    } else if ("visits".equals(key)) {
-      target.playouts = parseAnalysisPlayouts(value);
-    } else if ("order".equals(key)) {
-      target.order = Integer.parseInt(value);
-    } else if ("edgeVisits".equals(key)) {
-      target.edgeVisits = Integer.parseInt(value);
-    } else if ("winrate".equals(key)) {
-      target.winrate = parseAnalysisPlayouts(value) / 100.0;
+  private static void applyMoveDataToken(
+      MoveData target, AnalysisTokens tokens, int keyStart, int keyEnd) {
+    if (tokens.is(keyStart, keyEnd, "move")) {
+      target.coordinate = tokens.value();
+    } else if (tokens.is(keyStart, keyEnd, "visits")) {
+      target.playouts = parseAnalysisPlayouts(tokens.value());
+    } else if (tokens.is(keyStart, keyEnd, "order")) {
+      target.order = Integer.parseInt(tokens.value());
+    } else if (tokens.is(keyStart, keyEnd, "edgeVisits")) {
+      target.edgeVisits = Integer.parseInt(tokens.value());
+    } else if (tokens.is(keyStart, keyEnd, "winrate")) {
+      target.winrate = parseAnalysisPlayouts(tokens.value()) / 100.0;
       target.lcb = target.winrate;
-    } else if ("prior".equals(key)) {
-      target.policy = parsePriorValue(value);
-    } else if ("scoreMean".equals(key)) {
-      target.scoreMean = parseDoubleOrDefault(value, 0);
+    } else if (tokens.is(keyStart, keyEnd, "prior")) {
+      target.policy = parsePriorValue(tokens.value());
+    } else if (tokens.is(keyStart, keyEnd, "scoreMean")) {
+      target.scoreMean = parseDoubleOrDefault(tokens.value(), 0);
       target.isKataData = true;
-    } else if ("scoreStdev".equals(key)) {
-      target.scoreStdev = parseDoubleOrDefault(value, 0);
+    } else if (tokens.is(keyStart, keyEnd, "scoreStdev")) {
+      target.scoreStdev = parseDoubleOrDefault(tokens.value(), 0);
       target.isKataData = true;
     }
   }

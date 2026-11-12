@@ -308,7 +308,7 @@ public class BoardData {
         stones, Optional.empty(), Stone.EMPTY, true, new Zobrist(width, height), 0, boardArray, 0, 0, 50, 0);
   }
 
-  /** Creates an explicit history move node. */
+  /** Creates an explicit history move node, detaching all mutable position inputs. */
   public static BoardData move(
       Stone[] stones,
       int[] lastMove,
