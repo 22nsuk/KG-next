@@ -813,6 +813,68 @@ class SavedGameLoadSafetyTest {
     assertEquals(savedFirst, listContainer.isVisible());
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void saveCompletionCannotReplaceANewerOpenWaitingForQuickAnalysisRestore(boolean newerSaved)
+      throws Exception {
+    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    Path latest = Files.writeString(newerSaved ? savedFile(Slot.AUTO) : directory.resolve("latest.sgf"),
+        SAVED_SGF.replace("saved black", "latest black"));
+    config.saveBoardConfig.put("save-auto-game-index1", 1);
+    config.saveBoardConfig.put("save-auto-game-move-number1", 1);
+    config.saveBoardConfig.put("save-auto-game-move-list1", "");
+    Lizzie.setPrimaryEngine(null);
+    frame.loadedPlayers = new CopyOnWriteArrayList<>();
+    AtomicReference<CompletableFuture<Boolean>> normal = new AtomicReference<>();
+    AtomicReference<Object> accepted = new AtomicReference<>();
+    try {
+      try (var blocked = SgfSaveTestSupport.blockWorker()) {
+        SwingUtilities.invokeAndWait(() -> {
+          requestSavedOpen(false, 1);
+          // Foreground cleanup can become necessary after the earlier save barrier began.
+          // Hold that phase; use the real admission, supersession, save and read paths.
+          setFrameField("analysisControlCleanupInProgress", true);
+          if (newerSaved) requestSavedOpen(true, 1);
+          else normal.set(frame.openFileAsync(latest.toFile(), true, false));
+          try {
+            accepted.set(getFrameField("pendingKifuOpen"));
+          } catch (ReflectiveOperationException failure) {
+            throw new AssertionError(failure);
+          }
+          assertNotNull(accepted.get());
+          assertTrue(frame.loadedPlayers.isEmpty());
+        });
+        blocked.release();
+      }
+      drainSavedOpen();
+      SwingUtilities.invokeAndWait(() -> {
+        try {
+          assertSame(accepted.get(), getFrameField("pendingKifuOpen"),
+              "an older save completion must not take the newer selection's restore continuation");
+          if (!newerSaved) assertFalse(normal.get().isDone(), "the accepted open is still waiting");
+          setFrameField("analysisControlCleanupInProgress", false);
+          Method restored = LizzieFrame.class.getDeclaredMethod("finishDeferredKifuOpenAfterQuickAnalysisRestore");
+          restored.setAccessible(true);
+          assertEquals(true, restored.invoke(frame));
+        } catch (ReflectiveOperationException failure) {
+          throw new AssertionError(failure);
+        }
+      });
+      drainSavedOpen();
+      if (!newerSaved) assertTrue(normal.get().get(5, TimeUnit.SECONDS));
+      assertEquals(List.of("latest black"), frame.loadedPlayers);
+      assertEquals("latest black", Lizzie.board.getHistory().getGameInfo().getPlayerBlack());
+      assertEquals(newerSaved ? 1 : 0, frame.listCloses);
+    } finally {
+      SwingUtilities.invokeAndWait(() -> {
+        setFrameField("analysisControlCleanupInProgress", false);
+        setFrameField("kifuOpenWaitingForQuickAnalysisRestore", false);
+        setFrameField("pendingKifuOpen", null);
+      });
+    }
+  }
+
   @Test
   void newerSavedSelectionSurvivesThePreviousLoadsFinalization() throws Exception {
     prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);

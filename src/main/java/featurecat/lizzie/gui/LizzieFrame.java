@@ -15378,7 +15378,9 @@ public class LizzieFrame extends JFrame {
         && panel != null && panel.isVisible();
     if (!panelCurrent.getAsBoolean() || rejectFileOpenWhilePlaying()) return;
     Runnable reopen = () -> {
-      if (panelCurrent.getAsBoolean()) {
+      // A newer selection can own foreground restoration before claiming its local request.
+      // Its continuation is cleared before it runs; an older retry must not replace it.
+      if (panelCurrent.getAsBoolean() && pendingKifuOpen == null) {
         openSavedGame(isAutoSave, index, originalShowListPane, originalShowVariationGraph);
       }
     };
