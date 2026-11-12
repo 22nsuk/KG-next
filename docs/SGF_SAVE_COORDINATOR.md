@@ -15,16 +15,32 @@ commits on reader threads. It releases that lock before copying node payloads or
 serializing SGF, avoiding a nested history-to-payload lock order. A subsequent
 engine move cannot appear halfway through the captured tree. Each node is copied
 under the short lock also used
-by primary, secondary and whole-game payload commits. Engine publication can
-continue after each node copy. No engine lock is held while serializing the
-whole tree or writing to disk. The resulting immutable SGF string is the only
-board content given to the background writer.
+by primary, secondary and whole-game payload commits. The save-specific copy also
+detaches candidate fields and PV/visit lists: renderers can still modify the live
+candidate objects. Engine publication can continue after each node copy. No engine
+lock is held while serializing the whole tree or writing to disk.
+
+The request owns a private tree plus captured export mode, board size, engine
+rules, display preferences, language bundle and application version. The worker
+formats comments, analysis, ownership, provenance hashes and the SGF text before
+opening the destination. It never reads the current board, engine or configuration.
+Successful serialization retains its immutable string for write retries and releases
+the tree; serialization failures are retained too, so a partially formatted tree
+is never rendered again. Waiting requests retain their detached trees until the
+worker reaches them, within the existing queue limit. Tree and payload copying
+still take place on the requesting owner; this change does not eliminate capture
+cost or impose a byte-size limit on queued snapshots.
+
+Completed engine games keep their existing terminal-owner capture before engine
+retirement, including response-thread callers. Their dedicated file worker also
+serializes the detached snapshot. Synchronous string exports used by editing,
+clipboard and upload callers retain their immediate-return contract.
 
 Current-branch export follows the selected node's ancestors, then its main
 continuation. It retains setup nodes, passes and game metadata without clearing,
 replaying, navigating or pruning the live tree. Other export modes retain every
-variation. Temporary raw/comment flags are restored even when serialization
-fails.
+variation. Snapshot export modes are explicit values and never change the shared
+raw/comment flags.
 
 A single worker writes accepted requests in order (one active request and at most
 16 waiting requests). Each request includes event-thread preparation, worker I/O
@@ -92,7 +108,7 @@ atomic snapshot.
 
 ## Automatic records and batches
 
-The requesting event captures SGF, cursor metadata, name, destination and a
+The requesting event captures the SGF input, cursor metadata, name, destination and a
 detached preview image. Directory creation, unused-ID lookup/reservation, atomic
 SGF and manifest replacement, preview encoding/replacement and file cleanup run
 on the worker. A new saved record cannot claim an orphaned SGF/preview or a
@@ -164,13 +180,18 @@ version ignores a pending intent and does not provide this recovery guarantee.
 The tests cover abrupt JVM termination between replacements, not power loss,
 filesystem crash durability, or a transaction across all record files.
 
-Batch analysis retains one frozen SGF through a failed-save retry and advances
+Batch analysis retains one frozen save input and its serialized SGF through a failed-save retry and advances
 only after disk success. Duplicate starts/retries during a pending write are
 ignored; stop, game replacement or frame replacement prevents a late completion
 from advancing the current batch. Contribution batches capture the games and
 restore the watched position before I/O, then submit one write at a time so a
 large batch cannot exhaust the bounded queue. A completed contribution game is
 marked saved only if the written version still matches it.
+Explicit contribution captures wait behind an earlier pending capture instead of
+comparing rendered SGF strings on the event thread. This may write identical
+captures twice; it preserves changes to comments, analysis and export settings
+which the contribution move-list version alone cannot identify. The existing
+in-flight automatic-save gate still combines duplicate automatic requests.
 
 Swing callers use completion futures. The legacy boolean saved-game entry points
 wait for actual completion only when called off the event thread; they reject
@@ -219,6 +240,12 @@ waiters retain interruption status after receiving the actual result.
 - `SGFSaveSnapshotTest`: selected branches, setup/pass round trips, mode/flag
   restoration, continued edits, a deliberately interrupted analysis commit, and
   concurrent engine moves during both structure capture and payload copying.
+- `SGFDeferredSaveTest`: queued capture followed by mutation of candidate objects,
+  PV/visit lists, ownership, comments, topology, metadata and export settings;
+  serialization with live globals removed; cached retries, serialization failure,
+  old-file preservation and queue continuation.
+- `PlayedGameSaveSafetyTest`: JFR phase checks at the original-file and completed
+  played-game entrypoints require EDT capture and serialization on `lizzie-sgf-save`.
 - `OfflineBoardAcceptanceTest`: existing cancellation, overwrite protection and
   engine replacement checks, plus all four successful chooser flows, actual
   main-window ownership, Chinese filenames and preservation of the live tree.
@@ -237,14 +264,15 @@ unchanged. `SgfUiFilenameFieldTest` checks the lookup without a desktop; the
 full Linux keyboard flow must still pass separately. No production behavior was
 changed to accommodate the probe.
 
-No throughput improvement is claimed. Disk I/O has moved off the event thread;
-tree capture and serialization remain on it to preserve the existing serializer's
-board, rules and formatting context.
+No throughput improvement is claimed. File-save serialization and disk I/O run
+on the worker; tree capture remains on its requesting owner. The detached save
+input carries the board, rules and formatting values needed after capture.
 
 The subsequent [SGF measurement and interactive read path](SGF_PERFORMANCE.md)
 records these phases separately. Chooser, single-file drop and recent-file SGF
-reads/decode run on a bounded worker; parsing and serialization retain their
-existing context. Opening immediately after a save waits for its publication.
+reads/decode run on a bounded worker. Parsing and synchronous string exports retain
+their existing calling context. Opening immediately after a file save waits for
+its serialization, write and publication.
 
 ## Edit-protection comparison measurement (2026-10-31)
 

@@ -71,7 +71,8 @@ public class ContributeEngine {
   }
 
   private record CapturedGameSave(
-      ContributeGameInfo game, int index, Path target, String snapshot, GameSaveVersion version) {}
+      ContributeGameInfo game, int index, Path target,
+      SGFParser.SaveSnapshot snapshot, GameSaveVersion version) {}
 
   private record PendingGameSave(CapturedGameSave request, CompletableFuture<Path> completion) {}
 
@@ -1141,7 +1142,7 @@ public class ContributeEngine {
         (index + 1) + "_" + game.gameId + "_" + getShortName(info.getPlayerBlack())
             + "_VS_" + getShortName(info.getPlayerWhite()) + "(" + info.getResult() + ").sgf");
     return new CapturedGameSave(game, index, target,
-        SGFParser.saveSnapshot(Lizzie.board, false, false, false), GameSaveVersion.capture(game));
+        SGFParser.captureSnapshot(Lizzie.board, false, false, false), GameSaveVersion.capture(game));
   }
 
   private Path contributionSaveDirectory() {
@@ -1162,8 +1163,8 @@ public class ContributeEngine {
     if (pendingGameSaves == null) pendingGameSaves = new IdentityHashMap<>();
     PendingGameSave existing = pendingGameSaves.get(save.game());
     if (existing != null && !existing.completion().isDone()) {
-      if (existing.request().target().equals(save.target())
-          && existing.request().snapshot().equals(save.snapshot())) return existing.completion();
+      // Equal move lists do not imply equal comments, analysis or export settings. Preserve
+      // each explicit capture without rendering either snapshot on the event thread to compare it.
       return existing.completion().handle((ignored, failure) -> null)
           .thenCompose(ignored -> submitCapturedGame(save, owner));
     }

@@ -31,6 +31,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
+import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordingFile;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -38,6 +40,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class PlayedGameSaveSafetyTest {
   private static final int TIMEOUT_SECONDS = 10;
@@ -158,6 +161,40 @@ class PlayedGameSaveSafetyTest {
     assertTrue(LizzieFrame.isSavingRawComment);
     assertTrue(frame.failures.isEmpty());
     assertActiveFileUnchanged();
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void fileSaveSerializesOnTheSharedWorkerAfterEventThreadCapture(boolean playedGame)
+      throws Exception {
+    Path recordingFile = directory.resolve("save-phases.jfr");
+    try (Recording recording = new Recording()) {
+      recording.enable("kg.sgf.Phase").withoutThreshold();
+      recording.start();
+      onEdt(() -> {
+        config.showReplaceFileHint = false;
+        if (playedGame) frame.autoSavePlayedGame();
+        else frame.saveOriFile();
+      });
+      awaitPendingSaves();
+      recording.stop();
+      recording.dump(recordingFile);
+    }
+    var phases = RecordingFile.readAllEvents(recordingFile).stream()
+        .filter(event -> event.getEventType().getName().equals("kg.sgf.Phase")).toList();
+    var captures = phases.stream().filter(event -> event.getString("phase").equals("save-capture"))
+        .toList();
+    var serializers = phases.stream()
+        .filter(event -> event.getString("phase").equals("save-serialize")).toList();
+    assertEquals(1, captures.size());
+    assertEquals(1, serializers.size());
+    assertTrue(captures.get(0).getThread().getJavaName().startsWith("AWT-EventQueue-"));
+    assertEquals("lizzie-sgf-save", serializers.get(0).getThread().getJavaName());
+    assertTrue(serializers.get(0).getStartTime().compareTo(captures.get(0).getEndTime()) >= 0);
+    Path output = playedGame ? savedGames().get(0) : activeFile.toPath();
+    assertEquals("이전 흑", SGFParser.parseSgf(Files.readString(output), true)
+        .getGameInfo().getPlayerBlack());
+    assertTrue(frame.failures.isEmpty());
   }
 
   @Test

@@ -346,7 +346,7 @@ public class BoardHistoryNode {
 
   /** Detached node for saving; callers reconnect only detached parents/children. */
   BoardHistoryNode copyForSave() {
-    BoardHistoryNode copy = new BoardHistoryNode(data.clone());
+    BoardHistoryNode copy = new BoardHistoryNode(data.copyForSave());
     copy.analyzed = analyzed;
     copy.diffAnalyzed = diffAnalyzed;
     copy.isBest = isBest;

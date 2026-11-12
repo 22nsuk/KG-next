@@ -201,7 +201,7 @@ public class EngineManager {
     final String completionMessage;
     CompletableFuture<Boolean> attempt;
     final AtomicBoolean continuationScheduled = new AtomicBoolean();
-    String sgf;
+    SGFParser.SaveSnapshot sgf;
     BufferedImage image;
     boolean imageCaptured;
     Path sgfPath;
@@ -1755,9 +1755,10 @@ public class EngineManager {
     }
     try {
       // Freeze before the terminal caller retires its owner and permits later board mutations.
-      // Only a failed capture may retry from this exact completed history; writes reuse the string.
+      // Only a failed capture may retry from this exact completed history; rendering and writes
+      // reuse the detached snapshot, with successful SGF text retained across disk failures.
       if (save.required && save.sgf == null) {
-        save.sgf = SGFParser.captureSave(save.board, save.history, false);
+        save.sgf = SGFParser.captureSaveSnapshot(save.board, save.history, false);
       }
     } catch (IOException | RuntimeException failure) {
       finishEngineGameSaveOnEdt(save, attempt,

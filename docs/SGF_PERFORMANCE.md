@@ -11,7 +11,14 @@ Ordinary engine analysis is not an authored edit. An immediate Open after Save
 waits for accepted saves and their metadata publication, including writes
 accepted while waiting.
 
-Parsing, board application and serialization still use the original EDT/global
+File saves freeze their tree, candidate/PV values and export settings on the
+requesting owner, then serialize on the save worker. The manual probe uses the
+same detached `captureSaveSnapshot` boundary and serializes off the EDT before
+the separately timed atomic write. Synchronous text exports still return their
+result directly; they are not the file-save path. See
+[SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
+
+Parsing and board application still use the original EDT/global
 board context. In particular, `parseSgf` temporarily changes board dimensions
 and Zobrist tables: a detached return value does not make it thread safe.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
@@ -126,11 +133,11 @@ old/new application opening. All fixtures passed node/branch, authored-comment,
 candidate/ownership and save/reopen semantic checks; raw per-sample JFRs and
 source/fixture hashes were retained with the local measurement record.
 
-Reading and decoding can be isolated without giving a worker the live board.
-The retained parser, explicit-edit capture, save capture and serialization can
-still delay EDT work on large trees. Use the phase measurements to choose the
-next boundary; moving a global-context parser or serializer wholesale to a
-worker would change their ownership contract. Synthetic offline timings should
+At that revision, the parser, explicit-edit capture, save capture and
+serialization could all delay EDT work on large trees. File serialization now
+uses a detached worker input; parsing and capture still require their original
+owners. The historical measurements above do not quantify this later change.
+Synthetic offline timings should
 be supplemented with the user's representative files and actual engine when
 investigating a specific slow opening.
 
