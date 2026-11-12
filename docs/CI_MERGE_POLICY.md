@@ -90,7 +90,25 @@ Python 검사도 실행한다. 이 네 모듈은 portable scripts 그룹에서 r
 ### 캐시와 desktop 증거 보관
 
 Native Windows Engine Acceptance에도 기존 Java job과 같은 Maven 의존성 캐시를
-사용한다. 고정 native CPU 엔진과 SDK는 매번 빌드·audit하며 캐시로 대체하지 않는다.
+사용한다. 별도로 고정 native CPU 엔진과 SDK의 빌드 산출물을 캐시한다.
+소스 저장소·SHA, runner 이미지·아키텍처, MSVC·Windows SDK와 실제 빌드 도구의
+SHA-256, SDK 경로·환경, 빌드 스크립트·의존성 lock·workflow의 옵션을 키에 반영한다.
+정확한 키가 일치할 때만 컴파일을 생략하고, 키가 다르거나 복원에 실패하면 깨끗이
+다시 빌드한다. 다른 키를 대안으로 재사용하는 `restore-keys`는 설정하지 않는다.
+
+캐시에는 SDK prefix, 엔진 실행 파일, 빌드 receipt·로그·CMake 설정·라이선스만 넣는다.
+고정 소스 checkout 검증은 항상 실행하고, 캐시 적중 시에도 SDK 전체 파일·lock과
+실행 파일의 해시를 확인하는 기존 패키지 감사, PE 의존성 검사, 개발용 PATH를 제거한
+엔진 실행을 다시 수행한다. 감사 오류는 검사를 실패시킨다.
+`MoveFocusNativeAcceptanceIT`의 1개 사례와 `EngineGameParametersAcceptanceIT`의
+2개 사례도 매번 실제 Windows 앱·엔진으로 실행하며 누락·skip·실패를 허용하지 않는다.
+캐시는 작업 전체가 성공한 뒤에만 저장한다. 패키지 감사와 인수 결과는 캐시하지 않는다.
+
+캐시 적중 시 `source-build.json`과 빌드 로그는 원래 빌드의 증빙이며,
+`source-package.json`과 인수 검사 보고서는 현재 실행의 증빙이다.
+`native-engine-cache-inputs.json`과 Actions의 복원·빌드·감사 단계 시간을 함께 확인하여
+새 키의 첫 빌드와 같은 키의 재사용 비용을 비교한다. 실제 절감 시간은 runner와 캐시
+전송 비용에 따라 달라지며, 캐시 도입 전 빌드 시간만으로 절감량을 단정하지 않는다.
 전체 Java 검증의 JaCoCo 산출물과 CPU archive 전달용 artifact는 그대로 유지한다.
 
 성공한 desktop artifact는 7일 보관한다. 최초 전체 검사의 이미지는 모두 유지하고,
@@ -101,6 +119,25 @@ Native Windows Engine Acceptance에도 기존 Java job과 같은 Maven 의존성
 업로드를 시도한다. artifact 이름과 반복별 경로도 유지한다.
 작은 local CI JSON/Markdown 요약은 성공 여부와 무관하게 14일 보관하며, 실행 SHA·
 명령·결과·JUnit 집계로 해당 실행을 식별한다.
+
+### Dependabot 업데이트 묶음
+
+기존 `.github/dependabot.yml`의 Maven·GitHub Actions 주간 검사와 생태계별
+버전 업데이트 PR 상한 5개를 유지한다. 월요일 09:00 UTC(한국 시간 18:00)에
+일반 minor/patch 버전 업데이트를 생태계별 한 묶음으로 제안한다.
+major 업데이트는 개별 PR로 남기며, 이 그룹 설정은 보안 업데이트에 적용하지 않는다.
+자동 병합이나 기존 CI 생략은 추가하지 않는다.
+
+`me.friwi:jcefmaven`은 일반 Maven 묶음에서 제외하고 개별 제안을 유지한다.
+JCEF는 POM뿐 아니라 네이티브 번들·릴리스 핀·체크섬을 함께 갱신해야 하므로,
+다른 의존성 업데이트와 분리해 [기존 업그레이드 절차](DEPENDENCY_UPGRADE.md)를 따른다.
+KataGo 소스 SHA와 사용자 정의 SDK JSON·번들 체크섬은 이 설정의 자동 갱신 대상이 아니다.
+
+포크에서는 설정 파일 존재와 실제 Dependabot 활성화가 별개다.
+관리자는 GitHub의 Dependabot version updates 활성화 상태와 최근 업데이트 작업을
+확인해야 한다. 설정 PR만으로 서비스 활성화나 업데이트 PR 생성을 확인했다고 간주하지 않는다.
+공식 기준: [그룹 옵션](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference#groups),
+[포크의 버전 업데이트 활성화](https://docs.github.com/en/code-security/how-tos/secure-your-supply-chain/secure-your-dependencies/configure-version-updates#enabling-version-updates-on-forks).
 
 ## 저장소 보호 적용 순서
 

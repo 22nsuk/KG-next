@@ -7,6 +7,13 @@ updates:
       day: monday
       time: "09:00"
     open-pull-requests-limit: 5
+    groups:
+      github-actions-minor-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: maven
     directory: "/"
@@ -15,3 +22,13 @@ updates:
       day: monday
       time: "09:00"
     open-pull-requests-limit: 5
+    groups:
+      maven-minor-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          # JCEF upgrades also require matching native bundles and release pins.
+          - "me.friwi:jcefmaven"
+        update-types:
+          - minor
+          - patch
