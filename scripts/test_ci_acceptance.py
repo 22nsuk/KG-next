@@ -257,6 +257,54 @@ class CliTest(unittest.TestCase):
 
 
 class WorkflowContractTest(unittest.TestCase):
+    def test_native_cache_cannot_skip_fresh_audit_or_real_acceptance(self):
+        text = (WORKFLOWS / "move-focus-acceptance.yml").read_text()
+        steps = dict(re.findall(r"^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)", text,
+                                re.M | re.S))
+        build = steps["Build the pinned CPU engine on a cache miss"]
+        self.assertIn("if: steps.native-cache.outputs.cache-hit != 'true'", build)
+        self.assertIn("Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop", build)
+        self.assertIn("--target windows-cpu", build)
+        audit = steps["Audit and package the pinned CPU engine"]
+        self.assertIn("python scripts/package_katago_source_windows.py", audit)
+        self.assertIn("if ($LASTEXITCODE -ne 0)", audit)
+        native = steps["Exercise the real native application with the real engine"]
+        self.assertIn("MoveFocusNativeAcceptanceIT,EngineGameParametersAcceptanceIT", native)
+        self.assertIn("$report.testsuite.tests -ne 1", native)
+        self.assertIn("$parameters.testsuite.tests -ne 2", native)
+        for step in (audit, native):
+            self.assertNotRegex(step, r"(?m)^        if:")
+            self.assertNotIn("continue-on-error", step)
+        self.assertLess(text.index("Restore pinned CPU build outputs"),
+                        text.index("Build the pinned CPU engine on a cache miss"))
+        self.assertLess(text.index("Build the pinned CPU engine on a cache miss"),
+                        text.index("Audit and package the pinned CPU engine"))
+        self.assertLess(text.index("Audit and package the pinned CPU engine"),
+                        text.index("Exercise the real native application with the real engine"))
+
+    def test_native_cache_identity_covers_source_toolchain_and_build_definition(self):
+        text = (WORKFLOWS / "move-focus-acceptance.yml").read_text()
+        inputs = text.split("      - name: Identify native build inputs\n", 1)[1].split("      - name:", 1)[0]
+        self.assertIn("check_source(Path('upstream-katago'), os.environ['KATAGO_PARAMETER_COMMIT'])", inputs)
+        for name in ("KATAGO_PARAMETER_REPOSITORY", "ImageVersion", "RUNNER_ARCH", "RUNNER_TEMP",
+                     "GITHUB_WORKSPACE", "VCToolsVersion", "WindowsSDKVersion", "INCLUDE", "LIB",
+                     "cl.exe", "link.exe", "rc.exe", "cmake.exe", "ninja.exe"):
+            self.assertIn(f"'{name}'", inputs)
+        self.assertIn("hashlib.file_digest(handle, 'sha256')", inputs)
+        key = re.search(r"(?m)^          key: (.*)$", text).group(1)
+        for value in ("env.KATAGO_PARAMETER_COMMIT", "steps.native-inputs.outputs.toolchain",
+                      ".github/workflows/move-focus-acceptance.yml", "scripts/build_katago*.py",
+                      "scripts/katago_windows_dependencies.json", "scripts/katago_source_targets.py"):
+            self.assertIn(value, key)
+        cache = text.split("      - name: Restore pinned CPU build outputs\n", 1)[1].split("      - name:", 1)[0]
+        self.assertNotIn("restore-keys:", cache)
+        self.assertNotIn("focus-engine", cache)
+        self.assertNotIn("surefire-reports", cache)
+        self.assertIn("/focus-sdk/prefix", cache)
+        self.assertIn("/focus-build/katago.exe", cache)
+        self.assertIn("/focus-build/source-build.json", cache)
+        self.assertNotIn("/focus-build\n", cache)
+
     def test_desktop_job_covers_one_full_pass_and_two_race_repeats_with_overhead(self):
         text = (WORKFLOWS / "ci.yml").read_text()
         job = text.split("\n  desktop-smoke:\n", 1)[1].split("\n  analysis-provenance-ui:\n", 1)[0]

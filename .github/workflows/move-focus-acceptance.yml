@@ -50,13 +50,71 @@ jobs:
               $line | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
             }
           }
-      - name: Build and audit the pinned CPU engine
+      - name: Identify native build inputs
+        id: native-inputs
+        shell: python
+        run: |
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import shutil
+          import sys
+
+          sys.path.insert(0, str(Path('scripts').resolve()))
+          from build_katago_source import check_source
+
+          check_source(Path('upstream-katago'), os.environ['KATAGO_PARAMETER_COMMIT'])
+          inputs = {name: os.environ[name] for name in (
+              'KATAGO_PARAMETER_COMMIT', 'KATAGO_PARAMETER_REPOSITORY',
+              'ImageOS', 'ImageVersion', 'RUNNER_ARCH', 'RUNNER_TEMP', 'GITHUB_WORKSPACE',
+              'VCToolsVersion', 'VCToolsInstallDir', 'WindowsSDKVersion', 'WindowsSdkDir',
+              'INCLUDE', 'LIB', 'LIBPATH',
+          )}
+          inputs['tools'] = {}
+          for name in ('cl.exe', 'link.exe', 'rc.exe', 'cmake.exe', 'ninja.exe'):
+              executable = shutil.which(name)
+              if executable is None:
+                  raise RuntimeError(f'Required build tool is unavailable: {name}')
+              with open(executable, 'rb') as handle:
+                  digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+              inputs['tools'][name] = {'path': executable, 'sha256': digest}
+          serialized = json.dumps(inputs, sort_keys=True, indent=2) + '\n'
+          Path(os.environ['RUNNER_TEMP'], 'native-engine-cache-inputs.json').write_text(serialized, encoding='utf-8')
+          fingerprint = hashlib.sha256(serialized.encode('utf-8')).hexdigest()
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'toolchain={fingerprint}\n')
+      - name: Restore pinned CPU build outputs
+        id: native-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          # Receipts contain absolute SDK paths; those paths are part of the fingerprint.
+          # Never cache package audits or native acceptance results.
+          path: |
+            ${{ runner.temp }}/focus-sdk/prefix
+            ${{ runner.temp }}/focus-sdk/build.log
+            ${{ runner.temp }}/focus-build/katago.exe
+            ${{ runner.temp }}/focus-build/source-build.json
+            ${{ runner.temp }}/focus-build/source-licenses
+            ${{ runner.temp }}/focus-build/CMakeCache.txt
+            ${{ runner.temp }}/focus-build/build.log
+          key: native-windows-cpu-v1-${{ env.KATAGO_PARAMETER_COMMIT }}-${{ steps.native-inputs.outputs.toolchain }}-${{ hashFiles('.github/workflows/move-focus-acceptance.yml', 'scripts/build_katago*.py', 'scripts/katago_windows_dependencies.json', 'scripts/katago_source_targets.py') }}
+      - name: Build the pinned CPU engine on a cache miss
+        if: steps.native-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: |
+          # A partial restore or interrupted download must not become build input.
+          foreach ($directory in @('focus-sdk', 'focus-build')) {
+            $path = Join-Path $env:RUNNER_TEMP $directory
+            if (Test-Path $path) { Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction Stop }
+          }
           python scripts/build_katago_windows_dependencies.py --output "$env:RUNNER_TEMP/focus-sdk" --jobs 3
           if ($LASTEXITCODE -ne 0) { throw 'SDK failed' }
           python scripts/build_katago_source.py --source upstream-katago --output "$env:RUNNER_TEMP/focus-build" --source-commit "$env:KATAGO_PARAMETER_COMMIT" --source-repository "$env:KATAGO_PARAMETER_REPOSITORY" --target windows-cpu --windows-sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --jobs 3
           if ($LASTEXITCODE -ne 0) { throw 'Engine build failed' }
+      - name: Audit and package the pinned CPU engine
+        shell: pwsh
+        run: |
           python scripts/package_katago_source_windows.py --build "$env:RUNNER_TEMP/focus-build" --source-commit "$env:KATAGO_PARAMETER_COMMIT" --source-repository "$env:KATAGO_PARAMETER_REPOSITORY" --sdk "$env:RUNNER_TEMP/focus-sdk/prefix" --output "$env:RUNNER_TEMP/focus-engine"
           if ($LASTEXITCODE -ne 0) { throw 'Engine dependency audit failed' }
       - name: Exercise the real native application with the real engine
@@ -85,5 +143,6 @@ jobs:
             ${{ runner.temp }}/focus-build/build.log
             ${{ runner.temp }}/focus-build/source-build.json
             ${{ runner.temp }}/focus-engine/source-package.json
+            ${{ runner.temp }}/native-engine-cache-inputs.json
           if-no-files-found: error
           retention-days: 7
