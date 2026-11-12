@@ -76,9 +76,33 @@ public class SGFParser {
     return loadFileContent(SgfFileReader.read(Path.of(filename)), showHint, syncPrimaryEngine);
   }
 
+  /** Prepares immutable file syntax without reading import preferences or changing the live board. */
+  public static SgfDocument prepareFileContent(String value) {
+    try (var phase = new SgfPhase("parse-syntax")) {
+      if (value.isEmpty()) {
+        SgfObservation.record("open", "empty", null, null);
+        return null;
+      }
+      value = normalizeSgfInput(value);
+      SgfDocument document = value == null ? null : parseLoadDocument(value);
+      if (document == null) SgfObservation.record("open", "failed", null, null);
+      return document;
+    } catch (RuntimeException invalidSgf) {
+      SgfObservation.record("open", "failed", null, invalidSgf);
+      return null;
+    }
+  }
+
   /** Applies already decoded file content with the same navigation/hint contract as load(). */
   public static boolean loadFileContent(
       String value, boolean showHint, boolean syncPrimaryEngine) {
+    return loadFileDocument(prepareFileContent(value), showHint, syncPrimaryEngine);
+  }
+
+  /** The live board owner applies prepared syntax; no file I/O or syntax parsing is repeated. */
+  public static boolean loadFileDocument(
+      SgfDocument document, boolean showHint, boolean syncPrimaryEngine) {
+    if (document == null) return false;
     isExtraMode2 = false;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
     boolean finalizerScheduled = false;
@@ -91,19 +115,9 @@ public class SGFParser {
           Lizzie.board.clearWithoutPrimaryEngineForwarding();
         }
       }
-      if (value.isEmpty()) {
-        SgfObservation.record("open", "empty", null, null);
-        return false;
-      }
-
       boolean returnValue;
       try {
-        value = normalizeSgfInput(value);
-        if (value == null) {
-          SgfObservation.record("open", "failed", null, null);
-          return false;
-        }
-        returnValue = parse(value);
+        returnValue = parse(document);
       } catch (RuntimeException invalidSgf) {
         SgfObservation.record("open", "failed", null, invalidSgf);
         return false;
@@ -448,22 +462,30 @@ public class SGFParser {
   }
 
   private static boolean parse(String value) {
+    return parse(parseLoadDocument(value));
+  }
+
+  private static boolean parse(SgfDocument document) {
     boolean oriPlaySound = Lizzie.config.playSound;
     try (var phase = new SgfPhase("parse-build-tree")) {
       Lizzie.config.playSound = false;
-      return parseIntoCurrentBoard(value);
+      return parseIntoCurrentBoard(document);
     } finally {
       Lizzie.config.playSound = oriPlaySound;
     }
   }
 
-  // Syntax is detached first; the interactive owner applies the document to its live history.
-  private static boolean parseIntoCurrentBoard(String value) {
+  private static SgfDocument parseLoadDocument(String value) {
     SgfDocument document = SgfDocument.parseNormalized(value);
     if (document == null && !value.isEmpty()) {
       // Preserve the live loader's legacy leading-node fragment tolerance.
       document = SgfDocument.parseNormalized("(;" + value.substring(1));
     }
+    return document;
+  }
+
+  // Syntax is detached first; the interactive owner applies the document to its live history.
+  private static boolean parseIntoCurrentBoard(SgfDocument document) {
     if (document == null) return false;
     Lizzie.board.reopen(document.width(), document.height());
 
