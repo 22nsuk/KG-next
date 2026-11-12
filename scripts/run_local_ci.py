@@ -372,7 +372,6 @@ PY_COMPILE_FILES = (
     "scripts/package_katago_source_macos.py",
     "scripts/test_package_katago_source_macos.py",
     "scripts/probe_katago_focus.py",
-    "scripts/run_sgf_rust_probe.py",
     "scripts/test_build_katago_source.py",
     "scripts/katago_asset_catalog.py",
     "scripts/validate_kg_metadata.py",

@@ -336,12 +336,6 @@ public final class SgfPerformanceProbe {
         .put("max", ordered.get(ordered.size() - 1));
   }
 
-  /** Reuse the exact performance corpus in headless, opt-in parser experiments. */
-  public static List<Path> writeFixtures(Path output) throws Exception {
-    Files.createDirectories(output);
-    return fixtures(output).stream().map(Fixture::path).toList();
-  }
-
   private static List<Fixture> fixtures(Path output) throws Exception {
     StringBuilder variations = header(SHORT_COMMENT, false);
     appendBranches(variations, 0, 7);

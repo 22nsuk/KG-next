@@ -514,7 +514,6 @@ pwsh -NoProfile -File scripts/run_windows_ci_diagnostics.ps1 -OutputDirectory ta
 
 ## 建议搭配阅读
 
-- [SGF Rust 兼容性与端到端性能实验](../experiments/sgf-rust/README.md)（独立运行，不改变产品解析器或 Maven 构建依赖）
 - [贡献指南](../CONTRIBUTING.md)
 - [维护说明](MAINTENANCE.md)
 - [发布检查清单](RELEASE_CHECKLIST.md)
