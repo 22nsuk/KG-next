@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "7e9d3eab248fe414a2cfbc7b3bc35ed7a8fd3e73cc3a064220d0a8e3de8c2674",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "Hand-authored: the first closing bracket is followed by ordinary comment text, so it is preserved as literal text; the second closes C.",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": null,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 2,
+      "mainline_move_count": 1,
+      "root_branch_count": 1,
+      "comment_count": 1,
+      "unknown_property_names": [],
+      "final_board": [
+        "X........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

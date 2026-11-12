@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "2b280da4317805adc45a11a397f5b99bbebffe7eb366512736075109b5a4e71b",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "Hand-authored: mixed-case FF3 identifiers retain only uppercase letters; AddBlack becomes AB, XPrivate becomes XP. Setup aa/bb black and cc white, mainline B[dd] W[ee].",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": null,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 4,
+      "mainline_move_count": 2,
+      "root_branch_count": 1,
+      "comment_count": 2,
+      "unknown_property_names": [
+        "XP"
+      ],
+      "final_board": [
+        "X........",
+        ".X.......",
+        "..O......",
+        "...X.....",
+        "....O....",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

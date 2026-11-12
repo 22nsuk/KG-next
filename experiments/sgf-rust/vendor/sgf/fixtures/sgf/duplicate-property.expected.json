@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "2498fd9bc85ce08171e3176d7060fe8063320cfb44bf95caf872110e232517fa",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "sgfmill merges repeated C into a multi-value Text property, which it cannot interpret. Preserve both raw values; comment_count counts the one node bearing C.",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": 7.5,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 2,
+      "mainline_move_count": 1,
+      "root_branch_count": 1,
+      "comment_count": 1,
+      "unknown_property_names": [],
+      "final_board": [
+        "X........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

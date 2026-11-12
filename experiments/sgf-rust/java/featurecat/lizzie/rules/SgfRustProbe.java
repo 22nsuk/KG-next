@@ -16,7 +16,7 @@ import org.json.JSONObject;
 
 /** Opt-in experiment, compiled separately from both application and automatic tests. */
 public final class SgfRustProbe {
-  private static final SGFParser.ParseOptions OPTIONS =
+  static final SGFParser.ParseOptions OPTIONS =
       new SGFParser.ParseOptions(true, false, false, true, 0, 361, 7.5);
   private static final int MAX_FRAME = 64 * 1024 * 1024;
   private static volatile Object consumed;
@@ -207,7 +207,7 @@ public final class SgfRustProbe {
     }
   }
 
-  private static String difference(SgfDocument left, SgfDocument right) {
+  static String difference(SgfDocument left, SgfDocument right) {
     if (left == null || right == null) return "one or both parsers rejected the input";
     if (left.width() != right.width() || left.height() != right.height()) return "board size differs";
     List<SgfDocument.Event> a = left.events(), b = right.events();
@@ -227,7 +227,7 @@ public final class SgfRustProbe {
     return printable.length() <= 100 ? printable : printable.substring(0, 100) + "…";
   }
 
-  private static int gameCount(SgfDocument document) {
+  static int gameCount(SgfDocument document) {
     int depth = 0, games = 0;
     for (var event : document.events()) {
       if (event.kind() == '(' && depth++ == 0) games++;
@@ -236,7 +236,7 @@ public final class SgfRustProbe {
     return games;
   }
 
-  private static String historyDigest(BoardHistoryList history) throws Exception {
+  static String historyDigest(BoardHistoryList history) throws Exception {
     MessageDigest digest = MessageDigest.getInstance("SHA-256");
     var info = history.getGameInfo();
     add(digest, info.getPlayerBlack(), info.getPlayerWhite(), info.getDate(), info.getResult(),
@@ -255,7 +255,10 @@ public final class SgfRustProbe {
           d.estimateArray, d.estimateArray2, d.primaryAnalysisProvenance(), d.secondaryAnalysisProvenance(),
           d.primaryOwnershipProvenance(), d.secondaryOwnershipProvenance(),
           d.importedAnalysisDigest(false), d.importedAnalysisDigest(true),
-          d.importedAnalysisWrn(false), d.importedAnalysisWrn(true));
+          d.importedAnalysisWrn(false), d.importedAnalysisWrn(true),
+          d.engineName, d.engineName2, d.isKataData, d.isKataData2, d.isSaiData, d.isSaiData2,
+          d.scoreMeanIsBlackPerspective, d.scoreMeanIsBlackPerspective2,
+          d.analysisHeaderSlots, d.analysisHeaderSlots2);
       for (List<MoveData> moves : Arrays.asList(d.bestMoves, d.bestMovesOutOfRange,
           d.bestMoves2, d.bestMoves2OutOfRange)) {
         add(digest, moves == null ? -1 : moves.size());
@@ -283,7 +286,7 @@ public final class SgfRustProbe {
     return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
   }
 
-  private static void diagnostics(Path dir, List<Path> paths) throws Exception {
+  static void diagnostics(Path dir, List<Path> paths) throws Exception {
     Map<String, String> cases = new LinkedHashMap<>();
     cases.put("lz2-first", "(;LZ2[x])");
     cases.put("lz2-after-size", "(;SZ[19]LZ2[x]LZOP2[0.1 0.2])");
@@ -297,6 +300,9 @@ public final class SgfRustProbe {
     cases.put("surrounding-text", "prefix (;SZ[19]\\n;B[aa]) suffix");
     cases.put("missing-close", "(;SZ[19];B[aa]");
     cases.put("unescaped-close-bracket", "(;SZ[19]C[a]b])");
+    cases.put("stray-bracket-move", "(;SZ[19];B[aa]C[note]];W[bb])");
+    cases.put("stray-bracket-branches", "(;SZ[19];B[aa]C[x]](;W[bb])(;W[cc]))");
+    cases.put("normal-bracket-control", "(;SZ[19];B[aa]C[note\\]];W[bb])");
     cases.put("depth-260", "(;SZ[19]" + "(;B[]".repeat(260) + ")".repeat(261));
     provenanceCases(cases);
     for (var entry : cases.entrySet()) {
@@ -340,6 +346,20 @@ public final class SgfRustProbe {
         .encodeToString(metadata.toString().getBytes(StandardCharsets.UTF_8)) + "]";
     String both = "(;SZ[5]LZOP[" + escaped + "]LZOP2[" + escaped + "]" + bothKgp + ")";
     cases.put("provenance-secondary", both);
+    cases.put("provenance-secondary-move", both.replace("LZOP[", ";B[aa]LZ[").replace("LZOP2[", "LZ2["));
+    cases.put("provenance-secondary-metadata-first", "(;SZ[5]" + bothKgp
+        + "LZOP[" + escaped + "]LZOP2[" + escaped + "])");
+    cases.put("provenance-secondary-setup", "(;SZ[5];B[aa]LZ[" + escaped
+        + "]LZ2[" + escaped + "]" + bothKgp + "AB[bb])");
+    String specialPayload = payload.replace("KataGo", "Kata]Go\\net");
+    JSONObject specialSlot = new JSONObject(slot.toString()).put("payloadSha256",
+        hash(specialPayload.getBytes(StandardCharsets.UTF_8)));
+    JSONObject specialMetadata = new JSONObject().put("app", "KG-next").put("version", 2)
+        .put("primary", specialSlot).put("secondary", specialSlot);
+    cases.put("provenance-secondary-special-engine", "(;SZ[5]LZOP[" + SGFParser.Escaping(specialPayload)
+        + "]LZOP2[" + SGFParser.Escaping(specialPayload) + "]KGP["
+        + Base64.getUrlEncoder().withoutPadding().encodeToString(specialMetadata.toString().getBytes(StandardCharsets.UTF_8)) + "])");
+    cases.put("secondary-short-header", "(;SZ[5]LZOP[Main 44 0 3.5]LZOP2[Sub 41 0 2.1 0.5 0.8])");
     BoardData good = SGFParser.parseSgf(valid, true, OPTIONS).getData();
     BoardData changed = SGFParser.parseSgf(stale, true, OPTIONS).getData();
     BoardData secondary = SGFParser.parseSgf(both, true, OPTIONS).getData();

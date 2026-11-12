@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "d258f1c4ab72fc2e458b5f7206cebca706559e1d3ed73c936125c5158b810b0f",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "sgfmill rejects occupied-point moves. Preserve the preceding board and mark node 3 (zero-based mainline) illegal; the illegal node still counts as a move.",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": 7.5,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 4,
+      "mainline_move_count": 3,
+      "root_branch_count": 1,
+      "comment_count": 0,
+      "unknown_property_names": [],
+      "final_board": [
+        "X........",
+        ".O.......",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      },
+      "invalid_mainline_nodes": [
+        3
+      ]
+    }
+  ]
+}

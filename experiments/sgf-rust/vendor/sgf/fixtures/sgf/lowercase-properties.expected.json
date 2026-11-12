@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "c60fc9919e8de8351a5f268912d1146b39e95b19181b446171efcd5495b14b93",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "sgfmill discards lowercase identifier characters instead of recovering the names. Conservative fixture recovery uppercases these identifiers.",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": 6.5,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 3,
+      "mainline_move_count": 2,
+      "root_branch_count": 1,
+      "comment_count": 0,
+      "unknown_property_names": [],
+      "final_board": [
+        "X........",
+        ".O.......",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

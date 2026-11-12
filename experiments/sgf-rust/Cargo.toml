@@ -5,6 +5,19 @@ edition = "2024"
 rust-version = "1.96"
 license = "GPL-3.0-only"
 publish = false
+autobins = false
+
+[lib]
+name = "kg_sgf_rust_probe"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "kg-sgf-rust-pipe"
+path = "src/main.rs"
+
+[workspace]
+members = ["vendor/sgf"]
+resolver = "3"
 
 [dependencies]
-sgf = { git = "https://github.com/wimi321/lizzieyzy-next-v2", rev = "c1718bbefe4c2149f545db5b7bb191c7b37b7b27" }
+sgf = { path = "vendor/sgf" }

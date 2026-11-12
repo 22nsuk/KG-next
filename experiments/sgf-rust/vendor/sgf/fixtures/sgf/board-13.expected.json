@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source": "sgfmill",
+  "oracle_version": "1.1.1",
+  "input_sha256": "f45802bd12a3f633652eb8532f8f837149a9a1257f928609e1af29c12af6bf18",
+  "actual_encoding": "UTF-8",
+  "games": [
+    {
+      "board_size": {
+        "width": 13,
+        "height": 13
+      },
+      "komi": 7.5,
+      "rules_raw": "Chinese",
+      "handicap": 0,
+      "node_count": 5,
+      "mainline_move_count": 4,
+      "root_branch_count": 1,
+      "comment_count": 0,
+      "unknown_property_names": [],
+      "final_board": [
+        ".............",
+        ".............",
+        ".............",
+        "...X.....X...",
+        ".............",
+        ".............",
+        ".............",
+        ".............",
+        ".............",
+        "...O.....O...",
+        ".............",
+        ".............",
+        "............."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

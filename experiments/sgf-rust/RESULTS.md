@@ -1,5 +1,8 @@
 # Evaluation: 2026-11-12
 
+This is the initial unadapted pipe experiment. See the [native follow-up](NATIVE_RESULTS.md)
+for the subsequent raw compatibility API, real JNA binding, and Windows/Linux measurements.
+
 **Keep the production parser in Java.** The pinned Rust library parses the compatible
 large inputs faster internally, but full Java handoff/history construction has mixed results
 and KG extension/escape compatibility is not yet sufficient for a replacement.

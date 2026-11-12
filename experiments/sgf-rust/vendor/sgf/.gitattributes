@@ -1,0 +1,2 @@
+# Encoding and linebreak fixtures must remain byte-identical to pinned upstream.
+fixtures/sgf/*.sgf binary

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "0d7367e85c2197191822a194d9f31a2eedbf5827f5dbbe423ee3bba4e1ad66f5",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "sgfmill rejects the truncated tree. Conservative fixture recovery closes the one open tree at EOF.",
+  "games": [
+    {
+      "board_size": {
+        "width": 9,
+        "height": 9
+      },
+      "komi": 7.5,
+      "rules_raw": null,
+      "handicap": 0,
+      "node_count": 3,
+      "mainline_move_count": 2,
+      "root_branch_count": 1,
+      "comment_count": 0,
+      "unknown_property_names": [],
+      "final_board": [
+        "X........",
+        ".O.......",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        ".........",
+        "........."
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}

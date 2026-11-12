@@ -1,0 +1,541 @@
+{
+  "schema_version": 1,
+  "conventions": {
+    "actual_encoding": "Known byte encoding used to author the fixture; GBK is a subset of GB18030 and is not uniquely detectable. UTF-8 BOM is counted separately.",
+    "coordinates": "final_board rows run from SGF y=a downward; columns run from x=a rightward.",
+    "mainline": "Follow the first child at each node; count moves including passes and illegal move nodes.",
+    "branches": "root_branch_count counts direct children of the root, including a single continuation.",
+    "captures": "captured_by records stones removed by moves, not AE; self-capture credits the opponent.",
+    "metadata": "Missing komi and rules are null, missing handicap is 0. rules_raw is the raw RU value after decoding, without normalization.",
+    "collections": "Each file has a games array, in collection order; counts and boards belong to each game.",
+    "manual": "Manual exceptions have independent hand-authored expectations in tools/fixture-oracle/manual.py, pinned to exact SGF bytes. No fallback from automatic to manual."
+  },
+  "fixtures": [
+    {
+      "file": "basic-19.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "board-19",
+        "opening"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "board-9.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "board-9"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "board-13.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "board-13"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "rectangular-19x13.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "rectangular"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "handicap-2.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "handicap"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "handicap-9.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "handicap",
+        "setup"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "setup-midgame.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "midgame-AB-AW-AE"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "pass-empty.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "pass"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "pass-tt-ff3.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "pass",
+        "FF3"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "occupied-illegal.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "illegal-occupied"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "root-variations.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "root-branches",
+        "variations"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "nested-variations.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "nested-variations"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "collection-two.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "collection"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-escaped-bracket.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "escaped-bracket"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-multiline.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "multiline-comment"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-chinese.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "Chinese"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-japanese.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "Japanese"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-korean.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "Korean"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-english.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "English"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "utf8-bom.sgf",
+      "actual_encoding": "UTF-8-BOM",
+      "coverage": [
+        "BOM"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "gbk-no-ca.sgf",
+      "actual_encoding": "GBK",
+      "coverage": [
+        "GBK",
+        "missing-CA"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "gb18030-no-ca.sgf",
+      "actual_encoding": "GB18030",
+      "coverage": [
+        "GB18030",
+        "missing-CA"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "ca-mismatch-utf8.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "CA-mismatch"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "ca-mismatch-gb18030.sgf",
+      "actual_encoding": "GB18030",
+      "coverage": [
+        "CA-mismatch"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "fox-export-shape-synthetic.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "fox-export-shape"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Synthetic export-shaped fixture, NOT a downloaded game. Metadata shape from Java src/test/java/featurecat/lizzie/rules/BoardNodeKindHistoryPipelineTest.java:586 (liveLoadFoxScaledKomiUsesSourceMetadataWithoutChangingStandardSgf). KM is preserved literally as 375; this oracle does not implement Java vendor normalization."
+      }
+    },
+    {
+      "file": "yike-export-shape-synthetic.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "yike-export-shape"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Synthetic export-shaped fixture, NOT a downloaded game. Metadata shape from Java BoardNodeKindHistoryPipelineTest (SO[弈客直播员]); this is a service label, not an account."
+      }
+    },
+    {
+      "file": "java-saved-lz.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "Java-saved-LZ"
+      ],
+      "provenance": {
+        "kind": "constructed-java-export",
+        "description": "Original synthetic 9x9 position and explicitly synthetic analysis, saved by the unmodified Java SGFParser.saveToString(false), which calls SgfAnalysisPayloadWriter. Output bytes were not postprocessed. PB/PW are Black/White before export.",
+        "reference_repository": "../lizzieyzy-next",
+        "reference_commit": "993e288f6b6dab71e0476a1b44ecf416cba71cf5",
+        "driver": "tools/fixture-oracle/ExportConstructedLz.java",
+        "writer_source_sha256": {
+          "src/main/java/featurecat/lizzie/rules/SGFParser.java": "9425181df99cc3167d994c3e519d0539f74f389f4e4c150aa16a818f2d2e87ad",
+          "src/main/java/featurecat/lizzie/rules/SgfAnalysisPayloadWriter.java": "571a8a632e4ccc9d0fd81c13d5eeba161ae2b6176d5982bd518b48f491cb5bb8"
+        }
+      }
+    },
+    {
+      "file": "lowercase-properties.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "lowercase-properties"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "missing-closing-parenthesis.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "missing-parenthesis"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "ff3-legacy.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "FF3"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "duplicate-property.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "duplicate-property"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "capture-black.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "black-capture"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "capture-white.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "white-capture"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "capture-group.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "group-capture"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "ko-recapture-replay.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "ko-replay"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "setup-compressed.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "compressed-setup"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "marks-and-unknown.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "markup",
+        "unknown-properties"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "missing-metadata.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "default-size",
+        "missing-komi-rules"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "empty-board.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "empty-game"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "comment-backslash-continuation.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "escaped-backslash",
+        "escaped-newline"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic position constructed for P0-03; no real players or accounts."
+      }
+    },
+    {
+      "file": "ff3-mixed-case-properties.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "FF3-mixed-case",
+        "unknown-properties",
+        "variations"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic P1-02 fixture with an independent hand-authored expected result; no real players or accounts."
+      }
+    },
+    {
+      "file": "unescaped-closing-bracket.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "unescaped-closing-bracket"
+      ],
+      "provenance": {
+        "kind": "constructed",
+        "description": "Original synthetic P1-02 fixture with an independent hand-authored expected result; no real players or accounts."
+      }
+    },
+    {
+      "file": "fox-java-reference-fragment.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "fox-reference-fragment",
+        "consecutive-black-moves",
+        "scaled-komi"
+      ],
+      "provenance": {
+        "kind": "reference-test-fragment",
+        "description": "Exact eight-move SGF literal from Java GetFoxRequestTest.normalizeFoxSgfPayloadPromotesLeadingConsecutiveBlackMovesToHandicap. This is a reference test fragment, NOT a newly recorded response or a complete public game; the P1-19 live list request timed out.",
+        "reference_repository": "../lizzieyzy-next",
+        "reference_file": "src/test/java/featurecat/lizzie/analysis/GetFoxRequestTest.java"
+      }
+    },
+    {
+      "file": "fox-public-kisei-2019.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "fox-public-game",
+        "full-game",
+        "duplicate-AP",
+        "scaled-komi"
+      ],
+      "provenance": {
+        "kind": "public-issue-sgf",
+        "description": "Complete 313-move Fox SGF posted in the public leela-zero issue #2285: Yamashita Keigo (Black), Iyama Yuta (White), 2019-03-15, W+6.50. Exact SGF bytes extracted from the issue body without rewriting; includes AP[foxwq]. This is an archived public sample, not a successful P1-19 live Fox API recording.",
+        "source_url": "https://github.com/leela-zero/leela-zero/issues/2285",
+        "input_sha256": "c8f8d33022ea45e66fb1d86f4e9f9a5692692c497387ac600d1199491d281d5e"
+      }
+    },
+    {
+      "file": "fox-recorded-2026-10-30.sgf",
+      "actual_encoding": "UTF-8",
+      "coverage": [
+        "fox-recorded-game",
+        "full-game",
+        "duplicate-AP",
+        "scaled-komi"
+      ],
+      "provenance": {
+        "kind": "recorded-http-redacted",
+        "description": "Complete 177-move Fox H5 SGF from maintainer-provided 2026-10-30 HTTP recordings. PB/PW replaced with stable pseudonyms matching fixtures/fox/games.json; moves, SGF structure and game metadata remain unchanged. JSON replay files separately redact account IDs and sensitive account/transport fields.",
+        "input_sha256": "d99f867d76b8e23ff3a7cd9708e458355716659bab5c0ceae8778514d568635d"
+      }
+    }
+  ]
+}

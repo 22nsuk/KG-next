@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "source": "manual",
+  "input_sha256": "9c6eefe9ac2654e8c52d7656800048033cada2a5abee28e4b51439c5fa24dce3",
+  "actual_encoding": "UTF-8",
+  "manual_reason": "sgfmill only supports square boards; hand-counted two corner stones.",
+  "games": [
+    {
+      "board_size": {
+        "width": 19,
+        "height": 13
+      },
+      "komi": 7.5,
+      "rules_raw": "Chinese",
+      "handicap": 0,
+      "node_count": 3,
+      "mainline_move_count": 2,
+      "root_branch_count": 1,
+      "comment_count": 0,
+      "unknown_property_names": [],
+      "final_board": [
+        "X..................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "...................",
+        "..................O"
+      ],
+      "captured_by": {
+        "black": 0,
+        "white": 0
+      }
+    }
+  ]
+}
