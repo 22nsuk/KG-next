@@ -1906,6 +1906,132 @@ class AnalysisEngineRequestTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void wholeGameResultsRefreshAlreadyVisitedMetadataAfterCompletionOrCancellation(boolean cancel)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      history.add(
+          moveNode(
+              stones(placement(0, 0, Stone.BLACK), placement(1, 0, Stone.WHITE)),
+              new int[] {1, 0},
+              Stone.WHITE,
+              true,
+              2));
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode first = root.next().orElseThrow();
+      BoardHistoryNode second = first.next().orElseThrow();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      CountDownLatch visitedFirst = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      AtomicInteger updates = new AtomicInteger();
+      board.beforeRefreshUpdate =
+          () -> {
+            if (updates.incrementAndGet() != 3) return;
+            visitedFirst.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the metadata pass");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+          };
+      try {
+        assertEquals(3, engine.startWholeGameRequest(List.of(root, first, second), 200, false));
+        // Responses need not arrive in move order. Refresh the child before its parent is analyzed.
+        engine.parseResult(analysisResult(2, 200, 62.0));
+        assertTrue(visitedFirst.await(5, TimeUnit.SECONDS));
+        assertFalse(root.nodeInfoMain.analyzed);
+        engine.parseResult(analysisResult(1, 200, 58.0));
+        if (cancel) engine.requestShutdown();
+        else engine.parseResult(analysisResult(3, 200, 55.0));
+
+        CountDownLatch completed = new CountDownLatch(1);
+        board.setMovelistAll(completed::countDown);
+        board.setMovelistAll();
+        release.countDown();
+        assertTrue(
+            completed.await(5, TimeUnit.SECONDS), "ordinary progress must retain completion");
+        board.awaitMovelistRefresh();
+
+        assertEquals(1, board.movelistWorkers.size());
+        assertEquals(6, updates.get(), "all in-flight requests need only one following tree pass");
+        assertTrue(root.nodeInfoMain.analyzed, "accepted parent analysis must reach the move list");
+        assertEquals(200, root.nodeInfoMain.previousPlayouts);
+        assertEquals(200, root.nodeInfoMain.playouts);
+        assertEquals(100 - first.getData().winrate, root.nodeInfoMain.winrate, 0.0001);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfoMain.coords);
+        assertEquals(!cancel, first.nodeInfoMain.analyzed);
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
+  void metadataResetDuringRefreshDoesNotRevisitADeletedEqualVisitVariation() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode main =
+          root.addAtLast(
+              moveNode(
+                  stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      BoardHistoryNode branch =
+          root.addAtLast(
+              moveNode(
+                  stones(placement(1, 0, Stone.BLACK)), new int[] {1, 0}, Stone.BLACK, false, 1));
+      for (BoardHistoryNode node : List.of(root, main, branch)) {
+        installCompleteAnalysis(node.getData(), 200, false);
+      }
+      main.getData().winrate = 60.0;
+      branch.getData().winrate = 80.0;
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      CountDownLatch mainUpdated = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      AtomicInteger updated = new AtomicInteger();
+      AtomicInteger staleCompletions = new AtomicInteger();
+      board.afterRefreshUpdate =
+          () -> {
+            if (updated.incrementAndGet() != 2) return;
+            mainUpdated.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the old tree pass");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+          };
+      try {
+        board.setMovelistAll(staleCompletions::incrementAndGet);
+        assertTrue(mainUpdated.await(5, TimeUnit.SECONDS));
+        board.setMovelistAll(staleCompletions::incrementAndGet);
+        // The old traversal already stacked this sibling before it was removed.
+        root.deleteChild(1);
+        board.clearNodeInfo(root);
+        CountDownLatch completed = new CountDownLatch(1);
+        board.setMovelistAll(completed::countDown);
+        release.countDown();
+        assertTrue(completed.await(5, TimeUnit.SECONDS));
+        board.awaitMovelistRefresh();
+
+        assertEquals(
+            0, staleCompletions.get(), "a metadata reset retires active and queued callbacks");
+        assertTrue(
+            root.nodeInfoMain.analyzed, "stale sibling visits must not suppress main-line repair");
+        assertEquals(40.0, root.nodeInfoMain.winrate, 0.0001);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfo.coords);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfoMain.coords);
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
   @Test
   void graphProgressAlwaysRefreshesTheFinalResultBetweenThrottleIntervals() throws Exception {
     Method method =
@@ -4325,25 +4451,9 @@ class AnalysisEngineRequestTest {
   private static final class RequestBoard extends Board {
     private List<Thread> movelistWorkers;
     private List<Throwable> movelistFailures;
-    private volatile CountDownLatch refreshStarted;
     private CountDownLatch awaitStarted;
     private Runnable beforeRefreshUpdate;
-
-    @Override
-    public synchronized void setMovelistAll(Runnable onComplete) {
-      if (getHistory() == null) return;
-      CountDownLatch started = new CountDownLatch(1);
-      refreshStarted = started;
-      super.setMovelistAll(onComplete);
-      // Bind the actual worker before a later generation can replace its start signal.
-      // updateMovelist records ownership before calling code that may need this monitor.
-      try {
-        assertTrue(started.await(5, TimeUnit.SECONDS), "move-list worker must start");
-      } catch (InterruptedException failure) {
-        Thread.currentThread().interrupt();
-        throw new AssertionError("interrupted waiting for move-list worker", failure);
-      }
-    }
+    private Runnable afterRefreshUpdate;
 
     @Override
     public void updateMovelist(BoardHistoryNode node) {
@@ -4352,13 +4462,10 @@ class AnalysisEngineRequestTest {
         super.updateMovelist(node);
         return;
       }
-      if (!movelistWorkers.contains(worker)) {
-        worker.setUncaughtExceptionHandler((thread, failure) -> movelistFailures.add(failure));
-        movelistWorkers.add(worker);
-        refreshStarted.countDown();
-      }
+      trackMovelistWorker(worker);
       if (beforeRefreshUpdate != null) beforeRefreshUpdate.run();
       super.updateMovelist(node);
+      if (afterRefreshUpdate != null) afterRefreshUpdate.run();
     }
 
     private void awaitMovelistRefresh() throws InterruptedException {
@@ -4366,7 +4473,12 @@ class AnalysisEngineRequestTest {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       AssertionError failure = null;
       InterruptedException interrupted = null;
-      for (int index = 0; index < movelistWorkers.size(); index++) {
+      for (int index = 0; ; index++) {
+        // Capture the queue's owner even before its first update. Requests may share a worker,
+        // and a failed worker can hand an already-accepted request to a replacement.
+        Thread current = currentMovelistWorker();
+        if (current != null) trackMovelistWorker(current);
+        if (index >= movelistWorkers.size()) break;
         Thread worker = movelistWorkers.get(index);
         while (worker.isAlive()) {
           long remaining = deadline - System.nanoTime();
@@ -4399,10 +4511,38 @@ class AnalysisEngineRequestTest {
       }
       if (failure != null) throw failure;
     }
+
+    private void trackMovelistWorker(Thread worker) {
+      synchronized (movelistWorkers) {
+        if (!movelistWorkers.contains(worker)) {
+          worker.setUncaughtExceptionHandler((thread, failure) -> movelistFailures.add(failure));
+          movelistWorkers.add(worker);
+        }
+      }
+    }
+
+    private Thread currentMovelistWorker() {
+      try {
+        Field field = Board.class.getDeclaredField("movelistRefresh");
+        field.setAccessible(true);
+        Object refresh;
+        synchronized (this) {
+          refresh = field.get(this);
+        }
+        if (refresh == null) return null;
+        synchronized (refresh) {
+          Field worker = refresh.getClass().getDeclaredField("worker");
+          worker.setAccessible(true);
+          return (Thread) worker.get(refresh);
+        }
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError("cannot inspect the owned move-list worker", failure);
+      }
+    }
   }
 
   @Test
-  void alreadyBoundMovelistWorkerCannotReleaseTheNextStartGate() throws Exception {
+  void coalescedRequestsKeepTheOwnedWorkerThroughTheFollowUpPass() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
       history.add(
@@ -4425,12 +4565,11 @@ class AnalysisEngineRequestTest {
       try {
         board.setMovelistAll();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
-        CountDownLatch nextStart = new CountDownLatch(1);
-        board.refreshStarted = nextStart;
+        board.setMovelistAll();
         release.countDown();
         board.awaitMovelistRefresh();
-        assertEquals(2, updates.get(), "both real history nodes must be refreshed");
-        assertEquals(1, nextStart.getCount(), "an old worker cannot bind a new generation");
+        assertEquals(3, updates.get(), "superseded work stops before the complete follow-up pass");
+        assertEquals(1, board.movelistWorkers.size(), "both passes belong to one worker");
       } finally {
         release.countDown();
       }
@@ -4496,7 +4635,7 @@ class AnalysisEngineRequestTest {
       history.add(
           moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
       RequestBoard board = (RequestBoard) boardWithHistory(history);
-      CountDownLatch entered = new CountDownLatch(2);
+      CountDownLatch entered = new CountDownLatch(1);
       CountDownLatch release = new CountDownLatch(1);
       board.awaitStarted = new CountDownLatch(1);
       List<Config> workerConfigs = new CopyOnWriteArrayList<>();
@@ -4507,7 +4646,7 @@ class AnalysisEngineRequestTest {
           () -> {
             entered.countDown();
             try {
-              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release both workers");
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the worker");
             } catch (InterruptedException failure) {
               Thread.currentThread().interrupt();
               throw new AssertionError(failure);
@@ -4529,9 +4668,9 @@ class AnalysisEngineRequestTest {
             }
           }) {
         board.setMovelistAll();
-        board.setMovelistAll();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
-        assertEquals(2, board.movelistWorkers.size(), "both real worker generations must be owned");
+        board.setMovelistAll();
+        assertEquals(1, board.movelistWorkers.size(), "coalesced requests share the owned worker");
         Future<?> closing =
             executor.submit(
                 () -> {
@@ -4553,7 +4692,7 @@ class AnalysisEngineRequestTest {
         assertTrue(failure.getCause() instanceof InterruptedException);
         assertTrue(interruptPreserved.get(), "cleanup must restore the closer's interrupt flag");
         assertTrue(board.movelistWorkers.stream().noneMatch(Thread::isAlive));
-        assertTrue(workerConfigs.size() >= 2, "both workers must finish against fixture globals");
+        assertEquals(3, workerConfigs.size(), "the partial and final passes must retain fixture globals");
         assertEquals(workerConfigs.size(), callbackConfigs.size());
         assertTrue(workerConfigs.stream().allMatch(config -> config == scopedConfig));
         assertTrue(callbackConfigs.stream().allMatch(config -> config == scopedConfig));
