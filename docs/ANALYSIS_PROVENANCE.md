@@ -125,6 +125,35 @@ token. Updating an already accepted result's exact root visit count with
 `setPlayouts` must not silently remove that token. Provenance equality never
 substitutes for these admission and completion checks.
 
+## JSON response admission and HumanSL readiness
+
+The JSON readers distinguish protocol envelopes before reading analysis fields:
+
+| Response | Handling |
+| --- | --- |
+| `warning` | Record the engine's diagnostic and keep waiting for analysis. Warnings for `rules` or `overrideSettings` fail the request because KataGo may have replaced the rules or ignored requested settings. |
+| `error` | Fail the matching request. A general error without an ID also fails the active analysis; the HumanSL reader stops its process through the existing cleanup path. |
+| `action` | Ignore the control acknowledgement for analysis completion. A terminate acknowledgement does not prove that the terminated search has finished. |
+| `isDuringSearch: true` | Wait for the final result; do not publish or count the interim payload in these final-response consumers. |
+| `noResults: true` | Fail the matching request without publishing an analysis payload. |
+| Final analysis | Apply the existing request ownership, current-position and payload admission checks before publishing or counting the result. |
+
+Responses for IDs not owned by the current request are ignored before reading
+their payloads. A rules/settings warning cannot be followed by an accepted late
+result carrying provenance for the original, unfulfilled request conditions.
+The policy follows KataGo's [analysis response and action contract](https://github.com/22nsuk/KataGo/blob/57677bab9dc1db7d993eccd9f26b0e5ac0ed5570/docs/Analysis_Engine.md).
+
+HumanSL readiness requires a matching final response with usable `humanPolicy`
+and the same process generation still running. Ordinary `policy` from the main
+model is insufficient. Validation uses the readiness request's board dimensions
+and a snapshot of its stones. Numeric policies must have `width * height + 1`
+finite weights, allowing `-1` for illegal moves, and a positive weight on an
+empty point or pass. Existing coordinate/weight objects, pair arrays and
+`rootInfo.humanPolicy` remain supported; they must supply a finite positive
+weight on a valid empty point or pass. Failed readiness retains the diagnostic
+and uses the existing process shutdown path without stopping a replacement
+generation.
+
 ## SGF format and compatibility
 
 Root analysis uses `LZOP`/`LZOP2`; other nodes use `LZ`/`LZ2`. The six legacy
