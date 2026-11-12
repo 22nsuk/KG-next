@@ -560,3 +560,48 @@ candidate details beyond the capacity cap across all four analysis tags, both
 valid/invalidated states, two save/reopen modes with canonical KGP digest and
 provenance checks, plus non-KataGo empty/missing-PV spacing. Existing score-format,
 empty-list, ownership-only and KGP version 1/2 coverage remains in use.
+
+
+## Save capture allocation measurement (2026-11-12)
+
+The save-only `BoardData` copy now omits the display move-number grid, position
+hash and out-of-range display candidates. It reuses ownership only when stored
+in the internal immutable `CompactDoubleList`; other ownership lists and all
+serialized mutable candidates remain detached. See [save ownership](SGF_SAVE_COORDINATOR.md)
+for the scope and alternatives.
+
+Baseline: merged PR #160, `ac10ec9e9280c84a57a65536d4897d14a5d9bba0`.
+Measurements use Ubuntu/WSL2, OpenJDK 21.0.13, `-Xmx2g`, the existing four
+`SgfPerformanceProbe` fixture generators and `RulesLayerTestHarness`. These are
+headless rules-layer measurements on the actual Swing EDT, not native desktop
+interaction or total-save latency. The harness substitutes GUI/engine callbacks;
+production capture, tree copying and SGF serialization run unchanged.
+
+Each independent JVM performs 10 warmups and retains 20 captures per fixture,
+in baseline/candidate/candidate/baseline order (40 retained samples per revision
+and fixture). The baseline `BoardData` and its nested classes are compiled from
+the exact baseline source and placed ahead of the candidate classes; all other
+production classes are identical. The interval covers `captureSaveSnapshot`
+only, with exact thread allocation and CPU counters. Serialization runs after
+that interval to release each captured tree; parsing, formatting and file I/O
+are excluded. No sample is discarded for scheduling or GC.
+
+| Fixture | Allocated bytes, median before → after | Elapsed ms, median before → after | Elapsed ms, min–max before → after |
+| --- | ---: | ---: | ---: |
+| Wide variations, 21,845 nodes | 96,115,216 → 63,609,856 | 28.178 → 19.154 | 20.980–81.716 → 17.706–47.518 |
+| Dense analysis/ownership, 301 nodes | 4,123,736 → 2,782,480 | 1.285 → 0.978 | 0.969–4.457 → 0.662–2.410 |
+| Long multilingual comments, 201 nodes | 902,496 → 603,408 | 0.343 → 0.262 | 0.230–0.636 → 0.204–0.412 |
+| Long PV/visit lists, 151 nodes | 4,582,152 → 3,909,296 | 1.149 → 0.988 | 0.882–2.263 → 0.835–2.667 |
+
+This is roughly 15–34% less allocation in these capture workloads. The wide-tree
+capture still scans every node and copies every stone array; no constant-time
+capture, peak-heap reduction, frame-latency bound or total-save speedup is claimed.
+
+For each fixture, all eight combinations of raw/comment/current-branch flags
+were exported from freshly parsed input. All 32 UTF-8 lengths and SHA-256 hashes
+match across baseline and candidate JVMs, and all outputs reparse successfully.
+`SGFDeferredSaveTest` additionally changes live stones, coordinates, candidates,
+metadata and mutable ownership after capture; its compact-ownership case replaces
+both live slots before the worker serializes. `BoardDataSaveCopyTest` covers
+mutable backing storage behind an unmodifiable view, null/signed-zero ownership,
+and preservation of ordinary playable-clone arrays.

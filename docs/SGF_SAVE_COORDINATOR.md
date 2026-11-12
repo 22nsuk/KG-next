@@ -268,6 +268,23 @@ No throughput improvement is claimed. File-save serialization and disk I/O run
 on the worker; tree capture remains on its requesting owner. The detached save
 input carries the board, rules and formatting values needed after capture.
 
+Save-only `BoardData` copies omit the move-number display grid, ko-detection
+hash and out-of-range display candidates. They are private serialization inputs,
+not playable positions; ordinary `clone`, `sync` and analysis-adoption copies
+retain their existing semantics. Stones remain detached at every node because
+root setup and mid-tree setup deltas read both the node and its parent.
+Ownership already stored in the internal immutable `CompactDoubleList` can be
+shared with a save; all other lists (including unmodifiable views over mutable
+storage) are copied. Candidate objects, PV/visit lists, properties and topology
+remain detached. The history/BoardData lock order and terminal-owner capture are
+unchanged.
+
+This reduces per-node copying without a live-state cache. Incremental reuse would
+need reliable revisions for all public mutable node fields and renderer edits;
+moving capture to the worker would instead change which edits a save contains.
+Neither is needed for this optimization. Capture still walks the selected tree
+on its owner and remains linear in its retained topology and mutable payloads.
+
 The subsequent [SGF measurement and interactive read path](SGF_PERFORMANCE.md)
 records these phases separately. Chooser, single-file drop and recent-file SGF
 reads/decode run on a bounded worker. Parsing and synchronous string exports retain

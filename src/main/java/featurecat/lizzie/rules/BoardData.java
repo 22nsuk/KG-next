@@ -1209,27 +1209,31 @@ public class BoardData {
 
   /** Shares the short payload-commit lock so a save cannot mix visits and candidates from updates. */
   public synchronized BoardData clone() {
+    return copy(false);
+  }
+
+  private BoardData copy(boolean forSave) {
     // The constructor already detaches the mutable core arrays. Do not pre-copy them or
     // overwrite them through copyCoreStateFrom: a large save visits every node in the tree.
     BoardData data = new BoardData(
-        nodeKind, stones, lastMove, lastMoveColor, blackToPlay, zobrist, moveNumber,
-        moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
+        nodeKind, stones, lastMove, lastMoveColor, blackToPlay, forSave ? null : zobrist, moveNumber,
+        forSave ? null : moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
     data.moveMNNumber = moveMNNumber;
     data.dummy = dummy;
     data.verify = verify;
-    data.copyAnalysisStateFrom(this, true);
+    data.copyAnalysisStateFrom(this, true, forSave);
     data.properties = copyProperties(this.properties);
     return data;
   }
 
-  /** Save workers must not share candidates which renderers can still reorder or edit. */
+  /**
+   * Private serialization input, never a playable position: omit the display move-number grid and
+   * position hash. Keep stones for root/setup deltas and detach candidates still edited by renderers.
+   */
   synchronized BoardData copyForSave() {
-    BoardData copy = clone();
+    BoardData copy = copy(true);
     detachSaveMoves(copy.bestMoves);
     detachSaveMoves(copy.bestMoves2);
-    // Only the two serialized candidate lists belong to a save; display-only lists are unused.
-    copy.bestMovesOutOfRange = List.of();
-    copy.bestMoves2OutOfRange = List.of();
     return copy;
   }
 
@@ -1465,6 +1469,10 @@ public class BoardData {
   }
 
   private void copyAnalysisStateFrom(BoardData data, boolean includeComment) {
+    copyAnalysisStateFrom(data, includeComment, false);
+  }
+
+  private void copyAnalysisStateFrom(BoardData data, boolean includeComment, boolean forSave) {
     this.primaryAnalysisBlackToPlay = data.analysisBlackToPlay(false);
     this.secondaryAnalysisBlackToPlay = data.analysisBlackToPlay(true);
     this.winrate = data.winrate;
@@ -1492,9 +1500,9 @@ public class BoardData {
     this.scoreStdev = data.scoreStdev;
     this.scoreStdev2 = data.scoreStdev2;
     this.bestMoves = copyMoveDataList(data.bestMoves);
-    this.bestMovesOutOfRange = copyMoveDataList(data.bestMovesOutOfRange);
+    this.bestMovesOutOfRange = forSave ? List.of() : copyMoveDataList(data.bestMovesOutOfRange);
     this.bestMoves2 = copyMoveDataList(data.bestMoves2);
-    this.bestMoves2OutOfRange = copyMoveDataList(data.bestMoves2OutOfRange);
+    this.bestMoves2OutOfRange = forSave ? List.of() : copyMoveDataList(data.bestMoves2OutOfRange);
     this.isChanged = data.isChanged;
     this.isChanged2 = data.isChanged2;
     if (includeComment) {
@@ -1516,8 +1524,8 @@ public class BoardData {
     this.pda = data.pda;
     this.pda2 = data.pda2;
     this.komi = data.komi;
-    this.estimateArray = copyDoubleList(data.estimateArray);
-    this.estimateArray2 = copyDoubleList(data.estimateArray2);
+    this.estimateArray = copyOwnership(data.estimateArray, forSave);
+    this.estimateArray2 = copyOwnership(data.estimateArray2, forSave);
     this.playoutsChanged = data.playoutsChanged;
     this.lastMoveMatchCandidteNo = data.lastMoveMatchCandidteNo;
   }
@@ -1542,8 +1550,10 @@ public class BoardData {
     return CompactDoubleList.copyOf(values, size);
   }
 
-  private static List<Double> copyDoubleList(List<Double> values) {
-    return compactEstimateArray(values);
+  private static List<Double> copyOwnership(List<Double> values, boolean forSave) {
+    // CompactDoubleList owns its private primitive array and exposes no mutation. Reuse only this
+    // known immutable representation; imported/test/plugin lists may still be mutable.
+    return forSave && values instanceof CompactDoubleList ? values : compactEstimateArray(values);
   }
 
   private static List<MoveData> copyMoveDataList(List<MoveData> moves) {
