@@ -90,10 +90,15 @@ public final class SgfDocument {
         if (!name.isEmpty()) tag = normalizePropertyName(name.toString());
         name.setLength(0);
         start = i + 1;
-      } else if (c == '(') events.add(OPEN);
-      else if (c == ')') events.add(CLOSE);
-      else if (c == ';') events.add(NODE);
-      else if (c != '\n' && c != '\r' && c != '\t' && c != ' ') name.append(c);
+      } else if (c == ']') {
+        // Tolerate stray closing brackets without making them part of the next property name.
+        name.setLength(0);
+      } else if (c == '(' || c == ')' || c == ';') {
+        name.setLength(0);
+        if (c == '(') events.add(OPEN);
+        else if (c == ')') events.add(CLOSE);
+        else events.add(NODE);
+      } else if (c != '\n' && c != '\r' && c != '\t' && c != ' ') name.append(c);
     }
     return new SgfDocument(events, size[0], size[1], hasMultiGoBranchSuffix(value));
   }

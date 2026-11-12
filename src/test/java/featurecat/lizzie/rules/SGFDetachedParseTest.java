@@ -11,10 +11,89 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class SGFDetachedParseTest {
   private static final SGFParser.ParseOptions OPTIONS =
       new SGFParser.ParseOptions(true, false, false, true, 3, 2, 7.5);
+
+  @ParameterizedTest
+  @ValueSource(strings = {"C[note]]", "C[note]]]", "]C[note]"})
+  void strayClosingBracketsRetainMovesThroughDetachedLiveAndSavePaths(String comment)
+      throws Exception {
+    String sgf = "(;SZ[19];B[aa]" + comment + ";W[bb])";
+    try (var harness = RulesLayerTestHarness.open(19)) {
+      assertTwoMovesAndComment(SGFParser.parseSgf(sgf, true, OPTIONS));
+      assertTrue(SGFParser.loadFromString(sgf, false));
+      assertTwoMovesAndComment(Lizzie.board.getHistory());
+      String saved = SGFParser.saveToString(false);
+      assertTwoMovesAndComment(SGFParser.parseSgf(saved, true, OPTIONS));
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      assertTwoMovesAndComment(Lizzie.board.getHistory());
+    }
+  }
+
+  @Test
+  void strayClosingBracketBranchImportStillSavesAndReopensBothMoves() throws Exception {
+    try (var harness = RulesLayerTestHarness.open(19)) {
+      var history = SGFParser.parseSgf("(;SZ[19])", true, OPTIONS);
+      SGFParser.parseBranch(history, ";B[aa]C[note]];W[bb]");
+      assertTwoMovesAndComment(history);
+      Lizzie.board.setHistory(history);
+      String saved = SGFParser.saveToString(false);
+      assertTwoMovesAndComment(SGFParser.parseSgf(saved, true, OPTIONS));
+      assertTrue(SGFParser.loadFromString(saved, false));
+      assertTwoMovesAndComment(Lizzie.board.getHistory());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {";", "(", ")"})
+  void incompletePropertyNamesStopAtStructuralBoundaries(String boundary) {
+    var document = SgfDocument.parse("(;C[first]INCOMPLETE" + boundary + "C[second])");
+    assertNotNull(document);
+    assertEquals(
+        List.of(
+            new SgfDocument.Event('P', "C", "first"),
+            new SgfDocument.Event('P', "C", "second")),
+        document.events().stream().filter(event -> event.kind() == 'P').toList());
+  }
+
+  @Test
+  void validEscapedRepeatedAndNumberedPropertiesKeepTheirSyntaxAndBranches() throws Exception {
+    String sgf = "(;SZ[19]LZOP2[Sub 41.0 150 2.1 0.5 0.8]KGP[opaque\\]data]"
+        + ";B[aa]C[note\\]]LB[aa:A][bb:B]LZ2[Sub 41.0 150 2.1 0.5 0.8]"
+        + "(;W[bb])(;W[cc]))";
+    var document = SgfDocument.parse(sgf);
+    assertNotNull(document);
+    assertEquals(
+        List.of("SZ", "LZOP2", "KGP", "B", "C", "LB", "LB", "LZ2", "W", "W"),
+        document.events().stream().filter(event -> event.kind() == 'P')
+            .map(SgfDocument.Event::name).toList());
+    assertEquals("opaque\\]data", document.events().get(4).rawValue());
+    try (var harness = RulesLayerTestHarness.open(19)) {
+      // Analysis payload semantics have separate coverage; these are the valid syntax controls.
+      var history = SGFParser.parseSgf(sgf, true, OPTIONS);
+      var move = history.getStart().next().orElseThrow();
+      assertEquals("note]", move.getData().comment);
+      assertEquals(List.of("aa:A", "bb:B"), move.getData().getProperties().get("LB"));
+      assertEquals(2, move.numberOfChildren());
+      assertArrayEquals(new int[] {1, 1}, move.getVariation(0).orElseThrow().getData().lastMove.orElseThrow());
+      assertArrayEquals(new int[] {2, 2}, move.getVariation(1).orElseThrow().getData().lastMove.orElseThrow());
+    }
+  }
+
+  private static void assertTwoMovesAndComment(BoardHistoryList history) {
+    assertNotNull(history);
+    var black = history.getStart().next().orElseThrow();
+    assertArrayEquals(new int[] {0, 0}, black.getData().lastMove.orElseThrow());
+    assertEquals("note", black.getData().comment);
+    var white = black.next().orElseThrow();
+    assertArrayEquals(new int[] {1, 1}, white.getData().lastMove.orElseThrow());
+    assertEquals(Stone.WHITE, white.getData().stones[20]);
+    assertTrue(white.next().isEmpty());
+  }
 
   @Test
   void syntaxCanBeReusedWithCapturedPolicies() throws Exception {
