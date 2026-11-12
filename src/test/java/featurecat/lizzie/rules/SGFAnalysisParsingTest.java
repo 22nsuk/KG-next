@@ -168,6 +168,28 @@ class SGFAnalysisParsingTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
+  void candidateKeysKeepExactBoundariesAndLastValueWins(String tag) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      MoveData move = moves(parse(tag,
+          "unknown visits xmove D4 move C3 xvisits 999 visits 100 order +7 edgeVisits 12"
+              + " winrate 5500 prior 125 scoreMean -0.0 scoreStdev NaN visits 200"
+              + " scoreMeanExtra 9 VISITS 888 pv C3 D4 pvVisits 200 150"), tag).get(0);
+      assertEquals("C3", move.coordinate);
+      assertEquals(200, move.playouts);
+      assertEquals(7, move.order);
+      assertEquals(12, move.edgeVisits);
+      assertEquals(55.0, move.winrate);
+      assertEquals(55.0, move.lcb);
+      assertEquals(1.25, move.policy);
+      assertEquals(Double.doubleToRawLongBits(-0.0), Double.doubleToRawLongBits(move.scoreMean));
+      assertEquals(List.of("C3", "D4"), move.variation);
+      assertEquals(List.of("200", "150"), move.pvVisits);
+      assertEquals(List.of("C3"), moves(parse(tag, "move C3 visits 100 visits"), tag).get(0).variation);
+    }
+  }
+
   private static BoardData parse(String tag, String detail) {
     BoardHistoryList history = SGFParser.parseSgf(
         "(;SZ[5]" + tag + "[KataGo 45 100 2.5 1.2 0\n" + detail + "])", true);

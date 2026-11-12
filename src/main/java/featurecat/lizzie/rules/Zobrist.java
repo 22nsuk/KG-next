@@ -1,84 +1,101 @@
 package featurecat.lizzie.rules;
 
+import java.util.Objects;
 import java.util.Random;
 
-/** Used to maintain zobrist hashes for ko detection */
+/** A position hash and its immutable coordinate table, shared by descendants of that position. */
 public class Zobrist {
-  private static long[] blackZobrist;
-  private static long[] whiteZobrist;
+  // Independent histories can be spliced by online sync. Their same-size hashes must agree,
+  // including after init(), without retaining a global cache of every board size ever parsed.
+  private static final long TABLE_SEED = new Random().nextLong();
+  private static volatile TableSnapshot currentTables = createTables(Board.boardWidth, Board.boardHeight);
 
-  /** Opaque identity-preserving snapshot of the coordinate hash tables. */
+  /** Opaque identity-preserving snapshot used by live-board rollback. */
   static final class TableSnapshot {
+    private final int width;
+    private final int height;
     private final long[] black;
     private final long[] white;
 
-    private TableSnapshot(long[] black, long[] white) {
+    private TableSnapshot(int width, int height, long[] black, long[] white) {
+      this.width = width;
+      this.height = height;
       this.black = black;
       this.white = white;
     }
   }
 
-  // initialize zobrist hashing
-  static {
-    init();
-  }
-
-  // hash to be used to compare two board states
+  private final TableSnapshot tables;
   private long zhash;
 
   public Zobrist() {
-    zhash = 0;
+    this(0, currentTables);
   }
 
   public Zobrist(long zhash) {
-    this.zhash = zhash;
+    this(zhash, currentTables);
   }
 
-  /**
-   * @return a copy of this zobrist
-   */
+  Zobrist(int width, int height) {
+    this(0, tablesFor(width, height));
+  }
+
+  private Zobrist(long zhash, TableSnapshot tables) {
+    this.zhash = zhash;
+    this.tables = tables;
+  }
+
+  private static TableSnapshot tablesFor(int width, int height) {
+    TableSnapshot current = currentTables;
+    return current.width == width && current.height == height
+        ? current : createTables(width, height);
+  }
+
+  private static TableSnapshot createTables(int width, int height) {
+    Random random = new Random(TABLE_SEED ^ ((long) width * 0x9e3779b97f4a7c15L) ^ height);
+    long[] black = new long[Math.multiplyExact(width, height)];
+    long[] white = new long[black.length];
+    for (int i = 0; i < black.length; i++) {
+      black[i] = random.nextLong();
+      white[i] = random.nextLong();
+    }
+    return new TableSnapshot(width, height, black, white);
+  }
+
   public Zobrist clone() {
-    return new Zobrist(zhash);
+    return new Zobrist(zhash, tables);
   }
 
   public static synchronized void init() {
-
-    Random random = new Random();
-    blackZobrist = new long[Board.boardWidth * Board.boardHeight];
-    whiteZobrist = new long[Board.boardWidth * Board.boardHeight];
-
-    for (int i = 0; i < blackZobrist.length; i++) {
-      blackZobrist[i] = random.nextLong();
-      whiteZobrist[i] = random.nextLong();
-    }
+    currentTables = createTables(Board.boardWidth, Board.boardHeight);
   }
 
-  static synchronized TableSnapshot captureTables() {
-    return new TableSnapshot(blackZobrist, whiteZobrist);
+  static TableSnapshot captureTables() {
+    return currentTables;
   }
 
   static synchronized void restoreTables(TableSnapshot snapshot) {
-    if (snapshot == null || snapshot.black == null || snapshot.white == null) {
-      throw new IllegalArgumentException("Missing Zobrist table snapshot.");
-    }
-    blackZobrist = snapshot.black;
-    whiteZobrist = snapshot.white;
+    currentTables = Objects.requireNonNull(snapshot, "Missing Zobrist table snapshot.");
   }
 
-  /**
-   * Call this method to alter the current zobrist hash for this stone
-   *
-   * @param x x coordinate -- must be valid
-   * @param y y coordinate -- must be valid
-   * @param color color of the stone to alter (for adding or removing a stone color)
-   */
+  int width() { return tables.width; }
+
+  int height() { return tables.height; }
+
+  int index(int x, int y) { return x * tables.height + y; }
+
+  boolean isValid(int x, int y) {
+    return x >= 0 && x < tables.width && y >= 0 && y < tables.height;
+  }
+
+  /** Add or remove a stone using this position's table, even after another board is opened. */
   public void toggleStone(int x, int y, Stone color) {
     switch (color) {
       case BLACK:
-        zhash ^= blackZobrist[Board.getIndex(x, y)];
+        zhash ^= tables.black[index(x, y)];
         break;
       case WHITE:
-        zhash ^= whiteZobrist[Board.getIndex(x, y)];
+        zhash ^= tables.white[index(x, y)];
         break;
       default:
     }
@@ -90,12 +107,8 @@ public class Zobrist {
   }
 
   @Override
-  public int hashCode() {
-    return (int) zhash;
-  }
+  public int hashCode() { return (int) zhash; }
 
   @Override
-  public String toString() {
-    return "" + zhash;
-  }
+  public String toString() { return "" + zhash; }
 }

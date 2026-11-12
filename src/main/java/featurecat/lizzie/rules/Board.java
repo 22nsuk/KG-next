@@ -3446,9 +3446,9 @@ public class Board {
    * @return number of removed stones
    */
   public static int removeDeadChain(int x, int y, Stone color, Stone[] stones, Zobrist zobrist) {
-    if (!isValid(x, y) || stones[getIndex(x, y)] != color) return 0;
+    if (!zobrist.isValid(x, y) || stones[zobrist.index(x, y)] != color) return 0;
 
-    boolean hasLiberties = hasLibertiesHelper(x, y, color, stones);
+    boolean hasLiberties = hasLibertiesHelper(x, y, color, stones, zobrist);
 
     // either remove stones or reset what hasLibertiesHelper does to the board
     return cleanupHasLibertiesHelper(x, y, color.recursed(), stones, zobrist, !hasLiberties);
@@ -3464,24 +3464,24 @@ public class Board {
    * @param stones the stones array to modify
    * @return whether or not this chain has liberties
    */
-  private static boolean hasLibertiesHelper(int x, int y, Stone color, Stone[] stones) {
-    if (!isValid(x, y)) return false;
+  private static boolean hasLibertiesHelper(int x, int y, Stone color, Stone[] stones, Zobrist zobrist) {
+    if (!zobrist.isValid(x, y)) return false;
 
-    if (stones[getIndex(x, y)] == Stone.EMPTY) return true; // a liberty was found
-    else if (stones[getIndex(x, y)] != color)
+    if (stones[zobrist.index(x, y)] == Stone.EMPTY) return true; // a liberty was found
+    else if (stones[zobrist.index(x, y)] != color)
       return false; // we are either neighboring an enemy stone, or one we've already recursed on
 
     // set this index to be the recursed color to keep track of where we've already
     // searched
-    stones[getIndex(x, y)] = color.recursed();
+    stones[zobrist.index(x, y)] = color.recursed();
 
     // set removeDeadChain to true if any recursive calls return true. Recurse in
     // all 4 directions
     boolean hasLiberties =
-        hasLibertiesHelper(x + 1, y, color, stones)
-            || hasLibertiesHelper(x, y + 1, color, stones)
-            || hasLibertiesHelper(x - 1, y, color, stones)
-            || hasLibertiesHelper(x, y - 1, color, stones);
+        hasLibertiesHelper(x + 1, y, color, stones, zobrist)
+            || hasLibertiesHelper(x, y + 1, color, stones, zobrist)
+            || hasLibertiesHelper(x - 1, y, color, stones, zobrist)
+            || hasLibertiesHelper(x, y - 1, color, stones, zobrist);
 
     return hasLiberties;
   }
@@ -3501,9 +3501,9 @@ public class Board {
   private static int cleanupHasLibertiesHelper(
       int x, int y, Stone color, Stone[] stones, Zobrist zobrist, boolean removeStones) {
     int removed = 0;
-    if (!isValid(x, y) || stones[getIndex(x, y)] != color) return 0;
+    if (!zobrist.isValid(x, y) || stones[zobrist.index(x, y)] != color) return 0;
 
-    stones[getIndex(x, y)] = removeStones ? Stone.EMPTY : color.unrecursed();
+    stones[zobrist.index(x, y)] = removeStones ? Stone.EMPTY : color.unrecursed();
     if (removeStones) {
       zobrist.toggleStone(x, y, color.unrecursed());
       removed = 1;

@@ -18,9 +18,12 @@ the separately timed atomic write. Synchronous text exports still return their
 result directly; they are not the file-save path. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 
-Parsing and board application still use the original EDT/global
-board context. In particular, `parseSgf` temporarily changes board dimensions
-and Zobrist tables: a detached return value does not make it thread safe.
+Interactive parsing and board application still use the original EDT/global
+board context. Detached `parseSgf` now builds immutable syntax and a private
+history from captured import options and history-owned geometry; it no longer
+temporarily replaces the live board dimensions or Zobrist tables. This boundary
+does not move interactive publication, configuration capture or engine work to
+a different thread.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
 for batch, saved-list and startup callers. GIB loading is also still synchronous.
 `openFileAsync` completes after parsing/application; its result does not promise
@@ -605,3 +608,63 @@ metadata and mutable ownership after capture; its compact-ownership case replace
 both live slots before the worker serializes. `BoardDataSaveCopyTest` covers
 mutable backing storage behind an unmodifiable view, null/signed-zero ownership,
 and preservation of ordinary playable-clone arrays.
+
+## Detached Java parsing follow-up (2026-11-12)
+
+Baseline: `ca1ab5f19b1c2eb57fbdc9aed93c2d98bfde01f8`, the Java implementation
+in this PR before these optimizations, including the stray-bracket regression
+fix. This comparison is not against an earlier main branch or a different
+language. The changes retain the same public syntax events and import policy:
+
+- History moves let the existing factory detach parent buffers once, then edit
+  the unpublished candidate. Rejected moves discard that candidate. Public
+  factories still defensively copy; pass/setup and save-copy contracts remain.
+- Syntax and normalization scans skip complete escaped values by locating an
+  unescaped closing bracket. Legacy decoding appends unchanged spans in bulk;
+  raw values, numbered analysis tags and opaque properties retain their meaning.
+- Candidate keys are compared in their original token ranges. Numeric parsing,
+  candidate/PV limits and stored payload hashes are unchanged.
+
+The existing four deterministic fixture files are parsed without a UI/engine.
+The timed interval includes normalization, immutable syntax allocation and the
+same detached history builder. File reading, fixture generation, hash checks,
+save/reopen validation and JFR profiling are outside the timing interval.
+Each path runs in four independent JVMs, alternating baseline/candidate order,
+with 12 excluded warmups and 12 retained samples per fixture/JVM (48 per path).
+Heap options are `-Xms256m -Xmx1536m`. No measured sample is removed.
+Windows uses Temurin 21.0.13+9; Ubuntu/WSL uses OpenJDK 21.0.13.0.3.
+Both execute the same Java 17-targeted class files and dependencies.
+
+Total milliseconds, median (p95):
+
+| Fixture | Windows before | Windows after | Linux before | Linux after |
+| --- | ---: | ---: | ---: | ---: |
+| Wide variations, 21,845 nodes | 37.113 (48.233) | 29.528 (37.343) | 38.658 (64.097) | 32.278 (51.555) |
+| Dense analysis/ownership | 21.208 (26.745) | 17.900 (21.439) | 22.039 (35.548) | 18.118 (32.803) |
+| Long multilingual comments | 21.494 (22.815) | 6.068 (7.069) | 21.138 (24.758) | 6.513 (11.342) |
+| Dense analysis/long PV | 51.726 (70.098) | 38.164 (58.617) | 45.341 (58.430) | 38.937 (44.918) |
+
+Windows median allocated bytes per complete syntax/history call are
+177,996,856 → 113,600,744; 32,852,224 → 29,538,816;
+22,422,640 → 22,422,640; and 57,472,152 → 55,805,144 respectively.
+Linux shows the same direction (wide baseline 178,258,984 bytes).
+Thread allocation is transient allocation, not retained heap or peak RSS.
+The comment improvement reduces scanning/decoding time without reducing the
+required final strings. These results do not establish actual window latency,
+disk throughput, engine performance or a bound for arbitrary SGFs.
+
+A separate Windows comparison holds the syntax/buffer changes constant and
+toggles only candidate-key dispatch: dense analysis median 19.164 → 17.573 ms,
+allocation 32,636,512 → 29,538,816 bytes; long PV 39.440 → 35.399 ms,
+57,469,752 → 55,809,944 bytes. Inputs without analysis do not exercise this path;
+their timing variation is not attributed to token dispatch.
+
+All four fixture/history hashes agree across every timed JVM on both platforms.
+A seeded 35,632-input differential compares normalization, raw/decoded event
+values, dimensions and exceptions against the baseline. An additional 45-input
+corpus compares document/history, exact saved output and reopened history,
+including both analysis slots, provenance/invalidation and malformed inputs.
+The targeted suite passes 539 tests and broader move/rule/edit checks pass 157,
+without skips. The 64 syntax/token/ownership compatibility cases also pass with
+baseline production classes. Raw samples, source/class hashes, differential
+outputs and the isolated probe sources are retained with the measurement record.

@@ -3,6 +3,7 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -285,13 +286,13 @@ public class BoardHistoryList {
       BoardData data = this.getData();
       if (data.isMoveNode()) {
         int[] moveNumberList = this.getMoveNumberList();
-        moveNumberList[Board.getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
+        moveNumberList[getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
         Optional<BoardHistoryNode> node = this.getCurrentHistoryNode().previous();
         while (node.isPresent() && node.get().numberOfChildren() <= 1) {
           BoardData nodeData = node.get().getData();
           if (nodeData.isMoveNode() && nodeData.moveNumber >= moveNumber) {
             moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-            moveNumberList[Board.getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
+            moveNumberList[getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
                 moveNumber;
           }
           node = node.get().previous();
@@ -460,8 +461,8 @@ public class BoardHistoryList {
   }
 
   public void setStone(int[] coordinates, Stone stone) {
-    if (!Board.isValid(coordinates[0], coordinates[1])) return;
-    int index = Board.getIndex(coordinates[0], coordinates[1]);
+    if (!isValid(coordinates[0], coordinates[1])) return;
+    int index = getIndex(coordinates[0], coordinates[1]);
     head.getData().stones[index] = stone;
     head.getData().zobrist.toggleStone(coordinates[0], coordinates[1], stone);
   }
@@ -485,6 +486,10 @@ public class BoardHistoryList {
   public boolean isBlacksTurn() {
     return head.getData().blackToPlay;
   }
+
+  int getIndex(int x, int y) { return getData().zobrist.index(x, y); }
+
+  boolean isValid(int x, int y) { return getData().zobrist.isValid(x, y); }
 
   public Zobrist getZobrist() {
     return head.getData().zobrist.clone();
@@ -726,7 +731,7 @@ public class BoardHistoryList {
 
       int[] moveNumberList =
           newBranch && curNode.next(true).map(s -> s.getData()).isPresent()
-              ? new int[Board.boardWidth * Board.boardHeight]
+              ? new int[getData().stones.length]
               : curNode.getData().moveNumberList;
       // build the new game state
       BoardData newState =
@@ -821,8 +826,8 @@ public class BoardHistoryList {
     synchronized (this) {
       BoardHistoryNode curNode = this.head;
       if (addLast) curNode = head.getLast();
-      if (!Board.isValid(x, y)
-          || (curNode.getData().stones[Board.getIndex(x, y)] != Stone.EMPTY && !newBranch)) return;
+      if (!isValid(x, y)
+          || (curNode.getData().stones[getIndex(x, y)] != Stone.EMPTY && !newBranch)) return;
       // Lizzie.board.modifyStart();
       double nextWinrate = -100;
       if (curNode.getData().winrate >= 0) nextWinrate = 100 - curNode.getData().winrate;
@@ -844,21 +849,36 @@ public class BoardHistoryList {
           return;
         }
       }
-      // load a copy of the data at the current node of history
-      Stone[] stones = curNode.getData().stones.clone();
-      Zobrist zobrist = curNode.getData().zobrist.clone();
-      Optional<int[]> lastMove = Optional.of(new int[] {x, y});
-      int moveNumber = curNode.getData().moveNumber + 1;
-      int moveMNNumber = curNode.getData().nextMoveMNNumber(newBranch);
-      int[] moveNumberList =
-          newBranch && curNode.next(true).map(s -> s.getData()).isPresent()
-              ? new int[Board.boardWidth * Board.boardHeight]
-              : curNode.getData().moveNumberList.clone();
+      BoardData parent = curNode.getData();
+      int moveNumber = parent.moveNumber + 1;
+      int moveMNNumber = parent.nextMoveMNNumber(newBranch);
+      // The factory detaches the parent buffers once. Mutate only this unpublished candidate;
+      // rejected moves discard it without touching the parent or any existing variation.
+      BoardData newState =
+          BoardData.move(
+              parent.stones,
+              new int[] {x, y},
+              color,
+              color.equals(Stone.WHITE),
+              parent.zobrist,
+              moveNumber,
+              parent.moveNumberList,
+              parent.blackCaptures,
+              parent.whiteCaptures,
+              nextWinrate,
+              0);
+      newState.moveMNNumber = moveMNNumber;
+      Stone[] stones = newState.stones;
+      Zobrist zobrist = newState.zobrist;
+      int[] moveNumberList = newState.moveNumberList;
+      if (newBranch && curNode.next(true).isPresent()) {
+        Arrays.fill(moveNumberList, 0);
+      }
 
-      moveNumberList[Board.getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
+      moveNumberList[getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
 
       // set the stone at (x, y) to color
-      stones[Board.getIndex(x, y)] = color;
+      stones[getIndex(x, y)] = color;
       zobrist.toggleStone(x, y, color);
 
       // remove enemy stones
@@ -873,30 +893,14 @@ public class BoardHistoryList {
         // check to see if the player made a suicidal coordinate
         isSuicidal = Board.removeDeadChain(x, y, color, stones, zobrist);
       }
-      for (int i = 0; i < Board.boardWidth * Board.boardHeight; i++) {
+      for (int i = 0; i < getData().stones.length; i++) {
         if (stones[i].equals(Stone.EMPTY)) {
           moveNumberList[i] = 0;
         }
       }
 
-      int bc = curNode.getData().blackCaptures;
-      int wc = curNode.getData().whiteCaptures;
-      if (color.isBlack()) bc += capturedStones;
-      else wc += capturedStones;
-      BoardData newState =
-          BoardData.move(
-              stones,
-              lastMove.get(),
-              color,
-              color.equals(Stone.WHITE),
-              zobrist,
-              moveNumber,
-              moveNumberList,
-              bc,
-              wc,
-              nextWinrate,
-              0);
-      newState.moveMNNumber = moveMNNumber;
+      if (color.isBlack()) newState.blackCaptures += capturedStones;
+      else newState.whiteCaptures += capturedStones;
 
       // don't make this coordinate if it is suicidal or violates superko
       if (violatesKoRule(curNode, newState)) {
@@ -941,13 +945,13 @@ public class BoardHistoryList {
 
   public void addExtraStone(int x, int y, Stone color) {
     synchronized (this) {
-      if (!Board.isValid(x, y) || this.getStones()[Board.getIndex(x, y)] != Stone.EMPTY) return;
+      if (!isValid(x, y) || this.getStones()[getIndex(x, y)] != Stone.EMPTY) return;
 
       Stone[] stones = this.getData().stones;
       Zobrist zobrist = this.getData().zobrist;
 
       // set the stone at (x, y) to color
-      stones[Board.getIndex(x, y)] = color;
+      stones[getIndex(x, y)] = color;
       zobrist.toggleStone(x, y, color);
       head.addExtraStones(x, y, color.isBlack());
     }
@@ -955,17 +959,17 @@ public class BoardHistoryList {
 
   public void removeStone(int x, int y, Stone color) {
     synchronized (this) {
-      if (!Board.isValid(x, y) || this.getStones()[Board.getIndex(x, y)] == Stone.EMPTY) return;
+      if (!isValid(x, y) || this.getStones()[getIndex(x, y)] == Stone.EMPTY) return;
 
       BoardData data = this.getData();
       Stone[] stones = data.stones;
       Zobrist zobrist = data.zobrist;
 
       // set the stone at (x, y) to empty
-      Stone oriColor = stones[Board.getIndex(x, y)];
-      stones[Board.getIndex(x, y)] = Stone.EMPTY;
+      Stone oriColor = stones[getIndex(x, y)];
+      stones[getIndex(x, y)] = Stone.EMPTY;
       zobrist.toggleStone(x, y, oriColor);
-      data.moveNumberList[Board.getIndex(x, y)] = 0;
+      data.moveNumberList[getIndex(x, y)] = 0;
       head.setRemovedStone();
 
       Lizzie.frame.refresh();
@@ -987,7 +991,7 @@ public class BoardHistoryList {
                 blackToPlay,
                 zobrist,
                 0,
-                new int[Board.boardWidth * Board.boardHeight],
+                new int[getData().stones.length],
                 0,
                 0,
                 0.0,
