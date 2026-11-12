@@ -4864,9 +4864,15 @@ public class LizzieFrame extends JFrame {
 
   java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad) {
+    return openFileAsync(file, fromTemp, showHint, afterSuccessfulLoad, () -> true);
+  }
+
+  private java.util.concurrent.CompletableFuture<Boolean> openFileAsync(
+      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
+      BooleanSupplier requestCurrent) {
     var result = new java.util.concurrent.CompletableFuture<Boolean>();
     Runnable request = () -> beginInteractiveFileOpen(
-        file, fromTemp, showHint, afterSuccessfulLoad, Lizzie.config, result);
+        file, fromTemp, showHint, afterSuccessfulLoad, Lizzie.config, requestCurrent, result);
     if (SwingUtilities.isEventDispatchThread()) request.run();
     else SwingUtilities.invokeLater(request);
     return result;
@@ -4874,9 +4880,10 @@ public class LizzieFrame extends JFrame {
 
   private void beginInteractiveFileOpen(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
-      Config expectedConfig, java.util.concurrent.CompletableFuture<Boolean> result) {
+      Config expectedConfig, BooleanSupplier requestCurrent,
+      java.util.concurrent.CompletableFuture<Boolean> result) {
     if (localSgfOpenClosed || result.isCancelled() || Lizzie.frame != this
-        || Lizzie.config != expectedConfig) {
+        || Lizzie.config != expectedConfig || !requestCurrent.getAsBoolean()) {
       result.complete(false);
       return;
     }
@@ -4885,7 +4892,7 @@ public class LizzieFrame extends JFrame {
       return;
     }
     Runnable retry = () -> beginInteractiveFileOpen(
-        file, fromTemp, showHint, afterSuccessfulLoad, expectedConfig, result);
+        file, fromTemp, showHint, afterSuccessfulLoad, expectedConfig, requestCurrent, result);
     Runnable retired = () -> result.complete(false);
     // The existing teardown owner decides which continuation is accepted. A rejected
     // continuation must not retire the first accepted open, or snapshot its transitional board.
@@ -4898,7 +4905,7 @@ public class LizzieFrame extends JFrame {
     BooleanSupplier ownerCurrent = () -> !result.isCancelled() && !localSgfOpenClosed
         && selection == localSgfOpenRequest && Lizzie.frame == this
         && Lizzie.config == config && Lizzie.board == board
-        && (!displayed || isDisplayable());
+        && (!displayed || isDisplayable()) && requestCurrent.getAsBoolean();
     Runnable capture = () -> captureInteractiveFileOpen(
         file, fromTemp, showHint, afterSuccessfulLoad, board, ownerCurrent, result);
     var finalization = localSgfLoadFinalization;
@@ -15289,7 +15296,8 @@ public class LizzieFrame extends JFrame {
   private long savedGameOpenRequest;
 
   private boolean deferSavedGameOpenUntilWritesComplete(Runnable reopen) {
-    long request = ++savedGameOpenRequest;
+    long request = savedGameOpenRequest;
+    long selection = localSgfOpenRequest;
     java.util.concurrent.CompletableFuture<Void> pending = SgfSaveCoordinator.pendingSaves();
     if (pending.isDone()) return false;
     Config config = Lizzie.config;
@@ -15304,7 +15312,7 @@ public class LizzieFrame extends JFrame {
       return true;
     }
     BooleanSupplier stillCurrent = () ->
-        request == savedGameOpenRequest
+        request == savedGameOpenRequest && selection == localSgfOpenRequest
             && Lizzie.frame == this && Lizzie.config == config && Lizzie.board == board
             && savedGamePanelSession == session && tempGamePanelAll == panel
             && panel != null && panel.isVisible() && snapshot.isCurrent(board);
@@ -15360,13 +15368,35 @@ public class LizzieFrame extends JFrame {
       int index,
       boolean originalShowListPane,
       boolean originalShowVariationGraph) {
-    Runnable reopen = () ->
+    Config config = Lizzie.config;
+    Board selectedBoard = Lizzie.board;
+    JLayeredPane panel = tempGamePanelAll;
+    long session = savedGamePanelSession;
+    BooleanSupplier panelCurrent = () -> !localSgfOpenClosed
+        && Lizzie.frame == this && Lizzie.config == config && Lizzie.board == selectedBoard
+        && tempGamePanelAll == panel && savedGamePanelSession == session
+        && panel != null && panel.isVisible();
+    if (!panelCurrent.getAsBoolean() || rejectFileOpenWhilePlaying()) return;
+    Runnable reopen = () -> {
+      if (panelCurrent.getAsBoolean()) {
         openSavedGame(isAutoSave, index, originalShowListPane, originalShowVariationGraph);
+      }
+    };
     if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(reopen)
         || deferUntilHumanSlExit(reopen)) {
       return;
     }
-    localSgfOpenRequest++;
+    long selection = ++localSgfOpenRequest;
+    long request = ++savedGameOpenRequest;
+    var finalization = localSgfLoadFinalization;
+    if (finalization != null) {
+      // The previous parser's navigation is not a user edit. Settle it before the save
+      // barrier captures a game snapshot or this request resolves the published cursor.
+      finalization.thenRun(() -> {
+        if (selection == localSgfOpenRequest) reopen.run();
+      });
+      return;
+    }
     // SGF replacement precedes metadata publication. Every saved-list entrypoint must wait
     // until those writes settle, and old controls/previews must resolve the published cursor.
     if (deferSavedGameOpenUntilWritesComplete(reopen)) return;
@@ -15374,13 +15404,17 @@ public class LizzieFrame extends JFrame {
         .filter(record -> record.isAutoSave == isAutoSave && record.index == index)
         .findFirst().orElse(null);
     if (saved == null) return;
-    // A deferred loadFile return is only an acknowledgement, not a successful load. Keep
-    // position restoration and closing the saved list inside the actual success continuation.
-    loadFile(
+    long saves = SgfSaveCoordinator.acceptedSaveRevision();
+    BooleanSupplier ownerCurrent = () -> panelCurrent.getAsBoolean() && request == savedGameOpenRequest;
+    // Keep the published cursor paired with its SGF: a save/delete accepted during the read
+    // retires this attempt, even if disk replacement or metadata publication later fails.
+    // Restore the position after parser navigation, before the shared engine-sync continuation.
+    openFileAsync(
         resolveSavedGameFile(isAutoSave, index, "sgf"),
         true,
         true,
         () -> {
+          if (!ownerCurrent.getAsBoolean()) return;
           Board board = Lizzie.board;
           boolean originalLoading = board.isLoadingFile;
           boolean originalSound = Lizzie.config.playSound;
@@ -15401,7 +15435,8 @@ public class LizzieFrame extends JFrame {
           hideTempGamePanel(originalShowListPane, originalShowVariationGraph);
           if (bigBoardPanel != null) bigBoardPanel.setVisible(false);
           refresh();
-        });
+        },
+        () -> ownerCurrent.getAsBoolean() && saves == SgfSaveCoordinator.acceptedSaveRevision());
   }
 
   public void addTempGameOne(
