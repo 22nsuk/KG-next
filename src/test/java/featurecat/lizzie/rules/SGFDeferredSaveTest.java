@@ -29,7 +29,7 @@ class SGFDeferredSaveTest {
   @TempDir Path directory;
 
   @ParameterizedTest
-  @ValueSource(strings = {"normal", "raw", "comments", "branch", "game", "ordinary", "automatic"})
+  @ValueSource(strings = {"normal", "raw", "comments", "branch", "game", "ordinary", "automatic", "compact-ownership"})
   void queuedSaveRetainsTreeCandidatesAndSettingsAfterLiveOwnersAreReplaced(String mode)
       throws Exception {
     var originalBundle = Lizzie.resourceBundle;
@@ -63,6 +63,13 @@ class SGFDeferredSaveTest {
             var side = first.getVariation(1).orElseThrow();
             history.setHead(side);
             for (var node : List.of(history.getStart(), first, side)) installAnalysis(node.getData());
+            if (mode.equals("compact-ownership")) {
+              for (var node : List.of(history.getStart(), first, side)) {
+                var data = node.getData();
+                data.estimateArray = BoardData.compactEstimateArray(data.estimateArray);
+                data.estimateArray2 = BoardData.compactEstimateArray(data.estimateArray2);
+              }
+            }
             boolean raw = List.of("raw", "comments", "branch").contains(mode);
             boolean comments = mode.equals("comments");
             boolean branch = mode.equals("branch");
@@ -91,8 +98,15 @@ class SGFDeferredSaveTest {
                 candidate.variation.set(0, "A1");
                 candidate.pvVisits.set(0, "9999");
               }
-              data.estimateArray.set(0, 1.0);
-              data.estimateArray2.clear();
+              if (mode.equals("compact-ownership")) {
+                data.estimateArray = BoardData.compactEstimateArray(List.of(1.0));
+                data.estimateArray2 = null;
+              } else {
+                data.estimateArray.set(0, 1.0);
+                data.estimateArray2.clear();
+              }
+              java.util.Arrays.fill(data.stones, Stone.EMPTY);
+              data.lastMove.ifPresent(move -> move[0] = 0);
               data.setProperty("XX", "changed");
             }
             history.getGameInfo().setPlayerBlack("replacement player");
