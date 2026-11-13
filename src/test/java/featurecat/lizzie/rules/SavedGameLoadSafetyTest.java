@@ -163,6 +163,31 @@ class SavedGameLoadSafetyTest {
             "gib-unrecognized", "gib-apply-failure").map(input -> Arguments.of(entry, input)));
   }
 
+  @Test
+  void previewScalingFailureDoesNotHideSavedGame() throws Exception {
+    prepareSavedItem(SavedPosition.MOVE_NUMBER, Slot.MANUAL);
+    Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
+    BoardHistoryList original = Lizzie.board.getHistory();
+    String metadata = config.saveBoardConfig.toString();
+    frame.failPreviewScale = true;
+    SwingUtilities.invokeAndWait(() -> {
+      frame.showTempGamePanel();
+      assertSame(original, Lizzie.board.getHistory());
+      assertEquals(metadata, config.saveBoardConfig.toString());
+      assertTrue(listContainer.isVisible());
+      assertEquals(0, errorDialogs.get());
+      assertNull(frame.reportedSaveFailure);
+      click(EntryPoint.BUTTON, SavedPosition.MOVE_NUMBER, Slot.MANUAL);
+    });
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {
+      assertFalse(listContainer.isVisible());
+      assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+      assertEquals(1, Lizzie.board.getCurrentMovenumber());
+      assertEquals(0, errorDialogs.get());
+    });
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {"file", "string", "download", "parser", "gib"})
   void disabledAutomaticAnalysisStillSynchronizesLoadedRecordAndAllowsManualResume(String entry)
@@ -1562,6 +1587,7 @@ class SavedGameLoadSafetyTest {
     List<String> loadedPlayers;
     Runnable duringParse;
     boolean failPlayerUpdate;
+    boolean failPreviewScale;
     BoardHistoryList historyAtFailedPlayerUpdate;
     java.io.IOException reportedSaveFailure;
 
@@ -1574,6 +1600,13 @@ class SavedGameLoadSafetyTest {
     @Override
     public java.awt.Image saveMainBoardToImageOri() {
       return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
+    }
+
+    @Override
+    public java.awt.Image zoomImage(BufferedImage source, int width, int height) {
+      assertNotNull(source, "The real image decoder must run before the scaling failure");
+      if (failPreviewScale) throw new java.awt.image.ImagingOpException("Preview scaling failed");
+      return super.zoomImage(source, width, height);
     }
 
     @Override

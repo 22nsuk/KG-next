@@ -2195,20 +2195,23 @@ public class WinrateGraph {
     if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
       return null;
     }
+    QuickOverviewLayout quickOverviewLayout = renderedQuickOverviewLayout;
+    boolean insideQuickOverview =
+        quickOverviewLayout != null && isInsideQuickOverview(quickOverviewLayout, x, y);
+    // Reject misses before history traversal, retaining the overview's padded hit region.
+    if (!insideQuickOverview && !isInsideGraphBounds(x, y)) {
+      return null;
+    }
     // Validate once per lookup so later events still observe in-place analysis updates.
     if (!hasFreshRenderedSources()) {
       return null;
     }
-    QuickOverviewLayout quickOverviewLayout = renderedQuickOverviewLayout;
-    if (quickOverviewLayout != null && isInsideQuickOverview(quickOverviewLayout, x, y)) {
+    if (insideQuickOverview) {
       QuickOverviewPoint point = directQuickOverviewPointHit(quickOverviewLayout, x, y);
       if (point == null && !isFrameTryingMode()) {
         point = columnQuickOverviewPointHit(quickOverviewLayout, x, y);
       }
       return point == null ? null : point.move.node;
-    }
-    if (!isInsideGraphBounds(x, y)) {
-      return null;
     }
     List<GraphPoint> points = renderedGraphPoints;
     GraphPoint point = directGraphPointHit(points, x, y);

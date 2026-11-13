@@ -13,10 +13,13 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlans;
+import featurecat.lizzie.gui.AnalysisUiRefreshTestSupport;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.HumanSlGameController;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.ProblemListSideFilter;
+import featurecat.lizzie.gui.ProblemListSnapshot;
 import featurecat.lizzie.gui.WaitForAnalysis;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -56,8 +59,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.swing.SwingUtilities;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -1906,6 +1911,132 @@ class AnalysisEngineRequestTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void wholeGameResultsRefreshAlreadyVisitedMetadataAfterCompletionOrCancellation(boolean cancel)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      history.add(
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      history.add(
+          moveNode(
+              stones(placement(0, 0, Stone.BLACK), placement(1, 0, Stone.WHITE)),
+              new int[] {1, 0},
+              Stone.WHITE,
+              true,
+              2));
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode first = root.next().orElseThrow();
+      BoardHistoryNode second = first.next().orElseThrow();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      CountDownLatch visitedFirst = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      AtomicInteger updates = new AtomicInteger();
+      board.beforeRefreshUpdate =
+          () -> {
+            if (updates.incrementAndGet() != 3) return;
+            visitedFirst.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the metadata pass");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+          };
+      try {
+        assertEquals(3, engine.startWholeGameRequest(List.of(root, first, second), 200, false));
+        // Responses need not arrive in move order. Refresh the child before its parent is analyzed.
+        engine.parseResult(analysisResult(2, 200, 62.0));
+        assertTrue(visitedFirst.await(5, TimeUnit.SECONDS));
+        assertFalse(root.nodeInfoMain.analyzed);
+        engine.parseResult(analysisResult(1, 200, 58.0));
+        if (cancel) engine.requestShutdown();
+        else engine.parseResult(analysisResult(3, 200, 55.0));
+
+        CountDownLatch completed = new CountDownLatch(1);
+        board.setMovelistAll(completed::countDown);
+        board.setMovelistAll();
+        release.countDown();
+        assertTrue(
+            completed.await(5, TimeUnit.SECONDS), "ordinary progress must retain completion");
+        board.awaitMovelistRefresh();
+
+        assertEquals(1, board.movelistWorkers.size());
+        assertEquals(6, updates.get(), "all in-flight requests need only one following tree pass");
+        assertTrue(root.nodeInfoMain.analyzed, "accepted parent analysis must reach the move list");
+        assertEquals(200, root.nodeInfoMain.previousPlayouts);
+        assertEquals(200, root.nodeInfoMain.playouts);
+        assertEquals(100 - first.getData().winrate, root.nodeInfoMain.winrate, 0.0001);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfoMain.coords);
+        assertEquals(!cancel, first.nodeInfoMain.analyzed);
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
+  @Test
+  void metadataResetDuringRefreshDoesNotRevisitADeletedEqualVisitVariation() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode main =
+          root.addAtLast(
+              moveNode(
+                  stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
+      BoardHistoryNode branch =
+          root.addAtLast(
+              moveNode(
+                  stones(placement(1, 0, Stone.BLACK)), new int[] {1, 0}, Stone.BLACK, false, 1));
+      for (BoardHistoryNode node : List.of(root, main, branch)) {
+        installCompleteAnalysis(node.getData(), 200, false);
+      }
+      main.getData().winrate = 60.0;
+      branch.getData().winrate = 80.0;
+      RequestBoard board = (RequestBoard) boardWithHistory(history);
+      CountDownLatch mainUpdated = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      AtomicInteger updated = new AtomicInteger();
+      AtomicInteger staleCompletions = new AtomicInteger();
+      board.afterRefreshUpdate =
+          () -> {
+            if (updated.incrementAndGet() != 2) return;
+            mainUpdated.countDown();
+            try {
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the old tree pass");
+            } catch (InterruptedException failure) {
+              Thread.currentThread().interrupt();
+              throw new AssertionError(failure);
+            }
+          };
+      try {
+        board.setMovelistAll(staleCompletions::incrementAndGet);
+        assertTrue(mainUpdated.await(5, TimeUnit.SECONDS));
+        board.setMovelistAll(staleCompletions::incrementAndGet);
+        // The old traversal already stacked this sibling before it was removed.
+        root.deleteChild(1);
+        board.clearNodeInfo(root);
+        CountDownLatch completed = new CountDownLatch(1);
+        board.setMovelistAll(completed::countDown);
+        release.countDown();
+        assertTrue(completed.await(5, TimeUnit.SECONDS));
+        board.awaitMovelistRefresh();
+
+        assertEquals(
+            0, staleCompletions.get(), "a metadata reset retires active and queued callbacks");
+        assertTrue(
+            root.nodeInfoMain.analyzed, "stale sibling visits must not suppress main-line repair");
+        assertEquals(40.0, root.nodeInfoMain.winrate, 0.0001);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfo.coords);
+        assertArrayEquals(new int[] {0, 0}, root.nodeInfoMain.coords);
+      } finally {
+        release.countDown();
+      }
+    }
+  }
+
   @Test
   void graphProgressAlwaysRefreshesTheFinalResultBetweenThrottleIntervals() throws Exception {
     Method method =
@@ -1916,6 +2047,75 @@ class AnalysisEngineRequestTest {
     assertTrue((boolean) method.invoke(null, 49, 49));
     assertFalse((boolean) method.invoke(null, 49, 50));
     assertTrue((boolean) method.invoke(null, 48, 50));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void responseSidebarRefreshUsesMinimumIntervalWithoutDelayingUserRequests(boolean remote)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      Stone[] stones = emptyStones();
+      for (int move = 1; move <= 4; move++) {
+        boolean black = move % 2 == 1;
+        int[] point = {(move - 1) % BOARD_SIZE, (move - 1) / BOARD_SIZE};
+        Stone color = black ? Stone.BLACK : Stone.WHITE;
+        stones[Board.getIndex(point[0], point[1])] = color;
+        history.add(moveNode(stones.clone(), point, color, !black, move));
+      }
+      boardWithHistory(history);
+      SidebarProgressFrame frame = allocate(SidebarProgressFrame.class);
+      AnalysisUiRefreshTestSupport.installSidebar(frame);
+      Lizzie.frame = frame;
+      Lizzie.config.uiConfig = new JSONObject();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "useRemoteCompute", remote);
+      frame.analysisEngine = engine;
+      List<ProblemListSnapshot> published = new CopyOnWriteArrayList<>();
+      AtomicLong publishedAt = new AtomicLong();
+      AtomicReference<CountDownLatch> nextPublication = new AtomicReference<>();
+      try {
+        SwingUtilities.invokeAndWait(() -> frame.addProblemListListener(snapshot -> {
+          assertTrue(SwingUtilities.isEventDispatchThread());
+          published.add(snapshot);
+          publishedAt.set(System.nanoTime());
+          CountDownLatch latch = nextPublication.get();
+          if (latch != null) latch.countDown();
+        }));
+        assertEquals(4, engine.startRequestMissingMainline(false));
+        SwingUtilities.invokeAndWait(() -> {});
+        CountDownLatch first = new CountDownLatch(1);
+        nextPublication.set(first);
+        long firstRequestedAt = System.nanoTime();
+        if (remote) completeRemoteGtpSearch(engine, 200, 62.0, 1.5);
+        else engine.parseResult(analysisResult(1, 200, 62.0));
+        assertTrue(first.await(5, TimeUnit.SECONDS));
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+
+        CountDownLatch second = new CountDownLatch(1);
+        nextPublication.set(second);
+        if (remote) completeRemoteGtpSearch(engine, 200, 45.0, -1.5);
+        else engine.parseResult(analysisResult(2, 200, 45.0));
+        assertTrue(second.await(5, TimeUnit.SECONDS));
+        assertTrue(publishedAt.get() - firstRequestedAt >= TimeUnit.MILLISECONDS.toNanos(250),
+            "successive response publications must use the existing sidebar interval");
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+        ProblemListSnapshot progress = published.get(published.size() - 1);
+        assertTrue(progress.analysisRunning);
+        assertEquals(1, progress.analyzedMoves, "the delayed publication reads the latest metadata");
+
+        SwingUtilities.invokeAndWait(() -> {
+          int before = published.size();
+          frame.requestProblemListRefresh();
+          assertEquals(before + 1, published.size(), "user refresh bypasses the analysis interval");
+          frame.setProblemListSideFilter(ProblemListSideFilter.WHITE);
+          assertEquals(before + 2, published.size(), "filter changes publish immediately");
+          assertEquals(ProblemListSideFilter.WHITE, frame.getProblemListSideFilter());
+        });
+      } finally {
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+      }
+    }
   }
 
   @Test
@@ -4427,25 +4627,9 @@ class AnalysisEngineRequestTest {
   private static final class RequestBoard extends Board {
     private List<Thread> movelistWorkers;
     private List<Throwable> movelistFailures;
-    private volatile CountDownLatch refreshStarted;
     private CountDownLatch awaitStarted;
     private Runnable beforeRefreshUpdate;
-
-    @Override
-    public synchronized void setMovelistAll(Runnable onComplete) {
-      if (getHistory() == null) return;
-      CountDownLatch started = new CountDownLatch(1);
-      refreshStarted = started;
-      super.setMovelistAll(onComplete);
-      // Bind the actual worker before a later generation can replace its start signal.
-      // updateMovelist records ownership before calling code that may need this monitor.
-      try {
-        assertTrue(started.await(5, TimeUnit.SECONDS), "move-list worker must start");
-      } catch (InterruptedException failure) {
-        Thread.currentThread().interrupt();
-        throw new AssertionError("interrupted waiting for move-list worker", failure);
-      }
-    }
+    private Runnable afterRefreshUpdate;
 
     @Override
     public void updateMovelist(BoardHistoryNode node) {
@@ -4454,13 +4638,10 @@ class AnalysisEngineRequestTest {
         super.updateMovelist(node);
         return;
       }
-      if (!movelistWorkers.contains(worker)) {
-        worker.setUncaughtExceptionHandler((thread, failure) -> movelistFailures.add(failure));
-        movelistWorkers.add(worker);
-        refreshStarted.countDown();
-      }
+      trackMovelistWorker(worker);
       if (beforeRefreshUpdate != null) beforeRefreshUpdate.run();
       super.updateMovelist(node);
+      if (afterRefreshUpdate != null) afterRefreshUpdate.run();
     }
 
     private void awaitMovelistRefresh() throws InterruptedException {
@@ -4468,7 +4649,12 @@ class AnalysisEngineRequestTest {
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
       AssertionError failure = null;
       InterruptedException interrupted = null;
-      for (int index = 0; index < movelistWorkers.size(); index++) {
+      for (int index = 0; ; index++) {
+        // Capture the queue's owner even before its first update. Requests may share a worker,
+        // and a failed worker can hand an already-accepted request to a replacement.
+        Thread current = currentMovelistWorker();
+        if (current != null) trackMovelistWorker(current);
+        if (index >= movelistWorkers.size()) break;
         Thread worker = movelistWorkers.get(index);
         while (worker.isAlive()) {
           long remaining = deadline - System.nanoTime();
@@ -4501,10 +4687,38 @@ class AnalysisEngineRequestTest {
       }
       if (failure != null) throw failure;
     }
+
+    private void trackMovelistWorker(Thread worker) {
+      synchronized (movelistWorkers) {
+        if (!movelistWorkers.contains(worker)) {
+          worker.setUncaughtExceptionHandler((thread, failure) -> movelistFailures.add(failure));
+          movelistWorkers.add(worker);
+        }
+      }
+    }
+
+    private Thread currentMovelistWorker() {
+      try {
+        Field field = Board.class.getDeclaredField("movelistRefresh");
+        field.setAccessible(true);
+        Object refresh;
+        synchronized (this) {
+          refresh = field.get(this);
+        }
+        if (refresh == null) return null;
+        synchronized (refresh) {
+          Field worker = refresh.getClass().getDeclaredField("worker");
+          worker.setAccessible(true);
+          return (Thread) worker.get(refresh);
+        }
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError("cannot inspect the owned move-list worker", failure);
+      }
+    }
   }
 
   @Test
-  void alreadyBoundMovelistWorkerCannotReleaseTheNextStartGate() throws Exception {
+  void coalescedRequestsKeepTheOwnedWorkerThroughTheFollowUpPass() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
       history.add(
@@ -4527,12 +4741,11 @@ class AnalysisEngineRequestTest {
       try {
         board.setMovelistAll();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
-        CountDownLatch nextStart = new CountDownLatch(1);
-        board.refreshStarted = nextStart;
+        board.setMovelistAll();
         release.countDown();
         board.awaitMovelistRefresh();
-        assertEquals(2, updates.get(), "both real history nodes must be refreshed");
-        assertEquals(1, nextStart.getCount(), "an old worker cannot bind a new generation");
+        assertEquals(3, updates.get(), "superseded work stops before the complete follow-up pass");
+        assertEquals(1, board.movelistWorkers.size(), "both passes belong to one worker");
       } finally {
         release.countDown();
       }
@@ -4598,7 +4811,7 @@ class AnalysisEngineRequestTest {
       history.add(
           moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1));
       RequestBoard board = (RequestBoard) boardWithHistory(history);
-      CountDownLatch entered = new CountDownLatch(2);
+      CountDownLatch entered = new CountDownLatch(1);
       CountDownLatch release = new CountDownLatch(1);
       board.awaitStarted = new CountDownLatch(1);
       List<Config> workerConfigs = new CopyOnWriteArrayList<>();
@@ -4609,7 +4822,7 @@ class AnalysisEngineRequestTest {
           () -> {
             entered.countDown();
             try {
-              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release both workers");
+              assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the worker");
             } catch (InterruptedException failure) {
               Thread.currentThread().interrupt();
               throw new AssertionError(failure);
@@ -4631,9 +4844,9 @@ class AnalysisEngineRequestTest {
             }
           }) {
         board.setMovelistAll();
-        board.setMovelistAll();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
-        assertEquals(2, board.movelistWorkers.size(), "both real worker generations must be owned");
+        board.setMovelistAll();
+        assertEquals(1, board.movelistWorkers.size(), "coalesced requests share the owned worker");
         Future<?> closing =
             executor.submit(
                 () -> {
@@ -4655,7 +4868,7 @@ class AnalysisEngineRequestTest {
         assertTrue(failure.getCause() instanceof InterruptedException);
         assertTrue(interruptPreserved.get(), "cleanup must restore the closer's interrupt flag");
         assertTrue(board.movelistWorkers.stream().noneMatch(Thread::isAlive));
-        assertTrue(workerConfigs.size() >= 2, "both workers must finish against fixture globals");
+        assertEquals(3, workerConfigs.size(), "the partial and final passes must retain fixture globals");
         assertEquals(workerConfigs.size(), callbackConfigs.size());
         assertTrue(workerConfigs.stream().allMatch(config -> config == scopedConfig));
         assertTrue(callbackConfigs.stream().allMatch(config -> config == scopedConfig));
@@ -5261,6 +5474,19 @@ class AnalysisEngineRequestTest {
 
     @Override
     public void requestProblemListRefresh() {}
+  }
+
+  private static final class SidebarProgressFrame extends LizzieFrame {
+    @Override
+    public void appendComment() {}
+
+    @Override
+    public void refreshSilentAnalysisProgress() {}
+
+    @Override
+    public void refresh() {
+      requestProblemListRefresh();
+    }
   }
 
   private static final class SilentGtpConsole extends GtpConsolePane {

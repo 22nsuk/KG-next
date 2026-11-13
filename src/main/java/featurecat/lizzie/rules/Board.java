@@ -29,6 +29,7 @@ import java.util.Stack;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -73,7 +74,8 @@ public class Board {
   private static final String alphabet = "ABCDEFGHJKLMNOPQRSTUVWXYZ";
   private static final String alphabetWithI = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final int MOVELIST_REFRESH_NAVIGATION_PAUSE_MS = 450;
-  private BoardHistoryList history;
+  private static final int MOVELIST_REFRESH_IDLE_MS = 50;
+  private volatile BoardHistoryList history;
   private static final ExecutorService HISTORY_RESTORE_EXECUTOR =
       Executors.newSingleThreadExecutor(
           runnable -> {
@@ -113,7 +115,8 @@ public class Board {
   private boolean hasBigBranch = false;
   public boolean isExtremlySmallBoard = false;
   private boolean neverPassedInGame = true;
-  private volatile int movelistRefreshGeneration = 0;
+  private volatile int movelistRefreshEpoch = 0;
+  private MovelistRefresh movelistRefresh;
   private volatile long lastMoveNavigationAt = 0L;
   private volatile long contextRevision = 0L;
   private volatile BoardHistoryList pendingEngineAlignmentHistory;
@@ -744,7 +747,9 @@ public class Board {
     node.nodeInfo2 = new NodeInfo();
   }
 
-  public void clearNodeInfo(BoardHistoryNode node) {
+  public synchronized void clearNodeInfo(BoardHistoryNode node) {
+    // Structural/settings edits invalidate the old traversal, including already-stacked branches.
+    movelistRefreshEpoch++;
     Stack<BoardHistoryNode> stack = new Stack<>();
     stack.push(node);
     while (!stack.isEmpty()) {
@@ -5221,7 +5226,7 @@ public class Board {
       tempmovelist2 = snapshot.tempMoveList2;
       isTusmegoMode = snapshot.isTsumegoMode;
       tsumegoNode = snapshot.tsumegoNode;
-      movelistRefreshGeneration++;
+      movelistRefreshEpoch++;
     }
     // The restored history owns the value; stale import text can otherwise reapply on mouse exit.
     // Update only the display, without changing game metadata, analysis, or engine state.
@@ -5254,7 +5259,7 @@ public class Board {
 
   private void replaceHistory(BoardHistoryList newList, Runnable updateMetadata) {
     synchronized (this) {
-      movelistRefreshGeneration++;
+      movelistRefreshEpoch++;
       history = newList;
       setupMode = false;
       updateMetadata.run();
@@ -6056,57 +6061,152 @@ public class Board {
   }
 
   /**
-   * Rebuilds move-list metadata asynchronously and runs {@code onComplete} after it is coherent.
+   * Rebuilds move-list metadata asynchronously, merging requests into one waiting pass. Completion
+   * runs after a full pass covering this request, unless its history or metadata has been reset.
    */
-  public void setMovelistAll(Runnable onComplete) {
-    final int generation = ++movelistRefreshGeneration;
-    final BoardHistoryList refreshHistory = history;
-    if (refreshHistory == null) {
+  public synchronized void setMovelistAll(Runnable onComplete) {
+    if (history == null) {
       return;
     }
-    Thread thread =
-        new Thread(
-            new Runnable() {
-              public void run() {
-                BoardHistoryNode node = refreshHistory.getStart();
-                Stack<BoardHistoryNode> stack = new Stack<>();
-                stack.push(node);
-                int processed = 0;
-                while (!stack.isEmpty()) {
-                  if (generation != movelistRefreshGeneration || history != refreshHistory) {
-                    return;
-                  }
-                  if (!pauseMovelistRefreshForRecentNavigation()) {
-                    return;
-                  }
-                  if (generation != movelistRefreshGeneration || history != refreshHistory) {
-                    return;
-                  }
-                  BoardHistoryNode cur = stack.pop();
-                  updateMovelist(cur);
-                  processed++;
-                  if (cur.numberOfChildren() >= 1) {
-                    for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
-                      stack.push(cur.getVariations().get(i));
-                  }
-                  if (processed % 32 == 0) {
-                    Thread.yield();
-                  }
-                  if (processed % 128 == 0 && !sleepMovelistRefresh(1)) {
-                    return;
-                  }
-                }
-                if (generation == movelistRefreshGeneration
-                    && history == refreshHistory
-                    && onComplete != null) {
-                  onComplete.run();
-                }
-              }
-            },
-            "lizzie-movelist-refresh");
-    thread.setDaemon(true);
-    thread.setPriority(Thread.MIN_PRIORITY);
-    thread.start();
+    if (movelistRefresh == null) movelistRefresh = new MovelistRefresh();
+    movelistRefresh.request(onComplete);
+  }
+
+  /** Queue ownership never extends to node updates or client callbacks. */
+  private final class MovelistRefresh {
+    private MovelistRefreshRequest active;
+    private MovelistRefreshRequest pending;
+    private Thread worker;
+
+    synchronized void request(Runnable onComplete) {
+      if (pending == null || !pending.isCurrent()) {
+        pending = new MovelistRefreshRequest(history, movelistRefreshEpoch);
+      }
+      if (onComplete != null) pending.completions.add(onComplete);
+      if (active != null) active.superseded = true;
+      notifyAll();
+      startWorker();
+    }
+
+    private void startWorker() {
+      if (worker != null || pending == null) return;
+      Thread thread = new Thread(this::run, "lizzie-movelist-refresh");
+      thread.setDaemon(true);
+      thread.setPriority(Thread.MIN_PRIORITY);
+      worker = thread;
+      try {
+        worker.start();
+      } catch (RuntimeException | Error failure) {
+        worker = null;
+        throw failure;
+      }
+    }
+
+    private synchronized boolean awaitRequest() throws InterruptedException {
+      // Nearby results reuse this worker; available work wakes it immediately.
+      long remaining = TimeUnit.MILLISECONDS.toNanos(MOVELIST_REFRESH_IDLE_MS);
+      long deadline = System.nanoTime() + remaining;
+      while (pending == null && remaining > 0) {
+        TimeUnit.NANOSECONDS.timedWait(this, remaining);
+        remaining = deadline - System.nanoTime();
+      }
+      return pending != null;
+    }
+
+    private void run() {
+      try {
+        while (awaitRequest()) {
+          // Navigation already delays this work. Keep merging while no nodes have been visited.
+          if (!pauseMovelistRefreshForRecentNavigation()) return;
+          MovelistRefreshRequest request;
+          synchronized (this) {
+            request = pending;
+            pending = null;
+            active = request;
+          }
+          boolean complete = refreshMovelist(request);
+          synchronized (this) {
+            active = null;
+            if (!complete
+                && request.superseded
+                && request.isCurrent()
+                && !Thread.currentThread().isInterrupted()
+                && pending != null
+                && pending.isCurrent()) {
+              // Same-history requests share the newest complete pass, including earlier waiters.
+              pending.completions.addAll(0, request.completions);
+            }
+          }
+          if (complete) request.complete();
+          if (Thread.currentThread().isInterrupted()) return;
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      } finally {
+        synchronized (this) {
+          active = null;
+          worker = null;
+          // A request can arrive as the worker exits, including after a failed update/callback.
+          startWorker();
+        }
+      }
+    }
+  }
+
+  private final class MovelistRefreshRequest {
+    private final BoardHistoryList refreshHistory;
+    private final int refreshEpoch;
+    private final List<Runnable> completions = new ArrayList<>();
+    private volatile boolean superseded;
+
+    private MovelistRefreshRequest(BoardHistoryList refreshHistory, int refreshEpoch) {
+      this.refreshHistory = refreshHistory;
+      this.refreshEpoch = refreshEpoch;
+    }
+
+    private boolean isCurrent() {
+      return history == refreshHistory && movelistRefreshEpoch == refreshEpoch;
+    }
+
+    private boolean isActive() {
+      return isCurrent() && !superseded && !Thread.currentThread().isInterrupted();
+    }
+
+    private void complete() {
+      Throwable failure = null;
+      for (Runnable completion : completions) {
+        if (!isCurrent()) break;
+        try {
+          completion.run();
+        } catch (RuntimeException | Error caught) {
+          // Report failures without dropping other completions merged into the same pass.
+          if (failure == null) failure = caught;
+          else if (failure != caught) failure.addSuppressed(caught);
+        }
+      }
+      if (failure instanceof RuntimeException) throw (RuntimeException) failure;
+      if (failure instanceof Error) throw (Error) failure;
+    }
+  }
+
+  private boolean refreshMovelist(MovelistRefreshRequest request) {
+    Stack<BoardHistoryNode> stack = new Stack<>();
+    stack.push(request.refreshHistory.getStart());
+    int processed = 0;
+    while (!stack.isEmpty()) {
+      if (!request.isActive() || !pauseMovelistRefreshForRecentNavigation()) return false;
+      if (!request.isActive()) return false;
+      BoardHistoryNode cur = stack.pop();
+      updateMovelist(cur);
+      processed++;
+      if (cur.numberOfChildren() >= 1) {
+        for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
+          stack.push(cur.getVariations().get(i));
+      }
+      if (processed % 32 == 0) Thread.yield();
+      if (processed % 128 == 0 && !sleepMovelistRefresh(1)) return false;
+    }
+    return request.isActive();
   }
 
   public long getContextRevision() {

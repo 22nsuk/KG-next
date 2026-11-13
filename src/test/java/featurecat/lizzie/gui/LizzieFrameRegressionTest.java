@@ -2621,6 +2621,52 @@ class LizzieFrameRegressionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "IDLE, false", "PREPARING, true", "BASELINE, true", "DEEP, true", "PAUSING, true",
+    "PAUSED, false", "COMPLETE, false", "CANCELLED, false", "FAILED, false"
+  })
+  void problemListIncludesWholeGameRunningState(
+      WholeGameAnalysisSession.State state, boolean running) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      LizzieFrame frame = allocate(LizzieFrame.class);
+      setField(frame, "problemListListeners", new ArrayList<>());
+      WholeGameAnalysisSession session = allocate(WholeGameAnalysisSession.class);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "state", state);
+      setField(frame, "wholeGameAnalysisSession", session);
+      Lizzie.frame = frame;
+      SwingUtilities.invokeAndWait(frame::refreshProblemListSnapshot);
+      assertEquals(running, frame.getProblemListSnapshot().analysisRunning);
+
+      ResourceTrackingAnalysisEngine quickEngine = allocate(ResourceTrackingAnalysisEngine.class);
+      quickEngine.analysisInProgress = true;
+      frame.analysisEngine = quickEngine;
+      SwingUtilities.invokeAndWait(frame::refreshProblemListSnapshot);
+      assertTrue(frame.getProblemListSnapshot().analysisRunning,
+          "the ordinary analysis engine remains a source of running state");
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"COMPLETE", "CANCELLED", "FAILED"})
+  void wholeGameHandoffRequestsSettledPublicationOnce(String terminalState) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      WholeGameHandoffFrame frame = allocate(WholeGameHandoffFrame.class);
+      WholeGameAnalysisSession session = allocate(WholeGameAnalysisSession.class);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "terminal", true);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "state",
+          WholeGameAnalysisSession.State.valueOf(terminalState));
+      setField(frame, "wholeGameAnalysisSession", session);
+      SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+      assertEquals(1, frame.settledPublicationCount);
+      SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+      assertEquals(1, frame.settledPublicationCount);
+      assertEquals(0, frame.resumeCount);
+    }
+  }
+
   @Test
   void terminalWholeGameSessionBlocksQuickAnalysisUntilHandoff() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
@@ -2728,6 +2774,74 @@ class LizzieFrameRegressionTest {
       assertNull(getField(frame, "wholeGameAnalysisSession"));
       assertEquals(0, frame.resumeCount);
       assertEquals(0, frame.openCount);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "COMPLETE, KEEP",
+    "CANCELLED, KEEP",
+    "FAILED, KEEP",
+    "COMPLETE, HISTORY",
+    "COMPLETE, BOARD"
+  })
+  void wholeGameHandoffPublishesSettledMetadataWithoutResumingUserPause(
+      WholeGameAnalysisSession.State state, String replacement) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze(false);
+      BoardHistoryList history = historyWithTargetVisitAnalyzedMove();
+      history.add(moveData(new int[] {1, 1}, Stone.WHITE, true, 2, targetAnalysisVisitsForTest()));
+      MetadataCompletionBoard board = allocate(MetadataCompletionBoard.class);
+      board.entered = new CountDownLatch(1);
+      board.release = new CountDownLatch(1);
+      board.failure = new AtomicReference<>();
+      board.setHistory(history);
+      Lizzie.board = board;
+      WholeGameHandoffFrame frame = allocate(WholeGameHandoffFrame.class);
+      setField(frame, "problemListListeners", new ArrayList<Consumer<ProblemListSnapshot>>());
+      setField(frame, "userAnalysisPaused", true);
+      WholeGameAnalysisSession session = allocate(WholeGameAnalysisSession.class);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "state", state);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "terminal", true);
+      setField(frame, "wholeGameAnalysisSession", session);
+      Lizzie.frame = frame;
+      try {
+        board.setMovelistAll();
+        assertTrue(board.entered.await(5, TimeUnit.SECONDS));
+        SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+        assertNull(
+            getField(frame, "wholeGameAnalysisSession"), "handoff must not wait for metadata");
+        assertEquals(0, frame.problemSnapshotRefreshCount);
+        // A late ordinary progress request must not erase the final UI completion.
+        board.setMovelistAll();
+        if (replacement.equals("HISTORY")) {
+          board.setHistory(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+        } else if (replacement.equals("BOARD")) {
+          Lizzie.board = boardWith(new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE)));
+        }
+        board.release.countDown();
+        waitForMovelistRefreshThreads();
+        drainEdt();
+
+        int expected = replacement.equals("KEEP") ? 1 : 0;
+        assertEquals(expected, frame.problemSnapshotRefreshCount);
+        assertEquals(expected, frame.silentProgressRefreshCount);
+        assertEquals(0, frame.resumeCount, "metadata publication must preserve the user's pause");
+        if (expected == 1) {
+          assertEquals(1, frame.getProblemListSnapshot().analyzedMoves);
+          assertEquals(1, frame.getProblemListSnapshot().totalMoves);
+          assertFalse(frame.getProblemListSnapshot().analysisRunning);
+        }
+        assertNull(board.failure.get());
+        SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+        drainEdt();
+        assertEquals(
+            expected, frame.problemSnapshotRefreshCount, "duplicate handoff must be ignored");
+      } finally {
+        board.release.countDown();
+        waitForMovelistRefreshThreads();
+        drainEdt();
+      }
     }
   }
 
@@ -4954,10 +5068,13 @@ class LizzieFrameRegressionTest {
   }
 
   private static final class WholeGameHandoffFrame extends LizzieFrame {
+    private int settledPublicationCount;
     private int resumeCount;
     private WholeGameAnalysisDialog disposedDialog;
     private int openCount;
     private int resumeCountWhenOpened;
+    private int problemSnapshotRefreshCount;
+    private int silentProgressRefreshCount;
 
     private void requestOpen() {
       super.openWholeGameDeepAnalysis();
@@ -4981,11 +5098,50 @@ class LizzieFrameRegressionTest {
     public void refresh() {}
 
     @Override
+    public void refreshProblemListSnapshot() {
+      assertTrue(SwingUtilities.isEventDispatchThread());
+      super.refreshProblemListSnapshot();
+      problemSnapshotRefreshCount++;
+    }
+
+    @Override
+    public void refreshSilentAnalysisProgress() {
+      assertTrue(SwingUtilities.isEventDispatchThread());
+      silentProgressRefreshCount++;
+    }
+
+    @Override
     protected void showWholeGameAnalysisCompleteNotice() {}
 
     @Override
     protected void disposeWholeGameAnalysisDialog(WholeGameAnalysisDialog dialog) {
       disposedDialog = dialog;
+    }
+
+    @Override
+    void refreshCompletedSilentAnalysisProgress() {
+      settledPublicationCount++;
+      super.refreshCompletedSilentAnalysisProgress();
+    }
+  }
+
+  private static final class MetadataCompletionBoard extends Board {
+    private CountDownLatch entered;
+    private CountDownLatch release;
+    private AtomicReference<Throwable> failure;
+
+    @Override
+    public void updateMovelist(BoardHistoryNode node) {
+      Thread.currentThread().setUncaughtExceptionHandler(
+          (worker, error) -> failure.compareAndSet(null, error));
+      entered.countDown();
+      try {
+        assertTrue(release.await(5, TimeUnit.SECONDS), "test must release the metadata worker");
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(interrupted);
+      }
+      super.updateMovelist(node);
     }
   }
 

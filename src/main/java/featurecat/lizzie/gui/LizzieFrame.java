@@ -1631,7 +1631,9 @@ public class LizzieFrame extends JFrame {
     Collections.sort(blackEntries, comparator);
     Collections.sort(whiteEntries, comparator);
 
-    boolean analysisRunning = analysisEngine != null && analysisEngine.isAnalysisInProgress();
+    boolean analysisRunning =
+        (analysisEngine != null && analysisEngine.isAnalysisInProgress())
+            || (wholeGameAnalysisSession != null && wholeGameAnalysisSession.isRunning());
     problemListSnapshot =
         new ProblemListSnapshot(
             metric, blackEntries, whiteEntries, analyzedMoves, totalMoves, analysisRunning);
@@ -8103,7 +8105,7 @@ public class LizzieFrame extends JFrame {
     redrawWinratePaneOnly = true;
     if (mainPanel != null) mainPanel.repaint();
     if (listTable != null && listTable.isVisible()) listTable.repaint();
-    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
+    requestAnalysisSidebarRefresh();
     notifyWebBoard(true);
   }
 
@@ -8253,6 +8255,11 @@ public class LizzieFrame extends JFrame {
   /** Requests a bounded-rate title update without changing engine-game repaint behavior. */
   public void requestAnalysisTitleUpdate() {
     analysisUiRefresh.requestTitle();
+  }
+
+  /** Shares the sidebar interval across engine results, graph refreshes, and session state changes. */
+  public void requestAnalysisSidebarRefresh() {
+    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
   }
 
   private void flushAnalysisSidebarRefresh() {
@@ -15466,14 +15473,13 @@ public class LizzieFrame extends JFrame {
       boolean oriShowListPane,
       boolean OriShowVariationGraph) {
     JLabel boardImage = new JLabel();
-    File file = resolveSavedGameFile(isAutoSave, index, "bmp");
-    try {
-      BufferedImage img = ImageIO.read(file);
-      Image img2 = zoomImage(img, 300, 300);
-      boardImage.setIcon(new ImageIcon(img2));
-    } catch (IOException e1) {
-      // TODO Auto-generated catch block
-      e1.printStackTrace();
+    ImageIcon preview = readSavedGamePreview(isAutoSave, index, 300);
+    if (preview != null) {
+      boardImage.setIcon(preview);
+    } else {
+      boardImage.setText(Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.previewUnavailable"));
+      boardImage.setHorizontalAlignment(JLabel.CENTER);
+      boardImage.setForeground(Color.LIGHT_GRAY);
     }
     boardImage.setBounds(x, y, 300, 300);
     JLabel lblIndex =
@@ -15592,6 +15598,22 @@ public class LizzieFrame extends JFrame {
     tempGamePanel.add(txtName);
     tempGamePanel.add(lblIndex);
     tempGamePanel.add(boardImage);
+  }
+
+  private ImageIcon readSavedGamePreview(boolean autoSave, int index, int size) {
+    File file = resolveSavedGameFile(autoSave, index, "bmp");
+    // Previews are optional. Keep decoding/scaling failures outside record and SGF handling.
+    try (var input = Files.newInputStream(file.toPath())) {
+      BufferedImage image = ImageIO.read(input);
+      if (image == null) throw new IOException("Unsupported saved-game preview image");
+      return new ImageIcon(zoomImage(image, size, size));
+    } catch (NoSuchFileException absent) {
+      return null;
+    } catch (IOException | RuntimeException failure) {
+      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
+          .warn("Could not read saved-game preview: {}", file, failure);
+      return null;
+    }
   }
 
   public void addTempGameNew(
@@ -16053,19 +16075,15 @@ public class LizzieFrame extends JFrame {
       bigBoardPanel.setVisible(false);
     }
     bigBoardPanel = new JPopupMenu();
-    Image img2 = null;
-    File file = resolveSavedGameFile(isAutoSave, index, "bmp");
-    try {
-      BufferedImage img = ImageIO.read(file);
-      img2 = zoomImage(img, 600, 600);
-    } catch (IOException e1) {
-      // TODO Auto-generated catch block
+    ImageIcon preview = readSavedGamePreview(isAutoSave, index, 600);
+    if (preview == null) {
+      isShowingBigBoardPanel = false;
       return;
     }
     bigBoardPanel.setSize(600, 600);
     bigBoardPanel.setLayout(null);
     JLabel label = new JLabel();
-    label.setIcon(new ImageIcon(img2));
+    label.setIcon(preview);
     label.setBounds(0, 0, 600, 600);
     bigBoardPanel.add(label);
     if (bigBoardPanelLis != null) bigBoardPanel.removeMouseListener(bigBoardPanelLis);
@@ -16557,6 +16575,7 @@ public class LizzieFrame extends JFrame {
     } else {
       refresh();
     }
+    refreshCompletedSilentAnalysisProgress();
     if (complete || reopen) {
       WholeGameAnalysisDialog completedDialog = wholeGameAnalysisDialog;
       wholeGameAnalysisDialog = null;
