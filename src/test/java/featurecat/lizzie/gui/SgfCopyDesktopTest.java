@@ -4,10 +4,13 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.rules.SGFParser;
+import java.awt.Graphics2D;
+import java.awt.Image;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
+import java.awt.image.BufferedImage;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -114,6 +117,18 @@ class SgfCopyDesktopTest {
     assertEquals(2, serialized.size());
     for (var event : serialized) assertEquals("lizzie-sgf-copy", event.getThread().getJavaName());
 
+    DesktopProbeProcess.phase(result, "copy-image-ownership");
+    assertImageCopyWins(queue, worker, () -> Lizzie.frame.saveMainBoardToClipboard());
+    assertImageCopyWins(queue, worker, () -> Lizzie.frame.copySubBoard());
+    // A new SGF request after an image copy must still be allowed to publish.
+    edt(() -> {
+      assertTrue(SGFParser.loadFromString(LATEST, false));
+      Lizzie.frame.copySgf();
+      return null;
+    });
+    queue.pending().get(20, TimeUnit.SECONDS);
+    assertEquals(expected, clipboard());
+
     DesktopProbeProcess.phase(result, "copy-window-close");
     try (var blocked = new WorkerBlock(worker)) {
       blocked.awaitStarted();
@@ -127,6 +142,43 @@ class SgfCopyDesktopTest {
       assertEquals(expected, clipboard(), "a closed frame cannot publish its pending copy");
     }
     Files.writeString(result, "PASS");
+  }
+
+  private static void assertImageCopyWins(SgfSaveQueue queue, Executor worker, Runnable copyImage)
+      throws Exception {
+    try (var blocked = new WorkerBlock(worker)) {
+      blocked.awaitStarted();
+      BufferedImage copied = edt(() -> {
+        // A sentinel ensures a no-op image action cannot satisfy the assertions.
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+            .setContents(new StringSelection("before image"), null);
+        Lizzie.frame.copySgf();
+        copyImage.run();
+        return clipboardImage();
+      });
+      blocked.release();
+      queue.pending().get(20, TimeUnit.SECONDS);
+      BufferedImage retained = edt(SgfCopyDesktopTest::clipboardImage);
+      assertEquals(copied.getWidth(), retained.getWidth());
+      assertEquals(copied.getHeight(), retained.getHeight());
+      assertArrayEquals(
+          copied.getRGB(0, 0, copied.getWidth(), copied.getHeight(), null, 0, copied.getWidth()),
+          retained.getRGB(0, 0, retained.getWidth(), retained.getHeight(), null, 0, retained.getWidth()),
+          "an older SGF copy cannot replace a later board image");
+    }
+  }
+
+  private static BufferedImage clipboardImage() throws Exception {
+    var contents = Toolkit.getDefaultToolkit().getSystemClipboard().getContents(null);
+    assertTrue(contents.isDataFlavorSupported(DataFlavor.imageFlavor),
+        "the later board image must remain on the clipboard");
+    Image image = (Image) contents.getTransferData(DataFlavor.imageFlavor);
+    BufferedImage snapshot = new BufferedImage(
+        image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_RGB);
+    Graphics2D graphics = snapshot.createGraphics();
+    try { graphics.drawImage(image, 0, 0, null); }
+    finally { graphics.dispose(); }
+    return snapshot;
   }
 
   private static String clipboard() throws Exception {

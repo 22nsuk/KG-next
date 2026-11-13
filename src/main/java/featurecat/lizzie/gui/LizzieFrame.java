@@ -11040,21 +11040,22 @@ public class LizzieFrame extends JFrame {
         worker.setDaemon(true);
         return worker;
       }), SwingUtilities::invokeLater, AtomicSgfFileWriter::write);
-  private static long sgfCopyRequest;
+  // EDT-owned ordering shared by SGF and board-image copies, including detached boards.
+  private static long boardCopyRequest;
 
   public void copySgf() {
     if (!SwingUtilities.isEventDispatchThread()) {
       SwingUtilities.invokeLater(this::copySgf);
       return;
     }
-    long request = ++sgfCopyRequest;
+    long request = ++boardCopyRequest;
     Config config = Lizzie.config;
     boolean displayed = isDisplayable();
     try {
       SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
           Lizzie.board, Lizzie.board.getHistory(), false);
       sgfCopies.submit(snapshot::serialize,
-          () -> request == sgfCopyRequest && Lizzie.frame == this && Lizzie.config == config
+          () -> request == boardCopyRequest && Lizzie.frame == this && Lizzie.config == config
               && !localSgfOpenClosed && (!displayed || isDisplayable()),
           sgfContent -> {
             try {
@@ -12521,6 +12522,8 @@ public class LizzieFrame extends JFrame {
   }
 
   protected static void setClipboardImage(final Image image) {
+    // Retire pending SGF publication at the common boundary for every board-image copy.
+    ++boardCopyRequest;
     Transferable trans =
         new Transferable() {
           public DataFlavor[] getTransferDataFlavors() {
