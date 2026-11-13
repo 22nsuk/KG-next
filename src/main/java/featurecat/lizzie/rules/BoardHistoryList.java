@@ -396,7 +396,9 @@ public class BoardHistoryList {
     Optional<BoardHistoryNode> n = head.next(includeDummay);
     // n.ifPresent(x -> head = x);
     if (n.isPresent()) {
-      if (Lizzie.leelaz != null) Lizzie.leelaz.clearBestMoves();
+      if (!BoardHistoryNode.suppressGlobalMoveSideEffects() && Lizzie.leelaz != null) {
+        Lizzie.leelaz.clearBestMoves();
+      }
       head = n.get();
       // Lizzie.board.clearAfterMove();
     }
