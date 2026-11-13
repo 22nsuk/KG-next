@@ -1287,9 +1287,7 @@ public class KataGoAutoSetupDialog extends JDialog {
                   + ": "
                   + lblAnalysisConfigValue.getToolTipText();
           try {
-            Toolkit.getDefaultToolkit()
-                .getSystemClipboard()
-                .setContents(new java.awt.datatransfer.StringSelection(paths), null);
+            ClipboardCopy.setContents(new java.awt.datatransfer.StringSelection(paths));
           } catch (IllegalStateException unavailable) {
             Toolkit.getDefaultToolkit().beep();
           }

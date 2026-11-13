@@ -26,7 +26,10 @@ the separately timed atomic write. Synchronous text exports still return their
 result directly; they are not the file-save path. Clipboard Copy freezes the same
 save snapshot when clicked, serializes on `lizzie-sgf-copy`, and publishes on the
 EDT only for the latest copy request and its still-live frame/config. Later board
-edits do not change that captured text. Its bounded serial queue is separate from
+edits do not change that captured text. Explicit application clipboard writes
+(board images, URLs, diagnostics, commands and setup paths) share `ClipboardCopy`:
+each new copy retires older SGF publication, and the revision check and clipboard
+write are atomic. Its bounded serial queue is separate from
 disk saves, so Copy does not alter saved-list revisions or Open-after-Save barriers. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 

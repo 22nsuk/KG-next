@@ -65,7 +65,6 @@ import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.*;
-import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
@@ -11045,28 +11044,26 @@ public class LizzieFrame extends JFrame {
         worker.setDaemon(true);
         return worker;
       }), SwingUtilities::invokeLater, AtomicSgfFileWriter::write);
-  // EDT-owned ordering shared by SGF and board-image copies, including detached boards.
-  private static long boardCopyRequest;
 
   public void copySgf() {
     if (!SwingUtilities.isEventDispatchThread()) {
       SwingUtilities.invokeLater(this::copySgf);
       return;
     }
-    long request = ++boardCopyRequest;
+    long request = ClipboardCopy.beginRequest();
     Config config = Lizzie.config;
     boolean displayed = isDisplayable();
     try {
       SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
           Lizzie.board, Lizzie.board.getHistory(), false);
       sgfCopies.submit(snapshot::serialize,
-          () -> request == boardCopyRequest && Lizzie.frame == this && Lizzie.config == config
+          () -> Lizzie.frame == this && Lizzie.config == config
               && !localSgfOpenClosed && (!displayed || isDisplayable()),
           sgfContent -> {
             try {
-              Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-              clipboard.setContents(new StringSelection(sgfContent), null);
-              SgfObservation.record("export", "ok", "clipboard", null);
+              if (ClipboardCopy.publish(request, new StringSelection(sgfContent))) {
+                SgfObservation.record("export", "ok", "clipboard", null);
+              }
             } catch (RuntimeException failure) {
               SgfObservation.record("export", "failed", "clipboard", failure);
               throw failure;
@@ -12527,8 +12524,6 @@ public class LizzieFrame extends JFrame {
   }
 
   protected static void setClipboardImage(final Image image) {
-    // Retire pending SGF publication at the common boundary for every board-image copy.
-    ++boardCopyRequest;
     Transferable trans =
         new Transferable() {
           public DataFlavor[] getTransferDataFlavors() {
@@ -12545,7 +12540,7 @@ public class LizzieFrame extends JFrame {
             throw new UnsupportedFlavorException(flavor);
           }
         };
-    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(trans, null);
+    ClipboardCopy.setContents(trans);
   }
 
   public void syncOnline(String url) {

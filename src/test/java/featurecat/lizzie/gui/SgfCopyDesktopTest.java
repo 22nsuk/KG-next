@@ -3,7 +3,9 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.SGFParser;
+import java.awt.Component;
 import java.awt.Graphics2D;
 import java.awt.Image;
 import java.awt.Toolkit;
@@ -21,6 +23,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import javax.swing.JDialog;
+import javax.swing.JMenu;
+import javax.swing.JMenuItem;
 import javax.swing.SwingUtilities;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
@@ -120,7 +124,28 @@ class SgfCopyDesktopTest {
     DesktopProbeProcess.phase(result, "copy-image-ownership");
     assertImageCopyWins(queue, worker, () -> Lizzie.frame.saveMainBoardToClipboard());
     assertImageCopyWins(queue, worker, () -> Lizzie.frame.copySubBoard());
-    // A new SGF request after an image copy must still be allowed to publish.
+    DesktopProbeProcess.phase(result, "copy-url-ownership");
+    String url = "http://127.0.0.1:9998/?token=clipboard-test";
+    WebBoardManager previousManager = Lizzie.webBoardManager;
+    try {
+      // Only server readiness/URL are substituted; exercise the real menu and clipboard writes.
+      edt(() -> {
+        Lizzie.webBoardManager = new WebBoardManager() {
+          @Override public boolean isRunning() { return true; }
+          @Override public String getAccessUrl() { return url; }
+        };
+        return null;
+      });
+      assertTextCopyWins(queue, worker, url, () -> {
+        JMenuItem copyUrl = findMenuItem(LizzieFrame.menu.getComponents(),
+            Lizzie.resourceBundle.getString("Menu.webBoardCopyUrl"));
+        assertNotNull(copyUrl, "web board URL copy menu must be available");
+        copyUrl.doClick();
+      });
+    } finally {
+      edt(() -> { Lizzie.webBoardManager = previousManager; return null; });
+    }
+    // A new SGF request after another copy must still be allowed to publish.
     edt(() -> {
       assertTrue(SGFParser.loadFromString(LATEST, false));
       Lizzie.frame.copySgf();
@@ -133,6 +158,8 @@ class SgfCopyDesktopTest {
     try (var blocked = new WorkerBlock(worker)) {
       blocked.awaitStarted();
       edt(() -> {
+        Lizzie.board.getHistory().getStart().getData().setAuthoredComment("copy after close");
+        assertNotEquals(expected, SGFParser.saveToString(false));
         Lizzie.frame.copySgf();
         Lizzie.frame.dispose();
         return null;
@@ -142,6 +169,36 @@ class SgfCopyDesktopTest {
       assertEquals(expected, clipboard(), "a closed frame cannot publish its pending copy");
     }
     Files.writeString(result, "PASS");
+  }
+
+  private static void assertTextCopyWins(
+      SgfSaveQueue queue, Executor worker, String expected, Runnable copyText) throws Exception {
+    try (var blocked = new WorkerBlock(worker)) {
+      blocked.awaitStarted();
+      edt(() -> {
+        // Even recopying identical text must supersede the pending SGF request.
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+            .setContents(new StringSelection(expected), null);
+        Lizzie.frame.copySgf();
+        copyText.run();
+        return null;
+      });
+      assertEquals(expected, clipboard());
+      blocked.release();
+      queue.pending().get(20, TimeUnit.SECONDS);
+      assertEquals(expected, clipboard(), "an older SGF copy cannot replace later text");
+    }
+  }
+
+  private static JMenuItem findMenuItem(Component[] components, String label) {
+    for (Component component : components) {
+      if (component instanceof JMenuItem item && label.equals(item.getText())) return item;
+      if (component instanceof JMenu menu) {
+        JMenuItem found = findMenuItem(menu.getMenuComponents(), label);
+        if (found != null) return found;
+      }
+    }
+    return null;
   }
 
   private static void assertImageCopyWins(SgfSaveQueue queue, Executor worker, Runnable copyImage)

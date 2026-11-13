@@ -4234,7 +4234,7 @@ public class Menu extends JMenuBar {
             String url = Lizzie.webBoardManager.getAccessUrl();
             java.awt.datatransfer.StringSelection sel =
                 new java.awt.datatransfer.StringSelection(url);
-            java.awt.Toolkit.getDefaultToolkit().getSystemClipboard().setContents(sel, null);
+            ClipboardCopy.setContents(sel);
           }
         });
 
