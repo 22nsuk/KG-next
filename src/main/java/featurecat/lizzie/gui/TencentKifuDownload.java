@@ -365,9 +365,13 @@ public class TencentKifuDownload extends JFrame {
       }
       if (jsonObject.has("chess")) {
         String kifu = jsonObject.getString("chess");
+        GetTencentRequest source = tencentReq;
         showProgressNotice(Lizzie.frame.kifuLoadText("KifuLoad.parsing"));
-        Lizzie.frame.loadDownloadedSgfString(
-            kifu, 0, false, false, null, this::completeTencentKifuLoadRequest);
+        Lizzie.frame.loadSgfStringAsync(
+            kifu, 0, false, false, null, () -> tencentReq == source)
+            .thenAcceptAsync(loaded -> {
+              if (tencentReq == source) completeTencentKifuLoadRequest(loaded);
+            }, SwingUtilities::invokeLater);
       }
     } catch (Exception e) {
       e.printStackTrace();

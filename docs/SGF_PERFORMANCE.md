@@ -1,7 +1,9 @@
 # SGF read and serialization measurements
 
 Interactive SGF/GIB opening from the chooser, a single dropped file, and the recent
-file menu reads and decodes on `lizzie-sgf-read`. SGF preparation builds immutable
+file menu reads and decodes on `lizzie-sgf-read`. Paste, Fox/Tencent downloads and
+ordinary online SGF imports submit their already available strings to the same
+queue. SGF preparation builds immutable
 `SgfDocument` syntax and a private file-import history, including analysis payloads;
 GIB preparation parses headers and move commands. There is one active preparation
 and at most one waiting selection.
@@ -13,6 +15,9 @@ window lifetime, explicit game edits and foreground game/analysis ownership.
 Ordinary engine analysis is not an authored edit. An immediate Open after Save
 waits for accepted saves and their metadata publication, including writes
 accepted while waiting.
+An existing comment draft is committed to its original node before an accepted
+replacement captures its edit snapshot. Starting comment editing during preparation
+retires that result; uncommitted editor text is not installed onto a different game.
 
 File saves freeze their tree, candidate/PV values and export settings on the
 requesting owner, then serialize on the save worker. The manual probe uses the
@@ -37,12 +42,28 @@ Detached `parseSgf` also builds a private history from captured import options a
 history-owned geometry without replacing the live board dimensions or Zobrist
 tables. File opening reuses its own event builder against a private history rather
 than substituting `buildHistory`: the standalone parser's komi aliases, flags and
-property policy are not interchangeable with file import.
+property policy are not interchangeable with file import. String imports reuse
+the file-import builder, then retain their own synchronous final navigation and
+secondary-analysis hint policy on the EDT. Their text, parse preferences (including
+the caller's komi choice) and last-move option are frozen when requested. They do
+not adopt the file queue's publication-time preference rebuild policy.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
 for batch and startup compatibility callers, including synchronous GIB loading.
 `openFileAsync` completes after parsing/application; its result does not promise
 engine synchronization. Navigation and successful-open callbacks retain their
 existing next-EDT-turn ordering.
+`loadSgfStringAsync` likewise reports actual application, separately from engine
+synchronization; superseded/closed/edited requests complete false. Paste keeps its
+replacement confirmation, and download dialogs settle on the EDT only after that
+result. HumanSL teardown precedes automatic quick-analysis restoration for string
+imports, and rejected teardown continuations do not retire an accepted selection.
+Raw SGF URLs keep the current game while downloading and preparing, including
+invalid responses. A user-requested analysis resume waits for the latest accepted
+open to settle: successful application owns its resume, while rejection preserves
+the pending resume on the current game.
+The synchronous boolean string APIs remain compatibility entries; interactive
+production callers use the explicit asynchronous result. Structured Yike live-board
+merging retains its distinct standalone-parser and incremental-sync contract.
 
 Saved-list buttons, thumbnails and enlarged previews share this asynchronous
 path. They retain panel/session ownership and resolve saved cursor metadata only
@@ -70,6 +91,7 @@ investigating a particular file. The manual probe below does so automatically.
 | `board-clear` | Preparing the board for file application |
 | `parse-build-tree` | Decoding SGF properties/analysis and constructing a private history; on the read worker for interactive opening |
 | `file-apply` | The interactive EDT application envelope, including clear/history installation (or GIB command application) and UI updates |
+| `string-apply` | Prepared string installation, existing final navigation and UI updates on the EDT |
 | `board-finalize` | Deferred cursor navigation and final board cleanup |
 | `engine-sync-attempt` | One coordinator worker attempt, including engine response waits |
 | `save-capture` | Frozen topology and node payload copies |
