@@ -1,12 +1,14 @@
 # SGF read and serialization measurements
 
-Interactive SGF opening from the chooser, a single dropped file, and the recent
-file menu reads, decodes, normalizes and builds immutable `SgfDocument` syntax on
-`lizzie-sgf-read`. There is one active read/parse and at most one waiting selection.
+Interactive SGF/GIB opening from the chooser, a single dropped file, and the recent
+file menu reads and decodes on `lizzie-sgf-read`. SGF preparation builds immutable
+`SgfDocument` syntax and a private file-import history, including analysis payloads;
+GIB preparation parses headers and move commands. There is one active preparation
+and at most one waiting selection.
 A newer accepted selection retires earlier results. Existing quick-analysis and
 AI Coach teardown admission runs first; a rejected continuation cannot retire
 the first accepted open. The read/edit snapshot is captured after admission. Before
-applying the prepared document on the EDT, the frame checks the selection, original frame/config,
+applying the prepared result on the EDT, the frame checks the selection, original frame/config,
 window lifetime, explicit game edits and foreground game/analysis ownership.
 Ordinary engine analysis is not an authored edit. An immediate Open after Save
 waits for accepted saves and their metadata publication, including writes
@@ -19,22 +21,25 @@ the separately timed atomic write. Synchronous text exports still return their
 result directly; they are not the file-save path. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 
-Interactive history construction, analysis-payload import and board application
-still use the original EDT/global board context. Syntax preparation shares the
-file loader's normalization and leading-node-fragment tolerance; applying the
-prepared document does not read or parse it again. A syntax failure returns before
-clearing the current board. Commit failures still use the existing rollback path.
-Import preferences, UI updates and engine synchronization retain their current
-owners. Cancellation retires the result, rather than interrupting an active
-parser; a read retired before syntax preparation skips that preparation.
+SGF history construction uses captured import preferences and history-owned
+geometry without changing the live board, engine, menu or sound state. If those
+preferences change before publication, the worker rebuilds from the same syntax
+without another file read. File normalization, leading-node-fragment tolerance,
+komi aliases, explicit DZ flags, setup state, move markers and secondary-analysis
+hints retain the file loader's interpretation. Missing/disabled/invalid imported
+komi uses the existing clear/reopen default at application time. Preparation
+failure returns before clearing the current board; commit failures retain rollback.
+Board installation, settings-dependent move-list metadata, UI updates, GIB command
+application, final navigation and engine synchronization retain their existing owners. Cancellation retires a result rather
+than interrupting an active parser; a retired read skips subsequent preparation.
 
 Detached `parseSgf` also builds a private history from captured import options and
 history-owned geometry without replacing the live board dimensions or Zobrist
-tables. The interactive path continues to use its existing live history builder,
-whose komi aliases, setup state, hints and UI behavior are not interchangeable
-with the detached builder.
+tables. File opening reuses its own event builder against a private history rather
+than substituting `buildHistory`: the standalone parser's komi aliases, flags and
+property policy are not interchangeable with file import.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
-for batch and startup compatibility callers. GIB loading is also still synchronous.
+for batch and startup compatibility callers, including synchronous GIB loading.
 `openFileAsync` completes after parsing/application; its result does not promise
 engine synchronization. Navigation and successful-open callbacks retain their
 existing next-EDT-turn ordering.
@@ -45,8 +50,8 @@ after prior load finalization and pending save publication. A newly accepted
 save/edit retires an in-flight saved-list read, including when SGF replacement
 succeeds but manifest publication fails. See [saved-game records](SAVED_GAME_RECORDS.md)
 for cancellation and retry behavior. The real-window saved-list test blocks the
-read worker and checks that the EDT remains responsive; it does not measure a
-whole-open latency reduction or move live history construction off the EDT.
+read worker and checks that the EDT remains responsive. The actual-window
+measurements below separately examine SGF preparation and application costs.
 
 ## Opt-in phase recording
 
@@ -60,21 +65,24 @@ investigating a particular file. The manual probe below does so automatically.
 | `file-read` | Reading the complete byte sequence once |
 | `detect-decode` | Legacy charset detection/fallback and byte-to-text decoding |
 | `parse-syntax` | File input normalization and immutable syntax preparation; on the read worker for interactive opening |
+| `parse-gib` | GIB header and move-command preparation; on the read worker for interactive opening |
 | `open-edit-capture` | The existing explicit-edit snapshot used to protect the current game |
 | `board-clear` | Preparing the board for file application |
-| `parse-build-tree` | Applying prepared events, decoding properties/analysis and constructing the live history |
-| `file-apply` | The interactive EDT application envelope, including clear/history construction and UI updates |
+| `parse-build-tree` | Decoding SGF properties/analysis and constructing a private history; on the read worker for interactive opening |
+| `file-apply` | The interactive EDT application envelope, including clear/history installation (or GIB command application) and UI updates |
 | `board-finalize` | Deferred cursor navigation and final board cleanup |
 | `engine-sync-attempt` | One coordinator worker attempt, including engine response waits |
 | `save-capture` | Frozen topology and node payload copies |
 | `save-serialize` | Formatting the captured history as SGF |
 
-Nested events overlap: do not add `file-apply` to its clear/parse children.
+Nested events overlap: do not add `file-apply` to its `board-clear` child.
 Engine attempts exclude queue/retry delays and are not an engine search speed
 measurement. Offline attempts do not measure a native engine. `parse-syntax` is
 separate from history construction; the latter still combines property/analysis
-interpretation with board mutations. The historical `parse-build-tree` measurements
-below included syntax parsing as well, so they have a different phase boundary.
+interpretation with private-history mutations. Historical `parse-build-tree`
+measurements before syntax preparation included syntax parsing as well, and older
+`file-apply` measurements included tree construction. Compare those boundaries
+explicitly rather than treating all historical phase totals as equivalent.
 
 ## Reproduce with the actual window
 
@@ -125,6 +133,80 @@ escaped multilingual comments. A fourth fixture has 151 nodes, 32 candidates,
 Generated fixture hashes and source identities
 belong with any reported measurement so results cannot silently outlive changes.
 
+## Private file-history and GIB preparation (2026-11-13)
+
+Main `fe3903da56a6749d25b0a8190f866bbb4e71d9ff` already contains syntax
+preparation (#165) and saved-list asynchronous opening (#167). This follow-up
+uses their existing bounded queue for GIB read/decode/command preparation and
+SGF file-history/analysis construction. File-specific komi aliases, flags and
+properties stay with the file builder. Import options are captured and checked
+again before publication; changed options rebuild the same document. Application
+retains geometry/default-komi adoption, settings-dependent move metadata, initial
+setup stabilization, UI publication and final navigation. The standalone parser
+keeps its separate policy.
+
+The [measurement data](performance/2026-11-13/sgf-prepared-open.json) identifies
+production revision `488e4f2f8c152771a49fa9a1e8164bf8b50ba11b`, its seven changed
+production files by Git blob/SHA-256, the unchanged probe, fixtures and compiled
+artifacts. Four independent actual-window JVMs ran in before/after/after/before
+order on Linux amd64, Temurin 21.0.13+9, nine reported logical processors,
+Xvfb/Openbox and `-Xmx2g`. Each workload had five excluded warmups and ten retained
+samples per JVM: 20 opens and 20 reopens per version/workload. No timing or GC
+outliers were discarded, and no local builds or test workloads ran concurrently.
+These are offline, warm-filesystem observations on a shared runtime.
+
+Open EDT CPU medians fell in both execution orders (milliseconds):
+
+| Workload | First pair, before → after | Reverse pair, before → after |
+| --- | ---: | ---: |
+| Wide variations | 183.70 → 138.94 | 195.53 → 140.77 |
+| Candidates + ownership | 83.95 → 35.50 | 81.44 → 46.77 |
+| Long multilingual comments | 39.16 → 27.57 | 31.83 → 31.38 |
+| Long PV + visits + ownership | 123.58 → 35.32 | 109.31 → 38.26 |
+
+The table below pools all 20 retained open samples per version/workload. Queue
+delay is the median of each operation's largest queued-callback delay, rather
+than a worst-case bound or physical display frame time.
+
+| Workload | EDT CPU, before → after (ms) | Open wall time, before → after (ms) | Queue delay, before → after (ms) |
+| --- | ---: | ---: | ---: |
+| Wide variations | 195.53 → 138.94 | 265.80 → 225.43 | 89.47 → 73.15 |
+| Candidates + ownership | 82.54 → 39.25 | 101.74 → 98.49 | 66.75 → 21.80 |
+| Long multilingual comments | 34.88 → 31.38 | 78.69 → 80.45 | 29.19 → 14.95 |
+| Long PV + visits + ownership | 118.00 → 35.91 | 183.11 → 148.14 | 118.94 → 20.35 |
+
+These observations support reduced UI-thread work, particularly for imported
+analysis. They do not establish uniformly faster completion: the long-comment
+wall-time median increased, and its reverse-order EDT CPU difference was small.
+The explicit-edit snapshot, application, move metadata, final navigation and
+painting still consume EDT time. Reopen EDT CPU medians were 169.53 → 142.81,
+85.67 → 40.89, 31.65 → 21.13 and 118.67 → 27.75 ms in the same workload order.
+Native engines, cold disk, network shares, physical display FPS and the installed
+user's session were not measured. GIB is covered by worker/EDT and compatibility
+checks; this SGF probe does not quantify GIB latency.
+
+Every open/reopen recorded exactly one syntax preparation and one tree build.
+Syntax used `lizzie-sgf-read` in both versions; tree construction moved from the
+EDT to that worker, while `file-apply` stayed on the EDT. Baseline `file-apply`
+includes tree construction and candidate `file-apply` excludes it, so those
+nested phase totals must not be added together or interpreted as removed CPU
+work. Source/class/dependency hashes stayed unchanged before and after every
+run, and the two runs per version used identical artifacts. All 240 saved files,
+including warmups, matched byte-for-byte and passed the probe's tree, comment,
+analysis, PV/visit, ownership and save/reopen semantic checks.
+
+Compatibility checks include the original file-only KO/DZ/FIT interpretation,
+offline default komi, changed import options, root best-move markers, edit
+undo/redo metadata, shared move/pass prefixes, small SZ axis fallbacks and
+repeated SZ declarations. Thirteen independent expectations also passed on the
+unchanged baseline. Negative controls detected the old phase placement and the
+unpatched shared-prefix engine callback. The candidate's 1,100 headless cases
+had no failures or errors, with one desktop case deferred to its actual-window
+run; saved-list retries and SGF markup then passed with a required display.
+A separate merge of the four currently open PRs (#166, #169, #171, #172) was
+conflict-free and passed the relevant headless and actual-window checks recorded
+in the data. Exact PR-head CI remains a separate required gate.
+
 ## Interactive syntax preparation (2026-11-12)
 
 The baseline is main `cbaf8a981f97bd00a2fb04fe3acb49615e7c848c`. The
@@ -174,7 +256,7 @@ the wall-time differences.
 Every candidate open/reopen recorded exactly one `parse-syntax` event on
 `lizzie-sgf-read` and one `parse-build-tree` event on the EDT. The actual history
 builder, analysis-payload interpretation, property escape decoding, explicit-edit
-snapshots and final navigation still consume EDT time. The `parse-build-tree`
+snapshots and final navigation still consumed EDT time at that revision. The `parse-build-tree`
 boundary excludes syntax in the candidate and includes it in the baseline;
 comparing that phase alone would overstate saved work. Native engine response
 time, cold disk, network shares and end-user hardware were not measured.
@@ -214,8 +296,9 @@ source/fixture hashes were retained with the local measurement record.
 
 At that revision, the parser, explicit-edit capture, save capture and
 serialization could all delay EDT work on large trees. File serialization now
-uses a detached worker input; parsing and capture still require their original
-owners. The historical measurements above do not quantify this later change.
+uses a detached worker input; interactive SGF preparation now also owns a private
+history, while capture remains with its owner. The historical measurements above
+do not quantify those later changes.
 Synthetic offline timings should
 be supplemented with the user's representative files and actual engine when
 investigating a specific slow opening.

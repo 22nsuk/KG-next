@@ -44,7 +44,7 @@ public class BoardHistoryNode {
     }
   }
 
-  private static boolean suppressGlobalMoveSideEffects() {
+  static boolean suppressGlobalMoveSideEffects() {
     return DETACHED_BRANCH_NUMBERING.get() != null;
   }
 
@@ -57,6 +57,24 @@ public class BoardHistoryNode {
     nodeInfo2 = new NodeInfo();
     nodeInfoMain2 = new NodeInfo();
     this.data = data;
+  }
+
+  /** Recomputes the move marker using only this history's analysis and geometry. */
+  void updateIsBest() {
+    if (previous.isPresent()
+        && previous.get().getData().getPlayouts() > 0
+        && data.isMoveNode()
+        && previous.get().getData().bestMoves != null
+        && !previous.get().getData().bestMoves.isEmpty()) {
+      int[] coords = data.lastMove.get();
+      try {
+        int[] bestCoords = Board.convertNameToCoordinates(
+            previous.get().getData().bestMoves.get(0).coordinate, data.zobrist.height());
+        isBest = bestCoords[0] == coords[0] && bestCoords[1] == coords[1];
+      } catch (Exception e) {
+        e.printStackTrace();
+      }
+    } else isBest = false;
   }
 
   /** Remove all subsequent nodes. */

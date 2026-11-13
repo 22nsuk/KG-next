@@ -1,16 +1,18 @@
 package featurecat.lizzie.gui;
 
+import featurecat.lizzie.rules.GIBParser;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.SgfDocument;
 import featurecat.lizzie.util.SgfFileReader;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import javax.swing.SwingUtilities;
 
-/** At most one active read/parse and one waiting selection. Request state belongs to the EDT. */
+/** SGF/GIB preparation: one active request and one latest waiting selection, owned by the EDT. */
 final class SgfReadQueue {
   @FunctionalInterface
   interface Reader {
@@ -29,14 +31,32 @@ final class SgfReadQueue {
   private Request active;
   private Request waiting;
 
-  private record Request(Path path, CompletableFuture<SgfDocument> result) {}
+  sealed interface PreparedFile {
+    boolean apply(boolean showHint);
+  }
+
+  record PreparedSgf(
+      SgfDocument document, SGFParser.ParseOptions options, SGFParser.PreparedGame game)
+      implements PreparedFile {
+    @Override public boolean apply(boolean showHint) {
+      return SGFParser.loadPreparedFile(game, showHint, false);
+    }
+  }
+
+  private record PreparedGib(GIBParser.PreparedGame game) implements PreparedFile {
+    @Override public boolean apply(boolean showHint) {
+      return GIBParser.loadPreparedGame(game);
+    }
+  }
+
+  private record Request(Path path, CompletableFuture<PreparedFile> result) {}
 
   SgfReadQueue(Executor worker, Reader reader) {
     this.worker = worker;
     this.reader = reader;
   }
 
-  CompletableFuture<SgfDocument> prepare(Path path) {
+  CompletableFuture<PreparedFile> prepare(Path path) {
     if (!SwingUtilities.isEventDispatchThread()) {
       throw new IllegalStateException("SGF read requests belong to the event thread");
     }
@@ -54,18 +74,27 @@ final class SgfReadQueue {
     Request request = waiting;
     waiting = null;
     active = request;
+    SGFParser.ParseOptions options = SGFParser.ParseOptions.capture();
     try {
       worker.execute(() -> {
-        SgfDocument document = null;
+        PreparedFile prepared = null;
         Throwable failure = null;
         try {
           String content = reader.read(request.path());
-          // Superseded reads keep the active slot but need not start syntax preparation.
-          if (!request.result().isCancelled()) document = SGFParser.prepareFileContent(content);
+          // Superseded reads keep the active slot but need not start parsing or building a tree.
+          if (!request.result().isCancelled()) {
+            if (request.path().getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gib")) {
+              var game = GIBParser.prepareFileContent(content);
+              if (game != null) prepared = new PreparedGib(game);
+            } else {
+              SgfDocument document = SGFParser.prepareFileContent(content);
+              if (document != null) prepared = prepareSgf(document, options);
+            }
+          }
         } catch (IOException | RuntimeException | Error caught) {
           failure = caught;
         }
-        SgfDocument value = document;
+        PreparedFile value = prepared;
         Throwable error = failure;
         SwingUtilities.invokeLater(() -> finish(request, value, error));
       });
@@ -74,10 +103,39 @@ final class SgfReadQueue {
     }
   }
 
-  private void finish(Request request, SgfDocument document, Throwable failure) {
+  private static PreparedSgf prepareSgf(SgfDocument document, SGFParser.ParseOptions options) {
+    return new PreparedSgf(document, options, SGFParser.prepareFileGame(document, options));
+  }
+
+  private void finish(Request request, PreparedFile prepared, Throwable failure) {
+    if (failure == null && !request.result().isCancelled() && prepared instanceof PreparedSgf sgf) {
+      SGFParser.ParseOptions current = SGFParser.ParseOptions.capture();
+      if (!sgf.options().equals(current)) {
+        // Import preferences used to be read on application. Rebuild from the same syntax so a
+        // setting changed during preparation still takes effect without another file read.
+        try {
+          worker.execute(() -> {
+            PreparedFile rebuilt = null;
+            Throwable error = null;
+            try {
+              if (!request.result().isCancelled()) rebuilt = prepareSgf(sgf.document(), current);
+            } catch (RuntimeException | Error caught) {
+              error = caught;
+            }
+            PreparedFile value = rebuilt;
+            Throwable caught = error;
+            SwingUtilities.invokeLater(() -> finish(request, value, caught));
+          });
+        } catch (RuntimeException rejected) {
+          finish(request, null, rejected);
+        }
+        return;
+      }
+      if (sgf.game() == null) prepared = null;
+    }
     // Keep the active slot until callbacks settle: a callback may enqueue another selection.
     try {
-      if (failure == null) request.result().complete(document);
+      if (failure == null) request.result().complete(prepared);
       else request.result().completeExceptionally(failure);
     } finally {
       active = null;

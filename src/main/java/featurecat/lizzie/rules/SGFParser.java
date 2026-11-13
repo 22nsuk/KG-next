@@ -59,8 +59,6 @@ public class SGFParser {
   private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
 
-  private static boolean isExtraMode2 = false;
-
   // static boolean oriEmpty = false;
 
   public static boolean load(String filename, boolean showHint) throws IOException {
@@ -102,8 +100,20 @@ public class SGFParser {
   /** The live board owner applies prepared syntax; no file I/O or syntax parsing is repeated. */
   public static boolean loadFileDocument(
       SgfDocument document, boolean showHint, boolean syncPrimaryEngine) {
-    if (document == null) return false;
-    isExtraMode2 = false;
+    PreparedGame prepared;
+    try {
+      prepared = prepareFileGame(document, ParseOptions.capture());
+    } catch (RuntimeException invalidSgf) {
+      SgfObservation.record("open", "failed", null, invalidSgf);
+      return false;
+    }
+    return loadPreparedFile(prepared, showHint, syncPrimaryEngine);
+  }
+
+  /** Commits one privately prepared file history through the existing clear/finalization boundary. */
+  public static boolean loadPreparedFile(
+      PreparedGame prepared, boolean showHint, boolean syncPrimaryEngine) {
+    if (prepared == null) return false;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
     boolean finalizerScheduled = false;
     Lizzie.board.isLoadingFile = true;
@@ -115,14 +125,10 @@ public class SGFParser {
           Lizzie.board.clearWithoutPrimaryEngineForwarding();
         }
       }
-      boolean returnValue;
       try {
-        returnValue = parse(document);
+        applyPreparedGame(prepared);
       } catch (RuntimeException invalidSgf) {
         SgfObservation.record("open", "failed", null, invalidSgf);
-        return false;
-      }
-      if (!returnValue) {
         return false;
       }
       Board loadedBoard = Lizzie.board;
@@ -144,7 +150,7 @@ public class SGFParser {
                     ;
                 if (syncPrimaryEngine) syncPrimaryEngineAfterSgfLoad();
                 Lizzie.board.clearAfterMove();
-                if (isExtraMode2
+                if (prepared.extraMode2
                     && !Lizzie.config.isDoubleEngineMode()
                     && !Lizzie.config.isAutoAna
                     && showHint) {
@@ -190,7 +196,7 @@ public class SGFParser {
       SgfObservation.record("import", "failed", null, null);
       return false;
     }
-    isExtraMode2 = false;
+    PreparedGame prepared = null;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
     boolean result = false;
     boolean committed = false;
@@ -202,7 +208,8 @@ public class SGFParser {
         Lizzie.board.clearWithoutPrimaryEngineForwarding();
       }
       try {
-        result = parse(sgfString);
+        prepared = parse(sgfString);
+        result = prepared != null;
       } catch (RuntimeException invalidSgf) {
         SgfObservation.record("import", "failed", null, invalidSgf);
         return false;
@@ -221,7 +228,7 @@ public class SGFParser {
       if (syncPrimaryEngine) syncPrimaryEngineAfterSgfLoad();
       Lizzie.board.isLoadingFile = false;
       committed = true;
-      if (isExtraMode2 && !Lizzie.config.isDoubleEngineMode() && !Lizzie.config.isAutoAna) {
+      if (prepared.extraMode2 && !Lizzie.config.isDoubleEngineMode() && !Lizzie.config.isAutoAna) {
         int ret =
             JOptionPane.showConfirmDialog(
                 Lizzie.frame,
@@ -406,7 +413,7 @@ public class SGFParser {
     Lizzie.board.startStonelist = new ArrayList<Movelist>();
     Lizzie.board.isLoadingFile = true;
     try {
-      return parse(sgfString);
+      return parse(sgfString) != null;
     } finally {
       Lizzie.board.isLoadingFile = false;
       Lizzie.board.getHistory().restoreSessionRulesTarget(sessionRules);
@@ -458,18 +465,62 @@ public class SGFParser {
     return SgfDocument.convertSgfPosToCoord(pos, width, height);
   }
 
-  private static boolean parse(String value) {
-    return parse(parseLoadDocument(value));
+  private static PreparedGame parse(String value) {
+    PreparedGame prepared = prepareFileGame(parseLoadDocument(value), ParseOptions.capture());
+    if (prepared != null) applyPreparedGame(prepared);
+    return prepared;
   }
 
-  private static boolean parse(SgfDocument document) {
-    boolean oriPlaySound = Lizzie.config.playSound;
-    try (var phase = new SgfPhase("parse-build-tree")) {
-      Lizzie.config.playSound = false;
-      return parseIntoCurrentBoard(document);
-    } finally {
-      Lizzie.config.playSound = oriPlaySound;
+  /** Private until publication; the file loader alone receives and adopts this history. */
+  public static final class PreparedGame {
+    private final BoardHistoryList history;
+    private BoardHistoryNode rewindStart;
+    private boolean importedKomi;
+    private boolean extraMode2;
+    private boolean pkBoard;
+    private boolean kataBoard;
+    private boolean pkBoardKataB;
+    private boolean pkBoardKataW;
+
+    private PreparedGame(SgfDocument document, ParseOptions options) {
+      // Match Board.reopen's file-loader fallback before allocating a private position.
+      int width = document.width() >= 2 ? document.width() : 19;
+      int height = document.height() >= 2 ? document.height() : 19;
+      if (!Board.isValidBoardSize(width, height)) {
+        throw new IllegalArgumentException("Board dimensions exceed the array index range");
+      }
+      history = new BoardHistoryList(BoardData.empty(width, height));
+      history.getGameInfo().setKomiNoMenu(options.defaultKomi());
     }
+  }
+
+  /** Builds file-loader semantics without publishing a board or consulting changing import policy. */
+  public static PreparedGame prepareFileGame(SgfDocument document, ParseOptions options) {
+    if (document == null) return null;
+    try (var phase = new SgfPhase("parse-build-tree")) {
+      PreparedGame prepared = new PreparedGame(document, options);
+      BoardHistoryNode.runWithoutGlobalMoveSideEffects(options.newMoveNumberInBranch(),
+          () -> buildFileHistory(document, prepared, options));
+      return prepared;
+    }
+  }
+
+  private static void applyPreparedGame(PreparedGame prepared) {
+    Board board = Lizzie.board;
+    BoardHistoryList history = prepared.history;
+    board.reopen(history.getData().zobrist.width(), history.getData().zobrist.height());
+    // Clear/reopen owns the default (including engine/read-board policy), not the worker.
+    if (!prepared.importedKomi) {
+      history.getGameInfo().setKomiNoMenu(board.getHistory().getGameInfo().getKomi());
+    }
+    board.setFileHistory(history, prepared.pkBoard, prepared.kataBoard,
+        prepared.pkBoardKataB, prepared.pkBoardKataW);
+    board.restoreFileMoveMetadata(prepared.rewindStart);
+    stabilizeRootSetupSideToPlay(history);
+    if (prepared.importedKomi) history.getGameInfo().refreshKomiDisplay();
+    GameInfo info = history.getGameInfo();
+    Lizzie.frame.setPlayers(info.getPlayerWhite(), info.getPlayerBlack());
+    Lizzie.frame.setResult(info.getResult());
   }
 
   private static SgfDocument parseLoadDocument(String value) {
@@ -481,10 +532,12 @@ public class SGFParser {
     return document;
   }
 
-  // Syntax is detached first; the interactive owner applies the document to its live history.
-  private static boolean parseIntoCurrentBoard(SgfDocument document) {
-    if (document == null) return false;
-    Lizzie.board.reopen(document.width(), document.height());
+  // Keep the file import's KO/DZ/FIT and hint policy separate from standalone parseSgf imports.
+  private static void buildFileHistory(
+      SgfDocument document, PreparedGame prepared, ParseOptions options) {
+    BoardHistoryList history = prepared.history;
+    int width = history.getData().zobrist.width();
+    int height = history.getData().zobrist.height();
 
     int subTreeDepth = 0;
     // Save the variation step count
@@ -492,7 +545,7 @@ public class SGFParser {
     // Game properties
     Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
-    AnalysisImport analysisImport = new AnalysisImport();
+    AnalysisImport analysisImport = new AnalysisImport(options);
     PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
     boolean isMultiGo = false,
         moveStart = false,
@@ -510,7 +563,7 @@ public class SGFParser {
     String result = "";
     // boolean isChineseRule = true;
     // boolean hasHandicap = false;
-    Double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
+    Double komi = history.getGameInfo().getKomi();
     Double rootKomi = null;
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
@@ -518,26 +571,26 @@ public class SGFParser {
     for (SgfDocument.Event event : document.events()) {
       switch (event.kind()) {
         case '(':
-          flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+          flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           currentNodeHasDummy = false;
           subTreeDepth += 1;
           // Initialize the step count
-          subTreeStepMap.put(subTreeDepth, Lizzie.board.getHistory().getCurrentHistoryNode());
+          subTreeStepMap.put(subTreeDepth, history.getCurrentHistoryNode());
           addPassForMove = true;
           currentNodeHasSetupSnapshot = false;
           currentNodeHasMove = false;
           pendingProps = new HashMap<String, List<String>>();
           break;
         case ')':
-          flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+          flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           currentNodeHasDummy = false;
           if (isMultiGo) {
             // Restore to the variation node
             // int varStep = subTreeStepMap.get(subTreeDepth);
             BoardHistoryNode node = subTreeStepMap.get(subTreeDepth);
             //  for (int s = 0; s < varStep; s++)
-            while (Lizzie.board.getHistory().getCurrentHistoryNode() != node) {
-              if (!Lizzie.board.getHistory().previous().isPresent()) break;
+            while (history.getCurrentHistoryNode() != node) {
+              if (!history.previous().isPresent()) break;
             }
             //  System.out.println(subTreeDepth+" | "+varStep);
           }
@@ -551,33 +604,34 @@ public class SGFParser {
           String tagContent = event.legacyValue();
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
-            appendDummyPlaceholder(Lizzie.board.getHistory());
+            appendDummyPlaceholder(history);
             currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
-              Lizzie.board.getHistory().previous();
+              history.previous();
               currentNodeHasDummy = false;
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = convertSgfPosToCoord(tagContent);
+            int[] move = convertSgfPosToCoord(tagContent, width, height);
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
-            BoardHistoryNode parent = Lizzie.board.getHistory().getCurrentHistoryNode();
+            BoardHistoryNode parent = history.getCurrentHistoryNode();
             boolean newBranch =
                 parent.hasVariations()
                     || parent.next(true).map(BoardHistoryNode::isEndDummay).orElse(false);
             if (move == null) {
-              Lizzie.board.getHistory().pass(color, newBranch, false);
+              history.pass(color, newBranch, false);
             } else {
-              Lizzie.board.getHistory().place(move[0], move[1], color, newBranch);
+              history.place(move[0], move[1], color, newBranch, false, false,
+                  options.noCapture(), options.canSuicidal());
             }
             currentNodeHasMove = true;
             if (newBranch) {
-              processPendingPros(Lizzie.board.getHistory(), pendingProps);
+              processPendingPros(history, pendingProps);
             }
-            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {
             // Support comment
             if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
@@ -585,67 +639,67 @@ public class SGFParser {
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
-                      Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                      history, currentNodeHasSetupSnapshot);
               target.getData().comment = tagContent;
             }
           } else if (isAnalysisTag(tag)) {
             if (isSecondaryEngineAnalysisTag(tag)) {
-              isExtraMode2 = true;
+              prepared.extraMode2 = true;
             }
             if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
               bufferNodeAnalysis(pendingNodeMetadata, tag, tagContent);
             } else {
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
-                      Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                      history, currentNodeHasSetupSnapshot);
               analysisImport.applyTag(target.getData(), tag, tagContent);
             }
           } else if (tag.equals("AB") || tag.equals("AW")) {
-            int[] move = convertSgfPosToCoord(tagContent);
+            int[] move = convertSgfPosToCoord(tagContent, width, height);
             Stone color = tag.equals("AB") ? Stone.BLACK : Stone.WHITE;
             if (isRootSetupContext(
-                Lizzie.board.getHistory(), moveStart, allowRootSetupOnCurrentNode)) {
-              applyRootSetupProperty(Lizzie.board.getHistory(), tag, tagContent, move, color);
+                history, moveStart, allowRootSetupOnCurrentNode)) {
+              applyRootSetupProperty(history, tag, tagContent, move, color, false);
             } else {
               if (addPassForMove) {
                 boolean newBranch =
-                    Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
+                    history.getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    history, newBranch, pendingProps,
                     currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
-                      Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                      history, currentNodeHasSetupSnapshot);
               movePendingNodeMetadataToTarget(
-                  Lizzie.board.getHistory(), target, pendingNodeMetadata);
-              addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
+                  history, target, pendingNodeMetadata);
+              addNodePropertyOnNode(history, target, tag, tagContent);
               if (move != null) {
-                addExtraStoneOnNode(Lizzie.board.getHistory(), target, move[0], move[1], color);
+                addExtraStoneOnNode(history, target, move[0], move[1], color);
               }
             }
           } else if (tag.equals("PL")) {
             if (isRootSetupContext(
-                Lizzie.board.getHistory(), moveStart, allowRootSetupOnCurrentNode)) {
-              applyRootPlayerProperty(Lizzie.board.getHistory(), tagContent);
+                history, moveStart, allowRootSetupOnCurrentNode)) {
+              applyRootPlayerProperty(history, tagContent);
             } else {
               if (addPassForMove) {
                 boolean newBranch =
-                    Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
+                    history.getCurrentHistoryNode().hasVariations();
                 appendSetupSnapshot(
-                    Lizzie.board.getHistory(), newBranch, pendingProps,
+                    history, newBranch, pendingProps,
                     currentNodeHasMove, analysisImport);
                 addPassForMove = false;
                 currentNodeHasSetupSnapshot = true;
               }
               BoardHistoryNode target =
                   getSetupPropertyTargetNode(
-                      Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                      history, currentNodeHasSetupSnapshot);
               movePendingNodeMetadataToTarget(
-                  Lizzie.board.getHistory(), target, pendingNodeMetadata);
-              applyCurrentPlayerPropertyOnNode(Lizzie.board.getHistory(), target, tagContent);
+                  history, target, pendingNodeMetadata);
+              applyCurrentPlayerPropertyOnNode(history, target, tagContent);
             }
           } else if (tag.equals("PB")) {
             blackPlayer = decodeGameInfoText(tagContent);
@@ -655,20 +709,20 @@ public class SGFParser {
             result = decodeGameInfoText(tagContent);
           } else if (tag.equals("DZ")) {
             if (tagContent.equals("Y")) {
-              Lizzie.board.isPkBoard = true;
+              prepared.pkBoard = true;
             }
             if (tagContent.equals("KB")) {
-              Lizzie.board.isPkBoard = true;
-              Lizzie.board.isKataBoard = true;
-              Lizzie.board.isPkBoardKataB = true;
+              prepared.pkBoard = true;
+              prepared.kataBoard = true;
+              prepared.pkBoardKataB = true;
             }
             if (tagContent.equals("KW")) {
-              Lizzie.board.isPkBoard = true;
-              Lizzie.board.isKataBoard = true;
-              Lizzie.board.isPkBoardKataW = true;
+              prepared.pkBoard = true;
+              prepared.kataBoard = true;
+              prepared.pkBoardKataW = true;
             }
             if (tagContent.equals("G")) {
-              Lizzie.board.isKataBoard = true;
+              prepared.kataBoard = true;
             }
           } else if (tag.equals("KM")
               || tag.equals("KO")) { // Cyberoro and some site uses komi tag as KO.
@@ -711,42 +765,42 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch =
-                      Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
+                      history.getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      history, newBranch, pendingProps,
                       currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
-                        Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                        history, currentNodeHasSetupSnapshot);
                 movePendingNodeMetadataToTarget(
-                    Lizzie.board.getHistory(), target, pendingNodeMetadata);
-                addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
-                int[] move = convertSgfPosToCoord(tagContent);
+                    history, target, pendingNodeMetadata);
+                addNodePropertyOnNode(history, target, tag, tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, width, height);
                 if (move != null) {
                   removeStoneOnNode(
-                      Lizzie.board.getHistory(), target, move[0], move[1], Stone.EMPTY);
+                      history, target, move[0], move[1], Stone.EMPTY, false);
                 }
               } else if (currentNodeHasSetupSnapshot) {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
-                        Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-                addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
+                        history, currentNodeHasSetupSnapshot);
+                addNodePropertyOnNode(history, target, tag, tagContent);
               } else if (!"FIT".equals(tag)
                   && shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
                 bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else if (!"FIT".equals(tag)) {
                 boolean firstProp =
-                    Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
+                    history.getCurrentHistoryNode().hasVariations();
                 // (subTreeStepMap.get(subTreeDepth).hasVariations());
                 if (firstProp) {
                   addProperty(pendingProps, tag, tagContent);
                 } else {
                   addNodePropertyOnNode(
-                      Lizzie.board.getHistory(),
-                      Lizzie.board.getHistory().getCurrentHistoryNode(),
+                      history,
+                      history.getCurrentHistoryNode(),
                       tag,
                       tagContent);
                 }
@@ -754,46 +808,46 @@ public class SGFParser {
             } else {
               boolean rootSetupContext =
                   isRootSetupContext(
-                      Lizzie.board.getHistory(), moveStart, allowRootSetupOnCurrentNode);
+                      history, moveStart, allowRootSetupOnCurrentNode);
               if ("AE".equals(tag) && rootSetupContext) {
-                int[] move = convertSgfPosToCoord(tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, width, height);
                 applyRootSetupProperty(
-                    Lizzie.board.getHistory(), tag, tagContent, move, Stone.EMPTY);
+                    history, tag, tagContent, move, Stone.EMPTY, false);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch =
-                      Lizzie.board.getHistory().getCurrentHistoryNode().hasVariations();
+                      history.getCurrentHistoryNode().hasVariations();
                   appendSetupSnapshot(
-                      Lizzie.board.getHistory(), newBranch, pendingProps,
+                      history, newBranch, pendingProps,
                       currentNodeHasMove, analysisImport);
                   addPassForMove = false;
                   currentNodeHasSetupSnapshot = true;
                 }
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
-                        Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
+                        history, currentNodeHasSetupSnapshot);
                 movePendingNodeMetadataToTarget(
-                    Lizzie.board.getHistory(), target, pendingNodeMetadata);
-                addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
-                int[] move = convertSgfPosToCoord(tagContent);
+                    history, target, pendingNodeMetadata);
+                addNodePropertyOnNode(history, target, tag, tagContent);
+                int[] move = convertSgfPosToCoord(tagContent, width, height);
                 if (move != null) {
                   removeStoneOnNode(
-                      Lizzie.board.getHistory(), target, move[0], move[1], Stone.EMPTY);
+                      history, target, move[0], move[1], Stone.EMPTY, false);
                 }
               } else if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
                 bufferNodeMetadata(pendingNodeMetadata, tag, tagContent);
               } else {
                 BoardHistoryNode target =
                     getSetupPropertyTargetNode(
-                        Lizzie.board.getHistory(), currentNodeHasSetupSnapshot);
-                addNodePropertyOnNode(Lizzie.board.getHistory(), target, tag, tagContent);
+                        history, currentNodeHasSetupSnapshot);
+                addNodePropertyOnNode(history, target, tag, tagContent);
               }
             }
           }
           break;
         case ';':
           if (!(subTreeDepth > 1 && !isMultiGo)) {
-            flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+            flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
             currentNodeHasDummy = false;
             topLevelNodeCount += 1;
             allowRootSetupOnCurrentNode = topLevelNodeCount == 1;
@@ -806,38 +860,37 @@ public class SGFParser {
           throw new IllegalArgumentException("Unknown SGF event: " + event.kind());
       }
     }
-    flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
+    flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
     Optional<Double> parsedKomi =
         parsedKomiTag
             ? normalizeSgfKomi(
-                komi, rootKomi, gameProperties, Board.boardWidth * Board.boardHeight)
+                komi, rootKomi, gameProperties, width * height)
             : Optional.empty();
     if (parsedKomi.isPresent()
-        && (Lizzie.config.readKomi
-            || isSetupOrHandicapGame(Lizzie.board.getHistory())
+        && (options.readKomi()
+            || isSetupOrHandicapGame(history)
             || parseHandicapProperty(getOrDefault(gameProperties, "HA", null)) > 0)) {
       //      if (!hasHandicap && komi == 0) {
       //        if (isChineseRule) komi = 7.5;
       //        else komi = 6.5;
       //      }
-      Lizzie.board.getHistory().getGameInfo().setKomi(parsedKomi.get());
+      prepared.importedKomi = true;
+      history.getGameInfo().setKomiNoMenu(parsedKomi.get());
     }
-    Lizzie.frame.setPlayers(whitePlayer, blackPlayer);
-    Lizzie.frame.setResult(result);
-    GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
+    GameInfo gameInfo = history.getGameInfo();
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
-    gameInfo.setResult(result);
+    gameInfo.setResultNoUI(result);
     gameInfo.setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
     gameInfo.setHandicap(parseHandicapProperty(getOrDefault(gameProperties, "HA", null)));
-    // Rewind to game start
-    while (Lizzie.board.previousMove(false))
-      ;
+    prepared.rewindStart = history.getCurrentHistoryNode();
+    // Preserve the live rewind's move markers without navigation or engine/UI side effects.
+    do {
+      history.getCurrentHistoryNode().next().ifPresent(BoardHistoryNode::updateIsBest);
+    } while (history.previous().isPresent());
     if (gameProperties.size() > 0) {
-      Lizzie.board.addNodeProperties(gameProperties);
+      history.getData().addProperties(gameProperties);
     }
-    stabilizeRootSetupSideToPlay(Lizzie.board.getHistory());
-    return true;
   }
 
   public static String saveToString(boolean forUpload) throws IOException {

@@ -3,11 +3,10 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.GameInfo;
-import featurecat.lizzie.util.EncodingDetector;
+import featurecat.lizzie.logging.SgfPhase;
+import featurecat.lizzie.util.SgfFileReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
@@ -23,27 +22,22 @@ public class GIBParser {
       return false;
     }
 
-    String encoding = EncodingDetector.detect(filename);
-    String value;
-    try (FileInputStream fp = new FileInputStream(file);
-        InputStreamReader reader =
-            new InputStreamReader(fp, encoding.equals("WINDOWS-1252") ? "GB18030" : encoding)) {
-      StringBuilder builder = new StringBuilder();
-      while (reader.ready()) {
-        builder.append((char) reader.read());
-      }
-      value = builder.toString();
-    }
-    if (value.isEmpty()) {
-      return false;
-    }
+    return loadPreparedGame(prepareFileContent(SgfFileReader.read(file.toPath())));
+  }
 
-    GibGame game;
-    try {
-      game = parse(value);
-    } catch (IllegalArgumentException invalidGib) {
-      return false;
+  /** Reads no live state; the move commands are only executed by loadPreparedGame on application. */
+  public static PreparedGame prepareFileContent(String value) {
+    if (value.isEmpty()) {
+      return null;
     }
+    try (var phase = new SgfPhase("parse-gib")) {
+      return parse(value);
+    } catch (IllegalArgumentException invalidGib) {
+      return null;
+    }
+  }
+
+  public static boolean loadPreparedGame(PreparedGame game) {
     if (game == null) return false;
 
     Board board = Lizzie.board;
@@ -62,14 +56,14 @@ public class GIBParser {
         }
         EngineManager.isEmpty = true;
         Lizzie.config.playSound = false;
-        for (Consumer<Board> move : game.moves()) move.accept(board);
+        for (Consumer<Board> move : game.moves) move.accept(board);
         if (Lizzie.config.readKomi) {
-          board.getHistory().getGameInfo().setKomi(game.komi());
+          board.getHistory().getGameInfo().setKomi(game.komi);
         }
-        Lizzie.frame.setPlayers(game.whitePlayer(), game.blackPlayer());
+        Lizzie.frame.setPlayers(game.whitePlayer, game.blackPlayer);
         GameInfo gameInfo = board.getHistory().getGameInfo();
-        gameInfo.setPlayerBlack(game.blackPlayer());
-        gameInfo.setPlayerWhite(game.whitePlayer());
+        gameInfo.setPlayerBlack(game.blackPlayer);
+        gameInfo.setPlayerWhite(game.whitePlayer);
         while (board.previousMove(false))
           ;
         if (Lizzie.config.loadSgfLast)
@@ -107,10 +101,22 @@ public class GIBParser {
     }
   }
 
-  private record GibGame(
-      String whitePlayer, String blackPlayer, double komi, List<Consumer<Board>> moves) {}
+  public static final class PreparedGame {
+    private final String whitePlayer;
+    private final String blackPlayer;
+    private final double komi;
+    private final List<Consumer<Board>> moves;
 
-  private static GibGame parse(String value) {
+    private PreparedGame(
+        String whitePlayer, String blackPlayer, double komi, List<Consumer<Board>> moves) {
+      this.whitePlayer = whitePlayer;
+      this.blackPlayer = blackPlayer;
+      this.komi = komi;
+      this.moves = List.copyOf(moves);
+    }
+  }
+
+  private static PreparedGame parse(String value) {
     String whitePlayer = "Player 1";
     String blackPlayer = "Player 2";
     double komi = 7.5;
@@ -161,7 +167,7 @@ public class GIBParser {
         }
       }
     }
-    return recognized ? new GibGame(whitePlayer, blackPlayer, komi, moves) : null;
+    return recognized ? new PreparedGame(whitePlayer, blackPlayer, komi, moves) : null;
   }
 
   private static String headerValue(String line, String prefix) {

@@ -5237,12 +5237,32 @@ public class Board {
   }
 
   public void setHistory(BoardHistoryList newList) {
+    replaceHistory(newList, () -> {
+      syncBoardDimensionsWithHistory(newList);
+      syncBoardKataFlagsWithHistory(newList);
+    });
+  }
+
+  /** File preparation already resolved its flags; do not rescan or reinterpret its private tree. */
+  void setFileHistory(
+      BoardHistoryList newList, boolean pkBoard, boolean kataBoard,
+      boolean pkBoardKataB, boolean pkBoardKataW) {
+    replaceHistory(newList, () -> {
+      // The prepared geometry already includes file-loader fallbacks and the first SZ policy.
+      syncBoardDimensions(newList.getData().zobrist.width(), newList.getData().zobrist.height());
+      isPkBoard = pkBoard;
+      isKataBoard = kataBoard;
+      isPkBoardKataB = pkBoardKataB;
+      isPkBoardKataW = pkBoardKataW;
+    });
+  }
+
+  private void replaceHistory(BoardHistoryList newList, Runnable updateMetadata) {
     synchronized (this) {
       movelistRefreshEpoch++;
       history = newList;
       setupMode = false;
-      syncBoardDimensionsWithHistory(newList);
-      syncBoardKataFlagsWithHistory(newList);
+      updateMetadata.run();
     }
     notifyReadBoardHistoryOverwritten();
   }
@@ -5252,8 +5272,10 @@ public class Board {
       return;
     }
     int[] boardSize = SGFParser.resolveHistoryBoardSize(historyList);
-    int targetBoardWidth = boardSize[0];
-    int targetBoardHeight = boardSize[1];
+    syncBoardDimensions(boardSize[0], boardSize[1]);
+  }
+
+  private static void syncBoardDimensions(int targetBoardWidth, int targetBoardHeight) {
     if (targetBoardWidth <= 0 || targetBoardHeight <= 0) {
       return;
     }
@@ -6421,6 +6443,14 @@ public class Board {
     }
   }
 
+  /** Restores the metadata formerly computed by the file parser's live rewind. */
+  void restoreFileMoveMetadata(BoardHistoryNode rewindStart) {
+    while (rewindStart.previous().isPresent()) {
+      rewindStart = rewindStart.previous().get();
+      updateMovelistNext(rewindStart);
+    }
+  }
+
   private void updateMovelistNext(BoardHistoryNode node) {
     if (!(node.next().isPresent() && node.next().get().next().isPresent())) {
       updateMovelist(node);
@@ -6514,22 +6544,7 @@ public class Board {
   }
 
   public void updateIsBest(BoardHistoryNode node) {
-    if (node.previous().isPresent()
-        && node.previous().get().getData().getPlayouts() > 0
-        && node.getData().isMoveNode()
-        && node.previous().get().getData().bestMoves != null
-        && !node.previous().get().getData().bestMoves.isEmpty()) {
-      int[] coords = node.getData().lastMove.get();
-      try {
-        int[] bestCoords =
-            Board.convertNameToCoordinates(
-                node.previous().get().getData().bestMoves.get(0).coordinate);
-        if (bestCoords[0] == coords[0] && bestCoords[1] == coords[1]) node.isBest = true;
-        else node.isBest = false;
-      } catch (Exception e) {
-        e.printStackTrace();
-      }
-    } else node.isBest = false;
+    node.updateIsBest();
   }
 
   public void updateIsBest() {

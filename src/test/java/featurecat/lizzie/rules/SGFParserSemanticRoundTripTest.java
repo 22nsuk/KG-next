@@ -30,6 +30,43 @@ class SGFParserSemanticRoundTripTest {
   private static final int SIZE = 5;
   @TempDir Path tempDirectory;
 
+  @Test
+  void editUndoRedoAtRootPreservesAnalyzedMoveMetadataImmediately() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]C[original]LZ[KataGo 45 123 2.5 1.25 0\n"
+              + "move A5 visits 123 winrate 5500 pv A5 B4]"
+              + ";B[aa]LZ[KataGo 40 100 1.5 1.25 0\n"
+              + "move B4 visits 100 winrate 6000 pv B4 C3]"
+              + ";W[bb]LZ[KataGo 35 80 0.5 1.25 0\n"
+              + "move C3 visits 80 winrate 6500 pv C3 D2])"));
+      Board board = Lizzie.board;
+      assertImportedMoveMetadata(board);
+      board.saveListForEdit();
+      board.getData().comment = "edited";
+      board.cleanedit();
+      assertEquals("original", board.getData().comment);
+      assertImportedMoveMetadata(board);
+      board.reedit();
+      assertEquals("edited", board.getData().comment);
+      assertImportedMoveMetadata(board);
+    }
+  }
+
+  private static void assertImportedMoveMetadata(Board board) {
+    var root = board.getHistory().getStart();
+    assertSame(root, board.getHistory().getCurrentHistoryNode());
+    var first = root.next().orElseThrow();
+    assertTrue(root.nodeInfo.analyzed);
+    assertTrue(root.nodeInfoMain.analyzed);
+    assertEquals(100, root.nodeInfo.playouts);
+    assertEquals(123, root.nodeInfo.previousPlayouts);
+    assertTrue(first.nodeInfo.analyzed);
+    assertTrue(first.nodeInfoMain.analyzed);
+    assertEquals(80, first.nodeInfo.playouts);
+    assertEquals(100, first.nodeInfo.previousPlayouts);
+  }
+
   @ParameterizedTest
   @ValueSource(strings = {
       "(;SZ[5]AB[aa]AW[ee](;W[cc];B[])(;B[bb];W[]))",

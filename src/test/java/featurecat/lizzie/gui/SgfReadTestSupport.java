@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 
@@ -63,6 +64,7 @@ public final class SgfReadTestSupport {
     private final CountDownLatch started = new CountDownLatch(1);
     private final CountDownLatch release = new CountDownLatch(1);
     private final CountDownLatch finished = new CountDownLatch(1);
+    private final AtomicInteger reads = new AtomicInteger();
     private final Field field;
     private final SgfReadQueue.Reader original;
 
@@ -72,6 +74,7 @@ public final class SgfReadTestSupport {
       original = (SgfReadQueue.Reader) field.get(SgfReadQueue.SHARED);
       field.set(SgfReadQueue.SHARED, (SgfReadQueue.Reader) path -> {
         assertFalse(SwingUtilities.isEventDispatchThread());
+        reads.incrementAndGet();
         started.countDown();
         try {
           if (!release.await(10, TimeUnit.SECONDS)) throw new IOException("Read was not released");
@@ -87,6 +90,7 @@ public final class SgfReadTestSupport {
 
     public void awaitStarted() throws Exception { assertTrue(started.await(10, TimeUnit.SECONDS)); }
     public void release() { release.countDown(); }
+    public int reads() { return reads.get(); }
 
     @Override public void close() throws Exception {
       release();

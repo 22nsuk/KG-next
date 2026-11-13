@@ -53,7 +53,6 @@ import featurecat.lizzie.rules.MoveLinkedList;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.NodeInfo;
 import featurecat.lizzie.rules.SGFParser;
-import featurecat.lizzie.rules.SgfDocument;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.teacher.CommentDisplayRenderer;
 import featurecat.lizzie.theme.MorandiPalette;
@@ -3261,7 +3260,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void saveOriFile() {
-    if (curFile != null && !curFile.getName().toLowerCase().endsWith(".gib")) {
+    if (curFile != null && !curFile.getName().toLowerCase(Locale.ROOT).endsWith(".gib")) {
       if (Lizzie.config.showReplaceFileHint) {
         Box box = Box.createVerticalBox();
         JFontLabel label =
@@ -4962,29 +4961,22 @@ public class LizzieFrame extends JFrame {
       }));
       return;
     }
-    if (file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".gib")) {
-      finishInteractiveFileRead(
-          file, fromTemp, showHint, afterSuccessfulLoad, current, result, null, null);
-      return;
-    }
-    SgfReadQueue.SHARED.prepare(file.toPath()).whenComplete((document, failure) ->
+    SgfReadQueue.SHARED.prepare(file.toPath()).whenComplete((prepared, failure) ->
         finishInteractiveFileRead(
-            file, fromTemp, showHint, afterSuccessfulLoad, current, result, document, failure));
+            file, fromTemp, showHint, afterSuccessfulLoad, current, result, prepared, failure));
   }
 
   private void finishInteractiveFileRead(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
       BooleanSupplier current, java.util.concurrent.CompletableFuture<Boolean> result,
-      SgfDocument document, Throwable failure) {
+      SgfReadQueue.PreparedFile prepared, Throwable failure) {
     try {
       if (!current.getAsBoolean() || failure instanceof java.util.concurrent.CancellationException) {
         result.complete(false);
         return;
       }
-      // A rejected SGF must not enter applyFile's synchronous fallback and reread on the EDT.
-      if (failure != null
-          || (document == null
-              && !file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".gib"))) {
+      // Rejected input must not enter applyFile's synchronous fallback and reread on the EDT.
+      if (failure != null || prepared == null) {
         SgfObservation.record("open", "failed", file.getPath(), failure);
         showOpenFileFailedMessageLater();
         result.complete(false);
@@ -5006,7 +4998,7 @@ public class LizzieFrame extends JFrame {
       if (ponder) primary.togglePonder();
       boolean loaded;
       try (var phase = new featurecat.lizzie.logging.SgfPhase("file-apply")) {
-        loaded = applyFile(file, fromTemp, showHint, afterSuccessfulLoad, null, document);
+        loaded = applyFile(file, fromTemp, showHint, afterSuccessfulLoad, null, prepared);
       }
       if (!loaded && ponder && Lizzie.leelaz == primary
           && Lizzie.capturePrimaryEngineGeneration(primary) == generation
@@ -5046,7 +5038,7 @@ public class LizzieFrame extends JFrame {
 
   private boolean applyFile(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
-      Runnable afterEngineReady, SgfDocument preparedSgf) {
+      Runnable afterEngineReady, SgfReadQueue.PreparedFile prepared) {
     if (rejectFileOpenWhilePlaying()) return false;
     if (deferUntilHumanSlExit(
         () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady))) {
@@ -5066,13 +5058,13 @@ public class LizzieFrame extends JFrame {
     try {
       // System.out.println(file.getPath());
       boolean loaded;
-      boolean sgfFile = !file.getPath().toLowerCase().endsWith(".gib");
-      if (!sgfFile) {
+      boolean sgfFile = !file.getPath().toLowerCase(Locale.ROOT).endsWith(".gib");
+      if (prepared != null) {
+        loaded = prepared.apply(showHint);
+      } else if (!sgfFile) {
         loaded = GIBParser.load(file.getPath());
       } else {
-        loaded = preparedSgf == null
-            ? SGFParser.load(file.getPath(), showHint, false)
-            : SGFParser.loadFileDocument(preparedSgf, showHint, false);
+        loaded = SGFParser.load(file.getPath(), showHint, false);
       }
       if (!loaded) {
         rollbackState.restore();
@@ -5108,7 +5100,7 @@ public class LizzieFrame extends JFrame {
     Lizzie.config.playSound = oriSound;
     fileNameTitle = file.getName();
     updateTitle();
-    if (file.getPath().toLowerCase().endsWith(".gib")) {
+    if (file.getPath().toLowerCase(Locale.ROOT).endsWith(".gib")) {
       if (afterSuccessfulLoad != null) afterSuccessfulLoad.run();
       if (afterEngineReady != null) {
         scheduleKifuEngineReadyAfterLoad(afterEngineReady);
