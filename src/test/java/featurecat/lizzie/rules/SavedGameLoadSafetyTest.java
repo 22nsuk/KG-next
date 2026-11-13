@@ -60,6 +60,8 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTextField;
 import javax.swing.SwingUtilities;
+import jdk.jfr.Recording;
+import jdk.jfr.consumer.RecordingFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -852,6 +854,47 @@ class SavedGameLoadSafetyTest {
         () -> assertTrue((Boolean) getFrameField("canShowBigBoardImage")),
         () -> assertNull(getFrameField("kifuEngineSyncCoordinator")),
         () -> assertEquals(0, errorDialogs.get()));
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"", "not an SGF", "(;SZ[5]AB[aa:])"})
+  void rejectedPreparedSyntaxDoesNotClearOrRereadTheCurrentGame(String input) throws Exception {
+    Path rejected = Files.writeString(directory.resolve("rejected.sgf"), input);
+    Path recordingFile = directory.resolve("rejected-open.jfr");
+    BoardHistoryList history = Lizzie.board.getHistory();
+    BoardHistoryNode selected = history.getCurrentHistoryNode();
+    AtomicReference<String> originalTree = new AtomicReference<>();
+    AtomicReference<CompletableFuture<Boolean>> opened = new AtomicReference<>();
+    try (var recording = new Recording()) {
+      recording.enable("kg.sgf.Phase").withoutThreshold();
+      recording.start();
+      SwingUtilities.invokeAndWait(() -> {
+        originalTree.set(assertDoesNotThrow(() -> SGFParser.saveToString(false)));
+        opened.set(frame.openFileAsync(rejected.toFile(), true, false)
+            .whenComplete((loaded, failure) -> Lizzie.frame = null));
+      });
+      assertFalse(opened.get().get(10, TimeUnit.SECONDS));
+      assertTrue(errorDialogAttempted.await(5, TimeUnit.SECONDS));
+      recording.stop();
+      recording.dump(recordingFile);
+    }
+    SwingUtilities.invokeAndWait(() -> {
+      Lizzie.frame = frame;
+      assertSame(history, Lizzie.board.getHistory());
+      assertSame(selected, history.getCurrentHistoryNode());
+      assertEquals(originalTree.get(), assertDoesNotThrow(() -> SGFParser.saveToString(false)));
+      assertEquals(originalFile, LizzieFrame.curFile);
+      assertEquals(originalFile.getName(), LizzieFrame.fileNameTitle);
+      assertTrue(config.playSound);
+      assertFalse(Lizzie.board.isLoadingFile);
+      assertEquals(1, frame.resumeScheduled.getCount());
+    });
+    var phases = RecordingFile.readAllEvents(recordingFile).stream()
+        .filter(event -> event.getEventType().getName().equals("kg.sgf.Phase")).toList();
+    var reads = phases.stream().filter(event -> event.getString("phase").equals("file-read")).toList();
+    assertEquals(1, reads.size(), "rejected syntax must not fall back to a synchronous reread");
+    assertEquals("lizzie-sgf-read", reads.get(0).getThread().getJavaName());
+    assertFalse(phases.stream().anyMatch(event -> event.getString("phase").equals("board-clear")));
   }
 
   @ParameterizedTest(name = "{0}, {1}")
