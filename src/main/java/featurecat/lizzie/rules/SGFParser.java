@@ -191,38 +191,43 @@ public class SGFParser {
   }
 
   public static boolean loadFromString(String sgfString, boolean syncPrimaryEngine) {
-    sgfString = normalizeSgfInput(sgfString);
-    if (sgfString == null) {
-      SgfObservation.record("import", "failed", null, null);
+    PreparedGame prepared;
+    try {
+      prepared = prepareFileGame(prepareFileContent(sgfString), ParseOptions.capture());
+    } catch (RuntimeException invalidSgf) {
+      SgfObservation.record("import", "failed", null, invalidSgf);
       return false;
     }
-    PreparedGame prepared = null;
+    return loadPreparedString(prepared, syncPrimaryEngine, Lizzie.config.loadSgfLast);
+  }
+
+  /** Applies the shared import tree with the string loader's synchronous navigation and hints. */
+  public static boolean loadPreparedString(
+      PreparedGame prepared, boolean syncPrimaryEngine, boolean loadLast) {
+    if (prepared == null) return false;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
-    boolean result = false;
     boolean committed = false;
     Lizzie.board.isLoadingFile = true;
     try {
-      if (syncPrimaryEngine) {
-        Lizzie.board.clear(false);
-      } else {
-        Lizzie.board.clearWithoutPrimaryEngineForwarding();
+      try (var phase = new SgfPhase("board-clear")) {
+        if (syncPrimaryEngine) {
+          Lizzie.board.clear(false);
+        } else {
+          Lizzie.board.clearWithoutPrimaryEngineForwarding();
+        }
       }
       try {
-        prepared = parse(sgfString);
-        result = prepared != null;
+        applyPreparedGame(prepared);
       } catch (RuntimeException invalidSgf) {
         SgfObservation.record("import", "failed", null, invalidSgf);
         return false;
       }
-      SgfObservation.record("import", result ? "ok" : "failed", null, null);
-      if (!result) {
-        return false;
-      }
+      SgfObservation.record("import", "ok", null, null);
       if (syncPrimaryEngine) {
         adoptCurrentHistoryExternalRules();
       }
       applySgfKomiForSetupGameWhenReadKomiDisabled();
-      if (Lizzie.config.loadSgfLast)
+      if (loadLast)
         while (Lizzie.board.nextMove(false))
           ;
       if (syncPrimaryEngine) syncPrimaryEngineAfterSgfLoad();
@@ -471,7 +476,7 @@ public class SGFParser {
     return prepared;
   }
 
-  /** Private until publication; the file loader alone receives and adopts this history. */
+  /** Private until publication; the file and string loaders adopt this import history. */
   public static final class PreparedGame {
     private final BoardHistoryList history;
     private BoardHistoryNode rewindStart;
@@ -4093,8 +4098,14 @@ public class SGFParser {
       int limitBranchLength, int maxSuggestions, double defaultKomi) {
     public static ParseOptions capture() {
       var config = Lizzie.config;
+      return capture(config == null || config.readKomi);
+    }
+
+    /** Captures a per-import komi choice without temporarily changing the live preference. */
+    public static ParseOptions capture(boolean readKomi) {
+      var config = Lizzie.config;
       return new ParseOptions(
-          config == null || config.readKomi, config != null && config.noCapture,
+          readKomi, config != null && config.noCapture,
           Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal,
           config != null && config.newMoveNumberInBranch,
           config == null ? 0 : config.limitBranchLength,

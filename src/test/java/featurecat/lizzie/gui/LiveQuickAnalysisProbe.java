@@ -286,7 +286,7 @@ public final class LiveQuickAnalysisProbe {
   private static void load(String sgf) throws Exception {
     java.util.concurrent.atomic.AtomicBoolean loaded =
         new java.util.concurrent.atomic.AtomicBoolean();
-    edt(() -> Lizzie.frame.loadDownloadedSgfString(sgf, 0, true, false, null, loaded::set));
+    edt(() -> Lizzie.frame.loadSgfStringAsync(sgf, 0, true, false, null).thenAccept(loaded::set));
     await(loaded::get, 25, "downloaded-sgf-import");
   }
 

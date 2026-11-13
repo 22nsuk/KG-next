@@ -110,6 +110,8 @@ class OnlineDialogYikeSessionStateTest {
         OnlineDialog.shouldClearBoardBeforeSync(true, YikeUrlInfo.TYPE_NEW_LIVE_ROOM));
     assertTrue(OnlineDialog.shouldClearBoardBeforeSync(false, YikeUrlInfo.TYPE_OLD_LIVE_ROOM));
     assertFalse(OnlineDialog.shouldClearBoardBeforeSync(true, YikeUrlInfo.TYPE_OLD_LIVE_ROOM));
+    assertFalse(OnlineDialog.shouldClearBoardBeforeSync(false, 99));
+    assertFalse(OnlineDialog.shouldClearBoardBeforeSync(true, 99));
   }
 
   @Test

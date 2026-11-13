@@ -281,13 +281,12 @@ public class ZhiziQuickAnalysisAcceptanceIT {
     AtomicBoolean loaded = new AtomicBoolean();
     SwingUtilities.invokeAndWait(
         () ->
-            Lizzie.frame.loadDownloadedSgfString(
+            Lizzie.frame.loadSgfStringAsync(
                 sgf,
                 0,
                 true,
                 false,
-                null,
-                success -> {
+                null).thenAccept(success -> {
                   assertTrue(success);
                   loaded.set(true);
                 }));
