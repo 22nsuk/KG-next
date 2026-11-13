@@ -13,12 +13,15 @@ import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Minimal headless fixture for Board / SGFParser rules tests. Stubs GUI and engine callbacks so
  * play, capture, history jumps, parse, and save can run without a window, network, or KataGo.
  */
 final class RulesLayerTestHarness implements AutoCloseable {
+  private final TrackingBoard ownedBoard;
   private final int previousBoardWidth;
   private final int previousBoardHeight;
   private final Board previousBoard;
@@ -36,6 +39,7 @@ final class RulesLayerTestHarness implements AutoCloseable {
   private final featurecat.lizzie.analysis.EngineFollowController previousEngineFollowController;
 
   private RulesLayerTestHarness(
+      TrackingBoard ownedBoard,
       int previousBoardWidth,
       int previousBoardHeight,
       Board previousBoard,
@@ -51,6 +55,7 @@ final class RulesLayerTestHarness implements AutoCloseable {
       boolean previousCanGoAfterload,
       String previousFileNameTitle,
       featurecat.lizzie.analysis.EngineFollowController previousEngineFollowController) {
+    this.ownedBoard = ownedBoard;
     this.previousBoardWidth = previousBoardWidth;
     this.previousBoardHeight = previousBoardHeight;
     this.previousBoard = previousBoard;
@@ -129,6 +134,7 @@ final class RulesLayerTestHarness implements AutoCloseable {
     Lizzie.config = config;
 
     return new RulesLayerTestHarness(
+        board,
         previousBoardWidth,
         previousBoardHeight,
         previousBoard,
@@ -160,22 +166,26 @@ final class RulesLayerTestHarness implements AutoCloseable {
 
   @Override
   public void close() {
-    Board.boardWidth = previousBoardWidth;
-    Board.boardHeight = previousBoardHeight;
-    Zobrist.init();
-    Lizzie.board = previousBoard;
-    Lizzie.frame = previousFrame;
-    LizzieFrame.menu = previousMenu;
-    LizzieFrame.winrateGraph = previousWinrateGraph;
-    LizzieFrame.boardRenderer = previousBoardRenderer;
-    Lizzie.setPrimaryEngine(previousLeelaz);
-    Lizzie.config = previousConfig;
-    EngineManager.isEmpty = previousEngineEmpty;
-    LizzieFrame.isSavingRaw = previousSavingRaw;
-    LizzieFrame.urlSgf = previousUrlSgf;
-    LizzieFrame.canGoAfterload = previousCanGoAfterload;
-    LizzieFrame.fileNameTitle = previousFileNameTitle;
-    Lizzie.engineFollowController = previousEngineFollowController;
+    try {
+      ownedBoard.awaitMovelistRefresh();
+    } finally {
+      Board.boardWidth = previousBoardWidth;
+      Board.boardHeight = previousBoardHeight;
+      Zobrist.init();
+      Lizzie.board = previousBoard;
+      Lizzie.frame = previousFrame;
+      LizzieFrame.menu = previousMenu;
+      LizzieFrame.winrateGraph = previousWinrateGraph;
+      LizzieFrame.boardRenderer = previousBoardRenderer;
+      Lizzie.setPrimaryEngine(previousLeelaz);
+      Lizzie.config = previousConfig;
+      EngineManager.isEmpty = previousEngineEmpty;
+      LizzieFrame.isSavingRaw = previousSavingRaw;
+      LizzieFrame.urlSgf = previousUrlSgf;
+      LizzieFrame.canGoAfterload = previousCanGoAfterload;
+      LizzieFrame.fileNameTitle = previousFileNameTitle;
+      Lizzie.engineFollowController = previousEngineFollowController;
+    }
   }
 
   static boolean sameLastMove(BoardData data, int x, int y) {
@@ -193,6 +203,33 @@ final class RulesLayerTestHarness implements AutoCloseable {
   }
 
   static final class TrackingBoard extends Board {
+    private boolean movelistRefreshRequested;
+
+    @Override
+    public synchronized void setMovelistAll(Runnable onComplete) {
+      super.setMovelistAll(onComplete);
+      if (getHistory() != null) movelistRefreshRequested = true;
+    }
+
+    private void awaitMovelistRefresh() {
+      CountDownLatch completed;
+      synchronized (this) {
+        if (!movelistRefreshRequested) return;
+        completed = new CountDownLatch(1);
+        // Replaced histories retire their callbacks. A final current-history pass also drains
+        // any stale pass before the fixture restores the globals used by updateMovelist.
+        super.setMovelistAll(completed::countDown);
+      }
+      try {
+        if (!completed.await(5, TimeUnit.SECONDS)) {
+          throw new AssertionError("Move-list refresh did not finish before fixture teardown.");
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError("Interrupted while draining move-list refresh.", interrupted);
+      }
+    }
+
     @Override
     public void clearAfterMove() {}
   }

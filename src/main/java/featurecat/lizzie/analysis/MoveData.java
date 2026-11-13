@@ -57,6 +57,34 @@ public class MoveData {
 
   public MoveData() {}
 
+  /** Independent candidate retained by an editable history, including non-SGF display data. */
+  public MoveData copyForHistory() {
+    MoveData copy = new MoveData();
+    copy.coordinate = coordinate;
+    copy.playouts = playouts;
+    copy.edgeVisits = edgeVisits;
+    copy.winrate = winrate;
+    copy.variation = variation == null ? null : new ArrayList<>(variation);
+    copy.pvVisits = pvVisits == null ? null : new ArrayList<>(pvVisits);
+    copy.pvEdgeVisits = pvEdgeVisits == null ? null : new ArrayList<>(pvEdgeVisits);
+    copy.lcb = lcb;
+    copy.policy = policy;
+    copy.scoreMean = scoreMean;
+    copy.scoreStdev = scoreStdev;
+    copy.isKataData = isKataData;
+    copy.isSaiData = isSaiData;
+    copy.scoreMeanIsBlackPerspective = scoreMeanIsBlackPerspective;
+    copy.order = order;
+    copy.isNextMove = isNextMove;
+    copy.bestWinrate = bestWinrate;
+    copy.bestScoreMean = bestScoreMean;
+    copy.lastTimeUnlimited = lastTimeUnlimited;
+    copy.lastTimeUnlimitedTime = lastTimeUnlimitedTime;
+    copy.isSymmetry = isSymmetry;
+    copy.movesEstimateArray = BoardData.compactEstimateArray(movesEstimateArray);
+    return copy;
+  }
+
   /**
    * Parses a leelaz ponder output line. For example:
    *

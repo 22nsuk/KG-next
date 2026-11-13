@@ -1254,15 +1254,19 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void trialReturnRestoresSavedBranchAndManualRulesBeforeOneEngineRestore() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void trialReturnRestoresSavedBranchAndManualRulesBeforeOneEngineRestore(boolean undoTrial)
+      throws Exception {
     featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
     try (Harness harness = Harness.open()) {
       LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
       setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
       BoardHistoryList history =
           featurecat.lizzie.rules.SGFParser.parseSgf(
-              "(;SZ[19]RU[Japanese];B[pd](;W[dd])(;W[];AE[pd]AB[aa]PL[B];B[qq]))", true);
+              "(;SZ[19]RU[Japanese];B[pd](;W[dd])(;W[];AE[pd]AB[aa]PL[B];B[qq];W[rr]))", true);
       BoardHistoryNode branch =
           history
               .getStart()
@@ -1292,9 +1296,24 @@ class PositionConfirmedRollbackTest {
       String query = awaitRawCommand(output, "kata-get-rules", 0);
       harness.engine.dispatchReaderLineForTest(
           "=" + query.substring(0, query.indexOf(' ')) + " " + chinese.toGtpArgument());
+      if (undoTrial) {
+        harness.engine.ponder();
+        awaitRawCommand(output, "kata-analyze", 0);
+      }
       javax.swing.SwingUtilities.invokeAndWait(() -> harness.frame.tryPlay(false));
-      harness.board.getHistory().place(3, 3, Stone.WHITE, false);
-      javax.swing.SwingUtilities.invokeAndWait(() -> harness.frame.tryPlay(false));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        harness.engine.isInputCommand = true;
+        try {
+          harness.board.place(3, 3, Stone.WHITE);
+        } finally {
+          harness.engine.isInputCommand = false;
+        }
+      });
+      assertEquals(-1, harness.board.getData().moveNumberList[Board.getIndex(3, 3)]);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        if (undoTrial) harness.board.cleanedit();
+        else harness.frame.tryPlay(false);
+      });
       long deadline = System.nanoTime() + OBSERVATION_TIMEOUT_NANOS;
       while (harness.frame.scheduledResume == null && System.nanoTime() < deadline) {
         javax.swing.SwingUtilities.invokeAndWait(() -> {});
@@ -1304,6 +1323,7 @@ class PositionConfirmedRollbackTest {
       assertFalse(harness.frame.isTrying);
       assertArrayEquals(expected.stones, harness.board.getData().stones);
       assertEquals(expected.blackToPlay, harness.board.getData().blackToPlay);
+      assertEquals(expected.moveNumber, harness.board.getData().moveNumber);
       assertTrue(
           harness
               .board
@@ -1318,11 +1338,101 @@ class PositionConfirmedRollbackTest {
       assertTrue(harness.engine.engineRulesResult().isConfirmed());
       assertEquals(0, harness.frame.rulesFailurePromptCount);
       harness.frame.scheduledResume.run();
-      awaitRawCommand(output, "kata-analyze", 0);
-      assertEquals(1, payloadCount(output, "kata-analyze"));
+      awaitRawCommand(output, "kata-analyze", undoTrial ? 1 : 0);
+      assertEquals(undoTrial ? 2 : 1, payloadCount(output, "kata-analyze"));
+      if (undoTrial) {
+        harness.frame.scheduledResume = null;
+        javax.swing.SwingUtilities.invokeAndWait(harness.board::reedit);
+        awaitKifuResume(harness.frame);
+        assertFalse(harness.frame.isTrying);
+        assertEquals(expected.moveNumber + 1, harness.board.getData().moveNumber);
+        int displayNumber = expected.moveMNNumber < 0
+            ? expected.moveNumber + 1 : expected.moveMNNumber + 1;
+        assertEquals(displayNumber,
+            harness.board.getData().moveNumberList[Board.getIndex(3, 3)]);
+        assertEquals(Stone.WHITE, harness.board.getData().stones[Board.getIndex(3, 3)]);
+        assertEquals(2, payloadCount(output, "clear_board"));
+        assertEquals(2, payloadCount(output, "loadsgf"));
+      }
       harness.frame.shutdownKifuEngineSyncCoordinator();
     } finally {
       LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"running", "paused", "pause-during-restore", "idle"})
+  void editUndoWaitsForExactPositionAndPreservesAnalysisIntent(String state) throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.frame.readBoard = null;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19]KM[6.5]RU[Japanese];B[pd];W[];AE[pd]AB[dd]AW[pp]PL[B];B[dp])", true);
+      while (history.next().isPresent()) {}
+      harness.board.setHistory(history);
+      BoardData expected = history.getData().clone();
+      harness.board.saveListForEdit();
+      // A destructive edit changes both topology and cursor; undo must restore the exact setup.
+      history.toStart();
+      history.getStart().clear();
+      var currentInfo = history.getGameInfo();
+      currentInfo.setKomiNoMenu(8.5);
+      KataGoRules chinese = KataGoRules.parse("Chinese").orElseThrow();
+      var currentRules = history.publishManualRules(chinese);
+      harness.engine.commandLists.addAll(List.of("kata-set-rules", "kata-get-rules", "loadsgf"));
+      AtomicReference<Boolean> holdFence = new AtomicReference<>(true);
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(harness.engine, command ->
+              command.equals("kata-get-rules")
+                      || (command.equals("name") && holdFence.compareAndSet(true, false))
+                  ? null : ExactSnapshotRestoreProtocolFixture.Response.success());
+      harness.engine.queryEngineRulesOperation();
+      String query = awaitRawCommand(output, "kata-get-rules", 0);
+      harness.engine.dispatchReaderLineForTest(
+          "=" + query.substring(0, query.indexOf(' ')) + " " + chinese.toGtpArgument());
+      boolean running = state.equals("running") || state.equals("pause-during-restore");
+      Field paused = LizzieFrame.class.getDeclaredField("userAnalysisPaused");
+      paused.setAccessible(true);
+      paused.setBoolean(harness.frame, state.equals("paused"));
+      Lizzie.config.autoQuickAnalyzeOnLoad = true;
+      if (running) {
+        harness.engine.ponder();
+        awaitRawCommand(output, "kata-analyze", 0);
+      }
+      javax.swing.SwingUtilities.invokeAndWait(harness.board::cleanedit);
+      String fence = awaitRawCommand(output, "name", 0);
+      assertArrayEquals(expected.stones, harness.board.getData().stones);
+      assertEquals(expected.blackToPlay, harness.board.getData().blackToPlay);
+      assertSame(currentInfo, harness.board.getHistory().getGameInfo());
+      assertSame(currentRules, harness.board.getHistory().captureSessionRules());
+      assertEquals(1, payloadCount(output, "clear_board"));
+      assertEquals(1, payloadCount(output, "loadsgf"));
+      assertTrue(harness.board.isEngineAlignmentPending());
+      int initialAnalyses = running ? 1 : 0;
+      assertEquals(initialAnalyses, payloadCount(output, "kata-analyze"));
+      harness.engine.parseAnalysisLineForTest(info(100, 0.7));
+      assertNoAnalysis(harness.board.getData());
+      if (state.equals("pause-during-restore")) {
+        harness.engine.pauseForAnalysisControl(() -> {
+          try {
+            paused.setBoolean(harness.frame, true);
+          } catch (IllegalAccessException failure) {
+            throw new AssertionError(failure);
+          }
+        });
+      }
+      acknowledge(harness.engine, fence);
+      awaitKifuResume(harness.frame);
+      assertFalse(harness.board.isEngineAlignmentPending());
+      javax.swing.SwingUtilities.invokeAndWait(harness.frame.scheduledResume);
+      if (state.equals("running")) awaitRawCommand(output, "kata-analyze", 1);
+      harness.engine.sendCommand("protocol_version");
+      awaitRawCommand(output, "protocol_version", 0);
+      assertEquals(initialAnalyses + (state.equals("running") ? 1 : 0),
+          payloadCount(output, "kata-analyze"));
+      assertEquals(state.equals("paused") || state.equals("pause-during-restore"),
+          paused.getBoolean(harness.frame));
+      harness.frame.shutdownKifuEngineSyncCoordinator();
     }
   }
 
@@ -2964,9 +3074,6 @@ class PositionConfirmedRollbackTest {
 
     @Override
     public void clearKataEstimate() {}
-
-    @Override
-    public void clearTryPlay() {}
 
     @Override
     public void requestAnalysisRefresh() {}

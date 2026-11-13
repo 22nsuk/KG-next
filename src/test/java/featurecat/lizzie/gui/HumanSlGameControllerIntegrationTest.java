@@ -656,6 +656,11 @@ class HumanSlGameControllerIntegrationTest {
       HumanSlTrainingSession session = new HumanSlTrainingSession();
       session.setState(HumanSlTrainingSession.State.PREPARING);
       Lizzie.frame = allocate(CoachFrame.class);
+      LizzieFrame.toolbar.tryPlay = new javax.swing.JButton();
+      Board.GameStateSnapshot trialSnapshot = board.captureGameState();
+      Lizzie.frame.trySnapshot = trialSnapshot;
+      Lizzie.frame.isTrying = true;
+      board.saveListForEdit();
       HumanSlGameController controller =
           new HumanSlGameController(
               runner,
@@ -735,6 +740,10 @@ class HumanSlGameControllerIntegrationTest {
       assertSame(originalCurrent, board.tsumegoNode);
       assertEquals(Path.of("C:\\棋谱 空格\\original game.sgf").toFile(), LizzieFrame.curFile);
       assertEquals("原始 棋谱.sgf", LizzieFrame.fileNameTitle);
+      assertTrue(Lizzie.frame.isTrying);
+      assertSame(trialSnapshot, Lizzie.frame.trySnapshot,
+          "failed mode handoff must retain the original trial return state");
+      assertTrue(board.canUndoEdit(), "failed mode handoff must retain the pending undo");
       assertEquals(HumanSlTrainingSession.State.PREPARING, session.state());
       assertNull(Lizzie.frame.humanSlGame);
       assertTrue(runner.awaitClosed(), "rollback must close the prepared HumanSL runner");
@@ -2322,7 +2331,7 @@ class HumanSlGameControllerIntegrationTest {
     public void resetTitle() {}
 
     @Override
-    public void clearTryPlay() {}
+    public void setTitle(String title) {}
 
     @Override
     public void setResult(String result) {}

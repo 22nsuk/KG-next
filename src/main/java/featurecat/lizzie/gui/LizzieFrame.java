@@ -537,9 +537,7 @@ public class LizzieFrame extends JFrame {
   public boolean selectForceAllow = true;
 
   public boolean isTrying = false;
-  List<Integer> tryHistoryPath;
-  String tryString;
-  BoardHistoryList.SessionRulesTarget trySessionRulesTarget;
+  Board.GameStateSnapshot trySnapshot;
   String titleBeforeTrying;
   public volatile BrowserFrame browserFrame;
   public YikeLiveDialog yikeLiveDialog;
@@ -2483,57 +2481,27 @@ public class LizzieFrame extends JFrame {
     if (floatBoard != null && floatBoard.isVisible() && floatBoard.editMode)
       floatBoard.changeEetEditMode();
     if (!isTrying) {
-      try {
-        tryString = SGFParser.saveToString(false);
-      } catch (IOException e) {
-        throw new IllegalStateException("Unable to preserve history before trial play", e);
-      }
+      trySnapshot = Lizzie.board.beginTrial();
       isTrying = true;
       titleBeforeTrying = this.getTitle();
       this.setTitle(Lizzie.resourceBundle.getString("LizzieFrame.tryTitle")); // "试下中...");
       toolbar.tryPlay.setText(
           Lizzie.resourceBundle.getString("BottomToolbar.tryplayBack")); // ("恢复");
-      tryHistoryPath = new ArrayList<>();
-      BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
-      while (node.previous().isPresent()) {
-        BoardHistoryNode parent = node.previous().orElseThrow();
-        tryHistoryPath.add(parent.indexOfNode(node));
-        node = parent;
-      }
-      trySessionRulesTarget = Lizzie.board.getHistory().captureSessionRules();
-      Lizzie.board.getHistory().getCurrentHistoryNode().getData().moveNumber = 0;
-      Lizzie.board.deleteMoveNoHintAfter();
     } else {
-      Board.ClearStateSnapshot trialState = Lizzie.board.captureClearState();
-      isTrying = false;
-      if (!SGFParser.loadFromString(tryString, false)) {
-        isTrying = true;
-        return;
-      }
-      BoardHistoryNode restored = Lizzie.board.getHistory().getStart();
-      for (int index = tryHistoryPath.size() - 1; index >= 0; index--) {
-        Optional<BoardHistoryNode> child = restored.getVariation(tryHistoryPath.get(index));
-        if (child.isEmpty()) {
-          Lizzie.board.restoreClearState(trialState);
-          isTrying = true;
-          throw new IllegalStateException("Saved trial history path no longer exists");
-        }
-        restored = child.get();
-      }
-      Lizzie.board.getHistory().restoreSessionRulesTarget(trySessionRulesTarget);
-      Lizzie.board.requireEngineAlignment();
-      Lizzie.board.moveToAnyPosition(restored);
-      isTrying = false;
-      toolbar.tryPlay.setText(Lizzie.resourceBundle.getString("BottomToolbar.tryPlay"));
-      Lizzie.board.setMovelistAll();
-      scheduleEngineSyncAndResumeAfterKifuLoad(
-          0, this::resumeForegroundAnalysisForConfirmedPosition, false);
-      this.setTitle(titleBeforeTrying);
+      Lizzie.board.restoreGameState(trySnapshot);
+      Lizzie.board.cleanedittemp();
+      clearTryPlay();
+      synchronizeRestoredGame(true);
       if (needRefresh) refresh();
     }
   }
 
+  public Board.GameStateSnapshot getTrialSnapshot() {
+    return trySnapshot;
+  }
+
   public void clearTryPlay() {
+    trySnapshot = null;
     if (isTrying) {
       isTrying = false;
       toolbar.tryPlay.setText(Lizzie.resourceBundle.getString("BottomToolbar.tryPlay")); // ("试下");
@@ -5220,6 +5188,12 @@ public class LizzieFrame extends JFrame {
 
   public void synchronizeImportedSgfAfterParserLoad() {
     scheduleEngineSyncAndResumeAfterKifuLoad(0, this::resumeAnalysisAfterConfirmedLoad);
+  }
+
+  /** Internal history restoration keeps the pause policy and never starts file-open analysis. */
+  public void synchronizeRestoredGame(boolean resumeAnalysis) {
+    scheduleEngineSyncAndResumeAfterKifuLoad(
+        0, resumeAnalysis ? this::resumeForegroundAnalysisForConfirmedPosition : null, false);
   }
 
   private void scheduleEngineSyncAndResumeAfterKifuLoad(int delayMillis, Runnable action) {
@@ -13054,11 +13028,11 @@ public class LizzieFrame extends JFrame {
             ? null
             : "FunctionSearch.unavailable.fullTrace";
       case "menu.undoDelete":
-        return Lizzie.board.boardstatbeforeedit.isEmpty()
+        return !Lizzie.board.canUndoEdit()
             ? "FunctionSearch.unavailable.undoEdit"
             : null;
       case "menu.redoDelete":
-        return Lizzie.board.boardstatafteredit.isEmpty()
+        return !Lizzie.board.canRedoEdit()
             ? "FunctionSearch.unavailable.redoEdit"
             : null;
       case "menu.commitPane":
@@ -20912,8 +20886,8 @@ public class LizzieFrame extends JFrame {
       Lizzie.board.place(coords[0], coords[1], isBlack ? Stone.BLACK : Stone.WHITE);
     } else {
       if (Lizzie.board.getHistory().getCurrentHistoryNode().previous().isPresent())
-        Lizzie.board.deleteMoveNoHint();
-      else Lizzie.board.deleteMoveNoHintAfter();
+        Lizzie.board.deleteMoveNoHint(false);
+      else Lizzie.board.deleteMoveNoHintAfter(false);
 
       MoveLinkedList move = new MoveLinkedList();
       move.x = coords[0];
