@@ -23,7 +23,11 @@ File saves freeze their tree, candidate/PV values and export settings on the
 requesting owner, then serialize on the save worker. The manual probe uses the
 same detached `captureSaveSnapshot` boundary and serializes off the EDT before
 the separately timed atomic write. Synchronous text exports still return their
-result directly; they are not the file-save path. See
+result directly; they are not the file-save path. Clipboard Copy freezes the same
+save snapshot when clicked, serializes on `lizzie-sgf-copy`, and publishes on the
+EDT only for the latest copy request and its still-live frame/config. Later board
+edits do not change that captured text. Its bounded serial queue is separate from
+disk saves, so Copy does not alter saved-list revisions or Open-after-Save barriers. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 
 SGF history construction uses captured import preferences and history-owned

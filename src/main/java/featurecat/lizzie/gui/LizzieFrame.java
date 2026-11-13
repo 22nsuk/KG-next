@@ -11033,13 +11033,39 @@ public class LizzieFrame extends JFrame {
     updateTitle();
   }
 
+  // Clipboard work must not change the disk-save revision or hold up an Open-after-Save barrier.
+  private static final SgfSaveQueue sgfCopies = new SgfSaveQueue(
+      Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "lizzie-sgf-copy");
+        worker.setDaemon(true);
+        return worker;
+      }), SwingUtilities::invokeLater, AtomicSgfFileWriter::write);
+  private static long sgfCopyRequest;
+
   public void copySgf() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::copySgf);
+      return;
+    }
+    long request = ++sgfCopyRequest;
+    Config config = Lizzie.config;
+    boolean displayed = isDisplayable();
     try {
-      String sgfContent = SGFParser.saveToString(false);
-      Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-      Transferable transferableString = new StringSelection(sgfContent);
-      clipboard.setContents(transferableString, null);
-      SgfObservation.record("export", "ok", "clipboard", null);
+      SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
+          Lizzie.board, Lizzie.board.getHistory(), false);
+      sgfCopies.submit(snapshot::serialize,
+          () -> request == sgfCopyRequest && Lizzie.frame == this && Lizzie.config == config
+              && !localSgfOpenClosed && (!displayed || isDisplayable()),
+          sgfContent -> {
+            try {
+              Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+              clipboard.setContents(new StringSelection(sgfContent), null);
+              SgfObservation.record("export", "ok", "clipboard", null);
+            } catch (RuntimeException failure) {
+              SgfObservation.record("export", "failed", "clipboard", failure);
+              throw failure;
+            }
+          }, failure -> SgfObservation.record("export", "failed", "clipboard", failure));
     } catch (Exception e) {
       SgfObservation.record("export", "failed", "clipboard", e);
     }
