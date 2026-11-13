@@ -16576,6 +16576,7 @@ public class LizzieFrame extends JFrame {
     } else {
       refresh();
     }
+    refreshCompletedSilentAnalysisProgress();
     if (complete || reopen) {
       WholeGameAnalysisDialog completedDialog = wholeGameAnalysisDialog;
       wholeGameAnalysisDialog = null;
