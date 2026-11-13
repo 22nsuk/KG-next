@@ -390,7 +390,7 @@ class SavedGameLoadDesktopTest {
     Files.writeString(second, CURRENT_SGF);
     writeSolidPreview(saved.resolveSibling("game1.bmp"), 0xcc2211);
     writeSolidPreview(saved.resolveSibling("game2.bmp"), 0x22aa44);
-    onEdt(() -> {
+    responsiveEdt(() -> {
       Lizzie.config.saveBoardConfig = new JSONObject()
           .put("save-game-index", new JSONArray(List.of(1, 2)))
           .put("save-game-name", new JSONArray(List.of("첫 기록", "다음 기록")))
@@ -402,9 +402,9 @@ class SavedGameLoadDesktopTest {
     openFixture(current);
     JSONArray cases = new JSONArray();
     try (var read = SavedGamePreviewTestSupport.block(Lizzie.frame)) {
-      onEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
+      responsiveEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
       read.awaitStarted();
-      JLabel old = onEdt(() -> {
+      JLabel old = responsiveEdt(() -> {
         assertEquals(2, savedButtons("load").size());
         assertEquals(1, read.reads());
         assertTrue(savedList().isShowing());
@@ -416,10 +416,10 @@ class SavedGameLoadDesktopTest {
       clickSavedItem("button");
       awaitEdt(() -> !savedList().isVisible() && !Lizzie.board.isLoadingFile);
       writeSolidPreview(saved.resolveSibling("game1.bmp"), 0x2244cc);
-      onEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
+      responsiveEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
       read.release();
       SavedGamePreviewTestSupport.awaitPending(Lizzie.frame);
-      onEdt(() -> {
+      responsiveEdt(() -> {
         assertNull(old.getIcon(), "The retired label must never receive its old image");
         assertEquals(0x2244cc, iconColor(previewLabels().get(0)));
         assertEquals(0x22aa44, iconColor(previewLabels().get(1)));
@@ -429,16 +429,16 @@ class SavedGameLoadDesktopTest {
       cases.put("responsive-list-and-reopen");
     }
     try (var read = SavedGamePreviewTestSupport.block(Lizzie.frame)) {
-      onEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
+      responsiveEdt(() -> { Lizzie.frame.showTempGamePanel(); return null; });
       read.awaitStarted();
-      JLabel retained = onEdt(() -> {
+      JLabel retained = responsiveEdt(() -> {
         JLabel label = previewLabels().get(0);
         Lizzie.frame.setVisible(false);
         return label;
       });
       read.release();
       SavedGamePreviewTestSupport.awaitPending(Lizzie.frame);
-      onEdt(() -> {
+      responsiveEdt(() -> {
         Lizzie.frame.setVisible(true);
         assertSame(retained, previewLabels().get(0));
         assertEquals(0x2244cc, iconColor(retained));
@@ -447,7 +447,7 @@ class SavedGameLoadDesktopTest {
       cases.put("hidden-frame-retains-thumbnails");
     }
     try (var read = SavedGamePreviewTestSupport.block(Lizzie.frame)) {
-      onEdt(() -> {
+      responsiveEdt(() -> {
         Lizzie.config.loadASaveZoom = true;
         JPanel panel = field("tempGamePanel", JPanel.class);
         javax.swing.Timer timer = null;
@@ -461,7 +461,7 @@ class SavedGameLoadDesktopTest {
         return null;
       });
       read.awaitStarted();
-      onEdt(() -> {
+      responsiveEdt(() -> {
         assertEquals(1, read.reads(), "Rapid hover must converge to one image read");
         JPanel panel = field("tempGamePanel", JPanel.class);
         panel.dispatchEvent(mouse(panel, MouseEvent.MOUSE_MOVED, 460, 150));
@@ -480,16 +480,16 @@ class SavedGameLoadDesktopTest {
     }
     for (String action : List.of("option", "rebuild", "hide", "frame-hidden", "delete", "dispose")) {
       DesktopProbeProcess.phase(result, "async-" + action);
-      onEdt(() -> {
+      responsiveEdt(() -> {
         Lizzie.frame.setVisible(true);
         Lizzie.config.loadASaveZoom = true;
         Lizzie.frame.showTempGamePanel();
         return null;
       });
       try (var read = SavedGamePreviewTestSupport.block(Lizzie.frame)) {
-        onEdt(() -> { showPreview(false, action.equals("dispose") ? 2 : 1); return null; });
+        responsiveEdt(() -> { showPreview(false, action.equals("dispose") ? 2 : 1); return null; });
         read.awaitStarted();
-        onEdt(() -> {
+        responsiveEdt(() -> {
           switch (action) {
             case "option" -> {
               String text = Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.chkZoomImage");
@@ -509,7 +509,7 @@ class SavedGameLoadDesktopTest {
         if (action.equals("delete")) SgfSaveTestSupport.awaitPending();
         read.release();
         SavedGamePreviewTestSupport.awaitPending(Lizzie.frame);
-        onEdt(() -> {
+        responsiveEdt(() -> {
           JPopupMenu popup = field("bigBoardPanel", JPopupMenu.class);
           assertTrue(popup == null || !popup.isVisible(), action);
           assertFalse(field("savedGameHoverTimer", javax.swing.Timer.class).isRunning(), action);
@@ -674,6 +674,13 @@ class SavedGameLoadDesktopTest {
   }
 
   private static <T> T onEdt(Callable<T> action) throws Exception {
+    FutureTask<T> task = new FutureTask<>(action);
+    SwingUtilities.invokeAndWait(task);
+    return task.get();
+  }
+
+  /** A blocked preview decoder must not hold unrelated UI actions until it is released. */
+  private static <T> T responsiveEdt(Callable<T> action) throws Exception {
     FutureTask<T> task = new FutureTask<>(action);
     SwingUtilities.invokeLater(task);
     return task.get(5, TimeUnit.SECONDS);
