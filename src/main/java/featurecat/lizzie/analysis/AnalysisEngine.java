@@ -893,7 +893,7 @@ public class AnalysisEngine {
       if (useRemoteCompute && handleRemoteGtpLine(line)) {
         return;
       }
-      if (line.startsWith("{")) {
+      if (line.trim().startsWith("{")) {
         try {
           parseResult(line);
         } catch (Exception e) {
@@ -906,17 +906,42 @@ public class AnalysisEngine {
   }
 
   public void parseResult(String line) {
-    JSONObject result;
-    result = new JSONObject(line);
-    JSONArray moveInfos = result.getJSONArray("moveInfos");
-    int id = Integer.parseInt(result.getString("id"));
+    JSONObject result = new JSONObject(line);
+    String responseId = result.optString("id", "");
+    int id;
+    try {
+      id = Integer.parseInt(responseId);
+    } catch (NumberFormatException e) {
+      if (responseId.isEmpty() && result.has("error")) {
+        reportJsonDiagnostic(result);
+        requestDispatchFailed = true;
+        finishFailedRequestDispatch(!silentProgress);
+      }
+      return;
+    }
     BoardHistoryNode node = analyzeMap.get(id);
     if (node == null) return;
+    KataGoAnalysisResponse.Kind kind = KataGoAnalysisResponse.kind(result);
+    if (kind == KataGoAnalysisResponse.Kind.ACTION || kind == KataGoAnalysisResponse.Kind.PARTIAL) {
+      return;
+    }
+    if (kind == KataGoAnalysisResponse.Kind.WARNING
+        || kind == KataGoAnalysisResponse.Kind.ERROR
+        || kind == KataGoAnalysisResponse.Kind.NO_RESULTS) {
+      reportJsonDiagnostic(result);
+      if (kind != KataGoAnalysisResponse.Kind.WARNING
+          || KataGoAnalysisResponse.warningChangesRequest(result)) {
+        requestDispatchFailed = true;
+        finishFailedRequestDispatch(!silentProgress);
+      }
+      return;
+    }
     if (!requestStillTargetsCurrentGame()) {
       requestDispatchFailed = true;
       finishFailedRequestDispatch(false);
       return;
     }
+    JSONArray moveInfos = result.getJSONArray("moveInfos");
     List<MoveData> moves = Utils.getBestMovesFromJsonArray(moveInfos, true, true);
     List<Double> ownershipArray = null;
     if (result.has("ownership")) {
@@ -960,6 +985,12 @@ public class AnalysisEngine {
     Lizzie.frame.requestProblemListRefresh();
     showProgress(true);
     if (canFinalizeCurrentRequest() && responseCount == analyzeMap.size()) setResult();
+  }
+
+  private void reportJsonDiagnostic(JSONObject response) {
+    String diagnostic = KataGoAnalysisResponse.diagnostic(response);
+    LOG.warn("{}", diagnostic);
+    if (Lizzie.gtpConsole != null) Lizzie.gtpConsole.addErrorLine(diagnostic);
   }
 
   private boolean handleRemoteGtpLine(String line) {

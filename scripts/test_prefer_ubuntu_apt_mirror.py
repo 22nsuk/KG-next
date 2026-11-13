@@ -30,6 +30,31 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
     def test_swaps_priorities_without_removing_or_reordering_fallbacks(self):
         self.assertEqual(EXPECTED, mirrors.mirrorlist_with_priority(ORIGINAL))
 
+    def test_aws_regional_mirror_preserves_uri_and_both_priority_modes(self):
+        for region in ("us-east-2", "us-east-1", "eu-central-1", "ap-southeast-2", "us-gov-west-1"):
+            original = ORIGINAL.replace("azure.archive", f"{region}.ec2.archive")
+            expected = EXPECTED.replace("azure.archive", f"{region}.ec2.archive")
+            for source in (original, expected):
+                with self.subTest(region=region, source=source):
+                    self.assertEqual(expected, mirrors.mirrorlist_with_priority(source))
+                    self.assertEqual(original, mirrors.mirrorlist_with_priority(source, prefer_archive=False))
+
+    def test_rejects_lookalike_regional_mirrors_and_second_cloud_mirror(self):
+        lookalikes = (
+            "https://us-east-2.ec2.archive.ubuntu.com/ubuntu/",
+            "http://ec2.archive.ubuntu.com/ubuntu/",
+            "http://us-east-2.ec2.archive.ubuntu.com.example.invalid/ubuntu/",
+            "http://example.invalid/us-east-2.ec2.archive.ubuntu.com/ubuntu/",
+            "http://us-east-2.ec2.archive.ubuntu.com/debian/",
+            "http://us_east_2.ec2.archive.ubuntu.com/ubuntu/",
+        )
+        for uri in lookalikes:
+            with self.subTest(uri=uri), self.assertRaises(ValueError):
+                mirrors.mirrorlist_with_priority(ORIGINAL.replace(mirrors.AZURE, uri))
+        for extra in (mirrors.AZURE, "http://us-east-2.ec2.archive.ubuntu.com/ubuntu/"):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                mirrors.mirrorlist_with_priority(ORIGINAL + extra + "\tpriority:1\n")
+
     def test_preserves_comments_blank_lines_and_metadata_spacing(self):
         original = "# runner mirrors\n\n" + ORIGINAL.replace("\t", "\t \t")
         expected = "# runner mirrors\n\n" + EXPECTED.replace("\t", "\t \t")
@@ -108,10 +133,16 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
                     mirrors.require_hosted_ubuntu_x64(HOSTED, system, machine, distro)
 
     def test_download_budget_falls_back_once_and_installs_only_complete_archives(self):
+        for host in ("azure.archive", "us-east-2.ec2.archive"):
+            with self.subTest(host=host):
+                self.check_download_budget(ORIGINAL.replace("azure.archive", host),
+                                           EXPECTED.replace("azure.archive", host))
+
+    def check_download_budget(self, original, expected):
         for results in ((0,), (124, 0), (100, 0), (124, 100), (100, 124), (137,), (130,), (127,)):
             with self.subTest(results=results), tempfile.TemporaryDirectory() as temporary:
                 path = Path(temporary) / "apt-mirrors.txt"
-                path.write_text(ORIGINAL, encoding="utf-8")
+                path.write_text(original, encoding="utf-8")
                 remaining = iter(results)
                 priorities = []
                 calls = []
@@ -140,7 +171,7 @@ class PreferUbuntuAptMirrorTest(unittest.TestCase):
                             mirrors.install_packages(["xvfb", "fonts-noto-cjk"])
                         self.assertEqual(results[-1], error.exception.returncode)
                         self.assertFalse(any("--no-download" in call for call in calls))
-                self.assertEqual([EXPECTED] if len(results) == 1 else [EXPECTED, ORIGINAL], priorities)
+                self.assertEqual([expected] if len(results) == 1 else [expected, original], priorities)
                 self.assertEqual(1, calls.count(["apt-get", "update"]))
 
     def test_invalid_package_or_mirror_cannot_start_apt(self):

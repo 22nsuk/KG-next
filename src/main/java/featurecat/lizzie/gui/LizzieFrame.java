@@ -53,6 +53,7 @@ import featurecat.lizzie.rules.MoveLinkedList;
 import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.NodeInfo;
 import featurecat.lizzie.rules.SGFParser;
+import featurecat.lizzie.rules.SgfDocument;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.teacher.CommentDisplayRenderer;
 import featurecat.lizzie.theme.MorandiPalette;
@@ -4964,21 +4965,24 @@ public class LizzieFrame extends JFrame {
           file, fromTemp, showHint, afterSuccessfulLoad, current, result, null, null);
       return;
     }
-    SgfReadQueue.SHARED.read(file.toPath()).whenComplete((content, failure) ->
+    SgfReadQueue.SHARED.prepare(file.toPath()).whenComplete((document, failure) ->
         finishInteractiveFileRead(
-            file, fromTemp, showHint, afterSuccessfulLoad, current, result, content, failure));
+            file, fromTemp, showHint, afterSuccessfulLoad, current, result, document, failure));
   }
 
   private void finishInteractiveFileRead(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
       BooleanSupplier current, java.util.concurrent.CompletableFuture<Boolean> result,
-      String content, Throwable failure) {
+      SgfDocument document, Throwable failure) {
     try {
       if (!current.getAsBoolean() || failure instanceof java.util.concurrent.CancellationException) {
         result.complete(false);
         return;
       }
-      if (failure != null) {
+      // A rejected SGF must not enter applyFile's synchronous fallback and reread on the EDT.
+      if (failure != null
+          || (document == null
+              && !file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".gib"))) {
         SgfObservation.record("open", "failed", file.getPath(), failure);
         showOpenFileFailedMessageLater();
         result.complete(false);
@@ -5000,7 +5004,7 @@ public class LizzieFrame extends JFrame {
       if (ponder) primary.togglePonder();
       boolean loaded;
       try (var phase = new featurecat.lizzie.logging.SgfPhase("file-apply")) {
-        loaded = applyFile(file, fromTemp, showHint, afterSuccessfulLoad, null, content);
+        loaded = applyFile(file, fromTemp, showHint, afterSuccessfulLoad, null, document);
       }
       if (!loaded && ponder && Lizzie.leelaz == primary
           && Lizzie.capturePrimaryEngineGeneration(primary) == generation
@@ -5040,7 +5044,7 @@ public class LizzieFrame extends JFrame {
 
   private boolean applyFile(
       File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
-      Runnable afterEngineReady, String decodedSgf) {
+      Runnable afterEngineReady, SgfDocument preparedSgf) {
     if (rejectFileOpenWhilePlaying()) return false;
     if (deferUntilHumanSlExit(
         () -> loadFile(file, fromTemp, showHint, afterSuccessfulLoad, afterEngineReady))) {
@@ -5064,9 +5068,9 @@ public class LizzieFrame extends JFrame {
       if (!sgfFile) {
         loaded = GIBParser.load(file.getPath());
       } else {
-        loaded = decodedSgf == null
+        loaded = preparedSgf == null
             ? SGFParser.load(file.getPath(), showHint, false)
-            : SGFParser.loadFileContent(decodedSgf, showHint, false);
+            : SGFParser.loadFileDocument(preparedSgf, showHint, false);
       }
       if (!loaded) {
         rollbackState.restore();

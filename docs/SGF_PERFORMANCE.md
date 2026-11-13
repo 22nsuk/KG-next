@@ -1,11 +1,12 @@
 # SGF read and serialization measurements
 
 Interactive SGF opening from the chooser, a single dropped file, and the recent
-file menu reads and decodes on `lizzie-sgf-read`. There is one active read and at
-most one waiting selection. A newer accepted selection retires earlier results. Existing quick-analysis and
+file menu reads, decodes, normalizes and builds immutable `SgfDocument` syntax on
+`lizzie-sgf-read`. There is one active read/parse and at most one waiting selection.
+A newer accepted selection retires earlier results. Existing quick-analysis and
 AI Coach teardown admission runs first; a rejected continuation cannot retire
 the first accepted open. The read/edit snapshot is captured after admission. Before
-applying text on the EDT, the frame checks the selection, original frame/config,
+applying the prepared document on the EDT, the frame checks the selection, original frame/config,
 window lifetime, explicit game edits and foreground game/analysis ownership.
 Ordinary engine analysis is not an authored edit. An immediate Open after Save
 waits for accepted saves and their metadata publication, including writes
@@ -18,12 +19,20 @@ the separately timed atomic write. Synchronous text exports still return their
 result directly; they are not the file-save path. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 
-Interactive parsing and board application still use the original EDT/global
-board context. Detached `parseSgf` now builds immutable syntax and a private
-history from captured import options and history-owned geometry; it no longer
-temporarily replaces the live board dimensions or Zobrist tables. This boundary
-does not move interactive publication, configuration capture or engine work to
-a different thread.
+Interactive history construction, analysis-payload import and board application
+still use the original EDT/global board context. Syntax preparation shares the
+file loader's normalization and leading-node-fragment tolerance; applying the
+prepared document does not read or parse it again. A syntax failure returns before
+clearing the current board. Commit failures still use the existing rollback path.
+Import preferences, UI updates and engine synchronization retain their current
+owners. Cancellation retires the result, rather than interrupting an active
+parser; a read retired before syntax preparation skips that preparation.
+
+Detached `parseSgf` also builds a private history from captured import options and
+history-owned geometry without replacing the live board dimensions or Zobrist
+tables. The interactive path continues to use its existing live history builder,
+whose komi aliases, setup state, hints and UI behavior are not interchangeable
+with the detached builder.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
 for batch and startup compatibility callers. GIB loading is also still synchronous.
 `openFileAsync` completes after parsing/application; its result does not promise
@@ -50,10 +59,11 @@ investigating a particular file. The manual probe below does so automatically.
 | --- | --- |
 | `file-read` | Reading the complete byte sequence once |
 | `detect-decode` | Legacy charset detection/fallback and byte-to-text decoding |
+| `parse-syntax` | File input normalization and immutable syntax preparation; on the read worker for interactive opening |
 | `open-edit-capture` | The existing explicit-edit snapshot used to protect the current game |
 | `board-clear` | Preparing the board for file application |
-| `parse-build-tree` | Token processing and history construction, which are interleaved |
-| `file-apply` | The interactive EDT application envelope, including clear/parse and UI updates |
+| `parse-build-tree` | Applying prepared events, decoding properties/analysis and constructing the live history |
+| `file-apply` | The interactive EDT application envelope, including clear/history construction and UI updates |
 | `board-finalize` | Deferred cursor navigation and final board cleanup |
 | `engine-sync-attempt` | One coordinator worker attempt, including engine response waits |
 | `save-capture` | Frozen topology and node payload copies |
@@ -61,9 +71,10 @@ investigating a particular file. The manual probe below does so automatically.
 
 Nested events overlap: do not add `file-apply` to its clear/parse children.
 Engine attempts exclude queue/retry delays and are not an engine search speed
-measurement. Offline attempts do not measure a native engine. The parser already
-applies nodes while reading tokens; these events do not claim an independent
-pure parse versus pure board-install split.
+measurement. Offline attempts do not measure a native engine. `parse-syntax` is
+separate from history construction; the latter still combines property/analysis
+interpretation with board mutations. The historical `parse-build-tree` measurements
+below included syntax parsing as well, so they have a different phase boundary.
 
 ## Reproduce with the actual window
 
@@ -109,8 +120,64 @@ algorithm against the same bytes; it is not an old full-application benchmark.
 
 The workload set includes 21,845 nodes with 5,461 branching points, 301 nodes
 with 32 candidates and 361 ownership values per node, and 201 nodes with long
-escaped multilingual comments. Generated fixture hashes and source identities
+escaped multilingual comments. A fourth fixture has 151 nodes, 32 candidates,
+64 PV coordinates and visit counts, and 361 ownership values per node.
+Generated fixture hashes and source identities
 belong with any reported measurement so results cannot silently outlive changes.
+
+## Interactive syntax preparation (2026-11-12)
+
+The baseline is main `cbaf8a981f97bd00a2fb04fe3acb49615e7c848c`. The
+[measurement data](performance/2026-11-12/sgf-interactive-open.json) identifies
+the three changed production files by Git blob and SHA-256, the unchanged probe
+by SHA-256, and every fixture by hash. It includes all open/reopen observations,
+including excluded warmups, plus the observed phase threads.
+
+The unchanged actual-window probe ran in four separate JVMs in
+before/after/after/before order, on Linux amd64, Temurin 21.0.13+9, nine reported
+logical processors, Xvfb/Openbox and `-Xmx2g`. Each fixture had five excluded
+warmups and ten retained samples per JVM: 20 retained open and 20 retained reopen
+samples per version/fixture. These are offline, warm-filesystem observations.
+Source, class and dependency hashes were checked before and after every run;
+the two runs of each version used identical artifacts. All 240 saved files,
+including warmups, matched their counterparts byte-for-byte and passed the
+probe's tree/comment/candidate/PV/visit/ownership save-and-reopen checks.
+
+Open EDT CPU medians fell in both execution orders (milliseconds):
+
+| Workload | First pair, before → after | Reverse pair, before → after |
+| --- | ---: | ---: |
+| Wide variations | 109.44 → 90.92 | 109.00 → 99.03 |
+| Candidates + ownership | 58.42 → 42.93 | 54.44 → 42.09 |
+| Long multilingual comments | 32.07 → 18.58 | 34.02 → 17.62 |
+| Long PV + visits + ownership | 81.72 → 64.09 | 78.33 → 69.27 |
+
+The following pools all 20 retained open samples per version/fixture. Queue
+delay is the median of each operation's largest queued-callback delay, not a
+worst-case bound or physical display frame time.
+
+| Workload | EDT CPU, before → after (ms) | Open wall time, before → after (ms) | Queue delay, before → after (ms) |
+| --- | ---: | ---: | ---: |
+| Wide variations | 109.44 → 93.43 | 124.61 → 124.14 | 54.49 → 39.55 |
+| Candidates + ownership | 55.86 → 42.93 | 61.96 → 58.27 | 38.97 → 35.64 |
+| Long multilingual comments | 32.73 → 18.21 | 48.63 → 48.00 | 26.10 → 8.33 |
+| Long PV + visits + ownership | 79.62 → 66.95 | 87.88 → 94.74 | 66.20 → 52.69 |
+
+This supports reduced UI-thread work, not uniformly faster completion. Long-PV
+open wall-time medians increased in both orders (87.81 → 92.81 and
+87.88 → 95.63 ms), while wide-tree wall time changed little overall. Individual
+samples overlap and some queue-delay maxima increased; no slow sample or GC
+overlap was discarded. Moving work allows the EDT to run during preparation but
+does not remove that CPU work, and the recordings do not establish a cause for
+the wall-time differences.
+
+Every candidate open/reopen recorded exactly one `parse-syntax` event on
+`lizzie-sgf-read` and one `parse-build-tree` event on the EDT. The actual history
+builder, analysis-payload interpretation, property escape decoding, explicit-edit
+snapshots and final navigation still consume EDT time. The `parse-build-tree`
+boundary excludes syntax in the candidate and includes it in the baseline;
+comparing that phase alone would overstate saved work. Native engine response
+time, cold disk, network shares and end-user hardware were not measured.
 
 ## Interpretation and next boundary
 
