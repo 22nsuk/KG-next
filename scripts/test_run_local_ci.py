@@ -228,8 +228,8 @@ class RunLocalCiTest(unittest.TestCase):
         selector = next(arg.removeprefix("-Dtest=") for arg in step.command
                         if arg.startswith("-Dtest="))
         selected = selector.split(",")
-        self.assertEqual(36, len(selected))
-        self.assertEqual(110, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertEqual(37, len(selected))
+        self.assertEqual(111, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
         self.assertEqual(
             ["AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+"
              "decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame"],

@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.analysis.GameInfo;
+import featurecat.lizzie.rules.SGFParser;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -82,6 +83,37 @@ class SgfReadQueueTest {
     return assertInstanceOf(SgfReadQueue.PreparedSgf.class, file).document().events().stream()
         .filter(event -> event.name().equals("C"))
         .findFirst().orElseThrow().rawValue();
+  }
+
+  @Test
+  void stringsShareTheBoundedQueueAndKeepTheirCapturedOptions() throws Exception {
+    ArrayDeque<Runnable> worker = new ArrayDeque<>();
+    List<Path> reads = new ArrayList<>();
+    SgfReadQueue queue = new SgfReadQueue(worker::add, path -> {
+      reads.add(path);
+      return "(;C[file])";
+    });
+    var file = submit(queue, "file");
+    var options = new SGFParser.ParseOptions(false, true, false, true, 3, 2, 4.5);
+    AtomicReference<CompletableFuture<SgfReadQueue.PreparedFile>> first = new AtomicReference<>();
+    AtomicReference<CompletableFuture<SgfReadQueue.PreparedFile>> latest = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> {
+      first.set(queue.prepare("(;C[first])", options));
+      latest.set(queue.prepare("(;C[latest])", options));
+    });
+    assertTrue(file.isCancelled());
+    assertTrue(first.get().isCancelled());
+    assertEquals(1, worker.size());
+    worker.remove().run();
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals(1, worker.size());
+    worker.remove().run();
+    SwingUtilities.invokeAndWait(() -> {});
+    var prepared = assertInstanceOf(SgfReadQueue.PreparedSgf.class, latest.get().join());
+    assertEquals("latest", comment(prepared));
+    assertSame(options, prepared.options(), "string policy must not rebuild from live settings");
+    assertEquals(List.of(Path.of("file")), reads, "strings perform no file read");
+    assertTrue(worker.isEmpty());
   }
 
   @Test

@@ -195,7 +195,7 @@ class SavedGameLoadSafetyTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"file", "string", "download", "parser", "gib"})
+  @ValueSource(strings = {"file", "string", "download", "async-string", "parser", "gib"})
   void disabledAutomaticAnalysisStillSynchronizesLoadedRecordAndAllowsManualResume(String entry)
       throws Exception {
     installAcknowledgingEngine();
@@ -220,6 +220,7 @@ class SavedGameLoadSafetyTest {
         case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
         case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
         case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "async-string" -> frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
         case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
         default -> throw new AssertionError(entry);
       }
@@ -242,7 +243,7 @@ class SavedGameLoadSafetyTest {
   }
 
   static Stream<Arguments> pendingLoadAnalysisControls() {
-    return Stream.of("file", "string", "download", "parser", "gib")
+    return Stream.of("file", "string", "download", "async-string", "parser", "gib")
         .flatMap(entry -> Stream.of(false, true).map(toolbar -> Arguments.of(entry, toolbar)));
   }
 
@@ -259,6 +260,7 @@ class SavedGameLoadSafetyTest {
         case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
         case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
         case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "async-string" -> frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
         case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
         default -> throw new AssertionError(entry);
       }
@@ -300,6 +302,24 @@ class SavedGameLoadSafetyTest {
     transport.awaitResponses();
     assertEquals(0, analysisCommandCount());
     assertFalse(Lizzie.leelaz.isPondering());
+  }
+
+  @Test
+  void asynchronousStringApplicationCompletesBeforeTheEngineAcknowledgesThePosition() throws Exception {
+    CountDownLatch snapshotSent = holdNextSnapshotResponse();
+    var applied = frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
+    assertTrue(applied.get(5, TimeUnit.SECONDS));
+    assertTrue(snapshotSent.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {
+      assertTrue(Lizzie.board.isEngineAlignmentPending());
+      assertEquals(0, analysisCommandCount());
+      assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+    });
+    releaseSnapshotResponse();
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(frame.resumeAction);
+    transport.awaitResponses();
+    assertFalse(Lizzie.board.isEngineAlignmentPending());
   }
 
   private CountDownLatch holdNextSnapshotResponse() throws Exception {
@@ -440,6 +460,7 @@ class SavedGameLoadSafetyTest {
       frame.mainPanel.setSize(1024, 768);
       frame.commentScrollPane = new JScrollPane();
       frame.commentEditPane = new JScrollPane();
+      frame.commentEditPane.setVisible(false); // The real frame starts without an open comment draft.
       frame.sidebarPanel = RulesLayerTestHarness.allocate(QuietSidebar.class);
       setFrameField("varTreeScrollPane", new JScrollPane());
       frame.listScrollpane = new JScrollPane();
