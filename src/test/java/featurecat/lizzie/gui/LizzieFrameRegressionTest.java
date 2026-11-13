@@ -2621,6 +2621,52 @@ class LizzieFrameRegressionTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({
+    "IDLE, false", "PREPARING, true", "BASELINE, true", "DEEP, true", "PAUSING, true",
+    "PAUSED, false", "COMPLETE, false", "CANCELLED, false", "FAILED, false"
+  })
+  void problemListIncludesWholeGameRunningState(
+      WholeGameAnalysisSession.State state, boolean running) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.config = configWithAutoQuickAnalyze();
+      Lizzie.board = boardWith(historyWithUnanalyzedMove());
+      LizzieFrame frame = allocate(LizzieFrame.class);
+      setField(frame, "problemListListeners", new ArrayList<>());
+      WholeGameAnalysisSession session = allocate(WholeGameAnalysisSession.class);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "state", state);
+      setField(frame, "wholeGameAnalysisSession", session);
+      Lizzie.frame = frame;
+      SwingUtilities.invokeAndWait(frame::refreshProblemListSnapshot);
+      assertEquals(running, frame.getProblemListSnapshot().analysisRunning);
+
+      ResourceTrackingAnalysisEngine quickEngine = allocate(ResourceTrackingAnalysisEngine.class);
+      quickEngine.analysisInProgress = true;
+      frame.analysisEngine = quickEngine;
+      SwingUtilities.invokeAndWait(frame::refreshProblemListSnapshot);
+      assertTrue(frame.getProblemListSnapshot().analysisRunning,
+          "the ordinary analysis engine remains a source of running state");
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"COMPLETE", "CANCELLED", "FAILED"})
+  void wholeGameHandoffRequestsSettledPublicationOnce(String terminalState) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      WholeGameHandoffFrame frame = allocate(WholeGameHandoffFrame.class);
+      WholeGameAnalysisSession session = allocate(WholeGameAnalysisSession.class);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "terminal", true);
+      setDeclaredField(WholeGameAnalysisSession.class, session, "state",
+          WholeGameAnalysisSession.State.valueOf(terminalState));
+      setField(frame, "wholeGameAnalysisSession", session);
+      SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+      assertEquals(1, frame.settledPublicationCount);
+      SwingUtilities.invokeAndWait(() -> frame.onWholeGameAnalysisFinished(session, null, false));
+      assertEquals(1, frame.settledPublicationCount);
+      assertEquals(0, frame.resumeCount);
+    }
+  }
+
   @Test
   void terminalWholeGameSessionBlocksQuickAnalysisUntilHandoff() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
@@ -4954,6 +5000,7 @@ class LizzieFrameRegressionTest {
   }
 
   private static final class WholeGameHandoffFrame extends LizzieFrame {
+    private int settledPublicationCount;
     private int resumeCount;
     private WholeGameAnalysisDialog disposedDialog;
     private int openCount;
@@ -4986,6 +5033,12 @@ class LizzieFrameRegressionTest {
     @Override
     protected void disposeWholeGameAnalysisDialog(WholeGameAnalysisDialog dialog) {
       disposedDialog = dialog;
+    }
+
+    @Override
+    void refreshCompletedSilentAnalysisProgress() {
+      settledPublicationCount++;
+      super.refreshCompletedSilentAnalysisProgress();
     }
   }
 

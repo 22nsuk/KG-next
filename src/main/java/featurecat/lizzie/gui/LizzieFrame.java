@@ -1631,7 +1631,9 @@ public class LizzieFrame extends JFrame {
     Collections.sort(blackEntries, comparator);
     Collections.sort(whiteEntries, comparator);
 
-    boolean analysisRunning = analysisEngine != null && analysisEngine.isAnalysisInProgress();
+    boolean analysisRunning =
+        (analysisEngine != null && analysisEngine.isAnalysisInProgress())
+            || (wholeGameAnalysisSession != null && wholeGameAnalysisSession.isRunning());
     problemListSnapshot =
         new ProblemListSnapshot(
             metric, blackEntries, whiteEntries, analyzedMoves, totalMoves, analysisRunning);
@@ -8100,7 +8102,7 @@ public class LizzieFrame extends JFrame {
     redrawWinratePaneOnly = true;
     if (mainPanel != null) mainPanel.repaint();
     if (listTable != null && listTable.isVisible()) listTable.repaint();
-    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
+    requestAnalysisSidebarRefresh();
     notifyWebBoard(true);
   }
 
@@ -8250,6 +8252,11 @@ public class LizzieFrame extends JFrame {
   /** Requests a bounded-rate title update without changing engine-game repaint behavior. */
   public void requestAnalysisTitleUpdate() {
     analysisUiRefresh.requestTitle();
+  }
+
+  /** Shares the sidebar interval across engine results, graph refreshes, and session state changes. */
+  public void requestAnalysisSidebarRefresh() {
+    if (analysisSidebarRefreshCoalescer != null) analysisSidebarRefreshCoalescer.request();
   }
 
   private void flushAnalysisSidebarRefresh() {
@@ -16524,6 +16531,7 @@ public class LizzieFrame extends JFrame {
     } else {
       refresh();
     }
+    refreshCompletedSilentAnalysisProgress();
     if (complete || reopen) {
       WholeGameAnalysisDialog completedDialog = wholeGameAnalysisDialog;
       wholeGameAnalysisDialog = null;

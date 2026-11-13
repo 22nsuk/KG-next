@@ -982,7 +982,7 @@ public class AnalysisEngine {
       resultCount++;
     }
     notifyProgress();
-    Lizzie.frame.requestProblemListRefresh();
+    Lizzie.frame.requestAnalysisSidebarRefresh();
     showProgress(true);
     if (canFinalizeCurrentRequest() && responseCount == analyzeMap.size()) setResult();
   }
@@ -1305,7 +1305,7 @@ public class AnalysisEngine {
       resultCount++;
     }
     notifyProgress();
-    Lizzie.frame.requestProblemListRefresh();
+    Lizzie.frame.requestAnalysisSidebarRefresh();
     showProgress(sharedForegroundEngine == null || resultCount < analyzeMap.size());
     return true;
   }

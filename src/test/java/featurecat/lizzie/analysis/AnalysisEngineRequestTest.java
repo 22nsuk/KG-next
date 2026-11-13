@@ -13,10 +13,13 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.EngineGamePlans;
+import featurecat.lizzie.gui.AnalysisUiRefreshTestSupport;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.HumanSlGameController;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.ProblemListSideFilter;
+import featurecat.lizzie.gui.ProblemListSnapshot;
 import featurecat.lizzie.gui.WaitForAnalysis;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -56,8 +59,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
+import javax.swing.SwingUtilities;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
@@ -1916,6 +1921,75 @@ class AnalysisEngineRequestTest {
     assertTrue((boolean) method.invoke(null, 49, 49));
     assertFalse((boolean) method.invoke(null, 49, 50));
     assertTrue((boolean) method.invoke(null, 48, 50));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void responseSidebarRefreshUsesMinimumIntervalWithoutDelayingUserRequests(boolean remote)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      Stone[] stones = emptyStones();
+      for (int move = 1; move <= 4; move++) {
+        boolean black = move % 2 == 1;
+        int[] point = {(move - 1) % BOARD_SIZE, (move - 1) / BOARD_SIZE};
+        Stone color = black ? Stone.BLACK : Stone.WHITE;
+        stones[Board.getIndex(point[0], point[1])] = color;
+        history.add(moveNode(stones.clone(), point, color, !black, move));
+      }
+      boardWithHistory(history);
+      SidebarProgressFrame frame = allocate(SidebarProgressFrame.class);
+      AnalysisUiRefreshTestSupport.installSidebar(frame);
+      Lizzie.frame = frame;
+      Lizzie.config.uiConfig = new JSONObject();
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "useRemoteCompute", remote);
+      frame.analysisEngine = engine;
+      List<ProblemListSnapshot> published = new CopyOnWriteArrayList<>();
+      AtomicLong publishedAt = new AtomicLong();
+      AtomicReference<CountDownLatch> nextPublication = new AtomicReference<>();
+      try {
+        SwingUtilities.invokeAndWait(() -> frame.addProblemListListener(snapshot -> {
+          assertTrue(SwingUtilities.isEventDispatchThread());
+          published.add(snapshot);
+          publishedAt.set(System.nanoTime());
+          CountDownLatch latch = nextPublication.get();
+          if (latch != null) latch.countDown();
+        }));
+        assertEquals(4, engine.startRequestMissingMainline(false));
+        SwingUtilities.invokeAndWait(() -> {});
+        CountDownLatch first = new CountDownLatch(1);
+        nextPublication.set(first);
+        long firstRequestedAt = System.nanoTime();
+        if (remote) completeRemoteGtpSearch(engine, 200, 62.0, 1.5);
+        else engine.parseResult(analysisResult(1, 200, 62.0));
+        assertTrue(first.await(5, TimeUnit.SECONDS));
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+
+        CountDownLatch second = new CountDownLatch(1);
+        nextPublication.set(second);
+        if (remote) completeRemoteGtpSearch(engine, 200, 45.0, -1.5);
+        else engine.parseResult(analysisResult(2, 200, 45.0));
+        assertTrue(second.await(5, TimeUnit.SECONDS));
+        assertTrue(publishedAt.get() - firstRequestedAt >= TimeUnit.MILLISECONDS.toNanos(250),
+            "successive response publications must use the existing sidebar interval");
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+        ProblemListSnapshot progress = published.get(published.size() - 1);
+        assertTrue(progress.analysisRunning);
+        assertEquals(1, progress.analyzedMoves, "the delayed publication reads the latest metadata");
+
+        SwingUtilities.invokeAndWait(() -> {
+          int before = published.size();
+          frame.requestProblemListRefresh();
+          assertEquals(before + 1, published.size(), "user refresh bypasses the analysis interval");
+          frame.setProblemListSideFilter(ProblemListSideFilter.WHITE);
+          assertEquals(before + 2, published.size(), "filter changes publish immediately");
+          assertEquals(ProblemListSideFilter.WHITE, frame.getProblemListSideFilter());
+        });
+      } finally {
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(frame);
+      }
+    }
   }
 
   @Test
@@ -5261,6 +5335,19 @@ class AnalysisEngineRequestTest {
 
     @Override
     public void requestProblemListRefresh() {}
+  }
+
+  private static final class SidebarProgressFrame extends LizzieFrame {
+    @Override
+    public void appendComment() {}
+
+    @Override
+    public void refreshSilentAnalysisProgress() {}
+
+    @Override
+    public void refresh() {
+      requestProblemListRefresh();
+    }
   }
 
   private static final class SilentGtpConsole extends GtpConsolePane {
