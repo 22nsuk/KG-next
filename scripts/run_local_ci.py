@@ -209,6 +209,10 @@ DESKTOP_TESTS = {
     )),
     "featurecat.lizzie.gui.SavedGameLoadDesktopTest": TestSelection((
         "failedSavedListOpensPreserveCurrentGameAndAllowRetry",
+        *tuple(
+            f"unavailablePreviewsKeepSavedGamesUsable(String)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
     )),
     "featurecat.lizzie.gui.SavedGameSaveDesktopTest": TestSelection((
         "pendingSaveKeepsTheListResponsiveAndPublishesAfterDiskCompletion",

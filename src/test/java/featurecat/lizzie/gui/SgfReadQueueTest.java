@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.rules.SgfDocument;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayDeque;
@@ -21,7 +22,7 @@ class SgfReadQueueTest {
     SgfReadQueue queue = new SgfReadQueue(worker::add, path -> {
       assertFalse(SwingUtilities.isEventDispatchThread());
       reads.add(path);
-      return path.toString();
+      return "(;C[" + path + "])";
     });
     var first = submit(queue, "first");
     var second = submit(queue, "second");
@@ -34,7 +35,7 @@ class SgfReadQueueTest {
     assertEquals(1, worker.size());
     worker.remove().run();
     SwingUtilities.invokeAndWait(() -> {});
-    assertEquals("latest", latest.join());
+    assertEquals("latest", comment(latest.join()));
     assertEquals(List.of(Path.of("first"), Path.of("latest")), reads);
   }
 
@@ -43,7 +44,7 @@ class SgfReadQueueTest {
     ArrayDeque<Runnable> worker = new ArrayDeque<>();
     SgfReadQueue queue = new SgfReadQueue(worker::add, path -> {
       if (path.toString().equals("bad")) throw new IOException("read failed");
-      return "ok";
+      return "(;C[ok])";
     });
     var failed = submit(queue, "bad");
     worker.remove().run();
@@ -53,15 +54,38 @@ class SgfReadQueueTest {
     var good = submit(queue, "good");
     worker.remove().run();
     SwingUtilities.invokeAndWait(() -> {});
-    assertEquals("ok", good.join());
+    assertEquals("ok", comment(good.join()));
     var rejecting = new SgfReadQueue(task -> { throw new RejectedExecutionException(); }, path -> "");
     assertTrue(submit(rejecting, "first").isCompletedExceptionally());
     assertTrue(submit(rejecting, "next").isCompletedExceptionally());
   }
 
-  private static CompletableFuture<String> submit(SgfReadQueue queue, String path) throws Exception {
-    AtomicReference<CompletableFuture<String>> result = new AtomicReference<>();
-    SwingUtilities.invokeAndWait(() -> result.set(queue.read(Path.of(path))));
+  @Test
+  void invalidSyntaxSettlesBeforeTheNextPreparedDocument() throws Exception {
+    ArrayDeque<Runnable> worker = new ArrayDeque<>();
+    SgfReadQueue queue = new SgfReadQueue(worker::add,
+        path -> path.toString().equals("bad") ? "(;AB[aa:])" : "(;C[ok])");
+    var failed = submit(queue, "bad");
+    worker.remove().run();
+    SwingUtilities.invokeAndWait(() -> {});
+    assertNull(failed.join());
+    var good = submit(queue, "good");
+    AtomicReference<Boolean> callbackOnEdt = new AtomicReference<>();
+    good.thenAccept(document -> callbackOnEdt.set(SwingUtilities.isEventDispatchThread()));
+    worker.remove().run();
+    SwingUtilities.invokeAndWait(() -> {});
+    assertEquals("ok", comment(good.join()));
+    assertEquals(true, callbackOnEdt.get());
+  }
+
+  private static String comment(SgfDocument document) {
+    return document.events().stream().filter(event -> event.name().equals("C"))
+        .findFirst().orElseThrow().rawValue();
+  }
+
+  private static CompletableFuture<SgfDocument> submit(SgfReadQueue queue, String path) throws Exception {
+    AtomicReference<CompletableFuture<SgfDocument>> result = new AtomicReference<>();
+    SwingUtilities.invokeAndWait(() -> result.set(queue.prepare(Path.of(path))));
     return result.get();
   }
 }
