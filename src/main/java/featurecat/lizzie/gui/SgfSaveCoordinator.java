@@ -248,4 +248,9 @@ public final class SgfSaveCoordinator {
   public static CompletableFuture<Void> pendingSaves() {
     return SAVES.pending();
   }
+
+  /** Counts accepted save/edit operations, including those that subsequently fail. */
+  static long acceptedSaveRevision() {
+    return SAVES.acceptedRevision();
+  }
 }

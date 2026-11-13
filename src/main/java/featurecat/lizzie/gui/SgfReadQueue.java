@@ -1,5 +1,7 @@
 package featurecat.lizzie.gui;
 
+import featurecat.lizzie.rules.SGFParser;
+import featurecat.lizzie.rules.SgfDocument;
 import featurecat.lizzie.util.SgfFileReader;
 import java.io.IOException;
 import java.nio.file.Path;
@@ -8,7 +10,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import javax.swing.SwingUtilities;
 
-/** At most one active read and one waiting selection. All request state belongs to the EDT. */
+/** At most one active read/parse and one waiting selection. Request state belongs to the EDT. */
 final class SgfReadQueue {
   @FunctionalInterface
   interface Reader {
@@ -27,14 +29,14 @@ final class SgfReadQueue {
   private Request active;
   private Request waiting;
 
-  private record Request(Path path, CompletableFuture<String> result) {}
+  private record Request(Path path, CompletableFuture<SgfDocument> result) {}
 
   SgfReadQueue(Executor worker, Reader reader) {
     this.worker = worker;
     this.reader = reader;
   }
 
-  CompletableFuture<String> read(Path path) {
+  CompletableFuture<SgfDocument> prepare(Path path) {
     if (!SwingUtilities.isEventDispatchThread()) {
       throw new IllegalStateException("SGF read requests belong to the event thread");
     }
@@ -54,14 +56,16 @@ final class SgfReadQueue {
     active = request;
     try {
       worker.execute(() -> {
-        String content = null;
+        SgfDocument document = null;
         Throwable failure = null;
         try {
-          content = reader.read(request.path());
+          String content = reader.read(request.path());
+          // Superseded reads keep the active slot but need not start syntax preparation.
+          if (!request.result().isCancelled()) document = SGFParser.prepareFileContent(content);
         } catch (IOException | RuntimeException | Error caught) {
           failure = caught;
         }
-        String value = content;
+        SgfDocument value = document;
         Throwable error = failure;
         SwingUtilities.invokeLater(() -> finish(request, value, error));
       });
@@ -70,10 +74,10 @@ final class SgfReadQueue {
     }
   }
 
-  private void finish(Request request, String content, Throwable failure) {
+  private void finish(Request request, SgfDocument document, Throwable failure) {
     // Keep the active slot until callbacks settle: a callback may enqueue another selection.
     try {
-      if (failure == null) request.result().complete(content);
+      if (failure == null) request.result().complete(document);
       else request.result().completeExceptionally(failure);
     } finally {
       active = null;
