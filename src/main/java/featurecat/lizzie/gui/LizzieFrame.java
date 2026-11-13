@@ -454,10 +454,13 @@ public class LizzieFrame extends JFrame {
   private JScrollPane tempGameScrollPanel;
   private JPanel tempGamePanel;
   private JPopupMenu bigBoardPanel;
-  private boolean isShowingBigBoardPanel = false;
+  private SavedGamePreviewQueue savedGamePreviews;
+  private javax.swing.Timer savedGameHoverTimer;
+  private Runnable pendingSavedGameHover;
+  private boolean savedGamePreviewSuppressed;
+  private boolean bigBoardAutomatic;
   MouseMotionListener tempGamePanelLis;
   MouseListener tempGamePanelMoveLis;
-  MouseListener bigBoardPanelLis;
   private int bigBoardIndex = -1;
   private int bigBoardLastX = -1;
   private int bigBoardLastY = -1;
@@ -10167,6 +10170,7 @@ public class LizzieFrame extends JFrame {
 
   @Override
   public void setVisible(boolean visible) {
+    if (!visible) cancelSavedGameHover();
     if (!visible) invalidateVariationTree();
     if (!visible && boardRenderer != null) {
       cancelPendingSuggestionHoverPreview();
@@ -10181,6 +10185,7 @@ public class LizzieFrame extends JFrame {
 
   @Override
   public void dispose() {
+    clearSavedGamePreviews();
     disposeAnalysisFrames();
     disposeMoveListFrames();
     stopHumanSlPreparation();
@@ -15473,14 +15478,18 @@ public class LizzieFrame extends JFrame {
       boolean oriShowListPane,
       boolean OriShowVariationGraph) {
     JLabel boardImage = new JLabel();
-    ImageIcon preview = readSavedGamePreview(isAutoSave, index, 300);
-    if (preview != null) {
-      boardImage.setIcon(preview);
-    } else {
-      boardImage.setText(Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.previewUnavailable"));
-      boardImage.setHorizontalAlignment(JLabel.CENTER);
-      boardImage.setForeground(Color.LIGHT_GRAY);
-    }
+    boardImage.setText(Lizzie.resourceBundle.getString("LizzieFrame.loading"));
+    boardImage.setHorizontalAlignment(JLabel.CENTER);
+    boardImage.setForeground(Color.LIGHT_GRAY);
+    Config previewConfig = Lizzie.config;
+    JPanel previewPanel = tempGamePanel;
+    savedGamePreviews().thumbnail(resolveSavedGameFile(isAutoSave, index, "bmp").toPath(),
+        () -> Lizzie.frame == this && Lizzie.config == previewConfig && tempGamePanel == previewPanel,
+        image -> {
+          boardImage.setIcon(image == null ? null : new ImageIcon(image));
+          boardImage.setText(image == null
+              ? Lizzie.resourceBundle.getString("LizzieFrame.saveAndLoad.previewUnavailable") : "");
+        });
     boardImage.setBounds(x, y, 300, 300);
     JLabel lblIndex =
         new JLabel(
@@ -15515,31 +15524,19 @@ public class LizzieFrame extends JFrame {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            // TBD未完成
-            isShowingBigBoardPanel = true;
-            new Thread() {
-              public void run() {
-                try {
-                  Thread.sleep(500);
-                } catch (InterruptedException e) {
-                  // TODO Auto-generated catch block
-                  e.printStackTrace();
-                }
-                if (bigBoardPanel != null && bigBoardPanel.isVisible())
-                  bigBoardPanel.setVisible(false);
-              }
-            }.start();
-            int ret =
-                JOptionPane.showConfirmDialog(
+            cancelSavedGameHover();
+            savedGamePreviewSuppressed = true;
+            int ret;
+            try {
+              ret = JOptionPane.showConfirmDialog(
                     Lizzie.frame,
                     Lizzie.resourceBundle.getString("LizzieFrame.recordExists"),
                     Lizzie.resourceBundle.getString("LizzieFrame.warning"),
                     JOptionPane.YES_NO_OPTION);
-            if (ret != JOptionPane.YES_OPTION) {
-              isShowingBigBoardPanel = false;
-              return;
+            } finally {
+              savedGamePreviewSuppressed = false;
             }
-            isShowingBigBoardPanel = false;
+            if (ret != JOptionPane.YES_OPTION) return;
             finishSavedGamePanelAction(
                 saveTemporaryGameAsync(index, Lizzie.board.getHistory().getGameInfo().getSaveFileName(), false),
                 btnSave, oriShowListPane, OriShowVariationGraph);
@@ -15600,20 +15597,33 @@ public class LizzieFrame extends JFrame {
     tempGamePanel.add(boardImage);
   }
 
-  private ImageIcon readSavedGamePreview(boolean autoSave, int index, int size) {
-    File file = resolveSavedGameFile(autoSave, index, "bmp");
-    // Previews are optional. Keep decoding/scaling failures outside record and SGF handling.
-    try (var input = Files.newInputStream(file.toPath())) {
-      BufferedImage image = ImageIO.read(input);
-      if (image == null) throw new IOException("Unsupported saved-game preview image");
-      return new ImageIcon(zoomImage(image, size, size));
-    } catch (NoSuchFileException absent) {
-      return null;
-    } catch (IOException | RuntimeException failure) {
-      org.slf4j.LoggerFactory.getLogger(LizzieFrame.class)
-          .warn("Could not read saved-game preview: {}", file, failure);
-      return null;
+  private SavedGamePreviewQueue savedGamePreviews() {
+    if (savedGamePreviews == null) savedGamePreviews = new SavedGamePreviewQueue();
+    return savedGamePreviews;
+  }
+
+  private void cancelSavedGameHover() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::cancelSavedGameHover);
+      return;
     }
+    if (savedGameHoverTimer != null) savedGameHoverTimer.stop();
+    pendingSavedGameHover = null;
+    if (savedGamePreviews != null) savedGamePreviews.cancelHover();
+    if (bigBoardPanel != null) bigBoardPanel.setVisible(false);
+    bigBoardPanel = null;
+    bigBoardIndex = -1;
+    bigBoardLastX = -1;
+    bigBoardLastY = -1;
+  }
+
+  private void clearSavedGamePreviews() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::clearSavedGamePreviews);
+      return;
+    }
+    cancelSavedGameHover();
+    if (savedGamePreviews != null) savedGamePreviews.clear();
   }
 
   public void addTempGameNew(
@@ -15768,6 +15778,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void hideTempGamePanel(boolean oriShowListPane, boolean OriShowVariationGraph) {
+    clearSavedGamePreviews();
     savedGamePanelSession++;
     Lizzie.config.showListPane = oriShowListPane;
     Lizzie.config.showVariationGraph = OriShowVariationGraph;
@@ -15781,6 +15792,8 @@ public class LizzieFrame extends JFrame {
   }
 
   public void showTempGamePanel() {
+    // Image generations are independent of the session owning an in-flight SGF open.
+    clearSavedGamePreviews();
     canShowBigBoardImage = true;
     if (!tempGamePanelAll.isVisible()) {
       savedGamePanelSession++;
@@ -15909,6 +15922,7 @@ public class LizzieFrame extends JFrame {
           @Override
           public void actionPerformed(ActionEvent e) {
             Lizzie.config.loadASaveZoom = chkZoomImage.isSelected();
+            if (!Lizzie.config.loadASaveZoom) cancelSavedGameHover();
             Lizzie.config.uiConfig.put("load-save-zoom", Lizzie.config.loadASaveZoom);
           }
         });
@@ -15976,62 +15990,35 @@ public class LizzieFrame extends JFrame {
     tempGamePanelLis =
         new MouseAdapter() {
           public void mouseMoved(MouseEvent e) {
-            if (!Lizzie.config.loadASaveZoom) return;
+            if (!Lizzie.config.loadASaveZoom || savedGamePreviewSuppressed) return;
             int x = e.getX();
             int y = e.getY();
             if (bigBoardLastX == x && bigBoardLastY == y) return;
-            bigBoardLastX = x;
-            bigBoardLastY = y;
-            boolean isMouseOnImage = false;
             for (TempGameData data : tempGameList) {
-              if (data.x < x && (data.x + 300) > x)
-                if (data.y < y && (data.y + 300) > y) {
-                  isMouseOnImage = true;
-
-                  int boardIndex = data.isAutoSave ? data.index : data.index + 20000;
-                  if (bigBoardIndex != boardIndex) {
-                    if (bigBoardPanel != null) {
-                      bigBoardPanel.setVisible(false);
-                      isShowingBigBoardPanel = false;
-                    }
-                  }
-                  bigBoardIndex = boardIndex;
-                  if (bigBoardPanel == null || !bigBoardPanel.isVisible()) {
-                    Runnable runnable2 =
-                        new Runnable() {
-                          public void run() {
-                            try {
-                              Thread.sleep(800);
-                            } catch (InterruptedException es) {
-                              // TODO Auto-generated catch block
-                              es.printStackTrace();
-                            }
-                            if (e.getX() == bigBoardLastX && e.getY() == bigBoardLastY) {
-                              showBigBoardImage(
-                                  data.isAutoSave,
-                                  data.index,
-                                  tempGamePanel,
-                                  x,
-                                  y,
-                                  data.curMoveNumer,
-                                  data.moves,
-                                  oriShowListPane,
-                                  OriShowVariationGraph);
-                            }
-                          }
-                        };
-                    Thread thread2 = new Thread(runnable2);
-                    thread2.start();
-                  }
-                  break;
+              if (data.x < x && x < data.x + 300 && data.y < y && y < data.y + 300) {
+                if (bigBoardIndex == data.index && bigBoardAutomatic == data.isAutoSave
+                    && bigBoardPanel != null && bigBoardPanel.isVisible()) return;
+                cancelSavedGameHover();
+                bigBoardLastX = x;
+                bigBoardLastY = y;
+                bigBoardIndex = data.index;
+                bigBoardAutomatic = data.isAutoSave;
+                pendingSavedGameHover = () -> showBigBoardImage(
+                    data.isAutoSave, data.index, tempGamePanel, x, y,
+                    data.curMoveNumer, data.moves, oriShowListPane, OriShowVariationGraph);
+                if (savedGameHoverTimer == null) {
+                  savedGameHoverTimer = new javax.swing.Timer(800, event -> {
+                    Runnable show = pendingSavedGameHover;
+                    pendingSavedGameHover = null;
+                    if (show != null) show.run();
+                  });
+                  savedGameHoverTimer.setRepeats(false);
                 }
-            }
-            if (!isMouseOnImage) {
-              if (bigBoardPanel != null) {
-                bigBoardPanel.setVisible(false);
-                isShowingBigBoardPanel = false;
+                savedGameHoverTimer.restart();
+                return;
               }
             }
+            cancelSavedGameHover();
           }
         };
     tempGamePanel.addMouseMotionListener(tempGamePanelLis);
@@ -16039,6 +16026,15 @@ public class LizzieFrame extends JFrame {
     if (tempGamePanelMoveLis != null) tempGamePanel.removeMouseListener(tempGamePanelMoveLis);
     tempGamePanelMoveLis =
         new MouseAdapter() {
+          public void mouseExited(MouseEvent e) {
+            // Opening a popup transfers the pointer away from its invoker.
+            if (bigBoardPanel == null || !bigBoardPanel.isVisible()) cancelSavedGameHover();
+          }
+
+          public void mousePressed(MouseEvent e) {
+            cancelSavedGameHover();
+          }
+
           public void mouseClicked(MouseEvent e) {
             int x = e.getX();
             int y = e.getY();
@@ -16068,40 +16064,49 @@ public class LizzieFrame extends JFrame {
       String moveList,
       boolean oriShowListPane,
       boolean OriShowVariationGraph) {
-    if (isShowingBigBoardPanel) return;
-    isShowingBigBoardPanel = true;
-    if (bigBoardPanel != null) {
-      bigBoardPanel.removeAll();
-      bigBoardPanel.setVisible(false);
-    }
-    bigBoardPanel = new JPopupMenu();
-    ImageIcon preview = readSavedGamePreview(isAutoSave, index, 600);
-    if (preview == null) {
-      isShowingBigBoardPanel = false;
-      return;
-    }
-    bigBoardPanel.setSize(600, 600);
-    bigBoardPanel.setLayout(null);
-    JLabel label = new JLabel();
-    label.setIcon(preview);
-    label.setBounds(0, 0, 600, 600);
-    bigBoardPanel.add(label);
-    if (bigBoardPanelLis != null) bigBoardPanel.removeMouseListener(bigBoardPanelLis);
-    bigBoardPanelLis =
-        new MouseAdapter() {
-          public void mouseClicked(MouseEvent e) {
-            if (e.getX() == 0 && e.getY() == 0) {
-              openSavedGame(
-                  isAutoSave, index,
-                  oriShowListPane, OriShowVariationGraph);
-            }
+    if (savedGamePreviewSuppressed || !Lizzie.config.loadASaveZoom) return;
+    if (savedGameHoverTimer != null) savedGameHoverTimer.stop();
+    pendingSavedGameHover = null;
+    if (bigBoardPanel != null) bigBoardPanel.setVisible(false);
+    Config config = Lizzie.config;
+    savedGamePreviews().hover(resolveSavedGameFile(isAutoSave, index, "bmp").toPath(),
+        () -> Lizzie.frame == this && Lizzie.config == config && panel == tempGamePanel
+            && panel.isVisible() && canShowBigBoardImage && config.loadASaveZoom
+            && !savedGamePreviewSuppressed,
+        image -> {
+          if (image == null) {
+            bigBoardLastX = -1;
+            bigBoardLastY = -1;
+            return;
           }
-        };
-    bigBoardPanel.addMouseListener(bigBoardPanelLis);
-    try {
-      if (panel.isVisible() && canShowBigBoardImage) bigBoardPanel.show(panel, x, y);
-    } catch (Exception es) {
-    }
+          JPopupMenu popup = new JPopupMenu();
+          bigBoardPanel = popup;
+          popup.setSize(600, 600);
+          popup.setLayout(null);
+          JLabel label = new JLabel(new ImageIcon(image));
+          label.setBounds(0, 0, 600, 600);
+          popup.add(label);
+          popup.addMouseListener(new MouseAdapter() {
+            public void mouseClicked(MouseEvent e) {
+              if (e.getX() == 0 && e.getY() == 0) {
+                openSavedGame(isAutoSave, index, oriShowListPane, OriShowVariationGraph);
+              }
+            }
+          });
+          popup.addPopupMenuListener(new javax.swing.event.PopupMenuListener() {
+            public void popupMenuWillBecomeVisible(javax.swing.event.PopupMenuEvent event) {}
+            public void popupMenuWillBecomeInvisible(javax.swing.event.PopupMenuEvent event) {
+              if (bigBoardPanel == popup) {
+                bigBoardLastX = -1;
+                bigBoardLastY = -1;
+              }
+            }
+            public void popupMenuCanceled(javax.swing.event.PopupMenuEvent event) {
+              popupMenuWillBecomeInvisible(event);
+            }
+          });
+          if (panel.isShowing()) popup.show(panel, x, y);
+        });
   }
 
   public void drawContDownForHuman(int leftMinuts, int leftSeconds, int byoTimes, int byoSeconds) {
