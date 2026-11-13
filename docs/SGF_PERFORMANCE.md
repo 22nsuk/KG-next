@@ -34,10 +34,19 @@ tables. The interactive path continues to use its existing live history builder,
 whose komi aliases, setup state, hints and UI behavior are not interchangeable
 with the detached builder.
 The synchronous boolean `loadFile`/`SGFParser.load` contracts remain available
-for batch, saved-list and startup callers. GIB loading is also still synchronous.
+for batch and startup compatibility callers. GIB loading is also still synchronous.
 `openFileAsync` completes after parsing/application; its result does not promise
 engine synchronization. Navigation and successful-open callbacks retain their
 existing next-EDT-turn ordering.
+
+Saved-list buttons, thumbnails and enlarged previews share this asynchronous
+path. They retain panel/session ownership and resolve saved cursor metadata only
+after prior load finalization and pending save publication. A newly accepted
+save/edit retires an in-flight saved-list read, including when SGF replacement
+succeeds but manifest publication fails. See [saved-game records](SAVED_GAME_RECORDS.md)
+for cancellation and retry behavior. The real-window saved-list test blocks the
+read worker and checks that the EDT remains responsive; it does not measure a
+whole-open latency reduction or move live history construction off the EDT.
 
 ## Opt-in phase recording
 

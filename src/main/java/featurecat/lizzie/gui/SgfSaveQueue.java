@@ -36,6 +36,7 @@ final class SgfSaveQueue {
   private final Set<CompletableFuture<?>> inFlight = new HashSet<>();
   private final ArrayDeque<Request<?>> waiting = new ArrayDeque<>();
   private Request<?> active;
+  private long acceptedRevision;
 
   private record Request<T>(
       Preparation<T> preparation,
@@ -92,9 +93,11 @@ final class SgfSaveQueue {
         new Request<>(preparation, stillCurrent, success, failure, new CompletableFuture<>());
     inFlight.add(request.completion());
     if (active == null) {
+      acceptedRevision++;
       active = request;
       owner.execute(() -> prepare(request));
     } else if (waiting.size() < MAX_WAITING) {
+      acceptedRevision++;
       waiting.add(request);
     } else {
       owner.execute(
@@ -156,5 +159,9 @@ final class SgfSaveQueue {
     // Each shutdown request owns a snapshot of the writes it actually waits for. A failure
     // rejects that barrier, but already reported failures do not poison future requests.
     return CompletableFuture.allOf(inFlight.toArray(new CompletableFuture<?>[0]));
+  }
+
+  synchronized long acceptedRevision() {
+    return acceptedRevision;
   }
 }

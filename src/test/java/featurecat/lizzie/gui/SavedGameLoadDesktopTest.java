@@ -154,7 +154,18 @@ class SavedGameLoadDesktopTest {
 
           // Repair the same saved entry and retry its existing UI action without rebuilding the list.
           Files.writeString(saved, SAVED_SGF);
-          clickSavedItem(route);
+          try (var read = SgfReadTestSupport.block()) {
+            clickSavedItem(route);
+            read.awaitStarted();
+            onEdt(
+                () -> {
+                  before.assertPreserved();
+                  assertTrue(savedList().isShowing(), "Disk reads must leave the list responsive");
+                  assertNull(errorDialog());
+                  return null;
+                });
+            read.release();
+          }
           awaitEdt(() -> !savedList().isVisible() && !Lizzie.board.isLoadingFile);
           onEdt(
               () -> {
@@ -177,7 +188,8 @@ class SavedGameLoadDesktopTest {
           capture(result.resolveSibling(scenario + "-success-ko.png"));
           assertEquals(CURRENT_SGF, Files.readString(current));
           cases.put(
-              new JSONObject().put("route", route).put("failure", failure).put("retry", "PASS"));
+              new JSONObject().put("route", route).put("failure", failure).put("retry", "PASS")
+                  .put("responsiveWhileReading", true));
         }
       }
       Files.writeString(
