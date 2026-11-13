@@ -1578,14 +1578,7 @@ class HumanSlGameControllerIntegrationTest {
         AtomicReference<Runnable> exitWorker = new AtomicReference<>();
         controller.setExitLifecycleForTesting(
             exitWorker::set,
-            completion ->
-                SwingUtilities.invokeLater(
-                    () -> {
-                      completion.run();
-                      // The actual load has returned. Its queued error notice cannot use this
-                      // constructor-free frame as a native dialog owner.
-                      Lizzie.frame = null;
-                    }),
+            SwingUtilities::invokeLater,
             () -> true,
             null);
 
@@ -1878,6 +1871,9 @@ class HumanSlGameControllerIntegrationTest {
     java.lang.reflect.Field panel = LizzieFrame.class.getDeclaredField("tempGamePanel");
     panel.setAccessible(true);
     panel.set(frame, new JPanel());
+    java.lang.reflect.Field container = LizzieFrame.class.getDeclaredField("tempGamePanelAll");
+    container.setAccessible(true);
+    container.set(frame, new javax.swing.JLayeredPane());
     return frame;
   }
 
@@ -1943,9 +1939,9 @@ class HumanSlGameControllerIntegrationTest {
     worker.start();
     worker.join(5000L);
     assertFalse(worker.isAlive());
-    // The exit continuation queues the SGF parser finalizer and the saved-position callback.
+    // The exit continuation submits a read; wait for it and the saved-position finalizer.
     SwingUtilities.invokeAndWait(() -> {});
-    SwingUtilities.invokeAndWait(() -> {});
+    SgfReadTestSupport.awaitPending();
   }
 
   @Test
@@ -2431,6 +2427,7 @@ class HumanSlGameControllerIntegrationTest {
     private final AtomicInteger dialogs = new AtomicInteger();
     private final CountDownLatch noticeAttempted = new CountDownLatch(1);
     private Thread.UncaughtExceptionHandler previousHandler;
+    private SgfFailureDialogTestSupport dialogOwner;
     private final AWTEventListener closeDialog =
         event -> {
           if (event.getID() == WindowEvent.WINDOW_OPENED
@@ -2445,6 +2442,7 @@ class HumanSlGameControllerIntegrationTest {
     private SavedGameFailureDialogGuard() throws Exception {
       SwingUtilities.invokeAndWait(
           () -> {
+            dialogOwner = SgfFailureDialogTestSupport.install();
             Thread edt = Thread.currentThread();
             previousHandler = edt.getUncaughtExceptionHandler();
             edt.setUncaughtExceptionHandler((thread, failure) -> {
@@ -2476,6 +2474,7 @@ class HumanSlGameControllerIntegrationTest {
     public void close() throws Exception {
       SwingUtilities.invokeAndWait(
           () -> {
+            dialogOwner.close();
             Thread.currentThread().setUncaughtExceptionHandler(previousHandler);
             if (!GraphicsEnvironment.isHeadless()) {
               Toolkit.getDefaultToolkit().removeAWTEventListener(closeDialog);

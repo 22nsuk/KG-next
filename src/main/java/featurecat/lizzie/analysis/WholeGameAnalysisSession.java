@@ -780,6 +780,7 @@ public final class WholeGameAnalysisSession {
     } else {
       SwingUtilities.invokeLater(() -> listener.onSnapshot(snapshot));
     }
+    frame.requestAnalysisSidebarRefresh();
   }
 
   static int overallPercent(

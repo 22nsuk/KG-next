@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.AnalysisUiRefreshTestSupport;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.ProblemListSnapshot;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -99,6 +101,70 @@ class WholeGameAnalysisSessionTest {
       assertTrue(fixture.engine.callbacksCleared);
       assertTrue(fixture.engine.quitCalled.await(2, TimeUnit.SECONDS));
       drainEdt();
+    }
+  }
+
+  @Test
+  void sessionTransitionsPublishProblemListStateWithoutAnalysisResponses() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      CountDownLatch factoryEntered = new CountDownLatch(1);
+      CountDownLatch factoryReturned = new CountDownLatch(1);
+      CountDownLatch releaseFactory = new CountDownLatch(1);
+      List<SessionAnalysisEngine> created = new CopyOnWriteArrayList<>();
+      SessionFixture fixture = SessionFixture.createWithFactory(() -> {
+        factoryEntered.countDown();
+        try {
+          assertTrue(releaseFactory.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          throw new IOException(interrupted);
+        }
+        SessionAnalysisEngine engine = SessionFixture.newEngine();
+        created.add(engine);
+        factoryReturned.countDown();
+        return engine;
+      });
+      Field sessionField = LizzieFrame.class.getDeclaredField("wholeGameAnalysisSession");
+      sessionField.setAccessible(true);
+      sessionField.set(fixture.frame, fixture.session);
+      AnalysisUiRefreshTestSupport.installSidebar(fixture.frame);
+      java.util.concurrent.atomic.AtomicReference<ProblemListSnapshot> published =
+          new java.util.concurrent.atomic.AtomicReference<>();
+      SwingUtilities.invokeAndWait(() -> fixture.frame.addProblemListListener(snapshot -> {
+        assertTrue(SwingUtilities.isEventDispatchThread());
+        published.set(snapshot);
+      }));
+      try {
+        fixture.session.start();
+        assertTrue(factoryEntered.await(5, TimeUnit.SECONDS));
+        waitUntil(() -> published.get().analysisRunning,
+            "preparing must be published before any engine response");
+        assertEquals(WholeGameAnalysisSession.State.PREPARING, fixture.session.state());
+        assertNull(fixture.frame.analysisEngine, "whole-game engines keep their separate owner");
+        releaseFactory.countDown();
+        waitUntil(() -> !created.isEmpty() && created.get(0).requestedNodes != null,
+            "the baseline request should start");
+
+        fixture.session.pause();
+        waitUntil(() -> fixture.session.isPaused() && !published.get().analysisRunning,
+            "pausing must settle to a non-running problem list without another response");
+        fixture.session.resume();
+        waitUntil(() -> published.get().analysisRunning && created.size() == 2,
+            "resuming must publish running state without a response");
+        fixture.session.cancel();
+        waitUntil(() -> fixture.session.isTerminal() && !published.get().analysisRunning,
+            "cancellation must publish the terminal state");
+      } finally {
+        releaseFactory.countDown();
+        fixture.session.cancel();
+        waitForFinished(fixture);
+        assertTrue(factoryReturned.await(5, TimeUnit.SECONDS));
+        AnalysisUiRefreshTestSupport.awaitSidebarIdle(fixture.frame);
+        for (SessionAnalysisEngine engine : created) {
+          assertTrue(engine.quitCalled.await(5, TimeUnit.SECONDS));
+        }
+      }
     }
   }
 
@@ -1480,6 +1546,9 @@ class WholeGameAnalysisSessionTest {
     private boolean userPaused;
 
     private TrackingFrame() {}
+
+    @Override
+    public void appendComment() {}
 
     @Override
     public void onWholeGameAnalysisFinished(

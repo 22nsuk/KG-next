@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.util.ArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -30,6 +31,25 @@ public final class AnalysisUiRefreshTestSupport {
   public static void awaitIdle(LizzieFrame frame) throws Exception {
     Object updates = field(frame, LizzieFrame.class, "analysisUiRefresh");
     Object coalescer = field(updates, AnalysisUiRefresh.class, "coalescer");
+    awaitCoalescerIdle(coalescer);
+  }
+
+  public static void installSidebar(LizzieFrame frame) throws Exception {
+    Method flush = LizzieFrame.class.getDeclaredMethod("flushAnalysisSidebarRefresh");
+    flush.setAccessible(true);
+    Field field = LizzieFrame.class.getDeclaredField("analysisSidebarRefreshCoalescer");
+    field.setAccessible(true);
+    field.set(frame, new SwingRefreshCoalescer(250, () -> invoke(flush, frame)));
+    Field listeners = LizzieFrame.class.getDeclaredField("problemListListeners");
+    listeners.setAccessible(true);
+    if (listeners.get(frame) == null) listeners.set(frame, new ArrayList<>());
+  }
+
+  public static void awaitSidebarIdle(LizzieFrame frame) throws Exception {
+    awaitCoalescerIdle(field(frame, LizzieFrame.class, "analysisSidebarRefreshCoalescer"));
+  }
+
+  private static void awaitCoalescerIdle(Object coalescer) throws Exception {
     AtomicBoolean pending =
         (AtomicBoolean) field(coalescer, SwingRefreshCoalescer.class, "pending");
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
