@@ -149,6 +149,10 @@ class GameEditSnapshotTest {
       onEdt(() -> {
         Board board = fixture.board();
         var properties = board.getData().getProperties();
+        var empty = GameEditSnapshot.capture(board);
+        properties.put(null, List.of("authored value"));
+        assertFalse(matches(empty, board, strict));
+        properties.remove(null);
         properties.put("XX", null);
         var saved = GameEditSnapshot.capture(board);
         for (String key : List.of("KGP", "LZ", "LZ2", "LZOP", "LZOP2")) {

@@ -67,6 +67,7 @@ investigating a particular file. The manual probe below does so automatically.
 | `parse-syntax` | File input normalization and immutable syntax preparation; on the read worker for interactive opening |
 | `parse-gib` | GIB header and move-command preparation; on the read worker for interactive opening |
 | `open-edit-capture` | The existing explicit-edit snapshot used to protect the current game |
+| `open-edit-validate` | File-open ownership and authored-state validation after a save wait or before application; a retired owner short-circuits the full comparison |
 | `board-clear` | Preparing the board for file application |
 | `parse-build-tree` | Decoding SGF properties/analysis and constructing a private history; on the read worker for interactive opening |
 | `file-apply` | The interactive EDT application envelope, including clear/history installation (or GIB command application) and UI updates |
