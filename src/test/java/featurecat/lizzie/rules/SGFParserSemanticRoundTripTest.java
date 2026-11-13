@@ -175,22 +175,27 @@ class SGFParserSemanticRoundTripTest {
       assertEquals(BoardNodeKind.PASS, pass.getData().getNodeKind());
       assertEquals(2, pass.getData().moveNumber);
       board.moveToAnyPosition(deletePass ? pass : white);
+      Stone dummyColor = board.getHistory().getStart().getVariation(0).orElseThrow()
+          .getVariation(0).orElseThrow().getData().lastMoveColor;
       BoardHistoryList before = SGFParser.parseSgf(SGFParser.saveToString(false), true);
 
       board.deleteMoveNoHint();
       BoardHistoryList after = SGFParser.parseSgf(SGFParser.saveToString(false), true);
       board.cleanedit();
-      assertTreeSemanticsEqual(before, board.getHistory());
+      // SGF derives the placeholder's color from the inherited turn; a playable snapshot retains
+      // its original (non-move) color. Its exported meaning and the real selected node stay equal.
+      assertTreeSemanticsEqual(before, SGFParser.parseSgf(SGFParser.saveToString(false), true));
       assertDummySiblingAnalysis(board.getHistory(), true);
       BoardHistoryNode setup = board.getHistory().getStart().getVariation(0).orElseThrow();
       assertFalse(setup.getData().blackToPlay);
       assertTrue(setup.getVariation(0).orElseThrow().getData().dummy);
+      assertEquals(dummyColor, setup.getVariation(0).orElseThrow().getData().lastMoveColor);
       BoardHistoryNode restoredWhite = setup.getVariation(1).orElseThrow();
       assertSame(deletePass ? restoredWhite.getVariation(0).orElseThrow() : restoredWhite,
           board.getHistory().getCurrentHistoryNode());
 
       board.reedit();
-      assertTreeSemanticsEqual(after, board.getHistory());
+      assertTreeSemanticsEqual(after, SGFParser.parseSgf(SGFParser.saveToString(false), true));
       setup = board.getHistory().getStart().getVariation(0).orElseThrow();
       assertFalse(setup.getData().blackToPlay);
       assertSame(deletePass ? setup.getVariation(1).orElseThrow() : setup,

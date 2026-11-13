@@ -3961,9 +3961,7 @@ public class Menu extends JMenuBar {
     undoDelete.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
             Lizzie.board.cleanedit();
-            Lizzie.board.getHistory().setGameInfo(gameInfo);
             Lizzie.frame.refresh();
           }
         });
@@ -3973,9 +3971,7 @@ public class Menu extends JMenuBar {
     redoDelete.addActionListener(
         new ActionListener() {
           public void actionPerformed(ActionEvent e) {
-            GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
             Lizzie.board.reedit();
-            Lizzie.board.getHistory().setGameInfo(gameInfo);
             Lizzie.frame.refresh();
           }
         });
@@ -4077,9 +4073,9 @@ public class Menu extends JMenuBar {
               insertBlack.setState(false);
               insertWhite.setState(true);
             }
-            if (Lizzie.board.boardstatbeforeedit == "") undoDelete.setVisible(false);
+            if (!Lizzie.board.canUndoEdit()) undoDelete.setVisible(false);
             else undoDelete.setVisible(true);
-            if (Lizzie.board.boardstatafteredit == "") redoDelete.setVisible(false);
+            if (!Lizzie.board.canRedoEdit()) redoDelete.setVisible(false);
             else redoDelete.setVisible(true);
           }
 

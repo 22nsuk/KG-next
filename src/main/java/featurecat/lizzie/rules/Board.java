@@ -92,10 +92,8 @@ public class Board {
   // private boolean scoreMode;
   private boolean analysisMode;
   private boolean setupMode = false;
-  public String boardstatbeforeedit = "";
-  public String boardstatafteredit = "";
-  private List<Integer> positionBeforeEdit = List.of();
-  private List<Integer> positionAfterEdit = List.of();
+  private GameStateSnapshot stateBeforeEdit;
+  private GameStateSnapshot stateAfterEdit;
   public boolean isLoadingFile = false;
   public boolean isPkBoard = false;
   public boolean isGameBoard = false;
@@ -185,10 +183,8 @@ public class Board {
     private final boolean isExtremlySmallBoard;
     private final ArrayList<Movelist> startStoneList;
     private final ArrayList<Movelistwr> moveListWr;
-    private final String boardStateBeforeEdit;
-    private final String boardStateAfterEdit;
-    private final List<Integer> positionBeforeEdit;
-    private final List<Integer> positionAfterEdit;
+    private final GameStateSnapshot stateBeforeEdit;
+    private final GameStateSnapshot stateAfterEdit;
     private final ArrayList<Movelist> tempMoveList;
     private final ArrayList<Movelist> tempMoveList2;
     private final boolean isTsumegoMode;
@@ -219,10 +215,8 @@ public class Board {
           board.movelistwr == null
               ? new ArrayList<Movelistwr>()
               : new ArrayList<Movelistwr>(board.movelistwr);
-      boardStateBeforeEdit = board.boardstatbeforeedit;
-      boardStateAfterEdit = board.boardstatafteredit;
-      positionBeforeEdit = board.positionBeforeEdit;
-      positionAfterEdit = board.positionAfterEdit;
+      stateBeforeEdit = board.stateBeforeEdit;
+      stateAfterEdit = board.stateAfterEdit;
       tempMoveList = board.tempmovelist;
       tempMoveList2 = board.tempmovelist2;
       isTsumegoMode = board.isTusmegoMode;
@@ -815,85 +809,69 @@ public class Board {
     }
   }
 
-  //  public ArrayList<Movelist> savelistforeditmode() {
-  //    if (boardstatbeforeedit == "") {
-  //      try {
-  //        boardstatbeforeedit = SGFParser.saveToString(false);
-  //      } catch (IOException e) {
-  //        // TODO Auto-generated catch block
-  //        e.printStackTrace();
-  //      }
-  //      tempmovelist = getmovelistWithOutStartStone();
-  //    }
-  //    tempallmovelist = getallmovelist();
-  //    boardstatafteredit = "";
-  //    tempmovelist2 = new ArrayList<Movelist>();
-  //    return tempmovelist;
-  //  }
-
   public ArrayList<Movelist> saveListForEdit() {
-    try {
-      boardstatbeforeedit = SGFParser.saveToString(false);
-      positionBeforeEdit = captureEditPosition();
-    } catch (IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
+    return saveListForEdit(captureEditState());
+  }
+
+  private ArrayList<Movelist> saveListForEdit(GameStateSnapshot snapshot) {
+    stateBeforeEdit = snapshot;
     tempmovelist = getmovelistWithOutStartStone();
     tempallmovelist = getallmovelist();
-    boardstatafteredit = "";
+    stateAfterEdit = null;
     tempmovelist2 = new ArrayList<Movelist>();
     return tempmovelist;
   }
 
   public void cleanedittemp() {
-    boardstatbeforeedit = "";
-    boardstatafteredit = "";
+    stateBeforeEdit = null;
+    stateAfterEdit = null;
     tempmovelist2 = new ArrayList<Movelist>();
     tempmovelist = new ArrayList<Movelist>();
   }
 
   public void clearEditStuff() {
-    boardstatafteredit = "";
-    boardstatbeforeedit = "";
+    stateAfterEdit = null;
+    stateBeforeEdit = null;
     tempmovelist.clear();
     tempmovelist2.clear();
   }
 
+  public boolean canUndoEdit() {
+    return stateBeforeEdit != null;
+  }
+
+  public boolean canRedoEdit() {
+    return stateAfterEdit != null;
+  }
+
   public void cleanedit() {
-    if (boardstatbeforeedit != "") {
-      try {
-        boardstatafteredit = SGFParser.saveToString(false);
-        positionAfterEdit = captureEditPosition();
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
-      tempmovelist2 = getMoveList();
-    }
-    SGFParser.loadFromStringforedit(boardstatbeforeedit);
-    restoreEditPosition(positionBeforeEdit);
-    boardstatbeforeedit = "";
-    tempmovelist = new ArrayList<Movelist>();
-    return;
+    if (!canUndoEdit()) return;
+    GameStateSnapshot after = restoreEditState(stateBeforeEdit);
+    stateBeforeEdit = null;
+    stateAfterEdit = after;
+    tempmovelist = new ArrayList<>();
   }
 
   public void reedit() {
-    if (boardstatafteredit != "") {
-      try {
-        boardstatbeforeedit = SGFParser.saveToString(false);
-        positionBeforeEdit = captureEditPosition();
-      } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
-      tempmovelist = getMoveList();
+    if (!canRedoEdit()) return;
+    GameStateSnapshot before = restoreEditState(stateAfterEdit);
+    stateAfterEdit = null;
+    stateBeforeEdit = before;
+    tempmovelist2 = new ArrayList<>();
+  }
+
+  private GameStateSnapshot restoreEditState(GameStateSnapshot target) {
+    GameStateSnapshot current = captureEditState();
+    boolean resumeAnalysis = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
+    // Move edits have always kept the currently selected game info and session rules. Apply
+    // that policy before publishing the history or starting an asynchronous engine restore.
+    target.history.keepCurrentGameInfoAndRules(history);
+    restoreGameState(target);
+    if (Lizzie.frame != null) {
+      Lizzie.frame.clearTryPlay();
+      Lizzie.frame.synchronizeRestoredGame(resumeAnalysis);
     }
-    SGFParser.loadFromStringforedit(boardstatafteredit);
-    restoreEditPosition(positionAfterEdit);
-    boardstatafteredit = "";
-    tempmovelist2.clear();
-    return;
+    return current;
   }
 
   public void resetlistforeditmode() {
@@ -1644,27 +1622,6 @@ public class Board {
       }
     }
     Lizzie.config.playSound = oriPlaySound;
-  }
-
-  private List<Integer> captureEditPosition() {
-    List<Integer> path = new ArrayList<>();
-    BoardHistoryNode node = history.getCurrentHistoryNode();
-    while (node.previous().isPresent()) {
-      BoardHistoryNode parent = node.previous().get();
-      path.add(parent.indexOfNode(node));
-      node = parent;
-    }
-    return List.copyOf(path);
-  }
-
-  private void restoreEditPosition(List<Integer> path) {
-    BoardHistoryNode target = history.getStart();
-    for (int index = path.size() - 1; index >= 0; index--) {
-      target = target.getVariation(path.get(index)).orElseThrow();
-    }
-    // The saved SGF already contains the entire tree, including static setup boundaries.
-    // Navigate it instead of playing the move-only list into a second branch.
-    moveToAnyPosition(target);
   }
 
   private boolean isKnownPass(BoardData data) {
@@ -5097,8 +5054,13 @@ public class Board {
   }
 
   public void deleteMoveNoHintAfter() {
+    deleteMoveNoHintAfter(true);
+  }
+
+  /** An enclosing edit can reuse its already captured single undo state. */
+  public void deleteMoveNoHintAfter(boolean captureUndo) {
     if (!history.getCurrentHistoryNode().next().isPresent()) return;
-    saveListForEdit();
+    if (captureUndo) saveListForEdit();
     EngineForwardingPlan forwarding = EngineForwardingPlan.none();
     synchronized (this) {
       BoardHistoryNode currentNode = history.getCurrentHistoryNode().next().get();
@@ -5129,10 +5091,15 @@ public class Board {
   }
 
   public void deleteMoveNoHint() {
+    deleteMoveNoHint(true);
+  }
+
+  /** An enclosing edit can reuse its already captured single undo state. */
+  public void deleteMoveNoHint(boolean captureUndo) {
     EngineForwardingPlan forwarding = EngineForwardingPlan.none();
     synchronized (this) {
       BoardHistoryNode currentNode = history.getCurrentHistoryNode();
-      saveListForEdit();
+      if (captureUndo) saveListForEdit();
       if (currentNode.previous().isPresent()) {
         BoardHistoryNode pre = currentNode.previous().get();
         previousMove(true);
@@ -5180,6 +5147,110 @@ public class Board {
     return history;
   }
 
+  /** Complete private restore data, transferred once after every playable array is materialized. */
+  public static final class GameStateSnapshot {
+    private final Board owner;
+    private BoardHistorySnapshot history;
+    private final BoardHistoryList.TrialNumbering trialNumbering;
+    private final Zobrist.TableSnapshot zobristTables;
+    private final boolean analysisMode;
+    private final boolean setupMode;
+    private final boolean hasBigBranch;
+    private final boolean neverPassedInGame;
+    private final boolean isPkBoard;
+    private final boolean isGameBoard;
+    private final boolean isPkBoardKataB;
+    private final boolean isPkBoardKataW;
+    private final boolean isKataBoard;
+    private final boolean hasStartStone;
+    private final ArrayList<Movelist> startStones;
+
+    private GameStateSnapshot(
+        Board board, BoardHistoryList.TrialNumbering trialNumbering, boolean captureTrialNumbering) {
+      owner = board;
+      history = board.history.copyForRestore(trialNumbering);
+      this.trialNumbering = captureTrialNumbering
+          ? new BoardHistoryList.TrialNumbering(board.history) : null;
+      zobristTables = Zobrist.captureTables();
+      analysisMode = board.analysisMode;
+      setupMode = board.setupMode;
+      hasBigBranch = board.hasBigBranch;
+      neverPassedInGame = board.neverPassedInGame;
+      isPkBoard = board.isPkBoard;
+      isGameBoard = board.isGameBoard;
+      isPkBoardKataB = board.isPkBoardKataB;
+      isPkBoardKataW = board.isPkBoardKataW;
+      isKataBoard = board.isKataBoard;
+      hasStartStone = board.hasStartStone;
+      startStones = Movelist.copyList(board.startStonelist);
+    }
+  }
+
+  public synchronized GameStateSnapshot captureGameState() {
+    return new GameStateSnapshot(this, null, true);
+  }
+
+  public GameStateSnapshot beginTrial() {
+    GameStateSnapshot before = captureGameState();
+    if (history.getCurrentHistoryNode().next().isPresent()) {
+      // Trial return discards undo; undo exits trial. Only one of these owners can consume this
+      // same pre-trial state, so the initial truncation does not need a second full capture.
+      saveListForEdit(before);
+      deleteMoveNoHintAfter(false);
+    }
+    history.getData().moveNumber = 0;
+    return before;
+  }
+
+  private synchronized GameStateSnapshot captureEditState() {
+    // Undo/redo exits trial mode; its saved positions must use ordinary move numbering.
+    GameStateSnapshot trial = Lizzie.frame == null ? null : Lizzie.frame.getTrialSnapshot();
+    return new GameStateSnapshot(this,
+        trial == null || !Lizzie.frame.isTrying ? null : trial.trialNumbering, false);
+  }
+
+  /** Adopts the saved cursor and tree locally; the caller owns confirmed engine synchronization. */
+  public void restoreGameState(GameStateSnapshot snapshot) {
+    if (snapshot == null || snapshot.owner != this || snapshot.history == null) {
+      throw new IllegalArgumentException("Game snapshot is consumed or belongs to another board");
+    }
+    BoardHistoryList restored = snapshot.history.restore();
+    replaceHistory(restored, () -> {
+      boardWidth = restored.getData().zobrist.width();
+      boardHeight = restored.getData().zobrist.height();
+      Zobrist.restoreTables(snapshot.zobristTables);
+      analysisMode = snapshot.analysisMode;
+      setupMode = snapshot.setupMode;
+      hasBigBranch = snapshot.hasBigBranch;
+      neverPassedInGame = snapshot.neverPassedInGame;
+      isPkBoard = snapshot.isPkBoard;
+      isGameBoard = snapshot.isGameBoard;
+      isPkBoardKataB = snapshot.isPkBoardKataB;
+      isPkBoardKataW = snapshot.isPkBoardKataW;
+      isKataBoard = snapshot.isKataBoard;
+      hasStartStone = snapshot.hasStartStone;
+      startStonelist = snapshot.startStones;
+      isExtremlySmallBoard = boardWidth < 4;
+      forceRefresh = true;
+      forceRefresh2 = true;
+      clearTsumegoStatus();
+      requireEngineAlignment();
+      snapshot.history = null;
+    });
+    if (LizzieFrame.boardRenderer != null) LizzieFrame.boardRenderer.clearAfterMove();
+    if (LizzieFrame.boardRenderer2 != null) LizzieFrame.boardRenderer2.clearAfterMove();
+    LizzieFrame.forceRecreate = true;
+    GameInfo info = restored.getGameInfo();
+    info.refreshKomiDisplay();
+    if (Lizzie.frame != null) {
+      Lizzie.frame.redrawTree = true;
+      Lizzie.frame.clearKataEstimate();
+      Lizzie.frame.setPlayers(info.getPlayerWhite(), info.getPlayerBlack());
+      Lizzie.frame.setResult(info.getResult());
+    }
+    setMovelistAll();
+  }
+
   /** Captures every board-owned value that {@link #clear(boolean)} replaces or resets. */
   public synchronized ClearStateSnapshot captureClearState() {
     if (history == null) {
@@ -5218,10 +5289,8 @@ public class Board {
       }
       movelistwr.clear();
       movelistwr.addAll(snapshot.moveListWr);
-      boardstatbeforeedit = snapshot.boardStateBeforeEdit;
-      boardstatafteredit = snapshot.boardStateAfterEdit;
-      positionBeforeEdit = snapshot.positionBeforeEdit;
-      positionAfterEdit = snapshot.positionAfterEdit;
+      stateBeforeEdit = snapshot.stateBeforeEdit;
+      stateAfterEdit = snapshot.stateAfterEdit;
       tempmovelist = snapshot.tempMoveList;
       tempmovelist2 = snapshot.tempMoveList2;
       isTusmegoMode = snapshot.isTsumegoMode;

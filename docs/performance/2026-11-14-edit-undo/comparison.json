@@ -1,0 +1,446 @@
+{
+  "wide-variations": {
+    "delete": {
+      "before": {
+        "wallMs": 35.7015345,
+        "edtCpuMs": 30.5209585,
+        "edtAllocatedBytes": 19956696.0
+      },
+      "after": {
+        "wallMs": 42.620863,
+        "edtCpuMs": 41.04145,
+        "edtAllocatedBytes": 15315968.0
+      },
+      "wallChangePercent": 19.381039490053297
+    },
+    "undo-delete": {
+      "before": {
+        "wallMs": 116.565617,
+        "edtCpuMs": 86.427391,
+        "edtAllocatedBytes": 126536384.0
+      },
+      "after": {
+        "wallMs": 64.20855850000001,
+        "edtCpuMs": 62.7628945,
+        "edtAllocatedBytes": 84860472.0
+      },
+      "wallChangePercent": -44.91638258990213
+    },
+    "redo-delete": {
+      "before": {
+        "wallMs": 94.466683,
+        "edtCpuMs": 75.801418,
+        "edtAllocatedBytes": 104620600.0
+      },
+      "after": {
+        "wallMs": 90.707005,
+        "edtCpuMs": 69.91766799999999,
+        "edtAllocatedBytes": 70371160.0
+      },
+      "wallChangePercent": -3.979898394442416
+    },
+    "insert": {
+      "before": {
+        "wallMs": 97.950332,
+        "edtCpuMs": 97.364278,
+        "edtAllocatedBytes": 156721512.0
+      },
+      "after": {
+        "wallMs": 80.4134775,
+        "edtCpuMs": 71.994685,
+        "edtAllocatedBytes": 132124928.0
+      },
+      "wallChangePercent": -17.903823439822542
+    },
+    "undo-insert": {
+      "before": {
+        "wallMs": 210.7967225,
+        "edtCpuMs": 90.35356300000001,
+        "edtAllocatedBytes": 126539696.0
+      },
+      "after": {
+        "wallMs": 106.41929150000001,
+        "edtCpuMs": 63.736413999999996,
+        "edtAllocatedBytes": 84871256.0
+      },
+      "wallChangePercent": -49.515680207029774
+    },
+    "trial-enter": {
+      "before": {
+        "wallMs": 66.5514955,
+        "edtCpuMs": 62.733720000000005,
+        "edtAllocatedBytes": 39912784.0
+      },
+      "after": {
+        "wallMs": 50.950128500000005,
+        "edtCpuMs": 50.526082,
+        "edtAllocatedBytes": 15574448.0
+      },
+      "wallChangePercent": -23.442549085917985
+    },
+    "trial-return": {
+      "before": {
+        "wallMs": 122.10133300000001,
+        "edtCpuMs": 58.373924,
+        "edtAllocatedBytes": 113098440.0
+      },
+      "after": {
+        "wallMs": 70.077043,
+        "edtCpuMs": 33.167933000000005,
+        "edtAllocatedBytes": 73405908.0
+      },
+      "wallChangePercent": -42.60747096020647
+    },
+    "retainedUndoHeap": {
+      "before": {
+        "medianBytes": 2096912,
+        "observedBytes": [
+          1046464,
+          2097184,
+          2096912
+        ]
+      },
+      "after": {
+        "medianBytes": 14428600,
+        "observedBytes": [
+          14428600,
+          14427120,
+          14429000
+        ]
+      }
+    }
+  },
+  "dense-analysis-ownership": {
+    "delete": {
+      "before": {
+        "wallMs": 30.0159445,
+        "edtCpuMs": 30.056979,
+        "edtAllocatedBytes": 34384248.0
+      },
+      "after": {
+        "wallMs": 2.7395984999999996,
+        "edtCpuMs": 2.7607215,
+        "edtAllocatedBytes": 2976864.0
+      },
+      "wallChangePercent": -90.87285592495682
+    },
+    "undo-delete": {
+      "before": {
+        "wallMs": 54.773841000000004,
+        "edtCpuMs": 54.738126,
+        "edtAllocatedBytes": 29980336.0
+      },
+      "after": {
+        "wallMs": 1.8921945,
+        "edtCpuMs": 1.9059300000000001,
+        "edtAllocatedBytes": 1029176.0
+      },
+      "wallChangePercent": -96.54544128099397
+    },
+    "redo-delete": {
+      "before": {
+        "wallMs": 26.191515000000003,
+        "edtCpuMs": 26.110775500000003,
+        "edtAllocatedBytes": 34481656.0
+      },
+      "after": {
+        "wallMs": 1.7878349999999998,
+        "edtCpuMs": 1.7778535,
+        "edtAllocatedBytes": 2961688.0
+      },
+      "wallChangePercent": -93.17399165340379
+    },
+    "insert": {
+      "before": {
+        "wallMs": 387.61737800000003,
+        "edtCpuMs": 331.7512095,
+        "edtAllocatedBytes": 1149236700.0
+      },
+      "after": {
+        "wallMs": 249.1176535,
+        "edtCpuMs": 196.3024555,
+        "edtAllocatedBytes": 1083503488.0
+      },
+      "wallChangePercent": -35.731041062870005
+    },
+    "undo-insert": {
+      "before": {
+        "wallMs": 57.8533985,
+        "edtCpuMs": 57.8649425,
+        "edtAllocatedBytes": 30016240.0
+      },
+      "after": {
+        "wallMs": 2.8249985,
+        "edtCpuMs": 2.7369305,
+        "edtAllocatedBytes": 1219976.0
+      },
+      "wallChangePercent": -95.11697052680492
+    },
+    "trial-enter": {
+      "before": {
+        "wallMs": 51.5203555,
+        "edtCpuMs": 51.427316,
+        "edtAllocatedBytes": 68744416.0
+      },
+      "after": {
+        "wallMs": 3.177765,
+        "edtCpuMs": 3.197592,
+        "edtAllocatedBytes": 2977896.0
+      },
+      "wallChangePercent": -93.83202043316646
+    },
+    "trial-return": {
+      "before": {
+        "wallMs": 57.463943,
+        "edtCpuMs": 57.278246,
+        "edtAllocatedBytes": 29864328.0
+      },
+      "after": {
+        "wallMs": 1.4872589999999999,
+        "edtCpuMs": 1.4552524999999998,
+        "edtAllocatedBytes": 1018116.0
+      },
+      "wallChangePercent": -97.41183962959173
+    },
+    "retainedUndoHeap": {
+      "before": {
+        "medianBytes": 4204152,
+        "observedBytes": [
+          4200224,
+          4204152,
+          4204440
+        ]
+      },
+      "after": {
+        "medianBytes": 7182056,
+        "observedBytes": [
+          2964464,
+          7182056,
+          7185544
+        ]
+      }
+    }
+  },
+  "long-multilingual-comments": {
+    "delete": {
+      "before": {
+        "wallMs": 15.3320775,
+        "edtCpuMs": 13.9204095,
+        "edtAllocatedBytes": 32297208.0
+      },
+      "after": {
+        "wallMs": 0.673706,
+        "edtCpuMs": 0.684851,
+        "edtAllocatedBytes": 131464.0
+      },
+      "wallChangePercent": -95.60590533148557
+    },
+    "undo-delete": {
+      "before": {
+        "wallMs": 29.442501999999998,
+        "edtCpuMs": 29.458807,
+        "edtAllocatedBytes": 22653008.0
+      },
+      "after": {
+        "wallMs": 0.7902089999999999,
+        "edtCpuMs": 0.7977195,
+        "edtAllocatedBytes": 683424.0
+      },
+      "wallChangePercent": -97.3160942639997
+    },
+    "redo-delete": {
+      "before": {
+        "wallMs": 14.156104,
+        "edtCpuMs": 14.171224500000001,
+        "edtAllocatedBytes": 32414536.0
+      },
+      "after": {
+        "wallMs": 0.6896869999999999,
+        "edtCpuMs": 0.6987205000000001,
+        "edtAllocatedBytes": 124008.0
+      },
+      "wallChangePercent": -95.1279886047743
+    },
+    "insert": {
+      "before": {
+        "wallMs": 212.31752799999998,
+        "edtCpuMs": 179.8788695,
+        "edtAllocatedBytes": 786843116.0
+      },
+      "after": {
+        "wallMs": 171.35438399999998,
+        "edtCpuMs": 145.9110525,
+        "edtAllocatedBytes": 722440072.0
+      },
+      "wallChangePercent": -19.293340679814243
+    },
+    "undo-insert": {
+      "before": {
+        "wallMs": 35.2255625,
+        "edtCpuMs": 34.816049,
+        "edtAllocatedBytes": 22677272.0
+      },
+      "after": {
+        "wallMs": 1.6194935,
+        "edtCpuMs": 1.643623,
+        "edtAllocatedBytes": 810992.0
+      },
+      "wallChangePercent": -95.40250492806183
+    },
+    "trial-enter": {
+      "before": {
+        "wallMs": 36.7842425,
+        "edtCpuMs": 34.1223715,
+        "edtAllocatedBytes": 64578504.0
+      },
+      "after": {
+        "wallMs": 1.0321785,
+        "edtCpuMs": 1.0524015,
+        "edtAllocatedBytes": 132496.0
+      },
+      "wallChangePercent": -97.19396559545844
+    },
+    "trial-return": {
+      "before": {
+        "wallMs": 34.765595000000005,
+        "edtCpuMs": 32.4823265,
+        "edtAllocatedBytes": 22463272.0
+      },
+      "after": {
+        "wallMs": 1.270537,
+        "edtCpuMs": 1.2498125,
+        "edtAllocatedBytes": 681872.0
+      },
+      "wallChangePercent": -96.34541850930496
+    },
+    "retainedUndoHeap": {
+      "before": {
+        "medianBytes": 6292840,
+        "observedBytes": [
+          6288672,
+          6293528,
+          6292840
+        ]
+      },
+      "after": {
+        "medianBytes": 5236296,
+        "observedBytes": [
+          5236560,
+          107296,
+          5236296
+        ]
+      }
+    }
+  },
+  "dense-analysis-long-pv-visits": {
+    "delete": {
+      "before": {
+        "wallMs": 34.3180825,
+        "edtCpuMs": 34.046927499999995,
+        "edtAllocatedBytes": 45462400.0
+      },
+      "after": {
+        "wallMs": 3.1798285,
+        "edtCpuMs": 3.1933344999999997,
+        "edtAllocatedBytes": 4006760.0
+      },
+      "wallChangePercent": -90.73424775408125
+    },
+    "undo-delete": {
+      "before": {
+        "wallMs": 104.85289850000001,
+        "edtCpuMs": 104.8136975,
+        "edtAllocatedBytes": 56331312.0
+      },
+      "after": {
+        "wallMs": 1.079874,
+        "edtCpuMs": 1.123566,
+        "edtAllocatedBytes": 541632.0
+      },
+      "wallChangePercent": -98.97010572387754
+    },
+    "redo-delete": {
+      "before": {
+        "wallMs": 33.8101275,
+        "edtCpuMs": 33.8196665,
+        "edtAllocatedBytes": 45843544.0
+      },
+      "after": {
+        "wallMs": 1.6567195,
+        "edtCpuMs": 1.6044825,
+        "edtAllocatedBytes": 4003472.0
+      },
+      "wallChangePercent": -95.099931226228
+    },
+    "insert": {
+      "before": {
+        "wallMs": 266.2336545,
+        "edtCpuMs": 177.643643,
+        "edtAllocatedBytes": 634093924.0
+      },
+      "after": {
+        "wallMs": 202.30488400000002,
+        "edtCpuMs": 98.13668050000001,
+        "edtAllocatedBytes": 547200000.0
+      },
+      "wallChangePercent": -24.012279972665883
+    },
+    "undo-insert": {
+      "before": {
+        "wallMs": 103.70344800000001,
+        "edtCpuMs": 103.703388,
+        "edtAllocatedBytes": 56349264.0
+      },
+      "after": {
+        "wallMs": 2.8202825,
+        "edtCpuMs": 2.6270439999999997,
+        "edtAllocatedBytes": 636920.0
+      },
+      "wallChangePercent": -97.28043516933015
+    },
+    "trial-enter": {
+      "before": {
+        "wallMs": 74.90659600000001,
+        "edtCpuMs": 68.895058,
+        "edtAllocatedBytes": 90912936.0
+      },
+      "after": {
+        "wallMs": 3.6466825,
+        "edtCpuMs": 3.66411,
+        "edtAllocatedBytes": 4007792.0
+      },
+      "wallChangePercent": -95.13169374296491
+    },
+    "trial-return": {
+      "before": {
+        "wallMs": 114.9595425,
+        "edtCpuMs": 105.5464235,
+        "edtAllocatedBytes": 56039656.0
+      },
+      "after": {
+        "wallMs": 0.858066,
+        "edtCpuMs": 0.803631,
+        "edtAllocatedBytes": 513992.0
+      },
+      "wallChangePercent": -99.25359306296822
+    },
+    "retainedUndoHeap": {
+      "before": {
+        "medianBytes": 6301520,
+        "observedBytes": [
+          6290480,
+          6301520,
+          6301672
+        ]
+      },
+      "after": {
+        "medianBytes": 33763952,
+        "observedBytes": [
+          33763952,
+          33769936,
+          33758664
+        ]
+      }
+    }
+  }
+}

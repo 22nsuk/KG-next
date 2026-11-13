@@ -1,0 +1,3930 @@
+{
+  "retainedUndoHeap": [
+    {
+      "fixture": "wide-variations",
+      "repeat": 0,
+      "withoutUndoBytes": 165941920,
+      "withUndoBytes": 166988384,
+      "differenceBytes": 1046464
+    },
+    {
+      "fixture": "wide-variations",
+      "repeat": 1,
+      "withoutUndoBytes": 164983976,
+      "withUndoBytes": 167081160,
+      "differenceBytes": 2097184
+    },
+    {
+      "fixture": "wide-variations",
+      "repeat": 2,
+      "withoutUndoBytes": 164771080,
+      "withUndoBytes": 166867992,
+      "differenceBytes": 2096912
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "repeat": 0,
+      "withoutUndoBytes": 80144832,
+      "withUndoBytes": 84345056,
+      "differenceBytes": 4200224
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "repeat": 1,
+      "withoutUndoBytes": 80145208,
+      "withUndoBytes": 84349360,
+      "differenceBytes": 4204152
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "repeat": 2,
+      "withoutUndoBytes": 80145584,
+      "withUndoBytes": 84350024,
+      "differenceBytes": 4204440
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "repeat": 0,
+      "withoutUndoBytes": 84249632,
+      "withUndoBytes": 90538304,
+      "differenceBytes": 6288672
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "repeat": 1,
+      "withoutUndoBytes": 84288840,
+      "withUndoBytes": 90582368,
+      "differenceBytes": 6293528
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "repeat": 2,
+      "withoutUndoBytes": 84289432,
+      "withUndoBytes": 90582272,
+      "differenceBytes": 6292840
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "repeat": 0,
+      "withoutUndoBytes": 120474208,
+      "withUndoBytes": 126764688,
+      "differenceBytes": 6290480
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "repeat": 1,
+      "withoutUndoBytes": 82906360,
+      "withUndoBytes": 89207880,
+      "differenceBytes": 6301520
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "repeat": 2,
+      "withoutUndoBytes": 82907280,
+      "withUndoBytes": 89208952,
+      "differenceBytes": 6301672
+    }
+  ],
+  "warmupsExcluded": 5,
+  "os": "Linux amd64",
+  "started": "2026-11-13T19:47:28.626761744Z",
+  "finished": "2026-11-13T19:50:25.119637134Z",
+  "samples": 10,
+  "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+  "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+  "fixtures": [
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+      "bytes": 1551041,
+      "commentCharactersPerNode": 32,
+      "name": "wide-variations",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 21845,
+      "expectedForks": 5461
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+      "bytes": 1603477,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-ownership",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 8,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 301,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+      "bytes": 4825457,
+      "commentCharactersPerNode": 12800,
+      "name": "long-multilingual-comments",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 201,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+      "bytes": 3040737,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-long-pv-visits",
+      "expectedPvVisitCount": 64,
+      "expectedPvLength": 64,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 151,
+      "expectedForks": 0
+    }
+  ],
+  "result": "PASS",
+  "java": "21.0.13+9-LTS",
+  "observations": [
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 178.640972,
+      "edtAllocatedBytes": 20558688,
+      "wallMs": 182.522138,
+      "sample": -5,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 187.883068,
+      "edtAllocatedBytes": 128082856,
+      "wallMs": 207.356248,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 204.272992,
+      "edtAllocatedBytes": 105123064,
+      "wallMs": 212.005739,
+      "sample": -5,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 135.540619,
+      "edtAllocatedBytes": 156208168,
+      "wallMs": 169.812636,
+      "sample": -5,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 397.11054,
+      "edtAllocatedBytes": 126941224,
+      "wallMs": 560.417605,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 80.257223,
+      "edtAllocatedBytes": 40961344,
+      "wallMs": 81.142488,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 187.437346,
+      "edtAllocatedBytes": 114745688,
+      "wallMs": 233.151792,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 45.427259,
+      "edtAllocatedBytes": 20480976,
+      "wallMs": 45.271991,
+      "sample": -4,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 96.813193,
+      "edtAllocatedBytes": 126929600,
+      "wallMs": 96.769441,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 87.87807,
+      "edtAllocatedBytes": 104620624,
+      "wallMs": 99.916133,
+      "sample": -4,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 104.005468,
+      "edtAllocatedBytes": 156721288,
+      "wallMs": 228.686216,
+      "sample": -4,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 71.477773,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 116.385637,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 51.450311,
+      "edtAllocatedBytes": 39912624,
+      "wallMs": 51.417376,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 50.929083,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 105.604843,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 26.098271,
+      "edtAllocatedBytes": 19956720,
+      "wallMs": 26.14734,
+      "sample": -3,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 79.055654,
+      "edtAllocatedBytes": 126536408,
+      "wallMs": 79.0813,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 106.062162,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 109.238129,
+      "sample": -3,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 79.407914,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 79.346156,
+      "sample": -3,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 78.238672,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 245.064698,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 50.267859,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 50.229652,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 55.777782,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 106.293079,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 26.77234,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 44.581539,
+      "sample": -2,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 215.170068,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 264.9376,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 92.571655,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 110.54512,
+      "sample": -2,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 88.878396,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 100.704861,
+      "sample": -2,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 98.900343,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 131.707391,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 55.609234,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 55.763972,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 68.329913,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 187.875554,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 37.310942,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 38.241669,
+      "sample": -1,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 79.606516,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 137.425691,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 74.066274,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 74.072882,
+      "sample": -1,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 86.490064,
+      "edtAllocatedBytes": 156721456,
+      "wallMs": 116.097976,
+      "sample": -1,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 75.644676,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 107.558282,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 56.673916,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 56.425133,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 57.303674,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 121.453207,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 35.78379,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 35.717221,
+      "sample": 0,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 90.144319,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 90.096771,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 95.612846,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 98.34305,
+      "sample": 0,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 72.984012,
+      "edtAllocatedBytes": 156721256,
+      "wallMs": 72.982727,
+      "sample": 0,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 78.872216,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 222.691276,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 78.634298,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 78.603047,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 52.954173,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 120.866285,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 25.175771,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 25.048785,
+      "sample": 1,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 82.710463,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 83.863952,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 66.799868,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 69.066735,
+      "sample": 1,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 64.055693,
+      "edtAllocatedBytes": 156721256,
+      "wallMs": 64.005219,
+      "sample": 1,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 109.292469,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 206.17912,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 49.579521,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 49.543053,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 50.195602,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 113.695069,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 35.767396,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 35.685848,
+      "sample": 2,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 74.43813,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 104.690946,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 124.229511,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 140.58676,
+      "sample": 2,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 78.333805,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 78.36446,
+      "sample": 2,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 64.125722,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 218.69675,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 49.636943,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 49.59882,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 54.641077,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 55.747002,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 27.354773,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 30.671491,
+      "sample": 3,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 71.708995,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 71.660602,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 85.880037,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 118.579323,
+      "sample": 3,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 70.409292,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 70.40417,
+      "sample": 3,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 82.618629,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 190.983908,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 50.513423,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 50.476507,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 65.087905,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 123.336381,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 33.622708,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 40.166131,
+      "sample": 4,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 77.722727,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 77.782765,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 91.150197,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 95.810511,
+      "sample": 4,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 91.743959,
+      "edtAllocatedBytes": 156721240,
+      "wallMs": 91.965602,
+      "sample": 4,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 107.660421,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 120.429931,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 70.987988,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 143.172202,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 59.220939,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 180.304503,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 28.419708,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 29.237338,
+      "sample": 5,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 153.448018,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 153.429816,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 74.9114,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 77.962034,
+      "sample": 5,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 104.04525,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 103.935062,
+      "sample": 5,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 92.540324,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 223.802658,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 54.479452,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 54.499944,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 57.526909,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 120.188865,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 32.622209,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 43.992125,
+      "sample": 6,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 78.164895,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 128.440288,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 74.672467,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 83.111711,
+      "sample": 6,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 102.984597,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 147.233201,
+      "sample": 6,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 88.166802,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 140.409107,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 131.189605,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 201.271921,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 52.382727,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 52.330052,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 51.475543,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 52.638922,
+      "sample": 7,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 157.918583,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 183.446941,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 73.138893,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 95.473375,
+      "sample": 7,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 117.356943,
+      "edtAllocatedBytes": 156721512,
+      "wallMs": 118.33007,
+      "sample": 7,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 149.716219,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 215.414325,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 82.50937,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 148.594819,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 128.310413,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 128.658001,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 23.637229,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 23.553105,
+      "sample": 8,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 112.139102,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 141.928741,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 73.235099,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 93.459991,
+      "sample": 8,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 133.085436,
+      "edtAllocatedBytes": 156721272,
+      "wallMs": 133.237345,
+      "sample": 8,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 75.244093,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 333.331668,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 50.444479,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 50.496533,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 227.623456,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 283.825528,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 28.325796,
+      "edtAllocatedBytes": 19956696,
+      "wallMs": 40.802059,
+      "sample": 9,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 124.851966,
+      "edtAllocatedBytes": 126536384,
+      "wallMs": 172.113332,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 76.691436,
+      "edtAllocatedBytes": 104620600,
+      "wallMs": 85.094241,
+      "sample": 9,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 204.469059,
+      "edtAllocatedBytes": 156721528,
+      "wallMs": 457.062298,
+      "sample": 9,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 125.620902,
+      "edtAllocatedBytes": 126539696,
+      "wallMs": 206.153448,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 179.665274,
+      "edtAllocatedBytes": 39912784,
+      "wallMs": 176.688273,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "wide-variations",
+      "edtCpuMs": 131.075849,
+      "edtAllocatedBytes": 113098440,
+      "wallMs": 181.415054,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 76.907209,
+      "edtAllocatedBytes": 37656048,
+      "wallMs": 77.038387,
+      "sample": -5,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 110.567221,
+      "edtAllocatedBytes": 30058536,
+      "wallMs": 110.920447,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 51.518436,
+      "edtAllocatedBytes": 37735232,
+      "wallMs": 51.496233,
+      "sample": -5,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 764.465883,
+      "edtAllocatedBytes": 1157284240,
+      "wallMs": 823.084847,
+      "sample": -5,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 64.538074,
+      "edtAllocatedBytes": 30170392,
+      "wallMs": 64.531703,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 131.869459,
+      "edtAllocatedBytes": 74634384,
+      "wallMs": 131.856494,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 78.530164,
+      "edtAllocatedBytes": 30008696,
+      "wallMs": 80.909923,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 48.655253,
+      "edtAllocatedBytes": 37329232,
+      "wallMs": 51.003185,
+      "sample": -4,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 72.599191,
+      "edtAllocatedBytes": 30134488,
+      "wallMs": 73.97634,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 57.596002,
+      "edtAllocatedBytes": 37427008,
+      "wallMs": 62.918841,
+      "sample": -4,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 412.367494,
+      "edtAllocatedBytes": 1156648216,
+      "wallMs": 469.968987,
+      "sample": -4,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 75.087932,
+      "edtAllocatedBytes": 30160656,
+      "wallMs": 75.757546,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 71.630392,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 71.659905,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 58.480501,
+      "edtAllocatedBytes": 29999032,
+      "wallMs": 58.625514,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 26.274499,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 43.137297,
+      "sample": -3,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 52.512825,
+      "edtAllocatedBytes": 30115008,
+      "wallMs": 52.488157,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 33.750458,
+      "edtAllocatedBytes": 34481960,
+      "wallMs": 33.424272,
+      "sample": -3,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 269.081369,
+      "edtAllocatedBytes": 1150758824,
+      "wallMs": 303.649704,
+      "sample": -3,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 54.923161,
+      "edtAllocatedBytes": 30150944,
+      "wallMs": 54.900593,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 71.675643,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 71.494246,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 83.286429,
+      "edtAllocatedBytes": 29989400,
+      "wallMs": 83.389823,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 28.934449,
+      "edtAllocatedBytes": 34396024,
+      "wallMs": 29.796609,
+      "sample": -2,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 88.203277,
+      "edtAllocatedBytes": 30105408,
+      "wallMs": 88.232722,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 36.473478,
+      "edtAllocatedBytes": 34481928,
+      "wallMs": 36.454667,
+      "sample": -2,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 341.675495,
+      "edtAllocatedBytes": 1149660072,
+      "wallMs": 401.949248,
+      "sample": -2,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 52.581516,
+      "edtAllocatedBytes": 30141392,
+      "wallMs": 52.572146,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 56.098732,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 67.41615,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 67.988393,
+      "edtAllocatedBytes": 29989400,
+      "wallMs": 68.070558,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 25.675074,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 25.653395,
+      "sample": -1,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 63.713267,
+      "edtAllocatedBytes": 30105408,
+      "wallMs": 63.696459,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 19.778841,
+      "edtAllocatedBytes": 34481928,
+      "wallMs": 19.76306,
+      "sample": -1,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 231.979055,
+      "edtAllocatedBytes": 1149270872,
+      "wallMs": 261.999228,
+      "sample": -1,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 57.602327,
+      "edtAllocatedBytes": 30141312,
+      "wallMs": 57.584687,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 50.751784,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 69.4364,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 70.473135,
+      "edtAllocatedBytes": 29989400,
+      "wallMs": 83.354059,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 31.887367,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 31.930671,
+      "sample": 0,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 57.608386,
+      "edtAllocatedBytes": 30105408,
+      "wallMs": 57.591284,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 26.402215,
+      "edtAllocatedBytes": 34481928,
+      "wallMs": 26.584326,
+      "sample": 0,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 607.00405,
+      "edtAllocatedBytes": 1149270296,
+      "wallMs": 651.234149,
+      "sample": 0,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 59.278057,
+      "edtAllocatedBytes": 30141392,
+      "wallMs": 59.277552,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 64.427042,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 64.40695,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 69.044121,
+      "edtAllocatedBytes": 29989400,
+      "wallMs": 69.174057,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 38.090285,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 38.076357,
+      "sample": 1,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 65.404341,
+      "edtAllocatedBytes": 30070288,
+      "wallMs": 65.387483,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 26.967707,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 26.952899,
+      "sample": 1,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 300.025755,
+      "edtAllocatedBytes": 1149260880,
+      "wallMs": 312.628555,
+      "sample": 1,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 84.451845,
+      "edtAllocatedBytes": 30059440,
+      "wallMs": 93.124636,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 57.914987,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 57.911261,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 56.626786,
+      "edtAllocatedBytes": 29907528,
+      "wallMs": 56.924425,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 31.208577,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 31.180931,
+      "sample": 2,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 64.062017,
+      "edtAllocatedBytes": 30023536,
+      "wallMs": 64.039615,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 33.502597,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 34.818034,
+      "sample": 2,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 256.665189,
+      "edtAllocatedBytes": 1149236680,
+      "wallMs": 315.090596,
+      "sample": 2,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 60.503139,
+      "edtAllocatedBytes": 30059520,
+      "wallMs": 60.481348,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 49.067179,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 49.039652,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 63.947041,
+      "edtAllocatedBytes": 29907528,
+      "wallMs": 64.013821,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 19.694857,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 19.783688,
+      "sample": 3,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 56.555124,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 56.63671,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 21.766744,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 21.678787,
+      "sample": 3,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 301.97956,
+      "edtAllocatedBytes": 1149236848,
+      "wallMs": 386.376175,
+      "sample": 3,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 69.466135,
+      "edtAllocatedBytes": 30016240,
+      "wallMs": 69.470669,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 63.584748,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 114.687319,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 47.552156,
+      "edtAllocatedBytes": 29864016,
+      "wallMs": 47.527156,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 29.849909,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 29.989477,
+      "sample": 4,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 51.216372,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 51.194845,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 25.819336,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 25.798704,
+      "sample": 4,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 402.78697,
+      "edtAllocatedBytes": 1149236608,
+      "wallMs": 460.117232,
+      "sample": 4,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 61.349049,
+      "edtAllocatedBytes": 30016240,
+      "wallMs": 61.326162,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 46.327058,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 46.3156,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 57.929706,
+      "edtAllocatedBytes": 29864328,
+      "wallMs": 58.003461,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 35.808615,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 35.780313,
+      "sample": 5,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 52.921128,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 52.910972,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 27.483504,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 27.25354,
+      "sample": 5,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 388.234292,
+      "edtAllocatedBytes": 1149235944,
+      "wallMs": 418.695846,
+      "sample": 5,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 55.286738,
+      "edtAllocatedBytes": 30016240,
+      "wallMs": 55.254001,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 56.233571,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 56.204242,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 84.938524,
+      "edtAllocatedBytes": 29864328,
+      "wallMs": 85.448354,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 29.991541,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 29.962022,
+      "sample": 6,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 45.944116,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 45.922203,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 24.855034,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 24.835237,
+      "sample": 6,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 335.174928,
+      "edtAllocatedBytes": 1149236280,
+      "wallMs": 388.858581,
+      "sample": 6,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 55.593261,
+      "edtAllocatedBytes": 30016320,
+      "wallMs": 55.571179,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 46.686069,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 46.660194,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 49.499059,
+      "edtAllocatedBytes": 29864328,
+      "wallMs": 49.581932,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 22.612617,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 22.586792,
+      "sample": 7,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 51.872529,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 51.849281,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 21.921412,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 21.901,
+      "sample": 7,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 254.69626,
+      "edtAllocatedBytes": 1149236720,
+      "wallMs": 304.029613,
+      "sample": 7,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 56.451828,
+      "edtAllocatedBytes": 30016240,
+      "wallMs": 56.429245,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 49.870813,
+      "edtAllocatedBytes": 68744416,
+      "wallMs": 49.836394,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 52.678711,
+      "edtAllocatedBytes": 29864328,
+      "wallMs": 52.73294,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 30.122417,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 30.042412,
+      "sample": 8,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 50.881976,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 50.861001,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 21.502327,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 21.483391,
+      "sample": 8,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 341.107544,
+      "edtAllocatedBytes": 1149235976,
+      "wallMs": 379.809777,
+      "sample": 8,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 51.574466,
+      "edtAllocatedBytes": 30016240,
+      "wallMs": 51.550541,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 52.983819,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 53.204317,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 46.032272,
+      "edtAllocatedBytes": 29863808,
+      "wallMs": 46.010477,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 26.511699,
+      "edtAllocatedBytes": 34384248,
+      "wallMs": 29.235379,
+      "sample": 9,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 58.73297,
+      "edtAllocatedBytes": 29980336,
+      "wallMs": 84.65339,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 28.468286,
+      "edtAllocatedBytes": 34481656,
+      "wallMs": 28.430449,
+      "sample": 9,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 328.327491,
+      "edtAllocatedBytes": 1149245344,
+      "wallMs": 399.221851,
+      "sample": 9,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 53.966471,
+      "edtAllocatedBytes": 30016112,
+      "wallMs": 53.940965,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 46.499715,
+      "edtAllocatedBytes": 68744704,
+      "wallMs": 46.580705,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "edtCpuMs": 59.440773,
+      "edtAllocatedBytes": 29864072,
+      "wallMs": 59.532496,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 15.021016,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 15.055372,
+      "sample": -5,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 30.091966,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 50.78362,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 14.887155,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 14.869748,
+      "sample": -5,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 359.226607,
+      "edtAllocatedBytes": 786802552,
+      "wallMs": 405.621999,
+      "sample": -5,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 37.397382,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 37.129422,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.137554,
+      "edtAllocatedBytes": 64578216,
+      "wallMs": 35.179533,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 37.436401,
+      "edtAllocatedBytes": 22463296,
+      "wallMs": 37.503593,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 20.519965,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 20.492259,
+      "sample": -4,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 39.297756,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 39.277077,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 18.415956,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 18.395503,
+      "sample": -4,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 240.535418,
+      "edtAllocatedBytes": 786847544,
+      "wallMs": 276.434148,
+      "sample": -4,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 53.191872,
+      "edtAllocatedBytes": 22677560,
+      "wallMs": 53.168823,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.330872,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 31.306792,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.978728,
+      "edtAllocatedBytes": 22463296,
+      "wallMs": 36.312209,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 18.220713,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 18.193192,
+      "sample": -3,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 36.361887,
+      "edtAllocatedBytes": 22652720,
+      "wallMs": 36.350132,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 18.760736,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 22.608072,
+      "sample": -3,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 177.054296,
+      "edtAllocatedBytes": 786892264,
+      "wallMs": 205.821238,
+      "sample": -3,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 34.564009,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 34.643459,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 33.843948,
+      "edtAllocatedBytes": 64578216,
+      "wallMs": 41.241492,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 43.796684,
+      "edtAllocatedBytes": 22463584,
+      "wallMs": 44.313969,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 14.356327,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 14.332676,
+      "sample": -2,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 28.8105,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 28.755106,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 20.277527,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 20.248115,
+      "sample": -2,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 156.373798,
+      "edtAllocatedBytes": 786846520,
+      "wallMs": 180.504777,
+      "sample": -2,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.578675,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 29.56081,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 28.808013,
+      "edtAllocatedBytes": 64578216,
+      "wallMs": 28.801453,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 30.779524,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 31.235557,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.893027,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 13.870291,
+      "sample": -1,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.84032,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 29.825918,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 16.462026,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 16.463858,
+      "sample": -1,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 163.248102,
+      "edtAllocatedBytes": 786881456,
+      "wallMs": 194.648775,
+      "sample": -1,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 50.649979,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 50.632738,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 39.065807,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 39.49066,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.709272,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 29.75874,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.893385,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 13.870974,
+      "sample": 0,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 26.372402,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 26.355864,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 16.587638,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 16.513103,
+      "sample": 0,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 198.412515,
+      "edtAllocatedBytes": 786814192,
+      "wallMs": 209.781288,
+      "sample": 0,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 34.763645,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 35.602921,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 40.868384,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 64.986635,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 40.252943,
+      "edtAllocatedBytes": 22463584,
+      "wallMs": 40.82795,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 17.052616,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 17.022082,
+      "sample": 1,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.19692,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 35.175587,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 19.432485,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 19.359911,
+      "sample": 1,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 187.763667,
+      "edtAllocatedBytes": 786814512,
+      "wallMs": 267.567166,
+      "sample": 1,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 30.262484,
+      "edtAllocatedBytes": 22677560,
+      "wallMs": 30.119583,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 38.337096,
+      "edtAllocatedBytes": 64578216,
+      "wallMs": 37.980883,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.586545,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 31.5715,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 12.747581,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 29.071416,
+      "sample": 2,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 34.539774,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 34.5207,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.73614,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 13.815902,
+      "sample": 2,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 174.053926,
+      "edtAllocatedBytes": 786859448,
+      "wallMs": 201.459012,
+      "sample": 2,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 36.681291,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 36.623276,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 30.951265,
+      "edtAllocatedBytes": 64578216,
+      "wallMs": 31.148303,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 33.233684,
+      "edtAllocatedBytes": 22463584,
+      "wallMs": 33.319149,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 16.390163,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 16.658037,
+      "sample": 3,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.645922,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 29.627094,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 12.667521,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 12.649378,
+      "sample": 3,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 177.107871,
+      "edtAllocatedBytes": 786814480,
+      "wallMs": 209.90356,
+      "sample": 3,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 32.684423,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 33.11819,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 28.601685,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 28.64684,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 30.285551,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 30.192,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.947434,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 14.006118,
+      "sample": 4,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 33.256688,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 33.408016,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.532096,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 13.421359,
+      "sample": 4,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 171.636325,
+      "edtAllocatedBytes": 786837072,
+      "wallMs": 214.731496,
+      "sample": 4,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 34.868453,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 34.848204,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 33.170782,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 51.62941,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 69.846846,
+      "edtAllocatedBytes": 22463584,
+      "wallMs": 94.79754,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.592446,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 13.578585,
+      "sample": 5,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.271692,
+      "edtAllocatedBytes": 22652720,
+      "wallMs": 29.25791,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 14.352283,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 14.339034,
+      "sample": 5,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 261.226071,
+      "edtAllocatedBytes": 786856080,
+      "wallMs": 271.797869,
+      "sample": 5,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 38.306603,
+      "edtAllocatedBytes": 22677560,
+      "wallMs": 38.291376,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.592443,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 35.587602,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.486752,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 29.476033,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 12.958703,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 12.943612,
+      "sample": 6,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 41.616421,
+      "edtAllocatedBytes": 22652720,
+      "wallMs": 41.601361,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 15.410126,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 31.425339,
+      "sample": 6,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 406.138008,
+      "edtAllocatedBytes": 786869000,
+      "wallMs": 465.669814,
+      "sample": 6,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 44.721136,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 44.70374,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 45.305639,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 45.286392,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 41.340887,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 41.33734,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 19.678974,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 36.193549,
+      "sample": 7,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 28.359004,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 28.352975,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 17.00602,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 16.991706,
+      "sample": 7,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 174.474767,
+      "edtAllocatedBytes": 786849160,
+      "wallMs": 204.521684,
+      "sample": 7,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.640726,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 31.619386,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.073961,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 35.052416,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.730969,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 31.877151,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 18.10568,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 19.019641,
+      "sample": 8,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 27.631462,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 27.614741,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.990166,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 13.973174,
+      "sample": 8,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 182.649868,
+      "edtAllocatedBytes": 786868696,
+      "wallMs": 217.518813,
+      "sample": 8,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 37.831028,
+      "edtAllocatedBytes": 22677560,
+      "wallMs": 37.809047,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 29.482148,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 29.461992,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 35.824429,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 36.212041,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 13.587117,
+      "edtAllocatedBytes": 32297208,
+      "wallMs": 13.573758,
+      "sample": 9,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 25.068355,
+      "edtAllocatedBytes": 22653008,
+      "wallMs": 25.055693,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 12.262894,
+      "edtAllocatedBytes": 32414536,
+      "wallMs": 12.248993,
+      "sample": 9,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 165.252447,
+      "edtAllocatedBytes": 786830176,
+      "wallMs": 176.238278,
+      "sample": 9,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 33.498061,
+      "edtAllocatedBytes": 22677272,
+      "wallMs": 33.483544,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.200472,
+      "edtAllocatedBytes": 64578504,
+      "wallMs": 56.171641,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "edtCpuMs": 31.306633,
+      "edtAllocatedBytes": 22463272,
+      "wallMs": 44.672796,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 33.260829,
+      "edtAllocatedBytes": 46776296,
+      "wallMs": 33.248119,
+      "sample": -5,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 100.12937,
+      "edtAllocatedBytes": 56340040,
+      "wallMs": 135.613767,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 30.898615,
+      "edtAllocatedBytes": 47161472,
+      "wallMs": 85.897897,
+      "sample": -5,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 337.790393,
+      "edtAllocatedBytes": 636726552,
+      "wallMs": 431.813157,
+      "sample": -5,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 123.609802,
+      "edtAllocatedBytes": 56357952,
+      "wallMs": 123.790774,
+      "sample": -5,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 80.226404,
+      "edtAllocatedBytes": 90912792,
+      "wallMs": 80.196049,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 128.57543,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 128.648762,
+      "sample": -5,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 41.594898,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 41.578264,
+      "sample": -4,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 106.078745,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 171.220656,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 58.314445,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 85.306192,
+      "sample": -4,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 209.710125,
+      "edtAllocatedBytes": 634090792,
+      "wallMs": 326.229374,
+      "sample": -4,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 184.848537,
+      "edtAllocatedBytes": 56349224,
+      "wallMs": 184.808893,
+      "sample": -4,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 70.635374,
+      "edtAllocatedBytes": 90912792,
+      "wallMs": 132.419637,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 95.61578,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 108.218136,
+      "sample": -4,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 36.213036,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 36.196699,
+      "sample": -3,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 110.913636,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 157.487789,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 32.036177,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 32.022483,
+      "sample": -3,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 189.25106,
+      "edtAllocatedBytes": 634091216,
+      "wallMs": 324.178487,
+      "sample": -3,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 112.498716,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 112.4812,
+      "sample": -3,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 66.077501,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 66.062478,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 101.449287,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 101.672503,
+      "sample": -3,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 32.643834,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 32.632291,
+      "sample": -2,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 99.190831,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 99.263507,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 33.472535,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 33.841415,
+      "sample": -2,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 208.201063,
+      "edtAllocatedBytes": 634091952,
+      "wallMs": 255.13653,
+      "sample": -2,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 112.624948,
+      "edtAllocatedBytes": 56349224,
+      "wallMs": 112.621457,
+      "sample": -2,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 63.502331,
+      "edtAllocatedBytes": 90912792,
+      "wallMs": 63.492115,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 87.24177,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 87.410881,
+      "sample": -2,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 25.429693,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 25.414309,
+      "sample": -1,
+      "warmup": true,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 103.559184,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 105.831352,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 28.558615,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 28.54894,
+      "sample": -1,
+      "warmup": true,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 157.086197,
+      "edtAllocatedBytes": 634092376,
+      "wallMs": 228.696591,
+      "sample": -1,
+      "warmup": true,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 124.476857,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 124.534392,
+      "sample": -1,
+      "warmup": true,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 86.708358,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 86.842853,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 115.691435,
+      "edtAllocatedBytes": 56039448,
+      "wallMs": 116.202371,
+      "sample": -1,
+      "warmup": true,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 34.598953,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 34.586321,
+      "sample": 0,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 109.912762,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 109.907523,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 67.774526,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 109.974733,
+      "sample": 0,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 159.555652,
+      "edtAllocatedBytes": 634092440,
+      "wallMs": 224.757159,
+      "sample": 0,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 101.273061,
+      "edtAllocatedBytes": 56349304,
+      "wallMs": 101.26112,
+      "sample": 0,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 80.737477,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 80.724333,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 111.140274,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 111.193011,
+      "sample": 0,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 34.938842,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 34.928032,
+      "sample": 1,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 108.725285,
+      "edtAllocatedBytes": 56331024,
+      "wallMs": 108.729066,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 30.993764,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 30.983951,
+      "sample": 1,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 155.34773,
+      "edtAllocatedBytes": 634092784,
+      "wallMs": 321.472988,
+      "sample": 1,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 101.317499,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 101.419701,
+      "sample": 1,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 64.642873,
+      "edtAllocatedBytes": 90912792,
+      "wallMs": 64.746265,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 155.310716,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 155.658098,
+      "sample": 1,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 31.852937,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 31.841904,
+      "sample": 2,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 95.628842,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 95.618683,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 40.483635,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 40.474034,
+      "sample": 2,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 175.325587,
+      "edtAllocatedBytes": 634093632,
+      "wallMs": 194.97558,
+      "sample": 2,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 122.213933,
+      "edtAllocatedBytes": 56349224,
+      "wallMs": 122.202442,
+      "sample": 2,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 63.802703,
+      "edtAllocatedBytes": 90912792,
+      "wallMs": 63.792967,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 97.945165,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 98.599865,
+      "sample": 2,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 32.981125,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 32.992885,
+      "sample": 3,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 105.169651,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 105.141238,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 32.435462,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 32.450886,
+      "sample": 3,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 329.406492,
+      "edtAllocatedBytes": 634094056,
+      "wallMs": 443.520109,
+      "sample": 3,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 111.945463,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 112.914119,
+      "sample": 3,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 106.480617,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 106.560015,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 96.909514,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 154.765015,
+      "sample": 3,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 34.064951,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 34.049844,
+      "sample": 4,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 150.397171,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 150.382133,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 40.805558,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 198.16281,
+      "sample": 4,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 183.28359,
+      "edtAllocatedBytes": 634094152,
+      "wallMs": 232.965645,
+      "sample": 4,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 84.509532,
+      "edtAllocatedBytes": 56349224,
+      "wallMs": 84.848287,
+      "sample": 4,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 61.976866,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 83.010806,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 92.711226,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 92.93662,
+      "sample": 4,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 28.764563,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 28.753124,
+      "sample": 5,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 97.046448,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 97.034965,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 33.681993,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 33.673122,
+      "sample": 5,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 148.949544,
+      "edtAllocatedBytes": 634094544,
+      "wallMs": 289.143359,
+      "sample": 5,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 347.572784,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 352.041226,
+      "sample": 5,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 94.458457,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 94.438504,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 166.315777,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 166.802635,
+      "sample": 5,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 30.758756,
+      "edtAllocatedBytes": 45462400,
+      "wallMs": 30.761126,
+      "sample": 6,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 124.522208,
+      "edtAllocatedBytes": 56331312,
+      "wallMs": 124.509133,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 33.95734,
+      "edtAllocatedBytes": 45843544,
+      "wallMs": 33.947133,
+      "sample": 6,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 199.479005,
+      "edtAllocatedBytes": 634095312,
+      "wallMs": 467.129144,
+      "sample": 6,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 125.493045,
+      "edtAllocatedBytes": 56349512,
+      "wallMs": 125.533268,
+      "sample": 6,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 101.685051,
+      "edtAllocatedBytes": 90913080,
+      "wallMs": 101.885846,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 143.225986,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 143.530933,
+      "sample": 6,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 34.028904,
+      "edtAllocatedBytes": 45462048,
+      "wallMs": 49.320692,
+      "sample": 7,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 99.072866,
+      "edtAllocatedBytes": 56330960,
+      "wallMs": 99.984844,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 30.00507,
+      "edtAllocatedBytes": 45843192,
+      "wallMs": 30.186338,
+      "sample": 7,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 152.000723,
+      "edtAllocatedBytes": 634096000,
+      "wallMs": 236.453804,
+      "sample": 7,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 92.23678,
+      "edtAllocatedBytes": 56348952,
+      "wallMs": 92.224951,
+      "sample": 7,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 68.685924,
+      "edtAllocatedBytes": 90912376,
+      "wallMs": 68.623778,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 88.077338,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 88.201728,
+      "sample": 7,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 41.579028,
+      "edtAllocatedBytes": 45462048,
+      "wallMs": 41.623392,
+      "sample": 8,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 104.457744,
+      "edtAllocatedBytes": 56330960,
+      "wallMs": 104.564559,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 40.160267,
+      "edtAllocatedBytes": 45843192,
+      "wallMs": 155.973828,
+      "sample": 8,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 179.961699,
+      "edtAllocatedBytes": 634093792,
+      "wallMs": 243.32395,
+      "sample": 8,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 103.222553,
+      "edtAllocatedBytes": 56349192,
+      "wallMs": 103.239164,
+      "sample": 8,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 63.959813,
+      "edtAllocatedBytes": 90912376,
+      "wallMs": 64.433455,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 99.952573,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 100.16609,
+      "sample": 8,
+      "warmup": false,
+      "operation": "trial-return"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 35.928909,
+      "edtAllocatedBytes": 45462048,
+      "wallMs": 35.913817,
+      "sample": 9,
+      "warmup": false,
+      "operation": "delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 104.107537,
+      "edtAllocatedBytes": 56330960,
+      "wallMs": 104.092991,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 32.098467,
+      "edtAllocatedBytes": 45843192,
+      "wallMs": 32.085111,
+      "sample": 9,
+      "warmup": false,
+      "operation": "redo-delete"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 204.689322,
+      "edtAllocatedBytes": 634090520,
+      "wallMs": 355.951007,
+      "sample": 9,
+      "warmup": false,
+      "operation": "insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 104.184223,
+      "edtAllocatedBytes": 56348872,
+      "wallMs": 104.167732,
+      "sample": 9,
+      "warmup": false,
+      "operation": "undo-insert"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 69.104192,
+      "edtAllocatedBytes": 90912088,
+      "wallMs": 69.088859,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-enter"
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "edtCpuMs": 118.617612,
+      "edtAllocatedBytes": 56039656,
+      "wallMs": 118.726074,
+      "sample": 9,
+      "warmup": false,
+      "operation": "trial-return"
+    }
+  ],
+  "maxHeapBytes": 805306368
+}
