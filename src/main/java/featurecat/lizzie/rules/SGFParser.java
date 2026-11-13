@@ -76,9 +76,33 @@ public class SGFParser {
     return loadFileContent(SgfFileReader.read(Path.of(filename)), showHint, syncPrimaryEngine);
   }
 
+  /** Prepares immutable file syntax without reading import preferences or changing the live board. */
+  public static SgfDocument prepareFileContent(String value) {
+    try (var phase = new SgfPhase("parse-syntax")) {
+      if (value.isEmpty()) {
+        SgfObservation.record("open", "empty", null, null);
+        return null;
+      }
+      value = normalizeSgfInput(value);
+      SgfDocument document = value == null ? null : parseLoadDocument(value);
+      if (document == null) SgfObservation.record("open", "failed", null, null);
+      return document;
+    } catch (RuntimeException invalidSgf) {
+      SgfObservation.record("open", "failed", null, invalidSgf);
+      return null;
+    }
+  }
+
   /** Applies already decoded file content with the same navigation/hint contract as load(). */
   public static boolean loadFileContent(
       String value, boolean showHint, boolean syncPrimaryEngine) {
+    return loadFileDocument(prepareFileContent(value), showHint, syncPrimaryEngine);
+  }
+
+  /** The live board owner applies prepared syntax; no file I/O or syntax parsing is repeated. */
+  public static boolean loadFileDocument(
+      SgfDocument document, boolean showHint, boolean syncPrimaryEngine) {
+    if (document == null) return false;
     isExtraMode2 = false;
     Board.ClearStateSnapshot rollbackState = Lizzie.board.captureClearState();
     boolean finalizerScheduled = false;
@@ -91,19 +115,9 @@ public class SGFParser {
           Lizzie.board.clearWithoutPrimaryEngineForwarding();
         }
       }
-      if (value.isEmpty()) {
-        SgfObservation.record("open", "empty", null, null);
-        return false;
-      }
-
       boolean returnValue;
       try {
-        value = normalizeSgfInput(value);
-        if (value == null) {
-          SgfObservation.record("open", "failed", null, null);
-          return false;
-        }
-        returnValue = parse(value);
+        returnValue = parse(document);
       } catch (RuntimeException invalidSgf) {
         SgfObservation.record("open", "failed", null, invalidSgf);
         return false;
@@ -296,46 +310,37 @@ public class SGFParser {
       return Optional.empty();
     }
     String rawKomi = start.getData().getProperty("KM");
-    if (Utils.isBlank(rawKomi)) {
+    boolean hasRootKomi = !Utils.isBlank(rawKomi);
+    if (!hasRootKomi) {
       rawKomi = start.getData().getProperty("KO");
     }
-    return parseSgfKomi(rawKomi, start.getData().getProperties());
-  }
-
-  private static Optional<Double> parseSgfKomi(String rawKomi) {
-    return parseSgfKomi(rawKomi, null);
-  }
-
-  private static Optional<Double> parseSgfKomi(String rawKomi, Map<String, List<String>> rootProperties) {
     if (Utils.isBlank(rawKomi)) {
       return Optional.empty();
     }
     try {
       Double komi = Double.parseDouble(rawKomi.trim());
-      return normalizeSgfKomi(komi, rootProperties);
+      return normalizeSgfKomi(
+          komi, hasRootKomi ? komi : null, start.getData().getProperties(),
+          Board.boardWidth * Board.boardHeight);
     } catch (NumberFormatException ignored) {
       return Optional.empty();
     }
   }
 
-  private static Optional<Double> normalizeSgfKomi(Double komi) {
-    return normalizeSgfKomi(komi, null);
-  }
-
   private static Optional<Double> normalizeSgfKomi(
-      Double komi, Map<String, List<String>> rootProperties) {
-    return normalizeSgfKomi(komi, rootProperties, Board.boardWidth * Board.boardHeight);
-  }
-
-  private static Optional<Double> normalizeSgfKomi(
-      Double komi, Map<String, List<String>> rootProperties, int area) {
+      Double komi, Double rootKomi, Map<String, List<String>> rootProperties, int area) {
     if (komi == null) {
       return Optional.empty();
     }
-    komi =
-        isFoxSgf(rootProperties)
-            ? normalizeFoxSgfKomi(komi, rootProperties)
-            : normalizeLegacySgfKomi(komi);
+    if (rootKomi != null && isKgNextSgf(rootProperties)) {
+      // Our writer stores KM in points. A retained legacy KO must not override it.
+      komi = rootKomi;
+    } else {
+      komi =
+          isFoxSgf(rootProperties)
+              ? normalizeFoxSgfKomi(komi, rootProperties)
+              : normalizeLegacySgfKomi(komi);
+    }
     return Math.abs(komi) < area
         ? Optional.of(komi)
         : Optional.empty();
@@ -367,6 +372,12 @@ public class SGFParser {
 
   private static boolean isFoxSgf(Map<String, List<String>> rootProperties) {
     return rootPropertyContains(rootProperties, "AP", "foxwq");
+  }
+
+  private static boolean isKgNextSgf(Map<String, List<String>> rootProperties) {
+    String application = getOrDefault(rootProperties, "AP", null);
+    return application != null
+        && (application.equals("KG-next") || application.startsWith("KG-next:"));
   }
 
   private static boolean isChineseRules(Map<String, List<String>> rootProperties) {
@@ -448,22 +459,30 @@ public class SGFParser {
   }
 
   private static boolean parse(String value) {
+    return parse(parseLoadDocument(value));
+  }
+
+  private static boolean parse(SgfDocument document) {
     boolean oriPlaySound = Lizzie.config.playSound;
     try (var phase = new SgfPhase("parse-build-tree")) {
       Lizzie.config.playSound = false;
-      return parseIntoCurrentBoard(value);
+      return parseIntoCurrentBoard(document);
     } finally {
       Lizzie.config.playSound = oriPlaySound;
     }
   }
 
-  // Syntax is detached first; the interactive owner applies the document to its live history.
-  private static boolean parseIntoCurrentBoard(String value) {
+  private static SgfDocument parseLoadDocument(String value) {
     SgfDocument document = SgfDocument.parseNormalized(value);
     if (document == null && !value.isEmpty()) {
       // Preserve the live loader's legacy leading-node fragment tolerance.
       document = SgfDocument.parseNormalized("(;" + value.substring(1));
     }
+    return document;
+  }
+
+  // Syntax is detached first; the interactive owner applies the document to its live history.
+  private static boolean parseIntoCurrentBoard(SgfDocument document) {
     if (document == null) return false;
     Lizzie.board.reopen(document.width(), document.height());
 
@@ -492,6 +511,7 @@ public class SGFParser {
     // boolean isChineseRule = true;
     // boolean hasHandicap = false;
     Double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
+    Double rootKomi = null;
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
     boolean currentNodeHasDummy = false;
@@ -655,6 +675,9 @@ public class SGFParser {
             try {
               if (!tagContent.trim().isEmpty()) {
                 komi = Double.parseDouble(tagContent);
+                if (tag.equals("KM") && allowRootSetupOnCurrentNode) {
+                  rootKomi = komi;
+                }
                 parsedKomiTag = true;
               }
             } catch (NumberFormatException e) {
@@ -785,7 +808,10 @@ public class SGFParser {
     }
     flushPendingNodeMetadataToCurrentNode(Lizzie.board.getHistory(), pendingNodeMetadata);
     Optional<Double> parsedKomi =
-        parsedKomiTag ? normalizeSgfKomi(komi, gameProperties) : Optional.empty();
+        parsedKomiTag
+            ? normalizeSgfKomi(
+                komi, rootKomi, gameProperties, Board.boardWidth * Board.boardHeight)
+            : Optional.empty();
     if (parsedKomi.isPresent()
         && (Lizzie.config.readKomi
             || isSetupOrHandicapGame(Lizzie.board.getHistory())
@@ -1537,8 +1563,9 @@ public class SGFParser {
         if (!saveContext.dataType().isEmpty()) {
           rootData.setProperty("DZ", saveContext.dataType());
         }
-        rootData.setProperty("AP", Escaping("KG-next: " + saveContext.options().appVersion()));
       }
+      // Every mode writes the current KM in points, including raw/branch exports.
+      rootData.setProperty("AP", Escaping("KG-next: " + saveContext.options().appVersion()));
       rootData.setProperty("RE", Escaping(result));
       rootData.setProperty("SZ", boardSizeTag);
       rootData.setProperty("CA", "UTF-8");
@@ -4138,6 +4165,7 @@ public class SGFParser {
 
     String blackPlayer = "", whitePlayer = "";
     Double komi = null;
+    Double rootKomi = null;
     boolean parsedKomiTag = false;
     boolean currentNodeHasDummy = false;
     // Support unicode characters (UTF-8)
@@ -4270,6 +4298,9 @@ public class SGFParser {
               try {
                 if (!tagContent.trim().isEmpty()) {
                   komi = Double.parseDouble(tagContent);
+                  if (allowRootSetupOnCurrentNode) {
+                    rootKomi = komi;
+                  }
                   parsedKomiTag = true;
                 }
               } catch (NumberFormatException e) {
@@ -4385,7 +4416,10 @@ public class SGFParser {
       history.getGameInfo().setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
       stabilizeRootSetupSideToPlay(history);
       Optional<Double> parsedKomi =
-          parsedKomiTag ? normalizeSgfKomi(komi, gameProperties, history.getData().stones.length) : Optional.empty();
+          parsedKomiTag
+              ? normalizeSgfKomi(
+                  komi, rootKomi, gameProperties, history.getData().stones.length)
+              : Optional.empty();
       if (parsedKomi.isPresent()
           && (options.readKomi()
               || isSetupOrHandicapGame(history)
