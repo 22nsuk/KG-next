@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class WinrateGraphVariationHitTest {
   @Test
@@ -102,6 +104,93 @@ class WinrateGraphVariationHitTest {
           "hover should resolve the main-trunk node that remains visible after the fork.");
       assertEquals(
           1, history.mainEndReadCount, "one anchor hit should validate the rendered state once.");
+    } finally {
+      env.close();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void outsideGraphBoundsSkipHistoryTraversal(boolean showOverview) throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      VariationFixture fixture = boardWithVisibleMainContinuation();
+      WinrateGraph graph = new WinrateGraph();
+      TrackingFrame frame = allocate(TrackingFrame.class);
+      Lizzie.config.showWinrateOverview = showOverview;
+      Lizzie.board = fixture.board;
+      Lizzie.frame = frame;
+      LizzieFrame.winrateGraph = graph;
+      renderGraph(graph);
+
+      int[] bounds = (int[]) getField(graph, "origParams");
+      int left = bounds[0];
+      int top = bounds[1];
+      int right = left + bounds[2];
+      int bottom = top + bounds[3];
+      int[][] outside = {{left - 1, top}, {left, top - 1}, {right, top}, {left, bottom}};
+      CountingHistory history = (CountingHistory) fixture.board.getHistory();
+      history.mainEndReadCount = 0;
+      for (int[] point : outside) {
+        assertFalse(frame.processMouseMoveOnWinrateGraph(point[0], point[1]));
+        assertEquals(-1, graph.moveNumber(point[0], point[1]));
+      }
+      assertEquals(
+          0, history.mainEndReadCount, "off-graph pointer events must not traverse the history.");
+
+      int[][] inside = {
+        {left, top}, {right - 1, top}, {left, bottom - 1}, {right - 1, bottom - 1}
+      };
+      for (int[] point : inside) {
+        assertNotNull(
+            graph.resolveMoveTargetNode(point[0], point[1]),
+            "the original graph's inclusive left/top and exclusive right/bottom must be retained.");
+      }
+      assertEquals(
+          inside.length,
+          history.mainEndReadCount,
+          "each possible hit must still validate the current rendered state.");
+    } finally {
+      env.close();
+    }
+  }
+
+  @Test
+  void overviewPaddingOutsideMainGraphRetainsHitsAndFreshness() throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      VariationFixture fixture = boardWithVisibleMainContinuation();
+      WinrateGraph graph = new WinrateGraph();
+      TrackingFrame frame = allocate(TrackingFrame.class);
+      Lizzie.config.showWinrateOverview = true;
+      Lizzie.board = fixture.board;
+      Lizzie.frame = frame;
+      LizzieFrame.winrateGraph = graph;
+      setField(graph, "DOT_RADIUS", 8);
+      renderGraph(graph);
+
+      BoardHistoryNode firstMove = fixture.mainThird.previous().get().previous().get();
+      int[] point = renderedQuickOverviewPoint(graph, firstMove);
+      assertNotNull(point);
+      int left = ((int[]) getField(graph, "origParams"))[0];
+      CountingHistory history = (CountingHistory) fixture.board.getHistory();
+      history.mainEndReadCount = 0;
+      assertSame(firstMove, graph.resolveMoveTargetNode(left - 2, point[1]));
+      assertSame(firstMove, graph.resolveMoveTargetNode(left - 1, point[1]));
+      assertEquals(2, history.mainEndReadCount, "overview padding still requires fresh point sources.");
+
+      firstMove.getData().winrate = 90;
+      assertNull(
+          graph.resolveMoveTargetNode(left - 1, point[1]),
+          "an in-place analysis update must invalidate the padded hit before redraw.");
+      renderGraph(graph);
+      int[] updatedPoint = renderedQuickOverviewPoint(graph, firstMove);
+      assertNotNull(updatedPoint);
+      assertSame(firstMove, graph.resolveMoveTargetNode(left - 1, updatedPoint[1]));
+
+      history.mainEndReadCount = 0;
+      assertNull(graph.resolveMoveTargetNode(left - 3, updatedPoint[1]));
+      assertEquals(0, history.mainEndReadCount, "outside the overview padding must skip traversal.");
     } finally {
       env.close();
     }
