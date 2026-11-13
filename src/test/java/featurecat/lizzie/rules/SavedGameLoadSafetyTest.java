@@ -454,6 +454,7 @@ class SavedGameLoadSafetyTest {
       frame.mainPanel.setSize(1024, 768);
       frame.commentScrollPane = new JScrollPane();
       frame.commentEditPane = new JScrollPane();
+      frame.commentEditPane.setVisible(false); // The real frame starts without an open comment draft.
       frame.sidebarPanel = RulesLayerTestHarness.allocate(QuietSidebar.class);
       setFrameField("varTreeScrollPane", new JScrollPane());
       frame.listScrollpane = new JScrollPane();
