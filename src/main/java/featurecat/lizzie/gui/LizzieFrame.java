@@ -5300,7 +5300,31 @@ public class LizzieFrame extends JFrame {
   /** Internal history restoration keeps the pause policy and never starts file-open analysis. */
   public void synchronizeRestoredGame(boolean resumeAnalysis) {
     scheduleEngineSyncAndResumeAfterKifuLoad(
-        0, resumeAnalysis ? this::resumeForegroundAnalysisForConfirmedPosition : null, false);
+        0,
+        resumeAnalysis
+            ? new HistoryRestoreResumeAction(this::resumeForegroundAnalysisForConfirmedPosition)
+            : null,
+        false);
+  }
+
+  private record HistoryRestoreResumeAction(Runnable continuation) implements Runnable {
+    @Override
+    public void run() {
+      continuation.run();
+    }
+  }
+
+  private void resumeAfterKifuEngineSync(
+      int delayMillis, Runnable action, Runnable confirmedResume) {
+    if (action instanceof HistoryRestoreResumeAction) {
+      // The coordinator already completes on the EDT. Keep notPondering and the confirmed
+      // resume in this turn: another undo/redo must not observe a temporary stopped state
+      // and discard the running analysis intent. Retire older delayed resumes as usual.
+      kifuAnalysisResumeGeneration++;
+      confirmedResume.run();
+    } else {
+      scheduleResumeAnalysisAfterLoad(delayMillis, confirmedResume);
+    }
   }
 
   private void scheduleEngineSyncAndResumeAfterKifuLoad(int delayMillis, Runnable action) {
@@ -5561,7 +5585,6 @@ public class LizzieFrame extends JFrame {
 
               @Override
               public void onSynchronized() {
-                if (primary != null) primary.notPondering();
                 if (isCurrent()) {
                   if (synchronizedPosition != null
                       && !synchronizedPosition.completeEngineAlignment()) {
@@ -5569,11 +5592,13 @@ public class LizzieFrame extends JFrame {
                         root, rulesTarget, primary, primaryGeneration, mirror, delayMillis, action);
                     return;
                   }
+                  if (primary != null) primary.notPondering();
                   pendingKifuEngineSyncRoot = null;
                   canGoAfterload = true;
                   stopQuickAnalysisWarmupTimer();
-                  scheduleResumeAnalysisAfterLoad(
+                  resumeAfterKifuEngineSync(
                       delayMillis,
+                      action,
                       () -> {
                         if (isCurrentKifuRulesContext(
                                 root, rulesTarget, primary, primaryGeneration, mirror)
@@ -6213,7 +6238,6 @@ public class LizzieFrame extends JFrame {
 
               @Override
               public void onSynchronized() {
-                if (primary != null) primary.notPondering();
                 if (isCurrent()) {
                   if (synchronizedPosition == null
                       || !synchronizedPosition.completeEngineAlignment()) {
@@ -6228,10 +6252,12 @@ public class LizzieFrame extends JFrame {
                         action);
                     return;
                   }
+                  if (primary != null) primary.notPondering();
                   pendingKifuEngineSyncRoot = null;
                   canGoAfterload = true;
-                  scheduleResumeAnalysisAfterLoad(
+                  resumeAfterKifuEngineSync(
                       delayMillis,
+                      action,
                       () -> {
                         if (isCurrentKifuRulesContext(
                                 root, rulesTarget, primary, primaryGeneration, mirror)
