@@ -63,6 +63,20 @@ retain their own-engine comparison, sometimes two moves apart, with gain/loss ex
 the side that just played. The arrow points toward the new black-winrate boundary, including
 same-turn setup positions.
 
+## Analysis progress
+
+Analysis results, graph progress, and whole-game session state changes share the existing
+250ms comment/problem-list refresh interval. Each publication reads current data on the Swing
+event thread. Whole-game preparation, baseline/deep analysis, and pausing count as running;
+a paused or terminal session does not. The ordinary analysis engine remains a separate source
+of running state.
+
+Navigation, filter changes, and explicit list refreshes retain their immediate publication path.
+On whole-game completion, cancellation, or failure, the final problem list is published after
+move metadata settles, followed by a graph refresh. This final list publication bypasses the
+progress interval, and an intervening board or history replacement rejects the old completion.
+Metadata worker/callback coalescing remains the responsibility of `Board`.
+
 ## Implementation and verification
 
 This selectively adapts [upstream PR #736](https://github.com/wimi321/lizzieyzy-next/pull/736)
@@ -99,6 +113,9 @@ skipping.
 `AnalysisProgressDesktopTest` also feeds the production analysis result handler while nine of
 17 requests remain outstanding. It verifies that the graph and the main/independent player-name
 readings update without navigation or an explicit full refresh; engine I/O alone is controlled.
+It also waits for the intermediate and final problem-list counts and running state.
+The request/session regression suites cover JSON/GTP sidebar throttling, immediate user/filter
+updates, and preparing/paused/resumed/terminal state publication without analysis responses.
 
 ```bash
 mvn -B -Dfmt.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \

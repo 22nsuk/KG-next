@@ -82,7 +82,9 @@ class AnalysisProgressDesktopTest {
           () ->
               engine.waitFrame.isShowing()
                   && progressText(engine).endsWith("8/17")
-                  && renderedAnalyzedMoves() == 8);
+                  && renderedAnalyzedMoves() == 8
+                  && Lizzie.frame.getProblemListSnapshot().analyzedMoves == 7
+                  && Lizzie.frame.getProblemListSnapshot().analysisRunning);
       // Read already-published pixels, without refresh(), paintImmediately(), or navigation.
       // Both windows must update while nine engine requests are still outstanding.
       awaitEdt(
@@ -114,7 +116,9 @@ class AnalysisProgressDesktopTest {
               !engine.isAnalysisInProgress()
                   && !engine.waitFrame.isShowing()
                   && Lizzie.frame.isEnabled()
-                  && renderedAnalyzedMoves() == 17);
+                  && renderedAnalyzedMoves() == 17
+                  && Lizzie.frame.getProblemListSnapshot().analyzedMoves == 16
+                  && !Lizzie.frame.getProblemListSnapshot().analysisRunning);
       assertNoUnexpectedFailure();
       DesktopProbeProcess.phase(result, "final-result-painted-and-window-closed");
       Files.writeString(result, "PASS");
@@ -161,6 +165,9 @@ class AnalysisProgressDesktopTest {
           Lizzie.config.showWinrateLine = true;
           Lizzie.config.showScoreLeadLine = true;
           Lizzie.config.showNameInBoard = true;
+          Lizzie.config.showComment = true;
+          Lizzie.config.isShowingBlunderTabel = true;
+          Lizzie.frame.setCommentPaneContent();
           Lizzie.config.uiConfig.put(NameWinrates.SHOWN_KEY, true);
           StringBuilder sgf = new StringBuilder("(;FF[4]GM[1]SZ[19]KM[7.5]PB[Black]PW[White]");
           for (int move = 0; move < 17; move++) {
