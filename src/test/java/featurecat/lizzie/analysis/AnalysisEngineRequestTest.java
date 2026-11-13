@@ -2520,6 +2520,108 @@ class AnalysisEngineRequestTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"warning", "action", "partial"})
+  void localJsonWaitsForFinalAnalysisAfterNonTerminalResponses(String kind) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger completions = new AtomicInteger();
+      AtomicInteger failures = new AtomicInteger();
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      JSONObject response = new JSONObject().put("id", "1");
+      if (kind.equals("warning")) {
+        response.put("field", "clientTag").put("warning", "Unused field: clientTag");
+      } else if (kind.equals("action")) {
+        response.put("action", "terminate").put("terminateId", "old-request");
+      } else {
+        response = new JSONObject(analysisResult(1, 500, 70.0)).put("isDuringSearch", true);
+      }
+      engine.synchronousEngineLine = response.toString();
+
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertTrue(engine.isAnalysisInProgress());
+      assertEquals(0, completions.get());
+      assertEquals(0, failures.get());
+      assertEquals(0, data.getPlayouts());
+
+      invokeAnalysisEngineParseLine(engine, analysisResult(1, 500, 60.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(1, completions.get());
+      assertEquals(0, failures.get());
+      assertFalse(engine.isAnalysisInProgress());
+      assertEquals(500, data.getPlayouts());
+      assertEquals(60.0, data.bestMoves.get(0).winrate, 0.001);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(
+      strings = {
+        "{\"error\":\"Invalid rules\",\"field\":\"rules\"}",
+        "{\"warning\":\"Rules were replaced\",\"field\":\"rules\"}",
+        "{\"warning\":\"Unused humanSLProfile\",\"field\":\"overrideSettings\"}",
+        "{\"noResults\":true,\"isDuringSearch\":false}"
+      })
+  void localJsonRejectsFailedOrChangedRequestsWithoutApplyingLateResults(String envelope)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
+      BoardHistoryList history = new BoardHistoryList(data);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger completions = new AtomicInteger();
+      AtomicInteger failures = new AtomicInteger();
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
+
+      invokeAnalysisEngineParseLine(engine, new JSONObject(envelope).put("id", "1").toString());
+      invokeAnalysisEngineParseLine(engine, analysisResult(1, 500, 60.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(1, failures.get());
+      assertEquals(0, completions.get());
+      assertEquals(0, engine.pendingRequestCount());
+      assertEquals(0, data.getPlayouts());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"0", "foreign-request"})
+  void localJsonIgnoresUnownedResponsesBeforeReadingTheirPayload(String staleId) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      AtomicInteger failures = new AtomicInteger();
+      AtomicInteger completions = new AtomicInteger();
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      assertEquals(1, engine.startWholeGameRequest(List.of(history.getStart()), 500, false));
+
+      for (String envelope :
+          List.of(
+              "{\"warning\":\"Rules were replaced\",\"field\":\"rules\"}",
+              "{\"error\":\"Old request failed\"}",
+              "{\"noResults\":true}",
+              "{\"moveInfos\":[{}]}")) {
+        invokeAnalysisEngineParseLine(
+            engine, new JSONObject(envelope).put("id", staleId).toString());
+      }
+      assertTrue(engine.isAnalysisInProgress());
+      invokeAnalysisEngineParseLine(engine, analysisResult(1, 500, 60.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(0, failures.get());
+      assertEquals(1, completions.get());
+      assertEquals(500, history.getStart().getData().getPlayouts());
+    }
+  }
+
   @Test
   void localWholeGameUsesRootVisitsWithoutRequiringTopChildToReachTarget() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
