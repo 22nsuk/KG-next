@@ -670,6 +670,7 @@ public class LizzieFrame extends JFrame {
 
   /** Creates a window */
   public LizzieFrame() {
+    SwingClipboardActions.install();
     setTitle(DEFAULT_TITLE);
     boardRenderer = new BoardRenderer(false);
     subBoardRenderer = new SubBoardRenderer(false);

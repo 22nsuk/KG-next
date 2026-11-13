@@ -1,9 +1,11 @@
 package featurecat.lizzie.gui;
 
 import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.ClipboardOwner;
 import java.awt.datatransfer.Transferable;
 
-/** Orders the application's explicit clipboard writes, including deferred SGF copies. */
+/** Orders application and Swing clipboard writes against deferred SGF copies. */
 final class ClipboardCopy {
   private static long revision;
 
@@ -14,7 +16,13 @@ final class ClipboardCopy {
   }
 
   static synchronized void setContents(Transferable contents) {
-    publish(beginRequest(), contents);
+    setContents(Toolkit.getDefaultToolkit().getSystemClipboard(), contents, null);
+  }
+
+  static synchronized void setContents(
+      Clipboard clipboard, Transferable contents, ClipboardOwner owner) {
+    ++revision;
+    clipboard.setContents(contents, owner);
   }
 
   static synchronized boolean publish(long request, Transferable contents) {

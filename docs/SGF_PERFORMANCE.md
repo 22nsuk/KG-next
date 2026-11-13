@@ -29,7 +29,14 @@ EDT only for the latest copy request and its still-live frame/config. Later boar
 edits do not change that captured text. Explicit application clipboard writes
 (board images, URLs, diagnostics, commands and setup paths) share `ClipboardCopy`:
 each new copy retires older SGF publication, and the revision check and clipboard
-write are atomic. Its bounded serial queue is separate from
+write are atomic. Standard Swing `copy`/`cut` actions join that same boundary,
+including text-component methods, context menus, keyboard shortcuts and table
+copies. Registration covers existing windows and newly added controls; local
+action overrides survive UI refreshes. The original transfer handler creates the
+Transferable and performs cut deletion, paste and drag-and-drop. Empty or refused
+exports do not retire SGF work. Custom copy actions must use `ClipboardCopy`;
+other applications' clipboard writes are outside this in-process ordering.
+Its bounded serial queue is separate from
 disk saves, so Copy does not alter saved-list revisions or Open-after-Save barriers. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 

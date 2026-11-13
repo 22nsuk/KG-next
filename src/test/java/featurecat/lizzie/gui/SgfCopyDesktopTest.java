@@ -13,6 +13,7 @@ import java.awt.Window;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.image.BufferedImage;
+import java.awt.event.ActionEvent;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +26,12 @@ import java.util.concurrent.TimeUnit;
 import javax.swing.JDialog;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.JPasswordField;
+import javax.swing.JTable;
+import javax.swing.TransferHandler;
+import javax.swing.text.DefaultEditorKit;
 import javax.swing.SwingUtilities;
 import jdk.jfr.Recording;
 import jdk.jfr.consumer.RecordingFile;
@@ -144,6 +151,80 @@ class SgfCopyDesktopTest {
       });
     } finally {
       edt(() -> { Lizzie.webBoardManager = previousManager; return null; });
+    }
+    DesktopProbeProcess.phase(result, "copy-comment-ownership");
+    JIMSendTextPane comment = edt(() -> (JIMSendTextPane)
+        field(LizzieFrame.class, "commentEditTextPane").get(Lizzie.frame));
+    for (String operation : List.of("copy", "cut")) {
+      String text = "주석 " + operation;
+      assertTextCopyWins(queue, worker, text, () -> {
+        comment.setText(text);
+        comment.selectAll();
+        JMenuItem action = findMenuItem(comment.getPop().getComponents(),
+            Lizzie.resourceBundle.getString("JTextPane." + operation));
+        assertNotNull(action);
+        action.doClick();
+        assertEquals(operation.equals("cut") ? "" : text, comment.getText());
+      });
+    }
+    DesktopProbeProcess.phase(result, "copy-standard-swing");
+    JPanel controls = edt(() -> {
+      JPanel panel = new JPanel();
+      Lizzie.frame.getLayeredPane().add(panel);
+      return panel;
+    });
+    try {
+      for (boolean refreshUi : List.of(false, true)) {
+        assertTextCopyWins(queue, worker, "late field", () -> {
+          JTextField field = new JTextField("late field");
+          controls.add(field); // Added after startup; no explicit clipboard registration.
+          if (refreshUi) SwingUtilities.updateComponentTreeUI(controls);
+          TransferHandler original = field.getTransferHandler();
+          field.selectAll();
+          field.getActionMap().get(DefaultEditorKit.copyAction).actionPerformed(
+              new ActionEvent(field, ActionEvent.ACTION_PERFORMED, "keyboard copy"));
+          assertSame(original, field.getTransferHandler(), "keep the native paste/DnD handler");
+          field.setText("");
+          field.paste();
+          assertEquals("late field", field.getText());
+          controls.remove(field);
+        });
+      }
+      assertTextCopyWins(queue, worker, "table cell", () -> {
+        JTable table = new JTable(new Object[][] {{"table cell"}}, new Object[] {"column"});
+        controls.add(table);
+        table.selectAll();
+        table.getActionMap().get("copy").actionPerformed(
+            new ActionEvent(table, ActionEvent.ACTION_PERFORMED, "copy"));
+        controls.remove(table);
+      });
+      try (var blocked = new WorkerBlock(worker)) {
+        blocked.awaitStarted();
+        String noOpExpected = edt(() -> {
+          String captured = SGFParser.saveToString(false);
+          Lizzie.frame.copySgf();
+          JTextField field = new JTextField("read only");
+          controls.add(field);
+          field.copy(); // Empty selection must not retire the SGF copy.
+          field.setEditable(false);
+          field.selectAll();
+          field.cut();
+          assertEquals("read only", field.getText());
+          JPasswordField password = new JPasswordField("secret");
+          controls.add(password);
+          password.selectAll();
+          password.copy();
+          password.cut();
+          assertEquals("secret", new String(password.getPassword()));
+          controls.removeAll();
+          return captured;
+        });
+        blocked.release();
+        queue.pending().get(20, TimeUnit.SECONDS);
+        assertEquals(noOpExpected, clipboard(), "non-copy actions must not cancel SGF publication");
+      }
+    } finally {
+      edt(() -> { Lizzie.frame.getLayeredPane().remove(controls); return null; });
     }
     // A new SGF request after another copy must still be allowed to publish.
     edt(() -> {
