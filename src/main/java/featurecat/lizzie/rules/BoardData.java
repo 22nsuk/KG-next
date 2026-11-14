@@ -1238,7 +1238,7 @@ public class BoardData implements Cloneable {
   }
 
   /** Undo-only metadata clone; mutable fields are detached and live permissions are retired. */
-  synchronized BoardData copyRestoreMetadata() {
+  synchronized BoardData copyRestoreMetadata(Map<String, String> analysisStrings) {
     BoardData copy;
     try {
       copy = (BoardData) super.clone();
@@ -1250,10 +1250,10 @@ public class BoardData implements Cloneable {
     copy.lastMove = copyLastMove(lastMove);
     validateNodeKind(copy.nodeKind, copy.lastMove);
     copy.zobrist = zobrist == null ? null : zobrist.clone();
-    copy.bestMoves = copyHistoryMoves(bestMoves);
-    copy.bestMoves2 = copyHistoryMoves(bestMoves2);
-    copy.bestMovesOutOfRange = copyHistoryMoves(bestMovesOutOfRange);
-    copy.bestMoves2OutOfRange = copyHistoryMoves(bestMoves2OutOfRange);
+    copy.bestMoves = copyHistoryMoves(bestMoves, analysisStrings);
+    copy.bestMoves2 = copyHistoryMoves(bestMoves2, analysisStrings);
+    copy.bestMovesOutOfRange = copyHistoryMoves(bestMovesOutOfRange, analysisStrings);
+    copy.bestMoves2OutOfRange = copyHistoryMoves(bestMoves2OutOfRange, analysisStrings);
     copy.estimateArray = compactEstimateArray(estimateArray);
     copy.estimateArray2 = compactEstimateArray(estimateArray2);
     copy.properties = properties.isEmpty() ? Map.of() : copyProperties(properties);
@@ -1268,12 +1268,40 @@ public class BoardData implements Cloneable {
     return copy;
   }
 
-  private static List<MoveData> copyHistoryMoves(List<MoveData> moves) {
+  private static List<MoveData> copyHistoryMoves(
+      List<MoveData> moves, Map<String, String> analysisStrings) {
     if (moves == null) return null;
     if (moves.isEmpty()) return List.of();
     List<MoveData> copied = new ArrayList<>(moves.size());
-    for (MoveData move : moves) copied.add(move == null ? null : move.copyForHistory());
+    for (MoveData move : moves) {
+      MoveData copy = move == null ? null : move.copyForHistory();
+      if (copy != null) {
+        copy.coordinate = reuseAnalysisString(copy.coordinate, analysisStrings);
+        reuseAnalysisStrings(copy.variation, analysisStrings);
+        reuseAnalysisStrings(copy.pvVisits, analysisStrings);
+        reuseAnalysisStrings(copy.pvEdgeVisits, analysisStrings);
+      }
+      copied.add(copy);
+    }
     return copied;
+  }
+
+  private static void reuseAnalysisStrings(List<String> values, Map<String, String> strings) {
+    if (values == null) return;
+    for (int i = 0; i < values.size(); i++) {
+      values.set(i, reuseAnalysisString(values.get(i), strings));
+    }
+  }
+
+  private static String reuseAnalysisString(String value, Map<String, String> strings) {
+    // Parser-created PV/visit tokens often repeat across the tree. Share only immutable strings
+    // inside this capture; lists and candidates stay independent. Bound temporary work/storage
+    // for unusual tokens or mostly unique visits without changing or discarding their values.
+    if (value == null || value.length() > 64) return value;
+    String existing = strings.get(value);
+    if (existing != null) return existing;
+    if (strings.size() < 4096) strings.put(value, value);
+    return value;
   }
 
   /** Restore writable empty containers before publishing the private snapshot metadata. */

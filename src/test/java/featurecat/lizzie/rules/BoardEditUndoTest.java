@@ -8,12 +8,115 @@ import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.MoveData;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class BoardEditUndoTest {
+  @Test
+  void restoreSharesRepeatedAnalysisStringsWhileKeepingCandidatesAndListsIndependent()
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[])", true);
+      BoardData root = history.getStart().getData();
+      BoardData child = history.getStart().next().orElseThrow().getData();
+      List<String> expected = Arrays.asList("C3", "Q16", null, "", " D4", "d4", "한글");
+      List<List<MoveData>> originals = new ArrayList<>();
+      for (BoardData data : List.of(root, child)) {
+        data.bestMoves = new ArrayList<>();
+        data.bestMoves2 = new ArrayList<>();
+        data.bestMovesOutOfRange = new ArrayList<>();
+        data.bestMoves2OutOfRange = new ArrayList<>();
+        for (List<MoveData> moves : List.of(data.bestMoves, data.bestMoves2,
+            data.bestMovesOutOfRange, data.bestMoves2OutOfRange)) {
+          MoveData move = candidate(1);
+          move.coordinate = new String("C3");
+          move.variation = new ArrayList<>();
+          for (String value : expected) {
+            move.variation.add(value == null ? null : new String(value));
+          }
+          move.pvVisits = new ArrayList<>(Arrays.asList(new String("001"), "1", null, "+1"));
+          move.pvEdgeVisits = new ArrayList<>(Arrays.asList(new String("001"), " 1 ", "1.0"));
+          moves.add(move);
+          moves.add(null);
+          MoveData empty = new MoveData();
+          empty.pvVisits = new ArrayList<>();
+          moves.add(empty);
+          originals.add(moves);
+        }
+      }
+      BoardHistorySnapshot snapshot = history.copyForRestore(null);
+      for (List<MoveData> moves : originals) {
+        moves.get(0).coordinate = "pass";
+        moves.get(0).variation.clear();
+        moves.get(0).pvVisits.set(0, "changed");
+        moves.get(0).pvEdgeVisits.clear();
+      }
+
+      BoardHistoryList restored = snapshot.restore();
+      List<MoveData> copies = new ArrayList<>();
+      for (BoardData data : List.of(restored.getStart().getData(),
+          restored.getStart().next().orElseThrow().getData())) {
+        for (List<MoveData> moves : List.of(data.bestMoves, data.bestMoves2,
+            data.bestMovesOutOfRange, data.bestMoves2OutOfRange)) {
+          MoveData move = moves.get(0);
+          assertEquals("C3", move.coordinate);
+          assertEquals(expected, move.variation);
+          assertEquals(Arrays.asList("001", "1", null, "+1"), move.pvVisits);
+          assertEquals(List.of("001", " 1 ", "1.0"), move.pvEdgeVisits);
+          assertSame(copies.isEmpty() ? move.coordinate : copies.get(0).coordinate,
+              move.variation.get(0), "repeated immutable tokens do not need separate objects");
+          assertSame(move.pvVisits.get(0), move.pvEdgeVisits.get(0));
+          assertNull(moves.get(1));
+          assertNull(moves.get(2).variation);
+          assertNull(moves.get(2).pvEdgeVisits);
+          moves.get(2).pvVisits.add("writable");
+          copies.add(move);
+        }
+      }
+      for (int i = 0; i < copies.size(); i++) {
+        MoveData move = copies.get(i);
+        assertNotSame(originals.get(i).get(0), move);
+        assertEquals(expected, move.variation, "editing another restored candidate stays local");
+        assertEquals("001", move.pvVisits.get(0));
+        assertEquals("001", move.pvEdgeVisits.get(0));
+        move.variation.set(0, "pass");
+        move.pvVisits.clear();
+        move.pvEdgeVisits.add("new");
+        assertEquals("changed", originals.get(i).get(0).pvVisits.get(0));
+      }
+    }
+  }
+
+  @Test
+  void analysisStringReuseIsBoundedAndPreservesUnusualValuesAfterTheLimit() {
+    BoardData source = BoardData.empty(5, 5);
+    MoveData move = new MoveData();
+    move.variation = new ArrayList<>();
+    for (int i = 0; i < 4300; i++) move.variation.add("token-" + i);
+    move.variation.addAll(Arrays.asList(new String("token-0"), null, "x".repeat(64),
+        "x".repeat(65), "Aa", "BB", "9223372036854775808", "-0", "0"));
+    source.bestMoves.add(move);
+    Map<String, String> strings = new HashMap<>();
+    BoardData copy = source.copyRestoreMetadata(strings);
+    assertEquals(4096, strings.size(), "temporary dictionary must stop growing");
+    assertEquals(move.variation, copy.bestMoves.get(0).variation);
+    assertSame(copy.bestMoves.get(0).variation.get(0),
+        copy.bestMoves.get(0).variation.get(4300), "known tokens still reuse a full dictionary");
+    move.variation.clear();
+    assertEquals(4309, copy.bestMoves.get(0).variation.size());
+
+    Map<String, String> nextCapture = new HashMap<>();
+    source.bestMoves.get(0).variation.add("x".repeat(65));
+    BoardData next = source.copyRestoreMetadata(nextCapture);
+    assertTrue(nextCapture.isEmpty(), "long tokens are retained without hashing/interning");
+    assertEquals(List.of("x".repeat(65)), next.bestMoves.get(0).variation);
+  }
+
   @Test
   void undoRestoresIndependentPlayableAnalysisAndRawProperties() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
