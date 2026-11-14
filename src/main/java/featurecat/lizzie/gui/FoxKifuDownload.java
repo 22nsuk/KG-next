@@ -545,14 +545,17 @@ public class FoxKifuDownload extends JFrame {
       }
       if (jsonObject.has("chess")) {
         String kifu = jsonObject.getString("chess");
+        GetFoxRequest source = foxReq;
         showProgressNotice(Lizzie.frame.kifuLoadText("KifuLoad.parsing"));
-        Lizzie.frame.loadDownloadedSgfString(
+        Lizzie.frame.loadSgfStringAsync(
             kifu,
             0,
             Lizzie.config.readKomi,
             false,
             null,
-            this::completeFoxKifuLoadRequest);
+            () -> foxReq == source).thenAcceptAsync(loaded -> {
+              if (foxReq == source) completeFoxKifuLoadRequest(loaded);
+            }, SwingUtilities::invokeLater);
       }
       if (isFoxPayloadWithoutContent(jsonObject)) {
         failCurrentFoxRequest(jsonObject, jsonObject.optString("resultstr", string));

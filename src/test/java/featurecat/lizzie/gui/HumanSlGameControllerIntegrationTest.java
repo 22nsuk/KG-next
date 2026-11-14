@@ -1469,8 +1469,10 @@ class HumanSlGameControllerIntegrationTest {
     }
   }
 
-  @Test
-  void downloadedSgfCompletionWaitsForDeferredCoachTeardownAndActualLoad() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void downloadedSgfCompletionWaitsForDeferredCoachTeardownAndActualLoad(boolean asynchronous)
+      throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
       AtomicReference<Runnable> exitWorker = new AtomicReference<>();
@@ -1483,11 +1485,17 @@ class HumanSlGameControllerIntegrationTest {
       List<Boolean> completions = new CopyOnWriteArrayList<>();
       AtomicBoolean accepted = new AtomicBoolean();
 
-      SwingUtilities.invokeAndWait(
-          () ->
-              accepted.set(
-                  frame.loadDownloadedSgfString(
-                      "(;FF[4]SZ[3];B[aa])", 0, false, false, null, completions::add)));
+      SwingUtilities.invokeAndWait(() -> {
+        if (asynchronous) {
+          var result = frame.loadSgfStringAsync("(;FF[4]SZ[3];B[aa])", 0, false, false, null);
+          assertFalse(result.isDone());
+          result.thenAccept(completions::add);
+          accepted.set(true);
+        } else {
+          accepted.set(frame.loadDownloadedSgfString(
+              "(;FF[4]SZ[3];B[aa])", 0, false, false, null, completions::add));
+        }
+      });
 
       assertTrue(accepted.get(), "legacy return reports accepted deferred work");
       assertTrue(completions.isEmpty(), "accepted is not actual load completion");
@@ -1499,6 +1507,7 @@ class HumanSlGameControllerIntegrationTest {
       worker.join(1000L);
       assertFalse(worker.isAlive());
       SwingUtilities.invokeAndWait(() -> {});
+      SgfReadTestSupport.awaitPending();
 
       assertEquals(List.of(true), completions);
       assertEquals(1, Lizzie.board.getHistory().getStart().numberOfChildren());
@@ -1987,8 +1996,9 @@ class HumanSlGameControllerIntegrationTest {
     }
   }
 
-  @Test
-  void downloadedSgfCompletionFailsWhenAnotherExitContinuationAlreadyOwnsTeardown()
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void downloadedSgfCompletionFailsWhenAnotherExitContinuationAlreadyOwnsTeardown(boolean asynchronous)
       throws Exception {
     try (CoachEnvironment env = CoachEnvironment.open()) {
       HumanSlGameController controller = env.startCoach(new BlockingHumanSlRunner());
@@ -2003,16 +2013,17 @@ class HumanSlGameControllerIntegrationTest {
       controller.abortAndThen(() -> {});
       assertNotNull(exitWorker.get());
 
-      SwingUtilities.invokeAndWait(
-          () ->
-              assertTrue(
-                  frame.loadDownloadedSgfString(
-                      "(;FF[4]SZ[3];B[aa])",
-                      0,
-                      false,
-                      false,
-                      null,
-                      completions::add)));
+      SwingUtilities.invokeAndWait(() -> {
+        if (asynchronous) {
+          var result = frame.loadSgfStringAsync("(;FF[4]SZ[3];B[aa])", 0, false, false, null);
+          assertTrue(result.isDone());
+          assertFalse(result.join());
+          result.thenAccept(completions::add);
+        } else {
+          assertTrue(frame.loadDownloadedSgfString(
+              "(;FF[4]SZ[3];B[aa])", 0, false, false, null, completions::add));
+        }
+      });
 
       assertEquals(List.of(false), completions);
       assertEquals(0, Lizzie.board.getHistory().getMoveNumber());

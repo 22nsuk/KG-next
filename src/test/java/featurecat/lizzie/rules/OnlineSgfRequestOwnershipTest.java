@@ -9,6 +9,7 @@ import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.SyncDiagnosticsRecorder;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.OnlineDialog;
+import featurecat.lizzie.gui.SgfReadTestSupport;
 import java.awt.AWTEvent;
 import java.awt.EventQueue;
 import java.awt.Toolkit;
@@ -116,6 +117,7 @@ class OnlineSgfRequestOwnershipTest {
         frame.shutdownKifuEngineSyncCoordinator();
         queue.remove();
       });
+      SgfReadTestSupport.awaitPending();
     } finally {
       if (rules != null) rules.close();
       Lizzie.resourceBundle = previousResources;
@@ -132,6 +134,31 @@ class OnlineSgfRequestOwnershipTest {
     start(response);
     finish(response);
     assertNewGame();
+  }
+
+  @Test
+  void directOnlineStringWithoutAnOwnershipGuardStillLoads() throws Exception {
+    SwingUtilities.invokeAndWait(() -> dialog.parseSgf(NEW, "", 0, false, true));
+    SgfReadTestSupport.awaitPending();
+    assertNewGame();
+  }
+
+  @Test
+  void stopWhileStringPreparationIsQueuedPreservesCurrentGame() throws Exception {
+    var current = Lizzie.board.getHistory();
+    var file = java.nio.file.Files.writeString(directory.resolve("occupied.sgf"), OLD);
+    try (var read = SgfReadTestSupport.block()) {
+      frame.openFileAsync(file.toFile(), true, false);
+      read.awaitStarted();
+      Response response = response("/preparing", NEW);
+      start(response);
+      response.release.countDown();
+      await(queue.queued);
+      SwingUtilities.invokeAndWait(dialog::stopSync);
+      read.release();
+      SgfReadTestSupport.awaitPending();
+      assertSame(current, Lizzie.board.getHistory());
+    }
   }
 
   @Test
@@ -194,15 +221,18 @@ class OnlineSgfRequestOwnershipTest {
         assertEquals(true, finish.invoke(frame));
       } catch (ReflectiveOperationException e) { throw new AssertionError(e); }
     });
+    SgfReadTestSupport.awaitPending();
     if (stopBeforeRestore) assertSame(current, Lizzie.board.getHistory());
     else assertNewGame();
   }
 
   @ParameterizedTest
-  @CsvSource({"true,true,true", "false,true,true", "true,false,true", "true,true,false"})
+  @CsvSource({"true,true,true,false", "false,true,true,false", "true,false,true,false",
+      "true,true,false,false", "false,true,true,true"})
   void userPauseCleanupPreservesResumeWhenDeferredResponseIsStale(
-      boolean stopBeforeRestore, boolean requestResume, boolean restoreSucceeded) throws Exception {
-    Response response = response("/pause-cleanup", NEW);
+      boolean stopBeforeRestore, boolean requestResume, boolean restoreSucceeded, boolean invalidSgf)
+      throws Exception {
+    Response response = response("/pause-cleanup", invalidSgf ? "(;AB[aa:])" : NEW);
     start(response);
     BoardHistoryList current = Lizzie.board.getHistory();
     // Hold the asynchronous engine-restore boundary. The request, deferred load, user resume
@@ -227,24 +257,13 @@ class OnlineSgfRequestOwnershipTest {
         requestResume,
         field(LizzieFrame.class, "pendingForegroundResumeAfterCleanup").getBoolean(frame));
     assertTrue(engine.events.isEmpty(), "Resume must wait for engine restoration");
-    Method cleanup =
-        LizzieFrame.class.getDeclaredMethod(
-            "finishUserAnalysisPauseCleanup", long.class, boolean.class);
-    cleanup.setAccessible(true);
-    long generation = field(LizzieFrame.class, "analysisControlCleanupGeneration").getLong(frame);
-    SwingUtilities.invokeAndWait(
-        () -> {
-          try {
-            cleanup.invoke(frame, generation, restoreSucceeded);
-          } catch (ReflectiveOperationException e) {
-            throw new AssertionError(e);
-          }
-        });
+    finishPauseCleanup(restoreSucceeded);
 
-    if (stopBeforeRestore) assertSame(current, Lizzie.board.getHistory());
+    SgfReadTestSupport.awaitPending();
+    if (stopBeforeRestore || invalidSgf) assertSame(current, Lizzie.board.getHistory());
     else assertNewGame();
     assertEquals(
-        stopBeforeRestore && requestResume && restoreSucceeded
+        (stopBeforeRestore || invalidSgf) && requestResume && restoreSucceeded
             ? List.of("sync", "ponder")
             : List.of(),
         engine.events,
@@ -255,6 +274,54 @@ class OnlineSgfRequestOwnershipTest {
     if (stopBeforeRestore) {
       assertEquals(!requestResume || !restoreSucceeded, frame.isUserAnalysisPaused());
     }
+  }
+
+  @Test
+  void pendingUserResumeWaitsForTheLatestPreparedStringAndSurvivesItsCancellation() throws Exception {
+    var current = Lizzie.board.getHistory();
+    var file = java.nio.file.Files.writeString(directory.resolve("occupied.sgf"), OLD);
+    try (var read = SgfReadTestSupport.block()) {
+      frame.openFileAsync(file.toFile(), true, false);
+      read.awaitStarted();
+      SwingUtilities.invokeAndWait(() -> {
+        setFrame("analysisControlCleanupInProgress", true);
+        setFrame("userAnalysisPaused", true);
+      });
+      Response response = response("/deferred-and-superseded", NEW);
+      start(response);
+      response.release.countDown();
+      await(queue.queued);
+      SwingUtilities.invokeAndWait(() -> {});
+      assertNotNull(field(LizzieFrame.class, "pendingKifuOpen").get(frame));
+      ResumeTrackingLeelaz engine = new ResumeTrackingLeelaz();
+      Lizzie.setPrimaryEngine(engine);
+      EngineManager.isEmpty = false;
+      SwingUtilities.invokeAndWait(frame::togglePonderMannul);
+      finishPauseCleanup(true);
+      var latest = frame.loadSgfStringAsync(OLD, 0, true, false, null);
+      SwingUtilities.invokeAndWait(() -> {});
+      SwingUtilities.invokeAndWait(() -> {});
+      assertFalse(latest.isDone());
+      assertTrue(engine.events.isEmpty(), "a superseded request cannot resume during the latest preparation");
+      SwingUtilities.invokeAndWait(() -> latest.cancel(false));
+      SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(List.of("sync", "ponder"), engine.events);
+      read.release();
+      SgfReadTestSupport.awaitPending();
+      assertSame(current, Lizzie.board.getHistory());
+      assertEquals(List.of("sync", "ponder"), engine.events, "resume is delivered once");
+    }
+  }
+
+  private void finishPauseCleanup(boolean restoreSucceeded) throws Exception {
+    Method cleanup = LizzieFrame.class.getDeclaredMethod(
+        "finishUserAnalysisPauseCleanup", long.class, boolean.class);
+    cleanup.setAccessible(true);
+    long generation = field(LizzieFrame.class, "analysisControlCleanupGeneration").getLong(frame);
+    SwingUtilities.invokeAndWait(() -> {
+      try { cleanup.invoke(frame, generation, restoreSucceeded); }
+      catch (ReflectiveOperationException e) { throw new AssertionError(e); }
+    });
   }
 
   private Response response(String path, String sgf) {
@@ -297,6 +364,7 @@ class OnlineSgfRequestOwnershipTest {
     response.release.countDown();
     await(queue.queued);
     SwingUtilities.invokeAndWait(() -> {});
+    SgfReadTestSupport.awaitPending();
   }
 
   private void assertNewGame() {

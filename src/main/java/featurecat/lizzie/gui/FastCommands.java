@@ -10,9 +10,7 @@ import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.Window;
-import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.StringSelection;
-import java.awt.datatransfer.Transferable;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.ComponentAdapter;
@@ -125,9 +123,7 @@ public class FastCommands extends JDialog {
             public void actionPerformed(ActionEvent e) {
               String command = txtCmd.getText();
               Lizzie.gtpConsole.txtCommand.setText(command);
-              Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-              Transferable transferableString = new StringSelection(command);
-              clipboard.setContents(transferableString, null);
+              ClipboardCopy.setContents(new StringSelection(command));
             }
           });
       JButton send = new JFontButton(Lizzie.resourceBundle.getString("GtpConsolePane.send"));

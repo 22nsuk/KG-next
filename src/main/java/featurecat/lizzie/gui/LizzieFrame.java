@@ -65,7 +65,6 @@ import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.*;
-import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
@@ -4520,6 +4519,7 @@ public class LizzieFrame extends JFrame {
         null);
   }
 
+  /** Synchronous compatibility entry; interactive callers use {@link #loadSgfStringAsync}. */
   public boolean loadSgfString(
       String sgfContent,
       int resumeDelayMillis,
@@ -4605,6 +4605,80 @@ public class LizzieFrame extends JFrame {
     }
   }
 
+  /**
+   * Prepares a captured string/options off the EDT. True means the game was applied, not merely
+   * accepted and not that engine synchronization finished. Superseded requests complete false.
+   */
+  public java.util.concurrent.CompletableFuture<Boolean> loadSgfStringAsync(
+      String sgfContent, int resumeDelayMillis, boolean readKomi,
+      boolean resetAnalysisWindows, Runnable afterLoad) {
+    return loadSgfStringAsync(
+        sgfContent, resumeDelayMillis, readKomi, resetAnalysisWindows, afterLoad, () -> true);
+  }
+
+  java.util.concurrent.CompletableFuture<Boolean> loadSgfStringAsync(
+      String sgfContent, int resumeDelayMillis, boolean readKomi,
+      boolean resetAnalysisWindows, Runnable afterLoad, BooleanSupplier stillCurrent) {
+    var result = new java.util.concurrent.CompletableFuture<Boolean>();
+    BooleanSupplier requestCurrent = stillCurrent == null ? () -> true : stillCurrent;
+    Runnable request = () -> beginInteractiveStringOpen(
+        sgfContent, SGFParser.ParseOptions.capture(readKomi), Lizzie.config.loadSgfLast,
+        resumeDelayMillis, resetAnalysisWindows, afterLoad, Lizzie.config, requestCurrent, result);
+    if (SwingUtilities.isEventDispatchThread()) request.run();
+    else SwingUtilities.invokeLater(request);
+    return result;
+  }
+
+  private void beginInteractiveStringOpen(
+      String sgfContent, SGFParser.ParseOptions options, boolean loadLast,
+      int resumeDelayMillis, boolean resetAnalysisWindows, Runnable afterLoad,
+      Config expectedConfig, BooleanSupplier stillCurrent,
+      java.util.concurrent.CompletableFuture<Boolean> result) {
+    if (localSgfOpenClosed || result.isDone() || Lizzie.frame != this
+        || Lizzie.config != expectedConfig || !stillCurrent.getAsBoolean()) {
+      result.complete(false);
+      return;
+    }
+    Runnable retry = () -> beginInteractiveStringOpen(
+        sgfContent, options, loadLast, resumeDelayMillis, resetAnalysisWindows,
+        afterLoad, expectedConfig, stillCurrent, result);
+    Runnable retired = () -> result.complete(false);
+    // Preserve string import's coach -> quick-analysis teardown order, and acquire a selection
+    // only after admission. A rejected coach continuation cannot retire an accepted file open.
+    if (deferUntilHumanSlExit(retry, retired)
+        || deferKifuOpenUntilAutomaticQuickAnalysisRestored(retry, retired)) return;
+    if (rejectFileOpenWhilePlaying()) {
+      result.complete(false);
+      return;
+    }
+    prepareCurrentRecordOpen(stillCurrent, result, current ->
+        SgfReadQueue.SHARED.prepare(sgfContent, options).whenComplete((prepared, failure) -> {
+          try {
+            if (!current.getAsBoolean() || failure instanceof java.util.concurrent.CancellationException
+                || kifuOpenForegroundBusy()) {
+              result.complete(false);
+            } else if (failure != null || !(prepared instanceof SgfReadQueue.PreparedSgf sgf)) {
+              SgfObservation.record("import", "failed", null, failure);
+              result.complete(false);
+              showKifuLoadError(failure);
+            } else {
+              try (var phase = new featurecat.lizzie.logging.SgfPhase("string-apply")) {
+                result.complete(applySgfString(
+                    sgf.game(), resumeDelayMillis, options.readKomi(), loadLast,
+                    resetAnalysisWindows, afterLoad, false, null));
+              }
+            }
+          } catch (RuntimeException failureDuringApply) {
+            SgfObservation.record("import", "failed", null, failureDuringApply);
+            result.complete(false);
+            showKifuLoadError(failureDuringApply);
+          }
+        }), failure -> {
+          SgfObservation.record("import", "failed", null, failure);
+          showKifuLoadError(failure);
+        });
+  }
+
   private boolean loadSgfStringInternal(
       String sgfContent,
       String initialMessage,
@@ -4682,17 +4756,31 @@ public class LizzieFrame extends JFrame {
     }
     if (showFeedback) {
       beginKifuLoad(initialMessage);
+      updateKifuLoad(kifuLoadText("KifuLoad.parsing"));
     }
+    SGFParser.PreparedGame prepared = null;
+    try {
+      prepared = SGFParser.prepareFileGame(
+          SGFParser.prepareFileContent(sgfContent), SGFParser.ParseOptions.capture(readKomi));
+    } catch (RuntimeException invalidSgf) {
+      SgfObservation.record("import", "failed", null, invalidSgf);
+    }
+    return applySgfString(
+        prepared, resumeDelayMillis, readKomi, Lizzie.config.loadSgfLast,
+        resetAnalysisWindows, afterLoad, showFeedback, completion);
+  }
+
+  private boolean applySgfString(
+      SGFParser.PreparedGame prepared, int resumeDelayMillis, boolean readKomi,
+      boolean loadLast, boolean resetAnalysisWindows, Runnable afterLoad,
+      boolean showFeedback, Consumer<Boolean> completion) {
     boolean oriReadKomi = Lizzie.config.readKomi;
     boolean loaded = false;
     boolean boardLoaded = false;
     KifuLoadRollbackState rollbackState = KifuLoadRollbackState.capture();
     try {
-      if (showFeedback) {
-        updateKifuLoad(kifuLoadText("KifuLoad.parsing"));
-      }
       Lizzie.config.readKomi = readKomi;
-      if (!SGFParser.loadFromString(sgfContent, false)) {
+      if (!SGFParser.loadPreparedString(prepared, false, loadLast)) {
         rollbackState.restore();
         if (showFeedback) {
           failKifuLoad(kifuLoadText("KifuLoad.failed"));
@@ -4759,7 +4847,7 @@ public class LizzieFrame extends JFrame {
     }
   }
 
-  private void showKifuLoadError(Exception e) {
+  private void showKifuLoadError(Throwable e) {
     String message = kifuLoadText("KifuLoad.failed") + (e == null ? "" : e.getMessage());
     if (SwingUtilities.isEventDispatchThread()) {
       Utils.showMsg(message, Lizzie.frame);
@@ -4858,6 +4946,8 @@ public class LizzieFrame extends JFrame {
 
   private volatile long localSgfOpenRequest;
   private volatile boolean localSgfOpenClosed;
+  // EDT-owned: keep the latest application result distinct from request admission.
+  private java.util.concurrent.CompletableFuture<Boolean> localSgfOpenCompletion;
   // EDT-owned: parser navigation and success work must settle before a new edit snapshot.
   private java.util.concurrent.CompletableFuture<Void> localSgfLoadFinalization;
 
@@ -4903,16 +4993,47 @@ public class LizzieFrame extends JFrame {
     // continuation must not retire the first accepted open, or snapshot its transitional board.
     if (deferKifuOpenUntilAutomaticQuickAnalysisRestored(retry, retired)
         || deferUntilHumanSlExit(retry, retired)) return;
+    prepareCurrentRecordOpen(requestCurrent, result, current ->
+        prepareInteractiveFileOpen(
+            file, fromTemp, showHint, afterSuccessfulLoad, current, result), failure -> {
+          SgfObservation.record("open", "failed", file.getPath(), failure);
+          showOpenFileFailedMessageLater();
+        });
+  }
+
+  /** Shares selection, lifetime and authored-edit ownership across file and string preparation. */
+  private void prepareCurrentRecordOpen(
+      BooleanSupplier requestCurrent, java.util.concurrent.CompletableFuture<Boolean> result,
+      Consumer<BooleanSupplier> prepare, Consumer<RuntimeException> onFailure) {
+    // Commit the draft to its original node before taking ownership of a replacement. Starting
+    // another comment edit while preparation is pending gives the editor ownership instead.
+    if (commentEditPane != null && commentEditPane.isVisible()) setCommentEditable(false);
     long selection = ++localSgfOpenRequest;
+    localSgfOpenCompletion = result;
     Config config = Lizzie.config;
     Board board = Lizzie.board;
     boolean displayed = isDisplayable();
-    BooleanSupplier ownerCurrent = () -> !result.isCancelled() && !localSgfOpenClosed
+    BooleanSupplier ownerCurrent = () -> !result.isDone() && !localSgfOpenClosed
         && selection == localSgfOpenRequest && Lizzie.frame == this
         && Lizzie.config == config && Lizzie.board == board
+        && (commentEditPane == null || !commentEditPane.isVisible())
         && (!displayed || isDisplayable()) && requestCurrent.getAsBoolean();
-    Runnable capture = () -> captureInteractiveFileOpen(
-        file, fromTemp, showHint, afterSuccessfulLoad, board, ownerCurrent, result);
+    Runnable capture = () -> {
+      if (!ownerCurrent.getAsBoolean()) {
+        result.complete(false);
+        return;
+      }
+      try {
+        GameEditSnapshot edit;
+        try (var phase = new featurecat.lizzie.logging.SgfPhase("open-edit-capture")) {
+          edit = GameEditSnapshot.capture(board);
+        }
+        prepare.accept(() -> ownerCurrent.getAsBoolean() && edit.isCurrent(board));
+      } catch (RuntimeException failure) {
+        result.complete(false);
+        onFailure.accept(failure);
+      }
+    };
     var finalization = localSgfLoadFinalization;
     if (finalization != null) {
       // This completion belongs to the EDT. Capture at the settled boundary, before
@@ -4920,28 +5041,6 @@ public class LizzieFrame extends JFrame {
       finalization.thenRun(capture);
     } else {
       capture.run();
-    }
-  }
-
-  private void captureInteractiveFileOpen(
-      File file, boolean fromTemp, boolean showHint, Runnable afterSuccessfulLoad,
-      Board board, BooleanSupplier ownerCurrent,
-      java.util.concurrent.CompletableFuture<Boolean> result) {
-    if (!ownerCurrent.getAsBoolean()) {
-      result.complete(false);
-      return;
-    }
-    try {
-      GameEditSnapshot edit;
-      try (var phase = new featurecat.lizzie.logging.SgfPhase("open-edit-capture")) {
-        edit = GameEditSnapshot.capture(board);
-      }
-      BooleanSupplier current = () -> ownerCurrent.getAsBoolean() && edit.isCurrent(board);
-      prepareInteractiveFileOpen(file, fromTemp, showHint, afterSuccessfulLoad, current, result);
-    } catch (RuntimeException failure) {
-      SgfObservation.record("open", "failed", file.getPath(), failure);
-      result.complete(false);
-      showOpenFileFailedMessageLater();
     }
   }
 
@@ -5000,12 +5099,7 @@ public class LizzieFrame extends JFrame {
         return;
       }
       // A game/analysis mode may have acquired the foreground while bytes were being read.
-      if (EngineGamePresentation.current().startingOrPlaying()
-          || isPlayingAgainstLeelaz || isAnaPlayingAgainstLeelaz
-          || (humanSlGame != null && !humanSlGame.isFinished())
-          || kifuOpenWaitingForQuickAnalysisRestore || analysisControlCleanupInProgress
-          || (hasActiveAutomaticQuickAnalysis()
-              && automaticQuickAnalysisTask.requiresForegroundRestore())) {
+      if (kifuOpenForegroundBusy()) {
         result.complete(false);
         return;
       }
@@ -5051,6 +5145,15 @@ public class LizzieFrame extends JFrame {
         && !isPlayingAgainstLeelaz && !isAnaPlayingAgainstLeelaz) return false;
     Utils.showMsg(Lizzie.resourceBundle.getString("LizzieFrame.openFileFailed.inGame"));
     return true;
+  }
+
+  private boolean kifuOpenForegroundBusy() {
+    return EngineGamePresentation.current().startingOrPlaying()
+        || isPlayingAgainstLeelaz || isAnaPlayingAgainstLeelaz
+        || (humanSlGame != null && !humanSlGame.isFinished())
+        || kifuOpenWaitingForQuickAnalysisRestore || analysisControlCleanupInProgress
+        || (hasActiveAutomaticQuickAnalysis()
+            && automaticQuickAnalysisTask.requiresForegroundRestore());
   }
 
   private boolean applyFile(
@@ -6202,6 +6305,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void shutdownFileOpens() {
+    if (Lizzie.frame == this) ClipboardCopy.cancelPending();
     localSgfOpenClosed = true;
     localSgfOpenRequest++;
   }
@@ -10199,6 +10303,7 @@ public class LizzieFrame extends JFrame {
 
   @Override
   public void dispose() {
+    shutdownFileOpens();
     clearSavedGamePreviews();
     disposeAnalysisFrames();
     disposeMoveListFrames();
@@ -10947,14 +11052,43 @@ public class LizzieFrame extends JFrame {
     updateTitle();
   }
 
+  // Clipboard work must not change the disk-save revision or hold up an Open-after-Save barrier.
+  private static final SgfSaveQueue sgfCopies = new SgfSaveQueue(
+      Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "lizzie-sgf-copy");
+        worker.setDaemon(true);
+        return worker;
+      }), SwingUtilities::invokeLater, AtomicSgfFileWriter::write);
+
   public void copySgf() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::copySgf);
+      return;
+    }
+    ClipboardCopy.Request request = null;
+    Config config = Lizzie.config;
+    boolean displayed = isDisplayable();
     try {
-      String sgfContent = SGFParser.saveToString(false);
-      Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-      Transferable transferableString = new StringSelection(sgfContent);
-      clipboard.setContents(transferableString, null);
-      SgfObservation.record("export", "ok", "clipboard", null);
+      request = ClipboardCopy.beginRequest();
+      ClipboardCopy.Request capturedRequest = request;
+      SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
+          Lizzie.board, Lizzie.board.getHistory(), false);
+      sgfCopies.submit(snapshot::serialize,
+          () -> Lizzie.frame == this && Lizzie.config == config
+              && !localSgfOpenClosed && (!displayed || isDisplayable()),
+          sgfContent -> {
+            try {
+              if (ClipboardCopy.publish(capturedRequest, new StringSelection(sgfContent))) {
+                SgfObservation.record("export", "ok", "clipboard", null);
+              }
+            } catch (RuntimeException failure) {
+              SgfObservation.record("export", "failed", "clipboard", failure);
+              throw failure;
+            }
+          }, failure -> SgfObservation.record("export", "failed", "clipboard", failure))
+          .whenComplete((value, failure) -> capturedRequest.close());
     } catch (Exception e) {
+      if (request != null) request.close();
       SgfObservation.record("export", "failed", "clipboard", e);
     }
   }
@@ -10982,7 +11116,7 @@ public class LizzieFrame extends JFrame {
       return;
     }
     if (decision == PasteSgfDecision.LOAD || decision == PasteSgfDecision.CONFIRM_REPLACE) {
-      loadSgfString(sgfContent, 0, Lizzie.config.readKomi, true, null);
+      loadSgfStringAsync(sgfContent, 0, Lizzie.config.readKomi, true, null);
     }
   }
 
@@ -12425,7 +12559,7 @@ public class LizzieFrame extends JFrame {
             throw new UnsupportedFlavorException(flavor);
           }
         };
-    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(trans, null);
+    ClipboardCopy.setContents(trans);
   }
 
   public void syncOnline(String url) {
@@ -21500,13 +21634,21 @@ public class LizzieFrame extends JFrame {
     }
     if (kifuOpenWaitingForQuickAnalysisRestore) {
       finishDeferredKifuOpenAfterQuickAnalysisRestore();
-      // A successful load starts a new analysis context and owns its resume. A stale or
-      // rejected load leaves this context intact, so it must not consume the user's request.
-      if (cleanupGeneration != analysisControlCleanupGeneration) {
-        return;
-      }
     }
-    if (!pendingForegroundResumeAfterCleanup || userAnalysisPaused) {
+    resumeForegroundAnalysisAfterPendingOpen(cleanupGeneration);
+  }
+
+  private void resumeForegroundAnalysisAfterPendingOpen(long cleanupGeneration) {
+    // A successful load owns its resume. A rejected load must preserve the user's request,
+    // but its false completion may already belong to a newer pending selection.
+    if (cleanupGeneration != analysisControlCleanupGeneration || Lizzie.frame != this
+        || localSgfOpenClosed || !pendingForegroundResumeAfterCleanup || userAnalysisPaused) {
+      return;
+    }
+    var opening = localSgfOpenCompletion;
+    if (opening != null && !opening.isDone()) {
+      opening.whenCompleteAsync((loaded, failure) ->
+          resumeForegroundAnalysisAfterPendingOpen(cleanupGeneration), SwingUtilities::invokeLater);
       return;
     }
     pendingForegroundResumeAfterCleanup = false;
