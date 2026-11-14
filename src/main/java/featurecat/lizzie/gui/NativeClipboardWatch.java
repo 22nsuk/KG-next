@@ -1,6 +1,5 @@
 package featurecat.lizzie.gui;
 
-import com.sun.jna.Callback;
 import com.sun.jna.Function;
 import com.sun.jna.Library;
 import com.sun.jna.Memory;
@@ -11,8 +10,6 @@ import com.sun.jna.Platform;
 import com.sun.jna.Pointer;
 import com.sun.jna.ptr.IntByReference;
 import com.sun.jna.win32.StdCallLibrary;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
 
 /** Observes OS clipboard changes without reading or replacing the user's clipboard data. */
@@ -55,45 +52,59 @@ interface NativeClipboardWatch extends AutoCloseable {
   final class Mac {
     private static final NativeLibrary APP_KIT = NativeLibrary.getInstance("AppKit");
     private static final NativeLibrary OBJC = NativeLibrary.getInstance("objc");
-    private static final NativeLibrary SYSTEM = NativeLibrary.getInstance("System");
     private static final Function SEND = OBJC.getFunction("objc_msgSend");
     private static final Function CLASS = OBJC.getFunction("objc_getClass");
     private static final Function SELECTOR = OBJC.getFunction("sel_registerName");
 
-    interface Work extends Callback { void invoke(Pointer context); }
-
     static long changeCount() {
-      AtomicLong result = new AtomicLong();
-      AtomicReference<Throwable> failure = new AtomicReference<>();
-      Work work = ignored -> {
-        try { result.set(readOnAppKitThread()); }
-        catch (RuntimeException | LinkageError error) { failure.set(error); }
-      };
-      if (SYSTEM.getFunction("pthread_main_np").invokeInt(new Object[0]) != 0) {
-        work.invoke(null);
-      } else {
-        SYSTEM.getFunction("dispatch_sync_f").invokeVoid(new Object[] {
-            SYSTEM.getGlobalVariableAddress("_dispatch_main_q"), null, work});
-      }
-      if (failure.get() != null) {
-        throw new IllegalStateException("Could not observe macOS pasteboard", failure.get());
-      }
-      return result.get();
-    }
-
-    private static Pointer send(Pointer receiver, String selector) {
-      return SEND.invokePointer(new Object[] {receiver, SELECTOR.invokePointer(new Object[] {selector})});
-    }
-
-    private static long readOnAppKitThread() {
       Pointer pool = send(send(CLASS.invokePointer(new Object[] {"NSAutoreleasePool"}), "alloc"), "init");
-      try {
-        Pointer board = send(CLASS.invokePointer(new Object[] {"NSPasteboard"}), "generalPasteboard");
+      try (Memory result = new Memory(Native.POINTER_SIZE)) {
+        Pointer modes = send(CLASS.invokePointer(new Object[] {"NSMutableArray"}), "array");
+        for (String mode : new String[] {
+            "kCFRunLoopDefaultMode", "NSModalPanelRunLoopMode", "NSEventTrackingRunLoopMode", "AWTRunLoopMode"}) {
+          Pointer name = send(CLASS.invokePointer(new Object[] {"NSString"}), "stringWithUTF8String:", mode);
+          sendVoid(modes, "addObject:", name);
+        }
+        invokeOnMain(CLASS.invokePointer(new Object[] {"NSPasteboard"}), "generalPasteboard", modes, result);
+        Pointer board = result.getPointer(0);
         if (board == null) throw new IllegalStateException("General pasteboard is unavailable");
-        return SEND.invokeLong(new Object[] {board, SELECTOR.invokePointer(new Object[] {"changeCount"})});
+        invokeOnMain(board, "changeCount", modes, result);
+        return result.getLong(0); // NSInteger is 64-bit on supported macOS architectures.
       } finally {
-        SEND.invokeVoid(new Object[] {pool, SELECTOR.invokePointer(new Object[] {"drain"})});
+        sendVoid(pool, "drain");
       }
+    }
+
+    private static void invokeOnMain(Pointer target, String method, Pointer modes, Pointer result) {
+      Pointer selector = SELECTOR.invokePointer(new Object[] {method});
+      Pointer signature = send(target, "methodSignatureForSelector:", selector);
+      if (signature == null) throw new IllegalStateException("Missing pasteboard method: " + method);
+      Pointer invocation = send(CLASS.invokePointer(new Object[] {"NSInvocation"}),
+          "invocationWithMethodSignature:", signature);
+      sendVoid(invocation, "setTarget:", target);
+      sendVoid(invocation, "setSelector:", selector);
+      // AppKit can wait for the EDT inside AWTRunLoopMode (e.g. accessibility callbacks).
+      // dispatch_sync on the main queue is not serviced there. Match AWT's selector modes
+      // and keep the read synchronous so the snapshot still observes the click-time clipboard.
+      sendVoid(invocation, "performSelectorOnMainThread:withObject:waitUntilDone:modes:",
+          SELECTOR.invokePointer(new Object[] {"invoke"}), null, (byte) 1, modes);
+      sendVoid(invocation, "getReturnValue:", result);
+    }
+
+    private static Object[] message(Pointer receiver, String selector, Object... arguments) {
+      Object[] message = new Object[arguments.length + 2];
+      message[0] = receiver;
+      message[1] = SELECTOR.invokePointer(new Object[] {selector});
+      System.arraycopy(arguments, 0, message, 2, arguments.length);
+      return message;
+    }
+
+    private static Pointer send(Pointer receiver, String selector, Object... arguments) {
+      return SEND.invokePointer(message(receiver, selector, arguments));
+    }
+
+    private static void sendVoid(Pointer receiver, String selector, Object... arguments) {
+      SEND.invokeVoid(message(receiver, selector, arguments));
     }
   }
 

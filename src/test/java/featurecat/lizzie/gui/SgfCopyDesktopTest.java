@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.sun.jna.Platform;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.SGFParser;
@@ -25,6 +26,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -49,7 +51,7 @@ class SgfCopyDesktopTest {
   void copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest() throws Exception {
     DesktopProbeProcess.requireDisplay();
     Path result = DesktopProbeProcess.runWithStartupTimeout(
-        getClass(), "sgf-copy", List.of(), List.of(), 120, 90);
+        getClass(), "sgf-copy", probeVmArgs(), List.of(), 120, 90);
     assertEquals("PASS", Files.readString(result));
   }
 
@@ -58,10 +60,15 @@ class SgfCopyDesktopTest {
     DesktopProbeProcess.requireDisplay();
     for (int copies : List.of(17, 18)) {
       Path result = DesktopProbeProcess.runWithStartupTimeout(
-          getClass(), "sgf-copy-burst-" + copies, List.of(),
+          getClass(), "sgf-copy-burst-" + copies, probeVmArgs(),
           List.of("burst", Integer.toString(copies)), 120, 90);
       assertEquals("PASS", Files.readString(result));
     }
+  }
+
+  private static List<String> probeVmArgs() {
+    return Platform.isMac()
+        ? List.of("--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED") : List.of();
   }
 
   public static void main(String[] args) {
@@ -111,6 +118,7 @@ class SgfCopyDesktopTest {
       return null;
     });
     DesktopProbeProcess.applicationReady(result);
+    if (Platform.isMac()) assertClipboardReadDuringAppKitCallback(result);
     if (copies != 0) {
       assertCopyBurst(result, copies);
       Files.writeString(result, "PASS");
@@ -317,6 +325,38 @@ class SgfCopyDesktopTest {
     }
   }
 
+  private static void assertClipboardReadDuringAppKitCallback(Path result) throws Exception {
+    DesktopProbeProcess.phase(result, "copy-appkit-edt-callback");
+    // Reproduce the real accessibility wait: AppKit calls the EDT and pumps only
+    // AWTRunLoopMode while the EDT synchronously observes the native pasteboard.
+    // Reflection is confined to the probe; production uses public Foundation selectors.
+    Class<?> toolkit = Class.forName("sun.lwawt.macosx.LWCToolkit");
+    var invokeAndWait = toolkit.getMethod("invokeAndWait", Runnable.class, Component.class);
+    var onAppKit = toolkit.getDeclaredMethod("performOnMainThreadAfterDelay", Runnable.class, long.class);
+    onAppKit.setAccessible(true);
+    CompletableFuture<Void> observed = new CompletableFuture<>();
+    CompletableFuture<Void> returned = new CompletableFuture<>();
+    Runnable readOnEdt = () -> {
+      try (var watch = NativeClipboardWatch.capture()) {
+        assertTrue(SwingUtilities.isEventDispatchThread());
+        assertTrue(watch.unchanged(), "a native read must not modify the pasteboard");
+        observed.complete(null);
+      } catch (Throwable failure) { observed.completeExceptionally(failure); }
+    };
+    Runnable callback = () -> {
+      try {
+        invokeAndWait.invoke(null, readOnEdt, Lizzie.frame);
+        returned.complete(null);
+      } catch (Throwable failure) {
+        observed.completeExceptionally(failure);
+        returned.completeExceptionally(failure);
+      }
+    };
+    onAppKit.invoke(null, callback, 0L);
+    await(observed);
+    await(returned);
+  }
+
   private static void assertTextCopyWins(
       SgfSaveQueue queue, Executor worker, String expected, Runnable copyText) throws Exception {
     try (var blocked = new WorkerBlock(worker)) {
@@ -439,6 +479,10 @@ class SgfCopyDesktopTest {
   private static <T> T edt(Callable<T> action) throws Exception {
     FutureTask<T> task = new FutureTask<>(action);
     SwingUtilities.invokeLater(task);
+    return await(task);
+  }
+
+  private static <T> T await(Future<T> task) throws Exception {
     try {
       return task.get(20, TimeUnit.SECONDS);
     } catch (TimeoutException failure) {
