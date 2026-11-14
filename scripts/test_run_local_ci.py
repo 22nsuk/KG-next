@@ -229,7 +229,12 @@ class RunLocalCiTest(unittest.TestCase):
                         if arg.startswith("-Dtest="))
         selected = selector.split(",")
         self.assertEqual(38, len(selected))
-        self.assertEqual(112, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertEqual(113, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertIn(
+            ("featurecat.lizzie.gui.SgfCopyDesktopTest",
+             "copyBurstPublishesTheLatestClickWithoutQueueRejection"),
+            run_local_ci.DESKTOP_REQUIRED_TESTS,
+        )
         self.assertEqual(
             ["AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+"
              "decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame"],

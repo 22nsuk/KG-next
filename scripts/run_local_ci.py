@@ -141,6 +141,7 @@ DESKTOP_TESTS = {
     )),
     "featurecat.lizzie.gui.SgfCopyDesktopTest": TestSelection((
         "copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest",
+        "copyBurstPublishesTheLatestClickWithoutQueueRejection",
     )),
     "featurecat.lizzie.gui.ToolbarSettingsDesktopTest": TestSelection((
         *tuple(
