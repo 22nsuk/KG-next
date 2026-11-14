@@ -6,7 +6,6 @@ import featurecat.lizzie.analysis.KataGoRules;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -381,7 +380,7 @@ public class BoardHistoryList {
     boolean normalizeTrial = trialNumbering != null && trialNumbering.root.get() == root;
     List<BoardHistorySnapshot.NodeSnapshot> nodes = new java.util.ArrayList<>(structure.size());
     BoardPositionSnapshot.CaptureBuffer buffer = new BoardPositionSnapshot.CaptureBuffer();
-    Map<String, String> analysisStrings = new HashMap<>();
+    BoardData.RestoreStrings analysisStrings = new BoardData.RestoreStrings();
     // Match save capture's lock order: never acquire payload locks under the history monitor,
     // and release a payload lock before acquiring the corresponding node metadata lock.
     for (RestoreStructure entry : structure) {

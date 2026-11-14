@@ -9,9 +9,7 @@ import featurecat.lizzie.analysis.MoveData;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -97,24 +95,42 @@ class BoardEditUndoTest {
     BoardData source = BoardData.empty(5, 5);
     MoveData move = new MoveData();
     move.variation = new ArrayList<>();
-    for (int i = 0; i < 4300; i++) move.variation.add("token-" + i);
-    move.variation.addAll(Arrays.asList(new String("token-0"), null, "x".repeat(64),
-        "x".repeat(65), "Aa", "BB", "9223372036854775808", "-0", "0"));
+    // These eight distinct strings have the same hash; a cache miss must keep the original text.
+    move.variation.addAll(List.of("AaAaAa", "AaAaBB", "AaBBAa", "AaBBBB",
+        "BBAaAa", "BBAaBB", "BBBBAa", "BBBBBB"));
+    int tokensStart = move.variation.size();
+    for (int repeat = 0; repeat < 2; repeat++) {
+      for (int i = 0; i < 4300; i++) move.variation.add("token-" + i);
+    }
+    move.variation.addAll(Arrays.asList(null, "x".repeat(64), "x".repeat(65),
+        "9223372036854775808", "-0", "0", "polygenelubricants"));
+    int expectedSize = move.variation.size();
     source.bestMoves.add(move);
-    Map<String, String> strings = new HashMap<>();
+    BoardData.RestoreStrings strings = new BoardData.RestoreStrings();
     BoardData copy = source.copyRestoreMetadata(strings);
-    assertEquals(4096, strings.size(), "temporary dictionary must stop growing");
     assertEquals(move.variation, copy.bestMoves.get(0).variation);
-    assertSame(copy.bestMoves.get(0).variation.get(0),
-        copy.bestMoves.get(0).variation.get(4300), "known tokens still reuse a full dictionary");
+    int reused = 0;
+    for (int i = 0; i < 4300; i++) {
+      if (copy.bestMoves.get(0).variation.get(tokensStart + i)
+          == copy.bestMoves.get(0).variation.get(tokensStart + i + 4300)) {
+        reused++;
+      }
+    }
+    assertTrue(reused > 0 && reused <= 4096, "reuse must stay within the bounded cache");
+    assertSame(copy.bestMoves.get(0).variation.get(tokensStart),
+        copy.bestMoves.get(0).variation.get(tokensStart + 4300),
+        "existing cache entries are not evicted");
     move.variation.clear();
-    assertEquals(4309, copy.bestMoves.get(0).variation.size());
+    assertEquals(expectedSize, copy.bestMoves.get(0).variation.size());
 
-    Map<String, String> nextCapture = new HashMap<>();
-    source.bestMoves.get(0).variation.add("x".repeat(65));
+    BoardData.RestoreStrings nextCapture = new BoardData.RestoreStrings();
+    move.variation.addAll(List.of(new String("x".repeat(64)), new String("x".repeat(64)),
+        new String("x".repeat(65)), new String("x".repeat(65))));
     BoardData next = source.copyRestoreMetadata(nextCapture);
-    assertTrue(nextCapture.isEmpty(), "long tokens are retained without hashing/interning");
-    assertEquals(List.of("x".repeat(65)), next.bestMoves.get(0).variation);
+    assertEquals(move.variation, next.bestMoves.get(0).variation);
+    assertSame(next.bestMoves.get(0).variation.get(0), next.bestMoves.get(0).variation.get(1));
+    assertNotSame(next.bestMoves.get(0).variation.get(2), next.bestMoves.get(0).variation.get(3),
+        "long tokens are retained without hashing/interning");
   }
 
   @Test
