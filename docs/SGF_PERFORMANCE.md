@@ -108,6 +108,7 @@ investigating a particular file. The manual probe below does so automatically.
 | `parse-syntax` | File input normalization and immutable syntax preparation; on the read worker for interactive opening |
 | `parse-gib` | GIB header and move-command preparation; on the read worker for interactive opening |
 | `open-edit-capture` | The existing explicit-edit snapshot used to protect the current game |
+| `open-edit-validate` | File-open ownership and authored-state validation after a save wait or before application; a retired owner short-circuits the full comparison |
 | `board-clear` | Preparing the board for file application |
 | `parse-build-tree` | Decoding SGF properties/analysis and constructing a private history; on the read worker for interactive opening |
 | `file-apply` | The interactive EDT application envelope, including clear/history installation (or GIB command application) and UI updates |
@@ -174,6 +175,157 @@ escaped multilingual comments. A fourth fixture has 151 nodes, 32 candidates,
 64 PV coordinates and visit counts, and 361 ownership values per node.
 Generated fixture hashes and source identities
 belong with any reported measurement so results cannot silently outlive changes.
+
+## Authored edit snapshot protection (2026-11-13 UTC)
+
+This follow-up starts from main `922e57f43bcaba4f9e22c563cab57fece07996c1`,
+which already contains private file-history preparation. It separately measures
+snapshot capture and the ownership/authored-state predicate. The
+[actual-window data](performance/2026-11-13/game-edit-snapshot.json) records
+the measured production tree, published as
+`baecb4887192a2da84d3ab57286c3aa0f3275ae0`, and its two changed production files.
+The data also records the original local commit and the verified identical tree. The baseline adds only the same `open-edit-validate`
+JFR wrapper around its existing checks; that complete patch is included in the
+data. The earlier #173 measurements below remain measurements of `488e4f2`,
+not measurements of this main revision.
+
+The initial preparation call follows capture in the same EDT turn. It no longer
+immediately repeats the full comparison. Full validation remains after each
+pending-save wait and before applying the prepared result. An uncontended open
+therefore performs one full comparison instead of two. Private cloned arrays
+replace list/stream wrappers for stones and coordinates, the node-state array is
+filled directly, and analysis-only properties are filtered before their values
+are copied. Empty authored-property maps are shared. Ordered children, mutable
+payload copies, authored comments/properties, metadata, rules, explicit analysis
+invalidation and the existing lock order remain protected. This does not replace
+authored-state comparison with `contextRevision` alone or add a new edit counter.
+
+### Actual-window observations
+
+The unchanged `SgfPerformanceProbe` ran four independent JVMs in
+before/after/after/before order with the same fixtures, Linux amd64,
+Temurin 21.0.13+9, nine reported logical processors, Xvfb/Openbox and `-Xmx2g`.
+Each JVM used five excluded warmups and ten retained samples per fixture: the
+tables pool 20 opens and 20 reopens per version/fixture. All open/reopen observations,
+including warmups and slow samples, are retained in the data.
+
+For the 21,845-node variation tree, phase values are elapsed milliseconds:
+
+| Operation | Capture, before → after | Validation sum per operation, before → after | Capture + validation, before → after |
+| --- | ---: | ---: | ---: |
+| Open | 55.17 → 57.32 | 81.18 → 49.36 | 142.32 → 106.36 |
+| Reopen | 59.32 → 48.83 | 90.42 → 48.36 | 143.80 → 160.24 |
+
+Validation is the sum of all checks within each operation, not the latency of
+one comparison. The last column is the median of each sample's capture plus
+validation, **not** the sum of the first two medians. These elapsed-time values
+must not be added to whole-operation EDT CPU time or divided by it to infer a
+CPU share.
+
+The observations do not establish consistently faster capture, lower total
+protection latency, or faster interactive opening. In particular, reopen's
+pooled protection median increased despite lower medians for its two component
+phases. The execution-order pairs also disagree:
+
+| Wide-tree operation | First pair protection, before → after (ms) | Reverse pair protection, before → after (ms) |
+| --- | ---: | ---: |
+| Open | 205.78 → 242.97 | 106.36 → 97.36 |
+| Reopen | 204.76 → 217.48 | 123.78 → 89.95 |
+
+Whole-operation measurements are reported separately. Queue delay is the median
+of each operation's largest queued-callback delay, not a display frame rate.
+
+| Workload | Open EDT CPU, before → after (ms) | Open wall time, before → after (ms) | Queue delay, before → after (ms) | Reopen EDT CPU, before → after (ms) |
+| --- | ---: | ---: | ---: | ---: |
+| Wide variations | 208.03 → 215.79 | 374.38 → 545.92 | 97.94 → 110.38 | 210.22 → 224.68 |
+| Candidates + ownership | 64.65 → 93.85 | 191.93 → 277.48 | 45.46 → 82.37 | 58.15 → 72.11 |
+| Long multilingual comments | 49.42 → 50.75 | 184.52 → 138.14 | 39.20 → 35.74 | 47.65 → 78.85 |
+| Long PV + visits + ownership | 65.81 → 90.93 | 351.56 → 305.31 | 43.18 → 75.26 | 46.08 → 76.65 |
+
+Wide-tree reopen wall time was 405.83 → 432.12 ms. The unchanged parsing phases
+also varied substantially between executions. This task did not run builds or
+tests concurrently with the timing JVMs, but other shared-host activity was not
+controlled. These results cannot establish the cause of the whole-operation
+increases or support a claim that the application became faster.
+
+The original probe retains automatic saving. Across all 480 open/reopen
+observations, including warmups, the baseline had 239 operations with two
+validations and one with three; the candidate had 237 with one and three with
+two. The four exceptional samples contain an additional validation before the
+file read, after a pending-save wait. Their JFR phase timelines are included in
+the data. All four remain in the aggregates. This is a required preservation
+boundary, not an extra comparison to remove.
+
+Source, compiled classes and dependencies stayed identical before and after
+each run, and each version used identical artifacts in its two runs. Syntax and
+tree construction stayed on `lizzie-sgf-read`; capture, validation and application
+stayed on the EDT. All 240 saved files, including warmups, matched byte-for-byte
+and passed the existing tree/comment/analysis/PV/visit/ownership semantic checks.
+
+### Isolated CPU and allocation follow-up
+
+Because the actual-window latency result was mixed, a separate diagnostic
+measured only `GameEditSnapshot.capture` followed by **one** full `isCurrent`
+comparison. The [isolated data](performance/2026-11-13/game-edit-snapshot-isolated.json)
+includes its complete source, compiled/source identities and every observation.
+It uses the same production artifacts and fixture bytes as the window series.
+The existing file-import builder constructs the history; the diagnostic reads
+that private history into the existing rules-test harness. No production API or
+new permanent test harness was added.
+
+Four new JVMs used before/after/after/before order, 30 excluded warmups and 30
+retained samples per fixture/JVM. Each fixture's repeated captures and comparisons
+run in one EDT task without painting, input, engine updates or asynchronous open
+work. `ThreadMXBean` measures current-thread CPU time and allocated bytes around
+each phase. The following medians pool 60 retained observations per version.
+
+| Workload | Capture CPU, before → after (ms) | One full comparison CPU, before → after (ms) | Capture allocated bytes, before → after |
+| --- | ---: | ---: | ---: |
+| Wide variations | 34.611 → 32.596 | 30.452 → 32.607 | 46,118,840 → 37,381,072 |
+| Candidates + ownership | 0.203 → 0.345 | 0.227 → 0.297 | 564,936 → 511,968 |
+| Long multilingual comments | 0.111 → 0.099 | 0.077 → 0.054 | 377,456 → 342,088 |
+| Long PV + visits + ownership | 0.062 → 0.075 | 0.031 → 0.067 | 283,464 → 256,896 |
+
+Wide-tree capture allocated about **19% fewer bytes**; both execution orders
+showed the same allocation medians. Allocation means bytes allocated during the
+phase, not retained heap or process memory. CPU differences were not uniformly
+favorable across workloads or execution orders, and one full comparison remains
+substantial work. The supported result is less capture allocation and one fewer
+full comparison in the normal open path. The diagnostic does not establish a
+whole-open CPU or latency improvement, and repeated same-history cache/JIT
+behavior is different from interactive use. No timing thresholds were added to CI.
+
+To reproduce the isolated diagnostic after the normal probe has generated its
+fixtures, extract `probe.source` from the isolated JSON to
+`target/GameEditSnapshotCostProbe.java`, then compile it with `javac --release 17`
+and the same test/production/dependency classpath into a separate output directory.
+Run `featurecat.lizzie.rules.GameEditSnapshotCostProbe` with arguments
+`FIXTURE_DIRECTORY NEW_OUTPUT_JSON 30 30`, `-Xmx2g` and
+`-Djava.awt.headless=true`. Put the diagnostic's output directory first on the
+classpath. Use the same compiled diagnostic and unchanged rules-test harness for
+both production versions. For the window-series baseline, apply the recorded
+instrumentation-only patch to `922e57f` before compiling.
+
+### Protection checks and limits
+
+The candidate passed 361 focused headless cases. They cover deep-copy/value
+semantics, off-cursor branch changes, SGF/GIB preparation-time comments, marks,
+komi and rules edits, explicit primary/secondary analysis invalidation, ordinary
+analysis adoption, ownership retirement and save ordering. A save-wait edit
+rejects the request before submitting a read. The JFR checks require one full
+validation after preparation and before application for uncontended SGF/GIB opens.
+Against the baseline, the same 115 snapshot/open cases had only the two expected
+JFR-count failures (two comparisons instead of one); the other 113 passed.
+
+An additional display-enabled run passed 151 cases: 134 saved-list boundary cases
+use real entrypoints/SGF I/O with allocated or stubbed frames, while 17 shutdown
+save-race cases start the actual application window in separate JVMs. The local
+candidate build reused unchanged baseline classes and recompiled changed sources;
+it is not a clean full rebuild. Exact final PR-head CI remains a separate gate.
+The measurements are Linux/offline/warm-cache evidence. They do not establish
+Windows latency, native-engine performance, cold-disk behavior, network-share
+behavior or physical display FPS. Further user-visible speed claims require a
+more stable end-to-end measurement environment.
 
 ## Private file-history and GIB preparation (2026-11-13)
 

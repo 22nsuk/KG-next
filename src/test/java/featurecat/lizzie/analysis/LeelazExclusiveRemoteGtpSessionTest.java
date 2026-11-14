@@ -1260,9 +1260,20 @@ class LeelazExclusiveRemoteGtpSessionTest {
         assertNull(engine.captureAnalysisProvenance().komi());
         assertTrue(harness.lease.setRestoreRules("{\"ko\":\"SIMPLE\",\"scoring\":\"AREA\"}"));
 
-        harness.releaseThroughNameCommand();
-        harness.completeNameResponse();
-        assertTrue(context.matchesCurrentEngine(), "handback is not a user settings change");
+        harness.output.continueNameWrite = new CountDownLatch(1);
+        try {
+          harness.releaseThroughNameCommand();
+          harness.completeNameResponse();
+          assertTrue(context.matchesCurrentEngine(), "handback is not a user settings change");
+          assertEquals(
+              Leelaz.ExclusiveGtpLeaseAvailability.ENGINE_NOT_READY,
+              engine.acquireForegroundAnalysisLease(line -> {}, owner -> {}, owner -> {})
+                  .availability(),
+              "a restore response does not release a still-running command writer");
+        } finally {
+          harness.output.continueNameWrite.countDown();
+          harness.output.awaitNameWriteFinished();
+        }
 
         Leelaz.ForegroundAnalysisLeaseAcquisition resumed =
             engine.acquireForegroundAnalysisLease(line -> {}, owner -> {}, owner -> {});
@@ -1278,6 +1289,7 @@ class LeelazExclusiveRemoteGtpSessionTest {
         waitUntil(() -> harness.output.nameCommandsWritten.get() == 2);
         invokeResponseHandlerForLine(engine, "=");
         waitUntil(() -> harness.completions.get() == 2);
+        harness.output.awaitNameWriteFinished();
 
         assertEquals(0, harness.failures.get());
         assertTrue(context.matchesCurrentEngine(), "repeated restore must preserve the run");
@@ -2569,6 +2581,8 @@ class LeelazExclusiveRemoteGtpSessionTest {
     private final StringBuilder currentCommand = new StringBuilder();
     private final CountDownLatch nameCommandWritten = new CountDownLatch(1);
     private final AtomicInteger nameCommandsWritten = new AtomicInteger();
+    private volatile CountDownLatch continueNameWrite;
+    private volatile Thread nameWriter;
     private volatile String loadedSgf = "";
     private final String rejectedCommand;
     private volatile boolean rejected;
@@ -2591,8 +2605,12 @@ class LeelazExclusiveRemoteGtpSessionTest {
         return;
       }
       if ("name".equals(command)) {
+        nameWriter = Thread.currentThread();
         nameCommandsWritten.incrementAndGet();
         nameCommandWritten.countDown();
+        if (continueNameWrite != null) {
+          await(continueNameWrite);
+        }
         return;
       }
       String response = "=";
@@ -2621,6 +2639,15 @@ class LeelazExclusiveRemoteGtpSessionTest {
 
     private String loadedSgf() {
       return loadedSgf;
+    }
+
+    private void awaitNameWriteFinished() throws InterruptedException {
+      // The name signal is emitted inside flush, before the sender releases its queue admission.
+      // This fixture writes name on the one-shot restore worker, so joining also covers its epilogue.
+      Thread writer = nameWriter;
+      assertNotNull(writer, "foreground restore must write its final name command");
+      writer.join(2_000L);
+      assertFalse(writer.isAlive(), "foreground restore command writer must finish");
     }
   }
 
