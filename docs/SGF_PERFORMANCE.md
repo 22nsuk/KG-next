@@ -26,17 +26,23 @@ the separately timed atomic write. Synchronous text exports still return their
 result directly; they are not the file-save path. Clipboard Copy freezes the same
 save snapshot when clicked, serializes on `lizzie-sgf-copy`, and publishes on the
 EDT only for the latest copy request and its still-live frame/config. Later board
-edits do not change that captured text. Explicit application clipboard writes
-(board images, URLs, diagnostics, commands and setup paths) share `ClipboardCopy`:
-each new copy retires older SGF publication, and the revision check and clipboard
-write are atomic. Standard Swing `copy`/`cut` actions join that same boundary,
-including text-component methods, context menus, keyboard shortcuts and table
-copies. Registration covers existing windows and newly added controls; local
-action overrides survive UI refreshes. The original transfer handler creates the
-Transferable and performs cut deletion, paste and drag-and-drop. Empty or refused
-exports do not retire SGF work. Custom copy actions must use `ClipboardCopy`;
-other applications' clipboard writes are outside this in-process ordering.
-Its bounded serial queue is separate from
+edits do not change that captured text. `ClipboardCopy` also captures an OS clipboard
+watch before taking the snapshot and checks it immediately before publication.
+Windows uses `GetClipboardSequenceNumber`, macOS uses AppKit-thread `NSPasteboard`
+`changeCount`, and Linux observes X11/XWayland `CLIPBOARD` ownership through XFixes.
+This covers writes from Swing, native JCEF, other JVMs and other processes without
+enumerating copy commands, including identical text recopied by the same owner.
+Swing action maps and transfer handlers are left untouched. Missing native observation
+rejects the deferred copy and records the export failure; it does not silently fall
+back to text/flavor comparisons. Watches close on success, rejection, serialization
+failure, supersession and shutdown. Native Wayland behavior depends on its XWayland
+clipboard bridge and is not independently verified here.
+
+The final OS check followed by AWT publication is not a cross-process compare-and-set.
+A write concurrent with that short final publication still follows the OS clipboard's
+normal last-writer semantics. The guard prevents changes observed during preparation
+from being overwritten; it does not claim global atomicity against native writers.
+The bounded serial queue is separate from
 disk saves, so Copy does not alter saved-list revisions or Open-after-Save barriers. See
 [SGF save coordinator](SGF_SAVE_COORDINATOR.md) for ownership and retry rules.
 

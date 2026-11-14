@@ -15,10 +15,14 @@ import java.awt.datatransfer.StringSelection;
 import java.awt.image.BufferedImage;
 import java.awt.event.ActionEvent;
 import java.lang.reflect.Field;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.FutureTask;
@@ -50,6 +54,16 @@ class SgfCopyDesktopTest {
 
   public static void main(String[] args) {
     try {
+      if (args[0].equals("native-clipboard-writer")) {
+        BufferedReader input = new BufferedReader(new InputStreamReader(System.in));
+        String value;
+        while ((value = input.readLine()) != null) {
+          Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(value), null);
+          System.out.println("written");
+          System.out.flush();
+        }
+        System.exit(0);
+      }
       runProbe(Path.of(args[0]), Path.of(args[1]));
       System.exit(0);
     } catch (Throwable failure) {
@@ -226,6 +240,8 @@ class SgfCopyDesktopTest {
     } finally {
       edt(() -> { Lizzie.frame.getLayeredPane().remove(controls); return null; });
     }
+    DesktopProbeProcess.phase(result, "copy-native-process");
+    assertNativeCopyWins(queue, worker, result);
     // A new SGF request after another copy must still be allowed to publish.
     edt(() -> {
       assertTrue(SGFParser.loadFromString(LATEST, false));
@@ -269,6 +285,47 @@ class SgfCopyDesktopTest {
       queue.pending().get(20, TimeUnit.SECONDS);
       assertEquals(expected, clipboard(), "an older SGF copy cannot replace later text");
     }
+  }
+
+  private static void assertNativeCopyWins(SgfSaveQueue queue, Executor worker, Path result)
+      throws Exception {
+    Process writer = new ProcessBuilder(
+        Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "-Djava.awt.headless=false", "-cp", System.getProperty("java.class.path"),
+        SgfCopyDesktopTest.class.getName(), "native-clipboard-writer")
+        .redirectError(result.resolveSibling("native-writer-errors.log").toFile()).start();
+    PrintWriter input = new PrintWriter(writer.getOutputStream(), true);
+    BufferedReader output = new BufferedReader(new InputStreamReader(writer.getInputStream()));
+    try {
+      String text = "native clipboard text";
+      writeNative(input, output, text);
+      // Repeated identical copies by the same OS owner must also retire SGF publication.
+      for (int attempt = 0; attempt < 2; attempt++) {
+        try (var blocked = new WorkerBlock(worker)) {
+          blocked.awaitStarted();
+          edt(() -> { Lizzie.frame.copySgf(); return null; });
+          writeNative(input, output, text);
+          assertEquals(text, clipboard());
+          blocked.release();
+          queue.pending().get(20, TimeUnit.SECONDS);
+          assertEquals(text, clipboard(), "a native copy outside this JVM must win");
+        }
+      }
+    } finally {
+      writer.destroyForcibly();
+      assertTrue(writer.waitFor(5, TimeUnit.SECONDS), "native clipboard writer did not exit");
+      input.close();
+      output.close();
+    }
+  }
+
+  private static void writeNative(PrintWriter input, BufferedReader output, String text)
+      throws Exception {
+    input.println(text);
+    assertEquals("written", CompletableFuture.supplyAsync(() -> {
+      try { return output.readLine(); }
+      catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
+    }).get(10, TimeUnit.SECONDS));
   }
 
   private static JMenuItem findMenuItem(Component[] components, String label) {

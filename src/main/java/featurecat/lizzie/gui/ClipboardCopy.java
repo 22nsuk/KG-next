@@ -2,33 +2,63 @@ package featurecat.lizzie.gui;
 
 import java.awt.Toolkit;
 import java.awt.datatransfer.Clipboard;
-import java.awt.datatransfer.ClipboardOwner;
 import java.awt.datatransfer.Transferable;
 
-/** Orders application and Swing clipboard writes against deferred SGF copies. */
+/** Retires deferred SGF copies when another request or OS clipboard write supersedes them. */
 final class ClipboardCopy {
-  private static long revision;
+  private static Request current;
 
   private ClipboardCopy() {}
 
-  static synchronized long beginRequest() {
-    return ++revision;
+  static synchronized Request beginRequest() {
+    cancelPending();
+    return beginRequest(NativeClipboardWatch.capture());
+  }
+
+  static synchronized Request beginRequest(NativeClipboardWatch watch) {
+    cancelPending();
+    current = new Request(watch);
+    return current;
+  }
+
+  static synchronized void cancelPending() {
+    if (current != null) current.close();
   }
 
   static synchronized void setContents(Transferable contents) {
-    setContents(Toolkit.getDefaultToolkit().getSystemClipboard(), contents, null);
-  }
-
-  static synchronized void setContents(
-      Clipboard clipboard, Transferable contents, ClipboardOwner owner) {
-    ++revision;
-    clipboard.setContents(contents, owner);
-  }
-
-  static synchronized boolean publish(long request, Transferable contents) {
-    // Check and write under the same lock so another copy cannot slip between them.
-    if (request != revision) return false;
+    cancelPending();
     Toolkit.getDefaultToolkit().getSystemClipboard().setContents(contents, null);
-    return true;
+  }
+
+  static synchronized boolean publish(Request request, Transferable contents) {
+    return publish(request, Toolkit.getDefaultToolkit().getSystemClipboard(), contents);
+  }
+
+  static synchronized boolean publish(Request request, Clipboard clipboard, Transferable contents) {
+    try {
+      if (request != current || !request.watch.unchanged()) return false;
+      // Native observation covers uncoordinated writers too. OS APIs do not provide a portable
+      // compare-and-set: another process can still write concurrently with this final publication.
+      clipboard.setContents(contents, null);
+      return true;
+    } finally {
+      request.close();
+    }
+  }
+
+  static final class Request implements AutoCloseable {
+    private final NativeClipboardWatch watch;
+    private boolean closed;
+
+    private Request(NativeClipboardWatch watch) { this.watch = watch; }
+
+    @Override public void close() {
+      synchronized (ClipboardCopy.class) {
+        if (closed) return;
+        closed = true;
+        if (current == this) current = null;
+        watch.close();
+      }
+    }
   }
 }

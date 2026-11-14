@@ -670,7 +670,6 @@ public class LizzieFrame extends JFrame {
 
   /** Creates a window */
   public LizzieFrame() {
-    SwingClipboardActions.install();
     setTitle(DEFAULT_TITLE);
     boardRenderer = new BoardRenderer(false);
     subBoardRenderer = new SubBoardRenderer(false);
@@ -6292,6 +6291,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void shutdownFileOpens() {
+    if (Lizzie.frame == this) ClipboardCopy.cancelPending();
     localSgfOpenClosed = true;
     localSgfOpenRequest++;
   }
@@ -11051,10 +11051,12 @@ public class LizzieFrame extends JFrame {
       SwingUtilities.invokeLater(this::copySgf);
       return;
     }
-    long request = ClipboardCopy.beginRequest();
+    ClipboardCopy.Request request = null;
     Config config = Lizzie.config;
     boolean displayed = isDisplayable();
     try {
+      request = ClipboardCopy.beginRequest();
+      ClipboardCopy.Request capturedRequest = request;
       SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
           Lizzie.board, Lizzie.board.getHistory(), false);
       sgfCopies.submit(snapshot::serialize,
@@ -11062,15 +11064,17 @@ public class LizzieFrame extends JFrame {
               && !localSgfOpenClosed && (!displayed || isDisplayable()),
           sgfContent -> {
             try {
-              if (ClipboardCopy.publish(request, new StringSelection(sgfContent))) {
+              if (ClipboardCopy.publish(capturedRequest, new StringSelection(sgfContent))) {
                 SgfObservation.record("export", "ok", "clipboard", null);
               }
             } catch (RuntimeException failure) {
               SgfObservation.record("export", "failed", "clipboard", failure);
               throw failure;
             }
-          }, failure -> SgfObservation.record("export", "failed", "clipboard", failure));
+          }, failure -> SgfObservation.record("export", "failed", "clipboard", failure))
+          .whenComplete((value, failure) -> capturedRequest.close());
     } catch (Exception e) {
+      if (request != null) request.close();
       SgfObservation.record("export", "failed", "clipboard", e);
     }
   }
