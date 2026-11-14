@@ -33,7 +33,6 @@ import java.awt.GridBagLayout;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.RenderingHints;
-import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.geom.Path2D;
 import java.awt.geom.RoundRectangle2D;
@@ -1552,9 +1551,7 @@ public class RemoteComputeDialog extends JDialog {
       Desktop.getDesktop().browse(URI.create(url));
       updateStatus(openedStatus, true);
     } catch (Exception e) {
-      Toolkit.getDefaultToolkit()
-          .getSystemClipboard()
-          .setContents(new StringSelection(url), null);
+      ClipboardCopy.setContents(new StringSelection(url));
       updateStatus(copiedStatus, false);
       JOptionPane.showMessageDialog(
           this, copiedMessage, copiedTitle, JOptionPane.INFORMATION_MESSAGE);

@@ -12,7 +12,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import javax.swing.SwingUtilities;
 
-/** SGF/GIB preparation: one active request and one latest waiting selection, owned by the EDT. */
+/** File/string preparation: one active request and one latest waiting selection, owned by the EDT. */
 final class SgfReadQueue {
   @FunctionalInterface
   interface Reader {
@@ -49,7 +49,10 @@ final class SgfReadQueue {
     }
   }
 
-  private record Request(Path path, CompletableFuture<PreparedFile> result) {}
+  // File preferences retain their publication-time policy. Strings freeze preferences at request.
+  private record Request(
+      Path path, String content, SGFParser.ParseOptions options,
+      CompletableFuture<PreparedFile> result) {}
 
   SgfReadQueue(Executor worker, Reader reader) {
     this.worker = worker;
@@ -57,10 +60,17 @@ final class SgfReadQueue {
   }
 
   CompletableFuture<PreparedFile> prepare(Path path) {
+    return submit(new Request(path, null, null, new CompletableFuture<>()));
+  }
+
+  CompletableFuture<PreparedFile> prepare(String content, SGFParser.ParseOptions options) {
+    return submit(new Request(null, content, options, new CompletableFuture<>()));
+  }
+
+  private CompletableFuture<PreparedFile> submit(Request request) {
     if (!SwingUtilities.isEventDispatchThread()) {
       throw new IllegalStateException("SGF read requests belong to the event thread");
     }
-    Request request = new Request(path, new CompletableFuture<>());
     Request replaced = waiting;
     waiting = request;
     if (replaced != null) replaced.result().cancel(false);
@@ -74,16 +84,18 @@ final class SgfReadQueue {
     Request request = waiting;
     waiting = null;
     active = request;
-    SGFParser.ParseOptions options = SGFParser.ParseOptions.capture();
+    SGFParser.ParseOptions options = request.options() == null
+        ? SGFParser.ParseOptions.capture() : request.options();
     try {
       worker.execute(() -> {
         PreparedFile prepared = null;
         Throwable failure = null;
         try {
-          String content = reader.read(request.path());
+          String content = request.path() == null ? request.content() : reader.read(request.path());
           // Superseded reads keep the active slot but need not start parsing or building a tree.
           if (!request.result().isCancelled()) {
-            if (request.path().getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gib")) {
+            if (request.path() != null
+                && request.path().getFileName().toString().toLowerCase(Locale.ROOT).endsWith(".gib")) {
               var game = GIBParser.prepareFileContent(content);
               if (game != null) prepared = new PreparedGib(game);
             } else {
@@ -110,7 +122,7 @@ final class SgfReadQueue {
   private void finish(Request request, PreparedFile prepared, Throwable failure) {
     if (failure == null && !request.result().isCancelled() && prepared instanceof PreparedSgf sgf) {
       SGFParser.ParseOptions current = SGFParser.ParseOptions.capture();
-      if (!sgf.options().equals(current)) {
+      if (request.options() == null && !sgf.options().equals(current)) {
         // Import preferences used to be read on application. Rebuild from the same syntax so a
         // setting changed during preparation still takes effect without another file read.
         try {

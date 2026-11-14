@@ -925,7 +925,8 @@ public class OnlineDialog extends JDialog {
   }
 
   static boolean shouldClearBoardBeforeSync(boolean hasActiveSession, int syncType) {
-    return !hasActiveSession && syncType != YikeUrlInfo.TYPE_NEW_LIVE_ROOM;
+    // Raw SGF URLs replace the board only after the shared import preparation succeeds.
+    return !hasActiveSession && syncType != YikeUrlInfo.TYPE_NEW_LIVE_ROOM && syncType != 99;
   }
 
   private int nextYikeLiveSessionId() {
@@ -1141,7 +1142,7 @@ public class OnlineDialog extends JDialog {
         }
       } else {
         sgf = data;
-        Lizzie.frame.loadSgfString(sgf, 0, Lizzie.config.readKomi, false, null, stillCurrent);
+        Lizzie.frame.loadSgfStringAsync(sgf, 0, Lizzie.config.readKomi, false, null, stillCurrent);
         return;
       }
     }

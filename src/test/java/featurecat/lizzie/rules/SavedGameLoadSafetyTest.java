@@ -14,6 +14,7 @@ import featurecat.lizzie.gui.Input;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.SgfFailureDialogTestSupport;
 import featurecat.lizzie.gui.SgfReadTestSupport;
+import featurecat.lizzie.gui.SavedGamePreviewTestSupport;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.SgfSaveTestSupport;
 import featurecat.lizzie.gui.SidebarPanel;
@@ -169,9 +170,14 @@ class SavedGameLoadSafetyTest {
     Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
     BoardHistoryList original = Lizzie.board.getHistory();
     String metadata = config.saveBoardConfig.toString();
-    frame.failPreviewScale = true;
+    try (var previewRead = SavedGamePreviewTestSupport.failAfterDecode(frame)) {
+      SwingUtilities.invokeAndWait(frame::showTempGamePanel);
+      previewRead.awaitStarted();
+      previewRead.release();
+      SavedGamePreviewTestSupport.awaitPending(frame);
+      assertEquals(1, previewRead.reads(), "The decoded image must reach the failure boundary");
+    }
     SwingUtilities.invokeAndWait(() -> {
-      frame.showTempGamePanel();
       assertSame(original, Lizzie.board.getHistory());
       assertEquals(metadata, config.saveBoardConfig.toString());
       assertTrue(listContainer.isVisible());
@@ -189,7 +195,7 @@ class SavedGameLoadSafetyTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"file", "string", "download", "parser", "gib"})
+  @ValueSource(strings = {"file", "string", "download", "async-string", "parser", "gib"})
   void disabledAutomaticAnalysisStillSynchronizesLoadedRecordAndAllowsManualResume(String entry)
       throws Exception {
     installAcknowledgingEngine();
@@ -214,6 +220,7 @@ class SavedGameLoadSafetyTest {
         case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
         case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
         case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "async-string" -> frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
         case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
         default -> throw new AssertionError(entry);
       }
@@ -236,7 +243,7 @@ class SavedGameLoadSafetyTest {
   }
 
   static Stream<Arguments> pendingLoadAnalysisControls() {
-    return Stream.of("file", "string", "download", "parser", "gib")
+    return Stream.of("file", "string", "download", "async-string", "parser", "gib")
         .flatMap(entry -> Stream.of(false, true).map(toolbar -> Arguments.of(entry, toolbar)));
   }
 
@@ -253,6 +260,7 @@ class SavedGameLoadSafetyTest {
         case "file", "gib" -> assertTrue(frame.loadFile(file, true, false));
         case "string" -> assertTrue(frame.loadSgfString(SAVED_SGF, 0, true, false, null));
         case "download" -> assertTrue(frame.loadDownloadedSgfString(SAVED_SGF, 0, true, false, null));
+        case "async-string" -> frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
         case "parser" -> assertTrue(SGFParser.loadFromString(SAVED_SGF));
         default -> throw new AssertionError(entry);
       }
@@ -294,6 +302,24 @@ class SavedGameLoadSafetyTest {
     transport.awaitResponses();
     assertEquals(0, analysisCommandCount());
     assertFalse(Lizzie.leelaz.isPondering());
+  }
+
+  @Test
+  void asynchronousStringApplicationCompletesBeforeTheEngineAcknowledgesThePosition() throws Exception {
+    CountDownLatch snapshotSent = holdNextSnapshotResponse();
+    var applied = frame.loadSgfStringAsync(SAVED_SGF, 0, true, false, null);
+    assertTrue(applied.get(5, TimeUnit.SECONDS));
+    assertTrue(snapshotSent.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(() -> {
+      assertTrue(Lizzie.board.isEngineAlignmentPending());
+      assertEquals(0, analysisCommandCount());
+      assertEquals("saved root", Lizzie.board.getHistory().getStart().getData().comment);
+    });
+    releaseSnapshotResponse();
+    assertTrue(frame.resumeScheduled.await(5, TimeUnit.SECONDS));
+    SwingUtilities.invokeAndWait(frame.resumeAction);
+    transport.awaitResponses();
+    assertFalse(Lizzie.board.isEngineAlignmentPending());
   }
 
   private CountDownLatch holdNextSnapshotResponse() throws Exception {
@@ -434,6 +460,7 @@ class SavedGameLoadSafetyTest {
       frame.mainPanel.setSize(1024, 768);
       frame.commentScrollPane = new JScrollPane();
       frame.commentEditPane = new JScrollPane();
+      frame.commentEditPane.setVisible(false); // The real frame starts without an open comment draft.
       frame.sidebarPanel = RulesLayerTestHarness.allocate(QuietSidebar.class);
       setFrameField("varTreeScrollPane", new JScrollPane());
       frame.listScrollpane = new JScrollPane();
@@ -469,6 +496,7 @@ class SavedGameLoadSafetyTest {
       SgfReadTestSupport.awaitPending();
       if (frame != null && frame.historyAtFailedPlayerUpdate != null) awaitHistoryRestores();
       if (frame != null) {
+        SavedGamePreviewTestSupport.clear(frame);
         SwingUtilities.invokeAndWait(() -> {});
         Object coordinator = getFrameField("kifuEngineSyncCoordinator");
         ExecutorService worker = null;
@@ -507,7 +535,7 @@ class SavedGameLoadSafetyTest {
   @MethodSource("failedOpens")
   void failedSavedItemOpenPreservesCurrentGameAndKeepsListOpen(
       EntryPoint entry, SavedPosition position, Slot slot, String input) throws Exception {
-    prepareSavedItem(position, slot);
+    prepareSavedItem(entry, position, slot);
     if (input.equals("malformed")) Files.writeString(savedFile(slot), "not an SGF game tree");
     BoardHistoryList history = Lizzie.board.getHistory();
     BoardHistoryNode selected = history.getCurrentHistoryNode();
@@ -549,7 +577,7 @@ class SavedGameLoadSafetyTest {
   @MethodSource("successfulOpens")
   void successfulSavedItemOpenRestoresSavedPositionBeforeResuming(
       EntryPoint entry, SavedPosition position, Slot slot, boolean loadLast) throws Exception {
-    prepareSavedItem(position, slot);
+    prepareSavedItem(entry, position, slot);
     Files.writeString(savedFile(slot), SAVED_SGF);
     config.loadSgfLast = loadLast;
     installAcknowledgingEngine();
@@ -607,7 +635,7 @@ class SavedGameLoadSafetyTest {
   @MethodSource("overwrittenItems")
   void overwrittenItemCannotOpenBeforePublicationAndUsesLatestPositionAfterwards(
       EntryPoint entry, Slot slot) throws Exception {
-    prepareSavedItem(SavedPosition.BRANCH, slot);
+    prepareSavedItem(entry, SavedPosition.BRANCH, slot);
     config.saveBoard = new JSONObject().put("save", config.saveBoardConfig);
     Files.writeString(savedFile(slot), SAVED_SGF);
     setFrameField("autoSaveStartupPrepared", true);
@@ -695,7 +723,7 @@ class SavedGameLoadSafetyTest {
   @EnumSource(EntryPoint.class)
   void savedItemReadLeavesTheEdtResponsiveUntilItsPositionCanBeRestored(EntryPoint entry)
       throws Exception {
-    prepareSavedItem(SavedPosition.BRANCH, Slot.MANUAL);
+    prepareSavedItem(entry, SavedPosition.BRANCH, Slot.MANUAL);
     Files.writeString(savedFile(Slot.MANUAL), SAVED_SGF);
     Lizzie.setPrimaryEngine(null);
     BoardHistoryList current = Lizzie.board.getHistory();
@@ -1504,6 +1532,35 @@ class SavedGameLoadSafetyTest {
     assertTrue(listContainer.isVisible());
   }
 
+  private void prepareSavedItem(EntryPoint entry, SavedPosition position, Slot slot) throws Exception {
+    prepareSavedItem(position, slot);
+    if (entry != EntryPoint.PREVIEW) return;
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        config.loadASaveZoom = true;
+        Method show = LizzieFrame.class.getDeclaredMethod("showBigBoardImage", boolean.class,
+            int.class, JPanel.class, int.class, int.class, int.class, String.class,
+            boolean.class, boolean.class);
+        show.setAccessible(true);
+        show.invoke(frame, slot.automatic, 1, list, 150, 150,
+            position.moveNumber, position.moves, true, true);
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+    SavedGamePreviewTestSupport.awaitPending(frame);
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        preview = (JPopupMenu) getFrameField("bigBoardPanel");
+        assertNotNull(preview);
+        preview.setVisible(true);
+        assertTrue(preview.isVisible());
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+  }
+
   private Path savedFile(Slot slot) {
     return directory.resolve("save/" + slot.filename + ".sgf");
   }
@@ -1520,19 +1577,6 @@ class SavedGameLoadSafetyTest {
     int x = 150;
     int y = 150;
     if (entry == EntryPoint.PREVIEW) {
-      try {
-        Method show = LizzieFrame.class.getDeclaredMethod("showBigBoardImage", boolean.class,
-            int.class, JPanel.class, int.class, int.class, int.class, String.class,
-            boolean.class, boolean.class);
-        show.setAccessible(true);
-        show.invoke(frame, slot.automatic, 1, list, x, y,
-            position.moveNumber, position.moves, true, true);
-        preview = (JPopupMenu) getFrameField("bigBoardPanel");
-        preview.setVisible(true);
-        assertTrue(preview.isVisible());
-      } catch (ReflectiveOperationException failure) {
-        throw new AssertionError(failure);
-      }
       MouseEvent click = new MouseEvent(preview, MouseEvent.MOUSE_CLICKED, 0, 0, 0, 0, 1, false);
       for (MouseListener listener : preview.getMouseListeners()) listener.mouseClicked(click);
     } else {
@@ -1587,7 +1631,6 @@ class SavedGameLoadSafetyTest {
     List<String> loadedPlayers;
     Runnable duringParse;
     boolean failPlayerUpdate;
-    boolean failPreviewScale;
     BoardHistoryList historyAtFailedPlayerUpdate;
     java.io.IOException reportedSaveFailure;
 
@@ -1600,13 +1643,6 @@ class SavedGameLoadSafetyTest {
     @Override
     public java.awt.Image saveMainBoardToImageOri() {
       return new BufferedImage(8, 8, BufferedImage.TYPE_INT_RGB);
-    }
-
-    @Override
-    public java.awt.Image zoomImage(BufferedImage source, int width, int height) {
-      assertNotNull(source, "The real image decoder must run before the scaling failure");
-      if (failPreviewScale) throw new java.awt.image.ImagingOpException("Preview scaling failed");
-      return super.zoomImage(source, width, height);
     }
 
     @Override

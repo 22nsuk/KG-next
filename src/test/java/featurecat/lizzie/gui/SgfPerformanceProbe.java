@@ -336,7 +336,7 @@ public final class SgfPerformanceProbe {
         .put("max", ordered.get(ordered.size() - 1));
   }
 
-  private static List<Fixture> fixtures(Path output) throws Exception {
+  static List<Fixture> fixtures(Path output) throws Exception {
     StringBuilder variations = header(SHORT_COMMENT, false);
     appendBranches(variations, 0, 7);
     variations.append(')');
@@ -636,7 +636,7 @@ public final class SgfPerformanceProbe {
     if (!valid) throw new AssertionError(message);
   }
 
-  private record Fixture(
+  record Fixture(
       String name,
       Path path,
       String text,

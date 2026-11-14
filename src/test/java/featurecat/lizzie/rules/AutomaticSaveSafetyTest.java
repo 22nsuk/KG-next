@@ -157,7 +157,7 @@ class AutomaticSaveSafetyTest {
     Field panelField = LizzieFrame.class.getDeclaredField("tempGamePanel");
     panelField.setAccessible(true);
     panelField.set(frame, panel);
-    Field showingPreview = LizzieFrame.class.getDeclaredField("isShowingBigBoardPanel");
+    Field showingPreview = LizzieFrame.class.getDeclaredField("savedGamePreviewSuppressed");
     showingPreview.setAccessible(true);
     AtomicBoolean answered = new AtomicBoolean();
     AtomicBoolean timedOut = new AtomicBoolean();

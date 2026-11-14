@@ -136,6 +136,12 @@ DESKTOP_TESTS = {
     "featurecat.lizzie.gui.SgfMarkupEditingDesktopTest": TestSelection((
         "editsMarksWithoutSplittingLabelsOrRemovingOtherSgfProperties",
     )),
+    "featurecat.lizzie.gui.SgfStringImportDesktopTest": TestSelection((
+        "largeFilePasteAndOnlineImportsAgreeAndRespectReplacementConfirmation",
+    )),
+    "featurecat.lizzie.gui.SgfCopyDesktopTest": TestSelection((
+        "copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest",
+    )),
     "featurecat.lizzie.gui.ToolbarSettingsDesktopTest": TestSelection((
         *tuple(
             f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]"
@@ -209,6 +215,7 @@ DESKTOP_TESTS = {
     )),
     "featurecat.lizzie.gui.SavedGameLoadDesktopTest": TestSelection((
         "failedSavedListOpensPreserveCurrentGameAndAllowRetry",
+        "previewReadsKeepListResponsiveAndRetireStaleImages",
         *tuple(
             f"unavailablePreviewsKeepSavedGamesUsable(String)[{invocation}]"
             for invocation in range(1, 3)
