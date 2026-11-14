@@ -52,6 +52,17 @@ class SgfCopyDesktopTest {
     assertEquals("PASS", Files.readString(result));
   }
 
+  @Test
+  void copyBurstPublishesTheLatestClickWithoutQueueRejection() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    for (int copies : List.of(17, 18)) {
+      Path result = DesktopProbeProcess.runWithStartupTimeout(
+          getClass(), "sgf-copy-burst-" + copies, List.of(),
+          List.of("burst", Integer.toString(copies)), 120, 90);
+      assertEquals("PASS", Files.readString(result));
+    }
+  }
+
   public static void main(String[] args) {
     try {
       if (args[0].equals("native-clipboard-writer")) {
@@ -64,7 +75,9 @@ class SgfCopyDesktopTest {
         }
         System.exit(0);
       }
-      runProbe(Path.of(args[0]), Path.of(args[1]));
+      boolean burst = args[0].equals("burst");
+      runProbe(Path.of(args[burst ? 2 : 0]), Path.of(args[burst ? 3 : 1]),
+          burst ? Integer.parseInt(args[1]) : 0);
       System.exit(0);
     } catch (Throwable failure) {
       failure.printStackTrace();
@@ -72,7 +85,7 @@ class SgfCopyDesktopTest {
     }
   }
 
-  private static void runProbe(Path work, Path result) throws Exception {
+  private static void runProbe(Path work, Path result, int copies) throws Exception {
     Files.writeString(work.resolve("config.txt"),
         "{\"leelaz\":{\"engine-settings-list\":[]},\"logging\":{\"diagnostics-enabled\":false},"
             + "\"ui\":{\"autoload-empty\":true,\"first-time-load\":false,\"use-language\":3,"
@@ -97,6 +110,11 @@ class SgfCopyDesktopTest {
       return null;
     });
     DesktopProbeProcess.applicationReady(result);
+    if (copies != 0) {
+      assertCopyBurst(result, copies);
+      Files.writeString(result, "PASS");
+      return;
+    }
     String expected = edt(() -> SGFParser.saveToString(false));
     edt(() -> {
       assertTrue(SGFParser.loadFromString("(;SZ[5]C[older request];B[dd])", false));
@@ -266,6 +284,36 @@ class SgfCopyDesktopTest {
       assertEquals(expected, clipboard(), "a closed frame cannot publish its pending copy");
     }
     Files.writeString(result, "PASS");
+  }
+
+  private static void assertCopyBurst(Path result, int copies) throws Exception {
+    SgfSaveQueue queue = (SgfSaveQueue) field(LizzieFrame.class, "sgfCopies").get(null);
+    Executor worker = (Executor) field(SgfSaveQueue.class, "worker").get(queue);
+    String[] expected = new String[1];
+    long revision = SgfSaveCoordinator.acceptedSaveRevision();
+    DesktopProbeProcess.phase(result, "copy-burst");
+    try (var blocked = new WorkerBlock(worker)) {
+      blocked.awaitStarted();
+      CompletableFuture<Void> pending = edt(() -> {
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+            .setContents(new StringSelection("before burst"), null);
+        for (int index = 1; index <= copies; index++) {
+          Lizzie.board.getHistory().getStart().getData().setAuthoredComment("burst " + index);
+          Lizzie.frame.copySgf();
+        }
+        expected[0] = SGFParser.saveToString(false);
+        Lizzie.board.getHistory().getStart().getData().setAuthoredComment("after burst");
+        assertTrue(SgfSaveCoordinator.pendingSaves().isDone());
+        assertEquals(revision, SgfSaveCoordinator.acceptedSaveRevision());
+        return queue.pending();
+      });
+      assertEquals("before burst", clipboard());
+      blocked.release();
+      Throwable failure = pending.handle((value, error) -> error).get(20, TimeUnit.SECONDS);
+      System.out.println("burst=" + copies + " pendingFailure=" + failure + " clipboard=" + clipboard());
+      assertEquals(expected[0], clipboard(), "the latest click must survive a delayed worker burst");
+      assertNull(failure, "superseded copies must not exhaust queue capacity");
+    }
   }
 
   private static void assertTextCopyWins(

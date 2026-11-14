@@ -84,6 +84,21 @@ final class SgfSaveQueue {
     return submitPrepared(() -> operation, stillCurrent, success, failure);
   }
 
+  /** Owner-thread submissions for replaceable work; disk saves continue to use submit. */
+  synchronized <T> CompletableFuture<T> submitLatest(
+      IOOperation<T> operation,
+      BooleanSupplier stillCurrent,
+      Consumer<T> success,
+      Consumer<Throwable> failure) {
+    Request<?> replaced;
+    while ((replaced = waiting.poll()) != null) {
+      inFlight.remove(replaced.completion());
+      // Settle cancellation so the caller can release its snapshot/clipboard watch immediately.
+      replaced.completion().cancel(false);
+    }
+    return submit(operation, stillCurrent, success, failure);
+  }
+
   synchronized <T> CompletableFuture<T> submitPrepared(
       Preparation<T> preparation,
       BooleanSupplier stillCurrent,

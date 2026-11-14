@@ -11059,7 +11059,7 @@ public class LizzieFrame extends JFrame {
       ClipboardCopy.Request capturedRequest = request;
       SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
           Lizzie.board, Lizzie.board.getHistory(), false);
-      sgfCopies.submit(snapshot::serialize,
+      sgfCopies.submitLatest(snapshot::serialize,
           () -> Lizzie.frame == this && Lizzie.config == config
               && !localSgfOpenClosed && (!displayed || isDisplayable()),
           sgfContent -> {
