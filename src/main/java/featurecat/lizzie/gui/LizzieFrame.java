@@ -65,7 +65,6 @@ import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.*;
-import java.awt.datatransfer.Clipboard;
 import java.awt.datatransfer.DataFlavor;
 import java.awt.datatransfer.StringSelection;
 import java.awt.datatransfer.Transferable;
@@ -6292,6 +6291,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public void shutdownFileOpens() {
+    if (Lizzie.frame == this) ClipboardCopy.cancelPending();
     localSgfOpenClosed = true;
     localSgfOpenRequest++;
   }
@@ -11038,14 +11038,43 @@ public class LizzieFrame extends JFrame {
     updateTitle();
   }
 
+  // Clipboard work must not change the disk-save revision or hold up an Open-after-Save barrier.
+  private static final SgfSaveQueue sgfCopies = new SgfSaveQueue(
+      Executors.newSingleThreadExecutor(task -> {
+        Thread worker = new Thread(task, "lizzie-sgf-copy");
+        worker.setDaemon(true);
+        return worker;
+      }), SwingUtilities::invokeLater, AtomicSgfFileWriter::write);
+
   public void copySgf() {
+    if (!SwingUtilities.isEventDispatchThread()) {
+      SwingUtilities.invokeLater(this::copySgf);
+      return;
+    }
+    ClipboardCopy.Request request = null;
+    Config config = Lizzie.config;
+    boolean displayed = isDisplayable();
     try {
-      String sgfContent = SGFParser.saveToString(false);
-      Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
-      Transferable transferableString = new StringSelection(sgfContent);
-      clipboard.setContents(transferableString, null);
-      SgfObservation.record("export", "ok", "clipboard", null);
+      request = ClipboardCopy.beginRequest();
+      ClipboardCopy.Request capturedRequest = request;
+      SGFParser.SaveSnapshot snapshot = SGFParser.captureSaveSnapshot(
+          Lizzie.board, Lizzie.board.getHistory(), false);
+      sgfCopies.submit(snapshot::serialize,
+          () -> Lizzie.frame == this && Lizzie.config == config
+              && !localSgfOpenClosed && (!displayed || isDisplayable()),
+          sgfContent -> {
+            try {
+              if (ClipboardCopy.publish(capturedRequest, new StringSelection(sgfContent))) {
+                SgfObservation.record("export", "ok", "clipboard", null);
+              }
+            } catch (RuntimeException failure) {
+              SgfObservation.record("export", "failed", "clipboard", failure);
+              throw failure;
+            }
+          }, failure -> SgfObservation.record("export", "failed", "clipboard", failure))
+          .whenComplete((value, failure) -> capturedRequest.close());
     } catch (Exception e) {
+      if (request != null) request.close();
       SgfObservation.record("export", "failed", "clipboard", e);
     }
   }
@@ -12516,7 +12545,7 @@ public class LizzieFrame extends JFrame {
             throw new UnsupportedFlavorException(flavor);
           }
         };
-    Toolkit.getDefaultToolkit().getSystemClipboard().setContents(trans, null);
+    ClipboardCopy.setContents(trans);
   }
 
   public void syncOnline(String url) {
