@@ -27,6 +27,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.swing.JDialog;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
@@ -438,7 +439,17 @@ class SgfCopyDesktopTest {
   private static <T> T edt(Callable<T> action) throws Exception {
     FutureTask<T> task = new FutureTask<>(action);
     SwingUtilities.invokeLater(task);
-    return task.get(20, TimeUnit.SECONDS);
+    try {
+      return task.get(20, TimeUnit.SECONDS);
+    } catch (TimeoutException failure) {
+      // The probe exits before the parent timeout can capture a dump. Preserve both sides
+      // of native/EDT waits here, while the blocked threads are still alive.
+      Thread.getAllStackTraces().forEach((thread, stack) -> {
+        System.err.println("Thread " + thread.getName() + " " + thread.getState());
+        for (StackTraceElement frame : stack) System.err.println("\tat " + frame);
+      });
+      throw failure;
+    }
   }
 
   private static final class WorkerBlock implements AutoCloseable {
