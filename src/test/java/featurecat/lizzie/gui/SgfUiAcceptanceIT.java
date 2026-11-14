@@ -865,44 +865,73 @@ public final class SgfUiAcceptanceIT {
 
   private static void clickChooserFile(Robot robot, JFileChooser chooser, String fileName)
       throws Exception {
-    AtomicReference<JList<?>> listRef = new AtomicReference<>();
-    AtomicReference<Integer> indexRef = new AtomicReference<>();
-    await(
-        () ->
-            edt(
-                () -> {
-                  for (Component component : descendants(chooser)) {
-                    if (!(component instanceof JList<?> list) || !list.isShowing()) {
-                      continue;
-                    }
-                    for (int index = 0; index < list.getModel().getSize(); index++) {
-                      Object value = list.getModel().getElementAt(index);
-                      String name =
-                          value instanceof java.io.File f ? f.getName() : String.valueOf(value);
-                      if (fileName.equals(name)) {
-                        list.ensureIndexIsVisible(index);
-                        listRef.set(list);
-                        indexRef.set(index);
-                        return true;
-                      }
-                    }
-                  }
-                  return false;
-                }),
-        Deadline.after(Duration.ofSeconds(15)),
-        "Unicode fixture row in visible chooser");
-    JList<?> list = listRef.get();
-    int index = indexRef.get();
-    Point point = edt(() -> chooserFileClickPoint(list, index));
-    click(robot, point.x, point.y);
-    await(
+    CheckedCondition selected =
         () ->
             edt(
                 () ->
                     chooser.getSelectedFile() != null
-                        && fileName.equals(chooser.getSelectedFile().getName())),
-        Deadline.after(Duration.ofSeconds(5)),
-        "chooser row selection");
+                        && fileName.equals(chooser.getSelectedFile().getName()));
+    // A click can be lost or land on a stale layout while the chooser is still loading. Retry from
+    // the current layout, but never within the multi-click interval: two quick clicks on a file row
+    // form a double-click that approves the chooser and opens the file.
+    Duration spacing = chooserClickSpacing();
+    Deadline deadline = Deadline.after(Duration.ofSeconds(20));
+    AtomicReference<Point> pointRef = new AtomicReference<>();
+    boolean clicked = false;
+    while (true) {
+      pointRef.set(null);
+      await(
+          () -> {
+            pointRef.set(edt(() -> chooserFileRowPoint(chooser, fileName)));
+            return pointRef.get() != null;
+          },
+          deadline,
+          "chooser row selection (row not visible in the chooser file list)");
+      if (clicked && selected.test()) {
+        return;
+      }
+      Point point = pointRef.get();
+      click(robot, point.x, point.y);
+      clicked = true;
+      Deadline settle = Deadline.after(spacing);
+      do {
+        if (selected.test()) {
+          return;
+        }
+        TimeUnit.MILLISECONDS.sleep(25);
+      } while (settle.hasTime());
+      if (!deadline.hasTime()) {
+        throw new AssertionError("Timed out awaiting chooser row selection of " + fileName);
+      }
+    }
+  }
+
+  private static Duration chooserClickSpacing() {
+    Object property = Toolkit.getDefaultToolkit().getDesktopProperty("awt.multiClickInterval");
+    long interval = property instanceof Integer value && value > 0 ? value : 500;
+    return Duration.ofMillis(Math.max(1000, interval + 250));
+  }
+
+  // Returns null while the file row is absent; a transiently unclickable row fails retryably.
+  private static Point chooserFileRowPoint(JFileChooser chooser, String fileName) {
+    for (Component component : descendants(chooser)) {
+      if (!(component instanceof JList<?> list) || !list.isShowing()) {
+        continue;
+      }
+      for (int index = 0; index < list.getModel().getSize(); index++) {
+        Object value = list.getModel().getElementAt(index);
+        String name = value instanceof java.io.File f ? f.getName() : String.valueOf(value);
+        if (fileName.equals(name)) {
+          list.ensureIndexIsVisible(index);
+          try {
+            return chooserFileClickPoint(list, index);
+          } catch (AssertionError | IllegalStateException failure) {
+            throw new IllegalArgumentException("chooser file row is not clickable yet", failure);
+          }
+        }
+      }
+    }
+    return null;
   }
 
   private static <T> Point chooserFileClickPoint(JList<T> list, int index) {
