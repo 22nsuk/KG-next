@@ -139,6 +139,10 @@ DESKTOP_TESTS = {
     "featurecat.lizzie.gui.SgfStringImportDesktopTest": TestSelection((
         "largeFilePasteAndOnlineImportsAgreeAndRespectReplacementConfirmation",
     )),
+    "featurecat.lizzie.gui.SgfCopyDesktopTest": TestSelection((
+        "copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest",
+        "copyBurstPublishesTheLatestClickWithoutQueueRejection",
+    )),
     "featurecat.lizzie.gui.ToolbarSettingsDesktopTest": TestSelection((
         *tuple(
             f"toolbarSettingsStayReachableAndPreserveAnalysis(String)[{invocation}]"

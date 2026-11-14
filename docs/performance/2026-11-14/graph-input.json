@@ -1,0 +1,1648 @@
+{
+  "baseline_commit": "922e57f43bcaba4f9e22c563cab57fece07996c1",
+  "fingerprints": {
+    "candidate_source_sha256": "e3c52b78245db3c12b449f6e0376a428b759fe435bef25d12e08ac2db17c904c",
+    "test_fixture_source_sha256": "090b836bd7f619ed38869722aa1986998c8ed3447405fc4e20989c174a97dc6b",
+    "probe_source_sha256": "0c21ad3391257a898ff83ce7a183eab66e0afa0bc1447cbebda8ab200ce27bf1",
+    "baseline_source_sha256": "b1776ad1a30d479b2b5ee55c3c12d8680dc2496a5695eda791778191cd7b1572",
+    "renamed_baseline_source_sha256": "2ff9fca705877438b4ff2512e5655f4ae615462eae1f220d26622a094a8aa8de",
+    "candidate_classes": {
+      "featurecat/lizzie/gui/WinrateGraph$BaselineFillConsumer.class": "4cfbf9ea0af0c865fe1c52d274cae0185cd78bfe604ba02c09bcae2b8410fb3c",
+      "featurecat/lizzie/gui/WinrateGraph$BaselineFillShape.class": "ab74a862d799726bb4e50de222a35c5d35de1a22c2c07f812296b25fe1ac9fc3",
+      "featurecat/lizzie/gui/WinrateGraph$GraphNavigationTarget.class": "fbdb9d71aee42ecc408140632d64e55a6df94d2ecb81f87cf108532d26872c29",
+      "featurecat/lizzie/gui/WinrateGraph$GraphPath.class": "4ac011aa01217926f02f08b61b9550344e0897cf2b2d18966e1f30364fbbaeec",
+      "featurecat/lizzie/gui/WinrateGraph$GraphPoint.class": "0d4ae641d216f04941c25dfc6554b6c7ab0d04acebae932612a57bd793b39f22",
+      "featurecat/lizzie/gui/WinrateGraph$QuickOverviewLayout.class": "7b00257ca1c3b6bb2a710147d8fc8ecb5f78678b9483c112d320298841c1bd97",
+      "featurecat/lizzie/gui/WinrateGraph$QuickOverviewMove.class": "66cbaaed6ce43ca6e0bc2155baee3833052e174f7c4f08007530c60c86fa91e9",
+      "featurecat/lizzie/gui/WinrateGraph$QuickOverviewPoint.class": "6fbb2e94f7b4ec2d799a6de7fd3341459a5ccbfa0aba618083a93bd4c03840ff",
+      "featurecat/lizzie/gui/WinrateGraph$RenderableMetrics.class": "43cae13ff6dffba9fd932d6596a4186e16236daac49b71d1be8241f1e3e46000",
+      "featurecat/lizzie/gui/WinrateGraph.class": "5205c12f62d391590fd0c1ba1e181018b47edbe1fa96c3a127c519100f874bda"
+    },
+    "baseline_and_probe_classes": {
+      "featurecat/lizzie/gui/BaselineWinrateGraph$BaselineFillConsumer.class": "9021c89d252480497119d0847b0cbb8226d2a88048bb9673c279becedc9e0caa",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$BaselineFillShape.class": "c7e878470a9bbfb3b43e8302b77169eac6d34b05fa3f8800c6d05796a5674ace",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$GraphNavigationTarget.class": "b21f3be1560c47fc2911b08800bd21fa359084dcd55ae85f5db77e44ed7a6863",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$GraphPoint.class": "af67574ce263b2e1a66411a2086788fbe62b844df1512790e9957743f956db79",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$QuickOverviewLayout.class": "ef38ad851fd23e577744940df1956b52c9cda32a8527c7e2b80f25ad419afc20",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$QuickOverviewMove.class": "5354d25ef600b2581cd4c0b4df8d64bd853c432ce68dbcbbde320a6543fe469b",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$QuickOverviewPoint.class": "c7c63b14b22779aeafb286e578b58d154df9d7ad0e3e76b888321f5a8ec3d8ff",
+      "featurecat/lizzie/gui/BaselineWinrateGraph$RenderableMetrics.class": "12019264071481a5d5f9565320597fd14ace67591d92d472f201b799fcf68196",
+      "featurecat/lizzie/gui/BaselineWinrateGraph.class": "47bdabe67da56e3ca87741e530fc88d777b0c64f30a532eddcc8e872bd2b40a2",
+      "featurecat/lizzie/gui/GraphHitPairedProbe.class": "b760b94e2003d1e95284835eef98cbfff3ea87c8ecd5a88dba88f5f1480ae4e4"
+    },
+    "fixture_classes": {
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$CountingHistory.class": "ba2098a790d4c56ee84d7c3b2dfdeaa08b097be2da8d7f5f4680f1647c78b2ea",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$CountingPathNode.class": "343f03fb59850d0907eb3c622affaceeba1ba21720ed184f09ee64edc9a355c7",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$LinearFixture.class": "9b5fae589b5d6f7b269043e344c4a20faf015cf633362d414ed0efe364bbb8e4",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$TestEnvironment.class": "821e9d3c1eca61eaa23de7f7f74f81af2067af3bd099c46c6006fe1f87c51a13",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$TrackingBoard.class": "a416eb27933a19ce0d2acb0dc3a222a9dbd03c18e0af175a8a9b06608cb91bd8",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$TrackingFrame.class": "5ca8d340c6c9d3799f8a6190748bebbcdf14356f6a347f1d893a2645c688defc",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$UnsafeHolder.class": "9dc0dcbead2fd6b1d45fcdaef30087f65dfb2c4f688c095729a8f7237ef754f6",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest$VariationFixture.class": "5de85fa713495bc98c846c047b85be34341f753b7da1f1561a43f6d662212ec1",
+      "featurecat/lizzie/gui/WinrateGraphVariationHitTest.class": "88931c8e469409161e40795903b0e0e23456491c06aa0fba8e86ff489ac1cdf2"
+    },
+    "shared_production_classes_count": 3226,
+    "shared_production_class_manifest_sha256": "59b71150687b7b2066ff5bab6cc5f36bc560f4060471d7d8b2c0332dcca1ca27",
+    "dependencies": {
+      "net/java/dev/jna/jna-platform/5.19.1/jna-platform-5.19.1.jar": "3b3864f5b449e9c3c24b16861524b622b086563f44e0cd8384c8efc5a6052f82",
+      "net/java/dev/jna/jna/5.19.1/jna-5.19.1.jar": "4fb141dd8ef6b0585ffceea4bc49602fbc6312fa977e2c488794ea3e6aafecae",
+      "org/json/json/20260719/json-20260719.jar": "c243f45f9590c12694a4142ed3f07fc70dfb71e4daebd05ae234bf92a2da92a6",
+      "org/slf4j/slf4j-api/2.0.16/slf4j-api-2.0.16.jar": "a12578dde1ba00bd9b816d388a0b879928d00bab3c83c240f7013bf4196c579a",
+      "ch/qos/logback/logback-classic/1.6.3/logback-classic-1.6.3.jar": "beebede8db065fe1b72909ecc66bb49acda618901635d86c25fce14a5915e37e",
+      "ch/qos/logback/logback-core/1.6.3/logback-core-1.6.3.jar": "a6967a28c8b086dee75a694d2f6fb8830c71153539866d7d8af065c9b6df91e0",
+      "com/google/zxing/core/3.5.3/core-3.5.3.jar": "8d8064c1636fdaef7189dd9055c7d59950a8940a12f2293956446ec3c109fd82",
+      "com/google/zxing/javase/3.5.3/javase-3.5.3.jar": "d65795b789efac8a2156cb2a4b648d20e58bfe03613165bb5dce6870ecef798e",
+      "org/junit/jupiter/junit-jupiter/5.11.4/junit-jupiter-5.11.4.jar": "aa880e4afba87d447357e4c1fc098c5cb1d200cb9403496c00d3b35a5bd0e8db",
+      "org/junit/jupiter/junit-jupiter-api/5.11.4/junit-jupiter-api-5.11.4.jar": "ab83ef9e51ac4597d59d26b4b58812129550e2f579a404c8af7d09f5ce5b4293",
+      "org/opentest4j/opentest4j/1.3.0/opentest4j-1.3.0.jar": "48e2df636cab6563ced64dcdff8abb2355627cb236ef0bf37598682ddf742f1b",
+      "org/junit/platform/junit-platform-commons/1.11.4/junit-platform-commons-1.11.4.jar": "9edd969b0d0670c54105bc91ae79bd1c6f503e12115faba82073b84c86bbc334",
+      "org/junit/jupiter/junit-jupiter-params/5.11.4/junit-jupiter-params-5.11.4.jar": "02a6e015de7ce94ac7f256e7fa05b8091dea861fe79a555a7993313d0f6c7d96",
+      "org/junit/jupiter/junit-jupiter-engine/5.11.4/junit-jupiter-engine-5.11.4.jar": "cdf8ac59f3fad774ca738ad03890950eeb91833ef0e8908753177edd26f1581c",
+      "org/junit/platform/junit-platform-launcher/1.11.4/junit-platform-launcher-1.11.4.jar": "d7430bd029e7fcced53ee445e4d2d1a8a1e043ea4c4df43b6335a857f79761ae",
+      "org/junit/platform/junit-platform-engine/1.11.4/junit-platform-engine-1.11.4.jar": "b1dd998f64f9acadc15966d9cd3d08074662677b3e390f0a38fcbf0bb4c72330",
+      "org/apiguardian/apiguardian-api/1.1.2/apiguardian-api-1.1.2.jar": "b509448ac506d607319f182537f0b35d71007582ec741832a1f111e5b5b70b38",
+      "me/friwi/jcefmaven/152.0.6/jcefmaven-152.0.6.jar": "2128265df3262ffa447ee3b29502e836a58eaf3aa144710bd1c03be27be90576",
+      "me/friwi/jcef-api/jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83/jcef-api-jcef-17e805a+cef-152.0.6+g708dc14+chromium-152.0.7977.83.jar": "c95083e2dd36272d98db4b08ba7b4963bcab02f06c52e7c921fab17728834aeb",
+      "org/apache/commons/commons-compress/1.28.0/commons-compress-1.28.0.jar": "e1522945218456f3649a39bc4afd70ce4bd466221519dba7d378f2141a4642ca",
+      "commons-codec/commons-codec/1.19.0/commons-codec-1.19.0.jar": "5c3881e4f556855e9c532927ee0c9dfde94cc66760d5805c031a59887070af5f",
+      "commons-io/commons-io/2.20.0/commons-io-2.20.0.jar": "df90bba0fe3cb586b7f164e78fe8f8f4da3f2dd5c27fa645f888100ccc25dd72",
+      "org/apache/commons/commons-lang3/3.18.0/commons-lang3-3.18.0.jar": "4eeeae8d20c078abb64b015ec158add383ac581571cddc45c68f0c9ae0230720",
+      "com/google/code/gson/gson/2.11.0/gson-2.11.0.jar": "57928d6e5a6edeb2abd3770a8f95ba44dce45f3b23b7a9dc2b309c581552a78b",
+      "com/google/errorprone/error_prone_annotations/2.27.0/error_prone_annotations-2.27.0.jar": "24c923372c58e35d0b9f16a028929bb9aedc77521867c274f2bd0735df5ba1f5",
+      "org/apache/sshd/sshd-core/2.20.0/sshd-core-2.20.0.jar": "0f2fd957d1c7162b7fa682942e30de21be3377b98d698b6b5b729657df74e576",
+      "org/apache/sshd/sshd-common/2.20.0/sshd-common-2.20.0.jar": "55612c7c6a03302940c047d8b8b80761e963f4c529a032f47acda99a1a064334",
+      "org/slf4j/jcl-over-slf4j/1.7.36/jcl-over-slf4j-1.7.36.jar": "ab57ca8fd223772c17365d121f59e94ecbf0ae59d08c03a3cb5b81071c019195",
+      "com/googlecode/juniversalchardet/juniversalchardet/1.0.3/juniversalchardet-1.0.3.jar": "757bfe906193b8b651e79dc26cd67d6b55d0770a2cdfb0381591504f779d4a76",
+      "com/jhlabs/filters/2.0.235/filters-2.0.235.jar": "be6a1d54ebb043495e31e25e72b440f69156a5624cdd7e1c55c47e30d4fae308",
+      "org/java-websocket/Java-WebSocket/1.6.0/Java-WebSocket-1.6.0.jar": "eae29213e4f16515639c28957200f011b3967fffcada1962cf0255d24919c22f",
+      "io/socket/socket.io-client/2.1.2/socket.io-client-2.1.2.jar": "7cad7b85f6ff3d8c0194841ab2bd91d7275acbad3883c23a72df25067ecf59ef",
+      "io/socket/engine.io-client/2.1.0/engine.io-client-2.1.0.jar": "84bb94a41b0bd1f6f5762804ecc04b3626c3397aa2cfbc22daba6eb0622ee575",
+      "com/squareup/okhttp3/okhttp/3.12.12/okhttp-3.12.12.jar": "36f1cd0798fb231e5be189d0bfe2634d5879f73082be5718ca30a73d1ee15e4b",
+      "com/squareup/okio/okio/1.15.0/okio-1.15.0.jar": "693fa319a7e8843300602b204023b7674f106ebcb577f2dd5807212b66118bd2"
+    }
+  },
+  "runtime": {
+    "java": "openjdk version \"21.0.13\" 2026-10-20 LTS\nOpenJDK Runtime Environment Temurin-21.0.13+9 (build 21.0.13+9-LTS)\nOpenJDK 64-Bit Server VM Temurin-21.0.13+9 (build 21.0.13+9-LTS, mixed mode, sharing)",
+    "os": "Linux",
+    "architecture": "x86_64",
+    "available_processors": 9,
+    "jvm_flags": [
+      "-XX:-UsePerfData",
+      "-Xms512m",
+      "-Xmx512m",
+      "-Djava.awt.headless=true"
+    ],
+    "thread": "Swing EDT",
+    "shared_host": true
+  },
+  "protocol": {
+    "same_jvm": true,
+    "baseline_transform": "Only public class WinrateGraph { becomes public class BaselineWinrateGraph {; exact bytes checked before running.",
+    "cases": 24,
+    "order": "AB for even pairs; BA for odd pairs; A is baseline.",
+    "lookups_per_batch_per_version": 200,
+    "warmup_first_case_per_version": 15000,
+    "warmup_other_cases_per_version": 1500,
+    "graph_pixels": [
+      1200,
+      260
+    ],
+    "board_size": [
+      3,
+      3
+    ],
+    "reflection_in_measured_loop": false,
+    "all_samples_retained": true,
+    "identity_check_before_timing": "Exact node identity across both versions at all four input coordinates; stale input must be null.",
+    "summary_cpu_reduction": "100 * (1 - median(candidate_cpu_ns / baseline_cpu_ns)) across all 24 adjacent pairs from both runs for each condition.",
+    "summary_allocation_reduction": "100 * (1 - median(candidate_bytes) / median(baseline_bytes)).",
+    "jvm_runs": 2,
+    "pairs_per_case_per_jvm": 12
+  },
+  "runs": [
+    {
+      "started_at_utc": "2026-11-13T18:49:05.280064+00:00",
+      "finished_at_utc": "2026-11-13T18:53:44.012253+00:00",
+      "host_load_before": [
+        7.1328125,
+        6.18798828125,
+        7.3916015625
+      ],
+      "host_load_after": [
+        4.021484375,
+        5.7578125,
+        6.9541015625
+      ],
+      "exit_code": 0,
+      "fingerprints_unchanged_after": true,
+      "raw_output_sha256": "04c2dab3fc6e0f2f18ecc8a3ab4f22680d6893ae6e55668aa28df48b2c2efc01"
+    },
+    {
+      "started_at_utc": "2026-11-13T18:55:20.487903+00:00",
+      "finished_at_utc": "2026-11-13T18:59:24.830829+00:00",
+      "host_load_before": [
+        3.44970703125,
+        5.087890625,
+        6.59619140625
+      ],
+      "host_load_after": [
+        5.47021484375,
+        5.62646484375,
+        6.47265625
+      ],
+      "exit_code": 0,
+      "fingerprints_unchanged_after": true,
+      "raw_output_sha256": "6f706634d5719cc5e4f0d99c2e5c5a00d8f061e4af295591e07ffe84f2cd5ae0"
+    }
+  ],
+  "verification": {
+    "candidate": {
+      "totals": {
+        "tests": 124,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failures": [],
+      "reports_sha256": {
+        "TEST-featurecat.lizzie.gui.WinrateGraphAreaFillTest.xml": "a3b2ef199474ffb3b43d543855b16fe8955b9d95e56f6f825099976dbe981a41",
+        "TEST-featurecat.lizzie.gui.WinrateGraphDisplaySettingsTest.xml": "de6098d0bd4d4bd0375e9caa52aa1c21ca66e007365f798a9d38b93aab0ab898",
+        "TEST-featurecat.lizzie.gui.WinrateGraphEnginePkModeHitTest.xml": "28dd021c509e893c0ea1e1ed85c6f226c43c186ac5cdd192f0e79454bb167d86",
+        "TEST-featurecat.lizzie.gui.WinrateGraphLegendCopyTest.xml": "bce2fdca41ed993b88a97d383ea25d5bd0d81296a9d5964835a571b7469a69a5",
+        "TEST-featurecat.lizzie.gui.WinrateGraphQuickOverviewHitTest.xml": "25ddb15172412c1451c1e0f85ae87495d08a0c188c46362889b0dcbf100e2e8d",
+        "TEST-featurecat.lizzie.gui.WinrateGraphQuickOverviewTest.xml": "683662177ce7cbe125c85f1bf556b5744fff6f327143d6be45f981a3ffc20433",
+        "TEST-featurecat.lizzie.gui.WinrateGraphScoreLeadDisplayTest.xml": "c6f12860d860d0f40eee86a8a7d618cecccbbe5ef9bd5a1880cc54acb74d0ec8",
+        "TEST-featurecat.lizzie.gui.WinrateGraphSnapshotBoundaryHitTest.xml": "ff2f9ced7bac0e8a6e7b77db5ff4c448f8f0672fcb4375f9c18ca708cda3d700",
+        "TEST-featurecat.lizzie.gui.WinrateGraphVariationHitTest.xml": "64554ed1a647326f2c5cbc6158bfb2fd5ced0acc77a511ba560fe7bf4082ca32"
+      }
+    },
+    "baseline_negative_control": {
+      "totals": {
+        "tests": 124,
+        "failures": 2,
+        "errors": 0,
+        "skipped": 0
+      },
+      "failures": [
+        {
+          "class": "featurecat.lizzie.gui.WinrateGraphVariationHitTest",
+          "case": "insideGraphSharesPathTraversalAndRechecksEachInput(boolean)[1]",
+          "message": "one lookup should find the selected path end once. ==> expected: <1> but was: <2>"
+        },
+        {
+          "class": "featurecat.lizzie.gui.WinrateGraphVariationHitTest",
+          "case": "insideGraphSharesPathTraversalAndRechecksEachInput(boolean)[2]",
+          "message": "one lookup should find the selected path end once. ==> expected: <1> but was: <3>"
+        }
+      ],
+      "reports_sha256": {
+        "TEST-featurecat.lizzie.gui.WinrateGraphAreaFillTest.xml": "bc2fa29dccf8a98a48702e1aeb9c18c282691f020caa46d7da67a2949ca7e357",
+        "TEST-featurecat.lizzie.gui.WinrateGraphDisplaySettingsTest.xml": "749c9f69920c40082bdaad792f3d7b3161ca42ef7e8be32fbc56bfca19e713ed",
+        "TEST-featurecat.lizzie.gui.WinrateGraphEnginePkModeHitTest.xml": "12917ac1971f5f7115bf783d363104f4ce3a3f4b4f6cc14e88fbf26f78432233",
+        "TEST-featurecat.lizzie.gui.WinrateGraphLegendCopyTest.xml": "ae6403a04a3126c021b7c8008124c560230d562fb3a2bcb23b7485dc1537a0ec",
+        "TEST-featurecat.lizzie.gui.WinrateGraphQuickOverviewHitTest.xml": "aa5e5288085a4b494c3e537a3029280faebd062005bfec329e608acf767f1965",
+        "TEST-featurecat.lizzie.gui.WinrateGraphQuickOverviewTest.xml": "29e49f1f99b26d3c9f88cb6ccfad3760bee34003e7dc0cd2511ef6cd99661c96",
+        "TEST-featurecat.lizzie.gui.WinrateGraphScoreLeadDisplayTest.xml": "803379f8526982162c05a83bd589fc1939dee30cf6d72e6813d9e86ccd04b669",
+        "TEST-featurecat.lizzie.gui.WinrateGraphSnapshotBoundaryHitTest.xml": "20613f45dd848ebab83a53c55dac02f2382b5268f3b8391ea4bd7f204fc9abf9",
+        "TEST-featurecat.lizzie.gui.WinrateGraphVariationHitTest.xml": "ccaecf9498dd1d354910b5e6c1a2f694220b71d764a904be49a2bcde9e10956a"
+      }
+    }
+  },
+  "summaries": [
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": false,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 111185.02249999999,
+      "candidate_cpu_ns_median": 82148.72750000001,
+      "baseline_bytes_median": 113036.0,
+      "candidate_bytes_median": 83908.0,
+      "baseline_wall_ns_median": 120342.41500000001,
+      "candidate_wall_ns_median": 81782.4925,
+      "cpu_reduction_percent": 24.10505946280328,
+      "allocation_reduction_percent": 25.768781627092253,
+      "cpu_ratio_range": [
+        0.11208170280645849,
+        5.05056622521281
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 28.938304225445634,
+        "BA": 8.603552096387501
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 22.626036032453676,
+        "1": 32.36006870745716
+      },
+      "baseline_bytes_range": [
+        113036.0,
+        113036.76
+      ],
+      "candidate_bytes_range": [
+        83908.0,
+        83908.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": false,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 38463.22,
+      "candidate_cpu_ns_median": 50295.369999999995,
+      "baseline_bytes_median": 41960.0,
+      "candidate_bytes_median": 41992.0,
+      "baseline_wall_ns_median": 39928.2075,
+      "candidate_wall_ns_median": 53501.4775,
+      "cpu_reduction_percent": -4.688099552019365,
+      "allocation_reduction_percent": -0.07626310772164135,
+      "cpu_ratio_range": [
+        0.2873182734559142,
+        3.9979725303716522
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 11.069515589361556,
+        "BA": -30.975363771351816
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -25.308876998472087,
+        "1": 2.082257870165738
+      },
+      "baseline_bytes_range": [
+        41960.0,
+        41960.0
+      ],
+      "candidate_bytes_range": [
+        41992.0,
+        41992.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": false,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 214965.52000000002,
+      "candidate_cpu_ns_median": 184729.21750000003,
+      "baseline_bytes_median": 263486.0,
+      "candidate_bytes_median": 214798.0,
+      "baseline_wall_ns_median": 214864.99,
+      "candidate_wall_ns_median": 188772.465,
+      "cpu_reduction_percent": 16.282067674213607,
+      "allocation_reduction_percent": 18.478401129471777,
+      "cpu_ratio_range": [
+        0.19126541762006408,
+        1.7883270536488798
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 12.279327974730613,
+        "BA": 16.772572188469514
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 16.455140601102404,
+        "1": 5.533420358158669
+      },
+      "baseline_bytes_range": [
+        263486.0,
+        263486.0
+      ],
+      "candidate_bytes_range": [
+        214798.0,
+        214802.32
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": false,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 34004.35,
+      "candidate_cpu_ns_median": 34762.6125,
+      "baseline_bytes_median": 41960.0,
+      "candidate_bytes_median": 41992.0,
+      "baseline_wall_ns_median": 34224.3,
+      "candidate_wall_ns_median": 35155.619999999995,
+      "cpu_reduction_percent": -10.184794966048894,
+      "allocation_reduction_percent": -0.07626310772164135,
+      "cpu_ratio_range": [
+        0.5315068656924883,
+        1.8982265592870569
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 0.8356683709276114,
+        "BA": -14.383650264919034
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -18.144155101685875,
+        "1": 1.322577782828105
+      },
+      "baseline_bytes_range": [
+        41960.0,
+        41960.0
+      ],
+      "candidate_bytes_range": [
+        41992.0,
+        41992.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": true,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 238959.10499999998,
+      "candidate_cpu_ns_median": 181442.6475,
+      "baseline_bytes_median": 125146.0,
+      "candidate_bytes_median": 102424.0,
+      "baseline_wall_ns_median": 245089.8175,
+      "candidate_wall_ns_median": 190965.85749999998,
+      "cpu_reduction_percent": 21.46366670572597,
+      "allocation_reduction_percent": 18.15639333258754,
+      "cpu_ratio_range": [
+        0.27149466362689056,
+        2.9878353747356914
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 24.985627895495412,
+        "BA": 4.711288449870654
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 15.040425199164641,
+        "1": 21.867040186878818
+      },
+      "baseline_bytes_range": [
+        125140.0,
+        125152.0
+      ],
+      "candidate_bytes_range": [
+        102424.0,
+        102424.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": true,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 137532.635,
+      "candidate_cpu_ns_median": 84907.7025,
+      "baseline_bytes_median": 48400.0,
+      "candidate_bytes_median": 48432.0,
+      "baseline_wall_ns_median": 138223.325,
+      "candidate_wall_ns_median": 81512.3925,
+      "cpu_reduction_percent": 19.806741191598764,
+      "allocation_reduction_percent": -0.06611570247934129,
+      "cpu_ratio_range": [
+        0.2321255918936396,
+        3.171593935359977
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 6.575561188394974,
+        "BA": 33.165863201972236
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 15.565033983112354,
+        "1": 19.806741191598764
+      },
+      "baseline_bytes_range": [
+        48400.0,
+        48400.0
+      ],
+      "candidate_bytes_range": [
+        48432.0,
+        48432.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": true,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 441365.3125,
+      "candidate_cpu_ns_median": 275814.48750000005,
+      "baseline_bytes_median": 274174.0,
+      "candidate_bytes_median": 231886.0,
+      "baseline_wall_ns_median": 461977.135,
+      "candidate_wall_ns_median": 302722.72,
+      "cpu_reduction_percent": 5.350179899042217,
+      "allocation_reduction_percent": 15.423781977868067,
+      "cpu_ratio_range": [
+        0.28600190032440675,
+        2.058563529164923
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -2.730795853382295,
+        "BA": 39.36736108330374
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 42.731322057096456,
+        "1": 0.9860900343043877
+      },
+      "baseline_bytes_range": [
+        274174.0,
+        274174.0
+      ],
+      "candidate_bytes_range": [
+        231886.0,
+        231886.0
+      ]
+    },
+    {
+      "main_length": 400,
+      "branches": 0,
+      "pk": true,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 62283.5775,
+      "candidate_cpu_ns_median": 73169.76250000001,
+      "baseline_bytes_median": 48400.0,
+      "candidate_bytes_median": 48432.0,
+      "baseline_wall_ns_median": 58992.9225,
+      "candidate_wall_ns_median": 73113.0175,
+      "cpu_reduction_percent": -2.079458692301528,
+      "allocation_reduction_percent": -0.06611570247934129,
+      "cpu_ratio_range": [
+        0.16103716140776356,
+        5.012280824669208
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 9.287872260545882,
+        "BA": -17.732719119483175
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -2.079458692301528,
+        "1": -6.365388166635766
+      },
+      "baseline_bytes_range": [
+        48400.0,
+        48400.0
+      ],
+      "candidate_bytes_range": [
+        48432.0,
+        48432.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": false,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 874701.1675,
+      "candidate_cpu_ns_median": 557701.3075,
+      "baseline_bytes_median": 498024.0,
+      "candidate_bytes_median": 352488.0,
+      "baseline_wall_ns_median": 895660.0825,
+      "candidate_wall_ns_median": 557630.5375,
+      "cpu_reduction_percent": 28.880250473200753,
+      "allocation_reduction_percent": 29.222688063225867,
+      "cpu_ratio_range": [
+        0.27859890184715097,
+        2.9142243258401868
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 38.81925660679422,
+        "BA": 17.709916197284002
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 7.602782756182236,
+        "1": 28.880250473200753
+      },
+      "baseline_bytes_range": [
+        498024.0,
+        498040.0
+      ],
+      "candidate_bytes_range": [
+        352488.0,
+        352488.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": false,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 424150.525,
+      "candidate_cpu_ns_median": 352786.15249999997,
+      "baseline_bytes_median": 209568.0,
+      "candidate_bytes_median": 209600.0,
+      "baseline_wall_ns_median": 428588.48,
+      "candidate_wall_ns_median": 520839.63749999995,
+      "cpu_reduction_percent": 1.8150673425548547,
+      "allocation_reduction_percent": -0.015269506794934884,
+      "cpu_ratio_range": [
+        0.4036095964027639,
+        12.35759289389702
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -2.224640044559756,
+        "BA": 2.0299528338602157
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -5.168673564201587,
+        "1": 4.78439117753795
+      },
+      "baseline_bytes_range": [
+        209568.0,
+        209568.0
+      ],
+      "candidate_bytes_range": [
+        209600.0,
+        209600.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": false,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 1285349.0725,
+      "candidate_cpu_ns_median": 1122832.0025,
+      "baseline_bytes_median": 1265950.0,
+      "candidate_bytes_median": 1022846.0,
+      "baseline_wall_ns_median": 1315148.615,
+      "candidate_wall_ns_median": 1149170.8875000002,
+      "cpu_reduction_percent": 6.752433458924334,
+      "allocation_reduction_percent": 19.203286069749993,
+      "cpu_ratio_range": [
+        0.3557763701118109,
+        2.5312240728772766
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 20.80496451815119,
+        "BA": 1.5472074267197988
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -0.11401971006517186,
+        "1": 9.415673288486627
+      },
+      "baseline_bytes_range": [
+        1265950.0,
+        1265950.0
+      ],
+      "candidate_bytes_range": [
+        1022846.0,
+        1022846.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": false,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 265958.7025,
+      "candidate_cpu_ns_median": 254851.5725,
+      "baseline_bytes_median": 209568.0,
+      "candidate_bytes_median": 209600.0,
+      "baseline_wall_ns_median": 278293.96,
+      "candidate_wall_ns_median": 254775.2475,
+      "cpu_reduction_percent": -9.32692977167151,
+      "allocation_reduction_percent": -0.015269506794934884,
+      "cpu_ratio_range": [
+        0.4167908247816778,
+        1.8556896774633664
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 5.129609213532138,
+        "BA": -11.888737989307497
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -11.888737989307497,
+        "1": 5.129609213532138
+      },
+      "baseline_bytes_range": [
+        209568.0,
+        209568.0
+      ],
+      "candidate_bytes_range": [
+        209600.0,
+        209600.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": true,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 1336275.3725,
+      "candidate_cpu_ns_median": 725384.0025,
+      "baseline_bytes_median": 559088.0,
+      "candidate_bytes_median": 445552.0,
+      "baseline_wall_ns_median": 1346683.6775,
+      "candidate_wall_ns_median": 863390.9450000001,
+      "cpu_reduction_percent": 16.038096732608143,
+      "allocation_reduction_percent": 20.30735769682054,
+      "cpu_ratio_range": [
+        0.15522182477724347,
+        2.7830025911998715
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 12.80428579059274,
+        "BA": 19.139466338417677
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 31.831493000158982,
+        "1": 16.038096732608143
+      },
+      "baseline_bytes_range": [
+        559088.0,
+        559088.0
+      ],
+      "candidate_bytes_range": [
+        445552.0,
+        445552.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": true,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 408083.8325,
+      "candidate_cpu_ns_median": 333814.625,
+      "baseline_bytes_median": 242168.0,
+      "candidate_bytes_median": 242200.0,
+      "baseline_wall_ns_median": 420930.0775,
+      "candidate_wall_ns_median": 340303.505,
+      "cpu_reduction_percent": 16.815342614714403,
+      "allocation_reduction_percent": -0.013213967163294704,
+      "cpu_ratio_range": [
+        0.1303436624413353,
+        2.4509159395867446
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 17.262818925921675,
+        "BA": 16.815342614714403
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 7.456211540209168,
+        "1": 16.815342614714403
+      },
+      "baseline_bytes_range": [
+        242168.0,
+        242168.0
+      ],
+      "candidate_bytes_range": [
+        242200.0,
+        242200.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": true,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 1381592.8875000002,
+      "candidate_cpu_ns_median": 1301241.545,
+      "baseline_bytes_median": 1319898.0,
+      "candidate_bytes_median": 1108794.0,
+      "baseline_wall_ns_median": 1436231.6400000001,
+      "candidate_wall_ns_median": 1350419.5899999999,
+      "cpu_reduction_percent": 2.7423106214762294,
+      "allocation_reduction_percent": 15.993963169881308,
+      "cpu_ratio_range": [
+        0.23028460637336803,
+        3.5761838469935205
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 14.84646032089525,
+        "BA": -18.744715181072678
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -12.16118222760354,
+        "1": 16.017079688638947
+      },
+      "baseline_bytes_range": [
+        1319898.0,
+        1319898.0
+      ],
+      "candidate_bytes_range": [
+        1108794.0,
+        1108794.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 0,
+      "pk": true,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 382102.81999999995,
+      "candidate_cpu_ns_median": 425922.53,
+      "baseline_bytes_median": 242168.0,
+      "candidate_bytes_median": 242200.0,
+      "baseline_wall_ns_median": 460340.52249999996,
+      "candidate_wall_ns_median": 499735.305,
+      "cpu_reduction_percent": -20.031399959658145,
+      "allocation_reduction_percent": -0.013213967163294704,
+      "cpu_ratio_range": [
+        0.21103087134071533,
+        9.45276432127347
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -1.9155647052519376,
+        "BA": -60.60319753417733
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -3.8721975055999724,
+        "1": -63.67372559114908
+      },
+      "baseline_bytes_range": [
+        242168.0,
+        242168.0
+      ],
+      "candidate_bytes_range": [
+        242200.0,
+        242200.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": false,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 1656293.575,
+      "candidate_cpu_ns_median": 1643778.47,
+      "baseline_bytes_median": 850392.0,
+      "candidate_bytes_median": 576172.0,
+      "baseline_wall_ns_median": 1781180.46,
+      "candidate_wall_ns_median": 1680252.1400000001,
+      "cpu_reduction_percent": 22.553185518445428,
+      "allocation_reduction_percent": 32.2463052333512,
+      "cpu_ratio_range": [
+        0.14374188657349074,
+        2.409794185977939
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 22.553185518445428,
+        "BA": 21.129564681587077
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 33.73202469939008,
+        "1": -0.6279080779384882
+      },
+      "baseline_bytes_range": [
+        850392.0,
+        850392.0
+      ],
+      "candidate_bytes_range": [
+        576160.0,
+        576184.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": false,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 735315.1925,
+      "candidate_cpu_ns_median": 797664.9275,
+      "baseline_bytes_median": 370320.0,
+      "candidate_bytes_median": 370340.0,
+      "baseline_wall_ns_median": 768060.2725,
+      "candidate_wall_ns_median": 811318.4425,
+      "cpu_reduction_percent": -8.776735951244309,
+      "allocation_reduction_percent": -0.0054007344998829865,
+      "cpu_ratio_range": [
+        0.3171207139216155,
+        1.838695444516496
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -30.019714575271106,
+        "BA": -6.349978994396954
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -6.349978994396954,
+        "1": -11.114805674017658
+      },
+      "baseline_bytes_range": [
+        370320.0,
+        370320.0
+      ],
+      "candidate_bytes_range": [
+        370328.0,
+        370352.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": false,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 3624226.35,
+      "candidate_cpu_ns_median": 3077050.125,
+      "baseline_bytes_median": 2388082.0,
+      "candidate_bytes_median": 1919625.92,
+      "baseline_wall_ns_median": 3775331.015,
+      "candidate_wall_ns_median": 3178930.9975,
+      "cpu_reduction_percent": 10.997317993988132,
+      "allocation_reduction_percent": 19.616415181723244,
+      "cpu_ratio_range": [
+        0.358574457949041,
+        3.193923264903763
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 17.02189819034613,
+        "BA": 10.051143925631179
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 8.449667234494363,
+        "1": 17.114511859161084
+      },
+      "baseline_bytes_range": [
+        2388082.0,
+        2388094.0
+      ],
+      "candidate_bytes_range": [
+        1919610.0,
+        1919644.64
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": false,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 737999.13,
+      "candidate_cpu_ns_median": 1038603.4725,
+      "baseline_bytes_median": 370320.0,
+      "candidate_bytes_median": 370340.0,
+      "baseline_wall_ns_median": 803058.96,
+      "candidate_wall_ns_median": 1041994.9475,
+      "cpu_reduction_percent": -18.148078765631826,
+      "allocation_reduction_percent": -0.0054007344998829865,
+      "cpu_ratio_range": [
+        0.3493960897497082,
+        8.604285166405473
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -15.108091875139129,
+        "BA": -32.73458642352514
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -13.466896151956043,
+        "1": -26.800395372022102
+      },
+      "baseline_bytes_range": [
+        370320.0,
+        370320.0
+      ],
+      "candidate_bytes_range": [
+        370328.0,
+        370352.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": true,
+      "overview": false,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 1535795.915,
+      "candidate_cpu_ns_median": 1056813.6675,
+      "baseline_bytes_median": 821912.0,
+      "candidate_bytes_median": 643720.0,
+      "baseline_wall_ns_median": 1563557.4075000002,
+      "candidate_wall_ns_median": 1083057.3599999999,
+      "cpu_reduction_percent": 5.584258369657835,
+      "allocation_reduction_percent": 21.6801798732711,
+      "cpu_ratio_range": [
+        0.34213941501480827,
+        3.2676263894078383
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 4.601606392204416,
+        "BA": 16.60573833783634
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 10.823516914695318,
+        "1": -5.903907867721214
+      },
+      "baseline_bytes_range": [
+        821912.0,
+        821912.0
+      ],
+      "candidate_bytes_range": [
+        643720.0,
+        643720.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": true,
+      "overview": false,
+      "state": "stale",
+      "baseline_cpu_ns_median": 540963.9475,
+      "candidate_cpu_ns_median": 497492.12,
+      "baseline_bytes_median": 315168.0,
+      "candidate_bytes_median": 315200.0,
+      "baseline_wall_ns_median": 565539.61,
+      "candidate_wall_ns_median": 510719.61,
+      "cpu_reduction_percent": -4.473313519295319,
+      "allocation_reduction_percent": -0.010153315057359613,
+      "cpu_ratio_range": [
+        0.48247534760731686,
+        2.044385317208764
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": -2.703675196305122,
+        "BA": -4.473313519295319
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -11.342965918217285,
+        "1": 17.394613928324944
+      },
+      "baseline_bytes_range": [
+        315168.0,
+        315168.0
+      ],
+      "candidate_bytes_range": [
+        315200.0,
+        315200.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": true,
+      "overview": true,
+      "state": "fresh",
+      "baseline_cpu_ns_median": 4546403.2875,
+      "candidate_cpu_ns_median": 3983959.6849999996,
+      "baseline_bytes_median": 2352946.0,
+      "candidate_bytes_median": 1980514.0,
+      "baseline_wall_ns_median": 4697637.475,
+      "candidate_wall_ns_median": 4032175.885,
+      "cpu_reduction_percent": 10.72445934750168,
+      "allocation_reduction_percent": 15.828327551928522,
+      "cpu_ratio_range": [
+        0.39642028317237915,
+        2.182623711354117
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 17.77226968732666,
+        "BA": 2.2714594173955494
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": 6.96331250103367,
+        "1": 20.509191291835815
+      },
+      "baseline_bytes_range": [
+        2352946.0,
+        2352946.0
+      ],
+      "candidate_bytes_range": [
+        1980514.0,
+        1980514.0
+      ]
+    },
+    {
+      "main_length": 2000,
+      "branches": 128,
+      "pk": true,
+      "overview": true,
+      "state": "stale",
+      "baseline_cpu_ns_median": 483775.1325,
+      "candidate_cpu_ns_median": 444935.6725,
+      "baseline_bytes_median": 315168.0,
+      "candidate_bytes_median": 315200.0,
+      "baseline_wall_ns_median": 483724.325,
+      "candidate_wall_ns_median": 463081.7475,
+      "cpu_reduction_percent": -1.3966911178266317,
+      "allocation_reduction_percent": -0.010153315057359613,
+      "cpu_ratio_range": [
+        0.34006470264432526,
+        1.4699307525541352
+      ],
+      "cpu_reduction_by_order_percent": {
+        "AB": 2.117058868695343,
+        "BA": -4.7438592951446035
+      },
+      "cpu_reduction_by_run_percent": {
+        "0": -12.180115032238037,
+        "1": 3.8348184971889188
+      },
+      "baseline_bytes_range": [
+        315168.0,
+        315168.0
+      ],
+      "candidate_bytes_range": [
+        315200.0,
+        315200.0
+      ]
+    }
+  ],
+  "row_columns": [
+    "run",
+    "main_length",
+    "branches",
+    "pk",
+    "overview",
+    "state",
+    "pair",
+    "order",
+    "baseline_cpu_ns",
+    "candidate_cpu_ns",
+    "baseline_bytes",
+    "candidate_bytes",
+    "baseline_wall_ns",
+    "candidate_wall_ns",
+    "checksum"
+  ],
+  "rows": [
+    [0, 400, 0, false, false, "fresh", 0, "AB", 111109.025, 87149.53, 113036.76, 83908.0, 315883.805, 87057.69, 40150],
+    [0, 400, 0, false, false, "fresh", 1, "BA", 87859.23, 116143.47, 113036.0, 83908.0, 88877.02, 116045.165, 40150],
+    [0, 400, 0, false, false, "fresh", 2, "AB", 87279.42, 54784.79, 113036.0, 83908.0, 87770.97, 54709.43, 40150],
+    [0, 400, 0, false, false, "fresh", 3, "BA", 83015.085, 83684.495, 113036.0, 83908.0, 82930.16, 83595.435, 40150],
+    [0, 400, 0, false, false, "fresh", 4, "AB", 160479.675, 120596.505, 113036.0, 83908.0, 160376.98, 120502.25, 40150],
+    [0, 400, 0, false, false, "fresh", 5, "BA", 106803.25, 80612.96, 113036.0, 83908.0, 107123.92, 79969.55, 40150],
+    [0, 400, 0, false, false, "fresh", 6, "AB", 121542.445, 70231.375, 113036.0, 83908.0, 121225.85, 70062.46, 40150],
+    [0, 400, 0, false, false, "fresh", 7, "BA", 121618.62, 89989.68, 113036.0, 83908.0, 121524.425, 89949.97, 40150],
+    [0, 400, 0, false, false, "fresh", 8, "AB", 261849.04, 555155.13, 113036.0, 83908.0, 1030574.64, 572112.255, 40150],
+    [0, 400, 0, false, false, "fresh", 9, "BA", 849565.52, 1218976.625, 113036.0, 83908.0, 887043.74, 1221185.95, 40150],
+    [0, 400, 0, false, false, "fresh", 10, "AB", 1799610.435, 1373316.525, 113036.0, 83908.0, 1817505.045, 1407556.855, 40150],
+    [0, 400, 0, false, false, "fresh", 11, "BA", 81298.04, 410601.135, 113036.0, 83908.0, 82007.85, 495701.795, 40150],
+    [0, 400, 0, false, false, "stale", 0, "AB", 85532.675, 122671.775, 41960.0, 41992.0, 93399.105, 122586.915, 0],
+    [0, 400, 0, false, false, "stale", 1, "BA", 99863.625, 136091.815, 41960.0, 41992.0, 99791.93, 136001.065, 0],
+    [0, 400, 0, false, false, "stale", 2, "AB", 36771.24, 57089.815, 41960.0, 41992.0, 36697.84, 57013.29, 0],
+    [0, 400, 0, false, false, "stale", 3, "BA", 43324.94, 173211.92, 41960.0, 41992.0, 43248.245, 279177.475, 0],
+    [0, 400, 0, false, false, "stale", 4, "AB", 231737.61, 66582.45, 41960.0, 41992.0, 241093.43, 68470.725, 0],
+    [0, 400, 0, false, false, "stale", 5, "BA", 33329.74, 47374.425, 41960.0, 41992.0, 33241.01, 47428.045, 0],
+    [0, 400, 0, false, false, "stale", 6, "AB", 30713.495, 26381.225, 41960.0, 41992.0, 30622.58, 26311.175, 0],
+    [0, 400, 0, false, false, "stale", 7, "BA", 32435.5, 37086.78, 41960.0, 41992.0, 32358.45, 37010.895, 0],
+    [0, 400, 0, false, false, "stale", 8, "AB", 59560.2, 49666.4, 41960.0, 41992.0, 60793.065, 49989.665, 0],
+    [0, 400, 0, false, false, "stale", 9, "BA", 70829.67, 73652.68, 41960.0, 41992.0, 70923.48, 76142.05, 0],
+    [0, 400, 0, false, false, "stale", 10, "AB", 40155.2, 41866.575, 41960.0, 41992.0, 40510.84, 41781.62, 0],
+    [0, 400, 0, false, false, "stale", 11, "BA", 33231.53, 50924.34, 41960.0, 41992.0, 39345.575, 59695.055, 0],
+    [0, 400, 0, false, true, "fresh", 0, "AB", 227590.25, 190545.06, 263486.0, 214802.32, 227373.745, 271593.19, 30100],
+    [0, 400, 0, false, true, "fresh", 1, "BA", 207401.39, 127550.21, 263486.0, 214798.0, 207323.49, 127453.3, 30100],
+    [0, 400, 0, false, true, "fresh", 2, "AB", 432432.34, 262740.72, 263486.0, 214798.0, 441424.6, 263075.165, 30100],
+    [0, 400, 0, false, true, "fresh", 3, "BA", 261789.185, 270179.64, 263486.0, 214798.0, 263614.655, 272149.185, 30100],
+    [0, 400, 0, false, true, "fresh", 4, "AB", 255046.025, 255336.33, 263486.0, 214798.0, 328223.195, 255753.195, 30100],
+    [0, 400, 0, false, true, "fresh", 5, "BA", 331845.55, 208478.125, 263486.0, 214798.0, 331739.215, 208375.425, 30100],
+    [0, 400, 0, false, true, "fresh", 6, "AB", 236246.415, 306467.13, 263486.0, 214798.0, 236570.33, 306406.23, 30100],
+    [0, 400, 0, false, true, "fresh", 7, "BA", 224375.57, 191170.83, 263486.0, 214798.0, 301494.51, 191066.235, 30100],
+    [0, 400, 0, false, true, "fresh", 8, "AB", 231459.625, 181706.67, 263486.0, 214798.0, 232334.995, 183368.31, 30100],
+    [0, 400, 0, false, true, "fresh", 9, "BA", 211819.37, 177320.365, 263486.0, 214798.0, 211712.535, 177092.135, 30100],
+    [0, 400, 0, false, true, "fresh", 10, "AB", 198187.98, 165242.62, 263486.0, 214798.0, 198090.06, 186478.695, 30100],
+    [0, 400, 0, false, true, "fresh", 11, "BA", 143056.675, 114177.515, 263486.0, 214798.0, 142971.15, 114093.04, 30100],
+    [0, 400, 0, false, true, "stale", 0, "AB", 52302.195, 45687.4, 41960.0, 41992.0, 52191.04, 45595.76, 0],
+    [0, 400, 0, false, true, "stale", 1, "BA", 41791.51, 45877.24, 41960.0, 41992.0, 41720.745, 45793.355, 0],
+    [0, 400, 0, false, true, "stale", 2, "AB", 38810.45, 37759.985, 41960.0, 41992.0, 38758.34, 37682.415, 0],
+    [0, 400, 0, false, true, "stale", 3, "BA", 24140.38, 28314.82, 41960.0, 41992.0, 24222.23, 28259.055, 0],
+    [0, 400, 0, false, true, "stale", 4, "AB", 27883.99, 34480.175, 41960.0, 41992.0, 27837.03, 34428.85, 0],
+    [0, 400, 0, false, true, "stale", 5, "BA", 25671.47, 36986.79, 41960.0, 41992.0, 25612.795, 185609.045, 0],
+    [0, 400, 0, false, true, "stale", 6, "AB", 33830.805, 47173.92, 41960.0, 41992.0, 34483.69, 48708.7, 0],
+    [0, 400, 0, false, true, "stale", 7, "BA", 36728.885, 69719.745, 41960.0, 41992.0, 36827.85, 69911.405, 0],
+    [0, 400, 0, false, true, "stale", 8, "AB", 34606.56, 44575.915, 41960.0, 41992.0, 34541.795, 44519.71, 0],
+    [0, 400, 0, false, true, "stale", 9, "BA", 41463.325, 49339.68, 41960.0, 41992.0, 41398.305, 49278.915, 0],
+    [0, 400, 0, false, true, "stale", 10, "AB", 41187.01, 38980.455, 41960.0, 41992.0, 41113.35, 38911.115, 0],
+    [0, 400, 0, false, true, "stale", 11, "BA", 42341.505, 47200.17, 41960.0, 41992.0, 41860.53, 47311.175, 0],
+    [0, 400, 0, true, false, "fresh", 0, "AB", 137813.07, 358245.54, 125140.0, 102424.0, 138160.16, 469229.83, 40150],
+    [0, 400, 0, true, false, "fresh", 1, "BA", 139128.305, 372475.68, 125140.0, 102424.0, 138419.465, 485967.66, 40150],
+    [0, 400, 0, true, false, "fresh", 2, "AB", 148623.46, 345334.52, 125140.0, 102424.0, 148539.75, 345890.12, 40150],
+    [0, 400, 0, true, false, "fresh", 3, "BA", 248515.255, 122173.31, 125140.0, 102424.0, 313759.74, 122081.38, 40150],
+    [0, 400, 0, true, false, "fresh", 4, "AB", 169652.575, 506893.965, 125140.0, 102424.0, 169559.305, 507669.975, 40150],
+    [0, 400, 0, true, false, "fresh", 5, "BA", 157539.13, 82075.72, 125140.0, 102424.0, 158091.26, 81985.23, 40150],
+    [0, 400, 0, true, false, "fresh", 6, "AB", 157543.98, 117036.51, 125140.0, 102424.0, 157459.955, 116949.885, 40150],
+    [0, 400, 0, true, false, "fresh", 7, "BA", 289437.13, 153280.01, 125140.0, 102424.0, 289295.355, 153810.245, 40150],
+    [0, 400, 0, true, false, "fresh", 8, "AB", 375455.31, 145126.245, 125140.0, 102424.0, 375998.215, 184218.965, 40150],
+    [0, 400, 0, true, false, "fresh", 9, "BA", 152773.45, 143879.83, 125140.0, 102424.0, 152699.09, 144340.02, 40150],
+    [0, 400, 0, true, false, "fresh", 10, "AB", 148711.9, 112635.275, 125140.0, 102424.0, 148674.765, 157627.49, 40150],
+    [0, 400, 0, true, false, "fresh", 11, "BA", 159619.05, 153870.955, 125140.0, 102424.0, 159539.01, 153779.605, 40150],
+    [0, 400, 0, true, false, "stale", 0, "AB", 54351.59, 38273.49, 48400.0, 48432.0, 54255.725, 38193.565, 0],
+    [0, 400, 0, true, false, "stale", 1, "BA", 96833.405, 57234.85, 48400.0, 48432.0, 96747.065, 57152.39, 0],
+    [0, 400, 0, true, false, "stale", 2, "AB", 181294.185, 42083.02, 48400.0, 48432.0, 181708.945, 42002.75, 0],
+    [0, 400, 0, true, false, "stale", 3, "BA", 157856.94, 54231.93, 48400.0, 48432.0, 156344.865, 54140.22, 0],
+    [0, 400, 0, true, false, "stale", 4, "AB", 74953.83, 100725.81, 48400.0, 48432.0, 120061.48, 100660.405, 0],
+    [0, 400, 0, true, false, "stale", 5, "BA", 49220.53, 58703.135, 48400.0, 48432.0, 49172.925, 58647.175, 0],
+    [0, 400, 0, true, false, "stale", 6, "AB", 50020.58, 49246.055, 48400.0, 48432.0, 49965.24, 75006.03, 0],
+    [0, 400, 0, true, false, "stale", 7, "BA", 166941.69, 55907.81, 48400.0, 48432.0, 167442.415, 55854.485, 0],
+    [0, 400, 0, true, false, "stale", 8, "AB", 191054.58, 91114.045, 48400.0, 48432.0, 190853.895, 91047.505, 0],
+    [0, 400, 0, true, false, "stale", 9, "BA", 28515.46, 90439.46, 48400.0, 48432.0, 28462.45, 90371.915, 0],
+    [0, 400, 0, true, false, "stale", 10, "AB", 40432.56, 68155.25, 48400.0, 48432.0, 40374.67, 68099.72, 0],
+    [0, 400, 0, true, false, "stale", 11, "BA", 41421.35, 45597.325, 48400.0, 48432.0, 41365.185, 45533.285, 0],
+    [0, 400, 0, true, true, "fresh", 0, "AB", 505123.745, 231007.975, 274174.0, 231886.0, 504680.375, 366644.725, 30100],
+    [0, 400, 0, true, true, "fresh", 1, "BA", 659312.1, 196641.215, 274174.0, 231886.0, 659259.935, 196584.44, 30100],
+    [0, 400, 0, true, true, "fresh", 2, "AB", 182241.56, 196454.945, 274174.0, 231886.0, 182191.24, 196405.805, 30100],
+    [0, 400, 0, true, true, "fresh", 3, "BA", 765486.63, 306754.045, 274174.0, 231886.0, 765426.205, 306697.045, 30100],
+    [0, 400, 0, true, true, "fresh", 4, "AB", 608735.065, 810235.53, 274174.0, 231886.0, 662014.51, 808137.565, 30100],
+    [0, 400, 0, true, true, "fresh", 5, "BA", 1211703.48, 605815.13, 274174.0, 231886.0, 1495490.15, 606581.65, 30100],
+    [0, 400, 0, true, true, "fresh", 6, "AB", 225197.75, 463583.875, 274174.0, 231886.0, 249250.675, 462618.47, 30100],
+    [0, 400, 0, true, true, "fresh", 7, "BA", 1971005.575, 563711.34, 274174.0, 231886.0, 2001766.545, 1372902.14, 30100],
+    [0, 400, 0, true, true, "fresh", 8, "AB", 435288.4, 168339.71, 274174.0, 231886.0, 435224.49, 168283.01, 30100],
+    [0, 400, 0, true, true, "fresh", 9, "BA", 274001.11, 308724.785, 274174.0, 231886.0, 273939.12, 308515.9, 30100],
+    [0, 400, 0, true, true, "fresh", 10, "AB", 447442.225, 288780.9, 274174.0, 231886.0, 533532.005, 288729.08, 30100],
+    [0, 400, 0, true, true, "fresh", 11, "BA", 246131.68, 298800.2, 274174.0, 231886.0, 246067.35, 298748.395, 30100],
+    [0, 400, 0, true, true, "stale", 0, "AB", 103169.91, 71965.74, 48400.0, 48432.0, 180519.645, 71911.8, 0],
+    [0, 400, 0, true, true, "stale", 1, "BA", 154289.85, 80945.745, 48400.0, 48432.0, 154228.305, 80882.925, 0],
+    [0, 400, 0, true, true, "stale", 2, "AB", 49770.47, 45765.15, 48400.0, 48432.0, 49703.43, 45713.265, 0],
+    [0, 400, 0, true, true, "stale", 3, "BA", 62063.83, 39094.095, 48400.0, 48432.0, 62017.1, 39036.185, 0],
+    [0, 400, 0, true, true, "stale", 4, "AB", 53310.345, 267206.42, 48400.0, 48432.0, 53245.77, 269913.24, 0],
+    [0, 400, 0, true, true, "stale", 5, "BA", 24596.73, 27599.13, 48400.0, 48432.0, 24548.605, 27540.005, 0],
+    [0, 400, 0, true, true, "stale", 6, "AB", 29597.125, 54589.825, 48400.0, 48432.0, 29548.04, 54534.0, 0],
+    [0, 400, 0, true, true, "stale", 7, "BA", 43491.91, 86995.64, 48400.0, 48432.0, 43439.52, 86929.24, 0],
+    [0, 400, 0, true, true, "stale", 8, "AB", 45213.215, 30606.83, 48400.0, 48432.0, 45167.755, 30565.73, 0],
+    [0, 400, 0, true, true, "stale", 9, "BA", 38742.8, 31620.535, 48400.0, 48432.0, 38692.74, 31585.315, 0],
+    [0, 400, 0, true, true, "stale", 10, "AB", 46282.68, 97521.215, 48400.0, 48432.0, 46228.51, 97467.725, 0],
+    [0, 400, 0, true, true, "stale", 11, "BA", 64926.965, 216204.725, 48400.0, 48432.0, 64876.67, 216137.705, 0],
+    [0, 2000, 0, false, false, "fresh", 0, "AB", 3850047.59, 1235818.81, 498024.0, 352488.0, 3936395.615, 1235942.585, 200050],
+    [0, 2000, 0, false, false, "fresh", 1, "BA", 3038387.325, 3611840.085, 498024.0, 352488.0, 3204186.92, 3612510.05, 200050],
+    [0, 2000, 0, false, false, "fresh", 2, "AB", 1360919.165, 581099.485, 498024.0, 352488.0, 1614077.95, 581033.49, 200050],
+    [0, 2000, 0, false, false, "fresh", 3, "BA", 1328165.78, 714723.37, 498024.0, 352488.0, 1332404.385, 714678.575, 200050],
+    [0, 2000, 0, false, false, "fresh", 4, "AB", 1519134.62, 809926.365, 498024.0, 352488.0, 1643552.57, 809860.855, 200050],
+    [0, 2000, 0, false, false, "fresh", 5, "BA", 682199.75, 1033128.01, 498024.0, 352488.0, 682131.195, 1033053.14, 200050],
+    [0, 2000, 0, false, false, "fresh", 6, "AB", 737065.72, 952112.19, 498024.0, 352488.0, 779801.27, 951168.68, 200050],
+    [0, 2000, 0, false, false, "fresh", 7, "BA", 1132157.465, 1752685.72, 498024.0, 352488.0, 1172648.775, 1752582.475, 200050],
+    [0, 2000, 0, false, false, "fresh", 8, "AB", 1197088.93, 3488585.68, 498024.0, 352488.0, 1200355.62, 3488622.78, 200050],
+    [0, 2000, 0, false, false, "fresh", 9, "BA", 3191628.76, 4343766.015, 498024.0, 352488.0, 3535376.76, 4343610.44, 200050],
+    [0, 2000, 0, false, false, "fresh", 10, "AB", 876962.49, 539787.155, 498024.0, 352488.0, 886586.32, 539724.7, 200050],
+    [0, 2000, 0, false, false, "fresh", 11, "BA", 653346.49, 430691.525, 498024.0, 352488.0, 789545.86, 430624.1, 200050],
+    [0, 2000, 0, false, false, "stale", 0, "AB", 765906.15, 1545320.175, 209568.0, 209600.0, 852234.36, 1611136.635, 0],
+    [0, 2000, 0, false, false, "stale", 1, "BA", 434900.75, 595298.91, 209568.0, 209600.0, 437350.165, 601982.46, 0],
+    [0, 2000, 0, false, false, "stale", 2, "AB", 689717.88, 606947.235, 209568.0, 209600.0, 693157.14, 605984.94, 0],
+    [0, 2000, 0, false, false, "stale", 3, "BA", 414950.73, 385104.595, 209568.0, 209600.0, 419826.795, 714432.605, 0],
+    [0, 2000, 0, false, false, "stale", 4, "AB", 433350.32, 5355166.835, 209568.0, 209600.0, 453785.46, 5907922.22, 0],
+    [0, 2000, 0, false, false, "stale", 5, "BA", 1488205.67, 1466343.195, 209568.0, 209600.0, 1494327.94, 1535126.435, 0],
+    [0, 2000, 0, false, false, "stale", 6, "AB", 599500.265, 241964.06, 209568.0, 209600.0, 600650.855, 439696.815, 0],
+    [0, 2000, 0, false, false, "stale", 7, "BA", 532955.805, 3815140.755, 209568.0, 209600.0, 535511.33, 4465805.96, 0],
+    [0, 2000, 0, false, false, "stale", 8, "AB", 586574.555, 786822.375, 209568.0, 209600.0, 597372.345, 817842.28, 0],
+    [0, 2000, 0, false, false, "stale", 9, "BA", 2025384.9, 2050446.695, 209568.0, 209600.0, 2264454.145, 2711027.275, 0],
+    [0, 2000, 0, false, false, "stale", 10, "AB", 3672932.81, 4007168.33, 209568.0, 209600.0, 3747537.125, 5007813.59, 0],
+    [0, 2000, 0, false, false, "stale", 11, "BA", 7574624.955, 3543098.475, 209568.0, 209600.0, 7646685.635, 5415659.715, 0],
+    [0, 2000, 0, false, true, "fresh", 0, "AB", 945173.235, 1386081.07, 1265950.0, 1022846.0, 1029058.06, 1386005.995, 200050],
+    [0, 2000, 0, false, true, "fresh", 1, "BA", 3951424.29, 10001940.285, 1265950.0, 1022846.0, 4349293.685, 11920620.25, 200050],
+    [0, 2000, 0, false, true, "fresh", 2, "AB", 1216313.955, 1766823.68, 1265950.0, 1022846.0, 1227638.295, 1871124.1, 200050],
+    [0, 2000, 0, false, true, "fresh", 3, "BA", 1120401.63, 1338108.28, 1265950.0, 1022846.0, 1124904.015, 1493494.08, 200050],
+    [0, 2000, 0, false, true, "fresh", 4, "AB", 891610.395, 1479957.79, 1265950.0, 1022846.0, 949136.7, 1530502.54, 200050],
+    [0, 2000, 0, false, true, "fresh", 5, "BA", 3027380.935, 1077070.6, 1265950.0, 1022846.0, 3179874.265, 1111025.665, 200050],
+    [0, 2000, 0, false, true, "fresh", 6, "AB", 3009132.62, 1485500.15, 1265950.0, 1022846.0, 3167561.71, 1498543.48, 200050],
+    [0, 2000, 0, false, true, "fresh", 7, "BA", 1558015.035, 1102698.645, 1265950.0, 1022846.0, 1625726.26, 1131393.06, 200050],
+    [0, 2000, 0, false, true, "fresh", 8, "AB", 1249265.795, 963366.865, 1265950.0, 1022846.0, 1271327.765, 976438.32, 200050],
+    [0, 2000, 0, false, true, "fresh", 9, "BA", 1638130.0, 1651187.58, 1265950.0, 1022846.0, 1674651.85, 1671600.315, 200050],
+    [0, 2000, 0, false, true, "fresh", 10, "AB", 1361374.785, 1106463.175, 1265950.0, 1022846.0, 1381155.345, 1106385.115, 200050],
+    [0, 2000, 0, false, true, "fresh", 11, "BA", 1437077.2, 1428899.32, 1265950.0, 1022846.0, 1494040.81, 1515933.14, 200050],
+    [0, 2000, 0, false, true, "stale", 0, "AB", 281860.145, 308647.73, 209568.0, 209600.0, 326895.865, 309559.335, 0],
+    [0, 2000, 0, false, true, "stale", 1, "BA", 234707.42, 256183.155, 209568.0, 209600.0, 234639.7, 256100.505, 0],
+    [0, 2000, 0, false, true, "stale", 2, "AB", 262322.295, 486788.775, 209568.0, 209600.0, 262249.08, 579886.39, 0],
+    [0, 2000, 0, false, true, "stale", 3, "BA", 655811.025, 842453.005, 209568.0, 209600.0, 655743.79, 866153.465, 0],
+    [0, 2000, 0, false, true, "stale", 4, "AB", 617997.01, 961921.415, 209568.0, 209600.0, 621841.615, 961893.98, 0],
+    [0, 2000, 0, false, true, "stale", 5, "BA", 904059.21, 1013478.535, 209568.0, 209600.0, 904082.415, 1013387.675, 0],
+    [0, 2000, 0, false, true, "stale", 6, "AB", 649919.305, 472456.445, 209568.0, 209600.0, 721693.395, 472384.655, 0],
+    [0, 2000, 0, false, true, "stale", 7, "BA", 454564.415, 282489.445, 209568.0, 209600.0, 455005.665, 282406.98, 0],
+    [0, 2000, 0, false, true, "stale", 8, "AB", 241060.61, 380017.31, 209568.0, 209600.0, 241268.63, 380116.65, 0],
+    [0, 2000, 0, false, true, "stale", 9, "BA", 269595.11, 442879.285, 209568.0, 209600.0, 269842.645, 443403.635, 0],
+    [0, 2000, 0, false, true, "stale", 10, "AB", 350483.51, 215336.645, 209568.0, 209600.0, 461256.99, 215434.47, 0],
+    [0, 2000, 0, false, true, "stale", 11, "BA", 181926.53, 203165.29, 209568.0, 209600.0, 181862.46, 203382.68, 0],
+    [0, 2000, 0, true, false, "fresh", 0, "AB", 2990810.04, 1076625.655, 559088.0, 445552.0, 3023397.06, 1079323.03, 200050],
+    [0, 2000, 0, true, false, "fresh", 1, "BA", 4993009.57, 1420721.195, 559088.0, 445552.0, 5227196.31, 1464497.46, 200050],
+    [0, 2000, 0, true, false, "fresh", 2, "AB", 6972819.91, 6818131.875, 559088.0, 445552.0, 7335300.285, 7305743.505, 200050],
+    [0, 2000, 0, true, false, "fresh", 3, "BA", 5832145.565, 2221424.395, 559088.0, 445552.0, 5884152.535, 2253485.51, 200050],
+    [0, 2000, 0, true, false, "fresh", 4, "AB", 3758248.765, 1282201.06, 559088.0, 445552.0, 4010986.005, 1285171.265, 200050],
+    [0, 2000, 0, true, false, "fresh", 5, "BA", 2992602.39, 1426603.895, 559088.0, 445552.0, 3094081.475, 1435703.475, 200050],
+    [0, 2000, 0, true, false, "fresh", 6, "AB", 1883210.575, 5240979.91, 559088.0, 445552.0, 1883433.035, 5645878.125, 200050],
+    [0, 2000, 0, true, false, "fresh", 7, "BA", 2021094.03, 2697154.005, 559088.0, 445552.0, 2397237.85, 3180319.32, 200050],
+    [0, 2000, 0, true, false, "fresh", 8, "AB", 1416504.715, 1255958.075, 559088.0, 445552.0, 1512092.68, 1296802.04, 200050],
+    [0, 2000, 0, true, false, "fresh", 9, "BA", 1633127.51, 1504320.305, 559088.0, 445552.0, 1660785.23, 1683123.36, 200050],
+    [0, 2000, 0, true, false, "fresh", 10, "AB", 3625361.355, 562735.205, 559088.0, 445552.0, 3843214.91, 946780.785, 200050],
+    [0, 2000, 0, true, false, "fresh", 11, "BA", 1429473.59, 2130218.915, 559088.0, 445552.0, 1434792.0, 2267235.985, 200050],
+    [0, 2000, 0, true, false, "stale", 0, "AB", 200043.29, 220396.94, 242168.0, 242200.0, 199965.82, 220332.82, 0],
+    [0, 2000, 0, true, false, "stale", 1, "BA", 225842.265, 487027.145, 242168.0, 242200.0, 225770.305, 486953.81, 0],
+    [0, 2000, 0, true, false, "stale", 2, "AB", 866725.235, 534622.805, 242168.0, 242200.0, 866650.29, 532404.78, 0],
+    [0, 2000, 0, true, false, "stale", 3, "BA", 5087751.955, 2557904.765, 242168.0, 242200.0, 5862966.75, 2748713.765, 0],
+    [0, 2000, 0, true, false, "stale", 4, "AB", 1362835.975, 1020940.69, 242168.0, 242200.0, 1479860.8, 1021009.13, 0],
+    [0, 2000, 0, true, false, "stale", 5, "BA", 3593285.8, 798790.115, 242168.0, 242200.0, 3750470.83, 790705.29, 0],
+    [0, 2000, 0, true, false, "stale", 6, "AB", 1111686.235, 268403.01, 242168.0, 242200.0, 1368741.6, 268689.04, 0],
+    [0, 2000, 0, true, false, "stale", 7, "BA", 434297.415, 1033502.66, 242168.0, 242200.0, 434401.255, 1134796.73, 0],
+    [0, 2000, 0, true, false, "stale", 8, "AB", 222510.04, 311857.835, 242168.0, 242200.0, 222581.78, 311961.76, 0],
+    [0, 2000, 0, true, false, "stale", 9, "BA", 314441.59, 770669.905, 242168.0, 242200.0, 366268.675, 771450.15, 0],
+    [0, 2000, 0, true, false, "stale", 10, "AB", 490411.35, 728421.155, 242168.0, 242200.0, 490813.8, 733438.475, 0],
+    [0, 2000, 0, true, false, "stale", 11, "BA", 431467.555, 213982.935, 242168.0, 242200.0, 433894.295, 214276.555, 0],
+    [0, 2000, 0, true, true, "fresh", 0, "AB", 1585893.295, 1278404.84, 1319898.0, 1108794.0, 1626649.655, 1279156.57, 200050],
+    [0, 2000, 0, true, true, "fresh", 1, "BA", 1396615.125, 1666770.745, 1319898.0, 1108794.0, 1435436.23, 1867555.31, 200050],
+    [0, 2000, 0, true, true, "fresh", 2, "AB", 1311752.665, 1129542.495, 1319898.0, 1108794.0, 1348634.185, 1132742.365, 200050],
+    [0, 2000, 0, true, true, "fresh", 3, "BA", 1052505.655, 1482037.05, 1319898.0, 1108794.0, 1123286.27, 1526448.84, 200050],
+    [0, 2000, 0, true, true, "fresh", 4, "AB", 1061433.885, 1057280.945, 1319898.0, 1108794.0, 1127971.065, 1058427.6, 200050],
+    [0, 2000, 0, true, true, "fresh", 5, "BA", 1393815.965, 1479905.46, 1319898.0, 1108794.0, 1490038.67, 1524455.15, 200050],
+    [0, 2000, 0, true, true, "fresh", 6, "AB", 1497334.325, 1254393.55, 1319898.0, 1108794.0, 1821359.49, 1256545.03, 200050],
+    [0, 2000, 0, true, true, "fresh", 7, "BA", 1223934.26, 1446027.315, 1319898.0, 1108794.0, 1383682.495, 1488281.85, 200050],
+    [0, 2000, 0, true, true, "fresh", 8, "AB", 1140109.35, 1705710.27, 1319898.0, 1108794.0, 1194758.34, 1744159.485, 200050],
+    [0, 2000, 0, true, true, "fresh", 9, "BA", 2691011.08, 1082103.645, 1319898.0, 1108794.0, 3091912.435, 1179858.165, 200050],
+    [0, 2000, 0, true, true, "fresh", 10, "AB", 1368290.52, 4138626.57, 1319898.0, 1108794.0, 1392816.14, 4656339.26, 200050],
+    [0, 2000, 0, true, true, "fresh", 11, "BA", 2742431.575, 9807439.5, 1319898.0, 1108794.0, 3466874.725, 11026046.39, 200050],
+    [0, 2000, 0, true, true, "stale", 0, "AB", 330494.71, 293431.52, 242168.0, 242200.0, 330401.945, 508745.6, 0],
+    [0, 2000, 0, true, true, "stale", 1, "BA", 700887.815, 1976943.87, 242168.0, 242200.0, 801923.77, 2185812.785, 0],
+    [0, 2000, 0, true, true, "stale", 2, "AB", 320182.265, 276622.775, 242168.0, 242200.0, 461837.45, 328433.47, 0],
+    [0, 2000, 0, true, true, "stale", 3, "BA", 1421189.815, 299914.925, 242168.0, 242200.0, 1515947.05, 345754.75, 0],
+    [0, 2000, 0, true, true, "stale", 4, "AB", 425819.52, 383807.515, 242168.0, 242200.0, 602202.735, 394361.31, 0],
+    [0, 2000, 0, true, true, "stale", 5, "BA", 488464.24, 897813.985, 242168.0, 242200.0, 601515.34, 943288.255, 0],
+    [0, 2000, 0, true, true, "stale", 6, "AB", 348011.27, 723273.675, 242168.0, 242200.0, 403503.545, 793761.455, 0],
+    [0, 2000, 0, true, true, "stale", 7, "BA", 372432.605, 468037.545, 242168.0, 242200.0, 458843.595, 490725.01, 0],
+    [0, 2000, 0, true, true, "stale", 8, "AB", 315095.09, 360444.835, 242168.0, 242200.0, 327533.935, 361478.935, 0],
+    [0, 2000, 0, true, true, "stale", 9, "BA", 349912.245, 585155.08, 242168.0, 242200.0, 359608.32, 608359.265, 0],
+    [0, 2000, 0, true, true, "stale", 10, "AB", 798399.12, 249410.3, 242168.0, 242200.0, 826274.885, 268554.23, 0],
+    [0, 2000, 0, true, true, "stale", 11, "BA", 391773.035, 365727.945, 242168.0, 242200.0, 398468.54, 367654.045, 0],
+    [0, 2000, 128, false, false, "fresh", 0, "AB", 1433397.875, 978902.565, 850392.0, 576160.0, 1437108.305, 996399.755, 1669200],
+    [0, 2000, 128, false, false, "fresh", 1, "BA", 1741621.595, 1163984.055, 850392.0, 576160.0, 1854060.725, 1165887.855, 1669200],
+    [0, 2000, 128, false, false, "fresh", 2, "AB", 7172328.015, 1030963.96, 850392.0, 576160.0, 7750506.845, 1044555.9, 1669200],
+    [0, 2000, 128, false, false, "fresh", 3, "BA", 1662158.17, 1092081.145, 850392.0, 576160.0, 1667241.585, 1136982.16, 1669200],
+    [0, 2000, 128, false, false, "fresh", 4, "AB", 1574140.885, 1336995.385, 850392.0, 576160.0, 1618081.26, 1402950.71, 1669200],
+    [0, 2000, 128, false, false, "fresh", 5, "BA", 1540519.43, 1171936.295, 850392.0, 576160.0, 1594481.785, 1218511.23, 1669200],
+    [0, 2000, 128, false, false, "fresh", 6, "AB", 6103028.175, 2022192.935, 850392.0, 576160.0, 6352313.63, 2079976.315, 1669200],
+    [0, 2000, 128, false, false, "fresh", 7, "BA", 4577226.74, 2521562.34, 850392.0, 576160.0, 4766801.89, 2690532.49, 1669200],
+    [0, 2000, 128, false, false, "fresh", 8, "AB", 2793857.82, 2414106.27, 850392.0, 576160.0, 2870159.095, 2508722.85, 1669200],
+    [0, 2000, 128, false, false, "fresh", 9, "BA", 10289754.77, 2289081.815, 850392.0, 576160.0, 10488217.83, 2336417.615, 1669200],
+    [0, 2000, 128, false, false, "fresh", 10, "AB", 3059786.81, 1880854.585, 850392.0, 576160.0, 3079098.68, 1931360.29, 1669200],
+    [0, 2000, 128, false, false, "fresh", 11, "BA", 5690061.105, 7616115.765, 850392.0, 576160.0, 5709481.945, 7647147.745, 1669200],
+    [0, 2000, 128, false, false, "stale", 0, "AB", 1082684.84, 1550183.98, 370320.0, 370328.0, 1110827.78, 1607191.22, 0],
+    [0, 2000, 128, false, false, "stale", 1, "BA", 751104.66, 811368.75, 370320.0, 370328.0, 780346.175, 966872.305, 0],
+    [0, 2000, 128, false, false, "stale", 2, "AB", 798140.86, 793809.785, 370320.0, 370328.0, 830740.52, 815452.23, 0],
+    [0, 2000, 128, false, false, "stale", 3, "BA", 1654339.375, 801520.07, 370320.0, 370328.0, 1718832.89, 807184.655, 0],
+    [0, 2000, 128, false, false, "stale", 4, "AB", 579254.855, 824472.19, 370320.0, 370328.0, 608226.41, 868853.315, 0],
+    [0, 2000, 128, false, false, "stale", 5, "BA", 903595.72, 902714.46, 370320.0, 370328.0, 1030862.93, 957673.875, 0],
+    [0, 2000, 128, false, false, "stale", 6, "AB", 747445.185, 879789.26, 370320.0, 370328.0, 773849.03, 880468.685, 0],
+    [0, 2000, 128, false, false, "stale", 7, "BA", 777250.39, 908743.86, 370320.0, 370328.0, 833351.38, 909325.725, 0],
+    [0, 2000, 128, false, false, "stale", 8, "AB", 719845.47, 578005.945, 370320.0, 370328.0, 723598.105, 580928.015, 0],
+    [0, 2000, 128, false, false, "stale", 9, "BA", 723185.2, 757005.415, 370320.0, 370328.0, 723395.405, 793476.58, 0],
+    [0, 2000, 128, false, false, "stale", 10, "AB", 719799.665, 1323492.365, 370320.0, 370328.0, 762271.515, 1324923.45, 0],
+    [0, 2000, 128, false, false, "stale", 11, "BA", 2767714.49, 877699.595, 370320.0, 370328.0, 2768061.155, 899018.055, 0],
+    [0, 2000, 128, false, true, "fresh", 0, "AB", 4319635.615, 2565812.535, 2388094.0, 1919617.84, 4527080.625, 2646346.59, 1212950],
+    [0, 2000, 128, false, true, "fresh", 1, "BA", 3094276.615, 2815409.385, 2388094.0, 1919610.0, 3124733.565, 2863393.545, 1212950],
+    [0, 2000, 128, false, true, "fresh", 2, "AB", 3522229.055, 2331975.33, 2388094.0, 1919610.0, 3632483.765, 2388106.765, 1212950],
+    [0, 2000, 128, false, true, "fresh", 3, "BA", 2312189.92, 2317100.55, 2388094.0, 1919610.0, 2377249.365, 2357885.295, 1212950],
+    [0, 2000, 128, false, true, "fresh", 4, "AB", 3283761.56, 2308538.275, 2388094.0, 1919610.0, 3361396.025, 2425159.15, 1212950],
+    [0, 2000, 128, false, true, "fresh", 5, "BA", 6730243.835, 2413293.535, 2388084.88, 1919610.0, 8438338.065, 2586242.21, 1212950],
+    [0, 2000, 128, false, true, "fresh", 6, "AB", 4009807.385, 6113323.275, 2388082.0, 1919610.0, 4160430.15, 6482903.53, 1212950],
+    [0, 2000, 128, false, true, "fresh", 7, "BA", 5081173.465, 3338690.865, 2388082.0, 1919610.0, 5643989.245, 3494468.45, 1212950],
+    [0, 2000, 128, false, true, "fresh", 8, "AB", 5866690.43, 5403985.83, 2388082.0, 1919610.0, 6319122.745, 6242241.365, 1212950],
+    [0, 2000, 128, false, true, "fresh", 9, "BA", 3726223.645, 11901272.39, 2388082.0, 1919610.0, 3918178.265, 12404186.535, 1212950],
+    [0, 2000, 128, false, true, "fresh", 10, "AB", 4847248.67, 8179702.66, 2388082.0, 1919610.0, 5183738.275, 8418977.395, 1212950],
+    [0, 2000, 128, false, true, "fresh", 11, "BA", 2584236.645, 7531169.35, 2388082.0, 1919610.0, 2694985.67, 7813316.975, 1212950],
+    [0, 2000, 128, false, true, "stale", 0, "AB", 434470.78, 410067.25, 370320.0, 370328.0, 435674.53, 409992.505, 0],
+    [0, 2000, 128, false, true, "stale", 1, "BA", 415809.135, 431792.77, 370320.0, 370328.0, 465413.885, 434457.345, 0],
+    [0, 2000, 128, false, true, "stale", 2, "AB", 365672.425, 467826.445, 370320.0, 370328.0, 366147.085, 468341.22, 0],
+    [0, 2000, 128, false, true, "stale", 3, "BA", 493803.855, 416921.765, 370320.0, 370328.0, 493740.215, 416911.605, 0],
+    [0, 2000, 128, false, true, "stale", 4, "AB", 506582.38, 1299224.9, 370320.0, 370328.0, 556643.3, 1300794.35, 0],
+    [0, 2000, 128, false, true, "stale", 5, "BA", 898272.61, 1182341.965, 370320.0, 370328.0, 920625.555, 1187758.81, 0],
+    [0, 2000, 128, false, true, "stale", 6, "AB", 776748.18, 905226.845, 370320.0, 370328.0, 838037.17, 913909.255, 0],
+    [0, 2000, 128, false, true, "stale", 7, "BA", 1728210.855, 603830.115, 370320.0, 370328.0, 1742526.505, 605762.03, 0],
+    [0, 2000, 128, false, true, "stale", 8, "AB", 1708194.87, 1313222.58, 370320.0, 370328.0, 1768851.7, 1316021.12, 0],
+    [0, 2000, 128, false, true, "stale", 9, "BA", 516377.32, 906409.385, 370320.0, 370328.0, 516305.085, 914646.24, 0],
+    [0, 2000, 128, false, true, "stale", 10, "AB", 539782.465, 595883.195, 370320.0, 370328.0, 539703.865, 643325.535, 0],
+    [0, 2000, 128, false, true, "stale", 11, "BA", 495807.055, 1142232.715, 370320.0, 370328.0, 495822.235, 1142027.91, 0],
+    [0, 2000, 128, true, false, "fresh", 0, "AB", 1105535.52, 1061701.815, 821912.0, 643720.0, 1151702.675, 1061904.655, 1669200],
+    [0, 2000, 128, true, false, "fresh", 1, "BA", 1590819.665, 858007.335, 821912.0, 643720.0, 1614641.945, 857759.56, 1669200],
+    [0, 2000, 128, true, false, "fresh", 2, "AB", 891094.315, 721342.06, 821912.0, 643720.0, 891071.275, 755616.7, 1669200],
+    [0, 2000, 128, true, false, "fresh", 3, "BA", 1423911.38, 973125.335, 821912.0, 643720.0, 1463852.2, 973133.735, 1669200],
+    [0, 2000, 128, true, false, "fresh", 4, "AB", 866846.605, 821438.725, 821912.0, 643720.0, 866752.105, 837588.095, 1669200],
+    [0, 2000, 128, true, false, "fresh", 5, "BA", 928967.235, 782963.31, 821912.0, 643720.0, 949535.61, 782924.59, 1669200],
+    [0, 2000, 128, true, false, "fresh", 6, "AB", 861389.58, 984779.375, 821912.0, 643720.0, 861393.64, 1026117.25, 1669200],
+    [0, 2000, 128, true, false, "fresh", 7, "BA", 1413638.84, 840228.615, 821912.0, 643720.0, 1411584.625, 839906.08, 1669200],
+    [0, 2000, 128, true, false, "fresh", 8, "AB", 1110136.295, 1044302.62, 821912.0, 643720.0, 1185949.11, 1044227.005, 1669200],
+    [0, 2000, 128, true, false, "fresh", 9, "BA", 948258.725, 1051925.52, 821912.0, 643720.0, 948282.53, 1104210.065, 1669200],
+    [0, 2000, 128, true, false, "fresh", 10, "AB", 935850.97, 1000200.59, 821912.0, 643720.0, 953563.055, 1000208.51, 1669200],
+    [0, 2000, 128, true, false, "fresh", 11, "BA", 1052592.605, 868444.935, 821912.0, 643720.0, 1052506.9, 906106.4, 1669200],
+    [0, 2000, 128, true, false, "stale", 0, "AB", 319612.32, 428514.555, 315168.0, 315200.0, 319437.37, 427744.455, 0],
+    [0, 2000, 128, true, false, "stale", 1, "BA", 286275.29, 433536.505, 315168.0, 315200.0, 286213.09, 458984.77, 0],
+    [0, 2000, 128, true, false, "stale", 2, "AB", 379591.65, 307844.135, 315168.0, 315200.0, 379515.885, 307761.37, 0],
+    [0, 2000, 128, true, false, "stale", 3, "BA", 958291.225, 1959116.51, 315168.0, 315200.0, 1014437.5, 1960223.735, 0],
+    [0, 2000, 128, true, false, "stale", 4, "AB", 382229.455, 348271.26, 315168.0, 315200.0, 381920.44, 347914.485, 0],
+    [0, 2000, 128, true, false, "stale", 5, "BA", 300886.955, 537454.83, 315168.0, 315200.0, 300791.6, 536382.785, 0],
+    [0, 2000, 128, true, false, "stale", 6, "AB", 319679.965, 357876.41, 315168.0, 315200.0, 331364.725, 357783.86, 0],
+    [0, 2000, 128, true, false, "stale", 7, "BA", 317451.665, 332202.75, 315168.0, 315200.0, 317416.355, 332112.31, 0],
+    [0, 2000, 128, true, false, "stale", 8, "AB", 301235.385, 333580.815, 315168.0, 315200.0, 301337.02, 356051.86, 0],
+    [0, 2000, 128, true, false, "stale", 9, "BA", 465765.945, 485793.455, 315168.0, 315200.0, 465682.365, 485125.99, 0],
+    [0, 2000, 128, true, false, "stale", 10, "AB", 597697.23, 676798.645, 315168.0, 315200.0, 597604.975, 675536.905, 0],
+    [0, 2000, 128, true, false, "stale", 11, "BA", 558672.61, 482051.28, 315168.0, 315200.0, 558590.375, 505246.56, 0],
+    [0, 2000, 128, true, true, "fresh", 0, "AB", 3573811.925, 2695547.2, 2352946.0, 1980514.0, 3642851.77, 2709522.845, 1212950],
+    [0, 2000, 128, true, true, "fresh", 1, "BA", 4210916.95, 8431849.475, 2352946.0, 1980514.0, 4286232.89, 8729617.955, 1212950],
+    [0, 2000, 128, true, true, "fresh", 2, "AB", 6733124.11, 4514402.86, 2352946.0, 1980514.0, 6891136.195, 4554010.405, 1212950],
+    [0, 2000, 128, true, true, "fresh", 3, "BA", 6511918.32, 3751512.105, 2352946.0, 1980514.0, 6650731.075, 3773586.14, 1212950],
+    [0, 2000, 128, true, true, "fresh", 4, "AB", 3127994.415, 2784868.225, 2352946.0, 1980514.0, 3183694.245, 2854509.915, 1212950],
+    [0, 2000, 128, true, true, "fresh", 5, "BA", 6218984.37, 2465331.545, 2352946.0, 1980514.0, 6389601.715, 2508660.0, 1212950],
+    [0, 2000, 128, true, true, "fresh", 6, "AB", 3040709.825, 2935889.465, 2352946.0, 1980514.0, 3061902.22, 3014256.035, 1212950],
+    [0, 2000, 128, true, true, "fresh", 7, "BA", 2725419.505, 5948565.235, 2352946.0, 1980514.0, 2752917.92, 6015252.075, 1212950],
+    [0, 2000, 128, true, true, "fresh", 8, "AB", 2484754.66, 2224367.485, 2352946.0, 1980514.0, 2519370.5, 2258931.52, 1212950],
+    [0, 2000, 128, true, true, "fresh", 9, "BA", 4298591.135, 4327514.385, 2352946.0, 1980514.0, 4376788.445, 4373442.375, 1212950],
+    [0, 2000, 128, true, true, "fresh", 10, "AB", 3012544.825, 3125479.07, 2352946.0, 1980514.0, 3051953.815, 3138286.13, 1212950],
+    [0, 2000, 128, true, true, "fresh", 11, "BA", 2588629.255, 4228362.02, 2352946.0, 1980514.0, 2609644.035, 4289510.695, 1212950],
+    [0, 2000, 128, true, true, "stale", 0, "AB", 547661.7, 394087.51, 315168.0, 315200.0, 547877.715, 393988.14, 0],
+    [0, 2000, 128, true, true, "stale", 1, "BA", 389963.805, 479359.92, 315168.0, 315200.0, 389879.46, 498898.415, 0],
+    [0, 2000, 128, true, true, "stale", 2, "AB", 362420.545, 511899.625, 315168.0, 315200.0, 362320.295, 511802.13, 0],
+    [0, 2000, 128, true, true, "stale", 3, "BA", 349976.085, 514440.61, 315168.0, 315200.0, 385006.23, 514347.2, 0],
+    [0, 2000, 128, true, true, "stale", 4, "AB", 471324.085, 424618.75, 315168.0, 315200.0, 467466.11, 424578.61, 0],
+    [0, 2000, 128, true, true, "stale", 5, "BA", 447567.77, 320172.24, 315168.0, 315200.0, 447475.195, 320076.72, 0],
+    [0, 2000, 128, true, true, "stale", 6, "AB", 323813.415, 351100.855, 315168.0, 315200.0, 343571.23, 351011.745, 0],
+    [0, 2000, 128, true, true, "stale", 7, "BA", 344181.835, 399021.455, 315168.0, 315200.0, 344175.405, 398931.615, 0],
+    [0, 2000, 128, true, true, "stale", 8, "AB", 331100.68, 425157.495, 315168.0, 315200.0, 331182.265, 444390.865, 0],
+    [0, 2000, 128, true, true, "stale", 9, "BA", 445906.98, 549936.625, 315168.0, 315200.0, 451091.615, 549846.41, 0],
+    [0, 2000, 128, true, true, "stale", 10, "AB", 495137.575, 387667.715, 315168.0, 315200.0, 495112.34, 387576.51, 0],
+    [0, 2000, 128, true, true, "stale", 11, "BA", 1366545.385, 464713.85, 315168.0, 315200.0, 1357955.35, 531020.235, 0],
+    [1, 400, 0, false, false, "fresh", 0, "AB", 225168.765, 150808.73, 113036.76, 83908.0, 255857.725, 150772.125, 40150],
+    [1, 400, 0, false, false, "fresh", 1, "BA", 169093.88, 138634.195, 113036.0, 83908.0, 169012.605, 138546.165, 40150],
+    [1, 400, 0, false, false, "fresh", 2, "AB", 80186.415, 68255.69, 113036.0, 83908.0, 80105.67, 68171.245, 40150],
+    [1, 400, 0, false, false, "fresh", 3, "BA", 65315.975, 78853.985, 113036.0, 83908.0, 65239.155, 78763.12, 40150],
+    [1, 400, 0, false, false, "fresh", 4, "AB", 64816.085, 64200.035, 113036.0, 83908.0, 64879.135, 64313.135, 40150],
+    [1, 400, 0, false, false, "fresh", 5, "BA", 72794.095, 91698.18, 113036.0, 83908.0, 72710.195, 91619.185, 40150],
+    [1, 400, 0, false, false, "fresh", 6, "AB", 111261.02, 57563.48, 113036.0, 83908.0, 111173.905, 57483.005, 40150],
+    [1, 400, 0, false, false, "fresh", 7, "BA", 105503.57, 72063.155, 113036.0, 83908.0, 105450.215, 71983.025, 40150],
+    [1, 400, 0, false, false, "fresh", 8, "AB", 90054.105, 56432.705, 113036.0, 83908.0, 119458.98, 56353.39, 40150],
+    [1, 400, 0, false, false, "fresh", 9, "BA", 659487.75, 73916.51, 113036.0, 83908.0, 654112.0, 73390.395, 40150],
+    [1, 400, 0, false, false, "fresh", 10, "AB", 291401.595, 73849.36, 113036.0, 83908.0, 291499.58, 73723.345, 40150],
+    [1, 400, 0, false, false, "fresh", 11, "BA", 183051.905, 61923.93, 113036.0, 83908.0, 182958.78, 61839.12, 40150],
+    [1, 400, 0, false, false, "stale", 0, "AB", 25827.87, 66362.025, 41960.0, 41992.0, 25735.375, 66279.09, 0],
+    [1, 400, 0, false, false, "stale", 1, "BA", 52774.08, 70360.845, 41960.0, 41992.0, 52692.865, 70269.445, 0],
+    [1, 400, 0, false, false, "stale", 2, "AB", 74292.115, 57304.745, 41960.0, 41992.0, 109174.81, 57243.65, 0],
+    [1, 400, 0, false, false, "stale", 3, "BA", 51626.835, 66405.585, 41960.0, 41992.0, 51548.985, 66317.36, 0],
+    [1, 400, 0, false, false, "stale", 4, "AB", 33066.555, 26585.395, 41960.0, 41992.0, 33003.49, 26518.585, 0],
+    [1, 400, 0, false, false, "stale", 5, "BA", 48617.055, 41367.83, 41960.0, 41992.0, 48184.61, 41276.53, 0],
+    [1, 400, 0, false, false, "stale", 6, "AB", 30509.665, 22854.51, 41960.0, 41992.0, 30445.84, 22792.005, 0],
+    [1, 400, 0, false, false, "stale", 7, "BA", 49331.64, 72878.82, 41960.0, 41992.0, 49235.92, 72680.025, 0],
+    [1, 400, 0, false, false, "stale", 8, "AB", 31407.72, 29749.5, 41960.0, 41992.0, 31335.15, 29673.04, 0],
+    [1, 400, 0, false, false, "stale", 9, "BA", 28229.15, 28543.945, 41960.0, 41992.0, 28161.19, 28482.16, 0],
+    [1, 400, 0, false, false, "stale", 10, "AB", 26626.845, 24487.75, 41960.0, 41992.0, 26571.075, 24439.53, 0],
+    [1, 400, 0, false, false, "stale", 11, "BA", 26814.825, 28186.215, 41960.0, 41992.0, 26772.43, 28134.96, 0],
+    [1, 400, 0, false, true, "fresh", 0, "AB", 169781.135, 187751.765, 263486.0, 214798.0, 169247.4, 215486.765, 30100],
+    [1, 400, 0, false, true, "fresh", 1, "BA", 177427.605, 172485.665, 263486.0, 214798.0, 177342.185, 172381.705, 30100],
+    [1, 400, 0, false, true, "fresh", 2, "AB", 158324.36, 196647.165, 263486.0, 214798.0, 158210.07, 196626.25, 30100],
+    [1, 400, 0, false, true, "fresh", 3, "BA", 141574.025, 108853.22, 263486.0, 214798.0, 141094.045, 108770.9, 30100],
+    [1, 400, 0, false, true, "fresh", 4, "AB", 160891.485, 118829.275, 263486.0, 214798.0, 177878.815, 118748.285, 30100],
+    [1, 400, 0, false, true, "fresh", 5, "BA", 583839.705, 111668.345, 263486.0, 214798.0, 579179.93, 111579.0, 30100],
+    [1, 400, 0, false, true, "fresh", 6, "AB", 302051.685, 277037.235, 263486.0, 214798.0, 301954.105, 276955.86, 30100],
+    [1, 400, 0, false, true, "fresh", 7, "BA", 176592.2, 146115.65, 263486.0, 214798.0, 175867.635, 168131.485, 30100],
+    [1, 400, 0, false, true, "fresh", 8, "AB", 218111.67, 151134.105, 263486.0, 214798.0, 218017.445, 151054.72, 30100],
+    [1, 400, 0, false, true, "fresh", 9, "BA", 143471.065, 145060.06, 263486.0, 214798.0, 143400.96, 144977.795, 30100],
+    [1, 400, 0, false, true, "fresh", 10, "AB", 279856.92, 436377.12, 263486.0, 214798.0, 279890.075, 469672.08, 30100],
+    [1, 400, 0, false, true, "fresh", 11, "BA", 126260.325, 225794.755, 263486.0, 214798.0, 126181.845, 225759.775, 30100],
+    [1, 400, 0, false, true, "stale", 0, "AB", 52695.34, 28007.935, 41960.0, 41992.0, 52588.38, 27933.08, 0],
+    [1, 400, 0, false, true, "stale", 1, "BA", 31608.885, 25018.84, 41960.0, 41992.0, 31543.3, 24965.69, 0],
+    [1, 400, 0, false, true, "stale", 2, "AB", 34177.895, 34531.745, 41960.0, 41992.0, 33964.91, 34466.725, 0],
+    [1, 400, 0, false, true, "stale", 3, "BA", 27920.1, 24405.25, 41960.0, 41992.0, 27861.42, 24347.93, 0],
+    [1, 400, 0, false, true, "stale", 4, "AB", 34762.915, 33483.475, 41960.0, 41992.0, 34691.2, 52473.745, 0],
+    [1, 400, 0, false, true, "stale", 5, "BA", 25323.75, 33997.08, 41960.0, 41992.0, 25263.275, 33928.33, 0],
+    [1, 400, 0, false, true, "stale", 6, "AB", 30308.025, 35373.115, 41960.0, 41992.0, 30244.85, 35393.145, 0],
+    [1, 400, 0, false, true, "stale", 7, "BA", 25201.625, 34993.48, 41960.0, 41992.0, 25138.385, 34918.095, 0],
+    [1, 400, 0, false, true, "stale", 8, "AB", 24728.62, 27348.155, 41960.0, 41992.0, 24664.41, 27292.43, 0],
+    [1, 400, 0, false, true, "stale", 9, "BA", 28184.17, 28481.805, 41960.0, 41992.0, 28113.975, 28404.52, 0],
+    [1, 400, 0, false, true, "stale", 10, "AB", 38397.965, 31669.97, 41960.0, 41992.0, 38308.71, 31593.93, 0],
+    [1, 400, 0, false, true, "stale", 11, "BA", 31334.055, 25275.87, 41960.0, 41992.0, 31265.75, 25196.425, 0],
+    [1, 400, 0, true, false, "fresh", 0, "AB", 250687.69, 166595.36, 125152.0, 102424.0, 250583.595, 166513.005, 40150],
+    [1, 400, 0, true, false, "fresh", 1, "BA", 381226.13, 111321.23, 125152.0, 102424.0, 381177.785, 105744.96, 40150],
+    [1, 400, 0, true, false, "fresh", 2, "AB", 506515.37, 137516.22, 125152.0, 102424.0, 507460.46, 137975.28, 40150],
+    [1, 400, 0, true, false, "fresh", 3, "BA", 233810.76, 285624.75, 125152.0, 102424.0, 287445.88, 282768.93, 40150],
+    [1, 400, 0, true, false, "fresh", 4, "AB", 324724.82, 196289.935, 125152.0, 102424.0, 324666.81, 197712.75, 40150],
+    [1, 400, 0, true, false, "fresh", 5, "BA", 239693.245, 244955.515, 125152.0, 102424.0, 239596.04, 244821.945, 40150],
+    [1, 400, 0, true, false, "fresh", 6, "AB", 371221.19, 645162.26, 125152.0, 102424.0, 371114.865, 645067.335, 40150],
+    [1, 400, 0, true, false, "fresh", 7, "BA", 238224.965, 318512.205, 125152.0, 102424.0, 238097.225, 318392.205, 40150],
+    [1, 400, 0, true, false, "fresh", 8, "AB", 373053.165, 162381.72, 125152.0, 102424.0, 372992.3, 162272.78, 40150],
+    [1, 400, 0, true, false, "fresh", 9, "BA", 232382.445, 265325.95, 125152.0, 102424.0, 232281.065, 271017.41, 40150],
+    [1, 400, 0, true, false, "fresh", 10, "AB", 361259.11, 293819.525, 125152.0, 102424.0, 361131.47, 312589.36, 40150],
+    [1, 400, 0, true, false, "fresh", 11, "BA", 346825.685, 259889.825, 125152.0, 102424.0, 362498.0, 259371.665, 40150],
+    [1, 400, 0, true, false, "stale", 0, "AB", 86841.29, 60616.465, 48400.0, 48432.0, 86723.665, 60515.255, 0],
+    [1, 400, 0, true, false, "stale", 1, "BA", 233418.885, 81731.63, 48400.0, 48432.0, 233309.585, 72727.05, 0],
+    [1, 400, 0, true, false, "stale", 2, "AB", 144878.07, 274378.335, 48400.0, 48432.0, 144757.255, 274251.48, 0],
+    [1, 400, 0, true, false, "stale", 3, "BA", 128870.95, 141589.17, 48400.0, 48432.0, 128591.32, 141473.9, 0],
+    [1, 400, 0, true, false, "stale", 4, "AB", 173449.49, 210842.245, 48400.0, 48432.0, 173359.405, 208122.035, 0],
+    [1, 400, 0, true, false, "stale", 5, "BA", 193997.265, 73870.055, 48400.0, 48432.0, 194506.395, 73781.405, 0],
+    [1, 400, 0, true, false, "stale", 6, "AB", 185688.31, 192448.835, 48400.0, 48432.0, 250138.82, 192377.865, 0],
+    [1, 400, 0, true, false, "stale", 7, "BA", 955729.5, 298834.835, 48400.0, 48432.0, 957741.88, 298744.44, 0],
+    [1, 400, 0, true, false, "stale", 8, "AB", 331889.455, 293381.285, 48400.0, 48432.0, 331800.8, 293325.545, 0],
+    [1, 400, 0, true, false, "stale", 9, "BA", 205535.345, 153250.77, 48400.0, 48432.0, 205465.475, 153166.18, 0],
+    [1, 400, 0, true, false, "stale", 10, "AB", 130187.2, 88083.775, 48400.0, 48432.0, 131689.395, 88018.755, 0],
+    [1, 400, 0, true, false, "stale", 11, "BA", 117786.56, 101090.03, 48400.0, 48432.0, 117715.605, 101018.24, 0],
+    [1, 400, 0, true, true, "fresh", 0, "AB", 489654.055, 203231.815, 274174.0, 231886.0, 489556.865, 633634.675, 30100],
+    [1, 400, 0, true, true, "fresh", 1, "BA", 223515.24, 159295.51, 274174.0, 231886.0, 223454.93, 159217.44, 30100],
+    [1, 400, 0, true, true, "fresh", 2, "AB", 195114.41, 262848.075, 274174.0, 231886.0, 195052.83, 262837.665, 30100],
+    [1, 400, 0, true, true, "fresh", 3, "BA", 226796.285, 253259.99, 274174.0, 231886.0, 302797.795, 253184.255, 30100],
+    [1, 400, 0, true, true, "fresh", 4, "AB", 300047.2, 337124.81, 274174.0, 231886.0, 299980.795, 336824.515, 30100],
+    [1, 400, 0, true, true, "fresh", 5, "BA", 552360.015, 173875.325, 274174.0, 231886.0, 552446.235, 173809.795, 30100],
+    [1, 400, 0, true, true, "fresh", 6, "AB", 488803.695, 447926.26, 274174.0, 231886.0, 488729.78, 447573.32, 30100],
+    [1, 400, 0, true, true, "fresh", 7, "BA", 674486.715, 239109.085, 274174.0, 231886.0, 671942.635, 297408.87, 30100],
+    [1, 400, 0, true, true, "fresh", 8, "AB", 524084.015, 511832.98, 274174.0, 231886.0, 523991.73, 511833.37, 30100],
+    [1, 400, 0, true, true, "fresh", 9, "BA", 342961.975, 364642.245, 274174.0, 231886.0, 342893.745, 364614.335, 30100],
+    [1, 400, 0, true, true, "fresh", 10, "AB", 153231.16, 232042.795, 274174.0, 231886.0, 174556.58, 231974.76, 30100],
+    [1, 400, 0, true, true, "fresh", 11, "BA", 160999.85, 161588.19, 274174.0, 231886.0, 160468.76, 161511.15, 30100],
+    [1, 400, 0, true, true, "stale", 0, "AB", 88143.005, 74373.785, 48400.0, 48432.0, 88068.63, 74314.235, 0],
+    [1, 400, 0, true, true, "stale", 1, "BA", 71838.45, 49013.865, 48400.0, 48432.0, 71763.805, 48952.045, 0],
+    [1, 400, 0, true, true, "stale", 2, "AB", 58607.395, 88791.005, 48400.0, 48432.0, 58538.855, 88669.445, 0],
+    [1, 400, 0, true, true, "stale", 3, "BA", 62503.325, 82525.48, 48400.0, 48432.0, 59446.99, 82452.94, 0],
+    [1, 400, 0, true, true, "stale", 4, "AB", 442226.25, 71214.86, 48400.0, 48432.0, 442144.72, 71157.69, 0],
+    [1, 400, 0, true, true, "stale", 5, "BA", 70219.035, 61464.57, 48400.0, 48432.0, 70154.675, 61397.31, 0],
+    [1, 400, 0, true, true, "stale", 6, "AB", 76783.64, 108162.84, 48400.0, 48432.0, 54449.63, 108080.14, 0],
+    [1, 400, 0, true, true, "stale", 7, "BA", 65321.025, 93080.245, 48400.0, 48432.0, 65257.505, 93015.81, 0],
+    [1, 400, 0, true, true, "stale", 8, "AB", 55241.175, 49425.295, 48400.0, 48432.0, 55181.475, 49367.51, 0],
+    [1, 400, 0, true, true, "stale", 9, "BA", 37377.825, 46071.51, 48400.0, 48432.0, 37327.015, 46021.055, 0],
+    [1, 400, 0, true, true, "stale", 10, "AB", 358709.66, 122518.77, 48400.0, 48432.0, 344690.43, 122418.3, 0],
+    [1, 400, 0, true, true, "stale", 11, "BA", 68188.285, 240558.34, 48400.0, 48432.0, 68103.995, 232124.27, 0],
+    [1, 2000, 0, false, false, "fresh", 0, "AB", 872439.845, 530526.985, 498040.0, 352488.0, 904733.845, 530388.32, 200050],
+    [1, 2000, 0, false, false, "fresh", 1, "BA", 1642060.26, 522460.21, 498030.16, 352488.0, 1638956.37, 522379.0, 200050],
+    [1, 2000, 0, false, false, "fresh", 2, "AB", 617079.73, 454237.28, 498024.0, 352488.0, 647533.79, 456398.36, 200050],
+    [1, 2000, 0, false, false, "fresh", 3, "BA", 748807.965, 496521.87, 498024.0, 352488.0, 748732.0, 496439.98, 200050],
+    [1, 2000, 0, false, false, "fresh", 4, "AB", 578644.575, 575615.46, 498024.0, 352488.0, 621939.89, 575536.375, 200050],
+    [1, 2000, 0, false, false, "fresh", 5, "BA", 752635.335, 516523.895, 498024.0, 352488.0, 780134.685, 516449.9, 200050],
+    [1, 2000, 0, false, false, "fresh", 6, "AB", 1493044.435, 415960.54, 498024.0, 352488.0, 1503624.905, 415879.665, 200050],
+    [1, 2000, 0, false, false, "fresh", 7, "BA", 516329.115, 516230.53, 498024.0, 352488.0, 615985.795, 516147.89, 200050],
+    [1, 2000, 0, false, false, "fresh", 8, "AB", 529548.615, 437185.935, 498024.0, 352488.0, 529469.23, 437104.875, 200050],
+    [1, 2000, 0, false, false, "fresh", 9, "BA", 538204.895, 422426.625, 498024.0, 352488.0, 562312.985, 422351.145, 200050],
+    [1, 2000, 0, false, false, "fresh", 10, "AB", 966493.12, 583607.745, 498024.0, 352488.0, 965345.89, 583528.005, 200050],
+    [1, 2000, 0, false, false, "fresh", 11, "BA", 560816.275, 482818.505, 498024.0, 352488.0, 601456.13, 482734.9, 200050],
+    [1, 2000, 0, false, false, "stale", 0, "AB", 223928.475, 297053.77, 209568.0, 209600.0, 223835.44, 296954.025, 0],
+    [1, 2000, 0, false, false, "stale", 1, "BA", 280523.035, 206409.89, 209568.0, 209600.0, 280447.685, 206326.445, 0],
+    [1, 2000, 0, false, false, "stale", 2, "AB", 267887.155, 285595.475, 209568.0, 209600.0, 267845.195, 285532.73, 0],
+    [1, 2000, 0, false, false, "stale", 3, "BA", 302033.805, 275442.35, 209568.0, 209600.0, 301960.62, 307211.79, 0],
+    [1, 2000, 0, false, false, "stale", 4, "AB", 274723.855, 195404.97, 209568.0, 209600.0, 274632.285, 195329.02, 0],
+    [1, 2000, 0, false, false, "stale", 5, "BA", 344507.165, 320467.71, 209568.0, 209600.0, 344422.58, 320384.2, 0],
+    [1, 2000, 0, false, false, "stale", 6, "AB", 311283.86, 304556.75, 209568.0, 209600.0, 311111.125, 343392.26, 0],
+    [1, 2000, 0, false, false, "stale", 7, "BA", 440890.685, 689980.075, 209568.0, 209600.0, 440802.485, 685087.83, 0],
+    [1, 2000, 0, false, false, "stale", 8, "AB", 344383.145, 250303.385, 209568.0, 209600.0, 344251.55, 250232.51, 0],
+    [1, 2000, 0, false, false, "stale", 9, "BA", 270935.655, 286812.235, 209568.0, 209600.0, 270784.54, 286733.035, 0],
+    [1, 2000, 0, false, false, "stale", 10, "AB", 257039.645, 233755.515, 209568.0, 209600.0, 256962.535, 270445.96, 0],
+    [1, 2000, 0, false, false, "stale", 11, "BA", 245218.92, 238865.65, 209568.0, 209600.0, 245136.87, 238781.72, 0],
+    [1, 2000, 0, false, true, "fresh", 0, "AB", 1272827.45, 1196934.465, 1265950.0, 1022846.0, 1305624.975, 1196861.065, 200050],
+    [1, 2000, 0, false, true, "fresh", 1, "BA", 1477776.67, 1440457.615, 1265950.0, 1022846.0, 1538579.71, 1519813.41, 200050],
+    [1, 2000, 0, false, true, "fresh", 2, "AB", 1434447.445, 952054.245, 1265950.0, 1022846.0, 1442201.21, 970904.215, 200050],
+    [1, 2000, 0, false, true, "fresh", 3, "BA", 1021531.38, 906210.39, 1265950.0, 1022846.0, 1020740.37, 926336.105, 200050],
+    [1, 2000, 0, false, true, "fresh", 4, "AB", 1568305.155, 992704.075, 1265950.0, 1022846.0, 1581188.775, 1088853.07, 200050],
+    [1, 2000, 0, false, true, "fresh", 5, "BA", 1706219.555, 2648846.405, 1265950.0, 1022846.0, 1708192.32, 2685363.42, 200050],
+    [1, 2000, 0, false, true, "fresh", 6, "AB", 1297870.695, 881813.325, 1265950.0, 1022846.0, 1324672.255, 951438.09, 200050],
+    [1, 2000, 0, false, true, "fresh", 7, "BA", 1012739.72, 857882.21, 1265950.0, 1022846.0, 1042956.525, 857801.195, 200050],
+    [1, 2000, 0, false, true, "fresh", 8, "AB", 1003284.17, 1080881.225, 1265950.0, 1022846.0, 1024435.26, 1128918.73, 200050],
+    [1, 2000, 0, false, true, "fresh", 9, "BA", 1119033.4, 1034632.365, 1265950.0, 1022846.0, 1164693.675, 1034231.63, 200050],
+    [1, 2000, 0, false, true, "fresh", 10, "AB", 1095758.58, 824594.84, 1265950.0, 1022846.0, 1108521.975, 824517.685, 200050],
+    [1, 2000, 0, false, true, "fresh", 11, "BA", 1090685.59, 1139200.83, 1265950.0, 1022846.0, 1158187.725, 1166948.715, 200050],
+    [1, 2000, 0, false, true, "stale", 0, "AB", 205821.995, 243320.08, 209568.0, 209600.0, 205717.485, 243250.64, 0],
+    [1, 2000, 0, false, true, "stale", 1, "BA", 289906.085, 183072.7, 209568.0, 209600.0, 289046.585, 182998.395, 0],
+    [1, 2000, 0, false, true, "stale", 2, "AB", 608266.725, 253519.99, 209568.0, 209600.0, 678637.255, 253449.99, 0],
+    [1, 2000, 0, false, true, "stale", 3, "BA", 193491.405, 243579.595, 209568.0, 209600.0, 193426.57, 243496.21, 0],
+    [1, 2000, 0, false, true, "stale", 4, "AB", 198981.065, 199273.695, 209568.0, 209600.0, 198912.585, 199201.045, 0],
+    [1, 2000, 0, false, true, "stale", 5, "BA", 213076.24, 257826.09, 209568.0, 209600.0, 213000.845, 258818.055, 0],
+    [1, 2000, 0, false, true, "stale", 6, "AB", 292016.58, 193923.04, 209568.0, 209600.0, 322354.995, 193859.305, 0],
+    [1, 2000, 0, false, true, "stale", 7, "BA", 243425.115, 250580.31, 209568.0, 209600.0, 243352.73, 250491.68, 0],
+    [1, 2000, 0, false, true, "stale", 8, "AB", 235463.525, 210960.525, 209568.0, 209600.0, 235375.75, 210891.37, 0],
+    [1, 2000, 0, false, true, "stale", 9, "BA", 320494.575, 273621.235, 209568.0, 209600.0, 320425.72, 273542.91, 0],
+    [1, 2000, 0, false, true, "stale", 10, "AB", 212458.905, 179797.585, 209568.0, 209600.0, 286745.275, 179723.3, 0],
+    [1, 2000, 0, false, true, "stale", 11, "BA", 200063.135, 243366.675, 209568.0, 209600.0, 200252.81, 243287.17, 0],
+    [1, 2000, 0, true, false, "fresh", 0, "AB", 703785.66, 603323.27, 559088.0, 445552.0, 703690.865, 603245.63, 200050],
+    [1, 2000, 0, true, false, "fresh", 1, "BA", 718257.79, 701991.535, 559088.0, 445552.0, 718279.14, 780001.105, 200050],
+    [1, 2000, 0, true, false, "fresh", 2, "AB", 782234.54, 569057.95, 559088.0, 445552.0, 782148.285, 603953.535, 200050],
+    [1, 2000, 0, true, false, "fresh", 3, "BA", 1256046.03, 614749.21, 559088.0, 445552.0, 1258575.355, 614655.9, 200050],
+    [1, 2000, 0, true, false, "fresh", 4, "AB", 705916.405, 672350.515, 559088.0, 445552.0, 766669.62, 672273.975, 200050],
+    [1, 2000, 0, true, false, "fresh", 5, "BA", 672827.32, 645043.215, 559088.0, 445552.0, 712777.345, 644958.0, 200050],
+    [1, 2000, 0, true, false, "fresh", 6, "AB", 725398.365, 654498.24, 559088.0, 445552.0, 725304.57, 654416.505, 200050],
+    [1, 2000, 0, true, false, "fresh", 7, "BA", 721209.705, 573525.35, 559088.0, 445552.0, 777298.085, 571351.875, 200050],
+    [1, 2000, 0, true, false, "fresh", 8, "AB", 755471.265, 748776.47, 559088.0, 445552.0, 755375.755, 748694.155, 200050],
+    [1, 2000, 0, true, false, "fresh", 9, "BA", 739726.78, 571325.255, 559088.0, 445552.0, 739656.465, 615393.14, 200050],
+    [1, 2000, 0, true, false, "fresh", 10, "AB", 683329.72, 527040.665, 559088.0, 445552.0, 683241.73, 543321.825, 200050],
+    [1, 2000, 0, true, false, "fresh", 11, "BA", 616534.48, 506781.345, 559088.0, 445552.0, 616612.82, 506703.815, 200050],
+    [1, 2000, 0, true, false, "stale", 0, "AB", 401254.655, 328348.565, 242168.0, 242200.0, 407965.86, 336622.15, 0],
+    [1, 2000, 0, true, false, "stale", 1, "BA", 321445.555, 268230.305, 242168.0, 242200.0, 326801.68, 271896.31, 0],
+    [1, 2000, 0, true, false, "stale", 2, "AB", 336473.985, 395092.17, 242168.0, 242200.0, 336738.07, 406577.655, 0],
+    [1, 2000, 0, true, false, "stale", 3, "BA", 375865.035, 280434.725, 242168.0, 242200.0, 376888.68, 342948.885, 0],
+    [1, 2000, 0, true, false, "stale", 4, "AB", 401379.66, 335729.575, 242168.0, 242200.0, 404821.885, 337658.125, 0],
+    [1, 2000, 0, true, false, "stale", 5, "BA", 347894.96, 288489.445, 242168.0, 242200.0, 376259.76, 293679.295, 0],
+    [1, 2000, 0, true, false, "stale", 6, "AB", 561185.08, 331899.675, 242168.0, 242200.0, 617341.035, 331970.84, 0],
+    [1, 2000, 0, true, false, "stale", 7, "BA", 472743.125, 324290.59, 242168.0, 242200.0, 478785.965, 326325.325, 0],
+    [1, 2000, 0, true, false, "stale", 8, "AB", 373443.915, 344129.51, 242168.0, 242200.0, 374231.775, 344268.195, 0],
+    [1, 2000, 0, true, false, "stale", 9, "BA", 414788.005, 387720.2, 242168.0, 242200.0, 460709.455, 397385.705, 0],
+    [1, 2000, 0, true, false, "stale", 10, "AB", 1325941.375, 172828.055, 242168.0, 242200.0, 1359401.75, 172761.605, 0],
+    [1, 2000, 0, true, false, "stale", 11, "BA", 171039.145, 196469.25, 242168.0, 242200.0, 171091.495, 196444.54, 0],
+    [1, 2000, 0, true, true, "fresh", 0, "AB", 1244111.775, 1047513.105, 1319898.0, 1108794.0, 1269807.035, 1048342.51, 200050],
+    [1, 2000, 0, true, true, "fresh", 1, "BA", 1275435.55, 1068409.05, 1319898.0, 1108794.0, 1407657.36, 1090683.585, 200050],
+    [1, 2000, 0, true, true, "fresh", 2, "AB", 1369369.81, 1299622.825, 1319898.0, 1108794.0, 1437027.05, 1304313.03, 200050],
+    [1, 2000, 0, true, true, "fresh", 3, "BA", 1119672.34, 1344666.175, 1319898.0, 1108794.0, 1141178.31, 1601316.04, 200050],
+    [1, 2000, 0, true, true, "fresh", 4, "AB", 1308901.645, 930047.89, 1319898.0, 1108794.0, 1342355.415, 930662.805, 200050],
+    [1, 2000, 0, true, true, "fresh", 5, "BA", 4947884.98, 1139421.745, 1319898.0, 1108794.0, 5080645.13, 1172884.03, 200050],
+    [1, 2000, 0, true, true, "fresh", 6, "AB", 2149185.24, 3094529.32, 1319898.0, 1108794.0, 2202703.26, 3168169.91, 200050],
+    [1, 2000, 0, true, true, "fresh", 7, "BA", 1665786.15, 2632413.485, 1319898.0, 1108794.0, 1709698.35, 2821911.745, 200050],
+    [1, 2000, 0, true, true, "fresh", 8, "AB", 3133636.45, 1607607.29, 1319898.0, 1108794.0, 3452848.01, 1648619.63, 200050],
+    [1, 2000, 0, true, true, "fresh", 9, "BA", 1030951.74, 1302860.265, 1319898.0, 1108794.0, 1085637.22, 1396526.15, 200050],
+    [1, 2000, 0, true, true, "fresh", 10, "AB", 1789464.845, 1244422.675, 1319898.0, 1108794.0, 1822840.82, 1258478.485, 200050],
+    [1, 2000, 0, true, true, "fresh", 11, "BA", 1864421.945, 994542.28, 1319898.0, 1108794.0, 1923013.255, 1023204.755, 200050],
+    [1, 2000, 0, true, true, "stale", 0, "AB", 1670797.46, 3031211.76, 242168.0, 242200.0, 1835646.07, 3258094.92, 0],
+    [1, 2000, 0, true, true, "stale", 1, "BA", 272501.43, 2575891.795, 242168.0, 242200.0, 274059.59, 2591437.55, 0],
+    [1, 2000, 0, true, true, "stale", 2, "AB", 589034.3, 1021209.655, 242168.0, 242200.0, 588953.165, 1020953.84, 0],
+    [1, 2000, 0, true, true, "stale", 3, "BA", 486412.675, 748965.105, 242168.0, 242200.0, 525252.505, 748890.125, 0],
+    [1, 2000, 0, true, true, "stale", 4, "AB", 246921.27, 872401.875, 242168.0, 242200.0, 269363.91, 872394.995, 0],
+    [1, 2000, 0, true, true, "stale", 5, "BA", 246755.87, 1389649.47, 242168.0, 242200.0, 246684.145, 1401862.535, 0],
+    [1, 2000, 0, true, true, "stale", 6, "AB", 613115.68, 261900.15, 242168.0, 242200.0, 614760.335, 261825.135, 0],
+    [1, 2000, 0, true, true, "stale", 7, "BA", 215347.97, 205882.905, 242168.0, 242200.0, 226015.49, 205806.065, 0],
+    [1, 2000, 0, true, true, "stale", 8, "AB", 224961.925, 255775.595, 242168.0, 242200.0, 224886.655, 255700.275, 0],
+    [1, 2000, 0, true, true, "stale", 9, "BA", 315733.055, 189033.635, 242168.0, 242200.0, 315663.08, 188951.97, 0],
+    [1, 2000, 0, true, true, "stale", 10, "AB", 469095.53, 338867.36, 242168.0, 242200.0, 468725.015, 415233.11, 0],
+    [1, 2000, 0, true, true, "stale", 11, "BA", 1040924.67, 2198155.885, 242168.0, 242200.0, 1049139.805, 2274583.535, 0],
+    [1, 2000, 128, false, false, "fresh", 0, "AB", 1618512.805, 1244441.535, 850392.0, 576184.0, 1746597.07, 1305596.1, 1669200],
+    [1, 2000, 128, false, false, "fresh", 1, "BA", 1650428.98, 1239909.16, 850392.0, 576184.0, 1773636.25, 1241035.515, 1669200],
+    [1, 2000, 128, false, false, "fresh", 2, "AB", 1649903.935, 1123033.035, 850392.0, 576184.0, 1658493.46, 1232322.935, 1669200],
+    [1, 2000, 128, false, false, "fresh", 3, "BA", 1537803.425, 3132193.485, 850392.0, 576184.0, 1666922.91, 3150254.19, 1669200],
+    [1, 2000, 128, false, false, "fresh", 4, "AB", 1311008.475, 1022660.885, 850392.0, 576184.0, 1347882.335, 1253434.325, 1669200],
+    [1, 2000, 128, false, false, "fresh", 5, "BA", 1325066.59, 1082139.09, 850392.0, 576184.0, 1493950.115, 1172613.48, 1669200],
+    [1, 2000, 128, false, false, "fresh", 6, "AB", 1595316.96, 3844385.535, 850392.0, 576184.0, 1788724.67, 4374756.945, 1669200],
+    [1, 2000, 128, false, false, "fresh", 7, "BA", 1589856.39, 2444348.825, 850392.0, 576184.0, 1747842.815, 2601335.755, 1669200],
+    [1, 2000, 128, false, false, "fresh", 8, "AB", 2209569.66, 2610853.085, 850392.0, 576184.0, 2678651.335, 2974580.2, 1669200],
+    [1, 2000, 128, false, false, "fresh", 9, "BA", 1761399.365, 1983153.555, 850392.0, 576184.0, 1813065.845, 2499891.72, 1669200],
+    [1, 2000, 128, false, false, "fresh", 10, "AB", 1282284.875, 1406702.355, 850392.0, 576184.0, 1342638.6, 1429143.99, 1669200],
+    [1, 2000, 128, false, false, "fresh", 11, "BA", 2099126.935, 1921814.115, 850392.0, 576184.0, 2144175.29, 1981072.185, 1669200],
+    [1, 2000, 128, false, false, "stale", 0, "AB", 1102450.285, 845389.585, 370320.0, 370352.0, 1118416.9, 863908.085, 0],
+    [1, 2000, 128, false, false, "stale", 1, "BA", 1026168.52, 1020695.485, 370320.0, 370352.0, 1026695.885, 1020619.24, 0],
+    [1, 2000, 128, false, false, "stale", 2, "AB", 422657.32, 670656.75, 370320.0, 370352.0, 513424.915, 670574.135, 0],
+    [1, 2000, 128, false, false, "stale", 3, "BA", 592138.26, 736280.65, 370320.0, 370352.0, 592109.2, 736208.175, 0],
+    [1, 2000, 128, false, false, "stale", 4, "AB", 697426.75, 1049988.39, 370320.0, 370352.0, 760348.645, 1049382.465, 0],
+    [1, 2000, 128, false, false, "stale", 5, "BA", 444277.97, 671524.55, 370320.0, 370352.0, 444208.695, 671736.0, 0],
+    [1, 2000, 128, false, false, "stale", 6, "AB", 666487.115, 584626.665, 370320.0, 370352.0, 735695.425, 578574.95, 0],
+    [1, 2000, 128, false, false, "stale", 7, "BA", 609389.41, 686779.025, 370320.0, 370352.0, 609768.915, 686727.79, 0],
+    [1, 2000, 128, false, false, "stale", 8, "AB", 509153.035, 729177.43, 370320.0, 370352.0, 509080.275, 780220.28, 0],
+    [1, 2000, 128, false, false, "stale", 9, "BA", 535147.49, 586147.46, 370320.0, 370352.0, 535077.275, 586417.56, 0],
+    [1, 2000, 128, false, false, "stale", 10, "AB", 887976.78, 663361.74, 370320.0, 370352.0, 887892.635, 701946.07, 0],
+    [1, 2000, 128, false, false, "stale", 11, "BA", 872860.25, 671993.3, 370320.0, 370352.0, 873752.61, 671957.11, 0],
+    [1, 2000, 128, false, true, "fresh", 0, "AB", 2945186.845, 3486825.345, 2388090.0, 1919644.64, 2976580.76, 3664574.245, 1212950],
+    [1, 2000, 128, false, true, "fresh", 1, "BA", 3053315.165, 2212191.185, 2388082.0, 1919634.0, 3196923.815, 2266022.015, 1212950],
+    [1, 2000, 128, false, true, "fresh", 2, "AB", 3852181.6, 2300021.8, 2388082.0, 1919634.0, 4048601.775, 2405392.62, 1212950],
+    [1, 2000, 128, false, true, "fresh", 3, "BA", 2247571.47, 2662314.595, 2388082.0, 1919634.0, 2264112.08, 2742434.13, 1212950],
+    [1, 2000, 128, false, true, "fresh", 4, "AB", 2505430.655, 2232220.85, 2388082.0, 1919634.0, 2548646.93, 2276726.745, 1212950],
+    [1, 2000, 128, false, true, "fresh", 5, "BA", 2210875.84, 3513551.545, 2388082.0, 1919634.0, 2303542.96, 3578839.705, 1212950],
+    [1, 2000, 128, false, true, "fresh", 6, "AB", 3137687.04, 1782428.19, 2388082.0, 1919634.0, 3178524.0, 1808535.405, 1212950],
+    [1, 2000, 128, false, true, "fresh", 7, "BA", 2688979.915, 2390773.88, 2388082.0, 1919634.0, 2753357.22, 2428508.23, 1212950],
+    [1, 2000, 128, false, true, "fresh", 8, "AB", 9667635.725, 7430632.595, 2388082.0, 1919634.0, 9859345.265, 7817678.445, 1212950],
+    [1, 2000, 128, false, true, "fresh", 9, "BA", 7689224.745, 5801686.72, 2388082.0, 1919634.0, 7749977.085, 5858319.08, 1212950],
+    [1, 2000, 128, false, true, "fresh", 10, "AB", 15558926.74, 26565966.77, 2388082.0, 1919634.0, 15689226.81, 26784396.99, 1212950],
+    [1, 2000, 128, false, true, "fresh", 11, "BA", 11432289.035, 8141446.075, 2388082.0, 1919634.0, 11675526.4, 8454877.175, 1212950],
+    [1, 2000, 128, false, true, "stale", 0, "AB", 628213.41, 5405327.325, 370320.0, 370352.0, 1000861.03, 5448778.195, 0],
+    [1, 2000, 128, false, true, "stale", 1, "BA", 762950.02, 1337271.345, 370320.0, 370352.0, 768080.75, 1375465.305, 0],
+    [1, 2000, 128, false, true, "stale", 2, "AB", 900709.9, 1078650.33, 370320.0, 370352.0, 1034591.99, 1085355.04, 0],
+    [1, 2000, 128, false, true, "stale", 3, "BA", 2547772.33, 1286275.71, 370320.0, 370352.0, 2688052.385, 1286187.265, 0],
+    [1, 2000, 128, false, true, "stale", 4, "AB", 1560927.975, 3731750.55, 370320.0, 370352.0, 1563271.725, 4393715.31, 0],
+    [1, 2000, 128, false, true, "stale", 5, "BA", 2537860.27, 3396804.525, 370320.0, 370352.0, 2539465.505, 3529816.515, 0],
+    [1, 2000, 128, false, true, "stale", 6, "AB", 1849107.475, 1884927.245, 370320.0, 370352.0, 1848778.735, 1933059.72, 0],
+    [1, 2000, 128, false, true, "stale", 7, "BA", 1475399.76, 2478505.52, 370320.0, 370352.0, 1586164.255, 2668363.0, 0],
+    [1, 2000, 128, false, true, "stale", 8, "AB", 922976.775, 828716.315, 370320.0, 370352.0, 948737.8, 912614.2, 0],
+    [1, 2000, 128, false, true, "stale", 9, "BA", 713048.24, 998556.615, 370320.0, 370352.0, 719358.265, 998634.855, 0],
+    [1, 2000, 128, false, true, "stale", 10, "AB", 545533.265, 620138.225, 370320.0, 370352.0, 545677.965, 622630.895, 0],
+    [1, 2000, 128, false, true, "stale", 11, "BA", 513193.54, 578488.72, 370320.0, 370352.0, 513129.95, 593565.8, 0],
+    [1, 2000, 128, true, false, "fresh", 0, "AB", 3438741.715, 4377299.765, 821912.0, 643720.0, 3447239.205, 4461648.99, 1669200],
+    [1, 2000, 128, true, false, "fresh", 1, "BA", 6074227.205, 8502767.045, 821912.0, 643720.0, 6420516.415, 8716323.92, 1669200],
+    [1, 2000, 128, true, false, "fresh", 2, "AB", 1808060.73, 5908066.955, 821912.0, 643720.0, 1852523.0, 6562921.91, 1669200],
+    [1, 2000, 128, true, false, "fresh", 3, "BA", 10091776.14, 3452794.385, 821912.0, 643720.0, 10640371.32, 3648540.32, 1669200],
+    [1, 2000, 128, true, false, "fresh", 4, "AB", 13491203.925, 9414817.335, 821912.0, 643720.0, 14047443.03, 9721826.93, 1669200],
+    [1, 2000, 128, true, false, "fresh", 5, "BA", 1921562.655, 4016102.27, 821912.0, 643720.0, 2156346.985, 4339370.5, 1669200],
+    [1, 2000, 128, true, false, "fresh", 6, "AB", 2462082.64, 1877567.165, 821912.0, 643720.0, 2757087.125, 2001467.37, 1669200],
+    [1, 2000, 128, true, false, "fresh", 7, "BA", 1834252.75, 1950718.075, 821912.0, 643720.0, 1864145.225, 2337477.755, 1669200],
+    [1, 2000, 128, true, false, "fresh", 8, "AB", 1811575.37, 1910457.42, 821912.0, 643720.0, 1932765.765, 2025289.465, 1669200],
+    [1, 2000, 128, true, false, "fresh", 9, "BA", 1825319.44, 2253130.93, 821912.0, 643720.0, 1855290.56, 2340801.675, 1669200],
+    [1, 2000, 128, true, false, "fresh", 10, "AB", 1722654.66, 943026.08, 821912.0, 643720.0, 1809354.11, 945166.645, 1669200],
+    [1, 2000, 128, true, false, "fresh", 11, "BA", 1480772.165, 1137978.825, 821912.0, 643720.0, 1512472.87, 1138178.215, 1669200],
+    [1, 2000, 128, true, false, "stale", 0, "AB", 704744.055, 509190.785, 315168.0, 315200.0, 722899.48, 516192.66, 0],
+    [1, 2000, 128, true, false, "stale", 1, "BA", 574779.165, 472393.12, 315168.0, 315200.0, 626920.765, 479522.33, 0],
+    [1, 2000, 128, true, false, "stale", 2, "AB", 622098.945, 516490.695, 315168.0, 315200.0, 651203.43, 519131.42, 0],
+    [1, 2000, 128, true, false, "stale", 3, "BA", 388227.47, 425505.405, 315168.0, 315200.0, 388366.625, 429827.6, 0],
+    [1, 2000, 128, true, false, "stale", 4, "AB", 523255.285, 682908.715, 315168.0, 315200.0, 572488.845, 691676.35, 0],
+    [1, 2000, 128, true, false, "stale", 5, "BA", 490570.91, 397667.325, 315168.0, 315200.0, 492716.495, 399968.24, 0],
+    [1, 2000, 128, true, false, "stale", 6, "AB", 844839.855, 799807.84, 315168.0, 315200.0, 851312.31, 855729.91, 0],
+    [1, 2000, 128, true, false, "stale", 7, "BA", 1447700.755, 698479.925, 315168.0, 315200.0, 1569093.71, 702856.63, 0],
+    [1, 2000, 128, true, false, "stale", 8, "AB", 1240035.335, 625283.215, 315168.0, 315200.0, 1337425.365, 804857.84, 0],
+    [1, 2000, 128, true, false, "stale", 9, "BA", 626788.665, 704606.495, 315168.0, 315200.0, 629417.17, 950588.76, 0],
+    [1, 2000, 128, true, false, "stale", 10, "AB", 564871.92, 833637.395, 315168.0, 315200.0, 579054.825, 890122.39, 0],
+    [1, 2000, 128, true, false, "stale", 11, "BA", 2108756.42, 1282283.025, 315168.0, 315200.0, 2227736.055, 1306098.44, 0],
+    [1, 2000, 128, true, true, "fresh", 0, "AB", 4885452.04, 6468547.4, 2352946.0, 1980514.0, 5011661.39, 6542120.99, 1212950],
+    [1, 2000, 128, true, true, "fresh", 1, "BA", 6495561.715, 7362164.95, 2352946.0, 1980514.0, 6673674.395, 7453805.595, 1212950],
+    [1, 2000, 128, true, true, "fresh", 2, "AB", 7795481.125, 4140996.84, 2352946.0, 1980514.0, 8754606.605, 4178341.33, 1212950],
+    [1, 2000, 128, true, true, "fresh", 3, "BA", 4381241.745, 3826922.53, 2352946.0, 1980514.0, 4424260.215, 3886010.44, 1212950],
+    [1, 2000, 128, true, true, "fresh", 4, "AB", 23592413.79, 11689528.205, 2352946.0, 1980514.0, 23923949.695, 11970337.925, 1212950],
+    [1, 2000, 128, true, true, "fresh", 5, "BA", 5455675.82, 3536723.1, 2352946.0, 1980514.0, 5591271.455, 3592670.56, 1212950],
+    [1, 2000, 128, true, true, "fresh", 6, "AB", 4711564.83, 4836701.08, 2352946.0, 1980514.0, 4873579.43, 4905985.425, 1212950],
+    [1, 2000, 128, true, true, "fresh", 7, "BA", 4929086.435, 4671996.475, 2352946.0, 1980514.0, 5085362.965, 4696420.91, 1212950],
+    [1, 2000, 128, true, true, "fresh", 8, "AB", 6309763.85, 3274554.38, 2352946.0, 1980514.0, 6352555.5, 3379482.115, 1212950],
+    [1, 2000, 128, true, true, "fresh", 9, "BA", 6427004.54, 7148135.545, 2352946.0, 1980514.0, 6514758.525, 7267858.075, 1212950],
+    [1, 2000, 128, true, true, "fresh", 10, "AB", 4278784.245, 2930838.435, 2352946.0, 1980514.0, 4521695.52, 2952021.795, 1212950],
+    [1, 2000, 128, true, true, "fresh", 11, "BA", 3600325.465, 2579047.075, 2352946.0, 1980514.0, 3798792.97, 2674266.315, 1212950],
+    [1, 2000, 128, true, true, "stale", 0, "AB", 423013.0, 391927.6, 315168.0, 315200.0, 422923.91, 391846.005, 0],
+    [1, 2000, 128, true, true, "stale", 1, "BA", 520443.815, 481586.57, 315168.0, 315200.0, 520426.195, 481772.63, 0],
+    [1, 2000, 128, true, true, "stale", 2, "AB", 762253.98, 548435.315, 315168.0, 315200.0, 820509.18, 548360.895, 0],
+    [1, 2000, 128, true, true, "stale", 3, "BA", 575652.84, 573804.6, 315168.0, 315200.0, 574519.925, 573726.93, 0],
+    [1, 2000, 128, true, true, "stale", 4, "AB", 566556.305, 408463.505, 315168.0, 315200.0, 567677.025, 435426.485, 0],
+    [1, 2000, 128, true, true, "stale", 5, "BA", 603831.385, 414095.91, 315168.0, 315200.0, 603750.145, 414005.865, 0],
+    [1, 2000, 128, true, true, "stale", 6, "AB", 625281.2, 644755.275, 315168.0, 315200.0, 625686.25, 644661.045, 0],
+    [1, 2000, 128, true, true, "stale", 7, "BA", 472412.69, 518750.645, 315168.0, 315200.0, 472336.31, 529518.86, 0],
+    [1, 2000, 128, true, true, "stale", 8, "AB", 527170.475, 760018.58, 315168.0, 315200.0, 527083.69, 767970.795, 0],
+    [1, 2000, 128, true, true, "stale", 9, "BA", 531726.54, 603231.77, 315168.0, 315200.0, 570956.98, 603147.885, 0],
+    [1, 2000, 128, true, true, "stale", 10, "AB", 324215.99, 340862.84, 315168.0, 315200.0, 324133.055, 340822.3, 0],
+    [1, 2000, 128, true, true, "stale", 11, "BA", 576165.605, 345679.595, 315168.0, 315200.0, 554179.245, 348129.475, 0]
+  ]
+}

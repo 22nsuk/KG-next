@@ -34,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PositionConfirmedRollbackTest {
@@ -1252,6 +1253,203 @@ class PositionConfirmedRollbackTest {
         harness.frame.shutdownKifuEngineSyncCoordinator();
         mirror.normalQuit();
       }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void trialReturnRevalidatesSetupModeAfterEngineStart(boolean engineStarted) throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      harness.board.setHistory(
+          featurecat.lizzie.rules.SGFParser.parseSgf("(;SZ[19]AB[aa]AW[bb])", true));
+      Stone[] original = harness.board.getData().stones.clone();
+      harness.engine.commandLists.add("loadsgf");
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        EngineManager.isEmpty = true;
+        assertTrue(harness.frame.enterSetupMode());
+        harness.frame.tryPlay(false);
+        assertTrue(harness.board.setupPlaceStone(2, 2, Stone.BLACK));
+        harness.frame.exitSetupMode();
+        // Model the completed foreground engine start, retaining the trial snapshot.
+        EngineManager.isEmpty = !engineStarted;
+        harness.frame.tryPlay(false);
+      });
+      if (engineStarted) awaitHistoryRestoreCompletion(harness.board);
+
+      assertFalse(harness.frame.isTrying);
+      assertArrayEquals(original, harness.board.getData().stones);
+      assertEquals(!engineStarted, harness.board.isSetupMode(),
+          "trial return must not restore offline setup input routing over an active engine");
+      assertEquals(engineStarted ? 1 : 0, payloadCount(output, "loadsgf"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @Test
+  void pausedTrialUndoRedoKeepsAnalyzedMoveInProblemList() throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      setField(harness.frame, "problemListListeners", new ArrayList<>());
+      harness.frame.userAnalysisPaused = true;
+      harness.engine.commandLists.add("loadsgf");
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        BoardHistoryNode root = harness.board.getHistory().getStart();
+        root.getData().moveNumber = 30;
+        root.next().orElseThrow().getData().moveNumber = 31;
+        harness.board.getHistory().setHead(root);
+        harness.frame.tryPlay(false);
+        harness.engine.isInputCommand = true;
+        try {
+          harness.board.place(3, 3, Stone.BLACK);
+        } finally {
+          harness.engine.isInputCommand = false;
+        }
+        BoardHistoryNode trialMove = harness.board.getHistory().getCurrentHistoryNode();
+        root.getData().setPlayouts(100);
+        root.getData().setPlayouts2(200);
+        root.getData().winrate = 50;
+        root.getData().winrate2 = 50;
+        trialMove.getData().setPlayouts(110);
+        trialMove.getData().setPlayouts2(210);
+        trialMove.getData().winrate = 60;
+        trialMove.getData().winrate2 = 65;
+        harness.board.updateMovelist(trialMove);
+        harness.board.updateMovelist2(trialMove);
+        assertEquals(1, root.nodeInfoMain.moveNum);
+        assertTrue(root.nodeInfoMain.analyzed);
+        assertFalse(root.getData().playoutsChanged);
+        harness.board.cleanedit();
+      });
+      awaitHistoryRestoreCompletion(harness.board);
+      javax.swing.SwingUtilities.invokeAndWait(harness.board::reedit);
+      awaitHistoryRestoreCompletion(harness.board);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        BoardHistoryNode move = harness.board.getHistory().getCurrentHistoryNode();
+        BoardHistoryNode parent = move.previous().orElseThrow();
+        assertEquals(31, move.getData().moveNumber);
+        // Exercise the unchanged-visits refresh that previously left the trial cache stale.
+        harness.board.updateMovelist(move);
+        harness.board.updateMovelist2(move);
+        harness.frame.refreshProblemListSnapshot();
+        var problems = harness.frame.getProblemListSnapshot();
+        assertEquals(1, problems.analyzedMoves);
+        assertEquals(1, problems.totalMoves);
+        assertEquals(31, problems.blackEntries.get(0).moveNumber);
+        for (var info : List.of(parent.nodeInfo, parent.nodeInfoMain,
+            parent.nodeInfo2, parent.nodeInfoMain2)) {
+          assertEquals(31, info.moveNum);
+          assertTrue(info.analyzed);
+        }
+      });
+      assertFalse(harness.frame.isTrying);
+      assertFalse(harness.engine.isPondering());
+      assertEquals(0, payloadCount(output, "kata-analyze"));
+      assertEquals(2, payloadCount(output, "loadsgf"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "undo, false, false", "redo, false, false", "trial, false, false",
+      "undo, true, false", "redo, true, false", "trial, true, false",
+      "undo, false, true", "redo, false, true", "trial, false, true",
+      "undo, true, true", "redo, true, true", "trial, true, true"
+  })
+  void historyRestoreRearmsAnalysisLimits(
+      String action, boolean emptyBoard, boolean resumedPastLimit) throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      harness.engine.commandLists.add("loadsgf");
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      if (emptyBoard) harness.board.getHistory().setHead(harness.p0);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        if (action.equals("trial")) {
+          harness.frame.tryPlay(false);
+        } else {
+          harness.board.saveListForEdit();
+          harness.board.getData().comment = "edited";
+          if (action.equals("redo")) harness.board.cleanedit();
+        }
+      });
+      if (action.equals("redo")) awaitHistoryRestoreCompletion(harness.board);
+
+      Lizzie.config.limitPlayout = !emptyBoard;
+      Lizzie.config.limitPlayouts = 10;
+      Lizzie.config.stopAtEmptyBoard = emptyBoard;
+      javax.swing.SwingUtilities.invokeAndWait(harness.engine::ponder);
+      awaitRawCommand(output, "kata-analyze", 0);
+      harness.engine.parseAnalysisLineForTest(info(11, 0.6));
+      assertTrue(harness.engine.stopByPlayouts, "the original position must actually hit its limit");
+      assertFalse(harness.engine.isPondering());
+      int analysesBeforeRestore = 1;
+      if (resumedPastLimit) {
+        javax.swing.SwingUtilities.invokeAndWait(harness.engine::ponder);
+        awaitRawCommand(output, "kata-analyze", 1);
+        harness.engine.parseAnalysisLineForTest(info(12, 0.6));
+        assertTrue(harness.engine.outOfPlayoutsLimit,
+            "explicit resume on the same position must still bypass the limit");
+        assertTrue(harness.engine.isPondering());
+        analysesBeforeRestore++;
+      }
+
+      // Set both the production resume policy and the fixture's pause-query override.
+      Field paused = LizzieFrame.class.getDeclaredField("userAnalysisPaused");
+      paused.setAccessible(true);
+      paused.setBoolean(harness.frame, true);
+      harness.frame.userAnalysisPaused = true;
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        switch (action) {
+          case "undo" -> harness.board.cleanedit();
+          case "redo" -> harness.board.reedit();
+          case "trial" -> harness.frame.tryPlay(false);
+          default -> throw new AssertionError(action);
+        }
+      });
+      awaitHistoryRestoreCompletion(harness.board);
+      assertFalse(harness.engine.isPondering());
+      assertEquals(analysesBeforeRestore, payloadCount(output, "kata-analyze"));
+      paused.setBoolean(harness.frame, false);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        harness.frame.userAnalysisPaused = false;
+        harness.engine.ponder();
+      });
+      awaitRawCommand(output, "kata-analyze", analysesBeforeRestore);
+      int stopsBeforeInfo = payloadCount(output, "stop");
+      harness.engine.parseAnalysisLineForTest(info(20, 0.6));
+      assertEquals(20, harness.board.getData().getPlayouts(), "new-position info must be accepted");
+      assertFalse(harness.engine.isPondering(), "restored positions must obey their analysis limits");
+      assertTrue(harness.engine.stopByPlayouts);
+      assertFalse(harness.engine.outOfPlayoutsLimit);
+      awaitRawCommand(output, "stop", stopsBeforeInfo);
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
     }
   }
 
