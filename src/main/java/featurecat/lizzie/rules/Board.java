@@ -5236,6 +5236,9 @@ public class Board {
       forceRefresh2 = true;
       clearTsumegoStatus();
       requireEngineAlignment();
+      // Limit-stop and explicit-resume exceptions belong to the previous position, not the
+      // saved game. Reset them before notifying observers or resuming confirmed analysis.
+      if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
       snapshot.history = null;
     });
     if (LizzieFrame.boardRenderer != null) LizzieFrame.boardRenderer.clearAfterMove();
