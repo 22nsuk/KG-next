@@ -1294,6 +1294,79 @@ class PositionConfirmedRollbackTest {
     }
   }
 
+  @Test
+  void pausedTrialUndoRedoKeepsAnalyzedMoveInProblemList() throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      setField(harness.frame, "problemListListeners", new ArrayList<>());
+      harness.frame.userAnalysisPaused = true;
+      harness.engine.commandLists.add("loadsgf");
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        BoardHistoryNode root = harness.board.getHistory().getStart();
+        root.getData().moveNumber = 30;
+        root.next().orElseThrow().getData().moveNumber = 31;
+        harness.board.getHistory().setHead(root);
+        harness.frame.tryPlay(false);
+        harness.engine.isInputCommand = true;
+        try {
+          harness.board.place(3, 3, Stone.BLACK);
+        } finally {
+          harness.engine.isInputCommand = false;
+        }
+        BoardHistoryNode trialMove = harness.board.getHistory().getCurrentHistoryNode();
+        root.getData().setPlayouts(100);
+        root.getData().setPlayouts2(200);
+        root.getData().winrate = 50;
+        root.getData().winrate2 = 50;
+        trialMove.getData().setPlayouts(110);
+        trialMove.getData().setPlayouts2(210);
+        trialMove.getData().winrate = 60;
+        trialMove.getData().winrate2 = 65;
+        harness.board.updateMovelist(trialMove);
+        harness.board.updateMovelist2(trialMove);
+        assertEquals(1, root.nodeInfoMain.moveNum);
+        assertTrue(root.nodeInfoMain.analyzed);
+        assertFalse(root.getData().playoutsChanged);
+        harness.board.cleanedit();
+      });
+      awaitHistoryRestoreCompletion(harness.board);
+      javax.swing.SwingUtilities.invokeAndWait(harness.board::reedit);
+      awaitHistoryRestoreCompletion(harness.board);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        BoardHistoryNode move = harness.board.getHistory().getCurrentHistoryNode();
+        BoardHistoryNode parent = move.previous().orElseThrow();
+        assertEquals(31, move.getData().moveNumber);
+        // Exercise the unchanged-visits refresh that previously left the trial cache stale.
+        harness.board.updateMovelist(move);
+        harness.board.updateMovelist2(move);
+        harness.frame.refreshProblemListSnapshot();
+        var problems = harness.frame.getProblemListSnapshot();
+        assertEquals(1, problems.analyzedMoves);
+        assertEquals(1, problems.totalMoves);
+        assertEquals(31, problems.blackEntries.get(0).moveNumber);
+        for (var info : List.of(parent.nodeInfo, parent.nodeInfoMain,
+            parent.nodeInfo2, parent.nodeInfoMain2)) {
+          assertEquals(31, info.moveNum);
+          assertTrue(info.analyzed);
+        }
+      });
+      assertFalse(harness.frame.isTrying);
+      assertFalse(harness.engine.isPondering());
+      assertEquals(0, payloadCount(output, "kata-analyze"));
+      assertEquals(2, payloadCount(output, "loadsgf"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void trialReturnRestoresSavedBranchAndManualRulesBeforeOneEngineRestore(boolean undoTrial)

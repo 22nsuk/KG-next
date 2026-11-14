@@ -252,6 +252,66 @@ class BoardEditUndoTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void trialRestoreRenumbersBothEnginesWithoutReplacingBranchCaches(boolean alreadyOrdinary)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = board.getHistory();
+      BoardHistoryNode root = history.getStart();
+      root.getData().moveNumber = 30;
+      BoardHistoryList.TrialNumbering numbering = new BoardHistoryList.TrialNumbering(history);
+      root.getData().moveNumber = 0;
+      root.getData().setPlayouts(100);
+      root.getData().setPlayouts2(200);
+      root.getData().winrate = 50;
+      root.getData().winrate2 = 50;
+      history.place(1, 1, Stone.BLACK, true);
+      BoardHistoryNode main = history.getCurrentHistoryNode();
+      main.getData().setPlayouts(110);
+      main.getData().setPlayouts2(210);
+      board.updateMovelist(main);
+      board.updateMovelist2(main);
+      history.setHead(root);
+      history.place(2, 2, Stone.BLACK, true);
+      BoardHistoryNode branch = history.getCurrentHistoryNode();
+      branch.getData().setPlayouts(120);
+      branch.getData().setPlayouts2(220);
+      board.updateMovelist(branch);
+      board.updateMovelist2(branch);
+      List<NodeInfo> originals = List.of(
+          root.nodeInfo, root.nodeInfoMain, root.nodeInfo2, root.nodeInfoMain2);
+      for (NodeInfo info : originals) {
+        assertEquals(1, info.moveNum);
+        if (alreadyOrdinary) info.moveNum = 31;
+      }
+
+      BoardHistoryList restored = history.copyForRestore(numbering).restore();
+      BoardHistoryNode restoredRoot = restored.getStart();
+      List<NodeInfo> copies = List.of(restoredRoot.nodeInfo, restoredRoot.nodeInfoMain,
+          restoredRoot.nodeInfo2, restoredRoot.nodeInfoMain2);
+      for (int i = 0; i < copies.size(); i++) {
+        NodeInfo original = originals.get(i);
+        NodeInfo copy = copies.get(i);
+        assertEquals(31, copy.moveNum);
+        assertEquals(alreadyOrdinary ? 31 : 1, original.moveNum, "capture leaves live caches alone");
+        assertNotSame(original, copy);
+        assertArrayEquals(original.coords, copy.coords);
+        assertEquals(original.playouts, copy.playouts);
+        assertEquals(original.previousPlayouts, copy.previousPlayouts);
+        assertEquals(original.analyzed, copy.analyzed);
+        assertEquals(original.winrate, copy.winrate);
+        assertEquals(original.diffWinrate, copy.diffWinrate);
+      }
+      assertArrayEquals(new int[] {2, 2}, restoredRoot.nodeInfo.coords);
+      assertArrayEquals(new int[] {1, 1}, restoredRoot.nodeInfoMain.coords);
+      assertArrayEquals(new int[] {2, 2}, restoredRoot.nodeInfo2.coords);
+      assertArrayEquals(new int[] {1, 1}, restoredRoot.nodeInfoMain2.coords);
+      assertSame(restoredRoot.getVariation(1).orElseThrow(), restored.getCurrentHistoryNode());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void trialNumberingKeepsMnBranchesPassesAndSetupNodes(boolean branchNumbers) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       Lizzie.config.newMoveNumberInBranch = branchNumbers;

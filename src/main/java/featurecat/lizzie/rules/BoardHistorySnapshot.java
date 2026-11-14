@@ -1,5 +1,6 @@
 package featurecat.lizzie.rules;
 
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -47,6 +48,15 @@ final class BoardHistorySnapshot {
   private static void restoreOrdinaryNumbering(NodeSnapshot entry, NodeSnapshot parent) {
     BoardData data = entry.node().getData();
     BoardData parentData = parent.node().getData();
+    if (data.isMoveNode() && entry.originalMoveNumber() != data.moveNumber) {
+      // These parent-owned caches describe a child move. Renumber only matching entries,
+      // preserving branch selection and analysis even when no new visits trigger a refresh.
+      BoardHistoryNode parentNode = parent.node();
+      restoreMoveInfoNumber(parentNode.nodeInfo, data, entry.originalMoveNumber());
+      restoreMoveInfoNumber(parentNode.nodeInfoMain, data, entry.originalMoveNumber());
+      restoreMoveInfoNumber(parentNode.nodeInfo2, data, entry.originalMoveNumber());
+      restoreMoveInfoNumber(parentNode.nodeInfoMain2, data, entry.originalMoveNumber());
+    }
     int moveIndex = data.isMoveNode()
         ? data.zobrist.index(data.lastMove.orElseThrow()[0], data.lastMove.get()[1]) : -1;
     for (int i = 0; i < data.moveNumberList.length; i++) {
@@ -60,6 +70,14 @@ final class BoardHistorySnapshot {
           && data.stones[i] == parentData.stones[i]) {
         data.moveNumberList[i] = parentData.moveNumberList[i];
       }
+    }
+  }
+
+  private static void restoreMoveInfoNumber(NodeInfo info, BoardData move, int originalMoveNumber) {
+    if (info.moveNum == originalMoveNumber
+        && info.isBlack == !move.blackToPlay
+        && Arrays.equals(info.coords, move.lastMove.orElseThrow())) {
+      info.moveNum = move.moveNumber;
     }
   }
 }
