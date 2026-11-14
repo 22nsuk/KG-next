@@ -57,7 +57,8 @@ class BoardEditUndoTest {
         moves.get(0).pvEdgeVisits.clear();
       }
 
-      BoardHistoryList restored = snapshot.restore();
+      BoardHistoryList restored = snapshot.restore(
+          false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts);
       List<MoveData> copies = new ArrayList<>();
       for (BoardData data : List.of(restored.getStart().getData(),
           restored.getStart().next().orElseThrow().getData())) {
