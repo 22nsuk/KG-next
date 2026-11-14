@@ -1,0 +1,3623 @@
+{
+  "identity": {
+    "common": {
+      "probeClasses": {
+        "files": 2,
+        "sha256": "364e054f6fbf21052d941a05188bc3ca0f1d3db537c4ee147bda984c14079a3f"
+      },
+      "probeSourceSha256": "8a5a2cef4fa90dfc80b8893378dd17fdec5ec860473ea0daae1abbdc59b00441",
+      "agentSha256": "0352c02fead7b5f15332a8e57b565c53226f0249fc76aed54139414e097c9741",
+      "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155",
+      "heap": "768m",
+      "activeProcessorCount": 2
+    },
+    "runs": {
+      "before": {
+        "beforeProduction": {
+          "files": 3246,
+          "sha256": "c853a5d1780c57596cd275d92c7719c296a3ee8ca3c554d9bbc48ae0244e23dc"
+        },
+        "afterProduction": {
+          "files": 3246,
+          "sha256": "c853a5d1780c57596cd275d92c7719c296a3ee8ca3c554d9bbc48ae0244e23dc"
+        },
+        "unchanged": true,
+        "exitCode": 0
+      },
+      "map": {
+        "beforeProduction": {
+          "files": 3246,
+          "sha256": "abfdee2c7cdcfd7a29f002f34e76f48771babfcbdc4cce852714f06d3e1a7bc8"
+        },
+        "afterProduction": {
+          "files": 3246,
+          "sha256": "abfdee2c7cdcfd7a29f002f34e76f48771babfcbdc4cce852714f06d3e1a7bc8"
+        },
+        "unchanged": true,
+        "exitCode": 0
+      },
+      "cache": {
+        "beforeProduction": {
+          "files": 3247,
+          "sha256": "406d1f449068f06de4b4a5ec34eebfd434307be53a75e6a2b69a99c83225b18a"
+        },
+        "afterProduction": {
+          "files": 3247,
+          "sha256": "406d1f449068f06de4b4a5ec34eebfd434307be53a75e6a2b69a99c83225b18a"
+        },
+        "unchanged": true,
+        "exitCode": 0
+      },
+      "final": {
+        "beforeProduction": {
+          "files": 3247,
+          "sha256": "bde5c804d362a92c87c771c8d4fab48f14cfc5b738cb7b81a217ed6b348412cd"
+        },
+        "afterProduction": {
+          "files": 3247,
+          "sha256": "bde5c804d362a92c87c771c8d4fab48f14cfc5b738cb7b81a217ed6b348412cd"
+        },
+        "exitCode": 0,
+        "unchanged": true
+      }
+    }
+  },
+  "runs": {
+    "before": {
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "scope": "Sum of Instrumentation.getObjectSize over identity-distinct objects reachable from the pending edit snapshot after a root deletion; skip the Board owner back-reference, static fields and enum constants. Also subtract objects reachable from the remaining live history. Other application/VM roots are not subtracted: this is a graph footprint, not exclusive retained heap or peak RAM. Headless rules harness replaces UI/engine callbacks; no latency is measured.",
+      "fixtures": [
+        {
+          "fixture": "wide-variations",
+          "fixtureSha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 14977592,
+            "objects": 278540,
+            "classes": {
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 1001968,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 436880,
+                "objects": 5461
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[I": {
+                "bytes": 2528176,
+                "objects": 65533
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393264,
+                "objects": 5465
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 699008,
+                "objects": 43688
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.String": {
+                "bytes": 131064,
+                "objects": 5461
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 16688104,
+            "objects": 311342,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 1747864,
+                "objects": 21856
+              },
+              "[I": {
+                "bytes": 2528176,
+                "objects": 65533
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5808,
+                "objects": 2
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 524544,
+                "objects": 21856
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 1001968,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393280,
+                "objects": 5466
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "java.util.Optional": {
+                "bytes": 699024,
+                "objects": 43689
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-ownership",
+          "fixtureSha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 7170864,
+            "objects": 207429,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 2128800,
+                "objects": 87300
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7200,
+                "objects": 300
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 2095200,
+                "objects": 87300
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523752,
+                "objects": 10237
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4800,
+                "objects": 300
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 7191544,
+            "objects": 208046,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 2136160,
+                "objects": 87602
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5808,
+                "objects": 2
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 2102448,
+                "objects": 87602
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523768,
+                "objects": 10238
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4816,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          }
+        },
+        {
+          "fixture": "long-multilingual-comments",
+          "fixtureSha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 5234024,
+            "objects": 2029,
+            "classes": {
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5123200,
+                "objects": 200
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12072,
+                "objects": 204
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 3200,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.String": {
+                "bytes": 4800,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 5266240,
+            "objects": 2065,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5149080,
+                "objects": 212
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5808,
+                "objects": 2
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 5088,
+                "objects": 212
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12088,
+                "objects": 205
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "java.util.Optional": {
+                "bytes": 3216,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-long-pv-visits",
+          "fixtureSha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 33751304,
+            "objects": 1265443,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 14888400,
+                "objects": 619650
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3600,
+                "objects": 150
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 14871600,
+                "objects": 619650
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659424,
+                "objects": 9969
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2400,
+                "objects": 150
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 33956304,
+            "objects": 1273740,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 14987920,
+                "objects": 623792
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[I": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5808,
+                "objects": 2
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 14971008,
+                "objects": 623792
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "[Lfeaturecat.lizzie.rules.Stone;": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659440,
+                "objects": 9970
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2416,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          }
+        }
+      ]
+    },
+    "map": {
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "scope": "Sum of Instrumentation.getObjectSize over identity-distinct objects reachable from the pending edit snapshot after a root deletion; skip the Board owner back-reference, static fields and enum constants. Also subtract objects reachable from the remaining live history. Other application/VM roots are not subtracted: this is a graph footprint, not exclusive retained heap or peak RAM. Headless rules harness replaces UI/engine callbacks; no latency is measured.",
+      "fixtures": [
+        {
+          "fixture": "wide-variations",
+          "fixtureSha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 13486312,
+            "objects": 234851,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 436880,
+                "objects": 5461
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1514608,
+                "objects": 21845
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393264,
+                "objects": 5465
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 699008,
+                "objects": 43688
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.String": {
+                "bytes": 131064,
+                "objects": 5461
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 15196824,
+            "objects": 267653,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 1747864,
+                "objects": 21856
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1520416,
+                "objects": 21847
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 524544,
+                "objects": 21856
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393280,
+                "objects": 5466
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "java.util.Optional": {
+                "bytes": 699024,
+                "objects": 43689
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-ownership",
+          "fixtureSha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 3023648,
+            "objects": 34628,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 55200,
+                "objects": 900
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7200,
+                "objects": 300
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 21600,
+                "objects": 900
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523752,
+                "objects": 10237
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4800,
+                "objects": 300
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 3032376,
+            "objects": 34747,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 56584,
+                "objects": 953
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 22872,
+                "objects": 953
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523768,
+                "objects": 10238
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4816,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          }
+        },
+        {
+          "fixture": "long-multilingual-comments",
+          "fixtureSha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 5234008,
+            "objects": 2028,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5123200,
+                "objects": 200
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12072,
+                "objects": 204
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 3200,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.String": {
+                "bytes": 4800,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 5266224,
+            "objects": 2064,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5149080,
+                "objects": 212
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 5088,
+                "objects": 212
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12088,
+                "objects": 205
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "java.util.Optional": {
+                "bytes": 3216,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-long-pv-visits",
+          "fixtureSha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 4029688,
+            "objects": 27042,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 27600,
+                "objects": 450
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3600,
+                "objects": 150
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 10800,
+                "objects": 450
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659424,
+                "objects": 9969
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2400,
+                "objects": 150
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 4076576,
+            "objects": 28751,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 48064,
+                "objects": 1298
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 31152,
+                "objects": 1298
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659440,
+                "objects": 9970
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2416,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          }
+        }
+      ]
+    },
+    "cache": {
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "scope": "Sum of Instrumentation.getObjectSize over identity-distinct objects reachable from the pending edit snapshot after a root deletion; skip the Board owner back-reference, static fields and enum constants. Also subtract objects reachable from the remaining live history. Other application/VM roots are not subtracted: this is a graph footprint, not exclusive retained heap or peak RAM. Headless rules harness replaces UI/engine callbacks; no latency is measured.",
+      "fixtures": [
+        {
+          "fixture": "wide-variations",
+          "fixtureSha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 13486312,
+            "objects": 234851,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 436880,
+                "objects": 5461
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1514608,
+                "objects": 21845
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393264,
+                "objects": 5465
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 699008,
+                "objects": 43688
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.String": {
+                "bytes": 131064,
+                "objects": 5461
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 15196824,
+            "objects": 267653,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 1747864,
+                "objects": 21856
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1520416,
+                "objects": 21847
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 524544,
+                "objects": 21856
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393280,
+                "objects": 5466
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "java.util.Optional": {
+                "bytes": 699024,
+                "objects": 43689
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-ownership",
+          "fixtureSha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 3023648,
+            "objects": 34628,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 55200,
+                "objects": 900
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7200,
+                "objects": 300
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 21600,
+                "objects": 900
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523752,
+                "objects": 10237
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4800,
+                "objects": 300
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 3032376,
+            "objects": 34747,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 56584,
+                "objects": 953
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 22872,
+                "objects": 953
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523768,
+                "objects": 10238
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4816,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          }
+        },
+        {
+          "fixture": "long-multilingual-comments",
+          "fixtureSha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 5234008,
+            "objects": 2028,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5123200,
+                "objects": 200
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12072,
+                "objects": 204
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 3200,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.String": {
+                "bytes": 4800,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 5266224,
+            "objects": 2064,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5149080,
+                "objects": 212
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 5088,
+                "objects": 212
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12088,
+                "objects": 205
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "java.util.Optional": {
+                "bytes": 3216,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-long-pv-visits",
+          "fixtureSha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 4029688,
+            "objects": 27042,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 27600,
+                "objects": 450
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3600,
+                "objects": 150
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 10800,
+                "objects": 450
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659424,
+                "objects": 9969
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2400,
+                "objects": 150
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 4076576,
+            "objects": 28751,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 48064,
+                "objects": 1298
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 31152,
+                "objects": 1298
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659440,
+                "objects": 9970
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2416,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          }
+        }
+      ]
+    },
+    "final": {
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "scope": "Sum of Instrumentation.getObjectSize over identity-distinct objects reachable from the pending edit snapshot after a root deletion; skip the Board owner back-reference, static fields and enum constants. Also subtract objects reachable from the remaining live history. Other application/VM roots are not subtracted: this is a graph footprint, not exclusive retained heap or peak RAM. Headless rules harness replaces UI/engine callbacks; no latency is measured.",
+      "fixtures": [
+        {
+          "fixture": "wide-variations",
+          "fixtureSha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 13486312,
+            "objects": 234851,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 436880,
+                "objects": 5461
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1514608,
+                "objects": 21845
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393264,
+                "objects": 5465
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 699008,
+                "objects": 43688
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.String": {
+                "bytes": 131064,
+                "objects": 5461
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 15196824,
+            "objects": 267653,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 6116600,
+                "objects": 21845
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 524280,
+                "objects": 21845
+              },
+              "[B": {
+                "bytes": 1747864,
+                "objects": 21856
+              },
+              "[I": {
+                "bytes": 524256,
+                "objects": 21844
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 1520416,
+                "objects": 21847
+              },
+              "java.util.ArrayList": {
+                "bytes": 524328,
+                "objects": 21847
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 524544,
+                "objects": 21856
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 393280,
+                "objects": 5466
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 1223320,
+                "objects": 21845
+              },
+              "java.util.Optional": {
+                "bytes": 699024,
+                "objects": 43689
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 699040,
+                "objects": 21845
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-ownership",
+          "fixtureSha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 3023648,
+            "objects": 34628,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 55200,
+                "objects": 900
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7200,
+                "objects": 300
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 21600,
+                "objects": 900
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523752,
+                "objects": 10237
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4800,
+                "objects": 300
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 3032376,
+            "objects": 34747,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 84280,
+                "objects": 301
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "[B": {
+                "bytes": 56584,
+                "objects": 953
+              },
+              "[D": {
+                "bytes": 874104,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 7224,
+                "objects": 301
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 245664,
+                "objects": 10236
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 1155840,
+                "objects": 9632
+              },
+              "java.lang.String": {
+                "bytes": 22872,
+                "objects": 953
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 523768,
+                "objects": 10238
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 16856,
+                "objects": 301
+              },
+              "java.util.Optional": {
+                "bytes": 4816,
+                "objects": 301
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 9632,
+                "objects": 301
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 7224,
+                "objects": 301
+              }
+            }
+          }
+        },
+        {
+          "fixture": "long-multilingual-comments",
+          "fixtureSha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 5234008,
+            "objects": 2028,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5123200,
+                "objects": 200
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12072,
+                "objects": 204
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.util.Optional": {
+                "bytes": 3200,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.String": {
+                "bytes": 4800,
+                "objects": 200
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 5266224,
+            "objects": 2064,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 56280,
+                "objects": 201
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 4824,
+                "objects": 201
+              },
+              "[B": {
+                "bytes": 5149080,
+                "objects": 212
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 4872,
+                "objects": 203
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "java.lang.String": {
+                "bytes": 5088,
+                "objects": 212
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 12088,
+                "objects": 205
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 11256,
+                "objects": 201
+              },
+              "java.util.Optional": {
+                "bytes": 3216,
+                "objects": 201
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 6432,
+                "objects": 201
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              }
+            }
+          }
+        },
+        {
+          "fixture": "dense-analysis-long-pv-visits",
+          "fixtureSha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+          "snapshotObjectsNotInLiveHistory": {
+            "bytes": 4029688,
+            "objects": 27042,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 27600,
+                "objects": 450
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3600,
+                "objects": 150
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 10800,
+                "objects": 450
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659424,
+                "objects": 9969
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2400,
+                "objects": 150
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          },
+          "snapshotGraph": {
+            "bytes": 4076576,
+            "objects": 28751,
+            "classes": {
+              "featurecat.lizzie.rules.BoardData": {
+                "bytes": 42280,
+                "objects": 151
+              },
+              "[Ljava.util.HashMap$Node;": {
+                "bytes": 80,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistoryList$SessionRulesTarget": {
+                "bytes": 40,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "[B": {
+                "bytes": 48064,
+                "objects": 1298
+              },
+              "[D": {
+                "bytes": 438504,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardData$ImportedAnalysis": {
+                "bytes": 3624,
+                "objects": 151
+              },
+              "featurecat.lizzie.analysis.GameInfo": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "[J": {
+                "bytes": 5824,
+                "objects": 3
+              },
+              "java.util.ArrayList": {
+                "bytes": 239232,
+                "objects": 9968
+              },
+              "java.util.LinkedHashMap": {
+                "bytes": 64,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Board$GameStateSnapshot": {
+                "bytes": 48,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$MapN": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardPositionSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Boolean": {
+                "bytes": 32,
+                "objects": 2
+              },
+              "featurecat.lizzie.analysis.MoveData": {
+                "bytes": 579840,
+                "objects": 4832
+              },
+              "java.lang.String": {
+                "bytes": 31152,
+                "objects": 1298
+              },
+              "featurecat.lizzie.rules.BoardHistoryList": {
+                "bytes": 56,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.Zobrist$TableSnapshot": {
+                "bytes": 32,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "java.util.ImmutableCollections$ListN": {
+                "bytes": 24,
+                "objects": 1
+              },
+              "[Ljava.lang.Object;": {
+                "bytes": 2659440,
+                "objects": 9970
+              },
+              "java.util.ImmutableCollections$List12": {
+                "bytes": 120,
+                "objects": 5
+              },
+              "java.util.LinkedHashMap$Entry": {
+                "bytes": 200,
+                "objects": 5
+              },
+              "featurecat.lizzie.rules.BoardHistoryNode": {
+                "bytes": 8456,
+                "objects": 151
+              },
+              "java.util.Optional": {
+                "bytes": 2416,
+                "objects": 151
+              },
+              "featurecat.lizzie.rules.BoardHistorySnapshot$NodeSnapshot": {
+                "bytes": 4832,
+                "objects": 151
+              },
+              "java.lang.Object": {
+                "bytes": 16,
+                "objects": 1
+              },
+              "featurecat.lizzie.rules.CompactDoubleList": {
+                "bytes": 3624,
+                "objects": 151
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
