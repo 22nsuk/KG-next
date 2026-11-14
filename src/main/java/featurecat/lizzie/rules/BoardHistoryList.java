@@ -3,10 +3,14 @@ package featurecat.lizzie.rules;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
+import java.lang.ref.WeakReference;
+import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.WeakHashMap;
 import java.util.function.BooleanSupplier;
 
 /** Linked list data structure to store board history */
@@ -324,6 +328,90 @@ public class BoardHistoryList {
     copy.analysisOverrideMirror = analysisOverrideMirror;
     copy.analysisOverridePrimaryGeneration = analysisOverridePrimaryGeneration;
     return copy;
+  }
+
+  /** Numbering conventions that cannot be inferred after the trial anchor is reset to zero. */
+  static final class TrialNumbering {
+    private final WeakReference<BoardHistoryNode> root;
+    private final int rootMoveNumber;
+    // This metadata must not keep discarded live branches alive alongside the independent copy.
+    private final Map<BoardHistoryNode, Integer> dummyIncrements = new WeakHashMap<>();
+
+    TrialNumbering(BoardHistoryList history) {
+      synchronized (history) {
+        BoardHistoryNode start = history.getStart();
+        root = new WeakReference<>(start);
+        rootMoveNumber = start.getData().moveNumber;
+        ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
+        pending.add(start);
+        while (!pending.isEmpty()) {
+          BoardHistoryNode node = pending.removeFirst();
+          for (BoardHistoryNode child : node.getVariations()) {
+            if (child.getData().dummy) dummyIncrements.put(child,
+                child.getData().moveNumber - node.getData().moveNumber);
+            pending.add(child);
+          }
+        }
+      }
+    }
+  }
+
+  private record RestoreStructure(BoardHistoryNode node, int parentIndex) {}
+
+  /** Complete private restore data; arrays are materialized before the history can be published. */
+  BoardHistorySnapshot copyForRestore(TrialNumbering trialNumbering) {
+    BoardHistoryList copy = new BoardHistoryList(null);
+    BoardHistoryNode current;
+    BoardHistoryNode root;
+    List<RestoreStructure> structure = new java.util.ArrayList<>();
+    synchronized (this) {
+      current = head;
+      root = getStart();
+      copy.gameInfo = gameInfo.copyForSave();
+      copy.sessionRulesTarget = sessionRulesTarget;
+      structure.add(new RestoreStructure(root, -1));
+      for (int index = 0; index < structure.size(); index++) {
+        List<BoardHistoryNode> children = structure.get(index).node().getVariations();
+        for (int child = 0; child < children.size(); child++) {
+          structure.add(new RestoreStructure(children.get(child), index));
+        }
+      }
+    }
+    boolean normalizeTrial = trialNumbering != null && trialNumbering.root.get() == root;
+    List<BoardHistorySnapshot.NodeSnapshot> nodes = new java.util.ArrayList<>(structure.size());
+    BoardPositionSnapshot.CaptureBuffer buffer = new BoardPositionSnapshot.CaptureBuffer();
+    // Match save capture's lock order: never acquire payload locks under the history monitor,
+    // and release a payload lock before acquiring the corresponding node metadata lock.
+    for (RestoreStructure entry : structure) {
+      BoardData original = entry.node().getData();
+      BoardData metadata;
+      BoardPositionSnapshot position;
+      synchronized (original) {
+        metadata = original.copyRestoreMetadata();
+        position = BoardPositionSnapshot.capture(original.stones, original.moveNumberList, buffer);
+      }
+      int originalMoveNumber = metadata.moveNumber;
+      BoardHistoryNode node = entry.node().copyForRestore(metadata);
+      if (entry.parentIndex() >= 0) {
+        BoardHistoryNode parent = nodes.get(entry.parentIndex()).node();
+        node.reparentAsLastVariationOf(parent);
+        if (normalizeTrial) {
+          int increment = metadata.isHistoryActionNode() ? 1 : 0;
+          if (metadata.dummy) {
+            int oldParentNumber = nodes.get(entry.parentIndex()).originalMoveNumber();
+            increment = trialNumbering.dummyIncrements.getOrDefault(entry.node(),
+                originalMoveNumber == oldParentNumber ? 0 : 1);
+          }
+          metadata.moveNumber = parent.getData().moveNumber + increment;
+        }
+      } else if (normalizeTrial) {
+        metadata.moveNumber = trialNumbering.rootMoveNumber;
+      }
+      nodes.add(new BoardHistorySnapshot.NodeSnapshot(
+          node, position, entry.parentIndex(), originalMoveNumber));
+      if (entry.node() == current) copy.head = node;
+    }
+    return new BoardHistorySnapshot(copy, nodes, normalizeTrial);
   }
 
   /** Clear history. */

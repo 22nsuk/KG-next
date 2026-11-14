@@ -50,12 +50,18 @@ public class BoardHistoryNode {
 
   /** Initializes a new list node */
   public BoardHistoryNode(BoardData data) {
+    this(data, true);
+  }
+
+  private BoardHistoryNode(BoardData data, boolean initializeNodeInfo) {
     previous = Optional.empty();
     variations = new ArrayList<BoardHistoryNode>();
-    nodeInfo = new NodeInfo();
-    nodeInfoMain = new NodeInfo();
-    nodeInfo2 = new NodeInfo();
-    nodeInfoMain2 = new NodeInfo();
+    if (initializeNodeInfo) {
+      nodeInfo = new NodeInfo();
+      nodeInfoMain = new NodeInfo();
+      nodeInfo2 = new NodeInfo();
+      nodeInfoMain2 = new NodeInfo();
+    }
     this.data = data;
   }
 
@@ -364,17 +370,51 @@ public class BoardHistoryNode {
 
   /** Detached node for saving; callers reconnect only detached parents/children. */
   BoardHistoryNode copyForSave() {
-    BoardHistoryNode copy = new BoardHistoryNode(data.copyForSave());
+    return copyMetadata(data.copyForSave(), false);
+  }
+
+  BoardHistoryNode copyForRestore(BoardData copiedData) {
+    return copyMetadata(copiedData, true);
+  }
+
+  private synchronized BoardHistoryNode copyMetadata(
+      BoardData copiedData, boolean deferEmptyNodeInfo) {
+    BoardHistoryNode copy = new BoardHistoryNode(copiedData, false);
     copy.analyzed = analyzed;
     copy.diffAnalyzed = diffAnalyzed;
     copy.isBest = isBest;
-    copy.nodeInfo = copyNodeInfo(nodeInfo);
-    copy.nodeInfoMain = copyNodeInfo(nodeInfoMain);
-    copy.nodeInfo2 = copyNodeInfo(nodeInfo2);
-    copy.nodeInfoMain2 = copyNodeInfo(nodeInfoMain2);
+    copy.nodeInfo = copyNodeInfo(nodeInfo, deferEmptyNodeInfo);
+    copy.nodeInfoMain = copyNodeInfo(nodeInfoMain, deferEmptyNodeInfo);
+    copy.nodeInfo2 = copyNodeInfo(nodeInfo2, deferEmptyNodeInfo);
+    copy.nodeInfoMain2 = copyNodeInfo(nodeInfoMain2, deferEmptyNodeInfo);
     copy.extraStones = cloneExtraStones(extraStones);
     copy.hasRemovedStone = hasRemovedStone;
+    copy.fromBackChildren = fromBackChildren;
     return copy;
+  }
+
+  /** Expand the private snapshot's default-value sentinels before any node is published. */
+  void materializeRestoreNodeInfo() {
+    if (nodeInfo == null) nodeInfo = new NodeInfo();
+    if (nodeInfoMain == null) nodeInfoMain = new NodeInfo();
+    if (nodeInfo2 == null) nodeInfo2 = new NodeInfo();
+    if (nodeInfoMain2 == null) nodeInfoMain2 = new NodeInfo();
+  }
+
+  private static NodeInfo copyNodeInfo(NodeInfo source, boolean deferEmpty) {
+    if (deferEmpty && (source == null || isDefaultNodeInfo(source))) return null;
+    return copyNodeInfo(source);
+  }
+
+  private static boolean isDefaultNodeInfo(NodeInfo info) {
+    return info.coords == null && info.moveNum == 0 && info.playouts == 0
+        && info.previousPlayouts == 0 && !info.analyzed && !info.analyzedMatchValue
+        && !info.isBlack && !info.isMatchAi && !info.isBest
+        && (Double.doubleToRawLongBits(info.winrate)
+            | Double.doubleToRawLongBits(info.diffWinrate)
+            | Double.doubleToRawLongBits(info.scoreMeanDiff)
+            | Double.doubleToRawLongBits(info.scoreLead)
+            | Double.doubleToRawLongBits(info.percentsMatch)) == 0L;
   }
 
   /**

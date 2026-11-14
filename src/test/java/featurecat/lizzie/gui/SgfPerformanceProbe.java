@@ -487,7 +487,7 @@ public final class SgfPerformanceProbe {
     return payload.append(']').toString();
   }
 
-  private static String validate(Fixture fixture) throws Exception {
+  static String validate(Fixture fixture) throws Exception {
     ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
     pending.push(Lizzie.board.getHistory().getStart());
     MessageDigest digest = MessageDigest.getInstance("SHA-256");

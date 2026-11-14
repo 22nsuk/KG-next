@@ -893,9 +893,8 @@ public final class SgfUiAcceptanceIT {
         "Unicode fixture row in visible chooser");
     JList<?> list = listRef.get();
     int index = indexRef.get();
-    Rectangle cell = edt(() -> list.getCellBounds(index, index));
-    Point location = edt(list::getLocationOnScreen);
-    click(robot, location.x + cell.x + cell.width / 2, location.y + cell.y + cell.height / 2);
+    Point point = edt(() -> chooserFileClickPoint(list, index));
+    click(robot, point.x, point.y);
     await(
         () ->
             edt(
@@ -904,6 +903,24 @@ public final class SgfUiAcceptanceIT {
                         && fileName.equals(chooser.getSelectedFile().getName())),
         Deadline.after(Duration.ofSeconds(5)),
         "chooser row selection");
+  }
+
+  private static <T> Point chooserFileClickPoint(JList<T> list, int index) {
+    Rectangle cell = list.getCellBounds(index, index);
+    Component item =
+        list.getCellRenderer()
+            .getListCellRendererComponent(list, list.getModel().getElementAt(index), index, false, false);
+    // File lists ignore clicks in the cell's trailing whitespace. A short filename can occupy
+    // less than half the row, so target the rendered item rather than the whole cell.
+    int width = Math.min(cell.width, item.getPreferredSize().width);
+    if (!item.getComponentOrientation().isLeftToRight()) cell.x += cell.width - width;
+    cell.width = width;
+    Rectangle visible = cell.intersection(list.getVisibleRect());
+    assertFalse(visible.isEmpty(), "chooser file item is outside the visible list");
+    Point location = list.getLocationOnScreen();
+    return new Point(
+        location.x + visible.x + visible.width / 2,
+        location.y + visible.y + visible.height / 2);
   }
 
   private static JButton approveButton(JFileChooser chooser) {

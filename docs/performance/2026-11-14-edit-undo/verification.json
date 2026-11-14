@@ -1,0 +1,53 @@
+{
+  "surefire-reports": {
+    "suites": 561,
+    "tests": 8292,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 192
+  },
+  "failsafe-reports": {
+    "suites": 8,
+    "tests": 19,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 18
+  },
+  "negativeControl": {
+    "baseline": {
+      "exitCode": 1,
+      "expectedFailure": "undo must retain extra-stone state that has no SGF representation"
+    },
+    "fixed": {
+      "exitCode": 0,
+      "result": "PASS"
+    }
+  },
+  "productionCommit": "0fb71c1d388400bd2c46be029f9c0739fff31171",
+  "baselineCommit": "922e57f43bcaba4f9e22c563cab57fece07996c1",
+  "undo-fresh-verify": {
+    "sha256": "0e97f78f2554361dc953c41f97bc1f7c3cc2405cef14e87350f6eac9927aeea1",
+    "buildSuccess": true,
+    "uncaughtBackgroundException": true
+  },
+  "undo-rules-final": {
+    "sha256": "d811dfbb2e02f1899739a178fb176ff6e0f368c65539f209b2b767d8cfead9c3",
+    "buildSuccess": true,
+    "uncaughtBackgroundException": false
+  },
+  "rulesFollowUp": {
+    "tests": 1730,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 8,
+    "executed": 1722,
+    "uncaughtBackgroundException": false
+  },
+  "notes": [
+    "Full verify preceded the test-only owned-worker teardown fix; all rules tests were rebuilt and rerun afterward.",
+    "Performance runs used identical final probe class bytes; only baseline production remained frozen at 922e57f43bcaba4f9e22c563cab57fece07996c1.",
+    "GitHub API publication preserved every source blob and the complete source-commit Git tree; commit metadata differs from the locally measured commit."
+  ],
+  "publishedProductionCommit": "69ee78630ac143af86ab3114005a121516c76f6b",
+  "identicalProductionTree": "4ebc579141d7a5f3588a5e55f9f557525cb6d669"
+}

@@ -95,6 +95,7 @@ public final class HumanSlGameController {
     private final double maxScoreLead;
     private final LizzieFrame frame;
     private final boolean wasTrying;
+    private final Board.GameStateSnapshot trialSnapshot;
 
     private StartBoardSnapshot(Board board) {
       this.board = board;
@@ -110,6 +111,7 @@ public final class HumanSlGameController {
       maxScoreLead = winrateGraph == null ? 0.0 : winrateGraph.maxScoreLeadForModeHandoff();
       frame = Lizzie.frame;
       wasTrying = frame != null && frame.isTrying;
+      trialSnapshot = frame == null ? null : frame.trySnapshot;
     }
 
     static StartBoardSnapshot capture() {
@@ -145,6 +147,7 @@ public final class HumanSlGameController {
         }
         if (frame != null && Lizzie.frame == frame) {
           frame.isTrying = wasTrying;
+          frame.trySnapshot = trialSnapshot;
         }
         LizzieFrame.forceRecreate = true;
       }

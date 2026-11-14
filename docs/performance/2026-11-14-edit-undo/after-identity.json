@@ -1,0 +1,55 @@
+{
+  "baseCommit": "922e57f43bcaba4f9e22c563cab57fece07996c1",
+  "before": {
+    "productionClasses": {
+      "sha256": "205d2c4984268380b466fef8f448d291776dd253de5e103ce5788a3e81de050b",
+      "files": 3242
+    },
+    "probeClasses": {
+      "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+      "files": 4
+    },
+    "probeSources": {
+      "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+      "files": 2
+    },
+    "dependencies": {
+      "files": 35,
+      "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+    },
+    "productionSources": {
+      "sha256": "eb8b39133e1d44e75548bdd668ec72d3df7cf3a34778e6cb778393209d45ba13",
+      "files": 571
+    },
+    "productionSourceCommit": "0fb71c1d388400bd2c46be029f9c0739fff31171"
+  },
+  "started": 1794599427.2809076,
+  "heap": "768m",
+  "activeProcessorCount": 2,
+  "exitCode": 0,
+  "finished": 1794599577.6979918,
+  "after": {
+    "productionClasses": {
+      "sha256": "205d2c4984268380b466fef8f448d291776dd253de5e103ce5788a3e81de050b",
+      "files": 3242
+    },
+    "probeClasses": {
+      "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+      "files": 4
+    },
+    "probeSources": {
+      "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+      "files": 2
+    },
+    "dependencies": {
+      "files": 35,
+      "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+    },
+    "productionSources": {
+      "sha256": "eb8b39133e1d44e75548bdd668ec72d3df7cf3a34778e6cb778393209d45ba13",
+      "files": 571
+    },
+    "productionSourceCommit": "0fb71c1d388400bd2c46be029f9c0739fff31171"
+  },
+  "identityUnchanged": true
+}

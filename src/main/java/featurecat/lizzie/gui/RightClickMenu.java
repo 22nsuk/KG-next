@@ -91,16 +91,16 @@ public class RightClickMenu extends JPopupMenu {
             addSuggestionAsBranch.setVisible(
                 previewOwner.hasSelectedVariation() && !Lizzie.frame.isAnaPlayingAgainstLeelaz);
 
-            if (Lizzie.board.boardstatbeforeedit == "") {
+            if (!Lizzie.board.canUndoEdit()) {
               cleanupedit.setVisible(false);
-              if (Lizzie.board.boardstatafteredit == "") {
+              if (!Lizzie.board.canRedoEdit()) {
                 cleanedittemp.setVisible(false);
               }
             } else {
               cleanupedit.setVisible(true);
               cleanedittemp.setVisible(true);
             }
-            if (Lizzie.board.boardstatafteredit == "") {
+            if (!Lizzie.board.canRedoEdit()) {
               reedit.setVisible(false);
             } else {
               reedit.setVisible(true);
@@ -351,9 +351,7 @@ public class RightClickMenu extends JPopupMenu {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
             reedit();
-            Lizzie.board.getHistory().setGameInfo(gameInfo);
             Lizzie.frame.refresh();
           }
         });
@@ -362,9 +360,7 @@ public class RightClickMenu extends JPopupMenu {
         new ActionListener() {
           @Override
           public void actionPerformed(ActionEvent e) {
-            GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
             cleanupedit();
-            Lizzie.board.getHistory().setGameInfo(gameInfo);
             Lizzie.frame.refresh();
           }
         });

@@ -9,7 +9,7 @@ import featurecat.lizzie.logging.EngineObservation;
 import java.util.*;
 import java.util.function.Supplier;
 
-public class BoardData {
+public class BoardData implements Cloneable {
   public int moveNumber;
   public int moveMNNumber;
   public Optional<int[]> lastMove;
@@ -1235,6 +1235,58 @@ public class BoardData {
     detachSaveMoves(copy.bestMoves);
     detachSaveMoves(copy.bestMoves2);
     return copy;
+  }
+
+  /** Undo-only metadata clone; mutable fields are detached and live permissions are retired. */
+  synchronized BoardData copyRestoreMetadata() {
+    BoardData copy;
+    try {
+      copy = (BoardData) super.clone();
+    } catch (CloneNotSupportedException impossible) {
+      throw new AssertionError(impossible);
+    }
+    copy.stones = null;
+    copy.moveNumberList = null;
+    copy.lastMove = copyLastMove(lastMove);
+    validateNodeKind(copy.nodeKind, copy.lastMove);
+    copy.zobrist = zobrist == null ? null : zobrist.clone();
+    copy.bestMoves = copyHistoryMoves(bestMoves);
+    copy.bestMoves2 = copyHistoryMoves(bestMoves2);
+    copy.bestMovesOutOfRange = copyHistoryMoves(bestMovesOutOfRange);
+    copy.bestMoves2OutOfRange = copyHistoryMoves(bestMoves2OutOfRange);
+    copy.estimateArray = compactEstimateArray(estimateArray);
+    copy.estimateArray2 = compactEstimateArray(estimateArray2);
+    copy.properties = properties.isEmpty() ? Map.of() : copyProperties(properties);
+    // These revisions and permissions belong to the retired live node, not its saved results.
+    copy.analysisSource = null;
+    copy.analysisSource2 = null;
+    copy.primaryAnalysisRun = null;
+    copy.primaryAnalysisRevision = 0L;
+    copy.analysisEditRevision = 0L;
+    copy.primaryAnalysisBlackToPlay = analysisBlackToPlay(false);
+    copy.secondaryAnalysisBlackToPlay = analysisBlackToPlay(true);
+    return copy;
+  }
+
+  private static List<MoveData> copyHistoryMoves(List<MoveData> moves) {
+    if (moves == null) return null;
+    if (moves.isEmpty()) return List.of();
+    List<MoveData> copied = new ArrayList<>(moves.size());
+    for (MoveData move : moves) copied.add(move == null ? null : move.copyForHistory());
+    return copied;
+  }
+
+  /** Restore writable empty containers before publishing the private snapshot metadata. */
+  void materializeRestoreCollections() {
+    if (properties.isEmpty()) properties = new LinkedHashMap<>();
+    bestMoves = materializeEmptyMoves(bestMoves);
+    bestMoves2 = materializeEmptyMoves(bestMoves2);
+    bestMovesOutOfRange = materializeEmptyMoves(bestMovesOutOfRange);
+    bestMoves2OutOfRange = materializeEmptyMoves(bestMoves2OutOfRange);
+  }
+
+  private static List<MoveData> materializeEmptyMoves(List<MoveData> moves) {
+    return moves != null && moves.isEmpty() ? new ArrayList<>() : moves;
   }
 
   private static void detachSaveMoves(List<MoveData> moves) {
