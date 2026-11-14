@@ -7,6 +7,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -23,7 +24,7 @@ public final class GameEditSnapshot {
   private final int height;
   private final GameMetadata metadata;
   private final BoardHistoryList.SessionRulesTarget rules;
-  private final List<NodeState> nodes;
+  private final NodeState[] nodes;
 
   private GameEditSnapshot(Board board) {
     this.board = Objects.requireNonNull(board, "board");
@@ -47,9 +48,8 @@ public final class GameEditSnapshot {
         pending.addAll(children);
       }
     }
-    List<NodeState> captured = new ArrayList<>(structure.size());
-    for (NodeStructure node : structure) captured.add(NodeState.capture(node));
-    nodes = List.copyOf(captured);
+    nodes = new NodeState[structure.size()];
+    for (int i = 0; i < structure.size(); i++) nodes[i] = NodeState.capture(structure.get(i));
   }
 
   public static GameEditSnapshot capture(Board board) {
@@ -130,7 +130,7 @@ public final class GameEditSnapshot {
 
   private record NodeState(
       BoardHistoryNode node, List<BoardHistoryNode> children,
-      BoardNodeKind kind, List<Stone> stones, List<Integer> move,
+      BoardNodeKind kind, Stone[] stones, int[] move,
       Stone color, boolean blackToPlay, boolean dummy, int moveNumber, int moveMNNumber,
       String comment, Map<String, List<String>> properties, long analysisEditRevision,
       boolean removedStone, List<ExtraStone> extraStones) {
@@ -146,18 +146,28 @@ public final class GameEditSnapshot {
         }
       }
       synchronized (data) {
-        Map<String, List<String>> properties = BoardData.copyProperties(data.getProperties());
-        // Normal engine adoption removes imported KGP; these properties describe analysis.
-        properties.keySet().removeIf(GameEditSnapshot::isAnalysisProperty);
-        List<Integer> move = data.lastMove == null || data.lastMove.isEmpty() ? List.of()
-            : Arrays.stream(data.lastMove.get()).boxed().toList();
-        List<Stone> stones = data.stones == null ? null
-            : Collections.unmodifiableList(Arrays.asList(data.stones.clone()));
+        Map<String, List<String>> properties = captureProperties(data.getProperties());
+        int[] currentMove = data.lastMove == null ? null : data.lastMove.orElse(null);
+        int[] move = currentMove == null || currentMove.length == 0 ? null : currentMove.clone();
+        Stone[] stones = data.stones == null ? null : data.stones.clone();
         return new NodeState(node, structure.children(), data.getNodeKind(), stones, move,
             data.lastMoveColor, data.blackToPlay, data.dummy, data.moveNumber, data.moveMNNumber,
-            data.authoredComment(), Collections.unmodifiableMap(properties), data.analysisEditRevision(),
+            data.authoredComment(), properties, data.analysisEditRevision(),
             node.hasRemovedStone(), List.copyOf(extra));
       }
+    }
+
+    private static Map<String, List<String>> captureProperties(Map<String, List<String>> current) {
+      Map<String, List<String>> captured = null;
+      for (Map.Entry<String, List<String>> entry : current.entrySet()) {
+        // Normal engine adoption removes imported KGP; these properties describe analysis.
+        // Filter before copying their values, and share the empty map for unannotated nodes.
+        if (isAnalysisProperty(entry.getKey())) continue;
+        if (captured == null) captured = new LinkedHashMap<>();
+        List<String> values = entry.getValue();
+        captured.put(entry.getKey(), values == null ? null : List.copyOf(values));
+      }
+      return captured == null ? Collections.emptyMap() : Collections.unmodifiableMap(captured);
     }
 
     boolean matchesPayload() {
@@ -181,28 +191,14 @@ public final class GameEditSnapshot {
             && Objects.equals(comment, data.authoredComment())
             && analysisEditRevision == data.analysisEditRevision()
             && removedStone == node.hasRemovedStone()
-            && matchesStones(data.stones) && matchesMove(data)
+            && Arrays.equals(stones, data.stones) && matchesMove(data)
             && matchesProperties(data.getProperties());
       }
     }
 
-    private boolean matchesStones(Stone[] current) {
-      if (stones == null || current == null) return stones == null && current == null;
-      if (stones.size() != current.length) return false;
-      for (int i = 0; i < current.length; i++) {
-        if (stones.get(i) != current[i]) return false;
-      }
-      return true;
-    }
-
     private boolean matchesMove(BoardData data) {
       int[] current = data.lastMove == null ? null : data.lastMove.orElse(null);
-      int length = current == null ? 0 : current.length;
-      if (move.size() != length) return false;
-      for (int i = 0; i < length; i++) {
-        if (move.get(i) != current[i]) return false;
-      }
-      return true;
+      return move == null ? current == null || current.length == 0 : Arrays.equals(move, current);
     }
 
     private boolean matchesProperties(Map<String, List<String>> current) {
