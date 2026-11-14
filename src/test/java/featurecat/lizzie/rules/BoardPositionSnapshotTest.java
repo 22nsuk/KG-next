@@ -18,6 +18,7 @@ class BoardPositionSnapshotTest {
       stones[i * 3] = kinds[i];
       numbers[i * 3] = i % 2 == 0 ? 20 + i : -20 - i;
     }
+    numbers[0] = 0; // An unnumbered black stone at index zero is still an occupied cell.
     stones[70] = null;
     numbers[70] = Integer.MIN_VALUE;
     numbers[76] = Integer.MAX_VALUE;

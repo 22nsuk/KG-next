@@ -1,0 +1,1186 @@
+{
+  "fixtures": [
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+      "bytes": 1551041,
+      "commentCharactersPerNode": 32,
+      "name": "wide-variations",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 21845,
+      "expectedForks": 5461
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+      "bytes": 1603477,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-ownership",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 8,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 301,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+      "bytes": 4825457,
+      "commentCharactersPerNode": 12800,
+      "name": "long-multilingual-comments",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 201,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+      "bytes": 3040737,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-long-pv-visits",
+      "expectedPvVisitCount": 64,
+      "expectedPvLength": 64,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 151,
+      "expectedForks": 0
+    }
+  ],
+  "chronologicalRuns": [
+    "before-1",
+    "map",
+    "cache-prototype",
+    "sgf-reference",
+    "after-1",
+    "after-2",
+    "before-2"
+  ],
+  "runs": {
+    "before-1": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 162500672,
+            "withUndoBytes": 176926328,
+            "differenceBytes": 14425656
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 162663384,
+            "withUndoBytes": 177093000,
+            "differenceBytes": 14429616
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 162578040,
+            "withUndoBytes": 177005056,
+            "differenceBytes": 14427016
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 75751664,
+            "withUndoBytes": 82946040,
+            "differenceBytes": 7194376
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 75756552,
+            "withUndoBytes": 93044664,
+            "differenceBytes": 17288112
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 90341216,
+            "withUndoBytes": 93813880,
+            "differenceBytes": 3472664
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 77783144,
+            "withUndoBytes": 83024456,
+            "differenceBytes": 5241312
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 77793392,
+            "withUndoBytes": 83029536,
+            "differenceBytes": 5236144
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 77793744,
+            "withUndoBytes": 83029928,
+            "differenceBytes": 5236184
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 114050520,
+            "withUndoBytes": 118062008,
+            "differenceBytes": 4011488
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 76500976,
+            "withUndoBytes": 110263680,
+            "differenceBytes": 33762704
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 114054952,
+            "withUndoBytes": 118054008,
+            "differenceBytes": 3999056
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:04:45.347471729Z",
+        "finished": "2026-11-14T04:06:54.732038554Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "5e105115e4ded120612461005bd4cb8fc3479c8c31c33bc780dd193319cb1f65",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "b560a267ec95f7d3b73a37ed668465ed4868678ea7d82c2ffd1b621e00667cbf",
+            "files": 572
+          },
+          "sourceHead": "5c0728e6a8e4b5e21b4395fcd7ddf6308c466ed0",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794629085.1047516,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794629214.9465067,
+        "after": {
+          "productionClasses": {
+            "sha256": "5e105115e4ded120612461005bd4cb8fc3479c8c31c33bc780dd193319cb1f65",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "b560a267ec95f7d3b73a37ed668465ed4868678ea7d82c2ffd1b621e00667cbf",
+            "files": 572
+          },
+          "sourceHead": "5c0728e6a8e4b5e21b4395fcd7ddf6308c466ed0",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "map": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 161655120,
+            "withUndoBytes": 174584344,
+            "differenceBytes": 12929224
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 161897216,
+            "withUndoBytes": 174831568,
+            "differenceBytes": 12934352
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 161748936,
+            "withUndoBytes": 174683064,
+            "differenceBytes": 12934128
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 74868144,
+            "withUndoBytes": 77913416,
+            "differenceBytes": 3045272
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 74868760,
+            "withUndoBytes": 77906200,
+            "differenceBytes": 3037440
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 74868992,
+            "withUndoBytes": 77906448,
+            "differenceBytes": 3037456
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 76910304,
+            "withUndoBytes": 82152976,
+            "differenceBytes": 5242672
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 76946976,
+            "withUndoBytes": 82180992,
+            "differenceBytes": 5234016
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 76946040,
+            "withUndoBytes": 82182368,
+            "differenceBytes": 5236328
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 113192280,
+            "withUndoBytes": 117148224,
+            "differenceBytes": 3955944
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 75596768,
+            "withUndoBytes": 79645728,
+            "differenceBytes": 4048960
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 113149072,
+            "withUndoBytes": 117148352,
+            "differenceBytes": 3999280
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:17:50.596331237Z",
+        "finished": "2026-11-14T04:20:04.434344987Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "3df10e9ef3ebf7a423971b7cccf45f49d423856d774d30c6bb9962caeab6c287",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "e14e671b4013668ec91b0a75c702bce7fcd7fb3c271918ce87060ed66a8f4fe6",
+            "files": 572
+          },
+          "sourceHead": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794629870.275331,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794630004.7139597,
+        "after": {
+          "productionClasses": {
+            "sha256": "3df10e9ef3ebf7a423971b7cccf45f49d423856d774d30c6bb9962caeab6c287",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "e14e671b4013668ec91b0a75c702bce7fcd7fb3c271918ce87060ed66a8f4fe6",
+            "files": 572
+          },
+          "sourceHead": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "cache-prototype": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 162418976,
+            "withUndoBytes": 175349968,
+            "differenceBytes": 12930992
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 162635720,
+            "withUndoBytes": 175568976,
+            "differenceBytes": 12933256
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 162726112,
+            "withUndoBytes": 175659640,
+            "differenceBytes": 12933528
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 90040888,
+            "withUndoBytes": 93000400,
+            "differenceBytes": 2959512
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 90040872,
+            "withUndoBytes": 92990344,
+            "differenceBytes": 2949472
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 90042360,
+            "withUndoBytes": 92992120,
+            "differenceBytes": 2949760
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 77716744,
+            "withUndoBytes": 82957736,
+            "differenceBytes": 5240992
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 77727912,
+            "withUndoBytes": 82963904,
+            "differenceBytes": 5235992
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 77728560,
+            "withUndoBytes": 82964712,
+            "differenceBytes": 5236152
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 76448176,
+            "withUndoBytes": 80499704,
+            "differenceBytes": 4051528
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 76436744,
+            "withUndoBytes": 80483240,
+            "differenceBytes": 4046496
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 76438680,
+            "withUndoBytes": 80485928,
+            "differenceBytes": 4047248
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:24:34.024763672Z",
+        "finished": "2026-11-14T04:26:46.394662512Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "c72adb87a5105ac5bec89491901486ac1e8d043a52b4619cbee04a5ba88d27c1",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "98f197a0bacdf38679b372dd0520107d95b05a4f3630f5dc26e6bfc9d6005987",
+            "files": 572
+          },
+          "sourceHead": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+          "sourceDiffSha256": "8931a030dd32d8fb6f54337ab05ecc695fdb4924dd0e70a0deb5f37d116a7d77",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794630273.7195213,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794630406.54053,
+        "after": {
+          "productionClasses": {
+            "sha256": "c72adb87a5105ac5bec89491901486ac1e8d043a52b4619cbee04a5ba88d27c1",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "98f197a0bacdf38679b372dd0520107d95b05a4f3630f5dc26e6bfc9d6005987",
+            "files": 572
+          },
+          "sourceHead": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+          "sourceDiffSha256": "8931a030dd32d8fb6f54337ab05ecc695fdb4924dd0e70a0deb5f37d116a7d77",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "sgf-reference": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 163848272,
+            "withUndoBytes": 165943624,
+            "differenceBytes": 2095352
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 164004000,
+            "withUndoBytes": 166101040,
+            "differenceBytes": 2097040
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 163866992,
+            "withUndoBytes": 165963904,
+            "differenceBytes": 2096912
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 93381320,
+            "withUndoBytes": 97580120,
+            "differenceBytes": 4198800
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 79032480,
+            "withUndoBytes": 83237152,
+            "differenceBytes": 4204672
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 79032856,
+            "withUndoBytes": 83237544,
+            "differenceBytes": 4204688
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 83217600,
+            "withUndoBytes": 89511568,
+            "differenceBytes": 6293968
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 83220024,
+            "withUndoBytes": 89511160,
+            "differenceBytes": 6291136
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 93111880,
+            "withUndoBytes": 99403608,
+            "differenceBytes": 6291728
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 119403648,
+            "withUndoBytes": 125702136,
+            "differenceBytes": 6298488
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 81843592,
+            "withUndoBytes": 88143088,
+            "differenceBytes": 6299496
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 81843888,
+            "withUndoBytes": 88145936,
+            "differenceBytes": 6302048
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:30:20.893148614Z",
+        "finished": "2026-11-14T04:32:42.080711539Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "7d5c692a960bd08b59cb1da0fba0f26327d41addd0f117aa549a78fd02bd8d9e",
+            "files": 3235
+          },
+          "sourceHead": "922e57f43bcaba4f9e22c563cab57fece07996c1",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155",
+          "productionSourceTree": "e0fee6bb942b6755a53cefe72bcd95cfce5832c6",
+          "sourceEvidence": "Frozen production class hashes match the prior pinned 922e57f measurement"
+        },
+        "started": 1794630620.6420903,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794630762.5002668,
+        "after": {
+          "productionClasses": {
+            "sha256": "7d5c692a960bd08b59cb1da0fba0f26327d41addd0f117aa549a78fd02bd8d9e",
+            "files": 3235
+          },
+          "sourceHead": "922e57f43bcaba4f9e22c563cab57fece07996c1",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155",
+          "productionSourceTree": "e0fee6bb942b6755a53cefe72bcd95cfce5832c6",
+          "sourceEvidence": "Frozen production class hashes match the prior pinned 922e57f measurement"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "after-1": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 163115624,
+            "withUndoBytes": 176048656,
+            "differenceBytes": 12933032
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 162535808,
+            "withUndoBytes": 175470608,
+            "differenceBytes": 12934800
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 162650336,
+            "withUndoBytes": 175540952,
+            "differenceBytes": 12890616
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 75711040,
+            "withUndoBytes": 78756528,
+            "differenceBytes": 3045488
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 75710856,
+            "withUndoBytes": 78747272,
+            "differenceBytes": 3036416
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 75711472,
+            "withUndoBytes": 78748080,
+            "differenceBytes": 3036608
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 77722848,
+            "withUndoBytes": 82963168,
+            "differenceBytes": 5240320
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 87629928,
+            "withUndoBytes": 87736904,
+            "differenceBytes": 106976
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 77740952,
+            "withUndoBytes": 97883304,
+            "differenceBytes": 20142352
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 76454200,
+            "withUndoBytes": 80498600,
+            "differenceBytes": 4044400
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 76454816,
+            "withUndoBytes": 80498432,
+            "differenceBytes": 4043616
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 114007304,
+            "withUndoBytes": 118006584,
+            "differenceBytes": 3999280
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:37:21.154078355Z",
+        "finished": "2026-11-14T04:39:37.170897314Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "cf9e99b84ea3306b7b55c5e20eab81c1db8642787afdb507b5a2323929257506",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "3640785ecad60ec574f5b9d7101eb646a4157ec4ab8263f7b71fb2cbbf1508d4",
+            "files": 572
+          },
+          "sourceHead": "c5a75a45e027e4c1819faa84a0e83efe06f14ec7",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794631040.8654792,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794631177.4895236,
+        "after": {
+          "productionClasses": {
+            "sha256": "cf9e99b84ea3306b7b55c5e20eab81c1db8642787afdb507b5a2323929257506",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "3640785ecad60ec574f5b9d7101eb646a4157ec4ab8263f7b71fb2cbbf1508d4",
+            "files": 572
+          },
+          "sourceHead": "c5a75a45e027e4c1819faa84a0e83efe06f14ec7",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "after-2": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 162746456,
+            "withUndoBytes": 175679456,
+            "differenceBytes": 12933000
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 162787248,
+            "withUndoBytes": 175722768,
+            "differenceBytes": 12935520
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 162834168,
+            "withUndoBytes": 175749672,
+            "differenceBytes": 12915504
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 90103120,
+            "withUndoBytes": 93063448,
+            "differenceBytes": 2960328
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 90109688,
+            "withUndoBytes": 93055064,
+            "differenceBytes": 2945376
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 75782088,
+            "withUndoBytes": 78798176,
+            "differenceBytes": 3016088
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 77878848,
+            "withUndoBytes": 83115608,
+            "differenceBytes": 5236760
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 88582048,
+            "withUndoBytes": 88656496,
+            "differenceBytes": 74448
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 87810608,
+            "withUndoBytes": 87918096,
+            "differenceBytes": 107488
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 114032416,
+            "withUndoBytes": 118033040,
+            "differenceBytes": 4000624
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 76480680,
+            "withUndoBytes": 80524272,
+            "differenceBytes": 4043592
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 76480840,
+            "withUndoBytes": 80524432,
+            "differenceBytes": 4043592
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:44:47.341260681Z",
+        "finished": "2026-11-14T04:46:56.174692050Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "cf9e99b84ea3306b7b55c5e20eab81c1db8642787afdb507b5a2323929257506",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "3640785ecad60ec574f5b9d7101eb646a4157ec4ab8263f7b71fb2cbbf1508d4",
+            "files": 572
+          },
+          "sourceHead": "11f2076168ec5c1a726230383ae593c104cf020e",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794631487.0594196,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794631616.5707972,
+        "after": {
+          "productionClasses": {
+            "sha256": "cf9e99b84ea3306b7b55c5e20eab81c1db8642787afdb507b5a2323929257506",
+            "files": 3247
+          },
+          "productionSources": {
+            "sha256": "3640785ecad60ec574f5b9d7101eb646a4157ec4ab8263f7b71fb2cbbf1508d4",
+            "files": 572
+          },
+          "sourceHead": "11f2076168ec5c1a726230383ae593c104cf020e",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    },
+    "before-2": {
+      "summary": {
+        "retainedUndoHeap": [
+          {
+            "fixture": "wide-variations",
+            "repeat": 0,
+            "withoutUndoBytes": 162540352,
+            "withUndoBytes": 176965216,
+            "differenceBytes": 14424864
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 1,
+            "withoutUndoBytes": 162726760,
+            "withUndoBytes": 177153424,
+            "differenceBytes": 14426664
+          },
+          {
+            "fixture": "wide-variations",
+            "repeat": 2,
+            "withoutUndoBytes": 162892048,
+            "withUndoBytes": 177318520,
+            "differenceBytes": 14426472
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 0,
+            "withoutUndoBytes": 90173760,
+            "withUndoBytes": 93131128,
+            "differenceBytes": 2957368
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 1,
+            "withoutUndoBytes": 75830072,
+            "withUndoBytes": 83013256,
+            "differenceBytes": 7183184
+          },
+          {
+            "fixture": "dense-analysis-ownership",
+            "repeat": 2,
+            "withoutUndoBytes": 75830448,
+            "withUndoBytes": 83013392,
+            "differenceBytes": 7182944
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 0,
+            "withoutUndoBytes": 77876752,
+            "withUndoBytes": 83118640,
+            "differenceBytes": 5241888
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 1,
+            "withoutUndoBytes": 77892560,
+            "withUndoBytes": 83128272,
+            "differenceBytes": 5235712
+          },
+          {
+            "fixture": "long-multilingual-comments",
+            "repeat": 2,
+            "withoutUndoBytes": 77893208,
+            "withUndoBytes": 83129112,
+            "differenceBytes": 5235904
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 0,
+            "withoutUndoBytes": 114095696,
+            "withUndoBytes": 118097928,
+            "differenceBytes": 4002232
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 1,
+            "withoutUndoBytes": 76544336,
+            "withUndoBytes": 110311144,
+            "differenceBytes": 33766808
+          },
+          {
+            "fixture": "dense-analysis-long-pv-visits",
+            "repeat": 2,
+            "withoutUndoBytes": 76545208,
+            "withUndoBytes": 110310184,
+            "differenceBytes": 33764976
+          }
+        ],
+        "warmupsExcluded": 5,
+        "os": "Linux amd64",
+        "started": "2026-11-14T04:46:59.124886665Z",
+        "finished": "2026-11-14T04:49:14.070452112Z",
+        "samples": 10,
+        "measurement": "synchronous production action on EDT; offline; warm JVM; excludes repaint, deferred move metadata and native engine I/O",
+        "heapMeasurement": "Separate untimed passes: used heap after full GC with pending undo minus used heap after discarding undo; includes auxiliary edit lists",
+        "result": "PASS",
+        "java": "21.0.13+9-LTS",
+        "maxHeapBytes": 805306368
+      },
+      "artifactIdentity": {
+        "before": {
+          "productionClasses": {
+            "sha256": "5e105115e4ded120612461005bd4cb8fc3479c8c31c33bc780dd193319cb1f65",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "b560a267ec95f7d3b73a37ed668465ed4868678ea7d82c2ffd1b621e00667cbf",
+            "files": 572
+          },
+          "sourceHead": "5c0728e6a8e4b5e21b4395fcd7ddf6308c466ed0",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "started": 1794631618.6177633,
+        "heap": "768m",
+        "activeProcessorCount": 2,
+        "display": "owned Xorg dummy 1600x1200x24, authenticated TCP client via localhost; no window manager",
+        "samples": 10,
+        "warmups": 5,
+        "exitCode": 0,
+        "finished": 1794631754.2377398,
+        "after": {
+          "productionClasses": {
+            "sha256": "5e105115e4ded120612461005bd4cb8fc3479c8c31c33bc780dd193319cb1f65",
+            "files": 3246
+          },
+          "productionSources": {
+            "sha256": "b560a267ec95f7d3b73a37ed668465ed4868678ea7d82c2ffd1b621e00667cbf",
+            "files": 572
+          },
+          "sourceHead": "5c0728e6a8e4b5e21b4395fcd7ddf6308c466ed0",
+          "sourceDiffSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "probeClasses": {
+            "sha256": "c6e491abde0294dc8bf803aa667fc6dee3b5fd7f18fccd308631c4e6c2595a55",
+            "files": 4
+          },
+          "probeSources": {
+            "sha256": "9ab7e26fefddbf7fad6fb80e5fcbed76d31969f0512eadc9c8d39ddaded1be80",
+            "files": 2
+          },
+          "dependencies": {
+            "files": 35,
+            "sha256": "b270c87166483bd64f661b38d22b22c5a472f925a12989a35116884a5f5ecbf9"
+          },
+          "javaBinarySha256": "9cad3f2620d3ef2ed10b26f922af7e773d54fdaa05f615d6d6df014f3fec4155"
+        },
+        "identityUnchanged": true
+      }
+    }
+  }
+}

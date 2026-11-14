@@ -1238,7 +1238,7 @@ public class BoardData implements Cloneable {
   }
 
   /** Undo-only metadata clone; mutable fields are detached and live permissions are retired. */
-  synchronized BoardData copyRestoreMetadata() {
+  synchronized BoardData copyRestoreMetadata(RestoreStrings analysisStrings) {
     BoardData copy;
     try {
       copy = (BoardData) super.clone();
@@ -1250,10 +1250,10 @@ public class BoardData implements Cloneable {
     copy.lastMove = copyLastMove(lastMove);
     validateNodeKind(copy.nodeKind, copy.lastMove);
     copy.zobrist = zobrist == null ? null : zobrist.clone();
-    copy.bestMoves = copyHistoryMoves(bestMoves);
-    copy.bestMoves2 = copyHistoryMoves(bestMoves2);
-    copy.bestMovesOutOfRange = copyHistoryMoves(bestMovesOutOfRange);
-    copy.bestMoves2OutOfRange = copyHistoryMoves(bestMoves2OutOfRange);
+    copy.bestMoves = copyHistoryMoves(bestMoves, analysisStrings);
+    copy.bestMoves2 = copyHistoryMoves(bestMoves2, analysisStrings);
+    copy.bestMovesOutOfRange = copyHistoryMoves(bestMovesOutOfRange, analysisStrings);
+    copy.bestMoves2OutOfRange = copyHistoryMoves(bestMoves2OutOfRange, analysisStrings);
     copy.estimateArray = compactEstimateArray(estimateArray);
     copy.estimateArray2 = compactEstimateArray(estimateArray2);
     copy.properties = properties.isEmpty() ? Map.of() : copyProperties(properties);
@@ -1268,12 +1268,54 @@ public class BoardData implements Cloneable {
     return copy;
   }
 
-  private static List<MoveData> copyHistoryMoves(List<MoveData> moves) {
+  private static List<MoveData> copyHistoryMoves(
+      List<MoveData> moves, RestoreStrings analysisStrings) {
     if (moves == null) return null;
     if (moves.isEmpty()) return List.of();
     List<MoveData> copied = new ArrayList<>(moves.size());
-    for (MoveData move : moves) copied.add(move == null ? null : move.copyForHistory());
+    for (MoveData move : moves) {
+      MoveData copy = move == null ? null : move.copyForHistory();
+      if (copy != null) {
+        copy.coordinate = analysisStrings.reuse(copy.coordinate);
+        reuseAnalysisStrings(copy.variation, analysisStrings);
+        reuseAnalysisStrings(copy.pvVisits, analysisStrings);
+        reuseAnalysisStrings(copy.pvEdgeVisits, analysisStrings);
+      }
+      copied.add(copy);
+    }
     return copied;
+  }
+
+  private static void reuseAnalysisStrings(List<String> values, RestoreStrings strings) {
+    if (values == null) return;
+    for (int i = 0; i < values.size(); i++) {
+      values.set(i, strings.reuse(values.get(i)));
+    }
+  }
+
+  /** Best-effort token reuse owned by one capture, never by a live tree or saved snapshot. */
+  static final class RestoreStrings {
+    private static final int INDEX_BITS = 12;
+    private static final int CAPACITY = 1 << INDEX_BITS;
+    private String[] values;
+
+    String reuse(String value) {
+      if (value == null || value.length() > 64) return value;
+      if (values == null) values = new String[CAPACITY];
+      int index = (value.hashCode() * 0x9e3779b9) >>> (Integer.SIZE - INDEX_BITS);
+      // A fixed number of probes bounds collision work. Missing a reusable value only retains
+      // an extra immutable String; it must never change text, evict entries or share a list.
+      for (int probe = 0; probe < 4; probe++) {
+        String existing = values[index];
+        if (existing == null) {
+          values[index] = value;
+          return value;
+        }
+        if (existing.equals(value)) return existing;
+        index = (index + 1) & (CAPACITY - 1);
+      }
+      return value;
+    }
   }
 
   /** Restore writable empty containers before publishing the private snapshot metadata. */

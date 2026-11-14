@@ -1,0 +1,83 @@
+{
+  "initialMapCandidateVerify": {
+    "sourceCommit": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+    "sourceTree": "0af3345d4b9053dc0e00672808441e3a9c9abef9",
+    "logSha256": "c089ccab8bde352e99773c0ec62d38a8bd6f9da55d2d03e9d5a810a7a37a8253",
+    "surefire-reports": {
+      "classes": 563,
+      "tests": 8332,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 194
+    },
+    "failsafe-reports": {
+      "classes": 8,
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 18
+    },
+    "productionClassManifest": {
+      "expected": 3246,
+      "actual": 3246,
+      "missing": [],
+      "extra": []
+    }
+  },
+  "finalSourceCommit": "c5a75a45e027e4c1819faa84a0e83efe06f14ec7",
+  "finalSourceTree": "1dea0dc7138138f0adbf01c12fdd8743c2c7a119",
+  "finalFocusedChecks": {
+    "found": 346,
+    "failures": 0,
+    "aborted": 0,
+    "started": 346,
+    "passed": 346,
+    "failed": 0,
+    "skipped": 0,
+    "logSha256": "6801ef97f0916cfbf1ad8cebc72f52ad07429e046c48b3704a35d119f8522030"
+  },
+  "finalProductionAssembly": {
+    "baseline": "complete Maven-verified Map candidate classes",
+    "recompiledSources": [
+      "BoardData.java",
+      "BoardHistoryList.java"
+    ],
+    "compiler": "javac 21.0.13 --release 17 -g",
+    "expectedClasses": 3247,
+    "actualClasses": 3247,
+    "changedClasses": [
+      "featurecat/lizzie/rules/BoardData$RestoreStrings.class",
+      "featurecat/lizzie/rules/BoardData.class",
+      "featurecat/lizzie/rules/BoardHistoryList$ManualRulesIntent.class",
+      "featurecat/lizzie/rules/BoardHistoryList$RestoreStructure.class",
+      "featurecat/lizzie/rules/BoardHistoryList$SessionRulesKind.class",
+      "featurecat/lizzie/rules/BoardHistoryList$SessionRulesSource.class",
+      "featurecat/lizzie/rules/BoardHistoryList$SessionRulesTarget.class",
+      "featurecat/lizzie/rules/BoardHistoryList$TrialNumbering.class",
+      "featurecat/lizzie/rules/BoardHistoryList.class"
+    ],
+    "missing": [],
+    "extra": []
+  },
+  "publishedSourceMapping": {
+    "baseline": "5c0728e6a8e4b5e21b4395fcd7ddf6308c466ed0",
+    "map": {
+      "measuredLocal": "dc1b9fe02bc05e71d0ffc27b7e82e99ca77a7496",
+      "published": "7cc5140054bca6822a3f8c3c15f904b92f414a34",
+      "identicalTree": "0af3345d4b9053dc0e00672808441e3a9c9abef9"
+    },
+    "final": {
+      "measuredLocal": "c5a75a45e027e4c1819faa84a0e83efe06f14ec7",
+      "published": "11f2076168ec5c1a726230383ae593c104cf020e",
+      "identicalTree": "1dea0dc7138138f0adbf01c12fdd8743c2c7a119"
+    }
+  },
+  "latencyRuns": {
+    "count": 7,
+    "allPassed": true,
+    "sameFixturesProbeDependenciesRuntime": true,
+    "artifactsUnchangedWithinEveryRun": true,
+    "rawObservationRowsIncludingWarmups": 2940
+  },
+  "fullFinalCi": "See the PR checks for the clean rebuild of the final published revision; the local full verify recorded here belongs to the intermediate Map implementation."
+}

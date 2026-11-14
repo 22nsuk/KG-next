@@ -1,0 +1,3860 @@
+{
+  "method": "Warmups excluded. Primary medians pool 20 observations across two fresh JVMs per revision; observations within each JVM are not independent. No statistical speed guarantee.",
+  "groups": {
+    "before": [
+      "before-1",
+      "before-2"
+    ],
+    "after": [
+      "after-1",
+      "after-2"
+    ],
+    "sgfReference": [
+      "sgf-reference"
+    ],
+    "map": [
+      "map"
+    ],
+    "cachePrototype": [
+      "cache-prototype"
+    ]
+  },
+  "results": [
+    {
+      "fixture": "wide-variations",
+      "operation": "delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 23.660048,
+          "median": 37.3450755,
+          "p95NearestRank": 60.347332,
+          "max": 75.018845
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 23.689333,
+          "median": 37.0425495,
+          "p95NearestRank": 60.362939,
+          "max": 75.10874
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 15315968,
+          "median": 15315968.0,
+          "p95NearestRank": 15315968,
+          "max": 15315968
+        },
+        "perRunWallMedianMs": {
+          "before-1": 41.3525335,
+          "before-2": 36.75077
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 24.594489,
+          "median": 32.4404065,
+          "p95NearestRank": 56.537107,
+          "max": 61.157699
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 24.627206,
+          "median": 30.785391,
+          "p95NearestRank": 56.506358,
+          "max": 61.47386
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 13824632,
+          "median": 13824632.0,
+          "p95NearestRank": 13824632,
+          "max": 13824632
+        },
+        "perRunWallMedianMs": {
+          "after-1": 35.384141,
+          "after-2": 28.932683500000003
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 19.951933,
+          "median": 25.418358,
+          "p95NearestRank": 31.078983,
+          "max": 31.078983
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 20.023031,
+          "median": 23.43831,
+          "p95NearestRank": 27.519539,
+          "max": 27.519539
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 20480952,
+          "median": 20480952.0,
+          "p95NearestRank": 20480952,
+          "max": 20480952
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 25.418358
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 27.570665,
+          "median": 33.853345000000004,
+          "p95NearestRank": 64.505518,
+          "max": 64.505518
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 27.411767,
+          "median": 31.8744735,
+          "p95NearestRank": 61.259649,
+          "max": 61.259649
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 13824664,
+          "median": 13824664.0,
+          "p95NearestRank": 13824664,
+          "max": 13824664
+        },
+        "perRunWallMedianMs": {
+          "map": 33.853345000000004
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 28.479178,
+          "median": 31.0778965,
+          "p95NearestRank": 60.835745,
+          "max": 60.835745
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 28.579388,
+          "median": 31.109215499999998,
+          "p95NearestRank": 60.87645,
+          "max": 60.87645
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 13824632,
+          "median": 13824632.0,
+          "p95NearestRank": 13824632,
+          "max": 13824632
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 31.0778965
+        }
+      },
+      "wallMedianChangePercent": -13.133375510246314
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "undo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 41.533899,
+          "median": 76.599889,
+          "p95NearestRank": 101.40254,
+          "max": 170.860945
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 41.551187,
+          "median": 57.573639,
+          "p95NearestRank": 97.490068,
+          "max": 112.280205
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 84859616,
+          "median": 84859928.0,
+          "p95NearestRank": 84859928,
+          "max": 84859928
+        },
+        "perRunWallMedianMs": {
+          "before-1": 76.599889,
+          "before-2": 69.5752445
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 38.446479,
+          "median": 66.9808775,
+          "p95NearestRank": 146.496272,
+          "max": 146.54946
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 38.471413,
+          "median": 49.772687,
+          "p95NearestRank": 100.522352,
+          "max": 103.195784
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 83741096,
+          "median": 83741408.0,
+          "p95NearestRank": 83741408,
+          "max": 83741408
+        },
+        "perRunWallMedianMs": {
+          "after-1": 72.6567255,
+          "after-2": 64.634325
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 57.972315,
+          "median": 67.715792,
+          "p95NearestRank": 101.675849,
+          "max": 101.675849
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 58.002498,
+          "median": 64.050751,
+          "p95NearestRank": 75.492612,
+          "max": 75.492612
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 127453288,
+          "median": 127453288.0,
+          "p95NearestRank": 127456912,
+          "max": 127456912
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 67.715792
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 48.483392,
+          "median": 68.85847899999999,
+          "p95NearestRank": 90.968832,
+          "max": 90.968832
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 45.690334,
+          "median": 52.339352,
+          "p95NearestRank": 79.236883,
+          "max": 79.236883
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 83741128,
+          "median": 83741440.0,
+          "p95NearestRank": 83741440,
+          "max": 83741440
+        },
+        "perRunWallMedianMs": {
+          "map": 68.85847899999999
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 43.645812,
+          "median": 58.6731635,
+          "p95NearestRank": 126.750387,
+          "max": 126.750387
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 43.653662,
+          "median": 54.909814999999995,
+          "p95NearestRank": 126.179669,
+          "max": 126.179669
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 83741096,
+          "median": 83741252.0,
+          "p95NearestRank": 83741408,
+          "max": 83741408
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 58.6731635
+        }
+      },
+      "wallMedianChangePercent": -12.557474463181006
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "redo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 43.564948,
+          "median": 66.807436,
+          "p95NearestRank": 92.732354,
+          "max": 98.83414
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 43.554174,
+          "median": 56.743068,
+          "p95NearestRank": 74.060313,
+          "max": 87.160407
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 70370304,
+          "median": 70370616.0,
+          "p95NearestRank": 70370616,
+          "max": 70370616
+        },
+        "perRunWallMedianMs": {
+          "before-1": 66.807436,
+          "before-2": 65.810481
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 39.323966,
+          "median": 57.742397,
+          "p95NearestRank": 101.42177,
+          "max": 220.864441
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 39.259066,
+          "median": 49.022635,
+          "p95NearestRank": 80.316797,
+          "max": 206.082407
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 68878968,
+          "median": 68879280.0,
+          "p95NearestRank": 68879280,
+          "max": 68879280
+        },
+        "perRunWallMedianMs": {
+          "after-1": 85.0126765,
+          "after-2": 46.498039500000004
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 58.053395,
+          "median": 70.53030150000001,
+          "p95NearestRank": 82.406169,
+          "max": 82.406169
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 50.602242,
+          "median": 60.611093999999994,
+          "p95NearestRank": 71.163184,
+          "max": 71.163184
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 105537504,
+          "median": 105537504.0,
+          "p95NearestRank": 105537504,
+          "max": 105537504
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 70.53030150000001
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 46.70143,
+          "median": 53.997110500000005,
+          "p95NearestRank": 124.131364,
+          "max": 124.131364
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 43.870037,
+          "median": 49.054612,
+          "p95NearestRank": 120.629059,
+          "max": 120.629059
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 68879312,
+          "median": 68879312.0,
+          "p95NearestRank": 68879312,
+          "max": 68879312
+        },
+        "perRunWallMedianMs": {
+          "map": 53.997110500000005
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 42.807491,
+          "median": 53.592006999999995,
+          "p95NearestRank": 69.77523,
+          "max": 69.77523
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 42.712533,
+          "median": 52.9472625,
+          "p95NearestRank": 62.877006,
+          "max": 62.877006
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 68879280,
+          "median": 68879280.0,
+          "p95NearestRank": 68879280,
+          "max": 68879280
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 53.592006999999995
+        }
+      },
+      "wallMedianChangePercent": -13.568907209670488
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 45.431416,
+          "median": 73.49633299999999,
+          "p95NearestRank": 164.38668,
+          "max": 249.992881
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 45.464841,
+          "median": 62.3957315,
+          "p95NearestRank": 121.313887,
+          "max": 211.003756
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 139057136,
+          "median": 139057408.0,
+          "p95NearestRank": 139061032,
+          "max": 139061032
+        },
+        "perRunWallMedianMs": {
+          "before-1": 67.501555,
+          "before-2": 93.0766845
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 43.264278,
+          "median": 57.833708,
+          "p95NearestRank": 189.146093,
+          "max": 192.342847
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 43.225852,
+          "median": 55.260156,
+          "p95NearestRank": 118.063533,
+          "max": 147.874601
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 137565816,
+          "median": 137566072.0,
+          "p95NearestRank": 137569696,
+          "max": 137569696
+        },
+        "perRunWallMedianMs": {
+          "after-1": 65.14811999999999,
+          "after-2": 55.766343
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 57.039698,
+          "median": 67.2629775,
+          "p95NearestRank": 130.075707,
+          "max": 130.075707
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 56.951321,
+          "median": 66.3641315,
+          "p95NearestRank": 107.312473,
+          "max": 107.312473
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 164702504,
+          "median": 164702504.0,
+          "p95NearestRank": 164702704,
+          "max": 164702704
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 67.2629775
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 46.075207,
+          "median": 54.709053999999995,
+          "p95NearestRank": 125.195852,
+          "max": 125.195852
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 46.09539,
+          "median": 51.288029,
+          "p95NearestRank": 117.078606,
+          "max": 117.078606
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 137565848,
+          "median": 137566104.0,
+          "p95NearestRank": 137566104,
+          "max": 137566104
+        },
+        "perRunWallMedianMs": {
+          "map": 54.709053999999995
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 45.025018,
+          "median": 66.513491,
+          "p95NearestRank": 127.944247,
+          "max": 127.944247
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 45.057503,
+          "median": 51.3523845,
+          "p95NearestRank": 62.671084,
+          "max": 62.671084
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 137565816,
+          "median": 137566072.0,
+          "p95NearestRank": 137569696,
+          "max": 137569696
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 66.513491
+        }
+      },
+      "wallMedianChangePercent": -21.310757095867615
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "undo-insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 38.76589,
+          "median": 102.2538945,
+          "p95NearestRank": 201.477472,
+          "max": 386.498377
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 38.695827,
+          "median": 56.011885,
+          "p95NearestRank": 102.915687,
+          "max": 122.724477
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 84870400,
+          "median": 84870712.0,
+          "p95NearestRank": 84870712,
+          "max": 84870712
+        },
+        "perRunWallMedianMs": {
+          "before-1": 120.7646175,
+          "before-2": 101.41384
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 42.476199,
+          "median": 87.9944975,
+          "p95NearestRank": 210.433486,
+          "max": 225.320731
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 40.263944,
+          "median": 51.731614500000006,
+          "p95NearestRank": 80.274156,
+          "max": 85.354988
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 83750960,
+          "median": 83751272.0,
+          "p95NearestRank": 83751272,
+          "max": 83751272
+        },
+        "perRunWallMedianMs": {
+          "after-1": 83.81905499999999,
+          "after-2": 98.347425
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 91.210462,
+          "median": 133.468905,
+          "p95NearestRank": 218.295722,
+          "max": 218.295722
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 55.568175,
+          "median": 62.671375,
+          "p95NearestRank": 100.402391,
+          "max": 100.402391
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 127456984,
+          "median": 127456984.0,
+          "p95NearestRank": 127456984,
+          "max": 127456984
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 133.468905
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 45.323164,
+          "median": 81.7423875,
+          "p95NearestRank": 157.346472,
+          "max": 157.346472
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 42.267503,
+          "median": 50.364853,
+          "p95NearestRank": 73.304641,
+          "max": 73.304641
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 83750992,
+          "median": 83751148.0,
+          "p95NearestRank": 83751304,
+          "max": 83751304
+        },
+        "perRunWallMedianMs": {
+          "map": 81.7423875
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 44.47078,
+          "median": 55.0020385,
+          "p95NearestRank": 133.871182,
+          "max": 133.871182
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 44.476715,
+          "median": 52.7395895,
+          "p95NearestRank": 67.375612,
+          "max": 67.375612
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 83750960,
+          "median": 83751272.0,
+          "p95NearestRank": 83751272,
+          "max": 83751272
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 55.0020385
+        }
+      },
+      "wallMedianChangePercent": -13.945089397059595
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "trial-enter",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 28.763675,
+          "median": 39.4956955,
+          "p95NearestRank": 88.56798,
+          "max": 194.219488
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 28.793005,
+          "median": 37.7030745,
+          "p95NearestRank": 47.789515,
+          "max": 52.656548
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 15574448,
+          "median": 15574448.0,
+          "p95NearestRank": 15574448,
+          "max": 15574448
+        },
+        "perRunWallMedianMs": {
+          "before-1": 38.604009500000004,
+          "before-2": 41.295204
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 25.346569,
+          "median": 31.738615000000003,
+          "p95NearestRank": 71.219539,
+          "max": 96.823678
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 25.380154,
+          "median": 31.7787875,
+          "p95NearestRank": 70.117751,
+          "max": 96.981555
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 14083112,
+          "median": 14083112.0,
+          "p95NearestRank": 14083112,
+          "max": 14083112
+        },
+        "perRunWallMedianMs": {
+          "after-1": 34.416656,
+          "after-2": 31.738615000000003
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 42.181838,
+          "median": 48.100311000000005,
+          "p95NearestRank": 116.911838,
+          "max": 116.911838
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 42.141429,
+          "median": 48.048972,
+          "p95NearestRank": 63.924621,
+          "max": 63.924621
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 40961296,
+          "median": 40961296.0,
+          "p95NearestRank": 40961296,
+          "max": 40961296
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 48.100311000000005
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 28.941769,
+          "median": 36.8681625,
+          "p95NearestRank": 110.63624,
+          "max": 110.63624
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 28.972949,
+          "median": 36.9039985,
+          "p95NearestRank": 108.689417,
+          "max": 108.689417
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 14082936,
+          "median": 14083144.0,
+          "p95NearestRank": 14083144,
+          "max": 14083144
+        },
+        "perRunWallMedianMs": {
+          "map": 36.8681625
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 31.972176,
+          "median": 36.0331645,
+          "p95NearestRank": 101.507318,
+          "max": 101.507318
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 31.953802,
+          "median": 36.063053999999994,
+          "p95NearestRank": 96.813279,
+          "max": 96.813279
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 14083112,
+          "median": 14083112.0,
+          "p95NearestRank": 14083112,
+          "max": 14083112
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 36.0331645
+        }
+      },
+      "wallMedianChangePercent": -19.640318778536248
+    },
+    {
+      "fixture": "wide-variations",
+      "operation": "trial-return",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 21.354178,
+          "median": 71.6764245,
+          "p95NearestRank": 128.50852,
+          "max": 186.088439
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 21.372648,
+          "median": 29.6852535,
+          "p95NearestRank": 64.465722,
+          "max": 131.996334
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 73405224,
+          "median": 73405536.0,
+          "p95NearestRank": 73405536,
+          "max": 73405536
+        },
+        "perRunWallMedianMs": {
+          "before-1": 71.6764245,
+          "before-2": 78.004781
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 20.901597,
+          "median": 84.6047385,
+          "p95NearestRank": 119.718973,
+          "max": 153.490612
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 20.663767,
+          "median": 24.319071,
+          "p95NearestRank": 39.147896,
+          "max": 60.391593
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 73405224,
+          "median": 73405536.0,
+          "p95NearestRank": 73405536,
+          "max": 73405536
+        },
+        "perRunWallMedianMs": {
+          "after-1": 92.028346,
+          "after-2": 79.025887
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 55.301621,
+          "median": 87.0503675,
+          "p95NearestRank": 146.29398,
+          "max": 146.29398
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 41.41088,
+          "median": 50.601686,
+          "p95NearestRank": 63.381196,
+          "max": 63.381196
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 113621608,
+          "median": 113621608.0,
+          "p95NearestRank": 113621608,
+          "max": 113621608
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 87.0503675
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 22.097826,
+          "median": 76.2529135,
+          "p95NearestRank": 106.265474,
+          "max": 106.265474
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 21.507596,
+          "median": 25.279773499999997,
+          "p95NearestRank": 52.006643,
+          "max": 52.006643
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 73405224,
+          "median": 73405536.0,
+          "p95NearestRank": 73405536,
+          "max": 73405536
+        },
+        "perRunWallMedianMs": {
+          "map": 76.2529135
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 22.039161,
+          "median": 89.8807835,
+          "p95NearestRank": 120.345225,
+          "max": 120.345225
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 22.003645,
+          "median": 27.422488,
+          "p95NearestRank": 48.299451,
+          "max": 48.299451
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 73405224,
+          "median": 73405536.0,
+          "p95NearestRank": 73405536,
+          "max": 73405536
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 89.8807835
+        }
+      },
+      "wallMedianChangePercent": 18.037052057472547
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.761451,
+          "median": 2.2667064999999997,
+          "p95NearestRank": 2.766048,
+          "max": 3.669138
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.779489,
+          "median": 2.2735995,
+          "p95NearestRank": 2.798559,
+          "max": 3.740887
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2976864,
+          "median": 2976864.0,
+          "p95NearestRank": 2976864,
+          "max": 2976864
+        },
+        "perRunWallMedianMs": {
+          "before-1": 2.189479,
+          "before-2": 2.3263095
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 2.556547,
+          "median": 3.0842955,
+          "p95NearestRank": 4.622251,
+          "max": 5.872241
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 2.577867,
+          "median": 3.1118105,
+          "p95NearestRank": 4.756782,
+          "max": 5.909858
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2993192,
+          "median": 2993192.0,
+          "p95NearestRank": 2993192,
+          "max": 2993192
+        },
+        "perRunWallMedianMs": {
+          "after-1": 3.0262145,
+          "after-2": 3.414376
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 17.692352,
+          "median": 18.3616055,
+          "p95NearestRank": 28.588238,
+          "max": 28.588238
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 17.708075,
+          "median": 18.214098,
+          "p95NearestRank": 28.592255,
+          "max": 28.592255
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 34383936,
+          "median": 34384272.0,
+          "p95NearestRank": 34384272,
+          "max": 34384272
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 18.3616055
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 3.023109,
+          "median": 4.1732510000000005,
+          "p95NearestRank": 8.000503,
+          "max": 8.000503
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 3.049017,
+          "median": 4.2531425,
+          "p95NearestRank": 8.024887,
+          "max": 8.024887
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2978568,
+          "median": 2978568.0,
+          "p95NearestRank": 2978568,
+          "max": 2978568
+        },
+        "perRunWallMedianMs": {
+          "map": 4.1732510000000005
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 2.490039,
+          "median": 2.7929019999999998,
+          "p95NearestRank": 3.621835,
+          "max": 3.621835
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 2.532369,
+          "median": 2.808663,
+          "p95NearestRank": 3.637666,
+          "max": 3.637666
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2993192,
+          "median": 2993192.0,
+          "p95NearestRank": 2993352,
+          "max": 2993352
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 2.7929019999999998
+        }
+      },
+      "wallMedianChangePercent": 36.069469073300866
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "undo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.917849,
+          "median": 1.1890640000000001,
+          "p95NearestRank": 1.791052,
+          "max": 1.963424
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.9252,
+          "median": 1.2398924999999998,
+          "p95NearestRank": 1.799203,
+          "max": 1.983374
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1028288,
+          "median": 1028632.0,
+          "p95NearestRank": 1028632,
+          "max": 1028632
+        },
+        "perRunWallMedianMs": {
+          "before-1": 1.2131945000000002,
+          "before-2": 1.122303
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.799041,
+          "median": 0.9927794999999999,
+          "p95NearestRank": 1.422545,
+          "max": 3.048424
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.80659,
+          "median": 1.0018070000000001,
+          "p95NearestRank": 1.442137,
+          "max": 3.075765
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1044616,
+          "median": 1044928.0,
+          "p95NearestRank": 1044960,
+          "max": 1044960
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.9706645,
+          "after-2": 1.04466
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 39.496806,
+          "median": 40.33679,
+          "p95NearestRank": 61.765996,
+          "max": 61.765996
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 38.852195,
+          "median": 40.0829105,
+          "p95NearestRank": 61.78084,
+          "max": 61.78084
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 29964888,
+          "median": 29965224.0,
+          "p95NearestRank": 30008568,
+          "max": 30008568
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 40.33679
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.951451,
+          "median": 1.2996495000000001,
+          "p95NearestRank": 4.812487,
+          "max": 4.812487
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.961187,
+          "median": 1.3095485,
+          "p95NearestRank": 4.83423,
+          "max": 4.83423
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1030304,
+          "median": 1030320.0,
+          "p95NearestRank": 1030336,
+          "max": 1030336
+        },
+        "perRunWallMedianMs": {
+          "map": 1.2996495000000001
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.853086,
+          "median": 0.923324,
+          "p95NearestRank": 1.697912,
+          "max": 1.697912
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.86029,
+          "median": 0.939669,
+          "p95NearestRank": 1.704238,
+          "max": 1.704238
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1044928,
+          "median": 1044960.0,
+          "p95NearestRank": 1044960,
+          "max": 1044960
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.923324
+        }
+      },
+      "wallMedianChangePercent": -16.50747983287697
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "redo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.187683,
+          "median": 1.5318785,
+          "p95NearestRank": 2.074586,
+          "max": 2.167973
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.200004,
+          "median": 1.570606,
+          "p95NearestRank": 2.089262,
+          "max": 2.133661
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2960992,
+          "median": 2961144.0,
+          "p95NearestRank": 2961304,
+          "max": 2961400
+        },
+        "perRunWallMedianMs": {
+          "before-1": 1.731179,
+          "before-2": 1.4748700000000001
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.559498,
+          "median": 1.9097475,
+          "p95NearestRank": 2.966149,
+          "max": 4.151715
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.571654,
+          "median": 1.9441585,
+          "p95NearestRank": 2.988539,
+          "max": 4.193423
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2977264,
+          "median": 2977440.0,
+          "p95NearestRank": 2977472,
+          "max": 2977472
+        },
+        "perRunWallMedianMs": {
+          "after-1": 1.9083459999999999,
+          "after-2": 1.9097475
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 18.094166,
+          "median": 19.622311,
+          "p95NearestRank": 37.789111,
+          "max": 37.789111
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 18.107956,
+          "median": 19.637265499999998,
+          "p95NearestRank": 25.302461,
+          "max": 25.302461
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 34480608,
+          "median": 34480944.0,
+          "p95NearestRank": 34481088,
+          "max": 34481088
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 19.622311
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.801627,
+          "median": 2.6112705,
+          "p95NearestRank": 6.054244,
+          "max": 6.054244
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.852252,
+          "median": 2.628552,
+          "p95NearestRank": 5.627278,
+          "max": 5.627278
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2962816,
+          "median": 2962848.0,
+          "p95NearestRank": 2963160,
+          "max": 2963160
+        },
+        "perRunWallMedianMs": {
+          "map": 2.6112705
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.561166,
+          "median": 1.7499600000000002,
+          "p95NearestRank": 2.999906,
+          "max": 2.999906
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.571419,
+          "median": 1.817361,
+          "p95NearestRank": 3.011546,
+          "max": 3.011546
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2977440,
+          "median": 2977472.0,
+          "p95NearestRank": 2977472,
+          "max": 2977472
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 1.7499600000000002
+        }
+      },
+      "wallMedianChangePercent": 24.667034624482298
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 169.493469,
+          "median": 209.111074,
+          "p95NearestRank": 393.727832,
+          "max": 417.235579
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 135.945854,
+          "median": 157.9329,
+          "p95NearestRank": 302.428011,
+          "max": 319.472561
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1148903504,
+          "median": 1148919120.0,
+          "p95NearestRank": 1148928288,
+          "max": 1148938912
+        },
+        "perRunWallMedianMs": {
+          "before-1": 217.18278850000002,
+          "before-2": 200.541061
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 174.180327,
+          "median": 203.721004,
+          "p95NearestRank": 259.555461,
+          "max": 481.84555
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 129.883438,
+          "median": 154.916835,
+          "p95NearestRank": 227.547451,
+          "max": 414.140194
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1148900648,
+          "median": 1148921612.0,
+          "p95NearestRank": 1148922424,
+          "max": 1148932784
+        },
+        "perRunWallMedianMs": {
+          "after-1": 192.2811025,
+          "after-2": 229.166693
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 211.528299,
+          "median": 284.96114950000003,
+          "p95NearestRank": 324.84036,
+          "max": 324.84036
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 184.944303,
+          "median": 230.335508,
+          "p95NearestRank": 281.63486,
+          "max": 281.63486
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1214657960,
+          "median": 1214663232.0,
+          "p95NearestRank": 1214688400,
+          "max": 1214688400
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 284.96114950000003
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 187.894837,
+          "median": 321.47432000000003,
+          "p95NearestRank": 632.847498,
+          "max": 632.847498
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 161.811106,
+          "median": 290.7908175,
+          "p95NearestRank": 593.753198,
+          "max": 593.753198
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1148878104,
+          "median": 1148878832.0,
+          "p95NearestRank": 1150395432,
+          "max": 1150395432
+        },
+        "perRunWallMedianMs": {
+          "map": 321.47432000000003
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 187.509505,
+          "median": 245.30187949999998,
+          "p95NearestRank": 426.593895,
+          "max": 426.593895
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 143.492194,
+          "median": 186.294477,
+          "p95NearestRank": 345.466955,
+          "max": 345.466955
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1148891336,
+          "median": 1148892476.0,
+          "p95NearestRank": 1148903760,
+          "max": 1148903760
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 245.30187949999998
+        }
+      },
+      "wallMedianChangePercent": -2.5776109781732615
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "undo-insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.24166,
+          "median": 2.1817205,
+          "p95NearestRank": 3.298955,
+          "max": 4.04225
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.254719,
+          "median": 2.0840625,
+          "p95NearestRank": 3.248388,
+          "max": 3.958907
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1218888,
+          "median": 1219352.0,
+          "p95NearestRank": 1219464,
+          "max": 1219640
+        },
+        "perRunWallMedianMs": {
+          "before-1": 2.4384665,
+          "before-2": 2.004725
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.542584,
+          "median": 1.936776,
+          "p95NearestRank": 3.296694,
+          "max": 3.62014
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.555673,
+          "median": 1.944159,
+          "p95NearestRank": 3.267506,
+          "max": 3.547898
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1220912,
+          "median": 1220992.0,
+          "p95NearestRank": 1221536,
+          "max": 1221536
+        },
+        "perRunWallMedianMs": {
+          "after-1": 2.0592595,
+          "after-2": 1.902615
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 38.829664,
+          "median": 43.044172,
+          "p95NearestRank": 93.551094,
+          "max": 93.551094
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 38.845077,
+          "median": 41.2266005,
+          "p95NearestRank": 89.274973,
+          "max": 89.274973
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 30000744,
+          "median": 30001168.0,
+          "p95NearestRank": 30044760,
+          "max": 30044760
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 43.044172
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.5587,
+          "median": 4.528459,
+          "p95NearestRank": 7.289146,
+          "max": 7.289146
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.570919,
+          "median": 4.347484,
+          "p95NearestRank": 7.131372,
+          "max": 7.131372
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1206600,
+          "median": 1206632.0,
+          "p95NearestRank": 1206944,
+          "max": 1206944
+        },
+        "perRunWallMedianMs": {
+          "map": 4.528459
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.513359,
+          "median": 2.1306554999999996,
+          "p95NearestRank": 4.081399,
+          "max": 4.081399
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.50018,
+          "median": 2.075317,
+          "p95NearestRank": 4.596757,
+          "max": 4.596757
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1220968,
+          "median": 1221264.0,
+          "p95NearestRank": 1221568,
+          "max": 1221568
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 2.1306554999999996
+        }
+      },
+      "wallMedianChangePercent": -11.227125564434115
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "trial-enter",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.827875,
+          "median": 2.7406439999999996,
+          "p95NearestRank": 3.995195,
+          "max": 4.186208
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.843296,
+          "median": 2.757663,
+          "p95NearestRank": 4.014559,
+          "max": 4.203222
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2977608,
+          "median": 2977896.0,
+          "p95NearestRank": 2977896,
+          "max": 2977896
+        },
+        "perRunWallMedianMs": {
+          "before-1": 3.3769445,
+          "before-2": 2.4749005000000004
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 2.732736,
+          "median": 3.1560325000000002,
+          "p95NearestRank": 4.521695,
+          "max": 5.319966
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 2.749252,
+          "median": 3.175977,
+          "p95NearestRank": 4.5538,
+          "max": 5.377091
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 2993936,
+          "median": 2994224.0,
+          "p95NearestRank": 2994224,
+          "max": 2994224
+        },
+        "perRunWallMedianMs": {
+          "after-1": 3.095297,
+          "after-2": 3.2008845
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 35.175685,
+          "median": 40.633292,
+          "p95NearestRank": 62.864422,
+          "max": 62.864422
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 34.612851,
+          "median": 37.2405895,
+          "p95NearestRank": 43.896508,
+          "max": 43.896508
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 68743792,
+          "median": 68744464.0,
+          "p95NearestRank": 68744752,
+          "max": 68744752
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 40.633292
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 3.061146,
+          "median": 6.3882065,
+          "p95NearestRank": 10.04684,
+          "max": 10.04684
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 3.079613,
+          "median": 6.435052,
+          "p95NearestRank": 10.270071,
+          "max": 10.270071
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2979312,
+          "median": 2979312.0,
+          "p95NearestRank": 2979600,
+          "max": 2979600
+        },
+        "perRunWallMedianMs": {
+          "map": 6.3882065
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 2.758424,
+          "median": 3.521141,
+          "p95NearestRank": 4.969373,
+          "max": 4.969373
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 2.773127,
+          "median": 3.540746,
+          "p95NearestRank": 4.985649,
+          "max": 4.985649
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 2993936,
+          "median": 2993936.0,
+          "p95NearestRank": 2994224,
+          "max": 2994224
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 3.521141
+        }
+      },
+      "wallMedianChangePercent": 15.156601878974453
+    },
+    {
+      "fixture": "dense-analysis-ownership",
+      "operation": "trial-return",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.633773,
+          "median": 0.8698815,
+          "p95NearestRank": 3.372777,
+          "max": 3.598741
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.640585,
+          "median": 0.8821064999999999,
+          "p95NearestRank": 3.431004,
+          "max": 3.631044
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1017272,
+          "median": 1017616.0,
+          "p95NearestRank": 1017616,
+          "max": 1017616
+        },
+        "perRunWallMedianMs": {
+          "before-1": 1.1644805,
+          "before-2": 0.810108
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.669199,
+          "median": 0.8317319999999999,
+          "p95NearestRank": 1.453207,
+          "max": 6.883535
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.678242,
+          "median": 0.8416859999999999,
+          "p95NearestRank": 1.465306,
+          "max": 6.942238
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 1017328,
+          "median": 1017584.0,
+          "p95NearestRank": 1017616,
+          "max": 1017616
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.811896,
+          "after-2": 0.8409125
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 38.066346,
+          "median": 41.2858835,
+          "p95NearestRank": 46.499751,
+          "max": 46.499751
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 37.721453,
+          "median": 41.3012205,
+          "p95NearestRank": 45.822536,
+          "max": 45.822536
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 29848336,
+          "median": 29848336.0,
+          "p95NearestRank": 29891992,
+          "max": 29891992
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 41.2858835
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.716107,
+          "median": 0.8928715,
+          "p95NearestRank": 2.390839,
+          "max": 2.390839
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.727584,
+          "median": 0.88803,
+          "p95NearestRank": 1.82963,
+          "max": 1.82963
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1017584,
+          "median": 1017600.0,
+          "p95NearestRank": 1017616,
+          "max": 1017616
+        },
+        "perRunWallMedianMs": {
+          "map": 0.8928715
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.682399,
+          "median": 0.7267764999999999,
+          "p95NearestRank": 1.181381,
+          "max": 1.181381
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.698186,
+          "median": 0.7362664999999999,
+          "p95NearestRank": 1.190582,
+          "max": 1.190582
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 1017584,
+          "median": 1017616.0,
+          "p95NearestRank": 1017616,
+          "max": 1017616
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.7267764999999999
+        }
+      },
+      "wallMedianChangePercent": -4.385597348604387
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.299765,
+          "median": 0.442724,
+          "p95NearestRank": 0.647118,
+          "max": 0.733839
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.312688,
+          "median": 0.462169,
+          "p95NearestRank": 0.662889,
+          "max": 0.75509
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 131464,
+          "median": 131464.0,
+          "p95NearestRank": 131464,
+          "max": 131464
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.453208,
+          "before-2": 0.4075375
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.303792,
+          "median": 0.4537245,
+          "p95NearestRank": 0.901218,
+          "max": 0.95725
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.310861,
+          "median": 0.465003,
+          "p95NearestRank": 0.922847,
+          "max": 0.974144
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 131392,
+          "median": 131392.0,
+          "p95NearestRank": 131392,
+          "max": 131392
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.5063035,
+          "after-2": 0.393594
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 10.560099,
+          "median": 11.2342995,
+          "p95NearestRank": 26.35609,
+          "max": 26.35609
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 10.576105,
+          "median": 11.261214500000001,
+          "p95NearestRank": 16.854707,
+          "max": 16.854707
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 32296896,
+          "median": 32296896.0,
+          "p95NearestRank": 32296896,
+          "max": 32296896
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 11.2342995
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.354861,
+          "median": 0.3707555,
+          "p95NearestRank": 0.880995,
+          "max": 0.880995
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.364053,
+          "median": 0.379521,
+          "p95NearestRank": 0.896112,
+          "max": 0.896112
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 131424,
+          "median": 131424.0,
+          "p95NearestRank": 131424,
+          "max": 131424
+        },
+        "perRunWallMedianMs": {
+          "map": 0.3707555
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.330647,
+          "median": 0.41401,
+          "p95NearestRank": 1.149034,
+          "max": 1.149034
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.342985,
+          "median": 0.424836,
+          "p95NearestRank": 1.167954,
+          "max": 1.167954
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 131392,
+          "median": 131392.0,
+          "p95NearestRank": 131392,
+          "max": 131392
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.41401
+        }
+      },
+      "wallMedianChangePercent": 2.484730893287912
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "undo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.478291,
+          "median": 0.554885,
+          "p95NearestRank": 0.891406,
+          "max": 0.974199
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.4895,
+          "median": 0.563733,
+          "p95NearestRank": 0.903964,
+          "max": 0.984623
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 682592,
+          "median": 682880.0,
+          "p95NearestRank": 683064,
+          "max": 683064
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.5771735,
+          "before-2": 0.5534715
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.447503,
+          "median": 0.5435085,
+          "p95NearestRank": 1.001243,
+          "max": 1.385417
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.451743,
+          "median": 0.5497785,
+          "p95NearestRank": 1.009984,
+          "max": 1.366097
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 682520,
+          "median": 682840.0,
+          "p95NearestRank": 682960,
+          "max": 682960
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.56232,
+          "after-2": 0.517264
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 20.889349,
+          "median": 22.840092499999997,
+          "p95NearestRank": 55.107316,
+          "max": 55.107316
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 20.902558,
+          "median": 22.832963499999998,
+          "p95NearestRank": 46.32324,
+          "max": 46.32324
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 22651864,
+          "median": 22652152.0,
+          "p95NearestRank": 22652152,
+          "max": 22652152
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 22.840092499999997
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.449795,
+          "median": 0.5064424999999999,
+          "p95NearestRank": 0.710775,
+          "max": 0.710775
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.45611,
+          "median": 0.5125515,
+          "p95NearestRank": 0.716869,
+          "max": 0.716869
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 682864,
+          "median": 682896.0,
+          "p95NearestRank": 682896,
+          "max": 682896
+        },
+        "perRunWallMedianMs": {
+          "map": 0.5064424999999999
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.434332,
+          "median": 0.5664819999999999,
+          "p95NearestRank": 0.878411,
+          "max": 0.878411
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.440131,
+          "median": 0.5745184999999999,
+          "p95NearestRank": 0.88522,
+          "max": 0.88522
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 682960,
+          "median": 682960.0,
+          "p95NearestRank": 682960,
+          "max": 682960
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.5664819999999999
+        }
+      },
+      "wallMedianChangePercent": -2.0502446452868583
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "redo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.352367,
+          "median": 0.5666994999999999,
+          "p95NearestRank": 0.934839,
+          "max": 2.865656
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.359115,
+          "median": 0.578163,
+          "p95NearestRank": 0.948897,
+          "max": 2.943461
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 123464,
+          "median": 123492.0,
+          "p95NearestRank": 123648,
+          "max": 123648
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.5725955,
+          "before-2": 0.475644
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.452351,
+          "median": 0.6166715,
+          "p95NearestRank": 1.990399,
+          "max": 2.799166
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.46265,
+          "median": 0.6252305,
+          "p95NearestRank": 1.99847,
+          "max": 2.746406
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 123392,
+          "median": 123424.0,
+          "p95NearestRank": 123544,
+          "max": 123544
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.6490834999999999,
+          "after-2": 0.5186955
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 10.770472,
+          "median": 12.093008000000001,
+          "p95NearestRank": 16.228498,
+          "max": 16.228498
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 10.784864,
+          "median": 12.0953635,
+          "p95NearestRank": 16.242346,
+          "max": 16.242346
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 32413680,
+          "median": 32413680.0,
+          "p95NearestRank": 32413680,
+          "max": 32413680
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 12.093008000000001
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.42234,
+          "median": 0.552933,
+          "p95NearestRank": 0.701058,
+          "max": 0.701058
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.429301,
+          "median": 0.5841620000000001,
+          "p95NearestRank": 0.727636,
+          "max": 0.727636
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 123448,
+          "median": 123480.0,
+          "p95NearestRank": 123480,
+          "max": 123480
+        },
+        "perRunWallMedianMs": {
+          "map": 0.552933
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.429429,
+          "median": 0.5594874999999999,
+          "p95NearestRank": 1.182251,
+          "max": 1.182251
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.437228,
+          "median": 0.568193,
+          "p95NearestRank": 1.191763,
+          "max": 1.191763
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 123544,
+          "median": 123544.0,
+          "p95NearestRank": 123544,
+          "max": 123544
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.5594874999999999
+        }
+      },
+      "wallMedianChangePercent": 8.818077305520845
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 101.019781,
+          "median": 131.23037449999998,
+          "p95NearestRank": 297.323286,
+          "max": 330.648562
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 85.35234,
+          "median": 107.088999,
+          "p95NearestRank": 277.056869,
+          "max": 292.688235
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 766155976,
+          "median": 766186856.0,
+          "p95NearestRank": 766249032,
+          "max": 766249288
+        },
+        "perRunWallMedianMs": {
+          "before-1": 178.260172,
+          "before-2": 120.51995500000001
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 104.68297,
+          "median": 136.584583,
+          "p95NearestRank": 247.580084,
+          "max": 306.158898
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 88.255815,
+          "median": 114.44993600000001,
+          "p95NearestRank": 241.957963,
+          "max": 295.253165
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 766149480,
+          "median": 766181272.0,
+          "p95NearestRank": 766208208,
+          "max": 766209160
+        },
+        "perRunWallMedianMs": {
+          "after-1": 133.2993305,
+          "after-2": 182.952022
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 132.268411,
+          "median": 173.1741595,
+          "p95NearestRank": 310.12944,
+          "max": 310.12944
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 116.28193,
+          "median": 156.186325,
+          "p95NearestRank": 286.711734,
+          "max": 286.711734
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 830569808,
+          "median": 830600444.0,
+          "p95NearestRank": 830627400,
+          "max": 830627400
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 173.1741595
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 105.468752,
+          "median": 119.5756605,
+          "p95NearestRank": 136.450241,
+          "max": 136.450241
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 93.30614,
+          "median": 98.1727575,
+          "p95NearestRank": 110.47563,
+          "max": 110.47563
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 766142992,
+          "median": 766162792.0,
+          "p95NearestRank": 766175328,
+          "max": 766175328
+        },
+        "perRunWallMedianMs": {
+          "map": 119.5756605
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 116.39677,
+          "median": 133.432693,
+          "p95NearestRank": 152.49254,
+          "max": 152.49254
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 92.604943,
+          "median": 107.06891999999999,
+          "p95NearestRank": 126.305197,
+          "max": 126.305197
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 766137504,
+          "median": 766163108.0,
+          "p95NearestRank": 766166160,
+          "max": 766166160
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 133.432693
+        }
+      },
+      "wallMedianChangePercent": 4.080007026117283
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "undo-insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.873371,
+          "median": 1.516667,
+          "p95NearestRank": 2.009577,
+          "max": 2.986729
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.889593,
+          "median": 1.549593,
+          "p95NearestRank": 2.085517,
+          "max": 2.986108
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 810160,
+          "median": 810448.0,
+          "p95NearestRank": 810632,
+          "max": 810976
+        },
+        "perRunWallMedianMs": {
+          "before-1": 1.2312314999999998,
+          "before-2": 1.535677
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.693373,
+          "median": 1.663219,
+          "p95NearestRank": 4.083892,
+          "max": 4.831434
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.701313,
+          "median": 1.672131,
+          "p95NearestRank": 4.04838,
+          "max": 4.90327
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 800488,
+          "median": 800800.0,
+          "p95NearestRank": 801088,
+          "max": 801088
+        },
+        "perRunWallMedianMs": {
+          "after-1": 1.8171680000000001,
+          "after-2": 1.3168965
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 22.815664,
+          "median": 24.6038465,
+          "p95NearestRank": 31.783455,
+          "max": 31.783455
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 22.82979,
+          "median": 24.6215325,
+          "p95NearestRank": 31.831091,
+          "max": 31.831091
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 22676416,
+          "median": 22676704.0,
+          "p95NearestRank": 22676704,
+          "max": 22676704
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 24.6038465
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.254675,
+          "median": 1.37745,
+          "p95NearestRank": 1.993687,
+          "max": 1.993687
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.264832,
+          "median": 1.3895195,
+          "p95NearestRank": 1.966083,
+          "max": 1.966083
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 800576,
+          "median": 800844.0,
+          "p95NearestRank": 800864,
+          "max": 800864
+        },
+        "perRunWallMedianMs": {
+          "map": 1.37745
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.331066,
+          "median": 1.5553525000000001,
+          "p95NearestRank": 1.950465,
+          "max": 1.950465
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.342421,
+          "median": 1.567585,
+          "p95NearestRank": 1.962896,
+          "max": 1.962896
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 800640,
+          "median": 800928.0,
+          "p95NearestRank": 800928,
+          "max": 800928
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 1.5553525000000001
+        }
+      },
+      "wallMedianChangePercent": 9.662767107084157
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "trial-enter",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.434241,
+          "median": 0.6675865000000001,
+          "p95NearestRank": 0.937992,
+          "max": 1.176948
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.445904,
+          "median": 0.6907165,
+          "p95NearestRank": 0.988781,
+          "max": 1.196837
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 132208,
+          "median": 132496.0,
+          "p95NearestRank": 132496,
+          "max": 132496
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.6271875,
+          "before-2": 0.6864955
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.440705,
+          "median": 0.6221190000000001,
+          "p95NearestRank": 1.031666,
+          "max": 1.078839
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.448945,
+          "median": 0.6361295,
+          "p95NearestRank": 1.046924,
+          "max": 1.10289
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 132136,
+          "median": 132424.0,
+          "p95NearestRank": 132424,
+          "max": 132424
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.6276135,
+          "after-2": 0.592209
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 20.910999,
+          "median": 24.063325499999998,
+          "p95NearestRank": 39.920406,
+          "max": 39.920406
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 20.927987,
+          "median": 22.7729215,
+          "p95NearestRank": 30.283156,
+          "max": 30.283156
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 64577592,
+          "median": 64577880.0,
+          "p95NearestRank": 64577880,
+          "max": 64577880
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 24.063325499999998
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.446065,
+          "median": 0.5487744999999999,
+          "p95NearestRank": 0.872847,
+          "max": 0.872847
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.478858,
+          "median": 0.55856,
+          "p95NearestRank": 0.88606,
+          "max": 0.88606
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 132168,
+          "median": 132456.0,
+          "p95NearestRank": 132456,
+          "max": 132456
+        },
+        "perRunWallMedianMs": {
+          "map": 0.5487744999999999
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.466523,
+          "median": 0.632223,
+          "p95NearestRank": 1.009856,
+          "max": 1.009856
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.478302,
+          "median": 0.6445045,
+          "p95NearestRank": 1.028301,
+          "max": 1.028301
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 132136,
+          "median": 132424.0,
+          "p95NearestRank": 132424,
+          "max": 132424
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.632223
+        }
+      },
+      "wallMedianChangePercent": -6.810727898182478
+    },
+    {
+      "fixture": "long-multilingual-comments",
+      "operation": "trial-return",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.47159,
+          "median": 0.694878,
+          "p95NearestRank": 1.217732,
+          "max": 1.646885
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.478155,
+          "median": 0.69987,
+          "p95NearestRank": 1.23187,
+          "max": 1.656818
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 681040,
+          "median": 681372.0,
+          "p95NearestRank": 681544,
+          "max": 681544
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.705163,
+          "before-2": 0.6462870000000001
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.492924,
+          "median": 0.685222,
+          "p95NearestRank": 1.633549,
+          "max": 2.000786
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.498679,
+          "median": 0.6623865,
+          "p95NearestRank": 1.639689,
+          "max": 1.663038
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 681064,
+          "median": 681360.0,
+          "p95NearestRank": 681384,
+          "max": 681480
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.685222,
+          "after-2": 0.6980740000000001
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 22.249898,
+          "median": 23.3559625,
+          "p95NearestRank": 29.854575,
+          "max": 29.854575
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 22.256038,
+          "median": 23.352996,
+          "p95NearestRank": 29.42209,
+          "max": 29.42209
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 22461976,
+          "median": 22462184.0,
+          "p95NearestRank": 22462496,
+          "max": 22462496
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 23.3559625
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.483048,
+          "median": 0.59621,
+          "p95NearestRank": 0.758659,
+          "max": 0.758659
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.490486,
+          "median": 0.610349,
+          "p95NearestRank": 0.766869,
+          "max": 0.766869
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 681352,
+          "median": 681368.0,
+          "p95NearestRank": 681384,
+          "max": 681384
+        },
+        "perRunWallMedianMs": {
+          "map": 0.59621
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.474749,
+          "median": 0.5895285,
+          "p95NearestRank": 1.110959,
+          "max": 1.110959
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.481013,
+          "median": 0.5976555,
+          "p95NearestRank": 1.086486,
+          "max": 1.086486
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 681480,
+          "median": 681480.0,
+          "p95NearestRank": 681512,
+          "max": 681512
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.5895285
+        }
+      },
+      "wallMedianChangePercent": -1.389596447146113
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.883339,
+          "median": 2.427194,
+          "p95NearestRank": 3.360759,
+          "max": 5.566431
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.900176,
+          "median": 2.445855,
+          "p95NearestRank": 3.366867,
+          "max": 5.604028
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4006760,
+          "median": 4006760.0,
+          "p95NearestRank": 4006760,
+          "max": 4006760
+        },
+        "perRunWallMedianMs": {
+          "before-1": 2.335271,
+          "before-2": 2.52689
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 11.002767,
+          "median": 13.361580499999999,
+          "p95NearestRank": 32.181134,
+          "max": 74.285858
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 11.018233,
+          "median": 13.178132000000002,
+          "p95NearestRank": 18.742166,
+          "max": 32.2095
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4023088,
+          "median": 4023088.0,
+          "p95NearestRank": 4023088,
+          "max": 4023088
+        },
+        "perRunWallMedianMs": {
+          "after-1": 12.796765,
+          "after-2": 13.361580499999999
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 24.507913,
+          "median": 25.386118000000003,
+          "p95NearestRank": 60.36959,
+          "max": 60.36959
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 24.442332,
+          "median": 25.2971745,
+          "p95NearestRank": 33.382031,
+          "max": 33.382031
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 45462072,
+          "median": 45462424.0,
+          "p95NearestRank": 45462424,
+          "max": 45462424
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 25.386118000000003
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 14.066088,
+          "median": 18.351079,
+          "p95NearestRank": 33.573355,
+          "max": 33.573355
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 14.082149,
+          "median": 18.366864,
+          "p95NearestRank": 33.591215,
+          "max": 33.591215
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4049856,
+          "median": 4049856.0,
+          "p95NearestRank": 4049856,
+          "max": 4049856
+        },
+        "perRunWallMedianMs": {
+          "map": 18.351079
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 13.016692,
+          "median": 14.8660475,
+          "p95NearestRank": 27.80913,
+          "max": 27.80913
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 13.03135,
+          "median": 14.885232,
+          "p95NearestRank": 27.815412,
+          "max": 27.815412
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4023088,
+          "median": 4023088.0,
+          "p95NearestRank": 4023088,
+          "max": 4023088
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 14.8660475
+        }
+      },
+      "wallMedianChangePercent": 450.49495425581966
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "undo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.688798,
+          "median": 0.839911,
+          "p95NearestRank": 1.758224,
+          "max": 1.867071
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.695019,
+          "median": 0.846407,
+          "p95NearestRank": 1.426259,
+          "max": 1.877471
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 541088,
+          "median": 541116.0,
+          "p95NearestRank": 541144,
+          "max": 541144
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.8173305,
+          "before-2": 0.9021645
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.723677,
+          "median": 0.873459,
+          "p95NearestRank": 1.140903,
+          "max": 2.465149
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.728258,
+          "median": 0.8780595,
+          "p95NearestRank": 1.145926,
+          "max": 2.47187
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 557128,
+          "median": 557428.0,
+          "p95NearestRank": 557440,
+          "max": 557440
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.850536,
+          "after-2": 0.8841645
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 68.759127,
+          "median": 73.3204275,
+          "p95NearestRank": 122.878844,
+          "max": 122.878844
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 68.750943,
+          "median": 72.66953749999999,
+          "p95NearestRank": 80.375298,
+          "max": 80.375298
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 56323048,
+          "median": 56323400.0,
+          "p95NearestRank": 56323400,
+          "max": 56323400
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 73.3204275
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.894833,
+          "median": 1.150431,
+          "p95NearestRank": 2.749813,
+          "max": 2.749813
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.900988,
+          "median": 1.156223,
+          "p95NearestRank": 2.757769,
+          "max": 2.757769
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 584208,
+          "median": 584208.0,
+          "p95NearestRank": 584208,
+          "max": 584208
+        },
+        "perRunWallMedianMs": {
+          "map": 1.150431
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.745992,
+          "median": 1.0979320000000001,
+          "p95NearestRank": 1.683511,
+          "max": 1.683511
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.751753,
+          "median": 1.1045989999999999,
+          "p95NearestRank": 1.691624,
+          "max": 1.691624
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 557440,
+          "median": 557440.0,
+          "p95NearestRank": 557440,
+          "max": 557440
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 1.0979320000000001
+        }
+      },
+      "wallMedianChangePercent": 3.994232722276525
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "redo-delete",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.221172,
+          "median": 1.6718865,
+          "p95NearestRank": 2.687579,
+          "max": 122.261098
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.23352,
+          "median": 1.6839425000000001,
+          "p95NearestRank": 2.495698,
+          "max": 2.544838
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4002928,
+          "median": 4002984.0,
+          "p95NearestRank": 4003296,
+          "max": 4003296
+        },
+        "perRunWallMedianMs": {
+          "before-1": 1.7186595,
+          "before-2": 1.6399620000000001
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 4.529689,
+          "median": 6.0086379999999995,
+          "p95NearestRank": 19.784742,
+          "max": 55.575734
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 4.538607,
+          "median": 5.7106555,
+          "p95NearestRank": 13.519393,
+          "max": 19.732773
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4019256,
+          "median": 4019280.0,
+          "p95NearestRank": 4019592,
+          "max": 4019592
+        },
+        "perRunWallMedianMs": {
+          "after-1": 5.8275559999999995,
+          "after-2": 6.305123
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 24.952882,
+          "median": 31.4142905,
+          "p95NearestRank": 133.129955,
+          "max": 133.129955
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 24.869747,
+          "median": 29.859979,
+          "p95NearestRank": 38.413577,
+          "max": 38.413577
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 45842480,
+          "median": 45842832.0,
+          "p95NearestRank": 45842832,
+          "max": 45842832
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 31.4142905
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 5.844155,
+          "median": 6.5880045,
+          "p95NearestRank": 9.760045,
+          "max": 9.760045
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 5.62568,
+          "median": 6.597246,
+          "p95NearestRank": 9.669897,
+          "max": 9.669897
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4046048,
+          "median": 4046360.0,
+          "p95NearestRank": 4046360,
+          "max": 4046360
+        },
+        "perRunWallMedianMs": {
+          "map": 6.5880045
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 5.040808,
+          "median": 6.1035245,
+          "p95NearestRank": 8.668901,
+          "max": 8.668901
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 5.049102,
+          "median": 6.114909,
+          "p95NearestRank": 8.679715,
+          "max": 8.679715
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4019280,
+          "median": 4019280.0,
+          "p95NearestRank": 4019592,
+          "max": 4019592
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 6.1035245
+        }
+      },
+      "wallMedianChangePercent": 259.39269800910523
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 137.29734,
+          "median": 197.885196,
+          "p95NearestRank": 240.089806,
+          "max": 241.800508
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 70.30147,
+          "median": 80.448241,
+          "p95NearestRank": 101.522083,
+          "max": 102.570617
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 580114488,
+          "median": 580124268.0,
+          "p95NearestRank": 580133280,
+          "max": 580133728
+        },
+        "perRunWallMedianMs": {
+          "before-1": 205.116646,
+          "before-2": 193.12725
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 107.030153,
+          "median": 161.050592,
+          "p95NearestRank": 335.491665,
+          "max": 405.682967
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 71.359262,
+          "median": 89.7665915,
+          "p95NearestRank": 224.925738,
+          "max": 266.077947
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 580126992,
+          "median": 580131952.0,
+          "p95NearestRank": 580136152,
+          "max": 580136568
+        },
+        "perRunWallMedianMs": {
+          "after-1": 149.5457145,
+          "after-2": 209.6332855
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 153.017487,
+          "median": 191.5207805,
+          "p95NearestRank": 355.712242,
+          "max": 355.712242
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 123.481095,
+          "median": 142.6979585,
+          "p95NearestRank": 241.416377,
+          "max": 241.416377
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 667014896,
+          "median": 667017852.0,
+          "p95NearestRank": 667019536,
+          "max": 667019536
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 191.5207805
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 151.15856,
+          "median": 181.1441915,
+          "p95NearestRank": 288.086238,
+          "max": 288.086238
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 91.775321,
+          "median": 103.665256,
+          "p95NearestRank": 163.43123,
+          "max": 163.43123
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 580149696,
+          "median": 580151824.0,
+          "p95NearestRank": 580153720,
+          "max": 580153720
+        },
+        "perRunWallMedianMs": {
+          "map": 181.1441915
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 139.635736,
+          "median": 197.4354485,
+          "p95NearestRank": 265.921955,
+          "max": 265.921955
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 80.9164,
+          "median": 97.60308549999999,
+          "p95NearestRank": 166.772492,
+          "max": 166.772492
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 580115048,
+          "median": 580117456.0,
+          "p95NearestRank": 580119016,
+          "max": 580119016
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 197.4354485
+        }
+      },
+      "wallMedianChangePercent": -18.614128163483244
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "undo-insert",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.242255,
+          "median": 2.041178,
+          "p95NearestRank": 3.026391,
+          "max": 3.030302
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.253076,
+          "median": 2.034786,
+          "p95NearestRank": 2.967701,
+          "max": 3.006802
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 636024,
+          "median": 636160.0,
+          "p95NearestRank": 636624,
+          "max": 636680
+        },
+        "perRunWallMedianMs": {
+          "before-1": 2.1638715,
+          "before-2": 1.9697265000000002
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 1.415511,
+          "median": 1.8417620000000001,
+          "p95NearestRank": 4.515541,
+          "max": 5.570842
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 1.423403,
+          "median": 1.826724,
+          "p95NearestRank": 2.770863,
+          "max": 5.582144
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 645152,
+          "median": 645232.0,
+          "p95NearestRank": 645544,
+          "max": 645544
+        },
+        "perRunWallMedianMs": {
+          "after-1": 1.8588855,
+          "after-2": 1.7008135
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 69.334982,
+          "median": 74.413814,
+          "p95NearestRank": 94.272138,
+          "max": 94.272138
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 69.343123,
+          "median": 74.4389145,
+          "p95NearestRank": 94.283529,
+          "max": 94.283529
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 56340960,
+          "median": 56341352.0,
+          "p95NearestRank": 56341600,
+          "max": 56341600
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 74.413814
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.474424,
+          "median": 2.806058,
+          "p95NearestRank": 6.205136,
+          "max": 6.205136
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.49888,
+          "median": 2.523028,
+          "p95NearestRank": 4.790943,
+          "max": 4.790943
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 671944,
+          "median": 672336.0,
+          "p95NearestRank": 672544,
+          "max": 672544
+        },
+        "perRunWallMedianMs": {
+          "map": 2.806058
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 1.491149,
+          "median": 2.007483,
+          "p95NearestRank": 5.656613,
+          "max": 5.656613
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 1.528514,
+          "median": 1.9668815,
+          "p95NearestRank": 5.691254,
+          "max": 5.691254
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 645176,
+          "median": 645256.0,
+          "p95NearestRank": 645776,
+          "max": 645776
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 2.007483
+        }
+      },
+      "wallMedianChangePercent": -9.769652622162294
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "trial-enter",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 2.121573,
+          "median": 2.980549,
+          "p95NearestRank": 3.59601,
+          "max": 5.253821
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 2.157878,
+          "median": 2.8962440000000003,
+          "p95NearestRank": 3.613591,
+          "max": 5.269005
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4007504,
+          "median": 4007792.0,
+          "p95NearestRank": 4007792,
+          "max": 4007792
+        },
+        "perRunWallMedianMs": {
+          "before-1": 2.739091,
+          "before-2": 3.0920085000000004
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 10.751293,
+          "median": 14.1077585,
+          "p95NearestRank": 30.614466,
+          "max": 36.010631
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 10.755382,
+          "median": 14.1220255,
+          "p95NearestRank": 30.627449,
+          "max": 36.024294
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 4023832,
+          "median": 4024120.0,
+          "p95NearestRank": 4024120,
+          "max": 4024120
+        },
+        "perRunWallMedianMs": {
+          "after-1": 12.603925499999999,
+          "after-2": 15.427164999999999
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 47.867119,
+          "median": 54.9732475,
+          "p95NearestRank": 114.582915,
+          "max": 114.582915
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 47.809851,
+          "median": 52.5956935,
+          "p95NearestRank": 64.732443,
+          "max": 64.732443
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 90912136,
+          "median": 90912984.0,
+          "p95NearestRank": 90913128,
+          "max": 90913128
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 54.9732475
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 15.856761,
+          "median": 18.361742,
+          "p95NearestRank": 37.306794,
+          "max": 37.306794
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 15.870075,
+          "median": 18.3787445,
+          "p95NearestRank": 36.951201,
+          "max": 36.951201
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4050600,
+          "median": 4050888.0,
+          "p95NearestRank": 4050888,
+          "max": 4050888
+        },
+        "perRunWallMedianMs": {
+          "map": 18.361742
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 12.635333,
+          "median": 16.1527225,
+          "p95NearestRank": 18.2241,
+          "max": 18.2241
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 12.646679,
+          "median": 16.127579,
+          "p95NearestRank": 18.249055,
+          "max": 18.249055
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 4023832,
+          "median": 4023976.0,
+          "p95NearestRank": 4024120,
+          "max": 4024120
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 16.1527225
+        }
+      },
+      "wallMedianChangePercent": 373.3275144948129
+    },
+    {
+      "fixture": "dense-analysis-long-pv-visits",
+      "operation": "trial-return",
+      "before": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.478146,
+          "median": 0.610857,
+          "p95NearestRank": 1.940371,
+          "max": 2.229488
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.485312,
+          "median": 0.6129285,
+          "p95NearestRank": 1.010793,
+          "max": 1.525154
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 513464,
+          "median": 513508.0,
+          "p95NearestRank": 513520,
+          "max": 513552
+        },
+        "perRunWallMedianMs": {
+          "before-1": 0.6312245000000001,
+          "before-2": 0.5930880000000001
+        }
+      },
+      "after": {
+        "wallMs": {
+          "n": 20,
+          "min": 0.465154,
+          "median": 0.540767,
+          "p95NearestRank": 0.892508,
+          "max": 1.059895
+        },
+        "edtCpuMs": {
+          "n": 20,
+          "min": 0.470273,
+          "median": 0.5462469999999999,
+          "p95NearestRank": 0.930118,
+          "max": 1.066769
+        },
+        "edtAllocatedBytes": {
+          "n": 20,
+          "min": 513464,
+          "median": 513476.0,
+          "p95NearestRank": 513488,
+          "max": 513488
+        },
+        "perRunWallMedianMs": {
+          "after-1": 0.540767,
+          "after-2": 0.532351
+        }
+      },
+      "sgfReference": {
+        "wallMs": {
+          "n": 10,
+          "min": 67.956302,
+          "median": 73.7629115,
+          "p95NearestRank": 85.583812,
+          "max": 85.583812
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 67.902084,
+          "median": 73.709825,
+          "p95NearestRank": 85.453389,
+          "max": 85.453389
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 56031176,
+          "median": 56031176.0,
+          "p95NearestRank": 56031176,
+          "max": 56031176
+        },
+        "perRunWallMedianMs": {
+          "sgf-reference": 73.7629115
+        }
+      },
+      "map": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.433288,
+          "median": 0.6044455,
+          "p95NearestRank": 2.246093,
+          "max": 2.246093
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.438298,
+          "median": 0.5712585,
+          "p95NearestRank": 2.253655,
+          "max": 2.253655
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 513200,
+          "median": 513488.0,
+          "p95NearestRank": 513520,
+          "max": 513520
+        },
+        "perRunWallMedianMs": {
+          "map": 0.6044455
+        }
+      },
+      "cachePrototype": {
+        "wallMs": {
+          "n": 10,
+          "min": 0.459865,
+          "median": 0.5527409999999999,
+          "p95NearestRank": 0.795597,
+          "max": 0.795597
+        },
+        "edtCpuMs": {
+          "n": 10,
+          "min": 0.466689,
+          "median": 0.5595875,
+          "p95NearestRank": 0.842613,
+          "max": 0.842613
+        },
+        "edtAllocatedBytes": {
+          "n": 10,
+          "min": 513488,
+          "median": 513488.0,
+          "p95NearestRank": 513488,
+          "max": 513488
+        },
+        "perRunWallMedianMs": {
+          "cache-prototype": 0.5527409999999999
+        }
+      },
+      "wallMedianChangePercent": -11.474043843321757
+    }
+  ]
+}

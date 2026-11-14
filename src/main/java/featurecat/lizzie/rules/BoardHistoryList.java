@@ -380,6 +380,7 @@ public class BoardHistoryList {
     boolean normalizeTrial = trialNumbering != null && trialNumbering.root.get() == root;
     List<BoardHistorySnapshot.NodeSnapshot> nodes = new java.util.ArrayList<>(structure.size());
     BoardPositionSnapshot.CaptureBuffer buffer = new BoardPositionSnapshot.CaptureBuffer();
+    BoardData.RestoreStrings analysisStrings = new BoardData.RestoreStrings();
     // Match save capture's lock order: never acquire payload locks under the history monitor,
     // and release a payload lock before acquiring the corresponding node metadata lock.
     for (RestoreStructure entry : structure) {
@@ -387,7 +388,7 @@ public class BoardHistoryList {
       BoardData metadata;
       BoardPositionSnapshot position;
       synchronized (original) {
-        metadata = original.copyRestoreMetadata();
+        metadata = original.copyRestoreMetadata(analysisStrings);
         position = BoardPositionSnapshot.capture(original.stones, original.moveNumberList, buffer);
       }
       int originalMoveNumber = metadata.moveNumber;
