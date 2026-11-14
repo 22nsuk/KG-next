@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import com.sun.jna.Platform;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.SGFParser;
@@ -25,8 +26,10 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import javax.swing.JDialog;
 import javax.swing.JMenu;
 import javax.swing.JMenuItem;
@@ -48,8 +51,24 @@ class SgfCopyDesktopTest {
   void copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest() throws Exception {
     DesktopProbeProcess.requireDisplay();
     Path result = DesktopProbeProcess.runWithStartupTimeout(
-        getClass(), "sgf-copy", List.of(), List.of(), 120, 90);
+        getClass(), "sgf-copy", probeVmArgs(), List.of(), 120, 90);
     assertEquals("PASS", Files.readString(result));
+  }
+
+  @Test
+  void copyBurstPublishesTheLatestClickWithoutQueueRejection() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    for (int copies : List.of(17, 18)) {
+      Path result = DesktopProbeProcess.runWithStartupTimeout(
+          getClass(), "sgf-copy-burst-" + copies, probeVmArgs(),
+          List.of("burst", Integer.toString(copies)), 120, 90);
+      assertEquals("PASS", Files.readString(result));
+    }
+  }
+
+  private static List<String> probeVmArgs() {
+    return Platform.isMac()
+        ? List.of("--add-opens=java.desktop/sun.lwawt.macosx=ALL-UNNAMED") : List.of();
   }
 
   public static void main(String[] args) {
@@ -64,7 +83,9 @@ class SgfCopyDesktopTest {
         }
         System.exit(0);
       }
-      runProbe(Path.of(args[0]), Path.of(args[1]));
+      boolean burst = args[0].equals("burst");
+      runProbe(Path.of(args[burst ? 2 : 0]), Path.of(args[burst ? 3 : 1]),
+          burst ? Integer.parseInt(args[1]) : 0);
       System.exit(0);
     } catch (Throwable failure) {
       failure.printStackTrace();
@@ -72,7 +93,7 @@ class SgfCopyDesktopTest {
     }
   }
 
-  private static void runProbe(Path work, Path result) throws Exception {
+  private static void runProbe(Path work, Path result, int copies) throws Exception {
     Files.writeString(work.resolve("config.txt"),
         "{\"leelaz\":{\"engine-settings-list\":[]},\"logging\":{\"diagnostics-enabled\":false},"
             + "\"ui\":{\"autoload-empty\":true,\"first-time-load\":false,\"use-language\":3,"
@@ -97,6 +118,12 @@ class SgfCopyDesktopTest {
       return null;
     });
     DesktopProbeProcess.applicationReady(result);
+    if (Platform.isMac()) assertClipboardReadDuringAppKitCallback(result);
+    if (copies != 0) {
+      assertCopyBurst(result, copies);
+      Files.writeString(result, "PASS");
+      return;
+    }
     String expected = edt(() -> SGFParser.saveToString(false));
     edt(() -> {
       assertTrue(SGFParser.loadFromString("(;SZ[5]C[older request];B[dd])", false));
@@ -268,6 +295,68 @@ class SgfCopyDesktopTest {
     Files.writeString(result, "PASS");
   }
 
+  private static void assertCopyBurst(Path result, int copies) throws Exception {
+    SgfSaveQueue queue = (SgfSaveQueue) field(LizzieFrame.class, "sgfCopies").get(null);
+    Executor worker = (Executor) field(SgfSaveQueue.class, "worker").get(queue);
+    String[] expected = new String[1];
+    long revision = SgfSaveCoordinator.acceptedSaveRevision();
+    DesktopProbeProcess.phase(result, "copy-burst");
+    try (var blocked = new WorkerBlock(worker)) {
+      blocked.awaitStarted();
+      CompletableFuture<Void> pending = edt(() -> {
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+            .setContents(new StringSelection("before burst"), null);
+        for (int index = 1; index <= copies; index++) {
+          Lizzie.board.getHistory().getStart().getData().setAuthoredComment("burst " + index);
+          Lizzie.frame.copySgf();
+        }
+        expected[0] = SGFParser.saveToString(false);
+        Lizzie.board.getHistory().getStart().getData().setAuthoredComment("after burst");
+        assertTrue(SgfSaveCoordinator.pendingSaves().isDone());
+        assertEquals(revision, SgfSaveCoordinator.acceptedSaveRevision());
+        return queue.pending();
+      });
+      assertEquals("before burst", clipboard());
+      blocked.release();
+      Throwable failure = pending.handle((value, error) -> error).get(20, TimeUnit.SECONDS);
+      System.out.println("burst=" + copies + " pendingFailure=" + failure + " clipboard=" + clipboard());
+      assertEquals(expected[0], clipboard(), "the latest click must survive a delayed worker burst");
+      assertNull(failure, "superseded copies must not exhaust queue capacity");
+    }
+  }
+
+  private static void assertClipboardReadDuringAppKitCallback(Path result) throws Exception {
+    DesktopProbeProcess.phase(result, "copy-appkit-edt-callback");
+    // Reproduce the real accessibility wait: AppKit calls the EDT and pumps only
+    // AWTRunLoopMode while the EDT synchronously observes the native pasteboard.
+    // Reflection is confined to the probe; production uses public Foundation selectors.
+    Class<?> toolkit = Class.forName("sun.lwawt.macosx.LWCToolkit");
+    var invokeAndWait = toolkit.getMethod("invokeAndWait", Runnable.class, Component.class);
+    var onAppKit = toolkit.getDeclaredMethod("performOnMainThreadAfterDelay", Runnable.class, long.class);
+    onAppKit.setAccessible(true);
+    CompletableFuture<Void> observed = new CompletableFuture<>();
+    CompletableFuture<Void> returned = new CompletableFuture<>();
+    Runnable readOnEdt = () -> {
+      try (var watch = NativeClipboardWatch.capture()) {
+        assertTrue(SwingUtilities.isEventDispatchThread());
+        assertTrue(watch.unchanged(), "a native read must not modify the pasteboard");
+        observed.complete(null);
+      } catch (Throwable failure) { observed.completeExceptionally(failure); }
+    };
+    Runnable callback = () -> {
+      try {
+        invokeAndWait.invoke(null, readOnEdt, Lizzie.frame);
+        returned.complete(null);
+      } catch (Throwable failure) {
+        observed.completeExceptionally(failure);
+        returned.completeExceptionally(failure);
+      }
+    };
+    onAppKit.invoke(null, callback, 0L);
+    await(observed);
+    await(returned);
+  }
+
   private static void assertTextCopyWins(
       SgfSaveQueue queue, Executor worker, String expected, Runnable copyText) throws Exception {
     try (var blocked = new WorkerBlock(worker)) {
@@ -390,7 +479,21 @@ class SgfCopyDesktopTest {
   private static <T> T edt(Callable<T> action) throws Exception {
     FutureTask<T> task = new FutureTask<>(action);
     SwingUtilities.invokeLater(task);
-    return task.get(20, TimeUnit.SECONDS);
+    return await(task);
+  }
+
+  private static <T> T await(Future<T> task) throws Exception {
+    try {
+      return task.get(20, TimeUnit.SECONDS);
+    } catch (TimeoutException failure) {
+      // The probe exits before the parent timeout can capture a dump. Preserve both sides
+      // of native/EDT waits here, while the blocked threads are still alive.
+      Thread.getAllStackTraces().forEach((thread, stack) -> {
+        System.err.println("Thread " + thread.getName() + " " + thread.getState());
+        for (StackTraceElement frame : stack) System.err.println("\tat " + frame);
+      });
+      throw failure;
+    }
   }
 
   private static final class WorkerBlock implements AutoCloseable {
