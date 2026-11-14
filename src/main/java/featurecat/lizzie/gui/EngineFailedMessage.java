@@ -624,9 +624,7 @@ public class EngineFailedMessage extends JDialog {
   private void copyErrorAction() {
     String copyText = this.displayedDiagnostic.shareText();
     try {
-      Toolkit.getDefaultToolkit()
-          .getSystemClipboard()
-          .setContents(new StringSelection(copyText), null);
+      ClipboardCopy.setContents(new StringSelection(copyText));
       copyStatusLabel.setText(Lizzie.resourceBundle.getString("EngineFailedMessage.copied"));
     } catch (Exception ex) {
       copyStatusLabel.setText(Lizzie.resourceBundle.getString("EngineFailedMessage.copyFailed"));

@@ -111,6 +111,102 @@ class WinrateGraphVariationHitTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void insideGraphSharesPathTraversalAndRechecksEachInput(boolean showOverview) throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      VariationFixture fixture = boardWithVisibleMainContinuation();
+      WinrateGraph graph = new WinrateGraph();
+      Lizzie.config.showWinrateOverview = showOverview;
+      Lizzie.board = fixture.board;
+      Lizzie.frame = allocate(TrackingFrame.class);
+      LizzieFrame.winrateGraph = graph;
+      renderGraph(graph);
+
+      int x = renderedGraphPoint(graph, fixture.mainFuture)[0];
+      int y = ((int[]) getField(graph, "origParams"))[1];
+      CountingPathNode current = (CountingPathNode) fixture.variationCurrent;
+      current.nextReadCount = 0;
+      current.mainTrunkReadCount = 0;
+      current.variationTopReadCount = 0;
+
+      assertSame(fixture.mainFuture, graph.resolveMoveTargetNode(x, y));
+      assertEquals(1, current.nextReadCount, "one lookup should find the selected path end once.");
+      assertEquals(1, current.mainTrunkReadCount, "anchor and visible path should share trunk status.");
+      assertEquals(1, current.variationTopReadCount, "anchor and visible path should share the fork.");
+
+      current.getData().winrate = 92;
+      assertNull(
+          graph.resolveMoveTargetNode(x, y),
+          "the next lookup must reject an in-place analysis update before redraw.");
+      assertEquals(2, current.nextReadCount, "each input must inspect the path again.");
+
+      renderGraph(graph);
+      assertSame(
+          fixture.mainFuture,
+          graph.resolveMoveTargetNode(x, y),
+          "redraw should restore navigation using the updated analysis.");
+    } finally {
+      env.close();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void variationEditAtSameCurrentNodeInvalidatesInputUntilRedraw(boolean showWinrateLine)
+      throws Exception {
+    TestEnvironment env = TestEnvironment.open();
+    try {
+      VariationFixture fixture = boardWithVisibleMainContinuation();
+      WinrateGraph graph = new WinrateGraph();
+      TrackingFrame frame = allocate(TrackingFrame.class);
+      Lizzie.config.showWinrateLine = showWinrateLine;
+      Lizzie.config.showWinrateOverview = false;
+      Lizzie.board = fixture.board;
+      Lizzie.frame = frame;
+      LizzieFrame.winrateGraph = graph;
+      renderGraph(graph);
+      int[] previousPoint =
+          showWinrateLine
+              ? renderedGraphPoint(graph, fixture.mainFuture)
+              : uniqueColumnPixel(graph, fixture.mainFuture, 0);
+      assertSame(
+          fixture.mainFuture, graph.resolveMoveTargetNode(previousPoint[0], previousPoint[1]));
+
+      BoardHistoryNode newVariationMove =
+          fixture.variationCurrent.addAtLast(moveNode(2, 2, Stone.BLACK, false, 5, 10));
+      assertSame(fixture.variationCurrent, fixture.board.getHistory().getCurrentHistoryNode());
+      assertSame(fixture.mainFuture, fixture.board.getHistory().getMainEnd());
+      assertNull(
+          graph.resolveMoveTargetNode(previousPoint[0], previousPoint[1]),
+          "a new variation continuation must invalidate input without changing the current node.");
+
+      renderGraph(graph);
+      int[] point =
+          showWinrateLine
+              ? renderedGraphPoint(graph, newVariationMove)
+              : uniqueColumnPixel(graph, newVariationMove, 0);
+      assertSame(newVariationMove, graph.resolveMoveTargetNode(point[0], point[1]));
+      frame.onClickedWinrateOnly(point[0], point[1]);
+      assertSame(
+          newVariationMove,
+          fixture.board.getHistory().getCurrentHistoryNode(),
+          "click must select the new variation rather than the main-trunk node at move five.");
+
+      fixture.board.getHistory().setHead(fixture.variationCurrent);
+      fixture.variationCurrent.variations.remove(newVariationMove);
+      assertNull(
+          graph.resolveMoveTargetNode(point[0], point[1]),
+          "removing the continuation must invalidate the longer rendered navigation path.");
+      renderGraph(graph);
+      int[] mainPoint = uniqueColumnPixel(graph, fixture.mainFuture, 0);
+      assertSame(fixture.mainFuture, graph.resolveMoveTargetNode(mainPoint[0], mainPoint[1]));
+    } finally {
+      env.close();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void outsideGraphBoundsSkipHistoryTraversal(boolean showOverview) throws Exception {
     TestEnvironment env = TestEnvironment.open();
     try {
@@ -901,7 +997,7 @@ class WinrateGraphVariationHitTest {
     history.setHead(fork);
     BoardHistoryNode variationStart = fork.addAtLast(moveNode(2, 1, Stone.BLACK, false, 3, 41));
     BoardHistoryNode variationCurrent =
-        variationStart.addAtLast(moveNode(0, 2, Stone.WHITE, true, 4, 36));
+        variationStart.add(new CountingPathNode(moveNode(0, 2, Stone.WHITE, true, 4, 36)));
     history.setHead(variationCurrent);
     board.setHistory(history);
     return new VariationFixture(
@@ -1508,6 +1604,34 @@ class WinrateGraphVariationHitTest {
     public BoardHistoryNode getMainEnd() {
       mainEndReadCount++;
       return super.getMainEnd();
+    }
+  }
+
+  private static final class CountingPathNode extends BoardHistoryNode {
+    private int nextReadCount;
+    private int mainTrunkReadCount;
+    private int variationTopReadCount;
+
+    private CountingPathNode(BoardData data) {
+      super(data);
+    }
+
+    @Override
+    public Optional<BoardHistoryNode> next() {
+      nextReadCount++;
+      return super.next();
+    }
+
+    @Override
+    public boolean isMainTrunk() {
+      mainTrunkReadCount++;
+      return super.isMainTrunk();
+    }
+
+    @Override
+    public BoardHistoryNode findTop() {
+      variationTopReadCount++;
+      return super.findTop();
     }
   }
 

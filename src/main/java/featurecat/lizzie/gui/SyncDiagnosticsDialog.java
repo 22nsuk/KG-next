@@ -20,7 +20,6 @@ import java.awt.Graphics2D;
 import java.awt.GridLayout;
 import java.awt.Insets;
 import java.awt.RenderingHints;
-import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
@@ -161,9 +160,7 @@ public class SyncDiagnosticsDialog extends JDialog {
   }
 
   private void copySummary() {
-    Toolkit.getDefaultToolkit()
-        .getSystemClipboard()
-        .setContents(new StringSelection(copySummaryText), null);
+    ClipboardCopy.setContents(new StringSelection(copySummaryText));
   }
 
   private void exportDiagnosticsPackage() {

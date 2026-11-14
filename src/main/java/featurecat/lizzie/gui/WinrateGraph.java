@@ -133,6 +133,64 @@ public class WinrateGraph {
     }
   }
 
+  // One calculation owns these paths. Never retain it across input events: analysis and
+  // branch structure can change in place even when the current node stays the same.
+  private static final class GraphPath {
+    final BoardHistoryNode currentNode;
+    private BoardHistoryNode endNode;
+    private Optional<BoardHistoryNode> variationTop;
+    private List<BoardHistoryNode> nodes;
+
+    GraphPath(BoardHistoryNode currentNode) {
+      this.currentNode = currentNode;
+    }
+
+    BoardHistoryNode endNode() {
+      if (endNode == null && currentNode != null) {
+        endNode = graphTraversalEnd(currentNode);
+      }
+      return endNode;
+    }
+
+    Optional<BoardHistoryNode> variationTop() {
+      if (variationTop == null) {
+        variationTop =
+            currentNode == null || currentNode.isMainTrunk()
+                ? Optional.empty()
+                : Optional.of(currentNode.findTop());
+      }
+      return variationTop;
+    }
+
+    List<BoardHistoryNode> nodes() {
+      if (nodes != null) {
+        return nodes;
+      }
+      ArrayList<BoardHistoryNode> path = new ArrayList<>();
+      if (currentNode == null) {
+        nodes = path;
+        return path;
+      }
+      BoardHistoryNode node = endNode();
+      path.add(node);
+      while (node.previous().isPresent()) {
+        node = node.previous().get();
+        path.add(node);
+      }
+      Collections.reverse(path);
+      Optional<BoardHistoryNode> top = variationTop();
+      if (top.isPresent()) {
+        Optional<BoardHistoryNode> mainNode = top.get().next();
+        while (mainNode.isPresent()) {
+          path.add(mainNode.get());
+          mainNode = mainNode.get().next();
+        }
+      }
+      nodes = path;
+      return path;
+    }
+  }
+
   private int DOT_RADIUS = 3;
   private static final int GRAPH_ANCHOR_HIT_HALF_SIZE = 2;
   private static final int CURRENT_MOVE_MARKER_RADIUS = 4;
@@ -1666,7 +1724,7 @@ public class WinrateGraph {
     params[3] = height;
     params[4] = numMoves;
     BoardHistoryNode graphBaseNode = requestedCurrentMove;
-    List<GraphPoint> renderedAnchors = buildGraphAnchorPoints(graphBaseNode);
+    List<GraphPoint> renderedAnchors = buildGraphAnchorPoints(new GraphPath(graphBaseNode));
     drawGraphAnchors(g, renderedAnchors);
     drawMainCurrentMarkers(
         g,
@@ -1931,13 +1989,16 @@ public class WinrateGraph {
   }
 
   private List<QuickOverviewMove> buildQuickOverviewMoves(BoardHistoryNode curMove) {
+    return buildQuickOverviewMoves(new GraphPath(curMove));
+  }
+
+  private List<QuickOverviewMove> buildQuickOverviewMoves(GraphPath path) {
     ArrayList<QuickOverviewMove> moves = new ArrayList<>();
     double lastWinrate = 50;
     int lastMoveNumber = 0;
     boolean startsNewSegment = false;
-    List<BoardHistoryNode> path = buildGraphPath(curMove);
 
-    for (BoardHistoryNode pathNode : path) {
+    for (BoardHistoryNode pathNode : path.nodes()) {
       if (!pathNode.previous().isPresent()) continue;
       BoardData data = pathNode.getData();
       boolean isSnapshot = data.isSnapshotNode();
@@ -1985,7 +2046,12 @@ public class WinrateGraph {
       BoardHistoryNode currentNode, int posx, int width, int numMoves, Graphics2D graphics) {
     if (!canShowQuickOverview(width, numMoves)) return null;
 
-    List<QuickOverviewMove> moves = buildQuickOverviewMoves(currentNode);
+    return buildQuickOverviewLayout(
+        buildQuickOverviewMoves(currentNode), posx, width, numMoves, graphics);
+  }
+
+  private QuickOverviewLayout buildQuickOverviewLayout(
+      List<QuickOverviewMove> moves, int posx, int width, int numMoves, Graphics2D graphics) {
     if (moves.size() < 2) return null;
 
     int overviewHeight = Math.max(42, Math.min(68, origParams[3] / 5));
@@ -2248,38 +2314,6 @@ public class WinrateGraph {
     return Lizzie.board.getHistory().getCurrentHistoryNode();
   }
 
-  private List<BoardHistoryNode> buildGraphPath(BoardHistoryNode currentNode) {
-    ArrayList<BoardHistoryNode> path = new ArrayList<>();
-    if (currentNode == null) {
-      return path;
-    }
-    BoardHistoryNode node = currentNode;
-    while (node.next().isPresent()) {
-      node = node.next().get();
-    }
-    path.add(node);
-    while (node.previous().isPresent()) {
-      node = node.previous().get();
-      path.add(node);
-    }
-    Collections.reverse(path);
-    appendVisibleMainTrunkNodes(currentNode, path);
-    return path;
-  }
-
-  private void appendVisibleMainTrunkNodes(
-      BoardHistoryNode currentNode, List<BoardHistoryNode> path) {
-    if (currentNode.isMainTrunk()) {
-      return;
-    }
-    BoardHistoryNode forkNode = currentNode.findTop();
-    Optional<BoardHistoryNode> mainNode = forkNode.next();
-    while (mainNode.isPresent()) {
-      path.add(mainNode.get());
-      mainNode = mainNode.get().next();
-    }
-  }
-
   private boolean isGraphAnchorNode(BoardData data) {
     return data.isSnapshotNode() || isRealHistoryActionNode(data);
   }
@@ -2288,20 +2322,20 @@ public class WinrateGraph {
     return data.isMoveNode() || (data.isPassNode() && !data.dummy);
   }
 
-  private List<GraphPoint> buildGraphAnchorPoints(BoardHistoryNode currentNode) {
+  private List<GraphPoint> buildGraphAnchorPoints(GraphPath path) {
     if (!isShowWinrateLineEnabled()) {
       return Collections.emptyList();
     }
-    if (params[2] <= 0 || params[3] <= 0 || params[4] <= 0 || currentNode == null) {
+    if (params[2] <= 0 || params[3] <= 0 || params[4] <= 0 || path.currentNode == null) {
       return Collections.emptyList();
     }
     List<GraphPoint> points;
     if (isEngineOrPkGraphMode()) {
-      points = buildEngineGraphAnchorPoints(currentNode);
+      points = buildEngineGraphAnchorPoints(path);
     } else {
-      points = buildDefaultGraphAnchorPoints(currentNode);
+      points = buildDefaultGraphAnchorPoints(path);
     }
-    return includeCurrentMoveMarkerPoint(points, currentNode);
+    return includeCurrentMoveMarkerPoint(points, path.currentNode);
   }
 
   private List<GraphPoint> includeCurrentMoveMarkerPoint(
@@ -2318,11 +2352,10 @@ public class WinrateGraph {
     return pointsWithMarker;
   }
 
-  private List<GraphPoint> buildDefaultGraphAnchorPoints(BoardHistoryNode currentNode) {
+  private List<GraphPoint> buildDefaultGraphAnchorPoints(GraphPath path) {
     ArrayList<GraphPoint> points = new ArrayList<>();
-    BoardHistoryNode node = graphTraversalEnd(currentNode);
-    Optional<BoardHistoryNode> variationTop =
-        currentNode.isMainTrunk() ? Optional.empty() : Optional.of(currentNode.findTop());
+    BoardHistoryNode node = path.endNode();
+    Optional<BoardHistoryNode> variationTop = path.variationTop();
     double lastWinrate = 50;
     while (node.previous().isPresent()) {
       Double displayedWinrate = displayedDefaultAnchorWinrate(node, lastWinrate);
@@ -2359,9 +2392,9 @@ public class WinrateGraph {
     return Math.max(0, Math.min(100, fallbackWinrate));
   }
 
-  private List<GraphPoint> buildEngineGraphAnchorPoints(BoardHistoryNode currentNode) {
+  private List<GraphPoint> buildEngineGraphAnchorPoints(GraphPath path) {
     ArrayList<GraphPoint> points = new ArrayList<>();
-    BoardHistoryNode node = graphTraversalEnd(currentNode);
+    BoardHistoryNode node = path.endNode();
     while (node.previous().isPresent() && node.previous().get().previous().isPresent()) {
       BoardHistoryNode twoBackNode = node.previous().get().previous().get();
       double currentWinrate = resolveEngineGraphWinrate(node, twoBackNode);
@@ -2420,7 +2453,7 @@ public class WinrateGraph {
         || (Lizzie.board != null && Lizzie.board.isPkBoardKataB);
   }
 
-  private BoardHistoryNode graphTraversalEnd(BoardHistoryNode node) {
+  private static BoardHistoryNode graphTraversalEnd(BoardHistoryNode node) {
     BoardHistoryNode current = node;
     while (current.next().isPresent()) {
       current = current.next().get();
@@ -2844,14 +2877,15 @@ public class WinrateGraph {
 
   private void rememberRenderedPointSources(QuickOverviewLayout quickOverviewLayout) {
     BoardHistoryNode graphBaseNode = currentGraphNode();
-    rememberRenderedPointSources(quickOverviewLayout, buildGraphAnchorPoints(graphBaseNode));
+    rememberRenderedPointSources(
+        quickOverviewLayout, buildGraphAnchorPoints(new GraphPath(graphBaseNode)));
   }
 
   private void rememberRenderedPointSources(
       QuickOverviewLayout quickOverviewLayout, List<GraphPoint> renderedAnchors) {
     renderedGraphPoints =
         renderedAnchors == null ? Collections.emptyList() : new ArrayList<>(renderedAnchors);
-    renderedGraphNavigationTargets = buildGraphNavigationTargets(currentGraphNode());
+    renderedGraphNavigationTargets = buildGraphNavigationTargets(new GraphPath(currentGraphNode()));
     renderedQuickOverviewLayout = quickOverviewLayout;
     renderedOrigParams = origParams.clone();
     renderedParams = params.clone();
@@ -2879,20 +2913,24 @@ public class WinrateGraph {
     return renderedGraphPoints;
   }
 
-  private List<GraphNavigationTarget> buildGraphNavigationTargets(BoardHistoryNode currentNode) {
-    if (params[2] <= 0 || params[4] <= 0 || currentNode == null) {
+  private List<GraphNavigationTarget> buildGraphNavigationTargets(GraphPath path) {
+    if (params[2] <= 0 || params[4] <= 0 || path.currentNode == null) {
       return Collections.emptyList();
     }
     ArrayList<GraphNavigationTarget> targets = new ArrayList<>();
-    for (BoardHistoryNode node : buildGraphPath(currentNode)) {
-      if (!node.previous().isPresent()
-          || node.getData() == null
-          || !isGraphAnchorNode(node.getData())) {
+    for (BoardHistoryNode node : path.nodes()) {
+      if (!isGraphNavigationNode(node)) {
         continue;
       }
       targets.add(new GraphNavigationTarget(node, graphPointX(node.getData().moveNumber)));
     }
     return targets;
+  }
+
+  private boolean isGraphNavigationNode(BoardHistoryNode node) {
+    return node.previous().isPresent()
+        && node.getData() != null
+        && isGraphAnchorNode(node.getData());
   }
 
   private QuickOverviewLayout currentQuickOverviewLayout() {
@@ -2930,23 +2968,18 @@ public class WinrateGraph {
     if (!sameState) {
       return false;
     }
-    return hasFreshRenderedGraphPoints(renderedCurrentGraphNode)
-        && hasFreshRenderedGraphNavigationTargets(renderedCurrentGraphNode)
-        && hasFreshRenderedQuickOverviewLayout(renderedCurrentGraphNode);
+    GraphPath path = new GraphPath(renderedCurrentGraphNode);
+    return sameGraphPoints(renderedGraphPoints, buildGraphAnchorPoints(path))
+        && sameGraphNavigationTargets(renderedGraphNavigationTargets, path)
+        && hasFreshRenderedQuickOverviewLayout(path);
   }
 
-  private boolean hasFreshRenderedGraphPoints(BoardHistoryNode currentNode) {
-    return sameGraphPoints(renderedGraphPoints, buildGraphAnchorPoints(currentNode));
-  }
-
-  private boolean hasFreshRenderedGraphNavigationTargets(BoardHistoryNode currentNode) {
-    return sameGraphNavigationTargets(
-        renderedGraphNavigationTargets, buildGraphNavigationTargets(currentNode));
-  }
-
-  private boolean hasFreshRenderedQuickOverviewLayout(BoardHistoryNode currentNode) {
+  private boolean hasFreshRenderedQuickOverviewLayout(GraphPath path) {
     QuickOverviewLayout currentLayout =
-        buildQuickOverviewLayout(currentNode, params[0], params[2], params[4], null);
+        canShowQuickOverview(params[2], params[4])
+            ? buildQuickOverviewLayout(
+                buildQuickOverviewMoves(path), params[0], params[2], params[4], null)
+            : null;
     return sameQuickOverviewLayout(renderedQuickOverviewLayout, currentLayout);
   }
 
@@ -2967,18 +3000,25 @@ public class WinrateGraph {
   }
 
   private boolean sameGraphNavigationTargets(
-      List<GraphNavigationTarget> renderedTargets, List<GraphNavigationTarget> currentTargets) {
-    if (renderedTargets.size() != currentTargets.size()) {
-      return false;
+      List<GraphNavigationTarget> renderedTargets, GraphPath path) {
+    if (params[2] <= 0 || params[4] <= 0 || path.currentNode == null) {
+      return renderedTargets.isEmpty();
     }
-    for (int i = 0; i < renderedTargets.size(); i++) {
-      GraphNavigationTarget renderedTarget = renderedTargets.get(i);
-      GraphNavigationTarget currentTarget = currentTargets.get(i);
-      if (renderedTarget.node != currentTarget.node || renderedTarget.x != currentTarget.x) {
+    int index = 0;
+    for (BoardHistoryNode node : path.nodes()) {
+      if (!isGraphNavigationNode(node)) {
+        continue;
+      }
+      if (index >= renderedTargets.size()) {
+        return false;
+      }
+      GraphNavigationTarget renderedTarget = renderedTargets.get(index++);
+      if (renderedTarget.node != node
+          || renderedTarget.x != graphPointX(node.getData().moveNumber)) {
         return false;
       }
     }
-    return true;
+    return index == renderedTargets.size();
   }
 
   private boolean sameQuickOverviewLayout(

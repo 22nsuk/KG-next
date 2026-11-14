@@ -321,6 +321,34 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  native-clipboard-macos:
+    needs: repository-checks
+    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Set up Java 21
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Verify native pasteboard ownership and cross-process copying
+        run: >-
+          mvn -B -Djava.awt.headless=false -Dlizzie.desktop.required=true
+          -Dtest=SgfCopyDesktopTest,ClipboardCopyTest test
+      - name: Upload clipboard evidence
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: native-clipboard-macos
+          path: |
+            target/surefire-reports
+            target/desktop-smoke
+          if-no-files-found: warn
+
   analysis-provenance-ui:
     needs: repository-checks
     if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
@@ -466,7 +494,7 @@ jobs:
   # Server-side enforcement is configured separately; see docs/CI_MERGE_POLICY.md.
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, analysis-provenance-ui, engine-process, fox-search, b11-speed-notice, native-windows, sgf-cpu-acceptance]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, native-clipboard-macos, analysis-provenance-ui, engine-process, fox-search, b11-speed-notice, native-windows, sgf-cpu-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -15,7 +15,7 @@ from typing import Any, Mapping, Sequence
 
 EXECUTION_JOBS = (
     "script-tests", "windows-script-tests", "java-linux", "java17-web", "java-windows",
-    "desktop-smoke", "analysis-provenance-ui", "engine-process",
+    "desktop-smoke", "native-clipboard-macos", "analysis-provenance-ui", "engine-process",
     "fox-search", "b11-speed-notice", "native-windows", "sgf-cpu-acceptance",
 )
 
