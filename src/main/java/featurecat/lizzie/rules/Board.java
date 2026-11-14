@@ -5220,7 +5220,8 @@ public class Board {
       boardHeight = restored.getData().zobrist.height();
       Zobrist.restoreTables(snapshot.zobristTables);
       analysisMode = snapshot.analysisMode;
-      setupMode = snapshot.setupMode;
+      // A foreground engine may have started since this offline edit/trial was captured.
+      setupMode = snapshot.setupMode && EngineManager.isEmpty;
       hasBigBranch = snapshot.hasBigBranch;
       neverPassedInGame = snapshot.neverPassedInGame;
       isPkBoard = snapshot.isPkBoard;

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.MoveData;
 import java.lang.reflect.Modifier;
@@ -11,6 +12,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class BoardEditUndoTest {
@@ -217,6 +219,34 @@ class BoardEditUndoTest {
       board.getData().bestMoves2.add(candidate(2));
       assertEquals("aa", board.getData().getProperty("TR"));
       assertEquals(1, board.getData().bestMoves.size());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false, false", "false, true", "true, false", "true, true"})
+  void undoRedoRestoresSetupModeOnlyWhileOffline(boolean engineStarted, boolean redo)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      board.setHistory(SGFParser.parseSgf("(;SZ[5]AB[aa])", true));
+      board.setSetupMode(true);
+      board.saveListForEdit();
+      assertTrue(board.setupPlaceStone(1, 1, Stone.WHITE));
+
+      if (redo) {
+        board.cleanedit();
+        assertTrue(board.isSetupMode());
+        assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(1, 1)]);
+      }
+
+      board.setSetupMode(false);
+      EngineManager.isEmpty = !engineStarted;
+      if (redo) board.reedit();
+      else board.cleanedit();
+      assertEquals(!engineStarted, board.isSetupMode(),
+          "undo/redo must not restore offline setup input routing over an active engine");
+      assertEquals(redo ? Stone.WHITE : Stone.EMPTY,
+          board.getData().stones[Board.getIndex(1, 1)]);
     }
   }
 

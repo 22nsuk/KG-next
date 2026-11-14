@@ -1257,6 +1257,45 @@ class PositionConfirmedRollbackTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void trialReturnRevalidatesSetupModeAfterEngineStart(boolean engineStarted) throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      harness.board.setHistory(
+          featurecat.lizzie.rules.SGFParser.parseSgf("(;SZ[19]AB[aa]AW[bb])", true));
+      Stone[] original = harness.board.getData().stones.clone();
+      harness.engine.commandLists.add("loadsgf");
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          ExactSnapshotRestoreProtocolFixture.install(
+              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        EngineManager.isEmpty = true;
+        assertTrue(harness.frame.enterSetupMode());
+        harness.frame.tryPlay(false);
+        assertTrue(harness.board.setupPlaceStone(2, 2, Stone.BLACK));
+        harness.frame.exitSetupMode();
+        // Model the completed foreground engine start, retaining the trial snapshot.
+        EngineManager.isEmpty = !engineStarted;
+        harness.frame.tryPlay(false);
+      });
+      if (engineStarted) awaitHistoryRestoreCompletion(harness.board);
+
+      assertFalse(harness.frame.isTrying);
+      assertArrayEquals(original, harness.board.getData().stones);
+      assertEquals(!engineStarted, harness.board.isSetupMode(),
+          "trial return must not restore offline setup input routing over an active engine");
+      assertEquals(engineStarted ? 1 : 0, payloadCount(output, "loadsgf"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void trialReturnRestoresSavedBranchAndManualRulesBeforeOneEngineRestore(boolean undoTrial)
       throws Exception {
     featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
