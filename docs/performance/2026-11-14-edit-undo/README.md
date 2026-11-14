@@ -48,6 +48,14 @@ PV visit arrays and ownership. Analysis provenance, perspective, root visits and
 invalidation flags are retained; previous live source/run permissions and edit
 revisions are not granted to a new live tree.
 
+Move-list caches retain their mainline/selected-branch identity and analysis values,
+but match and best-move judgments are derived state. Restore recalculates those
+judgments from the saved candidates and the **current** candidate-count/visit-ratio
+settings, for both engines, before publishing the tree. This uses the same match
+calculation as live move-list updates and the saved board geometry; it does not
+wait for new visits, engine activation, or an asynchronous refresh. Engine-match
+boards keep their separate two-ply metadata semantics.
+
 Undo/redo preserves the **current** GameInfo and session rules, matching the edit
 UI's prior policy. Trial return restores the pre-trial game metadata and rules.
 These choices are applied before scheduling engine synchronization. Analysis only

@@ -265,6 +265,12 @@ class BoardEditUndoTest {
       root.getData().setPlayouts2(200);
       root.getData().winrate = 50;
       root.getData().winrate2 = 50;
+      Lizzie.config.matchAiMoves = 2;
+      Lizzie.config.matchAiPercentsPlayouts = 50;
+      root.getData().bestMoves = new ArrayList<>(List.of(
+          matchCandidate(2, 2, 100), matchCandidate(1, 1, 60)));
+      root.getData().bestMoves2 = new ArrayList<>(List.of(
+          matchCandidate(1, 1, 100), matchCandidate(2, 2, 60)));
       history.place(1, 1, Stone.BLACK, true);
       BoardHistoryNode main = history.getCurrentHistoryNode();
       main.getData().setPlayouts(110);
@@ -285,7 +291,9 @@ class BoardEditUndoTest {
         if (alreadyOrdinary) info.moveNum = 31;
       }
 
-      BoardHistoryList restored = history.copyForRestore(numbering).restore();
+      BoardHistorySnapshot snapshot = history.copyForRestore(numbering);
+      Lizzie.config.matchAiPercentsPlayouts = 70;
+      BoardHistoryList restored = snapshot.restore(false, 2, 70);
       BoardHistoryNode restoredRoot = restored.getStart();
       List<NodeInfo> copies = List.of(restoredRoot.nodeInfo, restoredRoot.nodeInfoMain,
           restoredRoot.nodeInfo2, restoredRoot.nodeInfoMain2);
@@ -306,8 +314,115 @@ class BoardEditUndoTest {
       assertArrayEquals(new int[] {1, 1}, restoredRoot.nodeInfoMain.coords);
       assertArrayEquals(new int[] {2, 2}, restoredRoot.nodeInfo2.coords);
       assertArrayEquals(new int[] {1, 1}, restoredRoot.nodeInfoMain2.coords);
+      assertFalse(restoredRoot.nodeInfoMain.isMatchAi);
+      assertFalse(restoredRoot.nodeInfo2.isMatchAi);
+      assertTrue(restoredRoot.nodeInfo.isMatchAi);
+      assertTrue(restoredRoot.nodeInfoMain2.isMatchAi);
       assertSame(restoredRoot.getVariation(1).orElseThrow(), restored.getCurrentHistoryNode());
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "undo, 2, 70, 50", "redo, 2, 70, 50", "trial, 2, 70, 50",
+      "undo, 1, 50, 50", "redo, 1, 50, 50", "trial, 1, 50, 50",
+      "undo, 2, 50, 50", "redo, 2, 50, 50", "trial, 2, 50, 50",
+      "undo, 2, 50, 70", "redo, 2, 50, 70", "trial, 2, 50, 70"
+  })
+  void restoresMatchJudgmentsUsingCurrentSettings(
+      String action, int candidates, double percent, double initialPercent)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = board.getHistory();
+      BoardHistoryNode root = history.getStart();
+      Lizzie.config.matchAiMoves = 2;
+      Lizzie.config.matchAiPercentsPlayouts = initialPercent;
+      root.getData().winrate = root.getData().winrate2 = 50;
+      root.getData().setPlayouts(160);
+      root.getData().setPlayouts2(160);
+      history.place(1, 1, Stone.BLACK, true);
+      BoardHistoryNode main = history.getCurrentHistoryNode();
+      main.getData().setPlayouts(100);
+      main.getData().setPlayouts2(100);
+      history.setHead(root);
+      history.place(2, 2, Stone.BLACK, true);
+      BoardHistoryNode branch = history.getCurrentHistoryNode();
+      branch.getData().setPlayouts(100);
+      branch.getData().setPlayouts2(100);
+      root.getData().bestMoves = new ArrayList<>(List.of(
+          matchCandidate(2, 2, 100), matchCandidate(1, 1, 60)));
+      root.getData().bestMoves2 = new ArrayList<>(List.of(
+          matchCandidate(1, 1, 100), matchCandidate(2, 2, 60)));
+      populateBranchMatchCaches(board, root, main, branch);
+      assertEquals(initialPercent <= 60, root.nodeInfoMain.isMatchAi);
+      assertEquals(initialPercent <= 60, root.nodeInfo2.isMatchAi);
+
+      Board.GameStateSnapshot trial = null;
+      if (action.equals("trial")) trial = board.captureGameState();
+      else {
+        board.saveListForEdit();
+        branch.getData().comment = "edited";
+        if (action.equals("redo")) board.cleanedit();
+      }
+
+      // The settings dialog invalidates only the active tree; saved undo/trial trees still exist.
+      board.clearNodeInfo(board.getHistory().getStart());
+      Lizzie.config.matchAiMoves = candidates;
+      Lizzie.config.matchAiPercentsPlayouts = percent;
+      if (action.equals("trial")) {
+        // Materialization precedes adoption of the saved geometry; candidate names use that
+        // geometry even if the user changed board size while the snapshot was held.
+        Board.boardWidth = Board.boardHeight = 19;
+        board.setHistory(new BoardHistoryList(BoardData.empty(19, 19)));
+      }
+      if (action.equals("undo")) board.cleanedit();
+      else if (action.equals("redo")) board.reedit();
+      else board.restoreGameState(trial);
+
+      BoardHistoryNode restored = board.getHistory().getStart();
+      boolean secondMatches = candidates >= 2 && percent <= 60;
+      assertEquals(secondMatches, restored.nodeInfoMain.isMatchAi, "primary mainline judgment");
+      assertEquals(secondMatches, restored.nodeInfo2.isMatchAi, "secondary branch judgment");
+      assertTrue(restored.nodeInfo.isMatchAi, "primary branch keeps its own candidate");
+      assertTrue(restored.nodeInfoMain2.isMatchAi, "secondary mainline keeps its own candidate");
+      assertTrue(restored.nodeInfo.isBest);
+      assertFalse(restored.nodeInfoMain.isBest);
+      assertFalse(restored.nodeInfo2.isBest);
+      assertTrue(restored.nodeInfoMain2.isBest);
+      assertEquals(0.6, restored.nodeInfoMain.percentsMatch);
+      assertEquals(0.6, restored.nodeInfo2.percentsMatch);
+      assertArrayEquals(new int[] {2, 2}, restored.nodeInfo.coords);
+      assertArrayEquals(new int[] {1, 1}, restored.nodeInfoMain.coords);
+      assertEquals(160, restored.getData().getPlayouts());
+      assertEquals(160, restored.getData().getPlayouts2());
+      assertEquals(60, restored.getData().bestMoves.get(1).playouts);
+      assertEquals(60, restored.getData().bestMoves2.get(1).playouts);
+      // No new visits or engine switch may be needed to make a restored judgment correct.
+      board.updateMovelist(restored.getVariation(1).orElseThrow());
+      board.updateMovelist2(restored.getVariation(1).orElseThrow());
+      assertEquals(secondMatches, restored.nodeInfoMain.isMatchAi);
+      assertEquals(secondMatches, restored.nodeInfo2.isMatchAi);
+    }
+  }
+
+  private static MoveData matchCandidate(int x, int y, int visits) {
+    MoveData move = new MoveData();
+    move.coordinate = Board.convertCoordinatesToName(x, y);
+    move.playouts = visits;
+    return move;
+  }
+
+  private static void populateBranchMatchCaches(Board board, BoardHistoryNode root,
+      BoardHistoryNode main, BoardHistoryNode branch) {
+    root.getData().playoutsChanged = true;
+    board.updateMovelist(main);
+    board.updateMovelist2(main);
+    root.getData().playoutsChanged = true;
+    // Equal visits must not accidentally make the fixture reuse the mainline's branch cache.
+    root.nodeInfo2.playouts = -1;
+    board.updateMovelist(branch);
+    board.updateMovelist2(branch);
   }
 
   @ParameterizedTest
@@ -331,7 +446,8 @@ class BoardEditUndoTest {
           pass.blackToPlay, pass.zobrist, pass.moveNumber, pass.moveNumberList,
           pass.blackCaptures, pass.whiteCaptures, 0, 0));
 
-      BoardHistoryList restored = history.copyForRestore(numbering).restore();
+      BoardHistoryList restored = history.copyForRestore(numbering)
+          .restore(false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts);
       assertTrue(restored.getData().isSnapshotNode());
       assertEquals(5, restored.getData().moveNumber);
       assertEquals(branchNumbers ? 1 : 4,
@@ -363,14 +479,17 @@ class BoardEditUndoTest {
       root.getData().moveNumber = 0;
       addDummy(root, 1);
       addDummy(root, 0);
-      BoardHistoryNode restored = history.copyForRestore(numbering).restore().getStart();
+      BoardHistoryNode restored = history.copyForRestore(numbering)
+          .restore(false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts).getStart();
       assertEquals(40, restored.getData().moveNumber);
       assertEquals(List.of(41, 40, 41, 40), restored.getVariations().stream()
           .map(node -> node.getData().moveNumber).toList());
-      assertEquals(0, history.copyForRestore(null).restore().getData().moveNumber);
+      assertEquals(0, history.copyForRestore(null)
+          .restore(false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts).getData().moveNumber);
       BoardHistoryList replacement = new BoardHistoryList(BoardData.empty(5, 5));
       replacement.getData().moveNumber = 99;
-      assertEquals(99, replacement.copyForRestore(numbering).restore().getData().moveNumber,
+      assertEquals(99, replacement.copyForRestore(numbering)
+          .restore(false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts).getData().moveNumber,
           "a trial cannot renumber a different document");
     }
   }
