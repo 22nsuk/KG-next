@@ -8,7 +8,7 @@ This change reduces snapshot representation size; **it does not eliminate every 
 
 The long-PV snapshot graph shrinks from **32.383 to 3.888 MiB (88.0%)**. Reusing those tokens costs CPU: deletion changes from **2.43 to 13.36 ms**. The fresh SGF reference measures 25.39 ms for that action. The wide record's SGF deletion reference is **25.42 ms**, so its original first-deletion gap remains. Full action results, including increases and variable restoration wall times, appear below. No uniform speedup or all-issues-resolved claim is made.
 
-The wide record's trial return has a higher observed wall median, **71.68 → 84.60 ms (+18.0%)**, despite lower EDT CPU time (**29.69 → 24.32 ms**). Per-run wall medians are 71.68/78.00 ms before and 92.03/79.03 ms after. The repeated comparison does not establish the cause of the wall-time increase, and it remains a limitation of these results.
+The wide record's trial return has a higher observed wall median, **71.68 → 84.60 ms (+18.0%)**, despite lower EDT CPU time (**29.69 → 24.32 ms**). Per-run wall medians are 71.68/78.00 ms before and 92.03/79.03 ms after. The original comparison did not establish the cause. A [later follow-up](#trial-return-wall-time-follow-up) attributes the wall-minus-CPU gap to garbage-collection pauses inside the timed action and finds no slowdown from this change; the higher median is not treated as a regression.
 
 The graph figures are sums of reachable object sizes, **not exclusive retained heap, total JVM memory, or peak RAM**. The original GC-difference probe varies substantially and is reported separately without treating it as an exact storage measure.
 
@@ -121,6 +121,64 @@ The original UI probe requests GC with a pending undo, then discards undo and re
 | Dense analysis and ownership (301 nodes) | 6.850 (2.820–16.487) | 2.886 (2.809–2.904) |
 | Long multilingual comments (201 nodes) | 4.994 (4.993–4.999) | 2.548 (0.071–19.209) |
 | Long PV and visits (151 nodes) | 18.012 (3.814–32.203) | 3.856 (3.814–3.857) |
+
+## Trial-return wall time follow-up
+
+Added after the change merged. It concerns only the wide record's trial return, whose wall median rose 71.68 → 84.60 ms while EDT CPU fell.
+
+### What the recorded samples already show
+
+The 20 + 20 measured samples in [observations.csv](observations.csv) fall into two groups rather than one distribution: a fast group of about 21–50 ms, and a slow group above 60 ms.
+
+| | #179 | Final |
+| --- | ---: | ---: |
+| Samples above 60 ms | 11 of 20 | 14 of 20 |
+| Wall mean, ms | 73.56 | 73.60 |
+| Wall median, ms | 71.68 | 84.60 |
+| 10th and 11th sorted values, ms | 68.18, 75.17 | 82.42, 86.79 |
+
+The median of 20 values is the mean of the 10th and 11th. Here those two values sit at the boundary between the groups, so three more slow samples move the median by 13 ms while the mean is unchanged. With two JVM runs per revision, this design cannot separate an 18% median shift from run-to-run variation.
+
+### Re-measurement with GC accounting
+
+Both revisions (`5c0728e6` and `4d8fb10f`) were re-measured on 2026-11-14 UTC on a different, faster machine: Java 21.0.13, Linux amd64 under WSL2, an Xvfb display, the same `-Xmx768m -XX:ActiveProcessorCount=2` options and the same probe arguments. Only the wide fixture was run. The probe was instrumented privately to record, around each timed action, the collection count and time from the JVM's garbage-collector beans (millisecond resolution), EDT blocked and waited time, and process CPU time. That instrumentation is not part of this repository. Absolute times are not comparable with the recorded runs above and must not be pooled with them.
+
+Ten fresh JVM runs per revision in alternating order, five warmups then ten measured samples each:
+
+| | #179 | Final |
+| --- | ---: | ---: |
+| Wall median, ms (100 samples) | 30.56 | 27.87 |
+| Wall mean, ms | 26.34 | 24.15 |
+| Per-run wall medians, ms | 15.6–38.6 | 9.1–37.9 |
+| EDT CPU median, ms | 9.11 | 8.93 |
+| Samples with a collection inside the timed action | 66 | 55 |
+| Wall median without a collection, ms | 9.08 | 8.93 |
+| Wall median with a collection, ms | 34.48 | 37.22 |
+
+- The higher final median does not reproduce. A run-level permutation test gives p = 0.18 for the median difference and p = 0.22 for the mean, so no difference in either direction is established.
+- Wall time minus EDT CPU time minus reported collection time averages 0.46 ms before and 0.39 ms after, at most 1.45 ms in any sample. EDT blocked and waited time is zero in all 200 samples.
+- Splitting ten same-revision runs into two disjoint two-run pools gives a median difference of at least 18% in 28% of splits for #179 and 74% for the final revision.
+
+Changing only heap options moves the gap as a collection-pause explanation predicts. Each row has three runs and 30 samples per revision:
+
+| Added JVM options | Samples with a collection, #179 / final | Wall median ms, #179 / final |
+| --- | ---: | ---: |
+| `-Xmn256m`, plus `System.gc()` before the timed action | 0 / 0 | 9.80 / 9.70 |
+| `-Xms4g -Xmx4g -Xmn2g` | 3 / 3 | 9.06 / 8.95 |
+| `-Xmn24m` | 30 / 30 | 30.49 / 28.55 |
+| `-XX:ParallelGCThreads=8` | 18 / 17 | 16.86 / 15.64 |
+| `-XX:+UseParallelGC` | 23 / 24 | 19.56 / 18.91 |
+| `-XX:+UseSerialGC` | 11 / 7 | 7.27 / 7.29 |
+
+All 560 measured samples are in [trial-return-gc-observations.csv](trial-return-gc-observations.csv); `config` is `main` for the default options and otherwise names a row of the table above in the same order (`gcbefore`, `bigheap`, `smallyoung`, `gcthreads8`, `parallel`, `serial`).
+
+### Conclusion and limits
+
+- In the re-measurement, the gap between wall and EDT CPU time is stop-the-world collection time. With no collection inside the timed action the two revisions are indistinguishable, and the trial-return path is not slower after this change.
+- For the originally recorded machine this is an inference: its samples have the same two-group shape and equal means, but no GC logs were recorded there.
+- GC logs from the re-measurement show the pauses dominated by evacuation, which fits freshly restored arrays still being live when a young collection runs. That mechanism was not isolated by an object-level experiment.
+- The underlying cost is unchanged by this follow-up: restoring 21,845 nodes allocates about 70 MiB in one EDT action, so a collection pause in that window remains likely on a small heap.
+- Future comparisons of actions that allocate tens of MiB should record collection activity per sample and use more than two runs per revision.
 
 ## Verification
 
