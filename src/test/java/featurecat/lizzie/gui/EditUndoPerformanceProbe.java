@@ -21,10 +21,29 @@ import org.json.JSONObject;
  * desktop: {@code EditUndoPerformanceProbe OUTPUT_DIRECTORY [SAMPLES [WARMUPS]]}. Uses the SGF
  * probe's deterministic fixtures and semantic oracle. Measures synchronous EDT work, excluding
  * repaint, background move-list refresh and native engine synchronization (the probe is offline).
+ *
+ * <p>Each timed row also records what else happened inside the timed region, because for actions
+ * that allocate tens of MiB the wall time is dominated by whether a stop-the-world collection
+ * lands there: {@code gcCount}/{@code gcMs} (summed over all garbage-collector beans; millisecond
+ * resolution), {@code processCpuMs} (all threads), {@code edtBlockedMs}/{@code edtBlockedCount}/
+ * {@code edtWaitedMs} (EDT lock contention and waiting) and {@code heapUsedBeforeBytes}.
+ *
+ * <p>System properties:
+ *
+ * <ul>
+ *   <li>{@code -Dprobe.fixture=NAME} runs only the fixture with that name.
+ *   <li>{@code -Dprobe.gcBefore=true} requests {@code System.gc()} on the EDT immediately before
+ *       every timed action (outside the timed region), to separate action cost from collection
+ *       pauses. Off by default.
+ * </ul>
  */
 public final class EditUndoPerformanceProbe {
   private static final ThreadMXBean THREADS =
       (ThreadMXBean) ManagementFactory.getThreadMXBean();
+  private static final com.sun.management.OperatingSystemMXBean OS =
+      (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
+  private static final String FIXTURE = System.getProperty("probe.fixture");
+  private static final boolean GC_BEFORE = Boolean.getBoolean("probe.gcBefore");
 
   public static void main(String[] args) throws Exception {
     try {
@@ -54,6 +73,8 @@ public final class EditUndoPerformanceProbe {
         .put("os", System.getProperty("os.name") + " " + System.getProperty("os.arch"))
         .put("maxHeapBytes", Runtime.getRuntime().maxMemory())
         .put("samples", samples).put("warmupsExcluded", warmups)
+        .put("fixtureFilter", FIXTURE == null ? JSONObject.NULL : FIXTURE)
+        .put("gcBeforeEachAction", GC_BEFORE)
         .put("measurement", "synchronous production action on EDT; offline; warm JVM; "
             + "excludes repaint, deferred move metadata and native engine I/O");
     JSONArray fixtures = new JSONArray();
@@ -63,6 +84,7 @@ public final class EditUndoPerformanceProbe {
         .put("retainedUndoHeap", retainedUndo)
         .put("heapMeasurement", "Separate untimed passes: used heap after full GC with pending "
             + "undo minus used heap after discarding undo; includes auxiliary edit lists");
+    THREADS.setThreadContentionMonitoringEnabled(true);
     Lizzie.main(new String[0]);
     onEdt(() -> {
       for (Window window : Window.getWindows()) if (window instanceof JDialog) window.dispose();
@@ -75,6 +97,7 @@ public final class EditUndoPerformanceProbe {
       return null;
     });
     for (var fixture : SgfPerformanceProbe.fixtures(output)) {
+      if (FIXTURE != null && !fixture.name().equals(FIXTURE)) continue;
       fixtures.put(fixture.evidence());
       for (int sample = -warmups; sample < samples; sample++) {
         open(fixture.path());
@@ -120,6 +143,7 @@ public final class EditUndoPerformanceProbe {
             .put("differenceBytes", withUndo - withoutUndo));
       }
     }
+    if (fixtures.isEmpty()) throw new AssertionError("No fixture named " + FIXTURE);
     summary.put("finished", Instant.now().toString()).put("result", "PASS");
     Files.writeString(output.resolve("summary.json"), summary.toString(2));
   }
@@ -151,19 +175,47 @@ public final class EditUndoPerformanceProbe {
       Runnable action) throws Exception {
     JSONObject row = onEdt(() -> {
       long id = Thread.currentThread().getId();
+      if (GC_BEFORE) System.gc();
+      var threadBefore = THREADS.getThreadInfo(id);
+      long heapUsedBefore = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage().getUsed();
+      long[] collectionsBefore = collections();
+      long processCpu = OS.getProcessCpuTime();
       long allocation = THREADS.getThreadAllocatedBytes(id);
       long cpu = THREADS.getCurrentThreadCpuTime();
       long start = System.nanoTime();
       action.run();
       long elapsed = System.nanoTime() - start;
+      long edtCpu = THREADS.getCurrentThreadCpuTime() - cpu;
+      long allocated = THREADS.getThreadAllocatedBytes(id) - allocation;
+      long processCpuElapsed = OS.getProcessCpuTime() - processCpu;
+      long[] collectionsAfter = collections();
+      var threadAfter = THREADS.getThreadInfo(id);
       return new JSONObject().put("fixture", fixture).put("sample", sample)
           .put("warmup", sample < 0).put("operation", operation)
           .put("wallMs", elapsed / 1_000_000.0)
-          .put("edtCpuMs", (THREADS.getCurrentThreadCpuTime() - cpu) / 1_000_000.0)
-          .put("edtAllocatedBytes", THREADS.getThreadAllocatedBytes(id) - allocation);
+          .put("edtCpuMs", edtCpu / 1_000_000.0)
+          .put("edtAllocatedBytes", allocated)
+          .put("gcCount", collectionsAfter[0] - collectionsBefore[0])
+          .put("gcMs", collectionsAfter[1] - collectionsBefore[1])
+          .put("processCpuMs", processCpuElapsed / 1_000_000.0)
+          .put("edtBlockedMs", threadAfter.getBlockedTime() - threadBefore.getBlockedTime())
+          .put("edtBlockedCount", threadAfter.getBlockedCount() - threadBefore.getBlockedCount())
+          .put("edtWaitedMs", threadAfter.getWaitedTime() - threadBefore.getWaitedTime())
+          .put("heapUsedBeforeBytes", heapUsedBefore);
     });
     rows.put(row);
     settle();
+  }
+
+  /** Total collection count and accumulated collection milliseconds over all collectors. */
+  private static long[] collections() {
+    long count = 0;
+    long millis = 0;
+    for (var collector : ManagementFactory.getGarbageCollectorMXBeans()) {
+      count += Math.max(0, collector.getCollectionCount());
+      millis += Math.max(0, collector.getCollectionTime());
+    }
+    return new long[] {count, millis};
   }
 
   private static <T> T onEdt(Callable<T> action) throws Exception {
