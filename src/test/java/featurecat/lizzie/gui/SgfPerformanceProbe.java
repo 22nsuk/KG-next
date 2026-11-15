@@ -373,6 +373,8 @@ public final class SgfPerformanceProbe {
           .append(longPvAnalysis());
     }
     longPv.append(')');
+    LateGameRecord lateMain = LateGameRecord.generate(false);
+    LateGameRecord lateReview = LateGameRecord.generate(true);
     return List.of(
         fixture(
             output, "wide-variations", variations.toString(), 21845, 5461, SHORT_COMMENT, false),
@@ -387,7 +389,201 @@ public final class SgfPerformanceProbe {
             0,
             SHORT_COMMENT,
             true,
-            true));
+            true),
+        fixture(output, "late-game-main-line", lateMain.text, lateMain.nodes, lateMain.forks,
+            SHORT_COMMENT, false),
+        fixture(output, "late-game-review", lateReview.text, lateReview.nodes, lateReview.forks,
+            SHORT_COMMENT, false));
+  }
+
+  /**
+   * Deterministic 19x19 record that reaches a crowded late-game board with captures. Moves come
+   * from seeded uniform play under area-scoring legality: no occupied point, no suicide, no
+   * immediate simple-ko recapture, and no filling of a point whose every neighbour is the mover's
+   * own stone. The 2x2 lower-right corner stays empty, so the probe's insert/trial move at (18,18)
+   * never touches a stone of the record. The review variant adds a short side variation at every
+   * second main-line node from {@link #REVIEW_FROM} on; a variation's first move always differs from
+   * the main-line move it replaces.
+   */
+  static final class LateGameRecord {
+    static final int MAIN_PLIES = 360;
+    static final int REVIEW_FROM = 120;
+    static final int REVIEW_EVERY = 2;
+    static final int REVIEW_PLIES = 20;
+    private static final int SIDE = 19;
+    private static final int[] STRIDES = {1, 7, 23, 37, 101, 151};
+
+    final String text;
+    final int nodes;
+    final int forks;
+
+    private LateGameRecord(String text, int nodes, int forks) {
+      this.text = text;
+      this.nodes = nodes;
+      this.forks = forks;
+    }
+
+    static LateGameRecord generate(boolean review) {
+      Play game = new Play(0x5EEDL);
+      StringBuilder text = header(SHORT_COMMENT, false);
+      List<String> variations = new ArrayList<>();
+      int nodes = 1;
+      for (int ply = 0; ply < MAIN_PLIES; ply++) {
+        boolean fork = review && ply >= REVIEW_FROM && ply % REVIEW_EVERY == 0;
+        Play before = fork ? game.copy(0x9E3779B97F4A7C15L * (ply + 1)) : null;
+        int color = game.toPlay;
+        int point = game.play(-1);
+        if (point < 0) break;
+        if (fork) {
+          StringBuilder side = new StringBuilder();
+          int first = before.play(point);
+          if (first >= 0) {
+            appendMove(side, before.toPlay == 1 ? 2 : 1, first);
+            int length = 1;
+            for (; length < REVIEW_PLIES; length++) {
+              int sideColor = before.toPlay;
+              int next = before.play(-1);
+              if (next < 0) break;
+              appendMove(side, sideColor, next);
+            }
+            nodes += length;
+            variations.add(side.toString());
+            text.append('(');
+          }
+        }
+        appendMove(text, color, point);
+        nodes++;
+      }
+      for (int index = variations.size() - 1; index >= 0; index--) {
+        text.append(")(").append(variations.get(index)).append(')');
+      }
+      text.append(')');
+      return new LateGameRecord(text.toString(), nodes, variations.size());
+    }
+
+    private static void appendMove(StringBuilder text, int color, int point) {
+      text.append(';')
+          .append(color == 1 ? 'B' : 'W')
+          .append('[')
+          .append((char) ('a' + point % SIDE))
+          .append((char) ('a' + point / SIDE))
+          .append("]C[")
+          .append(escape(SHORT_COMMENT))
+          .append(']');
+    }
+
+    private static final class Play {
+      final int[] board = new int[SIDE * SIDE];
+      int toPlay = 1;
+      int koPoint = -1;
+      long seed;
+
+      Play(long seed) {
+        this.seed = seed;
+      }
+
+      Play copy(long newSeed) {
+        Play copy = new Play(newSeed);
+        System.arraycopy(board, 0, copy.board, 0, board.length);
+        copy.toPlay = toPlay;
+        copy.koPoint = koPoint;
+        return copy;
+      }
+
+      private int next(int bound) {
+        seed = seed * 6364136223846793005L + 1442695040888963407L;
+        return (int) ((seed >>> 33) % bound);
+      }
+
+      /** Plays and returns one legal point other than {@code excluded}, or -1 if none remains. */
+      int play(int excluded) {
+        int start = next(board.length);
+        int stride = STRIDES[next(STRIDES.length)];
+        for (int step = 0; step < board.length; step++) {
+          int point = (start + step * stride) % board.length;
+          if (point != excluded && tryPlay(point)) return point;
+        }
+        return -1;
+      }
+
+      private boolean tryPlay(int point) {
+        int x = point % SIDE;
+        int y = point / SIDE;
+        if (board[point] != 0 || point == koPoint || (x >= SIDE - 2 && y >= SIDE - 2)) {
+          return false;
+        }
+        int color = toPlay;
+        int opponent = 3 - color;
+        boolean ownEye = true;
+        for (int neighbour : neighbours(point)) {
+          if (neighbour >= 0 && board[neighbour] != color) ownEye = false;
+        }
+        if (ownEye) return false;
+        board[point] = color;
+        int captured = 0;
+        int capturedPoint = -1;
+        for (int neighbour : neighbours(point)) {
+          if (neighbour >= 0 && board[neighbour] == opponent && liberties(neighbour) == 0) {
+            List<Integer> group = group(neighbour);
+            for (int stone : group) board[stone] = 0;
+            captured += group.size();
+            capturedPoint = neighbour;
+          }
+        }
+        if (captured == 0 && liberties(point) == 0) {
+          board[point] = 0;
+          return false;
+        }
+        koPoint = captured == 1 && group(point).size() == 1 && liberties(point) == 1
+            ? capturedPoint : -1;
+        toPlay = opponent;
+        return true;
+      }
+
+      private static int[] neighbours(int point) {
+        int x = point % SIDE;
+        int y = point / SIDE;
+        return new int[] {
+          x > 0 ? point - 1 : -1,
+          x < SIDE - 1 ? point + 1 : -1,
+          y > 0 ? point - SIDE : -1,
+          y < SIDE - 1 ? point + SIDE : -1
+        };
+      }
+
+      private List<Integer> group(int start) {
+        List<Integer> group = new ArrayList<>();
+        boolean[] seen = new boolean[board.length];
+        ArrayDeque<Integer> pending = new ArrayDeque<>();
+        pending.push(start);
+        seen[start] = true;
+        while (!pending.isEmpty()) {
+          int point = pending.pop();
+          group.add(point);
+          for (int neighbour : neighbours(point)) {
+            if (neighbour >= 0 && !seen[neighbour] && board[neighbour] == board[start]) {
+              seen[neighbour] = true;
+              pending.push(neighbour);
+            }
+          }
+        }
+        return group;
+      }
+
+      private int liberties(int start) {
+        boolean[] counted = new boolean[board.length];
+        int liberties = 0;
+        for (int point : group(start)) {
+          for (int neighbour : neighbours(point)) {
+            if (neighbour >= 0 && board[neighbour] == 0 && !counted[neighbour]) {
+              counted[neighbour] = true;
+              liberties++;
+            }
+          }
+        }
+        return liberties;
+      }
+    }
   }
 
   private static Fixture fixture(
