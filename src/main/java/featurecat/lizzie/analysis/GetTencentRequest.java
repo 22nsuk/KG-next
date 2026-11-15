@@ -15,6 +15,11 @@ import java.util.concurrent.Executors;
 import org.json.JSONObject;
 
 public class GetTencentRequest {
+  public enum RequestKind {
+    LIST,
+    KIFU
+  }
+
   private static final String CHESS_LIST_URL =
       "https://cgi.huanle.qq.com/cgi-bin/CommonMobileCGI/TXWQFetchChessList";
   private static final String CHESS_DETAIL_URL =
@@ -56,9 +61,9 @@ public class GetTencentRequest {
     executor.execute(
         () -> {
           try {
-            emit(fetchSgf(safeChessId));
+            emit(RequestKind.KIFU, fetchSgf(safeChessId));
           } catch (Exception e) {
-            emitError(e.getMessage());
+            emitError(RequestKind.KIFU, e.getMessage());
           }
         });
   }
@@ -86,9 +91,9 @@ public class GetTencentRequest {
                         safeLastCode,
                         DEFAULT_FETCH_NUM,
                         DEFAULT_SESSION));
-            emit(wrapListWithQuery(payload, safeUsername));
+            emit(RequestKind.LIST, wrapListWithQuery(payload, safeUsername));
           } catch (Exception e) {
-            emitError(e.getMessage());
+            emitError(RequestKind.LIST, e.getMessage());
           }
         });
   }
@@ -145,7 +150,7 @@ public class GetTencentRequest {
     return json.toString();
   }
 
-  private String httpGet(String url) {
+  String httpGet(String url) {
     IOException lastError = null;
     for (int attempt = 1; attempt <= HTTP_MAX_RETRIES; attempt++) {
       java.net.HttpURLConnection conn = null;
@@ -162,9 +167,8 @@ public class GetTencentRequest {
         if (in == null) {
           throw new IOException("HTTP " + code + " with empty body");
         }
-        try (InputStream input = in;
-            java.util.Scanner scanner = new java.util.Scanner(input, "UTF-8").useDelimiter("\\A")) {
-          return scanner.hasNext() ? scanner.next() : "";
+        try (InputStream input = in) {
+          return readResponseBody(input);
         }
       } catch (IOException e) {
         lastError = e;
@@ -186,17 +190,28 @@ public class GetTencentRequest {
     throw new RuntimeException(lastError);
   }
 
-  private void emit(String payload) {
-    if (payload != null && !payload.trim().isEmpty()) {
-      tencentKifuDownload.receiveResult(payload);
-    }
+  static String readResponseBody(InputStream input) throws IOException {
+    // Scanner swallows mid-body IOExceptions, bypassing httpGet's retry loop.
+    return new String(input.readAllBytes(), StandardCharsets.UTF_8);
   }
 
-  private void emitError(String msg) {
+  private void emit(RequestKind kind, String payload) {
+    // Interrupting the executor cannot stop a socket read that has already started.
+    if (executor == null || executor.isShutdown()) {
+      return;
+    }
+    if (payload == null || payload.trim().isEmpty()) {
+      emitError(kind, "empty response from server");
+      return;
+    }
+    tencentKifuDownload.receiveResult(this, kind, payload);
+  }
+
+  private void emitError(RequestKind kind, String msg) {
     JSONObject error = new JSONObject();
     error.put("result", 1);
     error.put("resultstr", msg == null ? "request failed" : msg);
-    emit(error.toString());
+    emit(kind, error.toString());
   }
 
   private String normalizeTencentSgfPayload(String payload) {

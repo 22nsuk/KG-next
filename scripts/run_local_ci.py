@@ -139,6 +139,9 @@ DESKTOP_TESTS = {
     "featurecat.lizzie.gui.SgfStringImportDesktopTest": TestSelection((
         "largeFilePasteAndOnlineImportsAgreeAndRespectReplacementConfirmation",
     )),
+    "featurecat.lizzie.gui.TencentKifuRequestDesktopTest": TestSelection((
+        "responsesStayWithTheirRequestAndFailedPagesCanRetry",
+    )),
     "featurecat.lizzie.gui.SgfCopyDesktopTest": TestSelection((
         "copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest",
         "copyBurstPublishesTheLatestClickWithoutQueueRejection",
