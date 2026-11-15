@@ -55,10 +55,6 @@ final class BoardPositionSnapshot {
     for (int i = 0; i < size; i++) {
       if (stones[i] != Stone.EMPTY || moveNumbers[i] != 0) {
         count++;
-        // Keep the existing dense cutoff: cloning dense arrays avoids packing every cell.
-        if (3L * count + 4 >= 2L * size) {
-          return new BoardPositionSnapshot(size, null, stones.clone(), moveNumbers.clone());
-        }
         buffer.ensureCapacity(count);
         int stone = stones[i] == null ? NULL_STONE : stones[i].ordinal();
         buffer.cells[count - 1] = ((long) i << 35) | ((long) stone << 32)
@@ -68,11 +64,23 @@ final class BoardPositionSnapshot {
     if (count == 0) {
       return new BoardPositionSnapshot(size, EMPTY_CELLS, null, null);
     }
+    // One 8-byte cell is smaller than the two dense arrays at any occupancy. Only boards at least
+    // 90% occupied (rare in play with captures) keep dense clones: packing saves under a tenth
+    // there, while restoring cells is several times slower than two clones. Deciding after the
+    // scan keeps an exit out of the packing loop; an in-loop exit slowed packing at any occupancy.
+    if (count >= size - size / 10) {
+      return new BoardPositionSnapshot(size, null, stones.clone(), moveNumbers.clone());
+    }
     return new BoardPositionSnapshot(size, Arrays.copyOf(buffer.cells, count), null, null);
   }
 
   int size() {
     return size;
+  }
+
+  /** Whether this snapshot keeps cloned arrays rather than packed cells; for tests. */
+  boolean isDense() {
+    return cells == null;
   }
 
   int moveNumberAt(int index) {

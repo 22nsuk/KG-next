@@ -94,6 +94,56 @@ class BoardEditUndoTest {
   }
 
   @Test
+  void historyRestoreIsExactOnBothSidesOfTheDenseBoundAndForAFullBoard() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      // A 5x5 position is stored dense from 23 occupied cells (90% rounded up).
+      int[] occupancy = {0, 22, 23, 24, 25};
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[];W[];B[];W[])", true);
+      List<BoardData> originals = new ArrayList<>();
+      BoardHistoryNode node = history.getStart();
+      for (int level : occupancy) {
+        BoardData data = node.getData();
+        data.stones = new Stone[25];
+        data.moveNumberList = new int[25];
+        Arrays.fill(data.stones, Stone.EMPTY);
+        for (int i = 0; i < level; i++) {
+          data.stones[i] = i % 3 == 0 ? Stone.WHITE : i % 7 == 0 ? Stone.EMPTY : Stone.BLACK;
+          data.moveNumberList[i] = i % 4 == 0 ? 0 : i % 5 == 0 ? Integer.MIN_VALUE : i + 1;
+          if (data.stones[i] == Stone.EMPTY && data.moveNumberList[i] == 0) {
+            data.moveNumberList[i] = -i;
+          }
+        }
+        originals.add(data);
+        node = node.next().orElse(null);
+      }
+      assertNull(node, "one history node per occupancy level");
+      List<Stone[]> expectedStones = new ArrayList<>();
+      List<int[]> expectedNumbers = new ArrayList<>();
+      for (BoardData data : originals) {
+        expectedStones.add(data.stones.clone());
+        expectedNumbers.add(data.moveNumberList.clone());
+      }
+      BoardHistorySnapshot snapshot = history.copyForRestore(null);
+      for (BoardData data : originals) {
+        Arrays.fill(data.stones, Stone.BLACK_RECURSED);
+        Arrays.fill(data.moveNumberList, 77);
+      }
+      BoardHistoryList restored = snapshot.restore(
+          false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts);
+      BoardHistoryNode current = restored.getStart();
+      for (int index = 0; index < occupancy.length; index++) {
+        BoardData data = current.getData();
+        assertArrayEquals(expectedStones.get(index), data.stones, "stones at " + occupancy[index]);
+        assertArrayEquals(expectedNumbers.get(index), data.moveNumberList,
+            "numbers at " + occupancy[index]);
+        assertNotSame(originals.get(index).stones, data.stones);
+        assertNotSame(originals.get(index).moveNumberList, data.moveNumberList);
+        current = current.next().orElse(null);
+      }
+    }
+  }
+
+  @Test
   void analysisStringReuseIsBoundedAndPreservesUnusualValuesAfterTheLimit() {
     BoardData source = BoardData.empty(5, 5);
     MoveData move = new MoveData();

@@ -84,6 +84,102 @@ class BoardPositionSnapshotTest {
     assertEquals(-7, restored.moveNumberList[300]);
   }
 
+  @ParameterizedTest
+  @ValueSource(ints = {1, 239, 240, 241, 300, 323, 324})
+  void positionsBelowNinetyPercentOccupancyArePackedAndRestoreExactly(int occupied) {
+    Stone[] stones = new Stone[361];
+    int[] numbers = new int[361];
+    fillOccupied(stones, numbers, occupied);
+    assertFalse(BoardPositionSnapshot.capture(stones.clone(), numbers.clone()).isDense());
+    assertIndependentRoundTrip(stones, numbers, 19, 19);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {325, 326, 360, 361})
+  void positionsAtLeastNinetyPercentOccupiedKeepDenseArraysAndRestoreExactly(int occupied) {
+    Stone[] stones = new Stone[361];
+    int[] numbers = new int[361];
+    fillOccupied(stones, numbers, occupied);
+    assertTrue(BoardPositionSnapshot.capture(stones.clone(), numbers.clone()).isDense());
+    assertIndependentRoundTrip(stones, numbers, 19, 19);
+  }
+
+  @Test
+  void numberOnlyCellsCountTowardTheDenseBound() {
+    // 324 stones stay packed; one EMPTY cell with a nonzero number makes 325 occupied cells.
+    Stone[] stones = new Stone[361];
+    int[] numbers = new int[361];
+    fillOccupied(stones, numbers, 324);
+    assertFalse(BoardPositionSnapshot.capture(stones, numbers).isDense());
+    int free = 0;
+    while (stones[free] != Stone.EMPTY || numbers[free] != 0) free++;
+    numbers[free] = -5;
+    assertTrue(BoardPositionSnapshot.capture(stones, numbers).isDense());
+    assertIndependentRoundTrip(stones, numbers, 19, 19);
+  }
+
+  @ParameterizedTest
+  @ValueSource(ints = {1, 9, 10, 11, 19})
+  void denseBoundRoundsNinetyPercentUpForSmallBoards(int size) {
+    int denseFrom = (9 * size + 9) / 10;
+    for (int occupied = 1; occupied <= size; occupied++) {
+      Stone[] stones = new Stone[size];
+      int[] numbers = new int[size];
+      fillOccupied(stones, numbers, occupied);
+      BoardPositionSnapshot snapshot = BoardPositionSnapshot.capture(stones, numbers);
+      assertEquals(occupied >= denseFrom, snapshot.isDense(), size + "/" + occupied);
+      BoardData target = BoardData.empty(size, 1);
+      snapshot.restoreInto(target);
+      assertArrayEquals(stones, target.stones);
+      assertArrayEquals(numbers, target.moveNumberList);
+    }
+  }
+
+  @Test
+  void aBufferFilledByAFullBoardCannotLeakIntoLaterSparseSnapshots() {
+    BoardPositionSnapshot.CaptureBuffer buffer = new BoardPositionSnapshot.CaptureBuffer();
+    Stone[] full = new Stone[361];
+    int[] fullNumbers = new int[361];
+    fillOccupied(full, fullNumbers, 361);
+    BoardPositionSnapshot dense = BoardPositionSnapshot.capture(full, fullNumbers, buffer);
+    Stone[] sparse = new Stone[361];
+    int[] sparseNumbers = new int[361];
+    fillOccupied(sparse, sparseNumbers, 240);
+    BoardPositionSnapshot packed = BoardPositionSnapshot.capture(sparse, sparseNumbers, buffer);
+    assertTrue(dense.isDense());
+    assertFalse(packed.isDense());
+    BoardData target = BoardData.empty(19, 19);
+    packed.restoreInto(target);
+    assertArrayEquals(sparse, target.stones);
+    assertArrayEquals(sparseNumbers, target.moveNumberList);
+    dense.restoreInto(target);
+    assertArrayEquals(full, target.stones);
+    assertArrayEquals(fullNumbers, target.moveNumberList);
+  }
+
+  /** Occupies cells spread over the board with every stone kind, null and extreme numbers. */
+  private static void fillOccupied(Stone[] stones, int[] numbers, int occupied) {
+    Arrays.fill(stones, Stone.EMPTY);
+    Arrays.fill(numbers, 0);
+    Stone[] kinds = Stone.values();
+    int size = stones.length;
+    for (int k = 0; k < occupied; k++) {
+      int i = (int) ((long) k * 7 % size);
+      if (size % 7 == 0) i = k; // keep the stride a permutation
+      int kind = k % (kinds.length + 1);
+      stones[i] = kind == kinds.length ? null : kinds[kind];
+      if (stones[i] == Stone.EMPTY && k % 2 == 0) stones[i] = Stone.WHITE;
+      numbers[i] = switch (k % 5) {
+        case 0 -> Integer.MIN_VALUE + k;
+        case 1 -> Integer.MAX_VALUE - k;
+        case 2 -> -k;
+        case 3 -> k;
+        default -> k % 3 == 0 ? 0 : k + 1;
+      };
+      if (stones[i] == Stone.EMPTY && numbers[i] == 0) numbers[i] = -1 - k;
+    }
+  }
+
   private static void assertIndependentRoundTrip(
       Stone[] stones, int[] numbers, int width, int height) {
     Stone[] expectedStones = stones.clone();
