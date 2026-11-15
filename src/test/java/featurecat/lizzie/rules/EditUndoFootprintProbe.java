@@ -49,7 +49,8 @@ public final class EditUndoFootprintProbe {
     if (Files.exists(output)) throw new IllegalArgumentException("Output already exists");
     JSONArray rows = new JSONArray();
     for (String name : List.of("wide-variations", "dense-analysis-ownership",
-        "long-multilingual-comments", "dense-analysis-long-pv-visits")) {
+        "long-multilingual-comments", "dense-analysis-long-pv-visits", "late-game-main-line",
+        "late-game-review")) {
       byte[] input = Files.readAllBytes(fixtures.resolve(name + ".sgf"));
       try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(19)) {
         Lizzie.config.newMoveNumberInBranch = true;
