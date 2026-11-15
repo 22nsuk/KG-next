@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.rules.Board;
@@ -36,6 +37,8 @@ class BoardImageReuseTest {
   private Leelaz oldEngine;
   private Leelaz oldSecondEngine;
   private boolean oldScaled;
+  private BoardRenderer oldRenderer;
+  private BoardRenderer oldSecondRenderer;
 
   @BeforeEach
   void setup() throws Exception {
@@ -45,6 +48,8 @@ class BoardImageReuseTest {
     oldEngine = Lizzie.leelaz;
     oldSecondEngine = Lizzie.leelaz2;
     oldScaled = Config.isScaled;
+    oldRenderer = LizzieFrame.boardRenderer;
+    oldSecondRenderer = LizzieFrame.boardRenderer2;
     Lizzie.config = allocate(Config.class);
     Lizzie.config.persisted = new JSONObject().put("ui-persist", new JSONObject());
     Lizzie.board = allocate(Board.class);
@@ -66,6 +71,56 @@ class BoardImageReuseTest {
     Lizzie.leelaz = oldEngine;
     Lizzie.leelaz2 = oldSecondEngine;
     Config.isScaled = oldScaled;
+    LizzieFrame.boardRenderer = oldRenderer;
+    LizzieFrame.boardRenderer2 = oldSecondRenderer;
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void clearingDragLayersReusesEmptyStorageAndAllowsRedrawing(boolean doubleEngine)
+      throws Exception {
+    Lizzie.config.usePureStone = true;
+    Lizzie.config.showStoneShadow = true;
+    Lizzie.config.shadowSize = 100;
+    Lizzie.config.extraMode = doubleEngine ? ExtraMode.Double_Engine : ExtraMode.Normal;
+    BoardRenderer main = (BoardRenderer) renderer(0);
+    BoardRenderer second = (BoardRenderer) renderer(0);
+    LizzieFrame.boardRenderer = main;
+    LizzieFrame.boardRenderer2 = second;
+    Method shadowCache = BoardRenderer.class.getDeclaredMethod("drawShadowCache");
+    shadowCache.setAccessible(true);
+    for (BoardRenderer renderer : List.of(main, second)) {
+      shadowCache.invoke(renderer);
+      renderer.drawmovestone(3, 4, Stone.BLACK);
+      assertTrue(java.util.Arrays.stream(pixels(dragImage(renderer, false))).anyMatch(p -> p != 0));
+      assertTrue(java.util.Arrays.stream(pixels(dragImage(renderer, true))).anyMatch(p -> p != 0));
+    }
+    BufferedImage previousSecond = dragImage(second, false);
+    main.removedrawmovestone();
+    List<BoardRenderer> cleared = doubleEngine ? List.of(main, second) : List.of(main);
+    for (BoardRenderer renderer : cleared) {
+      BufferedImage stones = dragImage(renderer, false);
+      BufferedImage shadows = dragImage(renderer, true);
+      assertTransparent(stones);
+      assertTransparent(shadows);
+      for (int repeat = 0; repeat < 10; repeat++) main.removedrawmovestone();
+      assertSame(stones, dragImage(renderer, false), "clearing an empty layer must not allocate");
+      assertSame(shadows, dragImage(renderer, true), "clearing an empty layer must not allocate");
+
+      geometry(renderer, 120, 100);
+      renderer.drawmovestone(2, 3, Stone.WHITE);
+      assertEquals(120, dragImage(renderer, false).getWidth());
+      assertEquals(100, dragImage(renderer, false).getHeight());
+      assertNotEquals(0, dragImage(renderer, false).getRGB(40, 50) >>> 24);
+      assertTransparent(stones);
+      assertTransparent(shadows);
+    }
+    if (!doubleEngine) assertSame(previousSecond, dragImage(second, false));
+  }
+
+  private static BufferedImage dragImage(BoardRenderer renderer, boolean shadow) throws Exception {
+    return (BufferedImage) field(BoardRenderer.class,
+        shadow ? "cachedStonesShadowImagedraged" : "cachedStonesImagedraged").get(renderer);
   }
 
   @ParameterizedTest

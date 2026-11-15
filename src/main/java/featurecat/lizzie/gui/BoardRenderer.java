@@ -1060,8 +1060,8 @@ public class BoardRenderer {
   }
 
   public void removedrawmovestone() {
-    cachedStonesImagedraged = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
-    cachedStonesShadowImagedraged = new BufferedImage(boardWidth, boardHeight, TYPE_INT_ARGB);
+    cachedStonesImagedraged = emptyImage;
+    cachedStonesShadowImagedraged = emptyImage;
     if (Lizzie.config.isDoubleEngineMode()) {
       if (this == LizzieFrame.boardRenderer) LizzieFrame.boardRenderer2.removedrawmovestone();
     }
