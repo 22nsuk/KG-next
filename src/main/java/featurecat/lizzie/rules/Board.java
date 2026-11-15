@@ -6684,9 +6684,12 @@ public class Board {
       BoardHistoryNode node, MoveLinkedList head, ArrayList<MoveLinkedList> tempHead) {
     Stack<BoardHistoryNode> stack = new Stack<>();
     stack.push(node);
+    tempHead.add(head);
 
     while (!stack.isEmpty()) {
       BoardHistoryNode cur = stack.pop();
+      // Each pending node keeps its own parent; a leaf must not consume a sibling's parent.
+      head = tempHead.remove(tempHead.size() - 1);
       BoardData data = cur.getData();
       Optional<int[]> lastMove = data.lastMove;
       if (shouldIncludeHistoryMove(data))
@@ -6698,15 +6701,9 @@ public class Board {
                 data.lastMoveColor.isBlack(),
                 !cur.previous().isPresent());
 
-      if (!cur.next().isPresent() && !tempHead.isEmpty()) {
-        head = tempHead.get(tempHead.size() - 1);
-        tempHead.remove(tempHead.size() - 1);
-      }
-
-      if (cur.numberOfChildren() >= 1) {
-        if (cur.numberOfChildren() > 1) tempHead.add(head);
-        for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
-          stack.push(cur.getVariations().get(i));
+      for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
+        stack.push(cur.getVariations().get(i));
+        tempHead.add(head);
       }
     }
   }

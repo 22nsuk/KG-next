@@ -2,11 +2,14 @@ package featurecat.lizzie.gui;
 
 import com.sun.management.ThreadMXBean;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.Stone;
 import java.awt.Window;
 import java.lang.management.ManagementFactory;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.FutureTask;
@@ -75,6 +78,7 @@ public final class EditUndoPerformanceProbe {
         .put("samples", samples).put("warmupsExcluded", warmups)
         .put("fixtureFilter", FIXTURE == null ? JSONObject.NULL : FIXTURE)
         .put("gcBeforeEachAction", GC_BEFORE)
+        .put("insertionValidation", "node/fork counts and inserted cursor checked before undo")
         .put("measurement", "synchronous production action on EDT; offline; warm JVM; "
             + "excludes repaint, deferred move metadata and native engine I/O");
     JSONArray fixtures = new JSONArray();
@@ -113,6 +117,7 @@ public final class EditUndoPerformanceProbe {
         open(fixture.path());
         observe(observations, fixture.name(), sample, "insert", () ->
             Lizzie.frame.insertMove(new int[] {18, 18}, true));
+        verifyInsertion(fixture);
         observe(observations, fixture.name(), sample, "undo-insert", () ->
             Lizzie.board.cleanedit());
         verify(fixture, expected);
@@ -167,6 +172,31 @@ public final class EditUndoPerformanceProbe {
     onEdt(() -> {
       if (Lizzie.board.getHistory().getCurrentHistoryNode() != Lizzie.board.getHistory().getStart())
         throw new AssertionError("Restore changed cursor");
+      return null;
+    });
+  }
+
+  private static void verifyInsertion(SgfPerformanceProbe.Fixture fixture) throws Exception {
+    onEdt(() -> {
+      var pending = new ArrayDeque<BoardHistoryNode>();
+      pending.push(Lizzie.board.getHistory().getStart());
+      int nodes = 0;
+      int forks = 0;
+      while (!pending.isEmpty()) {
+        BoardHistoryNode node = pending.pop();
+        nodes++;
+        if (node.numberOfChildren() > 1) forks++;
+        for (BoardHistoryNode child : node.getVariations()) pending.push(child);
+      }
+      if (nodes != fixture.nodes() + 1 || forks != fixture.forks()) {
+        throw new AssertionError("Insertion changed continuation shape for " + fixture.name()
+            + ": nodes=" + nodes + ", forks=" + forks);
+      }
+      var data = Lizzie.board.getData();
+      int[] move = data.lastMove.orElseThrow(() -> new AssertionError("Insertion has no cursor"));
+      if (move[0] != 18 || move[1] != 18 || data.lastMoveColor != Stone.BLACK) {
+        throw new AssertionError("Insertion did not select the inserted move");
+      }
       return null;
     });
   }

@@ -1,16 +1,67 @@
 package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class BoardEditReplayLinkedListTest {
   private static final int BOARD_SIZE = 3;
   private static final int BOARD_AREA = BOARD_SIZE * BOARD_SIZE;
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void extractionKeepsNestedSiblingParents(boolean startAtRoot) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5];B[aa](;W[bb](;B[cc])(;B[cd])(;B[dc]))"
+              + "(;W[bc];B[])(;W[cb])(;W[dd]))", true);
+      env.board().setHistory(history);
+      BoardHistoryNode root = history.getStart();
+      MoveLinkedList replay = env.board().getMoveLinkedListAfter(
+          startAtRoot ? root : root.next().orElseThrow());
+
+      assertEquals(0, replay.x);
+      assertEquals(0, replay.y);
+      assertTrue(replay.isBlack);
+      assertEquals(4, replay.variations.size());
+      int[][] siblings = {{1, 1}, {1, 2}, {2, 1}, {3, 3}};
+      for (int i = 0; i < siblings.length; i++) {
+        MoveLinkedList child = replay.variations.get(i);
+        assertEquals(siblings[i][0], child.x);
+        assertEquals(siblings[i][1], child.y);
+        assertEquals(false, child.isBlack);
+        assertSame(replay, child.previous.orElseThrow());
+      }
+      MoveLinkedList nested = replay.variations.get(0);
+      assertEquals(3, nested.variations.size());
+      int[][] leaves = {{2, 2}, {2, 3}, {3, 2}};
+      for (int i = 0; i < leaves.length; i++) {
+        MoveLinkedList leaf = nested.variations.get(i);
+        assertEquals(leaves[i][0], leaf.x);
+        assertEquals(leaves[i][1], leaf.y);
+        assertTrue(leaf.isBlack);
+        assertSame(nested, leaf.previous.orElseThrow());
+        assertEquals(0, leaf.variations.size());
+      }
+      MoveLinkedList second = replay.variations.get(1);
+      assertEquals(1, second.variations.size());
+      MoveLinkedList pass = second.variations.get(0);
+      assertTrue(pass.isPass);
+      assertTrue(pass.isBlack);
+      assertSame(second, pass.previous.orElseThrow());
+      assertEquals(0, pass.variations.size());
+      assertEquals(0, replay.variations.get(2).variations.size());
+      assertEquals(0, replay.variations.get(3).variations.size());
+    }
+  }
 
   @Test
   void getMainMoveLinkedListBetweenSkipsStaticSnapshotRootMoveDuringRestore() throws Exception {
