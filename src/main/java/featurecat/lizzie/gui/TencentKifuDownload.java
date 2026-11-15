@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.GetTencentRequest;
+import featurecat.lizzie.analysis.GetTencentRequest.RequestKind;
 import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -52,7 +53,6 @@ import org.json.JSONObject;
 
 public class TencentKifuDownload extends JFrame {
   private static final int NUMBERS_PER_TAB = 25;
-  private static final int API_FETCH_NUM = 100;
 
   private DefaultTableModel model;
   private JTable table;
@@ -66,6 +66,7 @@ public class TencentKifuDownload extends JFrame {
   private String currentQuery = "";
   private String currentUid = "";
   private String lastCode = "";
+  private String pendingPageCode;
   private int tabNumber = 1;
   private int curTabNumber = 1;
   private boolean isComplete = false;
@@ -326,6 +327,7 @@ public class TencentKifuDownload extends JFrame {
     tabNumber = 1;
     curTabNumber = 1;
     lastCode = "";
+    pendingPageCode = null;
     txtUserName.setText(normalizedUser);
     updateCurrentUserLabel(normalizedUser, currentUid);
     Lizzie.config.uiConfig.put("last-tencent-name", normalizedUser);
@@ -344,54 +346,49 @@ public class TencentKifuDownload extends JFrame {
     tencentReq.fetchKifu(chessId.trim());
   }
 
-  public void receiveResult(String string) {
+  public void receiveResult(GetTencentRequest source, RequestKind kind, String string) {
     SwingUtilities.invokeLater(
         new Runnable() {
           public void run() {
-            handleResult(string);
+            // A superseded request can finish its socket read or already be queued on the EDT.
+            if (source == null || source != tencentReq) return;
+            handleResult(source, kind, string);
           }
         });
   }
 
-  private void handleResult(String string) {
+  private void handleResult(GetTencentRequest source, RequestKind kind, String string) {
     try {
       JSONObject jsonObject = new JSONObject(string);
       if (!isSuccess(jsonObject)) {
-        handleRequestFailure(jsonObject.optString("resultstr", string));
+        handleRequestFailure(kind, jsonObject.optString("resultstr", string));
         return;
       }
-      if (jsonObject.has("chesslist")) {
+      if (kind == RequestKind.LIST) {
         handleChessList(jsonObject.getJSONArray("chesslist"));
-      }
-      if (jsonObject.has("chess")) {
+      } else {
         String kifu = jsonObject.getString("chess");
-        GetTencentRequest source = tencentReq;
+        if (kifu.trim().isEmpty()) throw new JSONException("empty game record");
         showProgressNotice(Lizzie.frame.kifuLoadText("KifuLoad.parsing"));
         Lizzie.frame.loadSgfStringAsync(
             kifu, 0, false, false, null, () -> tencentReq == source)
             .thenAcceptAsync(loaded -> {
-              if (tencentReq == source) completeTencentKifuLoadRequest(loaded);
+              if (tencentReq == source) completeTencentKifuLoadRequest(source, loaded);
             }, SwingUtilities::invokeLater);
       }
     } catch (Exception e) {
       e.printStackTrace();
-      hideProgressNotice();
-      if (isKifuLoading) {
-        isKifuLoading = false;
-        setTableBusy(false);
-      }
-      isSearching = false;
-      Utils.showMsg(text("TencentKifuDownload.getKifuFailed") + string, this);
+      handleRequestFailure(kind, string);
     }
   }
 
-  private void completeTencentKifuLoadRequest(boolean loaded) {
+  private void completeTencentKifuLoadRequest(GetTencentRequest source, boolean loaded) {
     if (loaded) {
-      finishTencentKifuLoadAfterMainPaint();
+      finishTencentKifuLoadAfterMainPaint(source);
     } else {
       isKifuLoading = false;
       setTableBusy(false);
-      hideProgressNotice();
+      hideProgressIfIdle();
     }
   }
 
@@ -401,40 +398,31 @@ public class TencentKifuDownload extends JFrame {
     return result == 0 && ret == 0;
   }
 
-  private void handleRequestFailure(String message) {
-    isSearching = false;
-    if (isKifuLoading) {
+  private void handleRequestFailure(RequestKind kind, String message) {
+    if (kind == RequestKind.LIST) {
+      // lastCode remains the last successful page, so this cursor can be retried.
+      pendingPageCode = null;
+      advanceToNextPageAfterLoad = false;
+      isSearching = false;
+    } else {
       isKifuLoading = false;
       setTableBusy(false);
     }
-    hideProgressNotice();
+    hideProgressIfIdle();
     Utils.showMsg(text("TencentKifuDownload.getKifuFailed") + message, this);
   }
 
   private void handleChessList(JSONArray jsonArray) throws JSONException {
-    isSearching = false;
-    hideProgressNotice();
+    // Validate a whole response before appending: a malformed later row must not leave
+    // partial results that would be duplicated by the retry.
+    List<TencentKifuInfo> page = new ArrayList<TencentKifuInfo>();
     int oldRows = tencentKifuInfos.size();
     int previousTabNumber = curTabNumber;
     boolean shouldAdvancePage = advanceToNextPageAfterLoad;
-    advanceToNextPageAfterLoad = false;
-    if (jsonArray.length() == 0) {
-      if (oldRows > 0) {
-        isComplete = true;
-        isSecondTimeReqEmpty = true;
-        isRequestEmpty = true;
-      } else {
-        Utils.showMsg(text("TencentKifuDownload.noKifu"), this);
-      }
-      return;
-    }
-
-    isRequestEmpty = false;
-    isComplete = jsonArray.length() < API_FETCH_NUM;
     for (int i = 0; i < jsonArray.length(); i++) {
       JSONObject jsonObject = jsonArray.getJSONObject(i);
       TencentKifuInfo info = new TencentKifuInfo();
-      info.index = tencentKifuInfos.size() + 1;
+      info.index = oldRows + page.size() + 1;
       info.playTime = resolvePlayTime(jsonObject);
       info.blackUid = resolveUid(jsonObject, "blackuid");
       info.whiteUid = resolveUid(jsonObject, "whiteuid");
@@ -447,8 +435,24 @@ public class TencentKifuDownload extends JFrame {
       info.isWin = isCurrentUserWin(jsonObject);
       info.result = buildResultText(jsonObject);
       if (!info.chessId.isEmpty()) {
-        tencentKifuInfos.add(info);
+        page.add(info);
       }
+    }
+
+    tencentKifuInfos.addAll(page);
+    if (pendingPageCode != null) lastCode = pendingPageCode;
+    pendingPageCode = null;
+    advanceToNextPageAfterLoad = false;
+    isSearching = false;
+    hideProgressIfIdle();
+    // Tencent may return fewer rows than requested while more pages still exist.
+    isComplete = jsonArray.length() == 0;
+    isRequestEmpty = isComplete;
+    if (isComplete) {
+      isSecondTimeReqEmpty = oldRows > 0;
+      setLblTab(curTabNumber);
+      if (oldRows == 0) Utils.showMsg(text("TencentKifuDownload.noKifu"), this);
+      return;
     }
 
     updateCurrentUserLabel(currentQuery, currentUid);
@@ -542,13 +546,14 @@ public class TencentKifuDownload extends JFrame {
 
   private void maybeGetNextPage() {
     if (tencentReq == null || tencentKifuInfos.isEmpty() || currentQuery.trim().isEmpty()) return;
+    if (pendingPageCode != null) return;
     if (curTabNumber == tabNumber || tabNumber >= 4 && curTabNumber == tabNumber - 1) {
       String last = tencentKifuInfos.get(tencentKifuInfos.size() - 1).chessId;
       if (!lastCode.equals(last)) {
-        lastCode = last;
+        pendingPageCode = last;
         advanceToNextPageAfterLoad = curTabNumber == tabNumber;
         showProgressNotice(text("TencentKifuDownload.loadingMore"));
-        tencentReq.fetchNextPage(currentQuery, lastCode);
+        tencentReq.fetchNextPage(currentQuery, last);
       } else if (curTabNumber == tabNumber) {
         if (isSecondTimeReqEmpty) {
           Utils.showMsg(text("TencentKifuDownload.noMoreKifu"), this);
@@ -560,7 +565,7 @@ public class TencentKifuDownload extends JFrame {
     }
   }
 
-  private void finishTencentKifuLoadAfterMainPaint() {
+  private void finishTencentKifuLoadAfterMainPaint(GetTencentRequest source) {
     showProgressNotice(Lizzie.frame.kifuLoadText("KifuLoad.refreshing"));
     KifuLoadFinisher.finishAfterRefresh(
         new Runnable() {
@@ -573,7 +578,7 @@ public class TencentKifuDownload extends JFrame {
         },
         new Runnable() {
           public void run() {
-            completeTencentKifuLoad();
+            if (tencentReq == source) completeTencentKifuLoad();
           }
         });
   }
@@ -581,7 +586,7 @@ public class TencentKifuDownload extends JFrame {
   private void completeTencentKifuLoad() {
     isKifuLoading = false;
     setTableBusy(false);
-    hideProgressNotice();
+    hideProgressIfIdle();
     if (afterGetAction == 0) setExtendedState(JFrame.ICONIFIED);
     else if (afterGetAction == 1) setVisible(false);
     focusMainFrameAfterKifuLoad();
@@ -643,13 +648,10 @@ public class TencentKifuDownload extends JFrame {
     }
   }
 
-  private void hideProgressNotice() {
-    SwingUtilities.invokeLater(
-        () -> {
-          if (progressGlassPane != null) {
-            progressGlassPane.setVisible(false);
-          }
-        });
+  private void hideProgressIfIdle() {
+    if (!isSearching && !isKifuLoading && pendingPageCode == null && progressGlassPane != null) {
+      progressGlassPane.setVisible(false);
+    }
   }
 
   private void ensureProgressOverlay() {
