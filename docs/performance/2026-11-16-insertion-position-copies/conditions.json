@@ -1,0 +1,420 @@
+{
+  "main": "a397814a43469fd0260b0c6f3ef250b07086a625",
+  "baselineDescription": "main plus sibling-parent extraction fix, original duplicate copies",
+  "candidateDescription": "same sibling-parent fix plus single-copy place/pass construction",
+  "productionSource": "src/main/java/featurecat/lizzie/rules/Board.java",
+  "referenceSourceSha256": "5fc0c346545e67ede4f42e5a9339b26885ff559ae771801f8a885ae9abed1206",
+  "candidateSourceSha256": "9ac69b2d31a287496ee2fabb217e061b71d4e48de935f8f81b8b515a66580031",
+  "productionClassDifferences": [
+    "featurecat/lizzie/rules/Board$1.class",
+    "featurecat/lizzie/rules/Board$2.class",
+    "featurecat/lizzie/rules/Board$3.class",
+    "featurecat/lizzie/rules/Board$EngineForwardingPlan.class",
+    "featurecat/lizzie/rules/Board$GameStateSnapshot.class",
+    "featurecat/lizzie/rules/Board$HistoryNavigationMutation.class",
+    "featurecat/lizzie/rules/Board$HistoryNavigationRestore.class",
+    "featurecat/lizzie/rules/Board$HistoryNavigationStep.class",
+    "featurecat/lizzie/rules/Board$HistoryNavigationStepKind.class",
+    "featurecat/lizzie/rules/Board$MovelistRefresh.class",
+    "featurecat/lizzie/rules/Board$MovelistRefreshRequest.class",
+    "featurecat/lizzie/rules/Board.class"
+  ],
+  "probeSourceSha256": "9beea8883c692e7cf1497b28f6dc287d1664649bd420cb42754729803c550b84",
+  "jvmOptions": [
+    "-Xmx768m",
+    "-XX:ActiveProcessorCount=2",
+    "-Djava.awt.headless=false"
+  ],
+  "display": "Xvfb 1600x1000x24, Openbox, application 1180x820",
+  "runOrder": [
+    {
+      "variant": "before",
+      "run": 1
+    },
+    {
+      "variant": "after",
+      "run": 1
+    },
+    {
+      "variant": "after",
+      "run": 2
+    },
+    {
+      "variant": "before",
+      "run": 2
+    },
+    {
+      "variant": "before",
+      "run": 3
+    },
+    {
+      "variant": "after",
+      "run": 3
+    }
+  ],
+  "runs": [
+    {
+      "variant": "before",
+      "run": 1,
+      "started": "2026-11-15T19:51:23.381485086Z",
+      "finished": "2026-11-15T19:52:41.434922592Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    },
+    {
+      "variant": "after",
+      "run": 1,
+      "started": "2026-11-15T19:52:41.649255299Z",
+      "finished": "2026-11-15T19:53:58.284331819Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    },
+    {
+      "variant": "after",
+      "run": 2,
+      "started": "2026-11-15T19:53:58.446586419Z",
+      "finished": "2026-11-15T19:55:17.000732790Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    },
+    {
+      "variant": "before",
+      "run": 2,
+      "started": "2026-11-15T19:55:17.197141983Z",
+      "finished": "2026-11-15T19:56:32.200358945Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    },
+    {
+      "variant": "before",
+      "run": 3,
+      "started": "2026-11-15T19:56:32.521013630Z",
+      "finished": "2026-11-15T19:57:47.841385776Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    },
+    {
+      "variant": "after",
+      "run": 3,
+      "started": "2026-11-15T19:57:48.022949513Z",
+      "finished": "2026-11-15T19:59:03.535059963Z",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64",
+      "maxHeapBytes": 805306368,
+      "samples": 5,
+      "warmupsExcluded": 5,
+      "result": "PASS",
+      "insertionValidation": "node/fork counts and inserted cursor checked before undo"
+    }
+  ],
+  "fixtures": [
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+      "bytes": 1551041,
+      "commentCharactersPerNode": 32,
+      "name": "wide-variations",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 21845,
+      "expectedForks": 5461
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+      "bytes": 1603477,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-ownership",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 8,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 301,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+      "bytes": 4825457,
+      "commentCharactersPerNode": 12800,
+      "name": "long-multilingual-comments",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 201,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+      "bytes": 3040737,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-long-pv-visits",
+      "expectedPvVisitCount": 64,
+      "expectedPvLength": 64,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 151,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "8687024f6943b79958ec6a24ec226bf3483cf74620bd9c39e5a20a46e9cde8d2",
+      "bytes": 24957,
+      "commentCharactersPerNode": 32,
+      "name": "late-game-main-line",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 361,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "c39f4776c1fd2b1e7885a6fff9e7991acdca4c91763d22bc3b65fa61e7fed7dc",
+      "bytes": 191037,
+      "commentCharactersPerNode": 32,
+      "name": "late-game-review",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 2761,
+      "expectedForks": 120
+    }
+  ],
+  "referenceCommit": "573ad091ea395a450e7695481657a7a7008fac7e",
+  "referenceTree": "c50ab0103997c6f92d6b766a3cbef5bd4cd0c312",
+  "initialScreen": {
+    "baseline": "a397814a43469fd0260b0c6f3ef250b07086a625",
+    "candidateProductionSource": "src/main/java/featurecat/lizzie/rules/Board.java",
+    "candidateProductionSourceSha256": "2f199352255406fc8c32863702e12694752c15bd742ff249bdccdb7776095cee",
+    "productionClassDifferences": [
+      "featurecat/lizzie/rules/Board$1.class",
+      "featurecat/lizzie/rules/Board$2.class",
+      "featurecat/lizzie/rules/Board$3.class",
+      "featurecat/lizzie/rules/Board$EngineForwardingPlan.class",
+      "featurecat/lizzie/rules/Board$GameStateSnapshot.class",
+      "featurecat/lizzie/rules/Board$HistoryNavigationMutation.class",
+      "featurecat/lizzie/rules/Board$HistoryNavigationRestore.class",
+      "featurecat/lizzie/rules/Board$HistoryNavigationStep.class",
+      "featurecat/lizzie/rules/Board$HistoryNavigationStepKind.class",
+      "featurecat/lizzie/rules/Board$MovelistRefresh.class",
+      "featurecat/lizzie/rules/Board$MovelistRefreshRequest.class",
+      "featurecat/lizzie/rules/Board.class"
+    ],
+    "probeSourceSha256": "7fbc9f35859ef79f9a19d8bf0ae78d73c8e84cde2478dfb1efd9fea396cd585d",
+    "jvmOptions": [
+      "-Xmx768m",
+      "-XX:ActiveProcessorCount=2",
+      "-Djava.awt.headless=false"
+    ],
+    "display": "Xvfb 1600x1000x24, Openbox, application 1180x820",
+    "runOrder": [
+      {
+        "variant": "before",
+        "run": 1
+      },
+      {
+        "variant": "after",
+        "run": 1
+      },
+      {
+        "variant": "after",
+        "run": 2
+      },
+      {
+        "variant": "before",
+        "run": 2
+      },
+      {
+        "variant": "before",
+        "run": 3
+      },
+      {
+        "variant": "after",
+        "run": 3
+      }
+    ],
+    "runs": [
+      {
+        "variant": "before",
+        "run": 1,
+        "started": "2026-11-15T19:26:20.284523557Z",
+        "finished": "2026-11-15T19:27:33.757391816Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      },
+      {
+        "variant": "after",
+        "run": 1,
+        "started": "2026-11-15T19:32:57.923504010Z",
+        "finished": "2026-11-15T19:34:15.698044299Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      },
+      {
+        "variant": "after",
+        "run": 2,
+        "started": "2026-11-15T19:34:16.016670919Z",
+        "finished": "2026-11-15T19:35:32.846972289Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      },
+      {
+        "variant": "before",
+        "run": 2,
+        "started": "2026-11-15T19:35:33.067284463Z",
+        "finished": "2026-11-15T19:36:48.419892174Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      },
+      {
+        "variant": "before",
+        "run": 3,
+        "started": "2026-11-15T19:36:48.620085879Z",
+        "finished": "2026-11-15T19:38:04.705789016Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      },
+      {
+        "variant": "after",
+        "run": 3,
+        "started": "2026-11-15T19:38:04.997624423Z",
+        "finished": "2026-11-15T19:39:21.765755552Z",
+        "java": "21.0.13+9-LTS",
+        "os": "Linux amd64",
+        "maxHeapBytes": 805306368,
+        "samples": 5,
+        "warmupsExcluded": 5,
+        "result": "PASS"
+      }
+    ],
+    "fixtures": [
+      {
+        "expectedCandidatesPerNode": 0,
+        "sha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+        "bytes": 1551041,
+        "commentCharactersPerNode": 32,
+        "name": "wide-variations",
+        "expectedPvVisitCount": 0,
+        "expectedPvLength": 0,
+        "expectedOwnershipValuesPerNode": 0,
+        "expectedNodes": 21845,
+        "expectedForks": 5461
+      },
+      {
+        "expectedCandidatesPerNode": 32,
+        "sha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+        "bytes": 1603477,
+        "commentCharactersPerNode": 32,
+        "name": "dense-analysis-ownership",
+        "expectedPvVisitCount": 0,
+        "expectedPvLength": 8,
+        "expectedOwnershipValuesPerNode": 361,
+        "expectedNodes": 301,
+        "expectedForks": 0
+      },
+      {
+        "expectedCandidatesPerNode": 0,
+        "sha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+        "bytes": 4825457,
+        "commentCharactersPerNode": 12800,
+        "name": "long-multilingual-comments",
+        "expectedPvVisitCount": 0,
+        "expectedPvLength": 0,
+        "expectedOwnershipValuesPerNode": 0,
+        "expectedNodes": 201,
+        "expectedForks": 0
+      },
+      {
+        "expectedCandidatesPerNode": 32,
+        "sha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+        "bytes": 3040737,
+        "commentCharactersPerNode": 32,
+        "name": "dense-analysis-long-pv-visits",
+        "expectedPvVisitCount": 64,
+        "expectedPvLength": 64,
+        "expectedOwnershipValuesPerNode": 361,
+        "expectedNodes": 151,
+        "expectedForks": 0
+      },
+      {
+        "expectedCandidatesPerNode": 0,
+        "sha256": "8687024f6943b79958ec6a24ec226bf3483cf74620bd9c39e5a20a46e9cde8d2",
+        "bytes": 24957,
+        "commentCharactersPerNode": 32,
+        "name": "late-game-main-line",
+        "expectedPvVisitCount": 0,
+        "expectedPvLength": 0,
+        "expectedOwnershipValuesPerNode": 0,
+        "expectedNodes": 361,
+        "expectedForks": 0
+      },
+      {
+        "expectedCandidatesPerNode": 0,
+        "sha256": "c39f4776c1fd2b1e7885a6fff9e7991acdca4c91763d22bc3b65fa61e7fed7dc",
+        "bytes": 191037,
+        "commentCharactersPerNode": 32,
+        "name": "late-game-review",
+        "expectedPvVisitCount": 0,
+        "expectedPvLength": 0,
+        "expectedOwnershipValuesPerNode": 0,
+        "expectedNodes": 2761,
+        "expectedForks": 120
+      }
+    ],
+    "interpretation": "before is unmodified main; after is the initial copies-only exploration. Both use the old restoration-only probe. The wide fixture loses continuation nodes after insertion, so this cohort is not evidence for correct full replay and is not pooled with the final correctness-preserving comparison."
+  },
+  "mainReplayFailure": {
+    "fixture": "wide-variations",
+    "inputNodes": 21845,
+    "expectedAfterInsertion": 21846,
+    "actualAfterInsertion": 16400,
+    "selectedSubtreeNodes": 5461,
+    "extractedNodes": 15
+  }
+}

@@ -9,8 +9,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import featurecat.lizzie.Lizzie;
 import java.util.Arrays;
 import java.util.Optional;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -60,11 +60,14 @@ class BoardHistoryMoveOwnershipTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"normal", "branch", "change", "append", "engine-game"})
-  void newMoveOwnsItsRectangularPositionAcrossHistoryEntrypoints(String entrypoint)
+  @ValueSource(strings = {"normal", "branch", "change", "append", "engine-game",
+      "board", "board-branch", "board-trial", "board-trial-branch"})
+  void newMoveOwnsItsRectangularPositionAcrossEntrypoints(String entrypoint)
       throws Exception {
     try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
       BoardHistoryList history = rectangularHistory(env);
+      boolean branch = entrypoint.endsWith("branch");
+      boolean trial = entrypoint.contains("trial");
       Lizzie.config.newMoveNumberInBranch = false;
       history.place(0, 0, Stone.BLACK);
       history.place(1, 1, Stone.WHITE);
@@ -74,7 +77,7 @@ class BoardHistoryMoveOwnershipTest {
       source.blackCaptures = 3;
       source.whiteCaptures = 4;
       BoardHistoryNode sibling = null;
-      if (entrypoint.equals("branch") || entrypoint.equals("change")
+      if (branch || entrypoint.equals("change")
           || entrypoint.equals("engine-game")) {
         history.place(2, 2, Stone.BLACK);
         sibling = env.current();
@@ -87,6 +90,7 @@ class BoardHistoryMoveOwnershipTest {
       BoardHistoryNode cursor = env.current();
       Position parentBefore = Position.capture(source);
       Position siblingBefore = sibling == null ? null : Position.capture(sibling.getData());
+      Lizzie.frame.isTrying = trial;
 
       switch (entrypoint) {
         case "normal" -> history.place(3, 6, Stone.BLACK);
@@ -94,6 +98,8 @@ class BoardHistoryMoveOwnershipTest {
         case "change" -> history.place(3, 6, Stone.BLACK, false, true);
         case "append" -> history.place(3, 6, Stone.BLACK, false, false, true);
         case "engine-game" -> history.placeForEngineGame(3, 6, Stone.BLACK, false, false, false);
+        case "board", "board-trial" -> env.board().place(3, 6, Stone.BLACK);
+        case "board-branch", "board-trial-branch" -> env.board().place(3, 6, Stone.BLACK, true);
         default -> throw new IllegalArgumentException(entrypoint);
       }
       BoardData move = entrypoint.equals("append")
@@ -104,13 +110,13 @@ class BoardHistoryMoveOwnershipTest {
       assertEquals(Stone.BLACK, move.lastMoveColor);
       assertEquals(false, move.blackToPlay);
       assertEquals(3, move.moveNumber);
-      assertEquals(entrypoint.equals("branch") ? -1 : 18, move.moveMNNumber);
+      assertEquals(branch ? -1 : 18, move.moveMNNumber);
       assertEquals(3, move.blackCaptures);
       assertEquals(4, move.whiteCaptures);
       assertEquals(Stone.BLACK, move.stones[history.getIndex(3, 6)]);
-      int[] expectedNumbers = entrypoint.equals("branch")
+      int[] expectedNumbers = branch
           ? new int[source.stones.length] : source.moveNumberList.clone();
-      expectedNumbers[history.getIndex(3, 6)] = entrypoint.equals("branch") ? 3 : 18;
+      expectedNumbers[history.getIndex(3, 6)] = trial ? -3 : branch ? 3 : 18;
       assertArrayEquals(expectedNumbers, move.moveNumberList);
       assertPositionHash(move);
       assertNotSame(source.stones, move.stones);
@@ -125,8 +131,10 @@ class BoardHistoryMoveOwnershipTest {
     }
   }
 
-  @Test
-  void captureAndLaterHistoryEditsKeepParentAndSiblingPositionsIndependent() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void captureAndLaterEditsKeepParentAndSiblingPositionsIndependent(boolean historyOnly)
+      throws Exception {
     try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
       BoardHistoryList history = rectangularHistory(env);
       Board board = env.board();
@@ -139,7 +147,8 @@ class BoardHistoryMoveOwnershipTest {
       Position parentBefore = Position.capture(parent.getData());
       Position siblingBefore = Position.capture(sibling.getData());
 
-      history.place(0, 1, Stone.BLACK, true);
+      if (historyOnly) history.place(0, 1, Stone.BLACK, true);
+      else board.place(0, 1, Stone.BLACK, true);
       BoardData capture = history.getData();
       assertEquals(Stone.EMPTY, capture.stones[history.getIndex(0, 0)]);
       assertEquals(0, capture.moveNumberList[history.getIndex(0, 0)]);
@@ -165,8 +174,9 @@ class BoardHistoryMoveOwnershipTest {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"suicide", "ko"})
-  void rejectedCandidateDoesNotMutateParentAncestorOrExistingSibling(String rejection)
+  @CsvSource({"true,suicide", "false,suicide", "true,ko", "false,ko"})
+  void rejectedCandidateDoesNotMutateParentAncestorOrExistingSibling(
+      boolean historyOnly, String rejection)
       throws Exception {
     try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
       BoardHistoryList history = rectangularHistory(env);
@@ -195,7 +205,8 @@ class BoardHistoryMoveOwnershipTest {
       Position ancestorBefore = Position.capture(ancestor);
       Position siblingBefore = Position.capture(sibling.getData());
 
-      history.place(ko ? 2 : 0, ko ? 2 : 0, ko ? Stone.WHITE : Stone.BLACK);
+      if (historyOnly) history.place(ko ? 2 : 0, ko ? 2 : 0, ko ? Stone.WHITE : Stone.BLACK);
+      else board.place(ko ? 2 : 0, ko ? 2 : 0, ko ? Stone.WHITE : Stone.BLACK);
 
       assertSame(parent, env.current());
       assertEquals(1, parent.numberOfChildren());
