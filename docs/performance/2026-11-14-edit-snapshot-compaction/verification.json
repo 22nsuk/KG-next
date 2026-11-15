@@ -79,5 +79,49 @@
     "artifactsUnchangedWithinEveryRun": true,
     "rawObservationRowsIncludingWarmups": 2940
   },
-  "fullFinalCi": "See the PR checks for the clean rebuild of the final published revision; the local full verify recorded here belongs to the intermediate Map implementation."
+  "fullFinalCi": {
+    "note": "Clean CI rebuilds recorded after merge. The local full verify recorded above belongs to the intermediate Map implementation; no full local verify of the final implementation was run.",
+    "runs": [
+      {
+        "commit": "4d8fb10f",
+        "role": "PR head: published final source plus this record",
+        "runId": 43559096383,
+        "attempt": 1,
+        "jobs": 17,
+        "conclusion": "success"
+      },
+      {
+        "commit": "ee09d6bd",
+        "role": "PR head after merging main with #179",
+        "runId": 43627863729,
+        "attempt": 1,
+        "conclusion": "failure",
+        "cause": "test compile error: BoardEditUndoTest called snapshot restore() without the match-policy arguments added by #179"
+      },
+      {
+        "commit": "5738828b",
+        "role": "PR head with the test call fixed",
+        "runId": 43629714931,
+        "attempt": 1,
+        "conclusion": "failure",
+        "cause": "lost file-chooser click in an SGF acceptance job; unrelated to this change, hardened in #182"
+      },
+      {
+        "commit": "5738828b",
+        "role": "PR head with the test call fixed",
+        "runId": 43629714931,
+        "attempt": 2,
+        "jobs": 18,
+        "conclusion": "success"
+      },
+      {
+        "commit": "d39c66ed",
+        "role": "merge commit on main",
+        "runId": 43632357304,
+        "attempt": 1,
+        "jobs": 18,
+        "conclusion": "success"
+      }
+    ]
+  }
 }
