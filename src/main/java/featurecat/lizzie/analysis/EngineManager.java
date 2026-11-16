@@ -14361,7 +14361,11 @@ public class EngineManager {
           now > Long.MAX_VALUE - nameNanos ? Long.MAX_VALUE : now + nameNanos;
       extendEngineGameDeadline(transaction.deadlineNanos, nameDeadline);
     }
-    EngineStartupProgress progress = engine.startupProgress(expectedIncarnation, timeoutMillis);
+    // A retained, loaded process can be selected again long after its startup budget expired.
+    // Give that name recheck its own bounded wait; initial-load waiters still share one budget.
+    EngineStartupProgress progress =
+        engine.isLoaded() ? null : engine.startupProgress(expectedIncarnation, timeoutMillis);
+    long nameRecheckNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
     while (true) {
       if (transaction != null
           && (!isCurrentEngineGameTransaction(transaction)
@@ -14381,7 +14385,10 @@ public class EngineManager {
       if (engine.isLoaded() && !engine.isCheckingName) {
         return true;
       }
-      long remaining = progress.remainingNanos(System.nanoTime());
+      long remaining =
+          progress != null
+              ? progress.remainingNanos(System.nanoTime())
+              : Math.max(0L, nameRecheckNanos - (System.nanoTime() - now));
       if (remaining == 0L) {
         engine.recordStartupFailure(
             expectedIncarnation,

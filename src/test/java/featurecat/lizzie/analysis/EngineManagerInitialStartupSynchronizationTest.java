@@ -52,12 +52,14 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Stream;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -2524,6 +2526,85 @@ class EngineManagerInitialStartupSynchronizationTest {
       assertTrue(frame.userAnalysisPaused);
       assertEquals(analyzeCountAfterPause, primary.analyzeCount.get());
       assertLifecycleReservationReleased(secondary);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, true", "true, false", "false, false"})
+  void reselectionSeparatesLoadedNameChecksFromInitialStartupBudget(
+      boolean previouslyLoaded, boolean nameResponds) throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz current = new StartupSyncLeelaz();
+      StartupSyncLeelaz target = new StartupSyncLeelaz();
+      current.started = true;
+      current.isLoaded = true;
+      current.Pondering();
+      target.delayReadyAfterStart = !previouslyLoaded;
+      target.startEngine(1);
+      Object incarnation = target.currentEngineIncarnation();
+      long started = System.nanoTime() - TimeUnit.SECONDS.toNanos(91);
+      EngineStartupProgress startup = new EngineStartupProgress(started, 90_000L, 600_000L);
+      if (previouslyLoaded) {
+        assertTrue(startup.loaded(started + TimeUnit.SECONDS.toNanos(10)));
+      }
+      Field progressField = incarnation.getClass().getDeclaredField("startupProgress");
+      progressField.setAccessible(true);
+      progressField.set(incarnation, startup);
+      long originalDeadline = startup.deadlineNanos();
+      assertTrue(originalDeadline - System.nanoTime() < 0L);
+
+      Lizzie.config.fastChange = true;
+      Board board = boardWithHistory(emptyRootHistory(3));
+      Lizzie.board = board;
+      Lizzie.leelaz = current;
+      EngineManager.isEmpty = false;
+      EngineManager.currentEngineNo = 0;
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(new ArrayList<>(List.of(current, target)));
+      manager.timeoutMillis = previouslyLoaded ? 1000L : 10_000L;
+      Lizzie.engineManager = manager;
+      AtomicInteger readinessProbes = new AtomicInteger();
+      manager.readinessProbe =
+          probedEngine -> {
+            if (probedEngine != target) return;
+            if (readinessProbes.incrementAndGet() == 2) {
+              assertTrue(target.isCheckingName, "reselection must await the new name response");
+              assertEquals(
+                  EngineManager.EngineSwitchUiPhase.SWITCHING,
+                  manager.engineSwitchUiSnapshot(true).phase());
+              assertEquals(0, target.ponderCount, "analysis must wait for name and board readiness");
+              if (nameResponds) target.publishReady();
+            }
+          };
+
+      assertTrue(manager.switchEngineIfAvailable(1, true));
+      assertTrue(manager.firstSynchronizationCompleted.await(3, TimeUnit.SECONDS));
+      assertTrue(target.startupCommandAttempts.contains("name"));
+      assertEquals(originalDeadline, startup.deadlineNanos(), "never reset the process startup budget");
+      if (previouslyLoaded) {
+        assertTrue(readinessProbes.get() >= 2, "an old startup deadline must not reject a name recheck");
+      }
+      EngineManager.EngineSwitchUiSnapshot result = manager.engineSwitchUiSnapshot(true);
+      if (nameResponds) {
+        assertEquals(EngineManager.EngineSwitchUiPhase.ACTIVE, result.phase());
+        assertEquals(1, result.activeIndex());
+        assertSame(target, Lizzie.leelaz);
+        assertSame(incarnation, target.currentEngineIncarnation());
+        assertSame(startup, target.startupProgress(incarnation, 1L));
+        assertEquals(0, manager.synchronizationFailureCount);
+        assertEquals(1, target.boardSynchronizationConfirmations);
+        assertFenceBeforeAnalyze(target);
+        assertEngineMatchesBoard(target, board, 19, 19);
+      } else {
+        assertTrue(manager.synchronizationFailed.await(2, TimeUnit.SECONDS));
+        assertEquals(EngineManager.EngineSwitchUiPhase.FAILED, result.phase());
+        assertEquals(0, result.activeIndex());
+        assertEquals(1, manager.synchronizationFailureCount);
+        assertFalse(target.isLoaded(), "missing readiness must still invalidate the target");
+        assertEquals(0, target.ponderCount);
+      }
+      assertLifecycleReservationReleased(current);
+      assertLifecycleReservationReleased(target);
     }
   }
 
@@ -8095,12 +8176,19 @@ class EngineManagerInitialStartupSynchronizationTest {
     private int synchronizationFailureCount;
     private int leaseConflictCount;
     private long timeoutMillis = TimeUnit.SECONDS.toMillis(5);
+    private Consumer<Leelaz> readinessProbe;
     private boolean deferFailurePresentation;
     private volatile Runnable deferredFailurePresentation;
     private final CountDownLatch failurePresentationEnqueued = new CountDownLatch(1);
 
     private ProductionEntryEngineManager(List<Leelaz> engines) {
       super(engines);
+    }
+
+    @Override
+    void afterPkEngineReadinessProbeForTest(
+        EngineGameOwnerTransaction transaction, Leelaz engine, Object expectedIncarnation) {
+      if (readinessProbe != null) readinessProbe.accept(engine);
     }
 
     @Override
