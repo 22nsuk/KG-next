@@ -308,7 +308,6 @@ public class EngineManager {
     private final long previousPrimaryGeneration;
     private final Object retainedForegroundLifecycleOwner;
     private final AtomicLong deadlineNanos;
-    private final AtomicInteger tuningBudgetParticipants = new AtomicInteger();
     final AtomicInteger operationsInFlight = new AtomicInteger();
     private final Set<EngineGamePhysicalRequestLease> physicalRequests =
         ConcurrentHashMap.newKeySet();
@@ -6307,6 +6306,21 @@ public class EngineManager {
     return engineSwitchUiTracker.current(main);
   }
 
+  /** Read-only progress for the exact pending selection; it never decides switch success. */
+  public EngineStartupProgress.Snapshot engineSwitchStartupProgress(EngineSwitchUiSnapshot snapshot) {
+    EngineSwitchTransaction transaction = engineSwitchTransaction.get();
+    if (snapshot == null || snapshot.phase != EngineSwitchUiPhase.SWITCHING
+        || !engineSwitchUiTracker.isCurrent(snapshot) || transaction == null
+        || transaction.uiToken != snapshot.token || transaction.main != snapshot.main
+        || !transaction.targetEngineIncarnationCaptured) {
+      return null;
+    }
+    EngineStartupProgress.Snapshot progress =
+        transaction.targetEngine.startupProgressSnapshot(transaction.targetEngineIncarnation);
+    return engineSwitchTransaction.get() == transaction && engineSwitchUiTracker.isCurrent(snapshot)
+        ? progress : null;
+  }
+
   public boolean isSnapshotActiveEngineAvailable(EngineSwitchUiSnapshot snapshot) {
     if (snapshot == null || snapshot.activeIndex < 0) {
       return false;
@@ -9673,32 +9687,14 @@ public class EngineManager {
     };
     for (int participant = 0; participant < participantIndexes.length; participant++) {
       Leelaz engine = exactEngineGameParticipant(transaction, participantIndexes[participant]);
-      int participantBit = 1 << participant;
-      if (engine != null
-          && engine.isTuning
-          && claimEngineGameTuningBudget(transaction, participantBit)) {
-        long tuningMillis = Math.max(1L, engine.engineTuningSynchronizationTimeoutMillis());
-        long tuningNanos = TimeUnit.MILLISECONDS.toNanos(tuningMillis);
-        long now = System.nanoTime();
-        long extended = now > Long.MAX_VALUE - tuningNanos ? Long.MAX_VALUE : now + tuningNanos;
-        extendEngineGameDeadline(transaction.deadlineNanos, extended);
+      Object incarnation = participant == 0
+          ? transaction.blackStartupIncarnation : transaction.whiteStartupIncarnation;
+      if (engine != null && incarnation != null) {
+        extendEngineGameDeadline(transaction.deadlineNanos,
+            engine.startupDeadlineNanos(incarnation, Long.MIN_VALUE));
       }
     }
     return transaction.deadlineNanos.get();
-  }
-
-  private static boolean claimEngineGameTuningBudget(
-      EngineGameOwnerTransaction transaction, int participantBit) {
-    while (true) {
-      int claimed = transaction.tuningBudgetParticipants.get();
-      if ((claimed & participantBit) != 0) {
-        return false;
-      }
-      if (transaction.tuningBudgetParticipants.compareAndSet(
-          claimed, claimed | participantBit)) {
-        return true;
-      }
-    }
   }
 
   private static void extendEngineGameDeadline(AtomicLong deadline, long candidate) {
@@ -14365,8 +14361,7 @@ public class EngineManager {
           now > Long.MAX_VALUE - nameNanos ? Long.MAX_VALUE : now + nameNanos;
       extendEngineGameDeadline(transaction.deadlineNanos, nameDeadline);
     }
-    long deadline = now + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
-    boolean tuningTimeoutApplied = false;
+    EngineStartupProgress progress = engine.startupProgress(expectedIncarnation, timeoutMillis);
     while (true) {
       if (transaction != null
           && (!isCurrentEngineGameTransaction(transaction)
@@ -14379,21 +14374,15 @@ public class EngineManager {
               || !engine.isCurrentStartupEngineIncarnation(expectedIncarnation))) {
         return false;
       }
-      if (!engine.isStarted() || engine.isDownWithError || engine.isNormalEnd) {
+      if (!engine.isCurrentEngineIncarnation(expectedIncarnation)
+          || !engine.isStarted() || engine.isDownWithError || engine.isNormalEnd) {
         return false;
       }
       if (engine.isLoaded() && !engine.isCheckingName) {
         return true;
       }
-      now = System.nanoTime();
-      if (!tuningTimeoutApplied && engine.isTuning) {
-        deadline =
-            now
-                + TimeUnit.MILLISECONDS.toNanos(
-                    Math.max(1L, engine.engineTuningSynchronizationTimeoutMillis()));
-        tuningTimeoutApplied = true;
-      }
-      if (now >= deadline) {
+      long remaining = progress.remainingNanos(System.nanoTime());
+      if (remaining == 0L) {
         engine.recordStartupFailure(
             expectedIncarnation,
             "startup-timeout",
@@ -14407,7 +14396,7 @@ public class EngineManager {
         }
         return false;
       }
-      long remainingMillis = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadline - now));
+      long remainingMillis = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remaining));
       try {
         Thread.sleep(Math.min(100L, remainingMillis));
       } catch (InterruptedException ex) {

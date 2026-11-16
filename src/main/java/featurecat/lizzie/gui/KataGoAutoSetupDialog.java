@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.EngineStartupProgress;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.util.B11ModelNotice;
 import featurecat.lizzie.util.CommandLaunchHelper;
@@ -203,7 +204,7 @@ public class KataGoAutoSetupDialog extends JDialog {
   private static final Pattern ELO_VALUE_PATTERN = Pattern.compile("[-+]?\\d[\\d,]*(?:\\.\\d+)?");
   private static final long ERROR_POPUP_DEDUP_MILLIS = 5000L;
   private static final int WEIGHT_SWITCH_POLL_MILLIS = 100;
-  private static final long WEIGHT_SWITCH_TIMEOUT_MILLIS = 35000L;
+  private static final long QUICK_ANALYSIS_RELEASE_TIMEOUT_MILLIS = 35000L;
   private static final String CARD_OVERVIEW = "overview";
   private static final String CARD_WEIGHTS = "weights";
   private static final String CARD_ACCELERATION = "acceleration";
@@ -3827,13 +3828,13 @@ public class KataGoAutoSetupDialog extends JDialog {
       return;
     }
     setBusy(true, text("AutoSetup.weightSwitchStoppingQuickAnalysis"), 0, -1);
-    final long deadline = System.currentTimeMillis() + WEIGHT_SWITCH_TIMEOUT_MILLIS;
+    final long deadline = System.currentTimeMillis() + QUICK_ANALYSIS_RELEASE_TIMEOUT_MILLIS;
     javax.swing.Timer timer =
         new javax.swing.Timer(
             WEIGHT_SWITCH_POLL_MILLIS,
             event -> {
               javax.swing.Timer source = (javax.swing.Timer) event.getSource();
-              if (source != pendingWeightSwitchTimer) {
+              if (source != pendingWeightSwitchTimer || !isPendingWeightSwitch(weightSwitchToken)) {
                 source.stop();
                 return;
               }
@@ -4900,13 +4901,12 @@ public class KataGoAutoSetupDialog extends JDialog {
       EngineManager expectedManager,
       long engineSwitchToken) {
     setBusy(true, text("AutoSetup.weightSwitchActivating"), 0, -1);
-    final long deadline = System.currentTimeMillis() + WEIGHT_SWITCH_TIMEOUT_MILLIS;
     javax.swing.Timer timer =
         new javax.swing.Timer(
             WEIGHT_SWITCH_POLL_MILLIS,
             event -> {
               javax.swing.Timer source = (javax.swing.Timer) event.getSource();
-              if (source != pendingWeightSwitchTimer) {
+              if (source != pendingWeightSwitchTimer || !isPendingWeightSwitch(weightSwitchToken)) {
                 source.stop();
                 return;
               }
@@ -4930,23 +4930,54 @@ public class KataGoAutoSetupDialog extends JDialog {
                 return;
               }
               if (waitState == AppliedEngineWaitState.FAILED
-                  || waitState == AppliedEngineWaitState.SUPERSEDED
-                  || System.currentTimeMillis() >= deadline) {
+                  || waitState == AppliedEngineWaitState.SUPERSEDED) {
                 source.stop();
                 pendingWeightSwitchTimer = null;
                 finishSetupApplied(
                     result,
                     message,
-                    text("AutoSetup.weightSwitchActivationTimeout"),
+                    appliedEngineFailureMessage(waitState, engineState),
                     showSuccessPopup,
                     includeWeightPathInPopup,
                     weightSwitchToken);
+                return;
+              }
+              String progressText = appliedEngineProgressText(
+                  expectedManager.engineSwitchStartupProgress(engineState));
+              if (!progressText.equals(progressStatusLabel.getText())) {
+                setBusy(true, progressText, 0, -1);
               }
             });
     timer.setInitialDelay(WEIGHT_SWITCH_POLL_MILLIS);
     timer.setRepeats(true);
     pendingWeightSwitchTimer = timer;
     timer.start();
+  }
+
+  String appliedEngineProgressText(EngineStartupProgress.Snapshot progress) {
+    if (progress == null) return text("AutoSetup.weightSwitchActivating");
+    String stage = switch (progress.stage()) {
+      case GPU_TUNING -> text("AutoSetup.weightSwitchTuning");
+      case TENSORRT_PLAN -> text("AutoSetup.weightSwitchPlan");
+      case SYNCHRONIZING -> text("AutoSetup.weightSwitchSynchronizing");
+      case EXPIRED, RETIRED -> text("AutoSetup.weightSwitchSettling");
+      case WAITING_RESPONSE -> text("BundledEngineStartup.status.waitingResponse");
+    };
+    if (progress.stage() == EngineStartupProgress.Stage.SYNCHRONIZING
+        || progress.stage() == EngineStartupProgress.Stage.EXPIRED
+        || progress.stage() == EngineStartupProgress.Stage.RETIRED) return stage;
+    return java.text.MessageFormat.format(text("AutoSetup.weightSwitchStartupBudget"),
+        stage, progress.elapsedMillis() / 1000L, (progress.remainingMillis() + 999L) / 1000L);
+  }
+
+  String appliedEngineFailureMessage(
+      AppliedEngineWaitState waitState, EngineManager.EngineSwitchUiSnapshot state) {
+    if (waitState == AppliedEngineWaitState.SUPERSEDED) {
+      return text("AutoSetup.weightSwitchEngineChanged");
+    }
+    String detail = state == null ? "" : state.failureDetail();
+    return text("AutoSetup.weightSwitchActivationFailed")
+        + (detail.isBlank() ? "" : "\n" + detail);
   }
 
   static AppliedEngineWaitState evaluateAppliedEngineWait(

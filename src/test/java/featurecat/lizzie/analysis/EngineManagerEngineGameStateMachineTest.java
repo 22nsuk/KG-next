@@ -2178,20 +2178,43 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @Test
-  void eachParticipantCanExtendTheTransactionForObservedOpenClTuning() {
+  void eachExactParticipantCanExtendTheTransactionForObservedGpuPreparation() throws Exception {
     ImmediateUiEngineManager manager = installManager();
     manager.timeoutMillis = 10L;
     EngineManager.EngineGameOwnerTransaction transaction = beginPreparing(manager, gameInfo());
     long initialDeadline = EngineManager.engineGameDeadlineNanos(transaction);
 
-    black.isTuning = true;
+    Object blackBinding = black.currentEngineIncarnation();
+    Object whiteBinding = white.currentEngineIncarnation();
+    Field blackStartup = transaction.getClass().getDeclaredField("blackStartupIncarnation");
+    Field whiteStartup = transaction.getClass().getDeclaredField("whiteStartupIncarnation");
+    blackStartup.setAccessible(true);
+    whiteStartup.setAccessible(true);
+    blackStartup.set(transaction, blackBinding);
+    whiteStartup.set(transaction, whiteBinding);
+    EngineStartupProgress blackProgress = black.startupProgress(blackBinding, 10L);
+    assertTrue(blackProgress.observe("Performing autotuning", blackProgress.deadlineNanos() - 1L));
     long blackDeadline = EngineManager.engineGameDeadlineNanos(transaction);
-    white.isTuning = true;
     white.tuningTimeoutMillis = TimeUnit.SECONDS.toMillis(140L);
+    EngineStartupProgress whiteProgress = white.startupProgress(whiteBinding, 10L);
+    assertTrue(whiteProgress.observe("Creating new plan cache", whiteProgress.deadlineNanos() - 1L));
     long whiteDeadline = EngineManager.engineGameDeadlineNanos(transaction);
 
     assertTrue(blackDeadline > initialDeadline);
     assertTrue(whiteDeadline > blackDeadline);
+    assertEquals(whiteDeadline, EngineManager.engineGameDeadlineNanos(transaction),
+        "polling the transaction does not renew either participant's budget");
+
+    // Rebinding the same endpoint must not give this older transaction the replacement's budget.
+    Method initialize = Leelaz.class.getDeclaredMethod(
+        "initializeStreams", InputStream.class, OutputStream.class, InputStream.class);
+    initialize.setAccessible(true);
+    initialize.invoke(white, new ByteArrayInputStream(new byte[0]), new ByteArrayOutputStream(),
+        new ByteArrayInputStream(new byte[0]));
+    white.tuningTimeoutMillis = TimeUnit.SECONDS.toMillis(600L);
+    EngineStartupProgress replacement = white.startupProgress(white.currentEngineIncarnation(), 90_000L);
+    assertTrue(replacement.observe("Performing autotuning", replacement.deadlineNanos() - 1L));
+    assertEquals(whiteDeadline, EngineManager.engineGameDeadlineNanos(transaction));
   }
 
   @Test

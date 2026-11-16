@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.EngineStartupProgress;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.EngineValidationResult;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.EngineValidationStatus;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
@@ -40,6 +42,32 @@ import sun.misc.Unsafe;
 
 class KataGoAutoSetupCatalogRegressionTest {
   @TempDir Path root;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"en-US", "ko", "ja-JP", "zh-CN", "zh-TW", "zh-HK", "th-TH"})
+  void startupPresentationUsesTheEngineBudgetAndSeparatesSynchronizationAndFailure(String language)
+      throws Exception {
+    var previous = Lizzie.resourceBundle;
+    try {
+      Lizzie.resourceBundle = java.util.ResourceBundle.getBundle(
+          "l10n.DisplayStrings", java.util.Locale.forLanguageTag(language));
+      HeadlessRefreshDialog dialog = unconstructedDialog();
+      String waiting = dialog.appliedEngineProgressText(new EngineStartupProgress.Snapshot(
+          EngineStartupProgress.Stage.TENSORRT_PLAN, 36_000L, 564_000L));
+      assertTrue(waiting.contains(Lizzie.resourceBundle.getString("AutoSetup.weightSwitchPlan")));
+      assertTrue(waiting.contains("36"));
+      assertTrue(waiting.contains("564"));
+      assertEquals(Lizzie.resourceBundle.getString("AutoSetup.weightSwitchSynchronizing"),
+          dialog.appliedEngineProgressText(new EngineStartupProgress.Snapshot(
+              EngineStartupProgress.Stage.SYNCHRONIZING, 37_000L, 563_000L)));
+      assertEquals(Lizzie.resourceBundle.getString("AutoSetup.weightSwitchActivationFailed"),
+          dialog.appliedEngineFailureMessage(KataGoAutoSetupDialog.AppliedEngineWaitState.FAILED, null));
+      assertEquals(Lizzie.resourceBundle.getString("AutoSetup.weightSwitchEngineChanged"),
+          dialog.appliedEngineFailureMessage(KataGoAutoSetupDialog.AppliedEngineWaitState.SUPERSEDED, null));
+    } finally {
+      Lizzie.resourceBundle = previous;
+    }
+  }
 
   @Test
   void unavailableSavedEntryRefreshRestoresRetryWithoutUnlockingSidebar() throws Exception {

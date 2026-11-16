@@ -1587,7 +1587,6 @@ public class Leelaz {
         Object watchdogIncarnation = captureEngineIncarnationFence();
         startBundledStartupWatchdog(
             startupToken,
-            engineExecutable,
             watchdogIncarnation,
             suppressesGlobalEnginePresentation(watchdogIncarnation));
       }
@@ -2403,32 +2402,24 @@ public class Leelaz {
   }
 
   private static boolean waitForAutomaticRestartReadiness(Leelaz engine) {
-    long now = System.nanoTime();
-    long deadline =
-        now
-            + TimeUnit.MILLISECONDS.toNanos(
-                Math.max(1L, engine.engineStartupSynchronizationTimeoutMillis()));
-    boolean tuningTimeoutApplied = false;
+    Object incarnation = engine.currentEngineIncarnation();
+    EngineStartupProgress progress =
+        engine.startupProgress(incarnation, engine.engineStartupSynchronizationTimeoutMillis());
     while (true) {
-      if (!engine.isStarted() || engine.isDownWithError || engine.isNormalEnd) {
+      if (!engine.isCurrentEngineIncarnation(incarnation)
+          || !engine.isStarted() || engine.isDownWithError || engine.isNormalEnd) {
         return false;
       }
       if (automaticRestartReady(engine.isLoaded(), engine.isCheckingName, engine.endGetCommandList)) {
         return true;
       }
-      now = System.nanoTime();
-      if (!tuningTimeoutApplied && engine.isTuning) {
-        deadline =
-            now
-                + TimeUnit.MILLISECONDS.toNanos(
-                    Math.max(1L, engine.engineTuningSynchronizationTimeoutMillis()));
-        tuningTimeoutApplied = true;
-      }
-      if (now >= deadline) {
+      long remaining = progress.remainingNanos(System.nanoTime());
+      if (remaining == 0L) {
+        engine.recordStartupFailure(incarnation, "startup-timeout",
+            "Engine restart did not complete before the startup deadline");
         return false;
       }
-      long remainingMillis =
-          Math.max(1L, TimeUnit.NANOSECONDS.toMillis(deadline - now));
+      long remainingMillis = Math.max(1L, TimeUnit.NANOSECONDS.toMillis(remaining));
       try {
         Thread.sleep(Math.min(100L, remainingMillis));
       } catch (InterruptedException ex) {
@@ -4681,6 +4672,7 @@ public class Leelaz {
                 || suppressGlobalEnginePresentationUntilOwned;
         beforeReaderBindingPublicationForTest();
         readerStreamBinding = nextBinding;
+        isTuning = false;
         startGetCommandList = false;
         endGetCommandList = false;
         commandListBinding = null;
@@ -4727,6 +4719,7 @@ public class Leelaz {
                 || suppressGlobalEnginePresentationUntilOwned;
         beforeReaderBindingPublicationForTest();
         readerStreamBinding = nextBinding;
+        isTuning = false;
         startGetCommandList = false;
         endGetCommandList = false;
         commandListBinding = null;
@@ -4814,8 +4807,13 @@ public class Leelaz {
 
   private void markEngineLoaded() {
     boolean already = isLoaded;
-    isLoaded = true;
     ReaderStreamBinding loadedBinding = readerStreamBinding;
+    if (!already && loadedBinding != null
+        && !startupProgress(loadedBinding).loaded(System.nanoTime())) {
+      throw new IllegalStateException("Engine became ready after its startup deadline");
+    }
+    isLoaded = true;
+    isTuning = false;
     if (loadedBinding != null && loadedBinding.startupDiagnostic != null)
       loadedBinding.startupDiagnostic.ready();
     if (!already) {
@@ -5216,6 +5214,8 @@ public class Leelaz {
     private final EngineTransport remoteTransport;
     private final SSHController javaSSH;
     private final long incarnation;
+    private final long startupStartedNanos = System.nanoTime();
+    private volatile EngineStartupProgress startupProgress;
     private EngineStartupDiagnostics.Attempt startupDiagnostic;
     private final Path processWorkingDirectory;
     private final SnapshotFileAccessKind snapshotFileAccessKind;
@@ -5347,6 +5347,7 @@ public class Leelaz {
     binding.analysisOutputMutationLock.lock();
     try {
       binding.terminated = true;
+      if (binding.startupProgress != null) binding.startupProgress.retire();
       binding.closeAnalysisModelLookup();
     } finally {
       binding.analysisOutputMutationLock.unlock();
@@ -9407,18 +9408,11 @@ public class Leelaz {
   }
 
   private void parseLineForError(String line, ReaderStreamBinding binding) {
-    // TODO Auto-generated method stub
+    observeStartupProgress(line, binding);
     EngineManager.EngineGamePrimaryContext presentationGameContext =
         EngineManager.captureEngineGamePrimaryContext(this, binding);
     if (suppressesGlobalEnginePresentation(binding) && presentationGameContext == null) {
-      // Preserve the one internal readiness signal needed to extend the bundled startup deadline,
-      // but quarantine all ordinary stderr analysis, board, console, dialog, and autoplay routes.
-      if (!isLoaded
-          && (line.startsWith("Started OpenCL SGEMM")
-              || line.startsWith("Tuning xGemmDirect")
-              || line.contains("long time"))) {
-        isTuning = true;
-      }
+      // Progress belongs to this exact attempt even while ordinary presentation is quarantined.
       return;
     }
     if (!this.isLoaded) {
@@ -9758,13 +9752,6 @@ public class Leelaz {
                 analysisOutputRouteAtParse, () -> this.pda = acceptedPda);
           }
         }
-      }
-    }
-    if (!isLoaded) {
-      if (line.startsWith("Started OpenCL SGEMM")
-          || line.startsWith("Tuning xGemmDirect")
-          || line.contains("long time")) {
-        isTuning = true;
       }
     }
     parseHeatMap(line);
@@ -24218,6 +24205,10 @@ public class Leelaz {
         if (KataGoRuntimeHelper.isNvidiaBundledPath(executable)) {
           return NVIDIA_ENGINE_START_TIMEOUT_MS;
         }
+        if (KataGoRuntimeHelper.needsFirstOpenCLTuning(
+            executable, openClFp32CompatibilityActive)) {
+          return FIRST_OPENCL_TUNING_START_TIMEOUT_MS;
+        }
       } catch (RuntimeException ignored) {
       }
     }
@@ -24226,6 +24217,58 @@ public class Leelaz {
 
   long engineTuningSynchronizationTimeoutMillis() {
     return FIRST_OPENCL_TUNING_START_TIMEOUT_MS;
+  }
+
+  EngineStartupProgress startupProgress(Object incarnation, long initialTimeoutMillis) {
+    ReaderStreamBinding binding = (ReaderStreamBinding) incarnation;
+    synchronized (engineArbitrationLock()) {
+      if (binding.startupProgress == null) {
+        binding.startupProgress = new EngineStartupProgress(
+            binding.startupStartedNanos, initialTimeoutMillis,
+            engineTuningSynchronizationTimeoutMillis());
+        if (binding.terminated || binding.readerShutdownRequested) binding.startupProgress.retire();
+      }
+      return binding.startupProgress;
+    }
+  }
+
+  private EngineStartupProgress startupProgress(ReaderStreamBinding binding) {
+    synchronized (engineArbitrationLock()) {
+      return binding.startupProgress != null ? binding.startupProgress
+          : startupProgress(binding, engineStartupSynchronizationTimeoutMillis());
+    }
+  }
+
+  private void observeStartupProgress(String line, ReaderStreamBinding binding) {
+    synchronized (engineArbitrationLock()) {
+      if (readerStreamBinding == binding && !binding.terminated
+          && !binding.readerShutdownRequested && !isLoaded && !isDownWithError && !isNormalEnd
+          && startupProgress(binding).observe(line, System.nanoTime())) {
+        isTuning = true;
+      }
+    }
+  }
+
+  EngineStartupProgress.Snapshot startupProgressSnapshot(Object incarnation) {
+    EngineStartupProgress progress = currentStartupProgress(incarnation);
+    if (progress == null) return null;
+    EngineStartupProgress.Snapshot snapshot = progress.snapshot(System.nanoTime());
+    return currentStartupProgress(incarnation) == progress ? snapshot : null;
+  }
+
+  long startupDeadlineNanos(Object incarnation, long fallback) {
+    EngineStartupProgress progress = currentStartupProgress(incarnation);
+    if (progress == null) return fallback;
+    long deadline = progress.deadlineNanos();
+    return currentStartupProgress(incarnation) == progress ? deadline : fallback;
+  }
+
+  // UI and deadline observers must not acquire the endpoint lock: a stream rebind can hold it
+  // while waiting for a physical write. The progress object's own lock never waits for transport.
+  private EngineStartupProgress currentStartupProgress(Object incarnation) {
+    ReaderStreamBinding binding = readerStreamBinding;
+    return binding == incarnation && binding != null
+        && !binding.terminated && !binding.readerShutdownRequested ? binding.startupProgress : null;
   }
 
   void recordStartupFailure(Object expectedIncarnation, String stage, String detail) {
@@ -24565,7 +24608,6 @@ public class Leelaz {
 
   private void startBundledStartupWatchdog(
       long token,
-      Path engineExecutable,
       Object expectedIncarnation,
       boolean suppressGlobalPresentation) {
     if (token <= 0L || preload || useJavaSSH || !Config.isBundledKataGoCommand(engineCommand)) {
@@ -24576,20 +24618,11 @@ public class Leelaz {
     }
     ReaderStreamBinding expectedBinding = (ReaderStreamBinding) expectedIncarnation;
     Process expectedProcess = expectedBinding.process;
-    final boolean nvidiaBundled = KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable);
-    final boolean firstOpenCLTuning =
-        !nvidiaBundled
-            && KataGoRuntimeHelper.needsFirstOpenCLTuning(
-                engineExecutable, openClFp32CompatibilityActive);
-    final long timeoutMillis =
-        firstOpenCLTuning
-            ? FIRST_OPENCL_TUNING_START_TIMEOUT_MS
-            : (nvidiaBundled ? NVIDIA_ENGINE_START_TIMEOUT_MS : BUNDLED_ENGINE_START_TIMEOUT_MS);
+    EngineStartupProgress progress = startupProgress(expectedBinding);
     Thread watchdog =
         new Thread(
             () -> {
-              long deadline = System.currentTimeMillis() + timeoutMillis;
-              while (System.currentTimeMillis() < deadline) {
+              while (!progress.expired(System.nanoTime())) {
                 if (token != bundledStartupToken
                     || readerStreamBinding != expectedBinding
                     || isLoaded
@@ -24600,13 +24633,6 @@ public class Leelaz {
                 if (expectedProcess != null && !expectedProcess.isAlive()) {
                   break;
                 }
-                // OpenCL autotuning can take several minutes; keep waiting while it runs.
-                if (isTuning) {
-                  deadline =
-                      Math.max(
-                          deadline,
-                          System.currentTimeMillis() + FIRST_OPENCL_TUNING_START_TIMEOUT_MS);
-                }
                 try {
                   Thread.sleep(250L);
                 } catch (InterruptedException e) {
@@ -24614,14 +24640,22 @@ public class Leelaz {
                   return;
                 }
               }
-              if (token != bundledStartupToken
-                  || readerStreamBinding != expectedBinding
-                  || isLoaded
-                  || isDownWithError
-                  || isNormalEnd) {
-                return;
+              synchronized (engineArbitrationLock()) {
+                if (token != bundledStartupToken
+                    || readerStreamBinding != expectedBinding
+                    || expectedBinding.terminated || expectedBinding.readerShutdownRequested
+                    || isLoaded || isDownWithError || isNormalEnd) {
+                  return;
+                }
+                // The ready commit uses this same lock and budget. A late response cannot revive
+                // an expired attempt, and this watchdog cannot fail a replacement process.
+                if (expectedProcess == null || expectedProcess.isAlive()) {
+                  if (!progress.expired(System.nanoTime())) return;
+                } else {
+                  progress.retire();
+                }
+                isDownWithError = true;
               }
-              isDownWithError = true;
               if (expectedBinding.startupDiagnostic != null) {
                 expectedBinding.startupDiagnostic.fail(
                     "startup-timeout", "Engine startup watchdog expired");
