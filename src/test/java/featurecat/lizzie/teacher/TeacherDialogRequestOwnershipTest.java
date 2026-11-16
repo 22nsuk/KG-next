@@ -145,6 +145,8 @@ class TeacherDialogRequestOwnershipTest {
 
   @Test
   void followUpRetainsFrozenEvidenceAndOriginalTarget() throws Exception {
+    addBlackD6Anchor();
+    Lizzie.resourceBundle = ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREAN);
     respondWith("Consider D4.", "D4 is supported by the original analysis.");
     openDialog();
     BoardHistoryNode target = root.get();
@@ -162,6 +164,9 @@ class TeacherDialogRequestOwnershipTest {
     awaitIdle();
 
     assertEquals(2, sent.size());
+    String initialEvidence = sent.get(0).getJSONArray("messages").getJSONObject(1).getString("content");
+    assertTrue(initialEvidence.contains("Candidate D4: 한 칸 뜀 (기준: 흑 D6)"));
+    assertFalse(initialEvidence.contains("one-space jump"));
     assertEquals(
         sent.get(0).getJSONArray("messages").getJSONObject(1).getString("content"),
         sent.get(1).getJSONArray("messages").getJSONObject(1).getString("content"));
@@ -177,6 +182,7 @@ class TeacherDialogRequestOwnershipTest {
 
   @Test
   void savedCommentaryFollowUpUsesSavedNodeAfterNavigation() throws Exception {
+    addBlackD6Anchor();
     root.get().getData().comment = TeacherCommentCodec.upsert("user note", "Saved D4 answer.", "old");
     BoardHistoryNode savedNode = root.get();
     BoardHistoryNode next = append(savedNode, "Q16");
@@ -194,6 +200,8 @@ class TeacherDialogRequestOwnershipTest {
     assertEquals(
         "Saved D4 answer.",
         sent.get(0).getJSONArray("messages").getJSONObject(2).getString("content"));
+    assertTrue(sent.get(0).getJSONArray("messages").getJSONObject(1).getString("content")
+        .contains("Candidate D4: one-space jump (from: B D6)"));
     assertEquals(
         "D4 remains in the supplied candidates.",
         TeacherCommentCodec.extract(savedNode.getData().comment).orElseThrow());
@@ -244,6 +252,7 @@ class TeacherDialogRequestOwnershipTest {
   @ValueSource(booleans = {false, true})
   void mixedRangeAndWholeGameSendOnlyEligibleEvidenceIncludingFollowUp(boolean wholeGame)
       throws Exception {
+    addBlackD6Anchor();
     BoardHistoryNode restricted = append(root.get(), "Q16");
     restricted.getData().bestMoves = List.of(candidate("A1"));
     restricted.getData().bestMoves.get(0).winrate = 81.5;
@@ -269,6 +278,7 @@ class TeacherDialogRequestOwnershipTest {
     assertTrue(evidence.contains("Analyzed positions: 2; selected key positions: 2"));
     assertTrue(evidence.contains("excluded restricted analysis: 1; excluded invalidated analysis: 1"));
     assertTrue(evidence.contains("move=D4"));
+    assertTrue(evidence.contains("Candidate D4: one-space jump (from: B D6)"));
     assertTrue(evidence.contains("move=D16"));
     assertFalse(evidence.contains("move=A1"));
     assertFalse(evidence.contains("move=A2"));
@@ -794,6 +804,12 @@ class TeacherDialogRequestOwnershipTest {
     parent.getVariations().add(child);
     parent.setPreviousForChild(child);
     return child;
+  }
+
+  private void addBlackD6Anchor() {
+    BoardData data = root.get().getData();
+    data.stones[Board.getIndex(3, 13)] = Stone.BLACK;
+    data.zobrist.toggleStone(3, 13, Stone.BLACK);
   }
 
   private static MoveData candidate(String coordinate) {

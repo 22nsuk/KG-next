@@ -67,6 +67,7 @@ class TeacherBoardContextTest {
     assertFalse(query.boardSnapshot.stream().anyMatch(snapshot -> snapshot.point.equals("Q16")));
     var capture = position.board.lines.get(0).frames().get(1);
     assertEquals(1, capture.captures());
+    assertFalse(position.board.facts(Locale.KOREAN).contains("Move shapes"));
     assertEquals(Stone.EMPTY, capture.stones().get(0));
     assertArrayEquals(originalStones, node.getData().stones);
     assertEquals(originalHash, node.getData().zobrist);
@@ -144,6 +145,7 @@ class TeacherBoardContextTest {
     assertTrue(position.board.lines.get(0).moves().isEmpty());
     assertEquals(1, position.board.lines.get(0).frames().size());
     assertEquals(0, node.getData().whiteCaptures);
+    assertFalse(position.board.facts(Locale.KOREAN).contains("Move shapes"));
   }
 
   @Test
@@ -171,6 +173,35 @@ class TeacherBoardContextTest {
     assertTrue(position.board.lines.get(0).moves().isEmpty());
     assertFalse(TeacherPromptBuilder.formatPosition(position, Locale.ENGLISH).contains("T1"));
     assertEquals(Stone.BLACK, node.getData().stones[Board.getIndex(1, 1)]);
+    assertFalse(position.board.facts(Locale.KOREAN).contains("Move shapes"));
+  }
+
+  @Test
+  void koreanShapesUseTheFrozenBoardForRecordedAndCandidateFirstMovesOnly() {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    stone(node.getData(), 3, 13, Stone.BLACK); // D6 anchors D4, a one-space jump.
+    node.getData().bestMoves = List.of(candidate("D4", List.of("D4", "Q16")));
+    Stone[] nextStones = node.getData().stones.clone();
+    nextStones[Board.getIndex(3, 15)] = Stone.BLACK;
+    BoardData next = BoardData.move(nextStones, new int[] {3, 15}, Stone.BLACK, false,
+        hash(nextStones), 1, new int[361], 0, 0, 50, 0);
+    append(node, next);
+
+    TeacherEvidence.Position position = TeacherEvidence.current(node).orElseThrow();
+    String frozen = TeacherPromptBuilder.formatPosition(position, Locale.KOREAN);
+    assertTrue(frozen.contains("Recorded D4: 한 칸 뜀 (기준: 흑 D6)"));
+    assertTrue(frozen.contains("Candidate D4: 한 칸 뜀 (기준: 흑 D6)"));
+    assertFalse(frozen.contains("Candidate Q16:"));
+    assertFalse(frozen.contains("one-space jump"));
+    assertTrue(TeacherVerifier.verify("D4: D6 돌에서 한 칸 뜀.", position).ok());
+    assertFalse(TeacherVerifier.verify("Q10 돌에서 한 칸 뜀.", position).ok());
+
+    node.getData().stones[Board.getIndex(3, 13)] = Stone.EMPTY;
+    node.getData().bestMoves = List.of(candidate("Q4", List.of("Q4")));
+    Board.boardWidth = 13;
+    Board.boardHeight = 9;
+    Zobrist.init();
+    assertEquals(frozen, TeacherPromptBuilder.formatPosition(position, Locale.KOREAN));
   }
 
   @Test
