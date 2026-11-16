@@ -1113,34 +1113,6 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void defaultAnalysisPreservesPrimaryWithLegacyComparisonPonder() throws Exception {
-    try (Harness harness = Harness.open()) {
-      Lizzie.config.extraMode = ExtraMode.Double_Engine;
-      Leelaz mirror = new Leelaz("");
-      mirror.started = true;
-      mirror.isLoaded = true;
-      mirror.isLeela0110 = true;
-      Lizzie.leelaz2 = mirror;
-      ExactSnapshotRestoreProtocolFixture.Transport primaryTransport =
-          ExactSnapshotRestoreProtocolFixture.install(
-              harness.engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
-      ExactSnapshotRestoreProtocolFixture.Transport mirrorTransport =
-          ExactSnapshotRestoreProtocolFixture.install(
-              mirror, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
-      try {
-        harness.engine.sendCommand("kata-analyze 10");
-        assertEquals(1, payloadCount(primaryTransport, "kata-analyze"));
-        assertEquals(0, payloadCount(mirrorTransport, "kata-analyze"));
-        assertEquals(1, payloadCount(mirrorTransport, "time_left b 0 0"));
-      } finally {
-        mirror.leela0110StopPonder();
-        mirror.started = false;
-        mirror.isLoaded = false;
-      }
-    }
-  }
-
   @ParameterizedTest
   @ValueSource(strings = {"running", "paused", "pause-during-restore", "idle"})
   void startingPositionConversionPreservesRulesAndConfirmedAnalysisIntent(String state)

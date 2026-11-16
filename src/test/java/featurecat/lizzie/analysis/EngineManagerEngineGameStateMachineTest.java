@@ -123,9 +123,6 @@ class EngineManagerEngineGameStateMachineTest {
   @AfterEach
   void restoreStateMachineFixture() throws Exception {
     EngineManager.resetEngineGameTransactionStateForTest();
-    black.leela0110StopPonder();
-    white.leela0110StopPonder();
-    preload.leela0110StopPonder();
     black.started = false;
     black.isLoaded = false;
     white.started = false;
@@ -3884,25 +3881,21 @@ class EngineManagerEngineGameStateMachineTest {
     awaitOperationsReleased(owner);
   }
 
-  @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void exactLeelaTimerAndDispatchedAnalysisRemainCancellable(boolean leelaTimer) throws Exception {
-    String command = leelaTimer ? "time_left b 0 0" : "kata-analyze B 30";
+  @Test
+  void exactDispatchedAnalysisRemainsCancellable() throws Exception {
+    String command = "kata-analyze B 30";
     BlockingCommandFlushOutput output = new BlockingCommandFlushOutput(command);
     black.bindLiveRuntime(output);
-    black.isLeela0110 = leelaTimer;
-    black.isKatago = !leelaTimer;
+    black.isKatago = true;
     WatchdogEngineManager manager = installManager(new WatchdogEngineManager(allEngines()));
     EngineManager.EngineGameOwnerTransaction owner = beginPreparing(manager, gameInfo());
     assertTrue(EngineManager.transitionEngineGameToDispatched(owner));
     assertTrue(EngineManager.bindEngineGameStartupIncarnation(owner, black, black.currentEngineIncarnation()));
     assertTrue(EngineManager.bindEngineGameStartupIncarnation(owner, white, white.currentEngineIncarnation()));
-    if (leelaTimer) assertTrue(black.installLeela0110PonderStateForTest(owner));
     AtomicReference<Throwable> failure = new AtomicReference<>();
     Thread sender = new Thread(() -> {
       try {
-        if (leelaTimer) black.sendLeela0110PonderCommandForTest(command, owner);
-        else black.sendEngineGameStartupCommandForTest(command, owner);
+        black.sendEngineGameStartupCommandForTest(command, owner);
       } catch (Throwable thrown) {
         failure.compareAndSet(null, thrown);
       }
@@ -3927,7 +3920,6 @@ class EngineManagerEngineGameStateMachineTest {
       assertTrue(manager.hasPendingWatchdog());
       manager.runWatchdog();
       assertEquals(1, black.forceQuitAttempts.get());
-      assertFalse(black.hasLeela0110PonderStateForTest(owner));
     } finally {
       output.releaseFlush.countDown();
       sender.join(2000L);
@@ -6064,7 +6056,7 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @Test
-  void zenAndLeela0110RetiredOutputsNeverFallThroughToOrdinaryAutoplay() throws Exception {
+  void zenRetiredOutputsNeverFallThroughToOrdinaryAutoplay() throws Exception {
     ImmediateUiEngineManager manager = installManager();
     EngineManager.EngineGameOwnerTransaction zen = activeTransaction(manager, gameInfo(), black, 0);
     black.isZen = true;
@@ -6075,21 +6067,6 @@ class EngineManagerEngineGameStateMachineTest {
     LizzieFrame.toolbar.isAutoPlay = true;
 
     black.parseAnalysisErrorLineForTest("I pass");
-
-    assertEquals(0, black.exactAnalysisActions.get());
-    assertEquals(0, black.ordinaryAnalysisActions.get());
-    assertEquals(0, Lizzie.board.getHistory().getMoveNumber());
-
-    black.isZen = false;
-    black.isLeela0110 = true;
-    EngineManager.EngineGameOwnerTransaction leela0110 =
-        activeTransaction(manager, gameInfo(), black, 0);
-    black.sendEngineGameStartupCommandForTest("time_left b 0 0", leela0110);
-    int timeCommandId = commandIdFor(black.commandText(), "time_left b 0 0");
-    black.processCommandResponseLineForTest("=" + timeCommandId);
-    manager.clearEngineGame();
-
-    black.parseAnalysisErrorLineForTest("=====");
 
     assertEquals(0, black.exactAnalysisActions.get());
     assertEquals(0, black.ordinaryAnalysisActions.get());
@@ -6321,11 +6298,10 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @Test
-  void leela0110GenmoveClockUpdateDoesNotClaimUnnumberedAnalysisOwnership()
+  void genmoveClockUpdateDoesNotClaimUnnumberedAnalysisOwnership()
       throws Exception {
     ImmediateUiEngineManager manager = installManager();
     EngineGamePlan game = EngineGamePlans.harness(0, 1, true);
-    black.isLeela0110 = true;
     EngineManager.EngineGameOwnerTransaction transaction = activeTransaction(manager, game, black, 0);
 
     black.timeLeft("b", 10, 1, true);
@@ -6339,154 +6315,6 @@ class EngineManagerEngineGameStateMachineTest {
     int genmoveId = commandIdFor(black.commandText(), "genmove B");
     black.parseEngineGameLineForTest("?" + genmoveId + " controlled failure");
     assertEquals(0, transaction.operationsInFlightForTest());
-  }
-
-  @Test
-  void leela0110TimerInheritsExactContextRetiresAndCannotClearSuccessor()
-      throws Exception {
-    ImmediateUiEngineManager manager = installManager();
-    black.isLeela0110 = true;
-    assertTrue(black.installLeela0110PonderStateForTest(null));
-    assertTrue(black.hasLeela0110PonderStateForTest(null));
-    EngineManager.EngineGameOwnerTransaction first =
-        activeTransaction(manager, gameInfo(), black, 0);
-    Leelaz.runWithEngineGameStartupCommandContext(first, black::ponder);
-    assertTrue(black.hasLeela0110PonderStateForTest(first));
-    int firstTimeLeft = commandIdFor(black.commandText(), "time_left b 0 0");
-
-    manager.clearEngineGame();
-
-    assertFalse(black.hasLeela0110PonderStateForTest(first));
-    black.processCommandResponseLineForTest("=" + firstTimeLeft);
-    awaitOperationsReleased(first);
-    EngineManager.EngineGameOwnerTransaction successor =
-        activeTransaction(manager, gameInfo(), black, 0);
-    assertTrue(black.installLeela0110PonderStateForTest(successor));
-    assertTrue(black.hasLeela0110PonderStateForTest(successor));
-
-    black.cancelEngineGameRequests(first);
-
-    assertTrue(black.hasLeela0110PonderStateForTest(successor));
-  }
-
-  @Test
-  void sameBindingLeela0110ReplacementWaitsForOldPhysicalWriteAndFlush()
-      throws Exception {
-    installManager();
-    BlockingFirstWriteOutput output = new BlockingFirstWriteOutput();
-    black.bindLiveRuntime(output);
-    black.isLeela0110 = true;
-    assertTrue(black.installLeela0110PonderStateForTest(null));
-    AtomicReference<Throwable> writerFailure = new AtomicReference<>();
-    AtomicReference<Throwable> replacementFailure = new AtomicReference<>();
-    AtomicReference<Boolean> replacementInstalled = new AtomicReference<>(false);
-    CountDownLatch replacementStarted = new CountDownLatch(1);
-    CountDownLatch replacementFinished = new CountDownLatch(1);
-    Thread writer =
-        new Thread(
-            () -> {
-              try {
-                black.sendLeela0110PonderCommandForTest("time_left b 0 0", null);
-              } catch (Throwable failure) {
-                writerFailure.set(failure);
-              }
-            },
-            "leela0110-old-state-physical-write");
-    Thread replacement =
-        new Thread(
-            () -> {
-              replacementStarted.countDown();
-              try {
-                black.leela0110StopPonder();
-                replacementInstalled.set(black.installLeela0110PonderStateForTest(null));
-              } catch (Throwable failure) {
-                replacementFailure.set(failure);
-              } finally {
-                replacementFinished.countDown();
-              }
-            },
-            "leela0110-same-binding-state-replacement");
-
-    writer.start();
-    try {
-      assertTrue(output.writeEntered.await(2, TimeUnit.SECONDS));
-      replacement.start();
-      assertTrue(replacementStarted.await(2, TimeUnit.SECONDS));
-      awaitThreadState(replacement, Thread.State.WAITING, Thread.State.BLOCKED);
-      assertEquals(
-          1L,
-          replacementFinished.getCount(),
-          "same-binding replacement must wait until the old state's write is flushed");
-    } finally {
-      output.releaseWrite.countDown();
-    }
-    writer.join(2_000L);
-    replacement.join(2_000L);
-
-    assertFalse(writer.isAlive());
-    assertFalse(replacement.isAlive());
-    assertNull(writerFailure.get());
-    assertNull(replacementFailure.get());
-    assertEquals(Boolean.TRUE, replacementInstalled.get());
-    assertTrue(black.hasLeela0110PonderStateForTest(null));
-    assertTrue(output.text().contains("time_left b 0 0"));
-  }
-
-  @Test
-  void finalRetirementPassClearsLeela0110StateInstalledByAdmittedLateOperation()
-      throws Exception {
-    ImmediateUiEngineManager manager = installManager();
-    black.isLeela0110 = true;
-    EngineManager.EngineGameOwnerTransaction first =
-        activeTransaction(manager, gameInfo(), black, 0);
-    CountDownLatch operationEntered = new CountDownLatch(1);
-    CountDownLatch releaseOperation = new CountDownLatch(1);
-    AtomicReference<Throwable> operationFailure = new AtomicReference<>();
-    Thread operation =
-        new Thread(
-            () -> {
-              try {
-                EngineManager.runEngineGameIoStepForTest(
-                    first,
-                    () -> {
-                      operationEntered.countDown();
-                      await(releaseOperation);
-                      assertTrue(black.installLeela0110PonderStateForTest(first));
-                    });
-              } catch (Throwable failure) {
-                operationFailure.set(failure);
-              }
-            },
-            "late-leela0110-operation-before-retirement");
-    operation.start();
-    assertTrue(operationEntered.await(2, TimeUnit.SECONDS));
-
-    manager.clearEngineGame();
-    assertEquals(EngineManager.EngineGamePhase.CANCELLED, first.phase());
-    releaseOperation.countDown();
-    operation.join(2_000L);
-    awaitOperationsReleased(first);
-
-    assertFalse(operation.isAlive());
-    assertNull(operationFailure.get());
-    assertFalse(black.hasLeela0110PonderStateForTest(first));
-    EngineManager.EngineGameOwnerTransaction successor =
-        activeTransaction(manager, gameInfo(), black, 0);
-    assertTrue(black.installLeela0110PonderStateForTest(successor));
-  }
-
-  @Test
-  void leela0110StateIsBindingScopedAcrossRebindAndStaleShutdown() {
-    black.isLeela0110 = true;
-    Object oldBinding = black.analysisReaderBindingForTest();
-    assertTrue(black.installLeela0110PonderStateForTest(null));
-
-    black.bindLiveRuntime();
-
-    assertFalse(black.hasLeela0110PonderStateForTest(null));
-    assertTrue(black.installLeela0110PonderStateForTest(null));
-    black.shutdownReaderBindingForTest(oldBinding);
-    assertTrue(black.hasLeela0110PonderStateForTest(null));
   }
 
   @Test

@@ -542,21 +542,10 @@ public class Leelaz {
   public volatile boolean isTuning = false;
   public volatile boolean isNormalEnd = false;
   public boolean canCheckAlive = true;
-  public boolean isLeela0110 = false;
-  private List<MoveData> leela0110BestMoves;
-  private long leela0110BestMovesEpoch = -1L;
-  private Timer leela0110PonderingTimer;
-  private BoardData leela0110PonderingBoardData;
-  private EngineManager.EngineGameOwnerTransaction leela0110PonderingTransaction;
-  private ReaderStreamBinding leela0110PonderingBinding;
-  private Object leela0110PonderingStateToken;
-  private final Object leela0110PonderStateLock = new Object();
-  private final ReentrantLock leela0110PonderPhysicalWriteLock = new ReentrantLock();
   private volatile Object analysisInfoMutationLock = new Object();
   private long analysisInfoEpoch;
   private AnalysisInfoTarget analysisInfoPayloadTarget;
   private final AtomicLong analysisOutputGeneration = new AtomicLong();
-  private static final int LEELA0110_PONDERING_INTERVAL_MILLIS = 1000;
   public boolean javaSSHClosed = false;
   public boolean useJavaSSH = false;
   public String ip;
@@ -3351,8 +3340,6 @@ public class Leelaz {
         Throwable preparationFailure = null;
         preparationFailure =
             runEngineCleanupStep(preparationFailure, Leelaz.this::notPondering);
-        preparationFailure =
-            runEngineCleanupStep(preparationFailure, Leelaz.this::leela0110StopPonder);
         unboundObservation = markEngineStoppedLocked(preparationFailure, true);
       }
       ReaderStreamBinding current = readerStreamBinding;
@@ -3613,18 +3600,11 @@ public class Leelaz {
 
   private EngineStopObservation markReaderBindingStoppedLocked(
       ReaderStreamBinding binding, ReaderExecutorSnapshot executors) {
-    // These engine-level requests belong to the binding being retired. Keep their cancellation in
-    // the same arbitration critical section as the incarnation check so a stale stop can never
-    // cancel work installed by a replacement binding.
-    Throwable preparationFailure = null;
-    preparationFailure =
-        runEngineCleanupStep(
-            preparationFailure, () -> cancelLeela0110PonderForReaderBinding(binding));
     // Recovery settlement uses this same binding fence. Once a stop wins it, no final live check
     // may cross the started/isLoaded transition and promote a stopped recovery endpoint.
     binding.analysisOutputMutationLock.lock();
     try {
-      return markEngineStoppedLocked(preparationFailure, executors.ownsTransportClose);
+      return markEngineStoppedLocked(null, executors.ownsTransportClose);
     } finally {
       binding.analysisOutputMutationLock.unlock();
     }
@@ -4655,7 +4635,6 @@ public class Leelaz {
         }
       }
       if (readerStreamBinding != null) {
-        cancelLeela0110PonderForReaderBinding(readerStreamBinding);
         synchronized (commandQueue()) {
           readerStreamRebindInProgress = true;
           while (normalCommandSendInProgress) {
@@ -4699,19 +4678,14 @@ public class Leelaz {
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
         beforeReaderBindingPublicationForTest();
-        synchronized (leela0110PonderStateLock) {
-          if (leela0110PonderingBinding == readerStreamBinding) {
-            clearLeela0110PonderStateLocked();
-          }
-          readerStreamBinding = nextBinding;
-          startGetCommandList = false;
-          endGetCommandList = false;
-          commandListBinding = null;
-          commandListPendingBinding = null;
-          commandLists.clear();
-          if (suppressGlobalEnginePresentationUntilOwned) {
-            nextBinding.suppressGlobalEnginePresentation = true;
-          }
+        readerStreamBinding = nextBinding;
+        startGetCommandList = false;
+        endGetCommandList = false;
+        commandListBinding = null;
+        commandListPendingBinding = null;
+        commandLists.clear();
+        if (suppressGlobalEnginePresentationUntilOwned) {
+          nextBinding.suppressGlobalEnginePresentation = true;
         }
         recordUpdateEngineStartBindingLocked(readerStreamBinding);
         synchronized (commandQueue()) {
@@ -4750,19 +4724,14 @@ public class Leelaz {
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
         beforeReaderBindingPublicationForTest();
-        synchronized (leela0110PonderStateLock) {
-          if (leela0110PonderingBinding == readerStreamBinding) {
-            clearLeela0110PonderStateLocked();
-          }
-          readerStreamBinding = nextBinding;
-          startGetCommandList = false;
-          endGetCommandList = false;
-          commandListBinding = null;
-          commandListPendingBinding = null;
-          commandLists.clear();
-          if (suppressGlobalEnginePresentationUntilOwned) {
-            nextBinding.suppressGlobalEnginePresentation = true;
-          }
+        readerStreamBinding = nextBinding;
+        startGetCommandList = false;
+        endGetCommandList = false;
+        commandListBinding = null;
+        commandListPendingBinding = null;
+        commandLists.clear();
+        if (suppressGlobalEnginePresentationUntilOwned) {
+          nextBinding.suppressGlobalEnginePresentation = true;
         }
         recordUpdateEngineStartBindingLocked(readerStreamBinding);
         synchronized (commandQueue()) {
@@ -4894,11 +4863,9 @@ public class Leelaz {
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
         beforeReaderBindingPublicationForTest();
-        synchronized (leela0110PonderStateLock) {
-          readerStreamBinding = nextBinding;
-          if (suppressGlobalEnginePresentationUntilOwned) {
-            nextBinding.suppressGlobalEnginePresentation = true;
-          }
+        readerStreamBinding = nextBinding;
+        if (suppressGlobalEnginePresentationUntilOwned) {
+          nextBinding.suppressGlobalEnginePresentation = true;
         }
         recordUpdateEngineStartBindingLocked(readerStreamBinding);
       }
@@ -6592,7 +6559,7 @@ public class Leelaz {
             currentObservationIdentity(), EngineObservation.STAGE_GTP_NAME);
       } catch (RuntimeException ignored) {
       }
-    } else if (isCheckingVersion && !isLeela0110) {
+    } else if (isCheckingVersion) {
       binding.reportedEngineVersion = String.join(" ", Arrays.copyOfRange(params, 1, params.length));
       if (isKatago) {
         String[] ver = params[1].split("\\.");
@@ -7077,11 +7044,6 @@ public class Leelaz {
     }
   }
 
-  private boolean isAnalysisOutputOwnershipCommand(String command) {
-    GtpCommandText parsed = GtpCommandText.parse(command);
-    return parsed.startsAnalysisPayload() || (isLeela0110 && parsed.verb().equals("time_left"));
-  }
-
   /** Commands whose successful physical write starts a distinct analysis payload generation. */
   private boolean startsNewAnalysisInfoPayload(String command) {
     return GtpCommandText.parse(command).startsAnalysisPayload();
@@ -7236,7 +7198,7 @@ public class Leelaz {
 
   private boolean shouldPublishAnalysisOutputOwnership(
       QueuedCommand command, ReaderStreamBinding binding) {
-    if (command == null || binding == null || !isAnalysisOutputOwnershipCommand(command.command)) {
+    if (command == null || binding == null || !startsNewAnalysisInfoPayload(command.command)) {
       return false;
     }
     EngineManager.EngineGameOwnerTransaction transaction = command.engineGameTransaction();
@@ -7246,16 +7208,7 @@ public class Leelaz {
       // physical write because analysis-mode ownership is intentionally unavailable in genmove.
       return false;
     }
-    if (!isLeela0110
-        || !GtpCommandText.parse(command.command).verb().equals("time_left")) {
-      return true;
-    }
-    EngineManager.EngineGamePrimaryContext currentGame =
-        transaction == null
-            ? EngineManager.captureEngineGamePrimaryContext(this, binding)
-            : null;
-    return !((transaction != null && transaction.isGenmove())
-        || (currentGame != null && currentGame.plan.genmove()));
+    return true;
   }
 
   private AnalysisOutputOwnershipPublication publishAnalysisOutputOwnershipAtPhysicalWrite(
@@ -7846,152 +7799,6 @@ public class Leelaz {
             }
           }
         });
-  }
-
-  private boolean handleLeela0110AnalysisSignal(
-      AnalysisOutputRoute route,
-      String line,
-      long expectedAnalysisInfoEpoch,
-      AnalysisInfoTarget analysisInfoTarget) {
-    if (!isLeela0110
-        || route == null
-        || route.kind == AnalysisOutputRouteKind.GENMOVE_CURRENT
-        || (!line.contains(" -> ") && !line.startsWith("====="))) {
-      return false;
-    }
-    EngineManager.EngineGameOwnerTransaction routeTransaction =
-        route.activeExactContext == null ? null : route.activeExactContext.transaction;
-    AtomicBoolean refreshLoadedEngine = new AtomicBoolean();
-    AtomicBoolean terminalBatch = new AtomicBoolean();
-    AtomicBoolean hasBestMoves = new AtomicBoolean();
-    AtomicReference<AnalysisInfoSnapshot> acceptedSnapshot = new AtomicReference<>();
-    boolean committed =
-        runIfCurrentAnalysisOutputRoute(
-            route,
-            () -> {
-              if (line.contains(" -> ")) {
-                MoveData move;
-                try {
-                  move = MoveData.fromSummaryLeela0110(line);
-                } catch (RuntimeException malformedSummary) {
-                  return;
-                }
-                synchronized (leela0110PonderStateLock) {
-                  if (leela0110PonderingBinding != route.binding
-                      || leela0110PonderingTransaction != routeTransaction
-                      || leela0110PonderingStateToken == null
-                      || leela0110BestMoves == null) {
-                    return;
-                  }
-                  if (leela0110BestMovesEpoch != expectedAnalysisInfoEpoch) {
-                    leela0110BestMoves = new ArrayList<>();
-                    leela0110BestMovesEpoch = expectedAnalysisInfoEpoch;
-                  }
-                  if (!isLoaded) {
-                    refreshLoadedEngine.set(true);
-                  }
-                  isLoaded = true;
-                  int limit =
-                      Lizzie.config.limitMaxSuggestion > 0 && !Lizzie.config.showNoSuggCircle
-                          ? Lizzie.config.limitMaxSuggestion
-                          : 361;
-                  if (!Lizzie.frame.isPlayingAgainstLeelaz
-                      && leela0110BestMoves.size() < limit
-                      && move != null) {
-                    move.order = leela0110BestMoves.size();
-                    leela0110BestMoves.add(move);
-                  }
-                }
-                return;
-              }
-              List<MoveData> completedMoves;
-              synchronized (leela0110PonderStateLock) {
-                if (leela0110PonderingBinding != route.binding
-                    || leela0110PonderingTransaction != routeTransaction
-                    || leela0110PonderingStateToken == null
-                    || leela0110PonderingBoardData != Lizzie.board.getData()
-                    || leela0110BestMoves == null) {
-                  return;
-                }
-                if (leela0110BestMovesEpoch != expectedAnalysisInfoEpoch) {
-                  leela0110BestMoves = new ArrayList<>();
-                  leela0110BestMovesEpoch = expectedAnalysisInfoEpoch;
-                }
-                completedMoves = List.copyOf(leela0110BestMoves);
-              }
-              synchronized (analysisInfoMutationLock()) {
-                if (analysisInfoEpoch != expectedAnalysisInfoEpoch) {
-                  return;
-                }
-                if (!isCurrentAnalysisInfoTarget(analysisInfoTarget)) {
-                  return;
-                }
-                canCheckAlive = true;
-                int completedPlayouts = MoveData.getPlayouts(completedMoves);
-                if (!completedMoves.isEmpty()) {
-                  publishAnalysisDisplayNonFatal(
-                      () -> {
-                        if (!isCurrentAnalysisInfoTarget(analysisInfoTarget)) return;
-                        if (analysisInfoTarget.secondarySlot) {
-                          analysisInfoTarget
-                              .displayNode
-                              .getData()
-                              .tryToSetBestMoves2FromEngine(
-                                  new ArrayList<>(completedMoves),
-                                  bestMovesEnginename,
-                                  this,
-                                  completedPlayouts,
-                                  null);
-                        } else {
-                          analysisInfoTarget
-                              .displayNode
-                              .getData()
-                              .tryToSetBestMovesFromEngine(
-                                  new ArrayList<>(completedMoves),
-                                  bestMovesEnginename,
-                                  this,
-                                  completedPlayouts,
-                                  null,
-                                  false);
-                        }
-                      });
-                }
-                currentTotalPlayouts = completedPlayouts;
-                currentRootVisits = -1;
-                analysisInfoPayloadTarget = analysisInfoTarget;
-                bestMoves = completedMoves;
-                acceptedSnapshot.set(
-                    new AnalysisInfoSnapshot(
-                        bestMoves, currentTotalPlayouts, analysisInfoEpoch, analysisInfoTarget));
-                hasBestMoves.set(!completedMoves.isEmpty());
-                terminalBatch.set(true);
-              }
-            });
-    if (!committed) {
-      return true;
-    }
-    if (refreshLoadedEngine.get()) {
-      Lizzie.frame.refresh();
-    }
-    if (terminalBatch.get()) {
-      Lizzie.frame.requestAnalysisRefresh();
-      leela0110UpdatePonder(route);
-      if (hasBestMoves.get()) {
-        if (route.acceptsExactEngineGameOutput()) {
-          routeExactAnalysisOutput(false, route, acceptedSnapshot.get());
-        } else {
-          int autoAnalyzeMode =
-              !Lizzie.config.isAutoAna
-                  ? 0
-                  : Lizzie.frame.isAutoAnalyzingDiffNode
-                      ? 1
-                      : Lizzie.config.analyzeAllBranch ? 2 : 3;
-          routeOrdinaryAnalysisOutput(
-              false, autoAnalyzeMode, route, acceptedSnapshot.get());
-        }
-      }
-    }
-    return true;
   }
 
   private boolean consumeCommandListResponseLine(String line) {
@@ -9625,9 +9432,8 @@ public class Leelaz {
       if (line.toLowerCase().contains("cl_platform_not_found"))
         Utils.showMsgNoModal(Lizzie.resourceBundle.getString("Leelaz.openclPlatfromNotFound"));
     }
-    if (!this.isLeela0110 || Lizzie.frame.isPlayingAgainstLeelaz)
-      if (Lizzie.gtpConsole.isVisible() || Lizzie.config.alwaysGtp || !this.isLoaded)
-        if (!line.startsWith("info")) Lizzie.gtpConsole.addErrorLine(line + "\n");
+    if (Lizzie.gtpConsole.isVisible() || Lizzie.config.alwaysGtp || !this.isLoaded)
+      if (!line.startsWith("info")) Lizzie.gtpConsole.addErrorLine(line + "\n");
     EngineManager.EngineGameMoveResponseContext engineGameResponse =
         isZen ? pendingEngineGameMoveResponseContext(line, binding) : null;
     AnalysisOutputRoute analysisOutputRouteAtParse = analysisOutputRoute(binding, line);
@@ -9871,18 +9677,6 @@ public class Leelaz {
             });
       }
     }
-    if (handleLeela0110AnalysisSignal(
-        analysisOutputRouteAtParse,
-        line,
-        analysisInfoEpochAtParse,
-        analysisInfoTargetAtParse)) {
-      return;
-    }
-    if (isLeela0110) {
-      if (Lizzie.gtpConsole.isVisible() || Lizzie.config.alwaysGtp || !this.isLoaded) {
-        Lizzie.gtpConsole.addErrorLine(line + "\n");
-      }
-    }
     if (!this.isKatago) {
       if (line.startsWith("NN eval")) {
         runIfCurrentAnalysisOutputRoute(
@@ -10064,25 +9858,11 @@ public class Leelaz {
             "Engine-game startup state batch has no live reader binding");
       }
     }
-    if (Lizzie.config.isDoubleEngineMode()
-        && Lizzie.leelaz2 != null
-        && this == Lizzie.leelaz2
-        && this.isLeela0110) {
-      this.leela0110Ponder(true);
-      return -1L;
-    }
 
     Leelaz mirroredEngine =
         gamePdaUpdate != null ? gamePdaUpdate.second
             : pdaUpdate != null ? pdaUpdate.target.mirror
             : startupTransaction == null ? resolveDefaultCommandMirrorEngine() : null;
-    // The legacy secondary Leela 0.11.0 path rejects ordinary default mirroring and drives its
-    // own ponder protocol. Preserve that contract while still making every supported mirror
-    // participate in the atomic admission below.
-    if (mirroredEngine != null && mirroredEngine.isLeela0110) {
-      if (gamePdaUpdate != null) return -1L;
-      mirroredEngine = null;
-    }
     RestartBootstrapReceipt bootstrapReceipt = restartBootstrapReceiptContext.get();
     OrdinaryEnqueueEffects effects = new OrdinaryEnqueueEffects();
     OrdinaryEnqueueEffects mirroredEffects =
@@ -10199,7 +9979,6 @@ public class Leelaz {
           command,
           true,
           commandBinding,
-          null,
           bootstrapReceipt,
           startupTransaction)) {
         return -1L;
@@ -10209,7 +9988,6 @@ public class Leelaz {
               command,
               true,
               mirroredCommandBinding,
-              null,
               mirroredBootstrapReceipt,
               null)) {
         return -1L;
@@ -10276,7 +10054,6 @@ public class Leelaz {
               true,
               false,
               commandBinding,
-              null,
               bootstrapReceipt,
               effects);
     }
@@ -10610,7 +10387,7 @@ public class Leelaz {
           runWithRestartBootstrapReceipt(
               binding.restartBootstrapReceipt,
               () -> processCommandResponseLine(responseLine, binding));
-          if (!this.isKatago && !this.isLeela0110 && Lizzie.frame.isPlayingAgainstLeelaz) {
+          if (!this.isKatago && Lizzie.frame.isPlayingAgainstLeelaz) {
             publishPreviousAnalysisSummary(binding);
           }
         }
@@ -10798,7 +10575,6 @@ public class Leelaz {
 
   private void shutdownReaderTransport(ReaderStreamBinding binding) {
     ReaderExecutorSnapshot executors = requestReaderShutdown(binding);
-    cancelLeela0110PonderForReaderBinding(binding);
     try {
       if (executors.ownsTransportClose) {
         if (binding.javaSSH != null) {
@@ -11500,33 +11276,6 @@ public class Leelaz {
     sendCommand(command);
   }
 
-  boolean installLeela0110PonderStateForTest(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    return prepareLeela0110PonderState(transaction);
-  }
-
-  void sendLeela0110PonderCommandForTest(
-      String command, EngineManager.EngineGameOwnerTransaction transaction) {
-    Leela0110PonderCommandOwner commandOwner = leela0110PonderCommandOwner(transaction);
-    if (commandOwner == null) {
-      throw new IllegalStateException("Leela0110 ponder state is not current");
-    }
-    runWithEngineGameStartupCommandContext(
-        transaction,
-        () ->
-            sendCommandNoLeelaz2(
-                command, null, commandOwner.binding, commandOwner.stateToken));
-  }
-
-  boolean hasLeela0110PonderStateForTest(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    synchronized (leela0110PonderStateLock) {
-      return leela0110PonderingTimer != null
-          && leela0110PonderingBoardData != null
-          && leela0110PonderingTransaction == transaction;
-    }
-  }
-
   void shutdownReaderBindingForTest(Object binding) {
     if (binding instanceof ReaderStreamBinding) {
       ReaderStreamBinding expected = (ReaderStreamBinding) binding;
@@ -11865,8 +11614,7 @@ public class Leelaz {
     private Leelaz currentMirror() {
       // GENMOVE edits belong to one participant, independent of per-turn primary selection.
       if (!requirePrimarySelection) return null;
-      Leelaz candidate = resolveDefaultCommandMirrorEngine();
-      return candidate != null && !candidate.isLeela0110 ? candidate : null;
+      return resolveDefaultCommandMirrorEngine();
     }
 
     public boolean isCurrent() {
@@ -12119,12 +11867,6 @@ public class Leelaz {
       }
       return false;
     }
-    if (Lizzie.config.isDoubleEngineMode() && Lizzie.leelaz2 != null
-        && this == Lizzie.leelaz2 && isLeela0110) {
-      String verb = GtpCommandText.parse(command).verb();
-      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
-      return false;
-    }
     command = adaptSecondaryCommand(command);
     command = adaptRootTreeReuseForReceiver(command);
     Leelaz mirroredEngine = mirrorToSecondEngine ? resolveDefaultCommandMirrorEngine() : null;
@@ -12167,7 +11909,6 @@ public class Leelaz {
                   true,
                   false,
                   readBoardGmaResponseBinding,
-                  null,
                   defaultMirrorMustRemainAbsent,
                   admittedPda);
     } else {
@@ -12201,7 +11942,6 @@ public class Leelaz {
                     true,
                     false,
                     readBoardGmaResponseBinding,
-                    null,
                     false,
                     admittedPda);
       }
@@ -12229,16 +11969,9 @@ public class Leelaz {
 
   /**
    * Applies the same secondary-engine protocol adaptation as a direct public send, without doing
-   * any queue or transport work. Returning {@code null} preserves the dedicated Leela 0.11.0
-   * secondary path, which does not accept ordinary default mirroring.
+   * any queue or transport work.
    */
   private String prepareDefaultMirroredCommand(String command) {
-    if (Lizzie.config != null && Lizzie.config.isDoubleEngineMode()
-        && Lizzie.leelaz2 != null && this == Lizzie.leelaz2 && isLeela0110) {
-      String verb = GtpCommandText.parse(command).verb();
-      if (verb.startsWith("lz-") || verb.startsWith("kata-")) leela0110Ponder(true);
-      return null;
-    }
     return adaptRootTreeReuseForReceiver(adaptSecondaryCommand(command));
   }
 
@@ -12440,13 +12173,11 @@ public class Leelaz {
                   command,
                   rejectForExclusiveWinner,
                   readBoardGmaResponseBinding,
-                  null,
                   bootstrapReceipt,
                   startupTransactionAtAdmission)
               || !mirroredEngine.canAdmitOrdinaryCommandLocked(
                   mirroredCommand,
                   true,
-                  null,
                   null,
                   mirroredBootstrapReceipt,
                   null)) {
@@ -12462,7 +12193,6 @@ public class Leelaz {
                   true,
                   false,
                   readBoardGmaResponseBinding,
-                  null,
                   bootstrapReceipt,
                   effects);
           QueuedCommand mirrorCommand =
@@ -12474,7 +12204,6 @@ public class Leelaz {
                   null,
                   true,
                   false,
-                  null,
                   null,
                   mirroredBootstrapReceipt,
                   mirroredEffects);
@@ -12508,11 +12237,10 @@ public class Leelaz {
       boolean countCommand,
       boolean noLeelaz2Coalescing,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       boolean defaultMirrorMustRemainAbsent) {
     return enqueueOrdinaryCommand(command, onResponse, onSendFailure, failOnSendError, settlement,
         rejectForExclusiveWinner, countCommand, noLeelaz2Coalescing, readBoardGmaResponseBinding,
-        expectedLeela0110StateToken, defaultMirrorMustRemainAbsent, null);
+        defaultMirrorMustRemainAbsent, null);
   }
 
   private boolean enqueueOrdinaryCommand(
@@ -12525,7 +12253,6 @@ public class Leelaz {
       boolean countCommand,
       boolean noLeelaz2Coalescing,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       boolean defaultMirrorMustRemainAbsent,
       Double admittedPda) {
     if (!hasGtpCapability()) {
@@ -12540,8 +12267,7 @@ public class Leelaz {
         && exclusiveGtpSession == null
        
         && settlement == null
-        && readBoardGmaResponseBinding == null
-        && expectedLeela0110StateToken == null) {
+        && readBoardGmaResponseBinding == null) {
       if (shouldDropStaleForegroundRestoreCommand()
           || shouldSuppressNormalCommandForForegroundAnalysis()
           || shouldDropCommandDuringInitialBoardSynchronizationAtAdmission(command)
@@ -12572,8 +12298,7 @@ public class Leelaz {
                   null,
                   countCommand,
                   bootstrapReceipt,
-                  readBoardGmaResponseBinding,
-                  expectedLeela0110StateToken),
+                  readBoardGmaResponseBinding),
               targetQueue));
       return true;
     }
@@ -12598,7 +12323,6 @@ public class Leelaz {
                         countCommand,
                         noLeelaz2Coalescing,
                         readBoardGmaResponseBinding,
-                        expectedLeela0110StateToken,
                         bootstrapReceipt,
                         startupTransactionAtAdmission,
                         effects,
@@ -12613,7 +12337,6 @@ public class Leelaz {
                 countCommand,
                 noLeelaz2Coalescing,
                 readBoardGmaResponseBinding,
-                expectedLeela0110StateToken,
                 bootstrapReceipt,
                 startupTransactionAtAdmission,
                 effects,
@@ -12635,13 +12358,12 @@ public class Leelaz {
       boolean countCommand,
       boolean noLeelaz2Coalescing,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       RestartBootstrapReceipt bootstrapReceipt,
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission,
       OrdinaryEnqueueEffects effects) {
     return enqueueOrdinaryCommandUnderLocks(command, onResponse, onSendFailure, failOnSendError,
         settlement, rejectForExclusiveWinner, countCommand, noLeelaz2Coalescing,
-        readBoardGmaResponseBinding, expectedLeela0110StateToken, bootstrapReceipt,
+        readBoardGmaResponseBinding, bootstrapReceipt,
         startupTransactionAtAdmission, effects, null);
   }
 
@@ -12655,7 +12377,6 @@ public class Leelaz {
       boolean countCommand,
       boolean noLeelaz2Coalescing,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       RestartBootstrapReceipt bootstrapReceipt,
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission,
       OrdinaryEnqueueEffects effects,
@@ -12666,7 +12387,6 @@ public class Leelaz {
             command,
             rejectForExclusiveWinner,
             readBoardGmaResponseBinding,
-            expectedLeela0110StateToken,
             bootstrapReceipt,
             startupTransactionAtAdmission)) {
           return false;
@@ -12680,7 +12400,6 @@ public class Leelaz {
             countCommand,
             noLeelaz2Coalescing,
             readBoardGmaResponseBinding,
-            expectedLeela0110StateToken,
             bootstrapReceipt,
             effects);
         recordAdmittedPda(admittedPda, effects);
@@ -12730,7 +12449,6 @@ public class Leelaz {
       String command,
       boolean rejectForExclusiveWinner,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       RestartBootstrapReceipt bootstrapReceipt,
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission) {
     CustomPdaTarget consoleTarget = CONSOLE_PONDER_TARGET.get();
@@ -12755,11 +12473,6 @@ public class Leelaz {
         && (readBoardGmaResponseBinding == null
             || (readerStreamBinding == readBoardGmaResponseBinding
                 && !readBoardGmaResponseBinding.terminated))
-        && (expectedLeela0110StateToken == null
-            || isCurrentLeela0110PonderState(
-                readBoardGmaResponseBinding,
-                startupTransactionAtAdmission,
-                expectedLeela0110StateToken))
         && (!rejectForExclusiveWinner
             || isExactSnapshotRestoreAdmissionContextActive()
             || (!engineStateUnrestored
@@ -12781,7 +12494,6 @@ public class Leelaz {
       boolean countCommand,
       boolean noLeelaz2Coalescing,
       ReaderStreamBinding readBoardGmaResponseBinding,
-      Object expectedLeela0110StateToken,
       RestartBootstrapReceipt bootstrapReceipt,
       OrdinaryEnqueueEffects effects) {
     ArrayDeque<QueuedCommand> targetQueue = commandQueueForCurrentThread();
@@ -12812,8 +12524,7 @@ public class Leelaz {
                 settlement,
                 countCommand,
                 bootstrapReceipt,
-                readBoardGmaResponseBinding,
-                expectedLeela0110StateToken),
+                readBoardGmaResponseBinding),
             targetQueue);
     targetQueue.addLast(queuedCommand);
     return queuedCommand;
@@ -12854,7 +12565,7 @@ public class Leelaz {
     ReaderStreamBinding binding = currentReaderStreamBinding();
     boolean positionMutation = analysisStateMutation(command.command) != AnalysisStateMutation.NONE;
     if (binding != null
-        && (positionMutation || isAnalysisOutputOwnershipCommand(command.command))) {
+        && (positionMutation || startsNewAnalysisInfoPayload(command.command))) {
       AnalysisStateLineage capturedRestoreLineage = positionRestoreLineageContext.get();
       AnalysisStateLineage scopedLineage = capturedRestoreLineage;
       if (scopedLineage == null && command.restoreAdmission != null) {
@@ -12904,7 +12615,7 @@ public class Leelaz {
                   : readBoardGmaRestoreResponseTimeoutMillis()));
     }
     if (command.engineGameTransaction() == null
-        && isAnalysisOutputOwnershipCommand(command.command)) {
+        && startsNewAnalysisInfoPayload(command.command)) {
       command.ordinaryAnalysisTarget = captureAnalysisInfoTarget();
       command.ordinaryAnalysisBinding = currentReaderStreamBinding();
     }
@@ -13654,14 +13365,13 @@ public class Leelaz {
   }
 
   private void sendCommandNoLeelaz2(String command, Runnable onResponse) {
-    sendCommandNoLeelaz2(command, onResponse, null, null);
+    sendCommandNoLeelaz2(command, onResponse, null);
   }
 
   private void sendCommandNoLeelaz2(
       String command,
       Runnable onResponse,
-      ReaderStreamBinding expectedBinding,
-      Object expectedLeela0110StateToken) {
+      ReaderStreamBinding expectedBinding) {
     if (shouldDropStaleForegroundRestoreCommand()
         || shouldSuppressNormalCommandForForegroundAnalysis()) {
       return;
@@ -13682,15 +13392,10 @@ public class Leelaz {
     if (expectedBinding != null
         && (readerStreamBinding != expectedBinding
             || expectedBinding.terminated
-            || (startupTransaction != null && startupBinding != expectedBinding)
-            || (expectedLeela0110StateToken != null
-                && !isCurrentLeela0110PonderState(
-                    expectedBinding,
-                    startupTransaction,
-                    expectedLeela0110StateToken)))) {
+            || (startupTransaction != null && startupBinding != expectedBinding))) {
       if (startupTransaction != null) {
         throw new IllegalStateException(
-            "engine-game startup command lost its Leela0110 reader binding: " + command);
+            "engine-game startup command lost its reader binding: " + command);
       }
       return;
     }
@@ -13710,7 +13415,6 @@ public class Leelaz {
         false,
         true,
         commandBinding,
-        expectedLeela0110StateToken,
         false)) {
       if (startupTransaction != null) {
         throw new IllegalStateException(
@@ -13760,7 +13464,6 @@ public class Leelaz {
           && queueHead.settlement == null
           && queueHead.restartBootstrapReceipt == null
           && queueHead.readBoardGmaResponseBinding == null
-          && queueHead.expectedLeela0110StateToken == null
           && !queueHead.foregroundRestoreCommand;
     }
   }
@@ -13879,7 +13582,7 @@ public class Leelaz {
         return;
       }
       if (queueHead.engineGameTransaction() == null
-          && isAnalysisOutputOwnershipCommand(queueHead.command)
+          && startsNewAnalysisInfoPayload(queueHead.command)
           && hasUnconfirmedOrdinaryResponse(true)) {
         return;
       }
@@ -14021,7 +13724,6 @@ public class Leelaz {
     EngineManager.EngineGameStateWriteLease exactStateWrite = null;
     List<Runnable> rawRulesEffects = new ArrayList<>();
     boolean analysisOutputBindingLocked = false;
-    boolean leela0110PonderPhysicalWriteLocked = false;
     boolean physicalWriteCompleted = false;
     if (currentOutputStream != null) {
       if (queuedCommand.restartBootstrapReceipt != null) {
@@ -14030,12 +13732,7 @@ public class Leelaz {
       ReaderStreamBinding expectedOutputBinding = queuedCommand.readBoardGmaResponseBinding;
       if (expectedOutputBinding != null
           && (outputBinding != expectedOutputBinding
-              || expectedOutputBinding.terminated
-              || (queuedCommand.expectedLeela0110StateToken != null
-                  && !isCurrentLeela0110PonderState(
-                      expectedOutputBinding,
-                      queuedCommand.engineGameTransaction(),
-                      queuedCommand.expectedLeela0110StateToken)))) {
+              || expectedOutputBinding.terminated)) {
         queuedCommand.cancelBeforeOutputWrite(
             new IllegalStateException(
                 "GTP command reader binding changed before physical output write"));
@@ -14146,145 +13843,114 @@ public class Leelaz {
           }
           exactAnalysisOutputContext = exactAnalysisWrite.context;
         }
-        if (queuedCommand.expectedLeela0110StateToken != null) {
-          // A Leela 0.11.0 timer command is valid only for one exact ponder-state incarnation.
-          // Hold this lease from the final state check through flush. Stop/rebind/reprepare take
-          // the same lease before changing that state, so an old same-binding timer can never
-          // cross the successor's linearization point after a successful final check.
-          leela0110PonderPhysicalWriteLock.lock();
-          leela0110PonderPhysicalWriteLocked = true;
-          if (!isCurrentLeela0110PonderState(
-              outputBinding,
-              analysisOutputTransaction,
-              queuedCommand.expectedLeela0110StateToken)) {
-            queuedCommand.cancelBeforeOutputWrite(
-                new IllegalStateException(
-                    "Leela0110 ponder state changed before physical output write"));
-            finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
-            return null;
+        if (publishesAnalysisOutputOwnership
+            || startsAnalysisInfoPayload
+            || stateMutation != AnalysisStateMutation.NONE) {
+          if (outputBinding == null) {
+            throw new AnalysisOutputAdmissionFailure(
+                "analysis payload has no current reader binding");
           }
-          if (analysisOutputTransaction != null) {
-            // Exact game output is now admitted and the command queue keeps later writes behind
-            // it. Do not make pause or terminal timer cancellation wait for this transport.
-            leela0110PonderPhysicalWriteLocked = false;
-            leela0110PonderPhysicalWriteLock.unlock();
-          }
+          outputBinding.analysisOutputMutationLock.lock();
+          analysisOutputBindingLocked = true;
         }
         try {
-          if (publishesAnalysisOutputOwnership
-              || startsAnalysisInfoPayload
-              || stateMutation != AnalysisStateMutation.NONE) {
-            if (outputBinding == null) {
-              throw new AnalysisOutputAdmissionFailure(
-                  "analysis payload has no current reader binding");
-            }
-            outputBinding.analysisOutputMutationLock.lock();
-            analysisOutputBindingLocked = true;
+          if (analysisOutputBindingLocked
+              && (readerStreamBinding != outputBinding
+                  || outputBinding.terminated
+                  || outputBinding.readerShutdownRequested
+                  || outputBinding.output != currentOutputStream
+                  || outputStream != currentOutputStream)) {
+            throw new AnalysisOutputAdmissionFailure(
+                "analysis/state output lost its live reader before physical output");
           }
-          try {
-            if (analysisOutputBindingLocked
-                && (readerStreamBinding != outputBinding
-                    || outputBinding.terminated
-                    || outputBinding.readerShutdownRequested
-                    || outputBinding.output != currentOutputStream
-                    || outputStream != currentOutputStream)) {
-              throw new AnalysisOutputAdmissionFailure(
-                  "analysis/state output lost its live reader before physical output");
+          if (stateMutation != AnalysisStateMutation.NONE) {
+            // Retire and clear/advance the old payload before the first state-command byte is
+            // observable. The manager lease prevents an already-admitted parser mutation from
+            // crossing this boundary, and caller-side cleanup cannot retire a queued successor.
+            bindAnalysisStateLineageAtPhysicalWrite(queuedCommand, outputBinding);
+            applyAnalysisStateMutation(stateMutation);
+            if (exactStateWrite != null) {
+              // Exact terminal cancellation must never wait for a blocked transport flush.
+              // Release binding before transaction: otherwise a parser can acquire the
+              // transaction fence, block behind this binding for the duration of flush, and
+              // indirectly make terminal settlement wait for the transport. Generation has
+              // already retired the old owner, so neither fence is needed after this point.
+              analysisOutputBindingLocked = false;
+              outputBinding.analysisOutputMutationLock.unlock();
+              exactStateWrite.close();
+              exactStateWrite = null;
             }
-            if (stateMutation != AnalysisStateMutation.NONE) {
-              // Retire and clear/advance the old payload before the first state-command byte is
-              // observable. The manager lease prevents an already-admitted parser mutation from
-              // crossing this boundary, and caller-side cleanup cannot retire a queued successor.
-              bindAnalysisStateLineageAtPhysicalWrite(queuedCommand, outputBinding);
-              applyAnalysisStateMutation(stateMutation);
-              if (exactStateWrite != null) {
-                // Exact terminal cancellation must never wait for a blocked transport flush.
-                // Release binding before transaction: otherwise a parser can acquire the
-                // transaction fence, block behind this binding for the duration of flush, and
-                // indirectly make terminal settlement wait for the transport. Generation has
-                // already retired the old owner, so neither fence is needed after this point.
-                analysisOutputBindingLocked = false;
-                outputBinding.analysisOutputMutationLock.unlock();
-                exactStateWrite.close();
-                exactStateWrite = null;
-              }
+          }
+          if (publishesAnalysisOutputOwnership) {
+            analysisOutputPublication =
+                publishAnalysisOutputOwnershipAtPhysicalWrite(
+                    queuedCommand,
+                    outputBinding,
+                    transactionlessAnalysisWrite,
+                    exactAnalysisOutputContext);
+          }
+          if (queuedCommand.onResponse instanceof RuntimeSearchThreadsResponse) {
+            RuntimeSearchThreadsResponse runtime =
+                (RuntimeSearchThreadsResponse) queuedCommand.onResponse;
+            boolean admitted =
+                Lizzie.runIfPrimaryEngine(
+                    this,
+                    runtime.target.primaryGeneration,
+                    () -> {
+                      if (!isCurrentLiveEngineIncarnation(runtime.target.binding)
+                          || outputBinding != runtime.target.binding
+                          || outputBinding.output != currentOutputStream
+                          || outputStream != currentOutputStream
+                          || runtime.result.isDone()) {
+                        throw new IllegalStateException("Runtime thread command lost its reader binding");
+                      }
+                      synchronized (outputBinding) {
+                        runtime.writeSequence = ++outputBinding.runtimeThreadWriteSequence;
+                      }
+                    });
+            if (!admitted) {
+              throw new IllegalStateException("Runtime thread command lost foreground selection");
             }
-            if (publishesAnalysisOutputOwnership) {
-              analysisOutputPublication =
-                  publishAnalysisOutputOwnershipAtPhysicalWrite(
-                      queuedCommand,
-                      outputBinding,
-                      transactionlessAnalysisWrite,
-                      exactAnalysisOutputContext);
+          }
+          if (analysisOutputTransaction != null) {
+            // Publish the complete new payload before releasing admission. Until this exact
+            // writer leaves the queue, parser admission drops premature info. No transaction
+            // or binding state lock may make cancellation/endpoint retirement wait for I/O.
+            if (startsAnalysisInfoPayload) resetAnalysisInfoPayload(false);
+            if (isOrdinaryPositionAnalysisCommand(command)
+                && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
+              ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
             }
-            if (queuedCommand.onResponse instanceof RuntimeSearchThreadsResponse) {
-              RuntimeSearchThreadsResponse runtime =
-                  (RuntimeSearchThreadsResponse) queuedCommand.onResponse;
-              boolean admitted =
-                  Lizzie.runIfPrimaryEngine(
-                      this,
-                      runtime.target.primaryGeneration,
-                      () -> {
-                        if (!isCurrentLiveEngineIncarnation(runtime.target.binding)
-                            || outputBinding != runtime.target.binding
-                            || outputBinding.output != currentOutputStream
-                            || outputStream != currentOutputStream
-                            || runtime.result.isDone()) {
-                          throw new IllegalStateException("Runtime thread command lost its reader binding");
-                        }
-                        synchronized (outputBinding) {
-                          runtime.writeSequence = ++outputBinding.runtimeThreadWriteSequence;
-                        }
-                      });
-              if (!admitted) {
-                throw new IllegalStateException("Runtime thread command lost foreground selection");
-              }
-            }
-            if (analysisOutputTransaction != null) {
-              // Publish the complete new payload before releasing admission. Until this exact
-              // writer leaves the queue, parser admission drops premature info. No transaction
-              // or binding state lock may make cancellation/endpoint retirement wait for I/O.
-              if (startsAnalysisInfoPayload) resetAnalysisInfoPayload(false);
-              if (isOrdinaryPositionAnalysisCommand(command)
-                  && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
-              }
-              if (analysisOutputBindingLocked) {
-                analysisOutputBindingLocked = false;
-                outputBinding.analysisOutputMutationLock.unlock();
-              }
-              if (exactAnalysisWrite != null) {
-                exactAnalysisWrite.close();
-                exactAnalysisWrite = null;
-              }
-            }
-            // Selection admission is short; transport IO must not hold the global primary lock.
-            // normalCommandSendInProgress keeps this exact reader/output owned until completion.
-            recordAnalysisConditionWrite(pendingHandler, outputBinding);
-            synchronized (currentOutputStream) {
-              currentOutputStream.write((commandLine + "\n").getBytes());
-              currentOutputStream.flush();
-              if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
-                  && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
-                ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
-              }
-              if (startsAnalysisInfoPayload && analysisOutputTransaction == null) {
-                // The binding fence keeps even an immediate reader line from committing before
-                // the new physical command invalidates the prior payload generation.
-                resetAnalysisInfoPayload(false);
-              }
-              physicalWriteCompleted = true;
-            }
-          } finally {
             if (analysisOutputBindingLocked) {
               analysisOutputBindingLocked = false;
               outputBinding.analysisOutputMutationLock.unlock();
             }
+            if (exactAnalysisWrite != null) {
+              exactAnalysisWrite.close();
+              exactAnalysisWrite = null;
+            }
+          }
+          // Selection admission is short; transport IO must not hold the global primary lock.
+          // normalCommandSendInProgress keeps this exact reader/output owned until completion.
+          recordAnalysisConditionWrite(pendingHandler, outputBinding);
+          synchronized (currentOutputStream) {
+            currentOutputStream.write((commandLine + "\n").getBytes());
+            currentOutputStream.flush();
+            if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
+                && !(queuedCommand.onResponse instanceof MoveFocusResponse)) {
+              ordinaryFocusBaseCommand = GtpCommandText.parse(command).payload();
+            }
+            if (startsAnalysisInfoPayload && analysisOutputTransaction == null) {
+              // The binding fence keeps even an immediate reader line from committing before
+              // the new physical command invalidates the prior payload generation.
+              resetAnalysisInfoPayload(false);
+            }
+            physicalWriteCompleted = true;
           }
         } finally {
-          if (leela0110PonderPhysicalWriteLocked) {
-            leela0110PonderPhysicalWriteLocked = false;
-            leela0110PonderPhysicalWriteLock.unlock();
+          if (analysisOutputBindingLocked) {
+            analysisOutputBindingLocked = false;
+            outputBinding.analysisOutputMutationLock.unlock();
           }
         }
       } catch (Exception | Error e) {
@@ -14356,10 +14022,6 @@ public class Leelaz {
         if (analysisOutputBindingLocked) {
           analysisOutputBindingLocked = false;
           outputBinding.analysisOutputMutationLock.unlock();
-        }
-        if (leela0110PonderPhysicalWriteLocked) {
-          leela0110PonderPhysicalWriteLocked = false;
-          leela0110PonderPhysicalWriteLock.unlock();
         }
         if (transactionlessAnalysisWrite != null) {
           transactionlessAnalysisWrite.close();
@@ -14493,10 +14155,6 @@ public class Leelaz {
     if (transaction == null) {
       return;
     }
-    // Retire the exact Leela 0.11.0 follow-up source before releasing this endpoint's
-    // cancellation barrier. Otherwise its BoardData sentinel can prevent the successor from
-    // installing a timer, or its delayed "name" task can race the successor's output owner.
-    cancelLeela0110PonderForEngineGameTransaction(transaction);
     RuntimeException failure =
         new IllegalStateException("Engine-game transaction ended before command output write");
     List<QueuedCommand> cancelled = new ArrayList<>();
@@ -19960,7 +19618,6 @@ public class Leelaz {
     private AnalysisInfoTarget ordinaryAnalysisTarget;
     private ReaderStreamBinding ordinaryAnalysisBinding;
     private final ReaderStreamBinding readBoardGmaResponseBinding;
-    private final Object expectedLeela0110StateToken;
     private final ExactSnapshotRestoreAdmission restoreAdmission = exactSnapshotRestoreAdmissionContext.get();
     private final LifecycleCompletionClaim completionOwner =
         lifecycleCompletionCommandContext.get() != null
@@ -19991,7 +19648,7 @@ public class Leelaz {
         Runnable onResponse,
         CommandSendFailureHandler onSendFailure,
         boolean failOnSendError) {
-      this(command, onResponse, onSendFailure, failOnSendError, null, true, null, null, null);
+      this(command, onResponse, onSendFailure, failOnSendError, null, true, null, null);
     }
 
     private QueuedCommand(
@@ -20000,7 +19657,7 @@ public class Leelaz {
         CommandSendFailureHandler onSendFailure,
         boolean failOnSendError,
         QueuedCommandSettlement settlement) {
-      this(command, onResponse, onSendFailure, failOnSendError, settlement, true, null, null, null);
+      this(command, onResponse, onSendFailure, failOnSendError, settlement, true, null, null);
     }
 
     private QueuedCommand(
@@ -20011,8 +19668,7 @@ public class Leelaz {
         QueuedCommandSettlement settlement,
         boolean countedCommand,
         RestartBootstrapReceipt restartBootstrapReceipt,
-        ReaderStreamBinding readBoardGmaResponseBinding,
-        Object expectedLeela0110StateToken) {
+        ReaderStreamBinding readBoardGmaResponseBinding) {
       this.command = command;
       this.onResponse =
           onResponse == null && analysisStateMutation(command) != AnalysisStateMutation.NONE
@@ -20026,7 +19682,6 @@ public class Leelaz {
               || lifecycleCompletionCommandContext.get() != null
           ? null : restartBootstrapReceipt;
       this.readBoardGmaResponseBinding = readBoardGmaResponseBinding;
-      this.expectedLeela0110StateToken = expectedLeela0110StateToken;
       if (onResponse instanceof MoveFocusResponse) {
         ((MoveFocusResponse) onResponse).command = this;
       }
@@ -20536,7 +20191,7 @@ public class Leelaz {
         if (stateChangesOnly
             ? analysisStateMutation(command) != AnalysisStateMutation.NONE
                 || isRulesMutationCommand(command)
-            : !isAnalysisOutputOwnershipCommand(command)) {
+            : !startsNewAnalysisInfoPayload(command)) {
           return true;
         }
       }
@@ -20972,7 +20627,7 @@ public class Leelaz {
               mirrorQueued = mirror.enqueueOrdinaryCommandUnderLocks(
                   "play " + (color == Stone.BLACK ? "B" : "W") + " " + move,
                   null, null, mirror.foregroundRestoreCommandSession.get() != null,
-                  null, false, false, true, mirrorBinding, null,
+                  null, false, false, true, mirrorBinding,
                   mirror.restartBootstrapReceiptContext.get(),
                   mirror.engineGameStartupCommandContext.get(), mirrorEffects);
             }
@@ -20991,7 +20646,7 @@ public class Leelaz {
         if (committed != node && isCurrentTarget(committed, committedRevision)) {
           // A slow mirror flush may have yielded to navigation or engine replacement.
           if (isPondering) ponder();
-          else sendCommandNoLeelaz2(isKatago ? "stop" : "name", null, binding, null);
+          else sendCommandNoLeelaz2(isKatago ? "stop" : "name", null, binding);
         }
       } finally {
         clearOwner();
@@ -22028,7 +21683,7 @@ public class Leelaz {
                         admitted[0] =
                             enqueueOrdinaryCommand(
                                 command, handler, handler::fail, true, null, true, false, true,
-                                target.binding, null, false);
+                                target.binding, false);
                       }
                     });
             if (!selected || !admitted[0]) {
@@ -23922,10 +23577,6 @@ public class Leelaz {
       sendHeatCommand();
       return;
     }
-    if (isLeela0110) {
-      leela0110Ponder(true);
-      return;
-    }
     if (this == Lizzie.leelaz && Lizzie.frame != null) {
       AnalysisResourceCoordinator.processStarted(
           this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process);
@@ -24001,10 +23652,6 @@ public class Leelaz {
   public void pkponder() {
     isPondering = true;
     startPonderTime = System.currentTimeMillis();
-    if (isLeela0110) {
-      leela0110Ponder(true);
-      return;
-    }
     if (this.isKatago) {
       if (Lizzie.config.showKataGoEstimate)
         sendCommand("kata-analyze " + getInterval() + addKataTag() + " ownership true");
@@ -24189,7 +23836,6 @@ public class Leelaz {
   }
 
   private void shutdown(ReaderStreamBinding binding, ReaderExecutorSnapshot executors) {
-    cancelLeela0110PonderForReaderBinding(binding);
     try {
       if (executors.ownsTransportClose) {
         AnalysisResourceCoordinator.processStopped(
@@ -26451,218 +26097,6 @@ public class Leelaz {
     @Override
     public void run() {
       completeEngineRulesCommand(this);
-    }
-  }
-
-  private static final class Leela0110PonderCommandOwner {
-    private final ReaderStreamBinding binding;
-    private final Object stateToken;
-
-    private Leela0110PonderCommandOwner(
-        ReaderStreamBinding binding, Object stateToken) {
-      this.binding = binding;
-      this.stateToken = stateToken;
-    }
-  }
-
-  private void leela0110Ponder(boolean first) {
-    // Engine-game analysis enters ponder through runEngineGameIoStep, which carries the exact
-    // transaction in this ThreadLocal. Preserve it for the timer, its derived command, ownership
-    // publication, and exact retirement; ordinary UI ponder naturally observes null here.
-    leela0110Ponder(first, engineGameStartupCommandContext.get());
-  }
-
-  private void leela0110Ponder(
-      boolean first, EngineManager.EngineGameOwnerTransaction transaction) {
-    if (first)
-      if (Lizzie.config.isDoubleEngineMode()) {
-        if (Lizzie.leelaz2 != null && this != Lizzie.leelaz2) {
-          Lizzie.leelaz2.sendCommand("lz-analyze " + getInterval());
-        }
-      }
-    if (prepareLeela0110PonderState(transaction)) {
-      Leela0110PonderCommandOwner commandOwner = leela0110PonderCommandOwner(transaction);
-      if (commandOwner == null) {
-        return;
-      }
-      runWithEngineGameStartupCommandContext(
-          transaction,
-          () ->
-              sendCommandNoLeelaz2(
-                  "time_left b 0 0",
-                  null,
-                  commandOwner.binding,
-                  commandOwner.stateToken));
-    }
-  }
-
-  private boolean prepareLeela0110PonderState(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    long initialAnalysisInfoEpoch = analysisInfoEpochSnapshot();
-    leela0110PonderPhysicalWriteLock.lock();
-    try {
-      synchronized (leela0110PonderStateLock) {
-        ReaderStreamBinding expectedBinding = readerStreamBinding;
-        if (expectedBinding == null || expectedBinding.terminated) {
-          return false;
-        }
-        if (leela0110PonderingBoardData != null) {
-          if (transaction == null || leela0110PonderingTransaction == transaction) {
-            return false;
-          }
-          // An admitted exact game owner supersedes an ordinary timer (or the retired batch
-          // predecessor) on this same endpoint. Do the replacement atomically under the one
-          // Leela0110-state monitor so the stale BoardData sentinel cannot suppress startup.
-          clearLeela0110PonderStateLocked();
-        }
-        leela0110PonderingBoardData = Lizzie.board.getData();
-        leela0110PonderingTransaction = transaction;
-        leela0110PonderingBinding = expectedBinding;
-        Object stateToken = new Object();
-        leela0110PonderingStateToken = stateToken;
-        leela0110BestMoves = new ArrayList<>();
-        leela0110BestMovesEpoch = initialAnalysisInfoEpoch;
-        leela0110PonderingTimer = new Timer("lizzie-leela0110-ponder", true);
-        leela0110PonderingTimer.schedule(
-            new TimerTask() {
-              public void run() {
-                if (isCurrentLeela0110PonderState(
-                        expectedBinding, transaction, stateToken)
-                    && (transaction == null
-                        || EngineManager.isCurrentEngineGameTransaction(transaction))) {
-                  runWithEngineGameStartupCommandContext(
-                      transaction,
-                      () ->
-                          sendCommandNoLeelaz2(
-                              "name", null, expectedBinding, stateToken));
-                }
-              }
-            },
-            LEELA0110_PONDERING_INTERVAL_MILLIS);
-        return true;
-      }
-    } finally {
-      leela0110PonderPhysicalWriteLock.unlock();
-    }
-  }
-
-  public void leela0110StopPonder() {
-    leela0110PonderPhysicalWriteLock.lock();
-    try {
-      synchronized (leela0110PonderStateLock) {
-        clearLeela0110PonderStateLocked();
-      }
-    } finally {
-      leela0110PonderPhysicalWriteLock.unlock();
-    }
-  }
-
-  void cancelLeela0110PonderForEngineGameTransaction(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    leela0110PonderPhysicalWriteLock.lock();
-    try {
-      synchronized (leela0110PonderStateLock) {
-        if (transaction == null || leela0110PonderingTransaction != transaction) {
-          return;
-        }
-        clearLeela0110PonderStateLocked();
-      }
-    } finally {
-      leela0110PonderPhysicalWriteLock.unlock();
-    }
-  }
-
-  private void cancelLeela0110PonderForReaderBinding(
-      ReaderStreamBinding binding) {
-    leela0110PonderPhysicalWriteLock.lock();
-    try {
-      synchronized (leela0110PonderStateLock) {
-        if (binding == null || leela0110PonderingBinding != binding) {
-          return;
-        }
-        clearLeela0110PonderStateLocked();
-      }
-    } finally {
-      leela0110PonderPhysicalWriteLock.unlock();
-    }
-  }
-
-  private Leela0110PonderCommandOwner leela0110PonderCommandOwner(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    synchronized (leela0110PonderStateLock) {
-      return leela0110PonderingTransaction == transaction
-              && leela0110PonderingBinding != null
-              && leela0110PonderingStateToken != null
-              && readerStreamBinding == leela0110PonderingBinding
-              && !leela0110PonderingBinding.terminated
-          ? new Leela0110PonderCommandOwner(
-              leela0110PonderingBinding, leela0110PonderingStateToken)
-          : null;
-    }
-  }
-
-  private boolean isCurrentLeela0110PonderState(
-      ReaderStreamBinding binding,
-      EngineManager.EngineGameOwnerTransaction transaction,
-      Object stateToken) {
-    synchronized (leela0110PonderStateLock) {
-      return binding != null
-          && leela0110PonderingBinding == binding
-          && leela0110PonderingTransaction == transaction
-          && stateToken != null
-          && leela0110PonderingStateToken == stateToken
-          && readerStreamBinding == binding
-          && !binding.terminated;
-    }
-  }
-
-  private void clearLeela0110PonderStateLocked() {
-    if (leela0110PonderingTimer != null) {
-      leela0110PonderingTimer.cancel();
-      leela0110PonderingTimer = null;
-    }
-    leela0110PonderingBoardData = null;
-    leela0110PonderingTransaction = null;
-    leela0110PonderingBinding = null;
-    leela0110PonderingStateToken = null;
-    leela0110BestMoves = null;
-    leela0110BestMovesEpoch = -1L;
-  }
-
-  private void leela0110UpdatePonder(AnalysisOutputRoute route) {
-    if (route == null) {
-      return;
-    }
-    EngineManager.EngineGameOwnerTransaction transaction =
-        route.activeExactContext == null ? null : route.activeExactContext.transaction;
-    runIfCurrentAnalysisOutputRoute(
-        route,
-        () -> {
-          leela0110StopPonder();
-          if (isPondering && prepareLeela0110PonderState(transaction)) {
-            Leela0110PonderCommandOwner commandOwner =
-                leela0110PonderCommandOwner(transaction);
-            if (commandOwner == null) {
-              return;
-            }
-            // The route's transaction/global admission remains held, but its binding lock has
-            // already been released. This preserves owner identity through the delimiter-triggered
-            // follow-up write without creating binding -> output or binding -> selection nesting.
-            runWithEngineGameStartupCommandContext(
-                transaction,
-                () ->
-                    sendCommandNoLeelaz2(
-                        "time_left b 0 0",
-                        null,
-                        commandOwner.binding,
-                        commandOwner.stateToken));
-          }
-        });
-  }
-
-  private boolean isLeela0110PonderingValid() {
-    synchronized (leela0110PonderStateLock) {
-      return leela0110PonderingBoardData == Lizzie.board.getData();
     }
   }
 
