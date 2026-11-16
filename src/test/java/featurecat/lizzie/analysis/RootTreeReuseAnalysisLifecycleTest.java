@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -15,8 +16,14 @@ import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.SGFParser;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.concurrent.FutureTask;
+import javax.swing.SwingUtilities;
+import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -94,6 +101,53 @@ class RootTreeReuseAnalysisLifecycleTest {
       fixture.primary.parseAnalysisLineForTest(info("D4", 50));
       assertEquals(expectedVisits, fixture.current.getPlayouts());
       assertEquals(expectedVisits == 50, fixture.current.hasRestrictedPrimaryAnalysis());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"kata-genmove_analyze", "lz-genmove_analyze", "genmove_analyze"})
+  void consoleGenmoveRestrictionsSurviveAdoptionAndSaveWithoutBecomingReusable(String verb)
+      throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      boolean kata = !verb.startsWith("lz-");
+      fixture.primary.isKatago = kata;
+      fixture.primary.bestMovesEnginename = kata ? "KataGo" : "LeelaZero";
+      String ordinaryCommand = kata ? "kata-analyze 10" : "lz-analyze 10";
+      fixture.primary.sendCommand(ordinaryCommand);
+      fixture.respond(fixture.primary, fixture.primaryTransport, 0);
+      fixture.primary.parseAnalysisLineForTest(kata ? info("Q16", 1000) : legacyInfo("Q16", 1000));
+      String command = "124" + verb + " B 10 allow b D4 1 avoid w Q16 2 # allow b A1 1";
+      assertTrue(fixture.primary.sendRawConsoleCommand(command));
+      assertEquals(command, fixture.primaryTransport.rawCommands().get(1));
+      fixture.primary.parseAnalysisLineForTest(kata ? info("D4", 50) : legacyInfo("D4", 50));
+
+      assertEquals(50, fixture.current.getPlayouts(), "restricted results replace deeper ordinary ones");
+      var source = fixture.current.primaryAnalysisProvenance();
+      assertNotNull(source.moveRestrictions());
+      assertEquals(List.of(new AnalysisMoveRestrictions.Clause("allow", "B", "D4", 1),
+          new AnalysisMoveRestrictions.Clause("avoid", "W", "Q16", 2)),
+          source.moveRestrictions().clauses());
+      assertTrue(fixture.current.hasCompletePrimaryAnalysis(50, false));
+      assertFalse(fixture.current.hasReusablePrimaryAnalysis(50, false));
+
+      FutureTask<String> capture = new FutureTask<>(
+          () -> SGFParser.saveSnapshot(Lizzie.board, false, false, false));
+      SwingUtilities.invokeAndWait(capture);
+      BoardData reopened = SGFParser.parseSgf(capture.get(), true)
+          .getStart().next().orElseThrow().getData();
+      assertEquals(50, reopened.getPlayouts(), capture.get());
+      assertEquals(source.moveRestrictions(), reopened.primaryAnalysisProvenance().moveRestrictions());
+      assertFalse(reopened.hasReusablePrimaryAnalysis(50, false));
+      JSONObject metadata = new JSONObject(new String(
+          Base64.getUrlDecoder().decode(reopened.getProperty("KGP")), StandardCharsets.UTF_8));
+      assertEquals(3, metadata.getInt("version"));
+
+      fixture.respond(fixture.primary, fixture.primaryTransport, 1);
+      fixture.primary.sendCommand(ordinaryCommand);
+      fixture.primary.parseAnalysisLineForTest(kata ? info("Q16", 25) : legacyInfo("Q16", 25));
+      assertEquals(25, fixture.current.getPlayouts());
+      assertNull(fixture.current.primaryAnalysisProvenance().moveRestrictions());
+      assertTrue(fixture.current.hasReusablePrimaryAnalysis(25, false));
     }
   }
 

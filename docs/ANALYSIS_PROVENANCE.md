@@ -115,6 +115,10 @@ request cannot relabel an older result. Each mirrored engine keeps its own
 owner. The record describes the requested clauses, not an independent
 attestation that a remote or unsupported engine applied them.
 
+This also covers `kata-genmove_analyze`, `lz-genmove_analyze` and `genmove_analyze`
+sent through the GTP console. Their analysis output carries the same recorded
+conditions and ordinary-reuse policy as the corresponding continuous analysis.
+
 The first restricted result keeps the existing lower-visit replacement rule.
 Removing or changing recorded restrictions also permits a fresh result to
 replace an incomparable saved result at fewer visits, including after reopening

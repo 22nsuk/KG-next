@@ -47,7 +47,8 @@ public record AnalysisMoveRestrictions(List<AnalysisMoveRestrictions.Clause> cla
   /** Uses the same GTP envelope/comment parsing as physical analysis-output admission. */
   public static AnalysisMoveRestrictions fromCommand(String command) {
     GtpCommandText parsed = GtpCommandText.parse(command);
-    if (!parsed.isOrdinaryAnalysis()) return null;
+    // Restrictions belong to analysis output, including genmove_analyze streams from the console.
+    if (!parsed.isAnalyze()) return null;
     String[] tokens = parsed.payload().split("\\s+");
     List<Clause> clauses = new ArrayList<>();
     for (int index = 1; index < tokens.length; index++) {
