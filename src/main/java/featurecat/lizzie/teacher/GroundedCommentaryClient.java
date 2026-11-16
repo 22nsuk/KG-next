@@ -32,9 +32,11 @@ final class GroundedCommentaryClient implements CommentaryClient {
     Consumer<String> receiver = onText == null ? ignored -> {} : onText;
     for (int attempt = 0; attempt < 2; attempt++) {
       checkCancellation(requestCancellation);
+      checkAnalysis();
       // Partial or rejected text must never reach the UI or become follow-up context.
       String result = delegate.stream(List.copyOf(input), requestCancellation, ignored -> {});
       checkCancellation(requestCancellation);
+      checkAnalysis();
       if (result == null || result.isBlank()) {
         throw unverifiedReply();
       }
@@ -61,6 +63,15 @@ final class GroundedCommentaryClient implements CommentaryClient {
   private static void checkCancellation(TeacherLlmClient.Cancellation cancellation) {
     if (cancellation.isCancelled() || Thread.currentThread().isInterrupted()) {
       throw new CancellationException("AI commentary request was cancelled.");
+    }
+  }
+
+  private void checkAnalysis() throws IOException {
+    if (positions.stream().anyMatch(position -> !position.analysisIsCurrent())) {
+      throw new IOException(
+          TeacherStrings.get(
+              "Teacher.status.analysisChanged",
+              "The analysis used for this commentary was invalidated. Analyze again and generate new commentary."));
     }
   }
 

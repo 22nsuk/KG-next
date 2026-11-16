@@ -229,7 +229,7 @@ class RunLocalCiTest(unittest.TestCase):
                         if arg.startswith("-Dtest="))
         selected = selector.split(",")
         self.assertEqual(40, len(selected))
-        self.assertEqual(115, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertEqual(130, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
         self.assertIn(
             ("featurecat.lizzie.gui.KataGoSetupReadinessDesktopTest",
              "setupWaitsBeyondThirtyFiveSecondsThenDisplaysTheCommittedEngine"),
@@ -269,7 +269,7 @@ class RunLocalCiTest(unittest.TestCase):
             set(selected),
         )
         required = run_local_ci.DESKTOP_RACE_REQUIRED_TESTS
-        self.assertEqual(48, len(required))
+        self.assertEqual(63, len(required))
         self.assertTrue(set(required) <= set(run_local_ci.DESKTOP_REQUIRED_TESTS))
         for classname, name in required:
             methods = selected[classname.rsplit(".", 1)[-1]]

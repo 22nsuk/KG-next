@@ -7,7 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
 import featurecat.lizzie.analysis.WholeGameAnalysisPlan;
+import featurecat.lizzie.teacher.TeacherEvidence;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.ArrayList;
@@ -37,6 +39,35 @@ class AnalysisProvenanceSgfTest {
       "Remote KataGo", "", "remote-model-id", "", "", "chinese", 7.5, null, null, "");
   private static final String ESCAPED_PRIMARY_NAME = "엔진]경로\\net\\n\\\\[v2(;,)]😀";
   private static final String ESCAPED_SECONDARY_NAME = "Other\\]끝\\";
+
+  @ParameterizedTest
+  @ValueSource(strings = {"restricted", "invalidated", "ownership-only", "legacy", "ordinary"})
+  void commentaryEligibilitySurvivesSgfRoundTripWithoutRemovingSavedAnalysis(String state)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[19]" + legacyTags(true) + ";B[aa])", true);
+      BoardData data = history.getStart().getData();
+      AnalysisProvenance restricted = new AnalysisProvenance(
+          "KataGo", "", "", "", "", "", null, null, null, "",
+          AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b C3 2"));
+      if (!state.equals("legacy")) data.setPrimaryAnalysisProvenance(ANALYSIS);
+      if (state.equals("restricted")) data.setPrimaryAnalysisProvenance(restricted);
+      if (state.equals("ownership-only")) data.setPrimaryOwnershipProvenance(restricted);
+      if (state.equals("invalidated")) data.invalidatePrimaryAnalysis();
+      Lizzie.board.setHistory(history);
+
+      String saved = SGFParser.saveToString(false);
+      BoardHistoryNode reopened = SGFParser.parseSgf(saved, true).getStart();
+      assertEquals(!state.equals("restricted") && !state.equals("invalidated"),
+          TeacherEvidence.current(reopened).isPresent());
+      assertEquals(120, reopened.getData().getPlayouts());
+      assertEquals("C3", reopened.getData().bestMoves.get(0).coordinate);
+      assertTrue(saved.contains("LZOP["));
+      assertEquals(state.equals("restricted"), reopened.getData().hasRestrictedPrimaryAnalysis());
+      assertEquals(state.equals("invalidated"), reopened.getData().isChanged);
+      if (state.equals("legacy")) assertNull(reopened.getData().primaryAnalysisProvenance());
+    }
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {"detached", "live", "edit", "branch"})

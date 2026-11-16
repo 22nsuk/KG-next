@@ -50,6 +50,10 @@ final class TeacherPromptBuilder {
     if (range.omittedPositions > 0) {
       evidence.append("; omitted lower-priority positions: ").append(range.omittedPositions);
     }
+    if (range.restrictedPositions > 0 || range.invalidatedPositions > 0) {
+      evidence.append("; excluded restricted analysis: ").append(range.restrictedPositions)
+          .append("; excluded invalidated analysis: ").append(range.invalidatedPositions);
+    }
     evidence.append('\n');
     for (TeacherEvidence.Position position : range.positions) {
       evidence.append('\n').append(formatPosition(position, locale));
@@ -117,6 +121,9 @@ final class TeacherPromptBuilder {
                 "Position after move {0}",
                 position.moveNumber))
         .append('\n');
+    if (position.provenance == null) {
+      text.append("Analysis conditions were not recorded; unrestricted search is not established.\n");
+    }
     text.append(
             TeacherStrings.format(
                 locale, "Teacher.prompt.sideToPlay", "Side to play: {0}", position.toPlay))
