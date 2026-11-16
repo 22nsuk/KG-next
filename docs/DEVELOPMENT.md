@@ -446,6 +446,20 @@ pwsh -NoProfile -File scripts/run_windows_ci_diagnostics.ps1 -OutputDirectory ta
 - `src/main/java/featurecat/lizzie/theme`
   - 主题相关逻辑
 
+### SGF 异步准备与取消
+
+`SgfReadQueue` 保持一个执行中的请求和一个最新等待请求。新请求取消旧请求的
+future，但旧任务真正退出并完成 EDT 收尾后才释放执行槽。SGF 的语法准备、
+长属性扫描、压缩摆子范围展开、独立棋谱树生成、分析 token 读取和回退遍历会
+协作检查该请求的取消状态；导入设置变化后的重建使用同一个取消来源。
+
+取消通过 `CancellationException` 与无效 SGF 区分，不记录为解析失败，也不发布
+部分树。原有同步 API 不读取线程 interrupt，继续使用不取消的准备路径。取消
+不保证立即打断阻塞中的文件系统读取、解码或单次 JVM 分配；这些操作返回后，
+旧请求不会继续完整的 SGF 准备。`SgfReadQueueTest` 在实际语法处理、树生成及
+设置重建中暂停旧请求，再提交新请求，验证旧计算退出后才由同一个 worker 接续。
+`SGFPreparationCancellationTest` 另行覆盖长属性、结构转义、摆子范围与分析数据。
+
 ### 资源目录
 
 - `src/main/resources/l10n`

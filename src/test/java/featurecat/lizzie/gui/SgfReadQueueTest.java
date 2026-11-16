@@ -10,10 +10,16 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class SgfReadQueueTest {
   @Test
@@ -175,6 +181,138 @@ class SgfReadQueueTest {
       assertEquals("next", comment(next.get().join()));
     } finally {
       SwingUtilities.invokeAndWait(() -> GameInfo.DEFAULT_KOMI = previousKomi);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"syntax", "tree", "rebuild"})
+  void supersedingAnInFlightPreparationStopsItsComputationBeforeTheNextRead(String stage)
+      throws Exception {
+    double previousKomi = GameInfo.DEFAULT_KOMI;
+    var worker = Executors.newSingleThreadExecutor();
+    var scheduled = new AtomicInteger();
+    var execution = new AtomicInteger();
+    var running = new AtomicInteger();
+    var maximumRunning = new AtomicInteger();
+    int cancelledExecution = stage.equals("rebuild") ? 2 : 1;
+    var first = new PausedPreparation(
+        stage.equals("syntax") ? "featurecat.lizzie.rules.SgfDocument" : SGFParser.class.getName(),
+        stage.equals("syntax") ? "valueEnd" : "buildFileHistory", execution, cancelledExecution);
+    List<Path> reads = new ArrayList<>();
+    String large = stage.equals("syntax")
+        ? "(;SZ[9]C[" + "x".repeat(128 * 1024) + "])"
+        : "(;SZ[9]" + ";B[];W[]".repeat(1000) + ")";
+    SgfReadQueue queue = new SgfReadQueue(task -> {
+      int index = scheduled.incrementAndGet();
+      worker.execute(() -> {
+        execution.set(index);
+        maximumRunning.accumulateAndGet(running.incrementAndGet(), Math::max);
+        try {
+          task.run();
+        } finally {
+          running.decrementAndGet();
+        }
+      });
+    }, path -> {
+      assertFalse(SwingUtilities.isEventDispatchThread());
+      reads.add(path);
+      if (!path.equals(Path.of("first"))) return "(;SZ[9]C[latest])";
+      if (stage.equals("rebuild")) {
+        try {
+          SwingUtilities.invokeAndWait(() -> GameInfo.DEFAULT_KOMI = previousKomi + 1);
+        } catch (Exception failure) {
+          throw new IOException(failure);
+        }
+      }
+      return large;
+    });
+    AtomicReference<Throwable> firstOutcome = new AtomicReference<>();
+    first.whenComplete((value, failure) -> firstOutcome.set(failure));
+    try {
+      submitObserved(queue, first);
+      assertTrue(first.reached.await(10, TimeUnit.SECONDS),
+          "the real parser must reach the middle of " + stage);
+      var latest = submit(queue, "latest");
+      assertTrue(first.isCancelled());
+      assertInstanceOf(java.util.concurrent.CancellationException.class, firstOutcome.get());
+      assertEquals(cancelledExecution, scheduled.get(),
+          "cancelling a result must not release the active computation slot");
+      assertEquals(List.of(Path.of("first")), reads);
+      AtomicReference<Boolean> callbackOnEdt = new AtomicReference<>();
+      latest.thenAccept(value -> callbackOnEdt.set(SwingUtilities.isEventDispatchThread()));
+      first.release.countDown();
+      assertEquals("latest", comment(latest.get(10, TimeUnit.SECONDS)));
+      SwingUtilities.invokeAndWait(() -> {});
+      assertTrue(first.observedCancellation, "A must consume the cancellation inside its preparation");
+      assertFalse(first.continuedAfterCancellation,
+          "A must unwind at that checkpoint, not scan/build its remaining input before B");
+      assertEquals(true, callbackOnEdt.get());
+      assertEquals(List.of(Path.of("first"), Path.of("latest")), reads,
+          "rebuilding must reuse syntax rather than reread A");
+      assertEquals(1, maximumRunning.get());
+    } finally {
+      first.release.countDown();
+      worker.shutdown();
+      assertTrue(worker.awaitTermination(10, TimeUnit.SECONDS));
+      SwingUtilities.invokeAndWait(() -> GameInfo.DEFAULT_KOMI = previousKomi);
+    }
+  }
+
+  // Observe the real request's cancellation polls without adding a product parser/test hook.
+  private static void submitObserved(SgfReadQueue queue, PausedPreparation result) throws Exception {
+    Class<?> requestType = Class.forName(SgfReadQueue.class.getName() + "$Request");
+    var constructor = requestType.getDeclaredConstructor(
+        Path.class, String.class, SGFParser.ParseOptions.class, CompletableFuture.class);
+    constructor.setAccessible(true);
+    Object request = constructor.newInstance(Path.of("first"), null, null, result);
+    var submit = SgfReadQueue.class.getDeclaredMethod("submit", requestType);
+    submit.setAccessible(true);
+    SwingUtilities.invokeAndWait(() -> {
+      try {
+        assertSame(result, submit.invoke(queue, request));
+      } catch (ReflectiveOperationException failure) {
+        throw new AssertionError(failure);
+      }
+    });
+  }
+
+  private static final class PausedPreparation extends CompletableFuture<SgfReadQueue.PreparedFile> {
+    private final String parserClass;
+    private final String parserMethod;
+    private final AtomicInteger execution;
+    private final int targetExecution;
+    private final CountDownLatch reached = new CountDownLatch(1);
+    private final CountDownLatch release = new CountDownLatch(1);
+    private int polls;
+    private volatile boolean observedCancellation;
+    private volatile boolean continuedAfterCancellation;
+
+    private PausedPreparation(
+        String parserClass, String parserMethod, AtomicInteger execution, int targetExecution) {
+      this.parserClass = parserClass;
+      this.parserMethod = parserMethod;
+      this.execution = execution;
+      this.targetExecution = targetExecution;
+    }
+
+    @Override public boolean isCancelled() {
+      if (!SwingUtilities.isEventDispatchThread() && execution.get() == targetExecution
+          && StackWalker.getInstance().walk(frames -> frames.anyMatch(frame ->
+              frame.getClassName().equals(parserClass) && frame.getMethodName().equals(parserMethod)))) {
+        if (observedCancellation) continuedAfterCancellation = true;
+        // More than the entry checks: both fixtures have substantial input remaining here.
+        if (++polls == 64) {
+          reached.countDown();
+          try {
+            assertTrue(release.await(10, TimeUnit.SECONDS), "preparation checkpoint was not released");
+          } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(failure);
+          }
+        }
+        if (super.isCancelled()) observedCancellation = true;
+      }
+      return super.isCancelled();
     }
   }
 
