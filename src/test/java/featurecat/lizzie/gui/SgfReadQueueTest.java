@@ -239,9 +239,13 @@ class SgfReadQueueTest {
           "cancelling a result must not release the active computation slot");
       assertEquals(List.of(Path.of("first")), reads);
       AtomicReference<Boolean> callbackOnEdt = new AtomicReference<>();
-      latest.thenAccept(value -> callbackOnEdt.set(SwingUtilities.isEventDispatchThread()));
+      var observed = latest.thenApply(value -> {
+        callbackOnEdt.set(SwingUtilities.isEventDispatchThread());
+        return value;
+      });
       first.release.countDown();
-      assertEquals("latest", comment(latest.get(10, TimeUnit.SECONDS)));
+      // Waiting on the parent future can help execute its callbacks on this test thread.
+      assertEquals("latest", comment(observed.get(10, TimeUnit.SECONDS)));
       SwingUtilities.invokeAndWait(() -> {});
       assertTrue(first.observedCancellation, "A must consume the cancellation inside its preparation");
       assertFalse(first.continuedAfterCancellation,

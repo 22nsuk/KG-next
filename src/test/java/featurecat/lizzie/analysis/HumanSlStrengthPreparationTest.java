@@ -45,6 +45,16 @@ class HumanSlStrengthPreparationTest {
         peak = new AtomicInteger();
     final CountDownLatch firstStarted = new CountDownLatch(1),
         firstReleased = new CountDownLatch(1);
+    final CountDownLatch secondStarted, secondReleased;
+
+    Factory() {
+      this(new CountDownLatch(0), new CountDownLatch(0));
+    }
+
+    Factory(CountDownLatch secondStarted, CountDownLatch secondReleased) {
+      this.secondStarted = secondStarted;
+      this.secondReleased = secondReleased;
+    }
 
     public HumanSlStrengthPreparation.Worker open() {
       int number = opened.incrementAndGet();
@@ -58,6 +68,9 @@ class HumanSlStrengthPreparationTest {
           if (number == 1) {
             firstStarted.countDown();
             assertTrue(firstReleased.await(5, TimeUnit.SECONDS));
+          } else if (number == 2) {
+            secondStarted.countDown();
+            assertTrue(secondReleased.await(5, TimeUnit.SECONDS));
           }
           if (cancelled.get()) throw new java.util.concurrent.CancellationException();
           progress.accept(game.getJSONArray("moves").length());
@@ -65,7 +78,8 @@ class HumanSlStrengthPreparationTest {
         }
 
         public void cancel() {
-          firstReleased.countDown();
+          if (number == 1) firstReleased.countDown();
+          else if (number == 2) secondReleased.countDown();
         }
 
         public void close() {
@@ -202,18 +216,25 @@ class HumanSlStrengthPreparationTest {
 
   @Test
   void manualPreemptsBackgroundWithoutOverlappingWorkers() throws Exception {
-    Factory factory = new Factory();
+    var manualStarted = new CountDownLatch(1);
+    var manualReleased = new CountDownLatch(1);
+    Factory factory = new Factory(manualStarted, manualReleased);
     try (var preparation = new HumanSlStrengthPreparation(factory)) {
       var snapshot = snapshot(HumanSlStrength40Test.game());
       preparation.observe(snapshot, true, true, false);
       assertTrue(factory.firstStarted.await(5, TimeUnit.SECONDS));
       var manual = preparation.manual(snapshot);
+      assertTrue(manualStarted.await(5, TimeUnit.SECONDS));
+      // Change the background setting while the manual worker is still preparing.
       preparation.observe(snapshot, false, true, false);
+      manualReleased.countDown();
       manual.completion().get(5, TimeUnit.SECONDS);
       assertEquals(2, factory.opened.get());
       assertEquals(1, factory.peak.get());
       assertEquals(0, factory.live.get());
       assertEquals("HumanSL40.backgroundReady", preparation.status().key());
+    } finally {
+      manualReleased.countDown();
     }
   }
 
