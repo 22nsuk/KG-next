@@ -34,7 +34,7 @@ Acceptance integration(SGF UI·Linux CPU)은
   복사를 검사한다. `SgfCopyDesktopTest`는 디스플레이를 필수로 요구하며,
   `ClipboardCopyTest`와 함께 실패 시 `ci-required`를 통과시키지 않는다.
 
-- 데스크톱 전체 검사는 한 번 실행하고, `desktop-races`의 63개 사례를 두 번 더
+- 데스크톱 전체 검사는 한 번 실행하고, `desktop-races`에 선언된 사례를 두 번 더
   실행한다. 추가 반복은 시작 시 EDT 소유권, 저장·종료, 분석 창 수명, 트리 게시,
   저장 목록 worker, 해설 요청 소유권, HumanSL의 늦은 완료에 집중한다.
   이 사례들은 전체 검사에도 포함되어 총 세 번 실행된다. 나머지 데스크톱 사례의

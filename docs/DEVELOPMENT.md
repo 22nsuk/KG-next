@@ -152,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux x86_64 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 完整 Maven verify（包括凭据测试） | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
-| `desktop-races` | 63 个 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
+| `desktop-races` | 显式声明的 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 显示测试的类选择和强制成功用例在 `scripts/run_local_ci.py` 中按类统一声明；
