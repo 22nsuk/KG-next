@@ -142,6 +142,9 @@ DESKTOP_TESTS = {
     "featurecat.lizzie.gui.TencentKifuRequestDesktopTest": TestSelection((
         "responsesStayWithTheirRequestAndFailedPagesCanRetry",
     )),
+    "featurecat.lizzie.gui.KataGoSetupReadinessDesktopTest": TestSelection((
+        "setupWaitsBeyondThirtyFiveSecondsThenDisplaysTheCommittedEngine",
+    )),
     "featurecat.lizzie.gui.SgfCopyDesktopTest": TestSelection((
         "copiesTheClickTimeSnapshotAndOnlyPublishesTheLatestRequest",
         "copyBurstPublishesTheLatestClickWithoutQueueRejection",

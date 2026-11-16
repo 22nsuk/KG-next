@@ -6512,7 +6512,8 @@ class EngineManagerLifecycleReservationTest {
     Leelaz previousEngine = Lizzie.leelaz;
     Leelaz current = new Leelaz("");
     ControlledReadinessLeelaz target = unavailableControlledEngine(1000L);
-    target.isTuning = true;
+    EngineStartupProgress progress = target.startupProgress(target.currentEngineIncarnation(), 10L);
+    assertTrue(progress.observe("Performing autotuning", progress.deadlineNanos() - 1L));
     ControlledReadinessEngineManager manager =
         new ControlledReadinessEngineManager(List.of(current, target), target, 10L);
     try {
@@ -6550,10 +6551,11 @@ class EngineManagerLifecycleReservationTest {
     Leelaz previousEngine = Lizzie.leelaz;
     EngineManager previousManager = Lizzie.engineManager;
     Leelaz current = new Leelaz("");
-    ControlledReadinessLeelaz target = unavailableControlledEngine(10L);
-    target.isTuning = true;
+    ControlledReadinessLeelaz target = unavailableControlledEngine(100L);
+    EngineStartupProgress progress = target.startupProgress(target.currentEngineIncarnation(), 10L);
+    assertTrue(progress.observe("Performing autotuning", progress.deadlineNanos() - 1L));
     ControlledReadinessEngineManager manager =
-        new ControlledReadinessEngineManager(List.of(current, target), target, 1000L);
+        new ControlledReadinessEngineManager(List.of(current, target), target, 10L);
     try {
       Lizzie.leelaz = current;
       Lizzie.engineManager = manager;

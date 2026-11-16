@@ -40,6 +40,40 @@ mvn -B -DskipTests package
 - `target/lizzie-yzy2.5.3.jar`
 - `target/lizzie-yzy2.5.3-shaded.jar`
 
+## 引擎启动与设置窗口的等待策略
+
+每个进程的 `Leelaz.ReaderStreamBinding` 持有一份 `EngineStartupProgress`。
+普通切换、自动重启、内置引擎 watchdog 和 PK 参与者读取同一个单调时钟截止时间；
+创建新的 reader binding 才会开始新的预算，添加一个等待者不会重新计时。
+
+| 启动路径 | 初始等待预算 |
+| --- | --- |
+| 远程算力 / Java SSH | 60 秒 |
+| 普通本地引擎 | 90 秒 |
+| NVIDIA 内置引擎 | 180 秒 |
+| 检测到首次 OpenCL 调优的内置引擎 | 600 秒 |
+
+真实 stderr 进展可以延长当前预算：`Performing autotuning`、旧版
+`Started OpenCL SGEMM` 和 `Creating new plan cache` 提供从该条消息起最多 600 秒；
+`Beginning GPU tuning`、`Tuning ...` 和有效的 `Testing N different configs`
+提供最多 120 秒。支持 KataGo 时间戳前缀，忽略 dummy-thread 汇总与泛化的 `long time`
+文字。新期限只会向后移动，且单次进程启动自 reader 安装起总计最多 20 分钟。
+重复查询或保持 `isTuning=true` 不会延长；已过期、已退役或已 loaded 的进程不能通过
+更多 stderr 重新延长。20 分钟是有界故障等待策略，不是 GPU 实测完成时间保证。
+
+进程 loaded 不等于切换完成。自动重启仍要求 `list_commands` 收完，保留有界等待；
+规则、棋盘恢复和最终选中引擎提交继续遵守各自的确认与失败处理。
+一键设置只在同一 manager、同一切换 token 的 `ACTIVE` 状态下报告应用成功。
+启动中显示阶段、已经等待的秒数与当前剩余预算，随后显示棋盘同步阶段；
+剩余预算不是预计完成时间，收到进展后可以增加。设置窗口不再以独立 35 秒判定启动失败。
+快速分析释放 GTP 占用的独立 35 秒限制仍保留，关闭设置窗口也不撤销已经受理的引擎切换。
+
+`EngineStartupProgressTest` 使用受控时钟覆盖进展、静默、总上限与过期不可恢复；
+reader、重启、切换和 PK 回归覆盖 incarnation、最终提交与失败清理。
+`KataGoSetupReadinessDesktopTest` 用受控 Java GTP 子进程保持启动超过 35 秒，
+验证生产设置窗口仍等待，再释放引擎响应并验证真实 `ACTIVE`，保存等待和完成截图。
+它列入 desktop gate；该验证不代表真实 OpenCL / TensorRT GPU 或原生平台验收。
+
 ## 本地桌面场景验收
 
 Linux / WSL 可使用独立 Xvfb 显示运行真实 Swing 场景，不占用 WSLg 或 Windows 日常桌面。先准备 JDK 21、Maven、`xvfb`、`xauth` 和中英文字体。

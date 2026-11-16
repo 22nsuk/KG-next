@@ -228,8 +228,13 @@ class RunLocalCiTest(unittest.TestCase):
         selector = next(arg.removeprefix("-Dtest=") for arg in step.command
                         if arg.startswith("-Dtest="))
         selected = selector.split(",")
-        self.assertEqual(39, len(selected))
-        self.assertEqual(114, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertEqual(40, len(selected))
+        self.assertEqual(115, len(run_local_ci.DESKTOP_REQUIRED_TESTS))
+        self.assertIn(
+            ("featurecat.lizzie.gui.KataGoSetupReadinessDesktopTest",
+             "setupWaitsBeyondThirtyFiveSecondsThenDisplaysTheCommittedEngine"),
+            run_local_ci.DESKTOP_REQUIRED_TESTS,
+        )
         self.assertIn(
             ("featurecat.lizzie.gui.TencentKifuRequestDesktopTest",
              "responsesStayWithTheirRequestAndFailedPagesCanRetry"),

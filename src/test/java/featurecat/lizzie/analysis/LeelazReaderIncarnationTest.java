@@ -3,6 +3,10 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -52,6 +56,145 @@ class LeelazReaderIncarnationTest {
   @AfterEach
   void resetLogging() {
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
+  }
+
+  @Test
+  void startupProgressIsSharedAndRetiredStderrCannotExtendAReplacement() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      initializeStreams(engine, bytes(""), bytes("Creating new plan cache for model\n"));
+      Object oldBinding = engine.currentEngineIncarnation();
+      Field suppression = oldBinding.getClass().getDeclaredField("suppressGlobalEnginePresentation");
+      suppression.setAccessible(true);
+      suppression.setBoolean(oldBinding, true);
+      EngineStartupProgress oldProgress = engine.startupProgress(oldBinding, 90_000L);
+      Method readError = Leelaz.class.getDeclaredMethod("readError", oldBinding.getClass());
+      readError.setAccessible(true);
+      readError.invoke(engine, oldBinding);
+      assertEquals(EngineStartupProgress.Stage.TENSORRT_PLAN,
+          engine.startupProgressSnapshot(oldBinding).stage());
+      assertTrue(engine.isTuning);
+      assertSame(oldProgress, engine.startupProgress(oldBinding, 1L),
+          "a second waiter cannot replace the process budget");
+
+      initializeStreams(engine, bytes(""), bytes(""));
+      Object replacement = engine.currentEngineIncarnation();
+      EngineStartupProgress next = engine.startupProgress(replacement, 90_000L);
+      long deadline = next.deadlineNanos();
+      Method parseError = Leelaz.class.getDeclaredMethod(
+          "parseLineForError", String.class, oldBinding.getClass());
+      parseError.setAccessible(true);
+      parseError.invoke(engine, "Performing autotuning", oldBinding);
+      assertFalse(engine.isTuning, "the old process cannot set the replacement's tuning flag");
+      assertEquals(deadline, next.deadlineNanos());
+      assertNull(engine.startupProgressSnapshot(oldBinding));
+      assertEquals(EngineStartupProgress.Stage.RETIRED,
+          oldProgress.snapshot(System.nanoTime()).stage());
+    }
+  }
+
+  @Test
+  void expiredStartupRejectsLateLoadedCommitAndOnlyANewBindingCanRetry() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      initializeStreams(engine, bytes(""), bytes(""));
+      Object binding = engine.currentEngineIncarnation();
+      EngineStartupProgress progress = engine.startupProgress(binding, 90_000L);
+      assertTrue(progress.expired(progress.deadlineNanos()));
+      Method loaded = Leelaz.class.getDeclaredMethod("markEngineLoaded");
+      loaded.setAccessible(true);
+      var failure = assertThrows(java.lang.reflect.InvocationTargetException.class,
+          () -> loaded.invoke(engine));
+      assertInstanceOf(IllegalStateException.class, failure.getCause());
+      assertFalse(engine.isLoaded);
+
+      initializeStreams(engine, bytes(""), bytes(""));
+      loaded.invoke(engine);
+      assertTrue(engine.isLoaded);
+      assertEquals(EngineStartupProgress.Stage.SYNCHRONIZING,
+          engine.startupProgressSnapshot(engine.currentEngineIncarnation()).stage());
+    }
+  }
+
+  @Test
+  void automaticRestartCannotWaitForeverForCommandListAfterLoaded() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      initializeStreams(engine, bytes(""), bytes(""));
+      engine.started = true;
+      engine.isLoaded = true;
+      engine.isCheckingName = false;
+      setField(engine, "endGetCommandList", false);
+      EngineStartupProgress progress = engine.startupProgress(engine.currentEngineIncarnation(), 1L);
+      progress.expired(progress.deadlineNanos());
+      Method wait = Leelaz.class.getDeclaredMethod("waitForAutomaticRestartReadiness", Leelaz.class);
+      wait.setAccessible(true);
+      assertEquals(false, wait.invoke(null, engine));
+      assertEquals(false, getField(engine, "endGetCommandList"));
+    }
+  }
+
+  @Test
+  void startupObserversDoNotBlockTheEdtOnARebindingTransport() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      initializeStreams(engine, bytes(""), bytes(""));
+      Object binding = engine.currentEngineIncarnation();
+      EngineStartupProgress progress = engine.startupProgress(binding, 90_000L);
+      Method arbitration = Leelaz.class.getDeclaredMethod("engineArbitrationLock");
+      arbitration.setAccessible(true);
+      Object lock = arbitration.invoke(engine);
+      CountDownLatch entered = new CountDownLatch(1);
+      CountDownLatch release = new CountDownLatch(1);
+      Thread transport = new Thread(() -> {
+        synchronized (lock) {
+          entered.countDown();
+          try {
+            release.await();
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+          }
+        }
+      });
+      transport.start();
+      try {
+        assertTrue(entered.await(2, TimeUnit.SECONDS));
+        var observation = new java.util.concurrent.FutureTask<>(() -> {
+          assertTrue(SwingUtilities.isEventDispatchThread());
+          assertEquals(progress.deadlineNanos(), engine.startupDeadlineNanos(binding, Long.MIN_VALUE));
+          return engine.startupProgressSnapshot(binding);
+        });
+        SwingUtilities.invokeLater(observation);
+        assertNotNull(observation.get(2, TimeUnit.SECONDS));
+        assertEquals(1L, release.getCount(), "observations must finish while transport is blocked");
+      } finally {
+        release.countDown();
+        transport.join(2000L);
+        assertFalse(transport.isAlive());
+      }
+    }
+  }
+
+  @Test
+  void loadedCommitClearsTuningIfStderrWasConsumedAfterTheNameResponse() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      initializeStreams(engine, bytes(""), bytes(""));
+      Object binding = engine.currentEngineIncarnation();
+      Field suppression = binding.getClass().getDeclaredField("suppressGlobalEnginePresentation");
+      suppression.setAccessible(true);
+      suppression.setBoolean(binding, true);
+      engine.isCheckingName = false;
+      engine.parseAnalysisErrorLineForTest("Creating new plan cache for model");
+      assertTrue(engine.isTuning);
+      Method loaded = Leelaz.class.getDeclaredMethod("markEngineLoaded");
+      loaded.setAccessible(true);
+      loaded.invoke(engine);
+      assertTrue(engine.isLoaded);
+      assertFalse(engine.isTuning, "late stderr must not keep a loaded engine unavailable");
+      engine.parseAnalysisErrorLineForTest("Performing autotuning");
+      assertFalse(engine.isTuning);
+    }
   }
 
   @Test
