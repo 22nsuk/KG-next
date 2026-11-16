@@ -313,6 +313,73 @@ class BoardEditUndoTest {
   }
 
   @Test
+  void insertionReplaysContinuationBranchesAndUndoRedoRestoreTheSelectedPosition()
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Board board = env.board();
+      board.setHistory(SGFParser.parseSgf(
+          "(;SZ[5]KM[6.5]C[root];B[aa]C[first]"
+              + "(;W[bb]C[selected](;B[];W[cc])(;B[dd];W[dc])"
+              + "(;B[cd];W[ed])(;B[dc];W[de]))"
+              + "(;W[ab]C[other];B[ac]))", true));
+      BoardHistoryNode parent = board.getHistory().getStart().next().orElseThrow();
+      BoardHistoryNode selected = parent.getVariation(0).orElseThrow();
+      BoardHistoryNode other = parent.getVariation(1).orElseThrow();
+      board.getHistory().setHead(selected);
+      String before = SGFParser.saveToString(false);
+      var gameInfo = board.getHistory().getGameInfo();
+      Lizzie.config.playSound = true;
+
+      Lizzie.frame.insertMove(new int[] {4, 4}, true);
+
+      BoardHistoryNode inserted = env.current();
+      assertTrue(RulesLayerTestHarness.sameLastMove(inserted.getData(), 4, 4));
+      assertEquals(Stone.BLACK, inserted.getData().lastMoveColor);
+      assertEquals(3, inserted.getData().moveNumber);
+      BoardHistoryNode replayedSelection = inserted.previous().orElseThrow();
+      assertTrue(RulesLayerTestHarness.sameLastMove(replayedSelection.getData(), 1, 1));
+      assertSame(parent, replayedSelection.previous().orElseThrow());
+      assertTrue(parent.getVariations().contains(other));
+      assertEquals("other", other.getData().comment);
+      assertEquals(4, inserted.numberOfChildren());
+      BoardHistoryNode pass = inserted.getVariation(0).orElseThrow();
+      assertTrue(pass.getData().isPassNode());
+      assertEquals(Stone.BLACK, pass.getData().lastMoveColor);
+      assertEquals(4, pass.getData().moveNumber);
+      BoardHistoryNode mainEnd = pass.next().orElseThrow();
+      assertTrue(RulesLayerTestHarness.sameLastMove(mainEnd.getData(), 2, 2));
+      assertEquals(Stone.WHITE, mainEnd.getData().lastMoveColor);
+      assertEquals(Stone.BLACK, mainEnd.getData().stones[Board.getIndex(4, 4)]);
+      BoardHistoryNode branch = inserted.getVariation(1).orElseThrow();
+      assertTrue(RulesLayerTestHarness.sameLastMove(branch.getData(), 3, 3));
+      assertEquals(Stone.BLACK, branch.getData().lastMoveColor);
+      assertTrue(RulesLayerTestHarness.sameLastMove(
+          branch.next().orElseThrow().getData(), 3, 2));
+      BoardHistoryNode third = inserted.getVariation(2).orElseThrow();
+      assertTrue(RulesLayerTestHarness.sameLastMove(third.getData(), 2, 3));
+      assertTrue(RulesLayerTestHarness.sameLastMove(
+          third.next().orElseThrow().getData(), 4, 3));
+      BoardHistoryNode fourth = inserted.getVariation(3).orElseThrow();
+      assertTrue(RulesLayerTestHarness.sameLastMove(fourth.getData(), 3, 2));
+      assertTrue(RulesLayerTestHarness.sameLastMove(
+          fourth.next().orElseThrow().getData(), 3, 4));
+      assertSame(gameInfo, board.getHistory().getGameInfo());
+      assertTrue(Lizzie.config.playSound);
+      String after = SGFParser.saveToString(false);
+
+      board.cleanedit();
+      assertEquals(before, SGFParser.saveToString(false));
+      assertTrue(RulesLayerTestHarness.sameLastMove(env.current().getData(), 1, 1));
+      assertEquals("selected", env.current().getData().comment);
+      assertSame(gameInfo, board.getHistory().getGameInfo());
+      board.reedit();
+      assertEquals(after, SGFParser.saveToString(false));
+      assertTrue(RulesLayerTestHarness.sameLastMove(env.current().getData(), 4, 4));
+      assertEquals(4, env.current().numberOfChildren());
+    }
+  }
+
+  @Test
   void oneStepUndoRedoKeepsCurrentGameInfoAndRulesAndClearRollbackKeepsThePendingEdit()
       throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {

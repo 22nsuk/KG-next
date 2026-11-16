@@ -15,9 +15,12 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PassVariationNumberingTest {
   @ParameterizedTest
-  @ValueSource(strings = {"normal", "branch", "dummy", "append", "engine-game"})
-  void newHistoryPassOwnsItsPositionState(String entrypoint) throws Exception {
+  @ValueSource(strings = {"normal", "branch", "dummy", "append", "engine-game",
+      "board", "board-branch", "board-dummy"})
+  void newPassOwnsItsPositionState(String entrypoint) throws Exception {
     try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      boolean branch = entrypoint.endsWith("branch");
+      boolean dummy = entrypoint.endsWith("dummy");
       // Keep addOrGoto's separate branch-number reset from masking the pass input's reset.
       Lizzie.config.newMoveNumberInBranch = false;
       BoardHistoryList history = env.board().getHistory();
@@ -27,7 +30,7 @@ class PassVariationNumberingTest {
       BoardData source = parent.getData();
       source.blackCaptures = 3;
       source.whiteCaptures = 4;
-      if (entrypoint.equals("branch")) {
+      if (branch) {
         history.place(2, 2, Stone.BLACK);
         assertTrue(history.previous().isPresent());
       } else if (entrypoint.equals("append")) {
@@ -45,6 +48,9 @@ class PassVariationNumberingTest {
         case "dummy" -> history.pass(Stone.BLACK, false, true);
         case "append" -> history.pass(Stone.BLACK, false, false, false, true);
         case "engine-game" -> history.passForEngineGame(Stone.BLACK, true);
+        case "board" -> env.board().pass(Stone.BLACK);
+        case "board-branch" -> env.board().pass(Stone.BLACK, true);
+        case "board-dummy" -> env.board().pass(Stone.BLACK, false, true);
         default -> throw new IllegalArgumentException(entrypoint);
       }
       BoardData pass =
@@ -53,7 +59,7 @@ class PassVariationNumberingTest {
               : history.getData();
       if (entrypoint.equals("append")) assertSame(cursor, env.current());
       assertTrue(pass.isPassNode());
-      assertEquals(entrypoint.equals("dummy"), pass.dummy);
+      assertEquals(dummy, pass.dummy);
       assertEquals(Stone.BLACK, pass.lastMoveColor);
       assertFalse(pass.blackToPlay);
       assertEquals(3, pass.moveNumber);
@@ -61,7 +67,7 @@ class PassVariationNumberingTest {
       assertEquals(4, pass.whiteCaptures);
       assertArrayEquals(stones, pass.stones);
       assertArrayEquals(
-          entrypoint.equals("branch") ? new int[numbers.length] : numbers, pass.moveNumberList);
+          branch ? new int[numbers.length] : numbers, pass.moveNumberList);
       assertEquals(hash, pass.zobrist);
       assertNotSame(source.stones, pass.stones);
       assertNotSame(source.moveNumberList, pass.moveNumberList);

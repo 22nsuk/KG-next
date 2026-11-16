@@ -2561,30 +2561,25 @@ public class Board {
         return;
       }
 
-      Stone[] stones = history.getStones().clone();
-      Zobrist zobrist = history.getZobrist();
-
-      int moveNumber = history.getMoveNumber() + 1;
-      int[] moveNumberList =
-          newBranch && history.getNext(true).isPresent()
-              ? new int[Board.boardWidth * Board.boardHeight]
-              : history.getMoveNumberList().clone();
-
-      // build the new game state
+      BoardData parent = history.getData();
+      // The factory owns the position copies; a pass leaves the parent untouched.
       BoardData newState =
           BoardData.pass(
-              stones,
+              parent.stones,
               color,
               color.equals(Stone.WHITE),
-              zobrist,
-              moveNumber,
-              moveNumberList,
-              history.getData().blackCaptures,
-              history.getData().whiteCaptures,
+              parent.zobrist,
+              parent.moveNumber + 1,
+              parent.moveNumberList,
+              parent.blackCaptures,
+              parent.whiteCaptures,
               0,
               0);
+      if (newBranch && history.getNext(true).isPresent()) {
+        Arrays.fill(newState.moveNumberList, 0);
+      }
       newState.dummy = dummy;
-      newState.moveMNNumber = history.getData().nextMoveMNNumber(newBranch);
+      newState.moveMNNumber = parent.nextMoveMNNumber(newBranch);
       boolean previousBlackToPlay = history.isBlacksTurn();
       // Reuse later pass variations without replacing their comments or analysis.
       if (!newBranch && !dummy && history.nextByMoveIdentity(newState).isPresent()) {
@@ -2859,16 +2854,31 @@ public class Board {
         Lizzie.frame.refreshAfterMove();
         return;
       }
-      // load a copy of the data at the current node of history
-      Stone[] stones = history.getStones().clone();
-      Zobrist zobrist = history.getZobrist();
-      Optional<int[]> lastMove = Optional.of(new int[] {x, y});
-      int moveNumber = history.getMoveNumber() + 1;
-      int moveMNNumber = history.getData().nextMoveMNNumber(newBranch);
-      int[] moveNumberList =
-          newBranch && history.getNext(true).isPresent()
-              ? new int[Board.boardWidth * Board.boardHeight]
-              : history.getMoveNumberList().clone();
+      BoardData parent = history.getData();
+      int moveNumber = parent.moveNumber + 1;
+      int moveMNNumber = parent.nextMoveMNNumber(newBranch);
+      // Detach the parent once, then mutate only this unpublished candidate. Rejected moves
+      // discard it without changing the parent or any existing variation.
+      BoardData newState =
+          BoardData.move(
+              parent.stones,
+              new int[] {x, y},
+              color,
+              color.equals(Stone.WHITE),
+              parent.zobrist,
+              moveNumber,
+              parent.moveNumberList,
+              parent.blackCaptures,
+              parent.whiteCaptures,
+              nextWinrate,
+              0);
+      newState.moveMNNumber = moveMNNumber;
+      Stone[] stones = newState.stones;
+      Zobrist zobrist = newState.zobrist;
+      int[] moveNumberList = newState.moveNumberList;
+      if (newBranch && history.getNext(true).isPresent()) {
+        Arrays.fill(moveNumberList, 0);
+      }
       if (Lizzie.frame.isTrying) moveNumberList[Board.getIndex(x, y)] = -moveNumber;
       else moveNumberList[Board.getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
 
@@ -2894,24 +2904,8 @@ public class Board {
         }
       }
 
-      int bc = history.getData().blackCaptures;
-      int wc = history.getData().whiteCaptures;
-      if (color.isBlack()) bc += capturedStones;
-      else wc += capturedStones;
-      BoardData newState =
-          BoardData.move(
-              stones,
-              lastMove.get(),
-              color,
-              color.equals(Stone.WHITE),
-              zobrist,
-              moveNumber,
-              moveNumberList,
-              bc,
-              wc,
-              nextWinrate,
-              0);
-      newState.moveMNNumber = moveMNNumber;
+      if (color.isBlack()) newState.blackCaptures += capturedStones;
+      else newState.whiteCaptures += capturedStones;
       newState.dummy = false;
       // don't make this coordinate if it is suicidal or violates superko
       if (!noCheckSuiKo) {
@@ -6684,9 +6678,12 @@ public class Board {
       BoardHistoryNode node, MoveLinkedList head, ArrayList<MoveLinkedList> tempHead) {
     Stack<BoardHistoryNode> stack = new Stack<>();
     stack.push(node);
+    tempHead.add(head);
 
     while (!stack.isEmpty()) {
       BoardHistoryNode cur = stack.pop();
+      // Each pending node keeps its own parent; a leaf must not consume a sibling's parent.
+      head = tempHead.remove(tempHead.size() - 1);
       BoardData data = cur.getData();
       Optional<int[]> lastMove = data.lastMove;
       if (shouldIncludeHistoryMove(data))
@@ -6698,15 +6695,9 @@ public class Board {
                 data.lastMoveColor.isBlack(),
                 !cur.previous().isPresent());
 
-      if (!cur.next().isPresent() && !tempHead.isEmpty()) {
-        head = tempHead.get(tempHead.size() - 1);
-        tempHead.remove(tempHead.size() - 1);
-      }
-
-      if (cur.numberOfChildren() >= 1) {
-        if (cur.numberOfChildren() > 1) tempHead.add(head);
-        for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
-          stack.push(cur.getVariations().get(i));
+      for (int i = cur.numberOfChildren() - 1; i >= 0; i--) {
+        stack.push(cur.getVariations().get(i));
+        tempHead.add(head);
       }
     }
   }
