@@ -42,8 +42,8 @@ scrollable while the analysis controls stay visible.
 
 ## Meaning of recorded fields
 
-`featurecat.lizzie.analysis.AnalysisProvenance` is an immutable value with ten
-fields. Empty text and null numbers mean unknown. Numeric fields must be
+`featurecat.lizzie.analysis.AnalysisProvenance` is an immutable value with producer
+details and optional move restrictions. Empty text and null numbers mean unknown. Numeric fields must be
 finite. The runtime collector normalizes invalid or oversized optional values
 to unknown so that missing metadata cannot stop analysis publication.
 
@@ -59,6 +59,7 @@ to unknown so that missing metadata cannot stop analysis publication.
 | `pda` | Observed static playout doubling advantage, when available. An unobserved or dynamic value remains unknown. |
 | `wrn` | Observed analysis wide root noise, when available. |
 | `humanSLProfile` | The HumanSL profile when it is explicitly known. Current live collection leaves this field unknown. |
+| `moveRestrictions` | Recorded `allow`/`avoid` clauses from the physically written analysis command: kind, player, coordinates and `untilDepth`. No value means no recorded restriction, which does not prove that a legacy result was unrestricted. An empty clause list means restrictions were requested but their details could not be completely recorded. |
 
 Local file hashes are file observations, **not attestations that the engine
 loaded those exact bytes**. A process could already have loaded a previous
@@ -85,6 +86,50 @@ The collector preserves uncertainty:
 The default reuse policy does not perform an automatic “same configuration”
 decision from these partial observations. Users select reassessment when they
 want every planned position evaluated again by the current engine.
+
+## Restricted analysis: record, display and reuse
+
+KG-next retains a restricted result in the current position's analysis slot.
+Saving analysis also saves that result and its recorded conditions; reopening
+does not automatically restart the restriction or alter the current allow/avoid
+selection. The source panel labels the result as restricted and shows each
+recorded player, coordinate list and search depth. Evaluation and ownership
+can have different restrictions, just as they can have different producers.
+Graphs and candidates remain available for inspection.
+
+| Result | Ordinary analysis reuse |
+| --- | --- |
+| Evaluation with recorded restrictions | Never satisfies ordinary whole-game/quick analysis, regardless of visits. It is also excluded from ordinary-analysis inputs to player-strength estimation. |
+| Ordinary evaluation with restricted ownership | Evaluation may be reused when ownership is not required. A task requesting ownership must obtain an ordinary map. Restricted ownership is not carried into a fresh ordinary result. |
+| Legacy result without recorded restrictions | Keeps the previous completeness, visit and invalidation policy; missing historical conditions are not inferred. |
+
+Automatic quick analysis and Yike curve completion use the same distinction
+when deciding whether work is missing and whether it has finished. Display
+availability itself is unchanged. This policy does not introduce a separate
+restricted-analysis cache or erase results at other positions.
+
+Conditions are read from the command that actually reached the engine's
+physical-write boundary, using the same GTP ID/comment parsing as output
+ownership. Changing a UI selection, queuing a command, or replacing an unwritten
+request cannot relabel an older result. Each mirrored engine keeps its own
+owner. The record describes the requested clauses, not an independent
+attestation that a remote or unsupported engine applied them.
+
+This also covers `kata-genmove_analyze`, `lz-genmove_analyze` and `genmove_analyze`
+sent through the GTP console. Their analysis output carries the same recorded
+conditions and ordinary-reuse policy as the corresponding continuous analysis.
+
+The first restricted result keeps the existing lower-visit replacement rule.
+Removing or changing recorded restrictions also permits a fresh result to
+replace an incomparable saved result at fewer visits, including after reopening
+the SGF or returning to the position. After that replacement, the normal cache
+protects it from a shallower result under the same recorded restrictions.
+An ownership map from the old restrictions is not retained across this boundary.
+
+`untilDepth` is the written search depth in ply, not a time or visit budget.
+Repeated clauses and both players are recorded in their written order; this
+change does not alter the engine request syntax or combine restriction modes.
+See KataGo's [GTP analysis options](https://github.com/lightvector/KataGo/blob/master/docs/GTP_Extensions.md).
 
 ## Payload ownership and lifecycle
 
@@ -117,7 +162,8 @@ Saved payload state and live execution permissions must remain separate:
 | `primaryAnalysisRevision` counter | Invalidates already dispatched work when the live position changes; never restored from SGF. |
 
 `hasReusablePrimaryAnalysis(visits, ownership, requiredRunToken)` applies the
-usual completeness/invalidation checks and, when the token is non-null,
+usual completeness/invalidation checks, excludes recorded restricted evaluation
+(and restricted ownership when requested), and, when the token is non-null,
 requires a result marked by that run. A null token retains the default reuse
 behavior. Full replacement clears the old token; the request owner marks the
 accepted result with its own token. Copy/sync and clear boundaries remove the
@@ -180,27 +226,35 @@ stored separately in a custom **`KGP`** property, as UTF-8 JSON encoded with
 unpadded Base64URL. This keeps model names, Unicode, brackets and backslashes
 outside the legacy analysis/PV grammar.
 
-The reader accepts versions 1 and 2. The writer uses version 2 when a serialized
+The reader accepts versions 1, 2 and 3. The writer uses version 3 only when a
+serialized evaluation or ownership source contains move restrictions. Otherwise
+it uses version 2 when a serialized
 payload is invalidated, including when its provenance is unknown. Valid-only
 source records continue to use version 1 so existing v1 readers can display
 their provenance. Version 2 adds a per-slot `invalidated` Boolean; absent flags
-and version 1 retain legacy validity behavior.
+and version 1 retain legacy validity behavior. Version 3 additionally permits
+`moveRestrictions` in each provenance object; version 1/2 reject that field.
 
 The decoded structure is:
 
 ```text
 app: "KG-next"
-version: 1 or 2
+version: 1, 2 or 3
 primary?:
   payloadSha256: SHA-256 of the primary LZ/LZOP property value
   analysis?: AnalysisProvenance object
   ownership?: AnalysisProvenance object
-  invalidated?: Boolean (version 2 only)
+  invalidated?: Boolean (version 2/3)
 secondary?:
   payloadSha256: SHA-256 of the secondary LZ2/LZOP2 property value
   analysis?: AnalysisProvenance object
   ownership?: AnalysisProvenance object
-  invalidated?: Boolean (version 2 only)
+  invalidated?: Boolean (version 2/3)
+
+AnalysisProvenance.moveRestrictions?: [  # version 3 only; [] = details unknown
+  { kind: "allow" | "avoid", player: "B" | "W",
+    coordinates: "D4,Q16,PASS", untilDepth: nonnegative integer }
+]
 ```
 
 The hash input is the unescaped SGF property value encoded in UTF-8, including
@@ -233,6 +287,10 @@ Metadata alone cannot override live invalidation. This import scope follows
 payloads transferred to setup snapshots and ends when parsing returns; it is
 not retained on the board or reused by a later import.
 
+Metadata-only imports also retain existing restricted source records for slots
+whose payloads were not replaced in that import. Replacing or corrupting only
+KGP cannot silently make those existing results reusable as ordinary analysis.
+
 A matching KGP source takes precedence over a named WRN, including when that
 source's WRN is explicitly unknown. The original header WRN is retained with
 its import digest so that a later invalid or nonmatching KGP replacement can
@@ -262,7 +320,7 @@ valid field types, finite numbers, strict Boolean invalidation flags and
 64-character hexadecimal hashes. Text limits are 1,024 characters for
 engine/model names, 128 for engine version,
 8,192 for rules and 256 for HumanSL profile. The encoded property is limited
-to 393,216 characters (384 KiB) for decoding. Each of the four source records
+to 393,216 characters (384 KiB) for version 1/2 decoding. Each of the four source records
 accepts at most 10,752 UTF-16 text units, including the two hashes. Allowing
 six JSON bytes per unit and 2,048 bytes for field names, punctuation, payload
 hashes and finite numbers bounds generated JSON at 260,096 bytes and padded
@@ -270,6 +328,22 @@ Base64 at 346,796 characters. The decoding limit therefore accommodates all
 accepted source records even with maximum JSON escaping. Invalid UTF-8,
 malformed metadata and unsupported versions are ignored as analysis metadata
 without rejecting the legacy analysis.
+
+Version 3 permits at most 64 restriction clauses and 65,536 characters of
+coordinate text plus per-clause overhead in each source record. Coordinates
+are bounded ASCII GTP vertices or `PASS`; depths must be nonnegative integers.
+Its encoded-property limit is 786,432 characters (768 KiB), allowing all four
+bounded restriction records in addition to the existing producer fields.
+Unreadable or oversized live restrictions remain marked as restricted with
+unknown details. Malformed imported metadata follows the existing opaque
+metadata policy and is not treated as a partly trusted source.
+
+Readers that only support KGP version 1/2 ignore the entire version 3 property,
+including invalidation flags. Other SGF readers may also ignore KGP. They can
+still display the legacy analysis payload, but cannot be relied on to show or
+enforce its restriction/reuse policy. The saved restrictions must be inspected
+in a version 3-aware KG-next; this change does not provide a compatibility guard
+inside older applications.
 
 Opaque or unsupported raw `KGP` values are retained when possible and written
 back when no current source or invalidation record supersedes them. A live

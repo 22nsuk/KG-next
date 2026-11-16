@@ -4,6 +4,7 @@ import static java.util.Arrays.asList;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
 import featurecat.lizzie.analysis.GameInfo;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.MoveData;
@@ -50,6 +51,7 @@ import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
 import org.json.JSONException;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
@@ -3126,9 +3128,11 @@ public class SGFParser {
   // Four records allow 10,752 UTF-16 text units each, at most six JSON bytes per unit.
   // With 2 KiB for keys, digests and numbers, Base64 needs at most 346,796 characters.
   private static final int MAX_PROVENANCE_PROPERTY_LENGTH = 393216;
+  // Version 3 also allows four bounded ASCII restriction records and their JSON keys.
+  private static final int MAX_RESTRICTED_PROVENANCE_PROPERTY_LENGTH = 786432;
   private static final Set<String> PROVENANCE_FIELDS = Set.of(
       "engineName", "engineVersion", "modelName", "modelSha256", "configSha256", "rules",
-      "komi", "pda", "wrn", "humanSLProfile");
+      "komi", "pda", "wrn", "humanSLProfile", "moveRestrictions");
 
   private record AnalysisMetadataSlot(
       String payloadSha256, AnalysisProvenance analysis, AnalysisProvenance ownership,
@@ -3143,15 +3147,21 @@ public class SGFParser {
     }
     boolean invalidated = (primaryPayload != null && data.isChanged)
         || (secondaryPayload != null && data.isChanged2);
+    AnalysisProvenance primaryOwnership = data.estimateArray == null || data.estimateArray.isEmpty()
+        ? null : data.primaryOwnershipProvenance();
+    AnalysisProvenance secondaryOwnership = data.estimateArray2 == null || data.estimateArray2.isEmpty()
+        ? null : data.secondaryOwnershipProvenance();
+    boolean restricted = (primaryPayload != null
+        && (hasMoveRestrictions(data.primaryAnalysisProvenance()) || hasMoveRestrictions(primaryOwnership)))
+        || (secondaryPayload != null
+        && (hasMoveRestrictions(data.secondaryAnalysisProvenance()) || hasMoveRestrictions(secondaryOwnership)));
     // Keep valid-only files readable by clients that understand version 1 provenance.
     JSONObject metadata = new JSONObject().put("app", "KG-next")
-        .put("version", invalidated ? 2 : 1);
+        .put("version", restricted ? 3 : invalidated ? 2 : 1);
     addAnalysisMetadataSlot(metadata, "primary", primaryPayload, data.primaryAnalysisProvenance(),
-        data.estimateArray == null || data.estimateArray.isEmpty()
-            ? null : data.primaryOwnershipProvenance(), data.isChanged);
+        primaryOwnership, data.isChanged);
     addAnalysisMetadataSlot(metadata, "secondary", secondaryPayload, data.secondaryAnalysisProvenance(),
-        data.estimateArray2 == null || data.estimateArray2.isEmpty()
-            ? null : data.secondaryOwnershipProvenance(), data.isChanged2);
+        secondaryOwnership, data.isChanged2);
     String property = data.getProperty("KGP");
     if (metadata.length() > 2) {
       property = Base64.getUrlEncoder().withoutPadding()
@@ -3179,7 +3189,7 @@ public class SGFParser {
   }
 
   private static JSONObject provenanceJson(AnalysisProvenance provenance) {
-    return new JSONObject()
+    JSONObject value = new JSONObject()
         .put("engineName", provenance.engineName())
         .put("engineVersion", provenance.engineVersion())
         .put("modelName", provenance.modelName())
@@ -3190,9 +3200,41 @@ public class SGFParser {
         .put("pda", provenance.pda())
         .put("wrn", provenance.wrn())
         .put("humanSLProfile", provenance.humanSLProfile());
+    if (hasMoveRestrictions(provenance)) {
+      JSONArray clauses = new JSONArray();
+      for (var clause : provenance.moveRestrictions().clauses()) {
+        clauses.put(new JSONObject().put("kind", clause.kind()).put("player", clause.player())
+            .put("coordinates", clause.coordinates()).put("untilDepth", clause.untilDepth()));
+      }
+      value.put("moveRestrictions", clauses);
+    }
+    return value;
+  }
+
+  private static boolean hasMoveRestrictions(AnalysisProvenance provenance) {
+    return provenance != null && provenance.moveRestrictions() != null;
   }
 
   private static void restoreAnalysisMetadata(
+      BoardData data, boolean restorePrimaryInvalidation, boolean restoreSecondaryInvalidation) {
+    AnalysisProvenance primary = data.primaryAnalysisProvenance();
+    AnalysisProvenance ownership = data.primaryOwnershipProvenance();
+    AnalysisProvenance secondary = data.secondaryAnalysisProvenance();
+    AnalysisProvenance ownership2 = data.secondaryOwnershipProvenance();
+    restoreAnalysisMetadataFromProperty(data, restorePrimaryInvalidation, restoreSecondaryInvalidation);
+    // Metadata-only imports cannot turn an existing restricted payload into ordinary reusable work.
+    // Replacing its LZ payload is the boundary that may retire these recorded conditions.
+    if (!restorePrimaryInvalidation) {
+      if (hasMoveRestrictions(primary)) data.setPrimaryAnalysisProvenance(primary);
+      if (hasMoveRestrictions(ownership)) data.setPrimaryOwnershipProvenance(ownership);
+    }
+    if (!restoreSecondaryInvalidation) {
+      if (hasMoveRestrictions(secondary)) data.setSecondaryAnalysisProvenance(secondary);
+      if (hasMoveRestrictions(ownership2)) data.setSecondaryOwnershipProvenance(ownership2);
+    }
+  }
+
+  private static void restoreAnalysisMetadataFromProperty(
       BoardData data, boolean restorePrimaryInvalidation, boolean restoreSecondaryInvalidation) {
     data.setPrimaryAnalysisProvenance(headerWrnProvenance(data.importedAnalysisWrn(false)));
     data.setPrimaryOwnershipProvenance(null);
@@ -3222,7 +3264,7 @@ public class SGFParser {
   }
 
   private static AnalysisMetadata readAnalysisMetadata(String property) {
-    if (property == null || property.length() > MAX_PROVENANCE_PROPERTY_LENGTH) return null;
+    if (property == null || property.length() > MAX_RESTRICTED_PROVENANCE_PROPERTY_LENGTH) return null;
     try {
       String json = StandardCharsets.UTF_8.newDecoder()
           .onMalformedInput(CodingErrorAction.REPORT)
@@ -3232,14 +3274,17 @@ public class SGFParser {
       JSONObject metadata = new JSONObject(tokener);
       if (tokener.nextClean() != 0) return null;
       requireProvenanceKeys(metadata, Set.of("app", "version", "primary", "secondary"));
-      boolean supportsInvalidation = Integer.valueOf(2).equals(metadata.opt("version"));
+      boolean supportsRestrictions = Integer.valueOf(3).equals(metadata.opt("version"));
+      boolean supportsInvalidation = supportsRestrictions
+          || Integer.valueOf(2).equals(metadata.opt("version"));
       if (!"KG-next".equals(metadata.opt("app"))
-          || (!supportsInvalidation && !Integer.valueOf(1).equals(metadata.opt("version")))) {
+          || (!supportsInvalidation && !Integer.valueOf(1).equals(metadata.opt("version")))
+          || (!supportsRestrictions && property.length() > MAX_PROVENANCE_PROPERTY_LENGTH)) {
         return null;
       }
       return new AnalysisMetadata(
-          readAnalysisMetadataSlot(metadata, "primary", supportsInvalidation),
-          readAnalysisMetadataSlot(metadata, "secondary", supportsInvalidation));
+          readAnalysisMetadataSlot(metadata, "primary", supportsInvalidation, supportsRestrictions),
+          readAnalysisMetadataSlot(metadata, "secondary", supportsInvalidation, supportsRestrictions));
     } catch (IllegalArgumentException | JSONException | CharacterCodingException ignored) {
       // Optional metadata must never prevent legacy analysis from loading. The raw property stays.
       return null;
@@ -3247,7 +3292,7 @@ public class SGFParser {
   }
 
   private static AnalysisMetadataSlot readAnalysisMetadataSlot(
-      JSONObject metadata, String key, boolean supportsInvalidation) {
+      JSONObject metadata, String key, boolean supportsInvalidation, boolean supportsRestrictions) {
     if (!metadata.has(key) || metadata.isNull(key)) return null;
     JSONObject slot = metadata.getJSONObject(key);
     requireProvenanceKeys(slot, supportsInvalidation
@@ -3259,25 +3304,32 @@ public class SGFParser {
       throw new JSONException("Invalid analysis invalidation flag");
     }
     return new AnalysisMetadataSlot(digest.toLowerCase(Locale.ROOT),
-        readProvenance(slot, "analysis"), readProvenance(slot, "ownership"),
+        readProvenance(slot, "analysis", supportsRestrictions),
+        readProvenance(slot, "ownership", supportsRestrictions),
         Boolean.TRUE.equals(slot.opt("invalidated")));
   }
 
-  private static AnalysisProvenance readProvenance(JSONObject slot, String key) {
+  private static AnalysisProvenance readProvenance(
+      JSONObject slot, String key, boolean supportsRestrictions) {
     if (!slot.has(key) || slot.isNull(key)) return null;
     JSONObject value = slot.getJSONObject(key);
     requireProvenanceKeys(value, PROVENANCE_FIELDS);
+    if (!supportsRestrictions && value.has("moveRestrictions")) {
+      throw new JSONException("Unsupported analysis restrictions");
+    }
     AnalysisProvenance provenance = new AnalysisProvenance(
         provenanceText(value, "engineName"), provenanceText(value, "engineVersion"),
         provenanceText(value, "modelName"), provenanceText(value, "modelSha256"),
         provenanceText(value, "configSha256"), provenanceText(value, "rules"),
         provenanceNumber(value, "komi"), provenanceNumber(value, "pda"),
-        provenanceNumber(value, "wrn"), provenanceText(value, "humanSLProfile"));
+        provenanceNumber(value, "wrn"), provenanceText(value, "humanSLProfile"),
+        readMoveRestrictions(value));
     JSONObject normalized = provenanceJson(provenance);
     // Live collection drops invalid optional fields; import rejects a malformed source as a whole.
     // This avoids showing a partially trusted source from an unsupported or corrupt schema.
     for (String field : PROVENANCE_FIELDS) {
-      if (field.equals("komi") || field.equals("pda") || field.equals("wrn")) continue;
+      if (field.equals("komi") || field.equals("pda") || field.equals("wrn")
+          || field.equals("moveRestrictions")) continue;
       String original = provenanceText(value, field).strip();
       if (field.endsWith("Sha256")) original = original.toLowerCase(Locale.ROOT);
       if (!original.equals(normalized.getString(field))) {
@@ -3285,6 +3337,26 @@ public class SGFParser {
       }
     }
     return provenance;
+  }
+
+  private static AnalysisMoveRestrictions readMoveRestrictions(
+      JSONObject provenance) {
+    if (!provenance.has("moveRestrictions") || provenance.isNull("moveRestrictions")) return null;
+    JSONArray values = provenance.getJSONArray("moveRestrictions");
+    if (values.length() > AnalysisMoveRestrictions.MAX_CLAUSES) {
+      throw new JSONException("Too many analysis restrictions");
+    }
+    List<AnalysisMoveRestrictions.Clause> clauses = new ArrayList<>();
+    for (int index = 0; index < values.length(); index++) {
+      JSONObject clause = values.getJSONObject(index);
+      requireProvenanceKeys(clause, Set.of("kind", "player", "coordinates", "untilDepth"));
+      if (!(clause.get("untilDepth") instanceof Integer depth)) {
+        throw new JSONException("Invalid restriction depth");
+      }
+      clauses.add(new AnalysisMoveRestrictions.Clause(
+          clause.getString("kind"), clause.getString("player"), clause.getString("coordinates"), depth));
+    }
+    return new AnalysisMoveRestrictions(clauses);
   }
 
   private static String provenanceText(JSONObject value, String key) {

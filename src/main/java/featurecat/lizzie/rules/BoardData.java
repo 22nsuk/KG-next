@@ -110,6 +110,24 @@ public class BoardData implements Cloneable {
     secondaryOwnershipProvenance = provenance;
   }
 
+  public synchronized boolean hasRestrictedPrimaryAnalysis() {
+    return hasMoveRestrictions(primaryAnalysisProvenance);
+  }
+
+  public synchronized boolean hasRestrictedPrimaryOwnership() {
+    return hasMoveRestrictions(primaryOwnershipProvenance);
+  }
+
+  private static boolean hasMoveRestrictions(AnalysisProvenance provenance) {
+    return provenance != null && provenance.moveRestrictions() != null;
+  }
+
+  private static boolean differentMoveRestrictions(
+      AnalysisProvenance cached, AnalysisProvenance incoming) {
+    return !Objects.equals(cached == null ? null : cached.moveRestrictions(),
+        incoming == null ? null : incoming.moveRestrictions());
+  }
+
   String importedAnalysisDigest(boolean secondary) {
     ImportedAnalysis imported = importedAnalysis(secondary);
     return imported == null ? null : imported.digest();
@@ -162,20 +180,23 @@ public class BoardData implements Cloneable {
         : cachedRoot >= 0 && exactRootVisits < 0 ? incomingEdgeVisits : totalVisits;
     boolean protectedCache = Lizzie.config.enableLizzieCache && !Lizzie.config.isAutoAna
         && (secondary || !Lizzie.engineGame.current().playing());
+    AnalysisProvenance incomingProvenance = engine.captureAnalysisProvenance();
+    boolean changedRestrictions = differentMoveRestrictions(
+        secondary ? secondaryAnalysisProvenance : primaryAnalysisProvenance, incomingProvenance);
     boolean full = forceFull || !protectedCache || invalidated || cachedPda != engine.pda
+        || changedRestrictions
         || (comparable && comparisonVisits > cached)
         || (sameSource && cachedRoot >= 0 && exactRootVisits >= 0 && totalVisits == cached);
     if (!full) {
       List<Double> oldOwnership = secondary ? estimateArray2 : estimateArray;
       if (ownership != null && !ownership.isEmpty()
           && (!comparable || comparisonVisits < cached || oldOwnership == null)) {
-        AnalysisProvenance provenance = engine.captureAnalysisProvenance();
         if (secondary) {
           estimateArray2 = compactEstimateArray(ownership);
-          secondaryOwnershipProvenance = provenance;
+          secondaryOwnershipProvenance = incomingProvenance;
         } else {
           estimateArray = compactEstimateArray(ownership);
-          primaryOwnershipProvenance = provenance;
+          primaryOwnershipProvenance = incomingProvenance;
         }
         discardImportedAnalysisMetadata(secondary);
         return AnalysisAdoption.OWNERSHIP_ONLY;
@@ -183,9 +204,11 @@ public class BoardData implements Cloneable {
       return AnalysisAdoption.REJECTED;
     }
     List<Double> retainedOwnership = ownership;
-    boolean retainsOwnership = sameSource && !invalidated && (ownership == null || ownership.isEmpty());
     AnalysisProvenance retainedOwnershipProvenance =
         secondary ? secondaryOwnershipProvenance : primaryOwnershipProvenance;
+    boolean retainsOwnership = sameSource && !invalidated && !changedRestrictions
+        && !differentMoveRestrictions(retainedOwnershipProvenance, incomingProvenance)
+        && (ownership == null || ownership.isEmpty());
     if (retainsOwnership) {
       retainedOwnership = secondary ? estimateArray2 : estimateArray;
     }
@@ -660,12 +683,15 @@ public class BoardData implements Cloneable {
     if (moves == null || moves.isEmpty()) {
       return false;
     }
+    AnalysisProvenance provenance =
+        sourceEngine == null ? null : sourceEngine.captureAnalysisProvenance();
     if (!forceOverride
         && Lizzie.config.enableLizzieCache
         && !Lizzie.config.isAutoAna
         && !Lizzie.engineGame.current().playing()) {
       if (!(totalplayouts > playouts
           || isChanged
+          || differentMoveRestrictions(primaryAnalysisProvenance, provenance)
           || (metadataEngine != null && pda != metadataEngine.pda))) {
         if (totalplayouts < playouts) {
           // Requesting ownership restarts KataGo's stream at low visits. Backfill only the map.
@@ -693,8 +719,7 @@ public class BoardData implements Cloneable {
               "ACCEPT",
               "OWNERSHIP_BACKFILL");
           this.estimateArray = compactEstimateArray(estimateArray);
-          primaryOwnershipProvenance =
-              sourceEngine == null ? null : sourceEngine.captureAnalysisProvenance();
+          primaryOwnershipProvenance = provenance;
           discardImportedAnalysisMetadata(false);
           return true;
         }
@@ -760,8 +785,7 @@ public class BoardData implements Cloneable {
     tryToLimitMoves(moves, bestMoves, true);
     bestMoves = moves;
     isChanged = false;
-    primaryAnalysisProvenance =
-        sourceEngine == null ? null : sourceEngine.captureAnalysisProvenance();
+    primaryAnalysisProvenance = provenance;
     primaryOwnershipProvenance =
         this.estimateArray == null || this.estimateArray.isEmpty() ? null : primaryAnalysisProvenance;
     primaryAnalysisRun = null;
@@ -885,9 +909,12 @@ public class BoardData implements Cloneable {
   private synchronized void tryToSetBestMoves2FromEngine(
       List<MoveData> moves, String engName, boolean isFromLeelaz,
       Leelaz metadataEngine, int totalplayouts, List<Double> estimateArray, boolean forceOverride) {
+    AnalysisProvenance provenance =
+        metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
     if (!forceOverride && Lizzie.config.enableLizzieCache && !Lizzie.config.isAutoAna) {
       if (!(totalplayouts > playouts2
           || isChanged2
+          || differentMoveRestrictions(secondaryAnalysisProvenance, provenance)
           || (metadataEngine != null && pda2 != metadataEngine.pda))) { // ||Lizzie.frame.urlSgf
         if (totalplayouts < playouts2) {
           // Keep the stronger secondary analysis while accepting its restarted ownership stream.
@@ -915,8 +942,7 @@ public class BoardData implements Cloneable {
               "ACCEPT",
               "OWNERSHIP_BACKFILL");
           this.estimateArray2 = compactEstimateArray(estimateArray);
-          secondaryOwnershipProvenance =
-              metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
+          secondaryOwnershipProvenance = provenance;
           discardImportedAnalysisMetadata(true);
           return;
         }
@@ -978,8 +1004,7 @@ public class BoardData implements Cloneable {
     tryToLimitMoves(moves, bestMoves2, false);
     bestMoves2 = moves;
     isChanged2 = false;
-    secondaryAnalysisProvenance =
-        metadataEngine == null ? null : metadataEngine.captureAnalysisProvenance();
+    secondaryAnalysisProvenance = provenance;
     secondaryOwnershipProvenance =
         this.estimateArray2 == null || this.estimateArray2.isEmpty() ? null : secondaryAnalysisProvenance;
     discardImportedAnalysisMetadata(true);
@@ -1460,6 +1485,8 @@ public class BoardData implements Cloneable {
   public synchronized boolean hasReusablePrimaryAnalysis(
       int targetVisits, boolean ownershipRequested, Object requiredRunToken) {
     return !isChanged
+        && !hasRestrictedPrimaryAnalysis()
+        && (!ownershipRequested || !hasRestrictedPrimaryOwnership())
         && (requiredRunToken == null || primaryAnalysisRun == requiredRunToken)
         && hasCompletePrimaryAnalysis(targetVisits, ownershipRequested);
   }

@@ -270,7 +270,7 @@ class AnalysisProvenanceSgfTest {
       properties.add(Base64.getUrlEncoder().withoutPadding()
           .encodeToString(oversizedJson.getBytes(StandardCharsets.UTF_8)));
       List<Consumer<JSONObject>> invalid = List.of(
-          json -> json.put("version", 3),
+          json -> json.put("version", 4),
           json -> json.put("app", "AnotherApp"),
           json -> json.put("futureField", true),
           json -> json.getJSONObject("primary").put("payloadSha256", "bad digest"),
@@ -304,7 +304,7 @@ class AnalysisProvenanceSgfTest {
   void opaqueMetadataWithoutAnalysisStillSurvivesSave() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
       for (String value : List.of("not base64!", "",
-          encode(metadata(PRIMARY, SECONDARY).put("version", 3)))) {
+          encode(metadata(PRIMARY, SECONDARY).put("version", 4)))) {
         var history = SGFParser.parseSgf("(;SZ[5];B[aa]KGP[" + value + "])", true);
         Lizzie.board.setHistory(history);
         String saved = SGFParser.captureSave(Lizzie.board, true);
@@ -384,7 +384,7 @@ class AnalysisProvenanceSgfTest {
       for (String replacement : List.of(
           encode(metadata(PRIMARY, SECONDARY)),
           encode(metadata(PRIMARY, SECONDARY).put("version", 2)),
-          encode(metadata(PRIMARY, SECONDARY).put("version", 3)), "not base64!")) {
+          encode(metadata(PRIMARY, SECONDARY).put("version", 4)), "not base64!")) {
         BoardData replaced = SGFParser.parseSgf(prefix + "KGP[" + replacement + "])", true).getData();
         assertFalse(replaced.isChanged);
         assertFalse(replaced.isChanged2);
@@ -521,7 +521,7 @@ class AnalysisProvenanceSgfTest {
       for (String property : List.of(encode(contradictory),
           encode(metadata(PRIMARY, SECONDARY)),
           encode(new JSONObject().put("app", "KG-next").put("version", 2)),
-          encode(metadata(PRIMARY, SECONDARY).put("version", 3)), "not base64!")) {
+          encode(metadata(PRIMARY, SECONDARY).put("version", 4)), "not base64!")) {
         SGFParser.parseBranch(history, ";KGP[" + property + "]");
         assertInvalidation(history, primaryInvalidated, !primaryInvalidated);
       }

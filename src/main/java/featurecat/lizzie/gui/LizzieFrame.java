@@ -21979,7 +21979,8 @@ public class LizzieFrame extends JFrame {
       node = node.next().get();
       if (!isRealHistoryActionNode(node.getData())) continue;
       mainTrunkMoves++;
-      if (node.getData().hasDisplayablePrimaryAnalysis()) {
+      if (node.getData().hasDisplayablePrimaryAnalysis()
+          && !node.getData().hasRestrictedPrimaryAnalysis()) {
         analyzedMoves++;
       }
     }

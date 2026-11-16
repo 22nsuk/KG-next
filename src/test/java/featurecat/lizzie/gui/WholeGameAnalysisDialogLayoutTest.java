@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
 import featurecat.lizzie.analysis.WholeGameAnalysisOptions;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -356,7 +357,9 @@ class WholeGameAnalysisDialogLayoutTest {
 
       waitOnEdt(
           () -> provenanceText(dialog.get()).contains("현재 국면: 1수")
-              && provenanceText(dialog.get()).contains("b18c384nbt-"));
+              && provenanceText(dialog.get()).contains("b18c384nbt-")
+              && provenanceText(dialog.get()).contains("허용 · 흑 · 좌표: D4,Q16 · 깊이: 2수")
+              && provenanceText(dialog.get()).contains("참고용 저장, 일반 분석에 재사용하지 않음"));
       Path screenshot = Path.of("target/provenance-ui/whole-game-source-ko.png");
       Files.createDirectories(screenshot.getParent());
       SwingUtilities.invokeAndWait(
@@ -393,7 +396,8 @@ class WholeGameAnalysisDialogLayoutTest {
     data.setPrimaryAnalysisProvenance(
         new AnalysisProvenance(
             "KataGo", "1.16.0", "b18c384nbt-" + "long-recorded-model-name-".repeat(5),
-            "a".repeat(64), "b".repeat(64), "chinese", 7.5, 0.0, 0.25, "rank_5d"));
+            "a".repeat(64), "b".repeat(64), "chinese", 7.5, 0.0, 0.25, "rank_5d",
+            AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b D4,Q16 2 allow w D4,Q16 2")));
     data.estimateArray = List.of(0.5);
     return data;
   }

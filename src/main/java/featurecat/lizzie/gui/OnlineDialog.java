@@ -1024,7 +1024,8 @@ public class OnlineDialog extends JDialog {
     while (node.next().isPresent()) {
       node = node.next().get();
       BoardData data = node.getData();
-      if (isYikeCurveAnalysisNode(data) && !data.hasDisplayablePrimaryAnalysis()) {
+      if (isYikeCurveAnalysisNode(data)
+          && (data.hasRestrictedPrimaryAnalysis() || !data.hasDisplayablePrimaryAnalysis())) {
         count++;
       }
     }

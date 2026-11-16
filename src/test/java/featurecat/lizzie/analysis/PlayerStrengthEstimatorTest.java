@@ -179,6 +179,14 @@ class PlayerStrengthEstimatorTest {
     assertEquals(0.0, report.white.goodMoveRate, 0.0001);
     assertEquals(1.0, report.white.mistakeRate, 0.0001);
     assertEquals("11-15k", report.white.strengthBand);
+    AnalysisProvenance restricted = new AnalysisProvenance(
+        "KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b A9 1"));
+    history.getStart().getData().setPrimaryOwnershipProvenance(restricted);
+    assertEquals(2, PlayerStrengthEstimator.estimate(history.getStart()).overall.sampleCount);
+    history.getStart().getData().setPrimaryAnalysisProvenance(restricted);
+    assertEquals(0, PlayerStrengthEstimator.estimate(history.getStart()).black.sampleCount);
+    assertEquals(1, PlayerStrengthEstimator.estimate(history.getStart()).white.sampleCount);
   }
 
   @Test

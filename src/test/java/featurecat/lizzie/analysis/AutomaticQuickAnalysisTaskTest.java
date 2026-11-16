@@ -99,6 +99,31 @@ class AutomaticQuickAnalysisTaskTest {
   }
 
   @Test
+  void restrictedDisplayStartsWorkAndCannotFinishUntilOrdinaryResultsArrive() {
+    BoardData data = board.getHistory().getData();
+    analyzed(data);
+    data.setPrimaryAnalysisProvenance(new AnalysisProvenance(
+        "KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b D4 1")));
+    AutomaticQuickAnalysisTask task = task(true);
+    task.start();
+    ControlledUse first = new ControlledUse();
+    environment.acquisitions.get(0).deliver(first);
+    first.finish(false, ForegroundRestoreResult.NOT_REQUIRED);
+    first.releaseFinished(ForegroundRestoreResult.NOT_REQUIRED);
+    assertTrue(task.isActive());
+    assertTrue(listener.completions.isEmpty());
+    assertTrue(data.hasDisplayablePrimaryAnalysis());
+    environment.advance(1800);
+    ControlledUse second = new ControlledUse();
+    environment.acquisitions.get(1).deliver(second);
+    data.setPrimaryAnalysisProvenance(null);
+    second.finish(false, ForegroundRestoreResult.NOT_REQUIRED);
+    second.releaseFinished(ForegroundRestoreResult.NOT_REQUIRED);
+    assertEquals(EndReason.COMPLETED, listener.completions.get(0).reason());
+  }
+
+  @Test
   void oldAttemptAndDuplicateCompletionCannotSettleNewAttempt() {
     AutomaticQuickAnalysisTask task = task(false);
     task.start();

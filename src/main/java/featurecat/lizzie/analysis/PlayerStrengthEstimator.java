@@ -248,6 +248,7 @@ public final class PlayerStrengthEstimator {
 
   private static boolean hasPrimaryAnalysisPayload(BoardData data) {
     return data != null
+        && !data.hasRestrictedPrimaryAnalysis()
         && (data.getPlayouts() > 0
             || data.analysisHeaderSlots > 0
             || !isBlank(data.engineName)

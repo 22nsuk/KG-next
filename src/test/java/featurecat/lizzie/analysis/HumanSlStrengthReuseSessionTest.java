@@ -254,6 +254,14 @@ class HumanSlStrengthReuseSessionTest {
     assertEquals(10, data.scoreMean);
     assertEquals(8, move.scoreMean);
     assertEquals(200, data.getPlayouts());
+    AnalysisProvenance restricted = new AnalysisProvenance(
+        "KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b C3 1"));
+    data.setPrimaryOwnershipProvenance(restricted);
+    assertTrue(HumanSlStrengthReuseSession.position(data) instanceof JSONObject);
+    data.setPrimaryAnalysisProvenance(restricted);
+    assertSame(JSONObject.NULL, HumanSlStrengthReuseSession.position(data));
+    data.setPrimaryAnalysisProvenance(null);
     data.isKataData = false;
     assertSame(JSONObject.NULL, HumanSlStrengthReuseSession.position(data));
   }
