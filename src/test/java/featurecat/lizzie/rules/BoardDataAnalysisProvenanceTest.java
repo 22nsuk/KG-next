@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.MoveData;
 import java.io.IOException;
@@ -20,6 +21,60 @@ class BoardDataAnalysisProvenanceTest {
   private static final AnalysisProvenance FIRST = source("first");
   private static final AnalysisProvenance SECOND = source("second");
   private static final AnalysisProvenance THIRD = source("third");
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void changedRestrictionsReplaceSavedResultsAndDoNotRetainTheOldOwnership(boolean secondary)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Lizzie.config.enableLizzieCache = true;
+      BoardData data = Lizzie.board.getData();
+      AnalysisProvenance restricted = restrictedSource();
+      KnownEngine engine = new KnownEngine(restricted);
+      Object tree = new Object();
+      data.adoptOrdinaryAnalysis(moves(500), "limited", engine, 500, 500,
+          List.of(0.1), tree, secondary, false);
+      assertSource(data, secondary, restricted, restricted);
+      assertEquals(BoardData.AnalysisAdoption.REJECTED,
+          data.adoptOrdinaryAnalysis(moves(20), "limited", engine, 20, 20,
+              null, tree, secondary, false));
+
+      engine.provenance = FIRST;
+      assertEquals(BoardData.AnalysisAdoption.FULL,
+          data.adoptOrdinaryAnalysis(moves(50), "ordinary", engine, 50, 50,
+              null, tree, secondary, false));
+      assertEquals(50, secondary ? data.getPlayouts2() : data.getPlayouts());
+      assertSource(data, secondary, FIRST, null);
+      assertNull(secondary ? data.estimateArray2 : data.estimateArray);
+      assertEquals(BoardData.AnalysisAdoption.REJECTED,
+          data.adoptOrdinaryAnalysis(moves(25), "ordinary", engine, 25, 25,
+              null, new Object(), secondary, false));
+    }
+  }
+
+  @Test
+  void restrictedOwnershipOnlyDisqualifiesReuseWhenAnOwnershipMapIsRequested() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      BoardData data = Lizzie.board.getData();
+      data.tryToSetBestMovesFromEngine(moves(500), "ordinary", new KnownEngine(FIRST),
+          500, List.of(0.1), true);
+      data.setPrimaryOwnershipProvenance(restrictedSource());
+      assertTrue(data.hasReusablePrimaryAnalysis(500, false));
+      assertFalse(data.hasReusablePrimaryAnalysis(500, true));
+      data.setPrimaryAnalysisProvenance(restrictedSource());
+      assertTrue(data.hasCompletePrimaryAnalysis(500, true));
+      assertFalse(data.hasReusablePrimaryAnalysis(500, false));
+      assertEquals(data.primaryAnalysisProvenance(), data.clone().primaryAnalysisProvenance());
+      data.clearAnalysisPayloadState();
+      assertNull(data.primaryAnalysisProvenance());
+      assertNull(data.primaryOwnershipProvenance());
+    }
+  }
+
+  private static AnalysisProvenance restrictedSource() {
+    return new AnalysisProvenance("recorded", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b C3 2"));
+  }
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})

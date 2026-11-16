@@ -1407,6 +1407,7 @@ public class AnalysisEngine {
       boolean retainOwnership =
           preserveExistingAnalysis
               && !data.isChanged
+              && !data.hasRestrictedPrimaryOwnership()
               && ownershipArray == null
               && data.estimateArray != null
               && (requiredAnalysisRun == null
@@ -2945,12 +2946,14 @@ public class AnalysisEngine {
   private static boolean shouldAnalyzeNode(BoardHistoryNode node, int targetVisits) {
     BoardData data = node == null ? null : node.getData();
     return isRealHistoryAction(data)
-        && (Lizzie.config.analysisAlwaysOverride || data.getPlayouts() < targetVisits);
+        && (Lizzie.config.analysisAlwaysOverride || data.hasRestrictedPrimaryAnalysis()
+            || data.getPlayouts() < targetVisits);
   }
 
   private static boolean shouldAnalyzeMissingNode(BoardHistoryNode node) {
     BoardData data = node == null ? null : node.getData();
-    return isRealHistoryAction(data) && !data.hasDisplayablePrimaryAnalysis();
+    return isRealHistoryAction(data)
+        && (data.hasRestrictedPrimaryAnalysis() || !data.hasDisplayablePrimaryAnalysis());
   }
 
   public static int targetAnalysisVisits() {

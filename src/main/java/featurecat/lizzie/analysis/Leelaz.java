@@ -1700,6 +1700,7 @@ public class Leelaz {
     AnalysisModelIdentity.Lookup lookup = binding.analysisModelLookup;
     AnalysisModelIdentity.FilesIdentity files =
         lookup == null ? AnalysisModelIdentity.UNKNOWN : lookup.snapshot();
+    AnalysisOutputOwnership owner = binding.analysisOutputOwnership.get();
     AnalysisProvenance source =
         new AnalysisProvenance(
             binding.reportedEngineName,
@@ -1711,7 +1712,8 @@ public class Leelaz {
             observedConditionValue(binding.provenanceKomi),
             isDymPda ? null : observedConditionValue(binding.provenancePda),
             observedConditionValue(binding.provenanceWrn),
-            "");
+            "",
+            owner == null ? null : owner.moveRestrictions);
     return readerStreamBinding == binding
             && !binding.terminated
             && !binding.readerShutdownRequested
@@ -4065,7 +4067,7 @@ public class Leelaz {
             AnalysisOutputOwnership.ordinary(
                 analysisOutputGeneration.get(),
                 binding.analysisStateLineage,
-                captureAnalysisInfoTarget(), false));
+                captureAnalysisInfoTarget(), null));
         binding.suppressGlobalEnginePresentation = false;
         suppressGlobalEnginePresentationUntilOwned = false;
       }
@@ -5372,7 +5374,7 @@ public class Leelaz {
     private final long generation;
     private final AnalysisStateLineage analysisStateLineage;
     private final AnalysisInfoTarget target;
-    private final boolean hasMoveRestrictions;
+    private final AnalysisMoveRestrictions moveRestrictions;
     /** Consumed only by a valid full display adoption from this physically published owner. */
     private boolean pendingRestrictedAnalysisAdoption;
 
@@ -5383,15 +5385,15 @@ public class Leelaz {
         long generation,
         AnalysisStateLineage analysisStateLineage,
         AnalysisInfoTarget target,
-        boolean hasMoveRestrictions) {
+        AnalysisMoveRestrictions moveRestrictions) {
       this.exactContext = exactContext;
       this.ordinary = ordinary;
       this.recoveryToken = recoveryToken;
       this.generation = generation;
       this.analysisStateLineage = analysisStateLineage;
       this.target = target;
-      this.hasMoveRestrictions = hasMoveRestrictions;
-      this.pendingRestrictedAnalysisAdoption = hasMoveRestrictions;
+      this.moveRestrictions = moveRestrictions;
+      this.pendingRestrictedAnalysisAdoption = moveRestrictions != null;
     }
 
     private static AnalysisOutputOwnership exact(
@@ -5399,20 +5401,20 @@ public class Leelaz {
         long generation,
         AnalysisStateLineage analysisStateLineage) {
       return new AnalysisOutputOwnership(
-          context, false, null, generation, analysisStateLineage, null, false);
+          context, false, null, generation, analysisStateLineage, null, null);
     }
 
     private static AnalysisOutputOwnership ordinary(
         long generation, AnalysisStateLineage analysisStateLineage, AnalysisInfoTarget target,
-        boolean hasMoveRestrictions) {
+        AnalysisMoveRestrictions moveRestrictions) {
       return new AnalysisOutputOwnership(
-          null, true, null, generation, analysisStateLineage, target, hasMoveRestrictions);
+          null, true, null, generation, analysisStateLineage, target, moveRestrictions);
     }
 
     private static AnalysisOutputOwnership recoveryTombstone(
         Object recoveryToken, long generation, AnalysisStateLineage analysisStateLineage) {
       return new AnalysisOutputOwnership(
-          null, false, recoveryToken, generation, analysisStateLineage, null, false);
+          null, false, recoveryToken, generation, analysisStateLineage, null, null);
     }
 
     private boolean isExact() {
@@ -7049,15 +7051,6 @@ public class Leelaz {
     return GtpCommandText.parse(command).startsAnalysisPayload();
   }
 
-  private boolean hasAnalysisMoveRestrictions(String command) {
-    GtpCommandText parsed = GtpCommandText.parse(command);
-    if (!parsed.isOrdinaryAnalysis()) return false;
-    for (String token : parsed.payload().split("\\s+")) {
-      if (token.equalsIgnoreCase("allow") || token.equalsIgnoreCase("avoid")) return true;
-    }
-    return false;
-  }
-
   private enum AnalysisStateMutation {
     NONE,
     RESET_PAYLOAD,
@@ -7255,13 +7248,13 @@ public class Leelaz {
                 isOrdinaryPositionAnalysisCommand(command.command)
                     ? command.ordinaryAnalysisTarget
                     : captureAnalysisInfoTarget(),
-                hasAnalysisMoveRestrictions(command.command));
+                AnalysisMoveRestrictions.fromCommand(command.command));
         // Stock engines also reset visits when the previous restrictions are removed. This
         // replacement belongs to the new owner, so an old or cancelled stream cannot consume it.
         replacement.pendingRestrictedAnalysisAdoption |=
             isOrdinaryPositionAnalysisCommand(command.command)
                 && previous != null
-                && (previous.hasMoveRestrictions || previous.pendingRestrictedAnalysisAdoption)
+                && (previous.moveRestrictions != null || previous.pendingRestrictedAnalysisAdoption)
                 && previous.generation == analysisOutputGeneration.get()
                 && isCurrentAnalysisInfoTarget(previous.target);
         binding.suppressGlobalEnginePresentation = false;

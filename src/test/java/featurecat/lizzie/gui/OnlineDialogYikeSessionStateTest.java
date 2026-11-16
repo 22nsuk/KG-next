@@ -226,6 +226,11 @@ class OnlineDialogYikeSessionStateTest {
       root.setPreviousForChild(branch);
 
       assertEquals(1, OnlineDialog.countMissingYikeCurveNodes(history));
+      analyzed.getData().setPrimaryAnalysisProvenance(new featurecat.lizzie.analysis.AnalysisProvenance(
+          "KataGo", "", "", "", "", "", null, null, null, "",
+          featurecat.lizzie.analysis.AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b D4 1")));
+      assertEquals(2, OnlineDialog.countMissingYikeCurveNodes(history));
+      assertTrue(analyzed.getData().hasDisplayablePrimaryAnalysis());
     }
   }
 

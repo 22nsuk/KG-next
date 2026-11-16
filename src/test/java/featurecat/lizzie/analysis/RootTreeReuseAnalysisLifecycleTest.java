@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -37,12 +38,18 @@ class RootTreeReuseAnalysisLifecycleTest {
       assertEquals(2, fixture.primaryTransport.commands().size(), "restriction must be queued");
       fixture.primary.parseAnalysisLineForTest(info("Q16", 1100));
       assertEquals(1100, fixture.current.getPlayouts(), "old stream remains live until replacement");
+      assertNull(fixture.current.primaryAnalysisProvenance().moveRestrictions());
       fixture.respond(fixture.primary, fixture.primaryTransport, 1);
       assertEquals(3, fixture.primaryTransport.commands().size());
       fixture.primary.parseAnalysisLineForTest(info("D4", 50));
 
       assertEquals(50, fixture.current.getPlayouts(), "the new filtered search may reset visits");
       assertEquals("D4", fixture.current.bestMoves.get(0).coordinate);
+      assertEquals(rawParameters ? List.of(new AnalysisMoveRestrictions.Clause("avoid", "B", "Q16", 2))
+          : List.of(new AnalysisMoveRestrictions.Clause("allow", "B", "D4", 2),
+              new AnalysisMoveRestrictions.Clause("allow", "W", "D4", 2)),
+          fixture.current.primaryAnalysisProvenance().moveRestrictions().clauses());
+      assertFalse(fixture.current.hasReusablePrimaryAnalysis(1, false));
       assertEquals(500, fixture.root.getPlayouts(), "other positions keep their cached analysis");
       assertFalse(fixture.root.isChanged);
       fixture.primary.parseAnalysisLineForTest(info("D4", 25));
@@ -67,6 +74,7 @@ class RootTreeReuseAnalysisLifecycleTest {
       assertEquals(1000, fixture.current.getPlayouts());
       assertEquals("Q16", fixture.current.bestMoves.get(0).coordinate);
       assertFalse(fixture.current.isChanged);
+      assertNull(fixture.current.primaryAnalysisProvenance().moveRestrictions());
     }
   }
 
@@ -85,6 +93,7 @@ class RootTreeReuseAnalysisLifecycleTest {
       assertTrue(fixture.primary.sendRawConsoleCommand(command));
       fixture.primary.parseAnalysisLineForTest(info("D4", 50));
       assertEquals(expectedVisits, fixture.current.getPlayouts());
+      assertEquals(expectedVisits == 50, fixture.current.hasRestrictedPrimaryAnalysis());
     }
   }
 
@@ -126,6 +135,8 @@ class RootTreeReuseAnalysisLifecycleTest {
 
       assertEquals(50, fixture.current.getPlayouts());
       assertEquals("Q16", fixture.current.bestMoves.get(0).coordinate);
+      assertNull(fixture.current.primaryAnalysisProvenance().moveRestrictions());
+      assertTrue(fixture.current.hasReusablePrimaryAnalysis(50, false));
       fixture.primary.parseAnalysisLineForTest(info("Q16", 25));
       assertEquals(50, fixture.current.getPlayouts());
     }
@@ -187,6 +198,8 @@ class RootTreeReuseAnalysisLifecycleTest {
       assertEquals("D4", fixture.current.bestMoves2.get(0).coordinate);
       assertEquals(1000, fixture.current.getPlayouts());
       assertEquals(300, fixture.current.bestMoves.get(0).playouts);
+      assertEquals(fixture.current.primaryAnalysisProvenance().moveRestrictions(),
+          fixture.current.secondaryAnalysisProvenance().moveRestrictions());
     }
   }
 

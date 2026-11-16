@@ -54,6 +54,18 @@ final class AnalysisProvenanceDisplay {
       }
       return;
     }
+    if (source.moveRestrictions() != null) {
+      text.append('\n').append(resources.getString("WholeGameAnalysis.source.restricted"));
+      if (source.moveRestrictions().clauses().isEmpty()) {
+        text.append('\n').append(resources.getString("WholeGameAnalysis.source.restrictionUnknown"));
+      }
+      for (var clause : source.moveRestrictions().clauses()) {
+        append(text, resources, "WholeGameAnalysis.source.restriction",
+            resources.getString("WholeGameAnalysis.source." + clause.kind()),
+            resources.getString("WholeGameAnalysis.source." + (clause.player().equals("B") ? "black" : "white")),
+            clause.coordinates(), Integer.toString(clause.untilDepth()));
+      }
+    }
     append(text, resources, "WholeGameAnalysis.source.engine", source.engineName(), source.engineVersion());
     append(text, resources, "WholeGameAnalysis.source.model", source.modelName());
     append(text, resources, "WholeGameAnalysis.source.modelSha", source.modelSha256());

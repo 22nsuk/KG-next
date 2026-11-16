@@ -2403,14 +2403,18 @@ class AnalysisEngineRequestTest {
     }
   }
 
-  @Test
-  void deeperReuseKeepsTheSourceOfOwnershipRetainedFromTheSavedResult() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void deeperReuseKeepsOnlyOrdinaryOwnershipRetainedFromTheSavedResult(boolean restrictedOwnership)
+      throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
       BoardData data = BoardData.empty(BOARD_SIZE, BOARD_SIZE);
       installCompleteAnalysis(data, 300, true);
       AnalysisProvenance saved = savedProvenance("saved ownership engine");
       data.setPrimaryAnalysisProvenance(saved);
-      data.setPrimaryOwnershipProvenance(saved);
+      data.setPrimaryOwnershipProvenance(restrictedOwnership
+          ? new AnalysisProvenance("KataGo", "", "", "", "", "", null, null, null, "",
+              AnalysisMoveRestrictions.fromCommand("kata-analyze 10 avoid w C3 1")) : saved);
       BoardHistoryList history = new BoardHistoryList(data);
       boardWithHistory(history);
       TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
@@ -2420,8 +2424,13 @@ class AnalysisEngineRequestTest {
 
       assertEquals(500, data.getPlayouts());
       assertEquals("", data.primaryAnalysisProvenance().engineName());
-      assertSame(saved, data.primaryOwnershipProvenance());
-      assertEquals(List.of(0.25), data.estimateArray);
+      if (restrictedOwnership) {
+        assertNull(data.primaryOwnershipProvenance());
+        assertNull(data.estimateArray);
+      } else {
+        assertSame(saved, data.primaryOwnershipProvenance());
+        assertEquals(List.of(0.25), data.estimateArray);
+      }
     }
   }
 
@@ -3229,6 +3238,33 @@ class AnalysisEngineRequestTest {
 
       assertEquals(0, requested);
       assertEquals(0, engine.requestCount());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void ordinaryAndMissingRequestsReanalyzeRestrictedSavedResults(boolean missingOnly) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = new BoardHistoryList(BoardData.empty(BOARD_SIZE, BOARD_SIZE));
+      BoardData restricted =
+          moveNode(stones(placement(0, 0, Stone.BLACK)), new int[] {0, 0}, Stone.BLACK, false, 1);
+      restricted.setPlayouts(50000);
+      restricted.engineName = "restricted";
+      restricted.analysisHeaderSlots = 3;
+      restricted.setPrimaryAnalysisProvenance(new AnalysisProvenance(
+          "KataGo", "", "", "", "", "", null, null, null, "",
+          AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b C3 2")));
+      history.add(restricted);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      if (missingOnly) assertEquals(1, engine.startRequestMissingMainline(false));
+      else engine.startRequest(1, 2, false);
+      assertEquals(1, engine.requestCount());
+      assertEquals(List.of(1), engine.singleRequest().getJSONArray("analyzeTurns").toList());
+      engine.parseResult(analysisResult(1, 200, 62.0));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(200, restricted.getPlayouts());
+      assertFalse(restricted.hasRestrictedPrimaryAnalysis());
     }
   }
 

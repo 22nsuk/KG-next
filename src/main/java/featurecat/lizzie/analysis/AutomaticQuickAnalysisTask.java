@@ -372,7 +372,7 @@ public final class AutomaticQuickAnalysisTask {
       BoardData data = node.getData();
       if ((data.isMoveNode() || data.isPassNode())
           && !data.dummy
-          && !data.hasDisplayablePrimaryAnalysis()) return true;
+          && (data.hasRestrictedPrimaryAnalysis() || !data.hasDisplayablePrimaryAnalysis())) return true;
     }
     return false;
   }

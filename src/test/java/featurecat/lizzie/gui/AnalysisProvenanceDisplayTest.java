@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
 import featurecat.lizzie.rules.BoardData;
 import java.util.List;
 import java.util.Locale;
@@ -14,6 +15,25 @@ import org.junit.jupiter.api.Test;
 class AnalysisProvenanceDisplayTest {
   private final ResourceBundle resources =
       ResourceBundle.getBundle("l10n.DisplayStrings", Locale.KOREA);
+
+  @Test
+  void restrictionsDescribeTheRecordedEvaluationAndOwnershipSeparately() {
+    BoardData data = BoardData.empty(19, 19);
+    data.setPlayouts(700);
+    data.setPrimaryAnalysisProvenance(new AnalysisProvenance(
+        "KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b D4,Q16 2")));
+    data.estimateArray = List.of(0.5);
+    data.setPrimaryOwnershipProvenance(new AnalysisProvenance(
+        "KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 avoid w PASS 999")));
+    String text = AnalysisProvenanceDisplay.describe(data, resources);
+    int ownership = text.indexOf(resources.getString("WholeGameAnalysis.source.ownership"));
+    assertTrue(text.substring(0, ownership).contains("허용 · 흑 · 좌표: D4,Q16 · 깊이: 2수"));
+    assertTrue(text.substring(ownership).contains("제외 · 백 · 좌표: PASS · 깊이: 999수"));
+    assertTrue(text.contains("참고용 저장, 일반 분석에 재사용하지 않음"));
+    assertFalse(text.contains(resources.getString("WholeGameAnalysis.source.same")));
+  }
 
   @Test
   void legacyDisplayNameDoesNotIdentifyTheEvaluationOrOwnershipSource() {

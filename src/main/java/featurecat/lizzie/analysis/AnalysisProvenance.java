@@ -19,7 +19,17 @@ public record AnalysisProvenance(
     Double komi,
     Double pda,
     Double wrn,
-    String humanSLProfile) {
+    String humanSLProfile,
+    AnalysisMoveRestrictions moveRestrictions) {
+  /** Legacy/independent producers have no recorded move restrictions. */
+  public AnalysisProvenance(
+      String engineName, String engineVersion, String modelName, String modelSha256,
+      String configSha256, String rules, Double komi, Double pda, Double wrn,
+      String humanSLProfile) {
+    this(engineName, engineVersion, modelName, modelSha256, configSha256, rules,
+        komi, pda, wrn, humanSLProfile, null);
+  }
+
   public AnalysisProvenance {
     engineName = text(engineName, 1024);
     engineVersion = text(engineVersion, 128);

@@ -102,6 +102,7 @@ public final class HumanSlStrengthReuseSession {
   private static Object positionSnapshot(BoardData data) {
     if (!data.isKataData
         || !data.hasPrimaryAnalysisPayload()
+        || data.hasRestrictedPrimaryAnalysis()
         || !Double.isFinite(data.scoreMean)
         || !Double.isFinite(data.winrate)
         || data.winrate < 0
