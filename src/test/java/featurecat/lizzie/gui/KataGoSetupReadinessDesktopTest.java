@@ -11,6 +11,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupResult;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
 import featurecat.lizzie.util.Utils;
 import java.awt.Dialog;
+import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Window;
 import java.lang.reflect.Field;
@@ -144,6 +145,7 @@ public class KataGoSetupReadinessDesktopTest {
       SwingUtilities.invokeAndWait(() -> {
         try {
           JLabel status = (JLabel) field(dialog, "progressStatusLabel");
+          assertTrue(status.isShowing(), "startup progress must be visible in the setup window");
           assertTrue(status.getText().contains(Lizzie.resourceBundle.getString("AutoSetup.weightSwitchPlan")));
           assertTrue(status.getFontMetrics(status.getFont()).stringWidth(status.getText())
               <= status.getWidth(), "startup budget must fit the visible footer");
@@ -159,7 +161,12 @@ public class KataGoSetupReadinessDesktopTest {
       SwingUtilities.invokeAndWait(() -> {
         try {
           assertTrue(engine.isLoaded());
-          assertEquals(successMessage, ((JLabel) field(dialog, "lblStatus")).getText());
+          JLabel status = (JLabel) field(dialog, "lblStatus");
+          assertEquals(successMessage, status.getText());
+          assertTrue(status.isShowing(), "the committed result must remain visible after progress ends");
+          assertTrue(dialog.getBounds().contains(
+              new Rectangle(status.getLocationOnScreen(), status.getSize())),
+              "the completed status must remain inside the setup window");
           assertNull(field(dialog, "pendingWeightSwitchTimer"));
         } catch (ReflectiveOperationException error) {
           throw new AssertionError(error);

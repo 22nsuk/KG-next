@@ -5032,6 +5032,8 @@ public class KataGoAutoSetupDialog extends JDialog {
                   : weightSwitchDisplayState.fail(weightSwitchToken, authoritativeSnapshot);
           snapshot = weightSwitchDisplayState.displayedSnapshot();
           setBusy(false, succeeded ? message : reloadWarning, 0, 0);
+          // The progress row ends here, but the committed result must remain visible.
+          footerPanel.setVisible(true);
           renderSnapshot();
           selectRemoteWeightByModelName(catalogModelName(snapshot));
           updateSelectedRemoteWeightInfo();
