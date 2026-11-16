@@ -16,12 +16,15 @@ public final class SgfDocument {
   private static final Pattern RECT_BOARD_SIZE_PATTERN = Pattern.compile("([\\d]+):([\\d]+)");
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
-  private static final Pattern TREE = Pattern.compile("(?s).*?(\\(\\s*;{0,1}.*\\))(?s).*?");
 
   /** Structural events have an empty name/value; P events retain each ordered property value. */
   public record Event(char kind, String name, String rawValue) {
     String legacyValue() {
-      int slash = rawValue.indexOf('\\');
+      return legacyValue(SgfCancellation.NONE);
+    }
+
+    String legacyValue(SgfCancellation cancellation) {
+      int slash = cancellation.indexOf(rawValue, '\\', 0);
       if (slash < 0) return rawValue;
       boolean text = name.equals("PB") || name.equals("PW") || name.equals("RE") || name.equals("DT");
       if (text) return rawValue;
@@ -30,6 +33,7 @@ public final class SgfDocument {
       StringBuilder value = null;
       int copied = 0;
       while (slash >= 0 && slash + 1 < rawValue.length()) {
+        cancellation.check();
         char escaped = rawValue.charAt(slash + 1);
         if (decoded || escaped == 'n') {
           if (value == null) value = new StringBuilder(rawValue.length());
@@ -38,7 +42,7 @@ public final class SgfDocument {
           value.append(escaped == 'n' ? '\n' : escaped);
           copied = slash + 2;
         }
-        slash = rawValue.indexOf('\\', slash + 2);
+        slash = cancellation.indexOf(rawValue, '\\', slash + 2);
       }
       return value == null ? rawValue : value.append(rawValue, copied, rawValue.length()).toString();
     }
@@ -71,20 +75,29 @@ public final class SgfDocument {
 
   /** Live loaders validate/normalize before clearing state; do not repeat that work here. */
   static SgfDocument parseNormalized(String value) {
+    return parseNormalized(value, SgfCancellation.NONE);
+  }
+
+  static SgfDocument parseNormalized(String value, SgfCancellation cancellation) {
+    cancellation.check();
     if (value == null) return null;
-    Matcher matcher = TREE.matcher(value);
-    if (!matcher.matches()) return null;
-    value = matcher.group(1);
-    int[] size = parseBoardSize(value);
+    // The legacy DOTALL pattern selected the first '(' through the last ')', with an optional
+    // semicolon. Explicit scans keep that tolerance while allowing a superseded read to stop.
+    int start = cancellation.indexOf(value, '(', 0);
+    int endOfTree = cancellation.lastIndexOf(value, ')');
+    if (start < 0 || endOfTree <= start) return null;
+    value = value.substring(start, endOfTree + 1);
+    int[] size = parseBoardSize(value, cancellation);
     List<Event> events = new ArrayList<>();
     StringBuilder name = new StringBuilder();
     String tag = "";
     for (int i = 0; i < value.length(); i++) {
+      cancellation.checkEvery(i);
       char c = value.charAt(i);
       if (c == '[') {
-        if (!name.isEmpty()) tag = normalizePropertyName(name.toString());
+        if (!name.isEmpty()) tag = normalizePropertyName(name.toString(), cancellation);
         name.setLength(0);
-        int end = valueEnd(value, i + 1);
+        int end = valueEnd(value, i + 1, cancellation);
         if (end < 0) break;
         events.add(new Event('P', tag, value.substring(i + 1, end)));
         i = end;
@@ -98,26 +111,37 @@ public final class SgfDocument {
         else events.add(NODE);
       } else if (c != '\n' && c != '\r' && c != '\t' && c != ' ') name.append(c);
     }
-    return new SgfDocument(events, size[0], size[1], hasMultiGoBranchSuffix(value));
+    cancellation.check();
+    return new SgfDocument(events, size[0], size[1], hasMultiGoBranchSuffix(value, cancellation));
   }
 
   /** A bracket closes a value only after an even number of consecutive escape characters. */
-  private static int valueEnd(String value, int start) {
-    int end = value.indexOf(']', start);
+  private static int valueEnd(String value, int start, SgfCancellation cancellation) {
+    int end = cancellation.indexOf(value, ']', start);
     while (end >= 0) {
       int slash = end;
-      while (slash > start && value.charAt(slash - 1) == '\\') slash--;
+      while (slash > start && value.charAt(slash - 1) == '\\') {
+        cancellation.checkEvery(slash);
+        slash--;
+      }
       if ((end - slash) % 2 == 0) return end;
-      end = value.indexOf(']', end + 1);
+      end = cancellation.indexOf(value, ']', end + 1);
     }
     return -1;
   }
 
   static boolean hasMultiGoBranchSuffix(String value) {
+    return hasMultiGoBranchSuffix(value, SgfCancellation.NONE);
+  }
+
+  private static boolean hasMultiGoBranchSuffix(String value, SgfCancellation cancellation) {
     int last = value.length() - 1;
     if (last < 1 || value.charAt(last) != ')') return false;
     int previous = last - 1;
-    while (previous >= 0 && SGF_WHITESPACE.indexOf(value.charAt(previous)) >= 0) previous--;
+    while (previous >= 0 && SGF_WHITESPACE.indexOf(value.charAt(previous)) >= 0) {
+      cancellation.checkEvery(previous);
+      previous--;
+    }
     return previous >= 0 && value.charAt(previous) == ')';
   }
 
@@ -135,22 +159,32 @@ public final class SgfDocument {
   }
 
   static String normalizeInput(String value) {
-    value = normalizeStructuralNewlines(value);
+    return normalizeInput(value, SgfCancellation.NONE);
+  }
+
+  static String normalizeInput(String value, SgfCancellation cancellation) {
+    cancellation.check();
+    value = normalizeStructuralNewlines(value, cancellation);
     if (value == null) return null;
     // Match the parsers' surrounding-text tolerance before reading SZ or setup values.
-    int start = value.indexOf('(');
-    int end = value.lastIndexOf(')');
+    int start = cancellation.indexOf(value, '(', 0);
+    int end = cancellation.lastIndexOf(value, ')');
     if (start >= 0 && end > start) value = value.substring(start, end + 1);
     // Dimensions are only needed here when a setup value might contain a range.
-    if (value.indexOf(':') < 0) return value;
-    int[] size = parseBoardSize(value);
-    return normalizeSetupRanges(value, size[0], size[1]);
+    if (cancellation.indexOf(value, ':', 0) < 0) return value;
+    int[] size = parseBoardSize(value, cancellation);
+    return normalizeSetupRanges(value, size[0], size[1], cancellation);
   }
 
   /** Smart-Go names such as PlayerBlack become PB by removing only ASCII lowercase letters. */
   static String normalizePropertyName(String name) {
+    return normalizePropertyName(name, SgfCancellation.NONE);
+  }
+
+  private static String normalizePropertyName(String name, SgfCancellation cancellation) {
     StringBuilder normalized = null;
     for (int i = 0; i < name.length(); i++) {
+      cancellation.checkEvery(i);
       char c = name.charAt(i);
       if (c >= 'a' && c <= 'z') {
         if (normalized == null) {
@@ -169,25 +203,32 @@ public final class SgfDocument {
    * handicap recognition and edited-snapshot serialization use their existing contracts.
    */
   static String normalizeSetupRanges(String value, int width, int height) {
-    if (value.indexOf(':') < 0) return value;
+    return normalizeSetupRanges(value, width, height, SgfCancellation.NONE);
+  }
+
+  private static String normalizeSetupRanges(
+      String value, int width, int height, SgfCancellation cancellation) {
+    if (cancellation.indexOf(value, ':', 0) < 0) return value;
     StringBuilder normalized = null;
     StringBuilder tagBuilder = new StringBuilder();
     String tag = "";
     int copied = 0;
     for (int i = 0; i < value.length(); i++) {
+      cancellation.checkEvery(i);
       char c = value.charAt(i);
       if (c == '[') {
         if (tagBuilder.length() > 0) {
           // Match the legacy parsers' Smart-Go name handling, including an empty resulting tag.
-          tag = normalizePropertyName(tagBuilder.toString());
+          tag = normalizePropertyName(tagBuilder.toString(), cancellation);
           tagBuilder.setLength(0);
         }
         int valueStart = i + 1;
-        int end = valueEnd(value, valueStart);
+        int end = valueEnd(value, valueStart, cancellation);
         boolean range = false;
         if (isSetupStoneProperty(tag)) {
           int limit = end < 0 ? value.length() : end;
           for (int point = valueStart; point < limit; point++) {
+            cancellation.checkEvery(point);
             if (value.charAt(point) == ':') {
               range = true;
               break;
@@ -199,7 +240,8 @@ public final class SgfDocument {
           break;
         }
         if (range) {
-          String expanded = expandSetupRange(value.substring(valueStart, end), width, height);
+          String expanded = expandSetupRange(
+              value.substring(valueStart, end), width, height, cancellation);
           if (expanded == null) return null;
           if (normalized == null) normalized = new StringBuilder(value.length());
           normalized.append(value, copied, i).append(expanded);
@@ -216,7 +258,9 @@ public final class SgfDocument {
     return normalized == null ? value : normalized.append(value, copied, value.length()).toString();
   }
 
-  private static String expandSetupRange(String value, int width, int height) {
+  private static String expandSetupRange(
+      String value, int width, int height, SgfCancellation cancellation) {
+    cancellation.check();
     // Use reopen's dimension contract before a short range can expand into billions of points.
     // Preserve its legacy fallback for dimensions below two; this is not a new heap/engine limit.
     if (!validBoardSize(width < 2 ? DEFAULT_BOARD_SIZE : width, height < 2 ? DEFAULT_BOARD_SIZE : height)) {
@@ -232,6 +276,7 @@ public final class SgfDocument {
     StringBuilder points = new StringBuilder();
     for (int x = first[0]; x <= last[0]; x++) {
       for (int y = first[1]; y <= last[1]; y++) {
+        cancellation.checkEvery(y - first[1]);
         points.append('[').append(asCoord(x, y, width, height)).append(']');
       }
     }
@@ -258,9 +303,9 @@ public final class SgfDocument {
   }
 
   /** Accept escaped LF/CRLF only between SGF tokens, never inside property values. */
-  private static String normalizeStructuralNewlines(String value) {
-    int start = value.indexOf('(');
-    if (start < 0 || value.indexOf('\\', start) < 0) {
+  private static String normalizeStructuralNewlines(String value, SgfCancellation cancellation) {
+    int start = cancellation.indexOf(value, '(', 0);
+    if (start < 0 || cancellation.indexOf(value, '\\', start) < 0) {
       return value;
     }
     StringBuilder normalized = null;
@@ -268,7 +313,8 @@ public final class SgfDocument {
     int depth = 0;
     boolean inValue = false;
     char previous = 0;
-    for (int i = start; i < value.length(); i++) {
+    for (int i = start, scanned = 0; i < value.length(); i++, scanned++) {
+      cancellation.checkEvery(scanned);
       char c = value.charAt(i);
       // Keep legacy surrounding-text tolerance, but inspect every adjacent collection tree.
       if (depth == 0 && c != '(' && c != '\\' && !Character.isWhitespace(c)) {
@@ -285,6 +331,7 @@ public final class SgfDocument {
         }
         int next = end;
         while (next < value.length() && Character.isWhitespace(value.charAt(next))) {
+          cancellation.checkEvery(next);
           next++;
         }
         if (Character.isLetter(previous)
@@ -300,7 +347,7 @@ public final class SgfDocument {
         continue;
       }
       if (c == '[') {
-        int end = valueEnd(value, i + 1);
+        int end = valueEnd(value, i + 1, cancellation);
         if (end < 0) {
           inValue = true;
           break;
@@ -328,13 +375,18 @@ public final class SgfDocument {
   }
 
   static int[] parseBoardSize(String value) {
+    return parseBoardSize(value, SgfCancellation.NONE);
+  }
+
+  private static int[] parseBoardSize(String value, SgfCancellation cancellation) {
     // Size is needed before creating the history. Scan property boundaries so a name such
     // as PW[SZ[3] cannot resize the board; '[' is legal unescaped text inside a value.
     StringBuilder tag = new StringBuilder();
     for (int i = 0; i < value.length(); i++) {
+      cancellation.checkEvery(i);
       char c = value.charAt(i);
       if (c == '[') {
-        int end = valueEnd(value, i + 1);
+        int end = valueEnd(value, i + 1, cancellation);
         if (end < 0) break;
         if ("SZ".contentEquals(tag)) {
           String size = value.substring(i + 1, end);

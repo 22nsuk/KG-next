@@ -45,7 +45,8 @@ import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
-import java.util.StringTokenizer;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.swing.JOptionPane;
@@ -78,15 +79,28 @@ public class SGFParser {
 
   /** Prepares immutable file syntax without reading import preferences or changing the live board. */
   public static SgfDocument prepareFileContent(String value) {
+    return prepareFileContent(value, SgfCancellation.NONE);
+  }
+
+  /** Async preparation may stop cooperatively; cancellation is not an invalid SGF result. */
+  public static SgfDocument prepareFileContent(String value, BooleanSupplier cancelled) {
+    return prepareFileContent(value, new SgfCancellation(cancelled));
+  }
+
+  private static SgfDocument prepareFileContent(String value, SgfCancellation cancellation) {
     try (var phase = new SgfPhase("parse-syntax")) {
+      cancellation.check();
       if (value.isEmpty()) {
         SgfObservation.record("open", "empty", null, null);
         return null;
       }
-      value = normalizeSgfInput(value);
-      SgfDocument document = value == null ? null : parseLoadDocument(value);
+      value = SgfDocument.normalizeInput(value, cancellation);
+      SgfDocument document = value == null ? null : parseLoadDocument(value, cancellation);
+      cancellation.check();
       if (document == null) SgfObservation.record("open", "failed", null, null);
       return document;
+    } catch (CancellationException cancelled) {
+      throw cancelled;
     } catch (RuntimeException invalidSgf) {
       SgfObservation.record("open", "failed", null, invalidSgf);
       return null;
@@ -503,11 +517,24 @@ public class SGFParser {
 
   /** Builds file-loader semantics without publishing a board or consulting changing import policy. */
   public static PreparedGame prepareFileGame(SgfDocument document, ParseOptions options) {
+    return prepareFileGame(document, options, SgfCancellation.NONE);
+  }
+
+  /** The request owns cancellation until its private history is ready for publication. */
+  public static PreparedGame prepareFileGame(
+      SgfDocument document, ParseOptions options, BooleanSupplier cancelled) {
+    return prepareFileGame(document, options, new SgfCancellation(cancelled));
+  }
+
+  private static PreparedGame prepareFileGame(
+      SgfDocument document, ParseOptions options, SgfCancellation cancellation) {
+    cancellation.check();
     if (document == null) return null;
     try (var phase = new SgfPhase("parse-build-tree")) {
       PreparedGame prepared = new PreparedGame(document, options);
       BoardHistoryNode.runWithoutGlobalMoveSideEffects(options.newMoveNumberInBranch(),
-          () -> buildFileHistory(document, prepared, options));
+          () -> buildFileHistory(document, prepared, options, cancellation));
+      cancellation.check();
       return prepared;
     }
   }
@@ -531,17 +558,23 @@ public class SGFParser {
   }
 
   private static SgfDocument parseLoadDocument(String value) {
-    SgfDocument document = SgfDocument.parseNormalized(value);
+    return parseLoadDocument(value, SgfCancellation.NONE);
+  }
+
+  private static SgfDocument parseLoadDocument(String value, SgfCancellation cancellation) {
+    SgfDocument document = SgfDocument.parseNormalized(value, cancellation);
     if (document == null && !value.isEmpty()) {
       // Preserve the live loader's legacy leading-node fragment tolerance.
-      document = SgfDocument.parseNormalized("(;" + value.substring(1));
+      cancellation.check();
+      document = SgfDocument.parseNormalized("(;" + value.substring(1), cancellation);
     }
     return document;
   }
 
   // Keep the file import's KO/DZ/FIT and hint policy separate from standalone parseSgf imports.
   private static void buildFileHistory(
-      SgfDocument document, PreparedGame prepared, ParseOptions options) {
+      SgfDocument document, PreparedGame prepared, ParseOptions options,
+      SgfCancellation cancellation) {
     BoardHistoryList history = prepared.history;
     int width = history.getData().zobrist.width();
     int height = history.getData().zobrist.height();
@@ -552,7 +585,7 @@ public class SGFParser {
     // Game properties
     Map<String, List<String>> gameProperties = new HashMap<String, List<String>>();
     Map<String, List<String>> pendingProps = new HashMap<String, List<String>>();
-    AnalysisImport analysisImport = new AnalysisImport(options);
+    AnalysisImport analysisImport = new AnalysisImport(options, cancellation);
     PendingNodeMetadata pendingNodeMetadata = new PendingNodeMetadata(analysisImport);
     boolean isMultiGo = false,
         moveStart = false,
@@ -576,6 +609,7 @@ public class SGFParser {
     // Support unicode characters (UTF-8)
     boolean currentNodeHasDummy = false;
     for (SgfDocument.Event event : document.events()) {
+      cancellation.check();
       switch (event.kind()) {
         case '(':
           flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
@@ -597,6 +631,7 @@ public class SGFParser {
             BoardHistoryNode node = subTreeStepMap.get(subTreeDepth);
             //  for (int s = 0; s < varStep; s++)
             while (history.getCurrentHistoryNode() != node) {
+              cancellation.check();
               if (!history.previous().isPresent()) break;
             }
             //  System.out.println(subTreeDepth+" | "+varStep);
@@ -608,7 +643,7 @@ public class SGFParser {
             break;
           }
           String tag = event.name();
-          String tagContent = event.legacyValue();
+          String tagContent = event.legacyValue(cancellation);
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -709,11 +744,11 @@ public class SGFParser {
               applyCurrentPlayerPropertyOnNode(history, target, tagContent);
             }
           } else if (tag.equals("PB")) {
-            blackPlayer = decodeGameInfoText(tagContent);
+            blackPlayer = decodeGameInfoText(tagContent, cancellation);
           } else if (tag.equals("PW")) {
-            whitePlayer = decodeGameInfoText(tagContent);
+            whitePlayer = decodeGameInfoText(tagContent, cancellation);
           } else if (tag.equals("RE")) {
-            result = decodeGameInfoText(tagContent);
+            result = decodeGameInfoText(tagContent, cancellation);
           } else if (tag.equals("DZ")) {
             if (tagContent.equals("Y")) {
               prepared.pkBoard = true;
@@ -888,11 +923,12 @@ public class SGFParser {
     gameInfo.setPlayerBlack(blackPlayer);
     gameInfo.setPlayerWhite(whitePlayer);
     gameInfo.setResultNoUI(result);
-    gameInfo.setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null)));
+    gameInfo.setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null), cancellation));
     gameInfo.setHandicap(parseHandicapProperty(getOrDefault(gameProperties, "HA", null)));
     prepared.rewindStart = history.getCurrentHistoryNode();
     // Preserve the live rewind's move markers without navigation or engine/UI side effects.
     do {
+      cancellation.check();
       history.getCurrentHistoryNode().next().ifPresent(BoardHistoryNode::updateIsBest);
     } while (history.previous().isPresent());
     if (gameProperties.size() > 0) {
@@ -4144,9 +4180,14 @@ public class SGFParser {
 
   /** Decode GameInfo's SimpleText fields without changing the raw node-property representation. */
   private static String decodeGameInfoText(String value) {
+    return decodeGameInfoText(value, SgfCancellation.NONE);
+  }
+
+  private static String decodeGameInfoText(String value, SgfCancellation cancellation) {
     if (value == null) return null;
     StringBuilder text = new StringBuilder(value.length());
-    for (int i = 0; i < value.length(); i++) {
+    for (int i = 0, scanned = 0; i < value.length(); i++, scanned++) {
+      cancellation.checkEvery(scanned);
       char c = value.charAt(i);
       boolean escaped = c == '\\' && i + 1 < value.length();
       if (escaped) c = value.charAt(++i);
@@ -4894,11 +4935,11 @@ public class SGFParser {
     return SgfDocument.hasMultiGoBranchSuffix(value);
   }
 
-  private static String[] analysisFields(String value) {
-    StringTokenizer tokenizer = new StringTokenizer(value.trim(), SGF_WHITESPACE);
-    String[] fields = new String[tokenizer.countTokens()];
-    for (int i = 0; i < fields.length; i++) fields[i] = tokenizer.nextToken();
-    return fields;
+  private static String[] analysisFields(String value, SgfCancellation cancellation) {
+    AnalysisTokens tokens = new AnalysisTokens(value, 0, value.length(), cancellation);
+    List<String> fields = new ArrayList<>();
+    while (tokens.advance()) fields.add(tokens.value());
+    return fields.toArray(String[]::new);
   }
 
   private static boolean isSecondaryEngineAnalysisTag(String tag) {
@@ -4907,11 +4948,17 @@ public class SGFParser {
 
   private static final class AnalysisImport {
     private final ParseOptions options;
+    private final SgfCancellation cancellation;
     private final BoardData.AnalysisStrings analysisStrings = new BoardData.AnalysisStrings();
 
     private AnalysisImport() { this(ParseOptions.capture()); }
 
-    private AnalysisImport(ParseOptions options) { this.options = options; }
+    private AnalysisImport(ParseOptions options) { this(options, SgfCancellation.NONE); }
+
+    private AnalysisImport(ParseOptions options, SgfCancellation cancellation) {
+      this.options = options;
+      this.cancellation = cancellation;
+    }
 
     // A matching digest can belong to an earlier import. Only payloads replaced by this parser
     // call permit KGP to restore invalidation; metadata alone cannot validate live analysis.
@@ -4926,6 +4973,7 @@ public class SGFParser {
     }
 
     private void applyTag(BoardData target, String tag, String tagContent) {
+      cancellation.check();
       if (target == null) {
         return;
       }
@@ -4936,24 +4984,26 @@ public class SGFParser {
         return;
       }
       if (Utils.isBlank(tagContent)) return;
-      int detailStart = tagContent.indexOf('\n');
+      int detailStart = cancellation.indexOf(tagContent, '\n', 0);
       String[] line1 = analysisFields(
-          detailStart < 0 ? tagContent : tagContent.substring(0, detailStart));
+          detailStart < 0 ? tagContent : tagContent.substring(0, detailStart), cancellation);
       if (line1.length < 3 || Utils.isBlank(line1[0])) {
         return;
       }
       boolean secondaryEngine = isSecondaryEngineAnalysisTag(tag);
       if (secondaryEngine) clearSecondaryAnalysisPayload(target);
       else clearPrimaryAnalysisPayload(target);
-      applyAnalysisHeader(target, line1, secondaryEngine);
+      applyAnalysisHeader(target, line1, secondaryEngine, cancellation);
       int numPlayouts = secondaryEngine ? target.getPlayouts2() : target.getPlayouts();
       if (numPlayouts > 0 && detailStart >= 0) {
         double stdev = extractAnalysisScoreStdev(line1);
         ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(
-            tagContent, detailStart + 1, stdev, secondaryEngine, options, analysisStrings);
+            tagContent, detailStart + 1, stdev, secondaryEngine, options, analysisStrings, cancellation);
         applyParsedAnalysisInfo(target, parsed, secondaryEngine);
       }
-      target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent), parseHeaderWrn(line1));
+      cancellation.check();
+      target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent),
+          parseHeaderWrn(line1, cancellation));
       (secondaryEngine ? secondaryReplacements : primaryReplacements).add(target);
       restoreAnalysisMetadata(target, !secondaryEngine, secondaryEngine);
     }
@@ -4970,10 +5020,11 @@ public class SGFParser {
         ? new AnalysisProvenance("", "", "", "", "", "", null, null, wrn, "") : null;
   }
 
-  private static Double parseHeaderWrn(String[] header) {
+  private static Double parseHeaderWrn(String[] header, SgfCancellation cancellation) {
     Double wrn = null;
     boolean seen = false;
     for (int i = 6; i < header.length; i++) {
+      cancellation.checkEvery(i);
       if (!header[i].startsWith("wrn=")) continue;
       // Conflicting or repeated values are ambiguous, even if one occurrence is valid.
       if (seen) return null;
@@ -4985,11 +5036,12 @@ public class SGFParser {
   }
 
   private static void applyAnalysisHeader(
-      BoardData target, String[] line1, boolean secondaryEngineTag) {
+      BoardData target, String[] line1, boolean secondaryEngineTag, SgfCancellation cancellation) {
     // Turn metadata must not pad a short legacy header with fabricated score fields.
     Boolean analysisTurn = null;
     boolean hasTurnField = false;
     for (int i = 3; i < line1.length; i++) {
+      cancellation.checkEvery(i);
       String field = line1[i];
       hasTurnField |= field.startsWith("analysisTurn=");
       if (field.equals("analysisTurn=B")) analysisTurn = true;
@@ -5000,10 +5052,11 @@ public class SGFParser {
       fields.subList(3, fields.size()).removeIf(field -> field.startsWith("analysisTurn="));
       line1 = fields.toArray(new String[0]);
     }
-    int headerPlayouts = parseAnalysisPlayouts(line1[2]);
+    int headerPlayouts = parseAnalysisPlayouts(line1[2], cancellation);
     int headerSlots = Math.min(6, line1.length);
     int rootVisits = -1;
     for (int i = 6; i < line1.length; i++) {
+      cancellation.checkEvery(i);
       if (line1[i].startsWith("rootVisits=")) {
         try {
           rootVisits = Integer.parseInt(line1[i].substring("rootVisits=".length()));
@@ -5057,7 +5110,7 @@ public class SGFParser {
     }
   }
 
-  private static int parseAnalysisPlayouts(String rawValue) {
+  private static int parseAnalysisPlayouts(String rawValue, SgfCancellation cancellation) {
     if (Utils.isBlank(rawValue)) {
       return 0;
     }
@@ -5066,6 +5119,7 @@ public class SGFParser {
     int integer = 0;
     int cursor = 0;
     while (cursor < rawValue.length()) {
+      cancellation.checkEvery(cursor);
       int digit = rawValue.charAt(cursor) - '0';
       if (digit < 0 || digit > 9 || integer > (Integer.MAX_VALUE - digit) / 10) break;
       integer = integer * 10 + digit;
@@ -5114,9 +5168,9 @@ public class SGFParser {
 
   private static ParsedAnalysisInfo parseAnalysisInfoForDetachedNode(
       String line, int start, double stdev, boolean secondaryEngineTag, ParseOptions options,
-      BoardData.AnalysisStrings analysisStrings) {
+      BoardData.AnalysisStrings analysisStrings, SgfCancellation cancellation) {
     // Keep the legacy literal separators, including ownership occurring inside a token.
-    int ownership = line.indexOf("ownership", start);
+    int ownership = cancellation.indexOf(line, "ownership", start);
     int analysisEnd = ownership < 0 ? line.length() : ownership;
     List<MoveData> bestMoves = new ArrayList<>();
     int maxSuggestions =
@@ -5124,9 +5178,10 @@ public class SGFParser {
             ? 361
             : options.maxSuggestions();
     while (start < analysisEnd && maxSuggestions > 0) {
-      int separator = line.indexOf(" info ", start);
+      cancellation.check();
+      int separator = cancellation.indexOf(line, " info ", start);
       if (separator < 0 || separator + " info ".length() > analysisEnd) separator = analysisEnd;
-      AnalysisTokens tokens = new AnalysisTokens(line, start, separator);
+      AnalysisTokens tokens = new AnalysisTokens(line, start, separator, cancellation);
       if (tokens.advance()) {
         bestMoves.add(parseMoveDataFromAnalysis(
             tokens, bestMoves.size(), options.limitBranchLength(), analysisStrings));
@@ -5138,30 +5193,47 @@ public class SGFParser {
       bestMoves.get(0).scoreStdev = stdev;
     }
     return new ParsedAnalysisInfo(bestMoves,
-        ownership < 0 ? null : parseOwnershipValues(line, ownership + "ownership".length()));
+        ownership < 0 ? null : parseOwnershipValues(
+            line, ownership + "ownership".length(), cancellation));
   }
 
   /** A trimmed region with the same six ASCII delimiters as analysisFields, read only once. */
   private static final class AnalysisTokens {
     private final String text;
     private final int end;
+    private final SgfCancellation cancellation;
     private int position;
     private int tokenStart;
     private int tokenEnd;
 
-    AnalysisTokens(String text, int start, int end) {
+    AnalysisTokens(String text, int start, int end, SgfCancellation cancellation) {
       this.text = text;
+      this.cancellation = cancellation;
+      cancellation.check();
       // String.trim also removes other control characters, but only at the region's edges.
-      while (start < end && text.charAt(start) <= ' ') start++;
-      while (start < end && text.charAt(end - 1) <= ' ') end--;
+      while (start < end && text.charAt(start) <= ' ') {
+        cancellation.checkEvery(start);
+        start++;
+      }
+      while (start < end && text.charAt(end - 1) <= ' ') {
+        cancellation.checkEvery(end);
+        end--;
+      }
       this.position = start;
       this.end = end;
     }
 
     boolean advance() {
-      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) >= 0) position++;
+      cancellation.check();
+      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) >= 0) {
+        cancellation.checkEvery(position);
+        position++;
+      }
       tokenStart = position;
-      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) < 0) position++;
+      while (position < end && SGF_WHITESPACE.indexOf(text.charAt(position)) < 0) {
+        cancellation.checkEvery(position);
+        position++;
+      }
       tokenEnd = position;
       return tokenStart < tokenEnd;
     }
@@ -5227,13 +5299,13 @@ public class SGFParser {
     if (tokens.is(keyStart, keyEnd, "move")) {
       target.coordinate = tokens.retainedValue(analysisStrings);
     } else if (tokens.is(keyStart, keyEnd, "visits")) {
-      target.playouts = parseAnalysisPlayouts(tokens.value());
+      target.playouts = parseAnalysisPlayouts(tokens.value(), tokens.cancellation);
     } else if (tokens.is(keyStart, keyEnd, "order")) {
       target.order = Integer.parseInt(tokens.value());
     } else if (tokens.is(keyStart, keyEnd, "edgeVisits")) {
       target.edgeVisits = Integer.parseInt(tokens.value());
     } else if (tokens.is(keyStart, keyEnd, "winrate")) {
-      target.winrate = parseAnalysisPlayouts(tokens.value()) / 100.0;
+      target.winrate = parseAnalysisPlayouts(tokens.value(), tokens.cancellation) / 100.0;
       target.lcb = target.winrate;
     } else if (tokens.is(keyStart, keyEnd, "prior")) {
       target.policy = parsePriorValue(tokens.value());
@@ -5254,8 +5326,9 @@ public class SGFParser {
     }
   }
 
-  private static List<Double> parseOwnershipValues(String line, int start) {
-    AnalysisTokens tokens = new AnalysisTokens(line, start, line.length());
+  private static List<Double> parseOwnershipValues(
+      String line, int start, SgfCancellation cancellation) {
+    AnalysisTokens tokens = new AnalysisTokens(line, start, line.length(), cancellation);
     double[] values = new double[32];
     int size = 0;
     while (tokens.advance()) {

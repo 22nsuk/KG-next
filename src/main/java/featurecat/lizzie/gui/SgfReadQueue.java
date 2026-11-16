@@ -99,8 +99,8 @@ final class SgfReadQueue {
               var game = GIBParser.prepareFileContent(content);
               if (game != null) prepared = new PreparedGib(game);
             } else {
-              SgfDocument document = SGFParser.prepareFileContent(content);
-              if (document != null) prepared = prepareSgf(document, options);
+              SgfDocument document = SGFParser.prepareFileContent(content, request.result()::isCancelled);
+              if (document != null) prepared = prepareSgf(document, options, request);
             }
           }
         } catch (IOException | RuntimeException | Error caught) {
@@ -115,8 +115,10 @@ final class SgfReadQueue {
     }
   }
 
-  private static PreparedSgf prepareSgf(SgfDocument document, SGFParser.ParseOptions options) {
-    return new PreparedSgf(document, options, SGFParser.prepareFileGame(document, options));
+  private static PreparedSgf prepareSgf(
+      SgfDocument document, SGFParser.ParseOptions options, Request request) {
+    return new PreparedSgf(document, options,
+        SGFParser.prepareFileGame(document, options, request.result()::isCancelled));
   }
 
   private void finish(Request request, PreparedFile prepared, Throwable failure) {
@@ -130,7 +132,7 @@ final class SgfReadQueue {
             PreparedFile rebuilt = null;
             Throwable error = null;
             try {
-              if (!request.result().isCancelled()) rebuilt = prepareSgf(sgf.document(), current);
+              if (!request.result().isCancelled()) rebuilt = prepareSgf(sgf.document(), current, request);
             } catch (RuntimeException | Error caught) {
               error = caught;
             }
