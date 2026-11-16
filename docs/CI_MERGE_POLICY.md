@@ -9,7 +9,7 @@ PR을 병합하는 것만으로 GitHub의 보호 설정이 활성화되지는 �
 
 main의 필수 상태 검사는 **`ci-required`** 하나로 유지한다. 모든 PR에서
 `repository-checks`의 성공을 요구한다. 문서 전용으로 판정된 PR을 제외하면
-script, Linux/Windows Java, Java 17, desktop, analysis-provenance UI와
+script, Linux/Windows Java, Java 17, desktop, macOS ARM64 클립보드와
 engine-process matrix도 모두 성공해야 한다.
 
 Fox Search Regression, B11 Speed Notice UI, Native Windows Engine Acceptance,
@@ -32,9 +32,14 @@ Acceptance integration(SGF UI·Linux CPU)은
 
 - `native-clipboard-macos`는 실제 AppKit 클립보드 변경 감지와 별도 프로세스의
   복사를 검사한다. `SgfCopyDesktopTest`는 디스플레이를 필수로 요구하며,
-  `ClipboardCopyTest`와 함께 실패 시 `ci-required`를 통과시키지 않는다.
+  `ClipboardCopyTest`와 함께 `native-clipboard` 그룹에서 실행한다. 실제 macOS 호스트와
+  두 클래스의 필수 사례 성공을 요구하며 누락·skip·실패·오류는 통과시키지 않는다.
+  ARM64 runner 미배정은 시험 실패와 구분하되 필수 검증 성공으로 대체하지 않는다.
+- 분석 출처 UI의 `WholeGameAnalysisDialogLayoutTest` 여섯 사례는 같은 Java·폰트·화면을
+  사용하는 desktop 전체 검사에 포함한다. 별도 runner와 컴파일은 제거하고, 필수 사례와
+  `target/provenance-ui`의 화면 증거는 유지한다. 경쟁 조건 반복 목록에는 추가하지 않는다.
 
-- 데스크톱 전체 검사는 한 번 실행하고, `desktop-races`의 48개 사례를 두 번 더
+- 데스크톱 전체 검사는 한 번 실행하고, `desktop-races`에 선언된 사례를 두 번 더
   실행한다. 추가 반복은 시작 시 EDT 소유권, 저장·종료, 분석 창 수명, 트리 게시,
   저장 목록 worker, 해설 요청 소유권, HumanSL의 늦은 완료에 집중한다.
   이 사례들은 전체 검사에도 포함되어 총 세 번 실행된다. 나머지 데스크톱 사례의
@@ -65,7 +70,8 @@ head까지를 NUL 구분 파일명으로 비교한다. API의 파일 수 제한�
 삭제된 경로와 이름 변경 전후 경로를 모두 검사한다. diff나 SHA 해석이 실패하면
 repository job이 실패한다. 실패를 문서 변경으로 간주하지 않는다.
 
-PR 변경이 **루트 Markdown 및 `docs/`의 Markdown/reStructuredText뿐**일 때만
+PR 변경이 **루트 Markdown, `docs/`의 Markdown/reStructuredText, 또는
+`docs/performance/` 아래의 비실행 측정 기록 CSV·JSON뿐**일 때만
 `repository-checks`와 `ci-required`를 실행한다. repository 검사는 줄바꿈·로컬 링크·
 엔진/모델 메타데이터와 CI 선택 정책을 검사하고, 문서를 실제로 읽는 다음 기존
 Python 검사도 실행한다. 이 네 모듈은 portable scripts 그룹에서 repository 그룹으로
@@ -76,6 +82,7 @@ Python 검사도 실행한다. 이 네 모듈은 portable scripts 그룹에서 r
 - `test_validate_release_workflow_identity.py`: 릴리스 workflow와 체크리스트의 식별 정보
 - `test_macos_signing_security.py`: macOS 서명 실패 처리와 문서의 일치
 
+측정 기록 예외는 실행 코드나 설정에 적용하지 않는다. `docs/`의 다른 JSON·CSV,
 코드·테스트·자원·엔진 카탈로그·빌드 도구·설정·알 수 없는 경로가 하나라도 바뀌면
 기존 전체 검사를 실행한다. main push와 merge queue의 `merge_group`도 항상 전체
 검사를 실행한다. merge queue 이벤트 지원은 queue를 활성화하는 설정이 아니다.
@@ -113,7 +120,11 @@ SHA-256, SDK 경로·환경, 빌드 스크립트·의존성 lock·workflow의 �
 `native-engine-cache-inputs.json`과 Actions의 복원·빌드·감사 단계 시간을 함께 확인하여
 새 키의 첫 빌드와 같은 키의 재사용 비용을 비교한다. 실제 절감 시간은 runner와 캐시
 전송 비용에 따라 달라지며, 캐시 도입 전 빌드 시간만으로 절감량을 단정하지 않는다.
-전체 Java 검증의 JaCoCo 산출물과 CPU archive 전달용 artifact는 그대로 유지한다.
+전체 Linux/Windows Java 검증의 JaCoCo 산출물은 모두 유지하되 7일 보관한다.
+CPU archive 전달용 artifact도 유지한다. 별도 Java 17·macOS 검사는 사용하지 않는
+coverage 수집을 끄고 실제 시험과 JUnit·probe 증거를 보존한다.
+Linux/macOS 릴리스 ZIP·DMG의 Actions 복구 사본은 재압축하지 않고 7일 보관한다.
+Draft Release의 실제 배포 자산과 run-bound provenance의 내용·검증·7일 보관은 바꾸지 않는다.
 
 성공한 desktop artifact는 7일 보관한다. 최초 전체 검사의 이미지는 모두 유지하고,
 추가 두 반복의 `races-1/**/*.png`, `races-1/**/*.bmp`, `races-2/**/*.png`,
@@ -206,3 +217,14 @@ GitHub Actions 실행이나 서버 규칙 활성화의 증거가 아니다.
 [필수 상태 검사](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks),
 [ruleset 규칙](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets),
 [검사 이름 규칙](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/troubleshooting-rules).
+
+## 운영 변경 판단
+
+- 플랫폼별 실제 네이티브 동작과 Java 17 호환성은 중복으로 간주하지 않는다.
+- PR 전체 diff를 검사하고 main push·merge queue는 전체 검증을 유지한다.
+- 사례 수 자체를 고정하기보다 이름별 실행·성공과 선택 목록의 중복·부분집합 관계를 검사한다.
+  전체 JUnit 보고서의 실패·오류는 Maven 종료 코드와 별도로 거부한다. Headless에서 허용된
+  선택적 GUI skip과 명시한 필수 사례의 skip은 구별한다.
+- Runner 배정 실패는 실패 작업만 간격을 두고 재시도한다. 실제 테스트 실패는 먼저
+  진단하며, 반복 재실행으로 성공 결과만 남기지 않는다. 외부 용량 부족을 숨기기 위한
+  timeout 확대·필수 검사 제외·Intel 대체·무제한 자동 재시도는 도입하지 않는다.

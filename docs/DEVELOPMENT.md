@@ -152,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux x86_64 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 完整 Maven verify（包括凭据测试） | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
-| `desktop-races` | 48 个 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
+| `desktop-races` | 显式声明的 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 显示测试的类选择和强制成功用例在 `scripts/run_local_ci.py` 中按类统一声明；
@@ -190,7 +190,7 @@ GitHub Ubuntu runner 还为 root 所有的 CI 专用 `unshare` 副本加载允�
 两平台 Java gate 使用 Failsafe 默认命名发现集成测试，不再限定单一类；集成测试为空会失败。
 执行器还检查本次 XML 中 `LoggingProviderSmokeIT.shadedArtifactWritesOneProviderEvent`
 确实成功执行：关键用例缺失，或关键类任一用例 skipped/失败/报错，均使预检失败并写出失败摘要。
-其他需要显示环境的可选用例仍可在 headless gate 跳过；不固定全仓测试或 skip 数量。
+所有报告中的 failure/error 都使汇总失败，即使 Maven 返回 0。其他需要显示环境的可选用例仍可在 headless gate 跳过；不固定全仓测试或 skip 数量。
 Windows 主机（不论 profile）还要求 `PlatformCredentialStoreTest.windowsDpapiRoundTripsAcrossRealNativeCalls`
 在同一次 verify 中成功执行；缺失、跳过或失败均使 Java gate 失败。不再单独重复执行凭据专项。
 
@@ -201,6 +201,8 @@ CI 的 desktop job 先执行一次完整 `desktop`，再执行两次 `desktop-ra
 CI 每次 race 成功后把后者保留为 `races-1/`、`races-2/`，失败时保留当前 `races/`。
 成功 artifact 只排除两个额外重复目录中的 PNG/BMP，保留首次完整执行的所有图片、
 每次重复的 XML/文本/SGF/日志和独立摘要；生成图片及其读取验证仍照常执行。
+分析来源 UI 的六个必需用例合入完整 desktop（不加入 races），共享编译/字体/显示环境；
+其 `target/provenance-ui` 截图也由 desktop artifact 保留。
 成功 desktop artifact 保留 7 天，失败或取消时尝试上传完整目录并保留 14 天；
 所有 local CI JSON/Markdown 摘要保留 14 天，artifact 名称及执行 SHA 记录不变。
 频率调整及必需成功规则见 [CI 合并策略](CI_MERGE_POLICY.md)。
@@ -322,15 +324,15 @@ Actions 的 `ci.yml` 对所有 PR 执行 `repository-checks` 和 `ci-required`�
 `repository-checks` 还执行直接读取文档的元数据/README、Windows 下载指导、
 release workflow/checklist identity、macOS signing security 四个现有 Python 模块；
 这些模块已移出 portable scripts 组，因此完整 CI 也只执行一次。
-只有根目录 Markdown 和 `docs/` 下 Markdown/reStructuredText 的改动可跳过其余执行 job。
+只有根目录 Markdown、`docs/` 下 Markdown/reStructuredText，以及 `docs/performance/` 下非执行的 CSV/JSON 测量记录改动可跳过其余执行 job；其他 JSON/CSV 不在例外内。
 含代码、资源、配置或未知路径的 PR，以及所有 main push 和 merge_group，仍执行
 `script-tests`、`windows-script-tests`、`java-linux`、`java17-web`、
-`java-windows`、`desktop-smoke`、`analysis-provenance-ui`，以及 `engine-process` 的
+`java-windows`、`desktop-smoke`、`native-clipboard-macos`，以及 `engine-process` 的
 Linux/Xvfb 与原生 Windows 两个 matrix leg。
 Windows 脚本 job 依次运行 `windows/repository` 与 `windows/scripts`，摘要独立上传。
-两平台 Java job 保留全量测试、`LoggingProviderSmokeIT`、shaded JAR 和 JaCoCo；
+两平台 Java job 保留全量测试、`LoggingProviderSmokeIT`、shaded JAR 和 JaCoCo（报告保留 7 天）；
 验证成功但 coverage artifact 缺失仍失败。单独执行的 desktop/races、engine-process、
-analysis-provenance、Fox、B11、native move-focus 和 `run_acceptance.py` UI/实引擎验收只保留
+Java 17、macOS clipboard、Fox、B11、native move-focus 和 `run_acceptance.py` UI/实引擎验收只保留
 JUnit/探针证据，不生成或合并 coverage 报告，因此这些 Maven 调用显式设置 `-Djacoco.skip=true`；
 TensorRT UI 也沿用这一设置。各组失败时仍尝试上传本组摘要；两个进程 leg 还始终上传
 `target/engine-process-smoke` 下的报告、日志和探针证据。
@@ -339,7 +341,7 @@ TensorRT UI 也沿用这一设置。各组失败时仍尝试上传本组摘要�
 repository 及文档消费检查必须成功；只有成功的文档专用判定才允许其余 job 跳过。
 失败、取消、必需执行的跳过、缺失或未知结果均不能通过，dependency 列表不一致也失败。
 workflow 自身保持无路径过滤，汇总 gate 始终依赖所有 job 并使用 `always()`。
-Native Windows Engine Acceptance 补齐 Maven 依赖缓存，固定 native CPU 引擎仍每次构建、audit 并执行原生用例。
+Native Windows Engine Acceptance 补齐 Maven 依赖缓存，固定 native CPU 引擎仅在精确缓存未命中时构建，每次仍重新 audit、打包并执行原生用例。
 发布仍仅接受目标 SHA 的完整 `ci.yml` push 成功运行。
 
 该检查是否作为合并条件强制执行，取决于目标仓库的分支保护或 ruleset 设置；仅定义 workflow
@@ -567,3 +569,16 @@ future，但旧任务真正退出并完成 EDT 收尾后才释放执行槽。SGF
 - [发布检查清单](RELEASE_CHECKLIST.md)
 - [发布包说明](PACKAGES.md)
 - [已验证平台](TESTED_PLATFORMS.md)
+
+### macOS 原生剪贴板必需检查
+
+在真实 macOS 主机运行：
+
+```sh
+python3 scripts/run_local_ci.py --profile portable --group native-clipboard --require-clean
+```
+
+此组保留 `SgfCopyDesktopTest` 与 `ClipboardCopyTest` 全类选择，要求声明用例成功执行；
+缺失、skip、failure/error 均失败。实际运行拒绝非 macOS 主机；其他平台可用 `--dry-run`
+检查命令，但不能据此报告原生验证成功。JUnit/probe 位于 `target/native-clipboard/`。
+所有 Java 组的报告汇总都独立拒绝失败/错误，不仅依赖 Maven 的退出码。
