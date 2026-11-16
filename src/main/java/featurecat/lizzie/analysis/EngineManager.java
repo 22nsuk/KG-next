@@ -4806,9 +4806,6 @@ public class EngineManager {
       Thread.sleep(200);
       engine.started = false;
       engine.isLoaded = false;
-      if (engine.isLeela0110) {
-        engine.leela0110StopPonder();
-      }
     } catch (Exception ignored) {
     }
   }
@@ -8845,25 +8842,6 @@ public class EngineManager {
         || !transaction.retirementCompletionClaimed.compareAndSet(false, true)) {
       return;
     }
-    // One last exact cleanup closes the window where an already-admitted nonblocking operation
-    // installs Leela0110 state after the terminal owner's first cancellation pass. No new lease
-    // can be admitted now, and the retiring barrier remains published until both endpoints are
-    // clean, so a batch successor cannot inherit the predecessor's timer or BoardData sentinel.
-    Throwable cleanupFailure = null;
-    try {
-      transaction.blackEngine.cancelLeela0110PonderForEngineGameTransaction(transaction);
-    } catch (RuntimeException | Error endpointFailure) {
-      cleanupFailure = appendEngineGameFailure(cleanupFailure, endpointFailure);
-    }
-    try {
-      transaction.whiteEngine.cancelLeela0110PonderForEngineGameTransaction(transaction);
-    } catch (RuntimeException | Error endpointFailure) {
-      cleanupFailure = appendEngineGameFailure(cleanupFailure, endpointFailure);
-    }
-    if (cleanupFailure != null) {
-      transaction.terminalFailure =
-          appendEngineGameFailure(transaction.terminalFailure, cleanupFailure);
-    }
     if (transaction.foregroundHandback != null) {
       try {
         Thread worker =
@@ -11667,7 +11645,6 @@ public class EngineManager {
         } else if (!Lizzie.config.fastChange) {
           previous.normalQuit();
         } else {
-          if (previous.isLeela0110) previous.leela0110StopPonder();
           previous.nameCmdfornoponder();
         }
       }
@@ -12385,7 +12362,6 @@ public class EngineManager {
           } else if (!Lizzie.config.fastChange) {
             curEng.normalQuit();
           } else {
-            if (curEng.isLeela0110) curEng.leela0110StopPonder();
             curEng.nameCmdfornoponder();
           }
         } catch (Exception e) {

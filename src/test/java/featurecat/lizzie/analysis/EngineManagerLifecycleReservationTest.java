@@ -2778,8 +2778,6 @@ class EngineManagerLifecycleReservationTest {
             "same-object-exit-rebind");
     rebind.setDaemon(true);
     Object replacementForegroundSample = null;
-    RecordingTimer replacementPonderTimer = null;
-    BoardData replacementPonderData = null;
     Thread exit =
         new Thread(
             () -> {
@@ -2838,10 +2836,6 @@ class EngineManagerLifecycleReservationTest {
       engine.isNormalEnd = false;
       replacementForegroundSample = installForegroundSampleSentinel(engine);
       assertFalse(retiredForegroundSample == replacementForegroundSample);
-      replacementPonderTimer = new RecordingTimer();
-      replacementPonderData = allocate(BoardData.class);
-      setLeelazField(engine, "leela0110PonderingTimer", replacementPonderTimer);
-      setLeelazField(engine, "leela0110PonderingBoardData", replacementPonderData);
       (retiredLocal ? retiredProcess.allowCleanup : retiredSsh.allowClose).countDown();
       exit.join(3_000L);
 
@@ -2875,8 +2869,6 @@ class EngineManagerLifecycleReservationTest {
       assertTrue(engine.started);
       assertTrue(engine.isLoaded);
       assertFalse(engine.isNormalEnd);
-      assertEquals(0, replacementPonderTimer.cancelCount.get());
-      assertSame(replacementPonderData, getLeelazField(engine, "leela0110PonderingBoardData"));
       assertEquals(
           EngineStartupStatus.State.CHECKING,
           Lizzie.engineStartupStatus.snapshot().state,
@@ -2890,9 +2882,6 @@ class EngineManagerLifecycleReservationTest {
       rebind.join(3_000L);
       retiredStdout.shutdownNow();
       retiredStderr.shutdownNow();
-      if (replacementPonderTimer != null) {
-        replacementPonderTimer.cancelForFixtureCleanup();
-      }
       removeForegroundSample(engine);
       restoreStartupStatus(previousStartupStatus);
       Lizzie.setPrimaryEngine(previousPrimary);
@@ -6694,7 +6683,22 @@ class EngineManagerLifecycleReservationTest {
     BlockingRollbackRecoveryLeelaz engine = new BlockingRollbackRecoveryLeelaz();
     StartThenThrowRollbackEngineManager manager =
         new StartThenThrowRollbackEngineManager(List.of(engine), engine);
+    AtomicInteger restoreFailureCount = new AtomicInteger();
     try {
+      Config config = allocate(Config.class);
+      config.extraMode = ExtraMode.Normal;
+      Lizzie.config = config;
+      // Fail the worker's restore explicitly, independent of optional protocol branches.
+      ExactSnapshotRestoreProtocolFixture.install(
+          engine,
+          command -> {
+            if (command.startsWith("loadsgf ")) {
+              restoreFailureCount.incrementAndGet();
+              return ExactSnapshotRestoreProtocolFixture.Response.error(
+                  "controlled rollback restore failure");
+            }
+            return ExactSnapshotRestoreProtocolFixture.Response.success();
+          });
       Lizzie.board = preparedRestoreBoard();
       Lizzie.frame = null;
       LizzieFrame.menu = null;
@@ -6713,6 +6717,7 @@ class EngineManagerLifecycleReservationTest {
       assertTrue(manager.rollbackFinished.await(2, TimeUnit.SECONDS));
       assertEquals(1, manager.startCount);
       assertEquals(1, engine.reservationCount.get());
+      assertEquals(1, restoreFailureCount.get());
       assertEquals(1L, engine.recoveryCompleted.getCount());
       assertEquals(1, manager.settlementCount);
       assertNull(activeFailedRollbackRecovery(manager));
@@ -8885,9 +8890,6 @@ class EngineManagerLifecycleReservationTest {
     protected QuietExitLeelaz() throws Exception {
       super("");
     }
-
-    @Override
-    public void leela0110StopPonder() {}
   }
 
   private static final class PresentationLockOrderLeelaz extends QuietExitLeelaz {
@@ -9526,24 +9528,6 @@ class EngineManagerLifecycleReservationTest {
     @Override
     public boolean isAlive() {
       return alive;
-    }
-  }
-
-  private static final class RecordingTimer extends java.util.Timer {
-    private final AtomicInteger cancelCount = new AtomicInteger();
-
-    private RecordingTimer() {
-      super(true);
-    }
-
-    @Override
-    public void cancel() {
-      cancelCount.incrementAndGet();
-      super.cancel();
-    }
-
-    private void cancelForFixtureCleanup() {
-      super.cancel();
     }
   }
 

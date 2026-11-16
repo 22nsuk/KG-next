@@ -364,15 +364,11 @@ class GtpConsoleSettingsTest {
   }
 
   @ParameterizedTest
-  @CsvSource({
-    "false, pda 0", "false, dympdacap 0.3",
-    "true, pda 0", "true, dympdacap 0.3"
-  })
-  void consolePdaDoesNotChangeAnEngineExcludedFromMirroring(boolean legacyLeela, String command)
+  @ValueSource(strings = {"pda 0", "dympdacap 0.3"})
+  void consolePdaDoesNotChangeAnEngineExcludedFromMirroring(String command)
       throws Exception {
     RecordingEngine secondary = comparisonEngine();
-    if (legacyLeela) secondary.isLeela0110 = true;
-    else Lizzie.config.extraMode = ExtraMode.Normal;
+    Lizzie.config.extraMode = ExtraMode.Normal;
 
     submit(command);
 

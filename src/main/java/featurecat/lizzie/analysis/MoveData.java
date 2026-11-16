@@ -656,26 +656,6 @@ public class MoveData {
     }
   }
 
-  public static MoveData fromSummaryLeela0110(String summary) {
-
-    // support 0.16 0.15
-    Pattern oldPattern = summaryPatternLeela0110;
-    Matcher matchold = oldPattern.matcher(summary.trim());
-    if (!matchold.matches()) {
-      throw new IllegalArgumentException("Unexpected summary format: " + summary);
-    } else {
-      MoveData result = new MoveData();
-      result.coordinate = matchold.group(1);
-      result.playouts = Integer.parseInt(matchold.group(2));
-      result.winrate = Double.parseDouble(matchold.group(3));
-      // result.oriwinrate = result.winrate;
-      result.policy = Double.parseDouble(matchold.group(4));
-      result.variation =
-          Arrays.asList(matchold.group(5).split(" ", Lizzie.config.limitBranchLength));
-      return result;
-    }
-  }
-
   public static MoveData fromSummarySai(String summary) {
     Matcher match = summaryPatternSai.matcher(summary.trim());
     if (match.matches()) {
@@ -716,10 +696,6 @@ public class MoveData {
       return result;
     } else return null;
   }
-
-  private static Pattern summaryPatternLeela0110 =
-      Pattern.compile(
-          "^ *(\\w\\d*) -> *(\\d+) \\(W: ([^%)]+)%\\).* \\(N: ([^%)]+)%\\) PV: (.+).*$");
 
   private static Pattern summaryPattern =
       Pattern.compile(
