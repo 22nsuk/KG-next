@@ -176,7 +176,7 @@ public final class EditUndoPerformanceProbe {
     });
   }
 
-  private static void verifyInsertion(SgfPerformanceProbe.Fixture fixture) throws Exception {
+  public static void verifyInsertion(SgfPerformanceProbe.Fixture fixture) throws Exception {
     onEdt(() -> {
       var pending = new ArrayDeque<BoardHistoryNode>();
       pending.push(Lizzie.board.getHistory().getStart());

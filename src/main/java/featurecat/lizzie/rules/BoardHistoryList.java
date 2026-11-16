@@ -380,7 +380,7 @@ public class BoardHistoryList {
     boolean normalizeTrial = trialNumbering != null && trialNumbering.root.get() == root;
     List<BoardHistorySnapshot.NodeSnapshot> nodes = new java.util.ArrayList<>(structure.size());
     BoardPositionSnapshot.CaptureBuffer buffer = new BoardPositionSnapshot.CaptureBuffer();
-    BoardData.RestoreStrings analysisStrings = new BoardData.RestoreStrings();
+    BoardData.AnalysisStrings analysisStrings = new BoardData.AnalysisStrings();
     // Match save capture's lock order: never acquire payload locks under the history monitor,
     // and release a payload lock before acquiring the corresponding node metadata lock.
     for (RestoreStructure entry : structure) {

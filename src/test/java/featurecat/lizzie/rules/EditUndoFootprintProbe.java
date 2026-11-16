@@ -23,7 +23,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 /**
- * Manual snapshot object-graph measurement, not a timing or total retained-heap test. Run with
+ * Manual history/snapshot object-graph measurement, not a timing or total retained-heap test. Run with
  * this class as a javaagent and main class, the test classpath, and java.lang/java.util opened.
  * Arguments: existing EditUndoPerformanceProbe fixture directory, new output JSON file.
  */
@@ -62,6 +62,7 @@ public final class EditUndoFootprintProbe {
         history.setHead(history.getStart());
         board.setHistory(history);
         settle(board);
+        JSONObject loaded = Graph.walk(history).summary(Set.of());
         board.deleteMoveNoHintAfter();
         settle(board);
         Field pending = Board.class.getDeclaredField("stateBeforeEdit");
@@ -73,16 +74,19 @@ public final class EditUndoFootprintProbe {
         rows.put(new JSONObject().put("fixture", name)
             .put("fixtureSha256", HexFormat.of().formatHex(
                 MessageDigest.getInstance("SHA-256").digest(input)))
+            .put("loadedHistoryGraph", loaded)
             .put("snapshotGraph", saved.summary(Set.of()))
+            .put("liveAndSnapshotGraph", Graph.walk(board.getHistory(), snapshot).summary(Set.of()))
             .put("snapshotObjectsNotInLiveHistory", saved.summary(live.objects)));
       }
     }
     JSONObject result = new JSONObject()
         .put("java", System.getProperty("java.runtime.version"))
         .put("scope", "Sum of Instrumentation.getObjectSize over identity-distinct objects "
-            + "reachable from the pending edit snapshot after a root deletion; skip the Board "
-            + "owner back-reference, static fields and enum constants. Also subtract objects "
-            + "reachable from the remaining live history. Other application/VM roots are not "
+            + "reachable from the loaded history before editing, the pending edit snapshot after "
+            + "a root deletion, and the union of remaining live history and snapshot; skip the "
+            + "Board owner back-reference, static fields and enum constants. Also subtract objects "
+            + "reachable from the remaining live history from the snapshot. Other application/VM roots are not "
             + "subtracted: this is a graph footprint, not exclusive retained heap or peak RAM. "
             + "Headless rules harness replaces UI/engine callbacks; no latency is measured.")
         .put("fixtures", rows).put("result", "PASS");
@@ -100,11 +104,11 @@ public final class EditUndoFootprintProbe {
   private static final class Graph {
     final Set<Object> objects = Collections.newSetFromMap(new IdentityHashMap<>());
 
-    static Graph walk(Object root) throws IllegalAccessException {
+    static Graph walk(Object... roots) throws IllegalAccessException {
       Graph graph = new Graph();
       ArrayDeque<Object> pending = new ArrayDeque<>();
       Map<Class<?>, List<Field>> fields = new HashMap<>();
-      pending.add(root);
+      for (Object root : roots) pending.add(root);
       while (!pending.isEmpty()) {
         Object object = pending.removeLast();
         if (object instanceof Enum<?> || !graph.objects.add(object)) continue;

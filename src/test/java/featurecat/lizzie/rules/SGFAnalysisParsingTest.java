@@ -2,13 +2,17 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.MoveData;
+import java.util.ArrayList;
 import java.util.List;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -16,6 +20,115 @@ import org.junit.jupiter.params.provider.ValueSource;
 /** Compatibility at the SGF import boundary, including tolerated legacy analysis syntax. */
 class SGFAnalysisParsingTest {
   private static final String MOVE = "move C3 visits 100 winrate 5500 pv C3 D4";
+
+  @ParameterizedTest
+  @ValueSource(strings = {"detached", "live", "edit", "branch"})
+  void retainedTokensShareWithinOneImportWhileCandidatesAndListsStayWritable(String entry)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open()) {
+      Lizzie.config.extraMode = featurecat.lizzie.ExtraMode.Double_Engine;
+      String payload = "[KataGo 45 100 2.5 1.2 0\n"
+          + "move C3 visits 100 pv C3 D4 C3 pvVisits 001 +1 001 info "
+          + "move C3 visits 100 pv C3 D4 C3 pvVisits 001 +1 001]";
+      String branch = ";B[aa]LZ" + payload + "LZ2" + payload
+          + ";W[bb]LZOP" + payload + "LZOP2" + payload;
+      BoardHistoryList history = importHistory(entry, branch);
+      List<MoveData> candidates = new ArrayList<>();
+      for (BoardHistoryNode node = history.getStart().next().orElseThrow();
+          node != null; node = node.next().orElse(null)) {
+        assertEquals(2, node.getData().bestMoves.size());
+        assertEquals(2, node.getData().bestMoves2.size());
+        candidates.addAll(node.getData().bestMoves);
+        candidates.addAll(node.getData().bestMoves2);
+      }
+      assertEquals(8, candidates.size());
+      MoveData first = candidates.get(0);
+      MoveData separateImport = importHistory(entry, branch).getStart().next().orElseThrow()
+          .getData().bestMoves.get(0);
+      assertNotSame(first.coordinate, separateImport.coordinate,
+          "the sharing table is not global or retained between imports");
+      BoardHistorySnapshot snapshot = history.copyForRestore(null);
+      for (int i = 0; i < candidates.size(); i++) {
+        MoveData move = candidates.get(i);
+        assertSame(first.coordinate, move.coordinate);
+        assertSame(move.coordinate, move.variation.get(0));
+        assertSame(move.coordinate, move.variation.get(2));
+        assertSame(first.pvVisits.get(0), move.pvVisits.get(0));
+        assertSame(move.pvVisits.get(0), move.pvVisits.get(2));
+        if (i > 0) {
+          assertNotSame(first, move);
+          assertNotSame(first.variation, move.variation);
+          assertNotSame(first.pvVisits, move.pvVisits);
+        }
+      }
+      for (MoveData move : candidates) {
+        assertEquals(List.of("C3", "D4", "C3"), move.variation);
+        assertEquals(List.of("001", "+1", "001"), move.pvVisits);
+        move.coordinate = "pass";
+        move.variation.clear();
+        move.pvVisits.set(0, "changed");
+      }
+      assertEquals(List.of("C3", "D4", "C3"), separateImport.variation);
+      BoardHistoryList restored = snapshot.restore(
+          false, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts);
+      for (BoardHistoryNode node = restored.getStart().next().orElseThrow();
+          node != null; node = node.next().orElse(null)) {
+        for (List<MoveData> moves : List.of(node.getData().bestMoves, node.getData().bestMoves2)) {
+          for (MoveData move : moves) {
+            assertEquals("C3", move.coordinate);
+            assertEquals(List.of("C3", "D4", "C3"), move.variation);
+            assertEquals(List.of("001", "+1", "001"), move.pvVisits);
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  void tokenRegionsReuseExactUtf16TextAndKeepLongValuesOutsideTheTable() {
+    BoardData.AnalysisStrings strings = new BoardData.AnalysisStrings();
+    for (String value : List.of("C3", "C30", "c3", "한글", "한글\uD83C\uDF0F", "001", "+1", "-0",
+        "polygenelubricants", "x".repeat(64), "\uD83C\uDF0F".repeat(32), "x".repeat(65))) {
+      String source = "prefix:" + value + ":suffix";
+      String retained = strings.substring(source, 7, 7 + value.length());
+      String repeated = strings.substring("(" + value + ")", 1, 1 + value.length());
+      assertEquals(value, retained);
+      assertEquals(value, repeated);
+      if (value.length() <= 64) {
+        assertSame(retained, repeated);
+        assertSame(retained, strings.reuse(new String(value)),
+            "existing strings and source regions use the same exact-text table");
+      } else {
+        assertNotSame(retained, repeated);
+      }
+    }
+    String existing = new String("Q16");
+    assertSame(existing, strings.reuse(existing));
+    assertSame(existing, strings.substring("pv Q16 tail", 3, 6));
+  }
+
+  @Test
+  void tokenRegionCollisionsAndSaturationKeepTextWithoutEvictingEntries() {
+    BoardData.AnalysisStrings strings = new BoardData.AnalysisStrings();
+    List<String> values = new ArrayList<>(List.of("AaAaAa", "AaAaBB", "AaBBAa", "AaBBBB",
+        "BBAaAa", "BBAaBB", "BBBBAa", "BBBBBB"));
+    for (int i = 0; i < 4300; i++) values.add("token-" + i);
+    List<String> retained = new ArrayList<>();
+    for (String value : values) {
+      retained.add(strings.substring("[" + value + "]", 1, 1 + value.length()));
+    }
+    assertEquals(values, retained);
+    int reused = 0;
+    for (int i = 0; i < values.size(); i++) {
+      String value = values.get(i);
+      String repeated = strings.substring("(" + value + ")", 1, 1 + value.length());
+      assertEquals(value, repeated);
+      if (repeated == retained.get(i)) reused++;
+      if (i < 4) assertSame(retained.get(i), repeated, "earliest collisions are not evicted");
+      if (i >= 4 && i < 8) assertNotSame(retained.get(i), repeated, "collision work stays bounded");
+    }
+    assertTrue(reused > 0 && reused <= 4096, "reuse must stay within the bounded table");
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {"LZ", "LZOP", "LZ2", "LZOP2"})
@@ -195,6 +308,19 @@ class SGFAnalysisParsingTest {
         "(;SZ[5]" + tag + "[KataGo 45 100 2.5 1.2 0\n" + detail + "])", true);
     assertNotNull(history);
     return history.getStart().getData();
+  }
+
+  private static BoardHistoryList importHistory(String entry, String branch) {
+    String sgf = "(;SZ[5]" + branch + ")";
+    if (entry.equals("detached")) return SGFParser.parseSgf(sgf, true);
+    if (entry.equals("branch")) {
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5])", true);
+      SGFParser.parseBranch(history, branch);
+      return history;
+    }
+    if (entry.equals("live")) assertTrue(SGFParser.loadFromString(sgf, false));
+    else assertTrue(SGFParser.loadFromStringforedit(sgf));
+    return Lizzie.board.getHistory();
   }
 
   private static List<MoveData> moves(BoardData data, String tag) {

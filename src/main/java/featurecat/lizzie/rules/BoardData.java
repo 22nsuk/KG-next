@@ -1238,7 +1238,7 @@ public class BoardData implements Cloneable {
   }
 
   /** Undo-only metadata clone; mutable fields are detached and live permissions are retired. */
-  synchronized BoardData copyRestoreMetadata(RestoreStrings analysisStrings) {
+  synchronized BoardData copyRestoreMetadata(AnalysisStrings analysisStrings) {
     BoardData copy;
     try {
       copy = (BoardData) super.clone();
@@ -1269,7 +1269,7 @@ public class BoardData implements Cloneable {
   }
 
   private static List<MoveData> copyHistoryMoves(
-      List<MoveData> moves, RestoreStrings analysisStrings) {
+      List<MoveData> moves, AnalysisStrings analysisStrings) {
     if (moves == null) return null;
     if (moves.isEmpty()) return List.of();
     List<MoveData> copied = new ArrayList<>(moves.size());
@@ -1286,21 +1286,22 @@ public class BoardData implements Cloneable {
     return copied;
   }
 
-  private static void reuseAnalysisStrings(List<String> values, RestoreStrings strings) {
+  private static void reuseAnalysisStrings(List<String> values, AnalysisStrings strings) {
     if (values == null) return;
     for (int i = 0; i < values.size(); i++) {
       values.set(i, strings.reuse(values.get(i)));
     }
   }
 
-  /** Best-effort token reuse owned by one capture, never by a live tree or saved snapshot. */
-  static final class RestoreStrings {
+  /** Best-effort token reuse owned by one import or capture, never retained by a history. */
+  static final class AnalysisStrings {
     private static final int INDEX_BITS = 12;
     private static final int CAPACITY = 1 << INDEX_BITS;
+    private static final int MAX_LENGTH = 64;
     private String[] values;
 
     String reuse(String value) {
-      if (value == null || value.length() > 64) return value;
+      if (value == null || value.length() > MAX_LENGTH) return value;
       if (values == null) values = new String[CAPACITY];
       int index = (value.hashCode() * 0x9e3779b9) >>> (Integer.SIZE - INDEX_BITS);
       // A fixed number of probes bounds collision work. Missing a reusable value only retains
@@ -1315,6 +1316,29 @@ public class BoardData implements Cloneable {
         index = (index + 1) & (CAPACITY - 1);
       }
       return value;
+    }
+
+    /** Read a retained token directly from its source region, allocating only on a cache miss. */
+    String substring(String text, int start, int end) {
+      int length = end - start;
+      if (length > MAX_LENGTH) return text.substring(start, end);
+      if (values == null) values = new String[CAPACITY];
+      int hash = 0;
+      for (int i = start; i < end; i++) hash = 31 * hash + text.charAt(i);
+      int index = (hash * 0x9e3779b9) >>> (Integer.SIZE - INDEX_BITS);
+      for (int probe = 0; probe < 4; probe++) {
+        String existing = values[index];
+        if (existing == null) {
+          String value = text.substring(start, end);
+          values[index] = value;
+          return value;
+        }
+        if (existing.length() == length && text.regionMatches(start, existing, 0, length)) {
+          return existing;
+        }
+        index = (index + 1) & (CAPACITY - 1);
+      }
+      return text.substring(start, end);
     }
   }
 

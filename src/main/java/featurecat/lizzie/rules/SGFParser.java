@@ -4835,6 +4835,7 @@ public class SGFParser {
 
   private static final class AnalysisImport {
     private final ParseOptions options;
+    private final BoardData.AnalysisStrings analysisStrings = new BoardData.AnalysisStrings();
 
     private AnalysisImport() { this(ParseOptions.capture()); }
 
@@ -4877,7 +4878,7 @@ public class SGFParser {
       if (numPlayouts > 0 && detailStart >= 0) {
         double stdev = extractAnalysisScoreStdev(line1);
         ParsedAnalysisInfo parsed = parseAnalysisInfoForDetachedNode(
-            tagContent, detailStart + 1, stdev, secondaryEngine, options);
+            tagContent, detailStart + 1, stdev, secondaryEngine, options, analysisStrings);
         applyParsedAnalysisInfo(target, parsed, secondaryEngine);
       }
       target.setImportedAnalysis(secondaryEngine, analysisPayloadDigest(tagContent), parseHeaderWrn(line1));
@@ -5040,7 +5041,8 @@ public class SGFParser {
   }
 
   private static ParsedAnalysisInfo parseAnalysisInfoForDetachedNode(
-      String line, int start, double stdev, boolean secondaryEngineTag, ParseOptions options) {
+      String line, int start, double stdev, boolean secondaryEngineTag, ParseOptions options,
+      BoardData.AnalysisStrings analysisStrings) {
     // Keep the legacy literal separators, including ownership occurring inside a token.
     int ownership = line.indexOf("ownership", start);
     int analysisEnd = ownership < 0 ? line.length() : ownership;
@@ -5054,7 +5056,8 @@ public class SGFParser {
       if (separator < 0 || separator + " info ".length() > analysisEnd) separator = analysisEnd;
       AnalysisTokens tokens = new AnalysisTokens(line, start, separator);
       if (tokens.advance()) {
-        bestMoves.add(parseMoveDataFromAnalysis(tokens, bestMoves.size(), options.limitBranchLength()));
+        bestMoves.add(parseMoveDataFromAnalysis(
+            tokens, bestMoves.size(), options.limitBranchLength(), analysisStrings));
         maxSuggestions--;
       }
       start = separator + " info ".length();
@@ -5095,6 +5098,10 @@ public class SGFParser {
       return text.substring(tokenStart, tokenEnd);
     }
 
+    String retainedValue(BoardData.AnalysisStrings analysisStrings) {
+      return analysisStrings.substring(text, tokenStart, tokenEnd);
+    }
+
     boolean is(String expected) {
       return is(tokenStart, tokenEnd, expected);
     }
@@ -5105,7 +5112,8 @@ public class SGFParser {
     }
   }
 
-  private static MoveData parseMoveDataFromAnalysis(AnalysisTokens tokens, int order, int limit) {
+  private static MoveData parseMoveDataFromAnalysis(
+      AnalysisTokens tokens, int order, int limit, BoardData.AnalysisStrings analysisStrings) {
     MoveData result = new MoveData();
     result.order = order;
     do {
@@ -5113,10 +5121,10 @@ public class SGFParser {
       int keyEnd = tokens.tokenEnd;
       if (!tokens.advance()) break;
       if (tokens.is(keyStart, keyEnd, "pv")) {
-        captureVariationTokens(result, tokens, limit);
+        captureVariationTokens(result, tokens, limit, analysisStrings);
         break;
       }
-      applyMoveDataToken(result, tokens, keyStart, keyEnd);
+      applyMoveDataToken(result, tokens, keyStart, keyEnd, analysisStrings);
     } while (tokens.advance());
     if ((result.variation == null || result.variation.isEmpty())
         && !Utils.isBlank(result.coordinate)) {
@@ -5126,22 +5134,26 @@ public class SGFParser {
     return result;
   }
 
-  private static void captureVariationTokens(MoveData target, AnalysisTokens tokens, int limit) {
+  private static void captureVariationTokens(
+      MoveData target, AnalysisTokens tokens, int limit, BoardData.AnalysisStrings analysisStrings) {
     target.variation = new ArrayList<>();
     do {
       if (tokens.is("pvVisits")) {
         target.pvVisits = new ArrayList<>();
-        while (tokens.advance()) target.pvVisits.add(tokens.value());
+        while (tokens.advance()) target.pvVisits.add(tokens.retainedValue(analysisStrings));
         return;
       }
-      if (limit <= 0 || target.variation.size() < limit) target.variation.add(tokens.value());
+      if (limit <= 0 || target.variation.size() < limit) {
+        target.variation.add(tokens.retainedValue(analysisStrings));
+      }
     } while (tokens.advance());
   }
 
   private static void applyMoveDataToken(
-      MoveData target, AnalysisTokens tokens, int keyStart, int keyEnd) {
+      MoveData target, AnalysisTokens tokens, int keyStart, int keyEnd,
+      BoardData.AnalysisStrings analysisStrings) {
     if (tokens.is(keyStart, keyEnd, "move")) {
-      target.coordinate = tokens.value();
+      target.coordinate = tokens.retainedValue(analysisStrings);
     } else if (tokens.is(keyStart, keyEnd, "visits")) {
       target.playouts = parseAnalysisPlayouts(tokens.value());
     } else if (tokens.is(keyStart, keyEnd, "order")) {
