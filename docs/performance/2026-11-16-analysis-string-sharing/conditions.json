@@ -1,0 +1,226 @@
+{
+  "base": "74dd0fe2b2038d956195a1977cde32fb14a57500",
+  "mode": "headless rules harness, no display, no native engine",
+  "order": [
+    "before-1",
+    "after-1",
+    "after-2",
+    "before-2",
+    "before-3",
+    "after-3"
+  ],
+  "samples": 5,
+  "warmups": 5,
+  "jvmOptions": [
+    "-Xmx768m",
+    "-XX:ActiveProcessorCount=2",
+    "-Djava.awt.headless=true"
+  ],
+  "dependencyClasspathSha256": "231ed20022326d352e2cf8f19a622960e6b7e05fe1bb2fec8c0de13c4565dd5d",
+  "runs": [
+    {
+      "name": "before-1",
+      "startedUtc": "2026-11-16T03:34:54.765272119Z",
+      "finishedUtc": "2026-11-16T03:36:11.677715552Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    },
+    {
+      "name": "after-1",
+      "startedUtc": "2026-11-16T03:36:11.798732444Z",
+      "finishedUtc": "2026-11-16T03:37:26.263783260Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    },
+    {
+      "name": "after-2",
+      "startedUtc": "2026-11-16T03:37:26.395622819Z",
+      "finishedUtc": "2026-11-16T03:38:40.405221838Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    },
+    {
+      "name": "before-2",
+      "startedUtc": "2026-11-16T03:38:40.525059235Z",
+      "finishedUtc": "2026-11-16T03:39:56.368142256Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    },
+    {
+      "name": "before-3",
+      "startedUtc": "2026-11-16T03:39:56.510113230Z",
+      "finishedUtc": "2026-11-16T03:41:10.251038203Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    },
+    {
+      "name": "after-3",
+      "startedUtc": "2026-11-16T03:41:10.380752339Z",
+      "finishedUtc": "2026-11-16T03:42:25.485511516Z",
+      "result": "PASS",
+      "java": "21.0.13+9-LTS",
+      "os": "Linux amd64"
+    }
+  ],
+  "startedUtc": "2026-11-16T03:34:54Z",
+  "finishedUtc": "2026-11-16T03:42:31Z",
+  "result": "PASS",
+  "productionClassTreeSha256": {
+    "before": "8d6795121bd6c5c8929b615480475be6d7b53abcf35e7b8582e188bb37643e14",
+    "after": "a136540a2af2d866e24fa0f07ae76cd01481a423c99dd210725db95887630e9a"
+  },
+  "commonTestClassTreeSha256": "dbb89029b5eb3f0a31e001c5d0d061d25698edf081388020e2d58119e8a89bf9",
+  "classTreeDigestDefinition": "SHA-256 of sorted relative path + NUL + file SHA-256 + LF, encoded as UTF-8",
+  "changedProductionClassFiles": [
+    {
+      "path": "featurecat/lizzie/rules/BlunderMoves.class",
+      "beforeSha256": "03a15848dc20ed5bfa1e9891310cf9f500f8a8ce5b7f3ff108b877999235a596",
+      "afterSha256": "8ae2af8f71823ecd394f3c1561b8b03715592e1ec107e557bdcaa087344c66e2"
+    },
+    {
+      "path": "featurecat/lizzie/rules/BoardData$AnalysisStrings.class",
+      "beforeSha256": null,
+      "afterSha256": "94ce231af7cd8efece74b91f8013270366c379dbcfc3205e2219e03373ac7b3f"
+    },
+    {
+      "path": "featurecat/lizzie/rules/BoardData$RestoreStrings.class",
+      "beforeSha256": "176105aa0325245ebee4f6ef9513d89e109c2ea2b1aae1e13b2308f002eadbae",
+      "afterSha256": null
+    },
+    {
+      "path": "featurecat/lizzie/rules/BoardData.class",
+      "beforeSha256": "751608a737606fb26ee1469b69d5454c98c40b59556af97687b1de548a4934fd",
+      "afterSha256": "ecef5e4f20608e04ea1e725772d9869360a64612ef50f9184cf23791e8393c91"
+    },
+    {
+      "path": "featurecat/lizzie/rules/BoardHistoryList.class",
+      "beforeSha256": "cf910ad36dccf4af323c1d962b340f623207b6a669a495c79d4c35e5faf9044e",
+      "afterSha256": "b27e8582336e3eef060ee464fc729dec785948562ce6e88d2a8f2e48093ea908"
+    },
+    {
+      "path": "featurecat/lizzie/rules/SGFParser$AnalysisImport.class",
+      "beforeSha256": "deff29f703533e8919a32e55205c5ed5f9783dbc647a80c044b42afdfe6dcda8",
+      "afterSha256": "c5fb20b26345dc2cf0fc7ad5195b1cce42b5cffe561662ea63631548013f267e"
+    },
+    {
+      "path": "featurecat/lizzie/rules/SGFParser$AnalysisTokens.class",
+      "beforeSha256": "09caf933d4b3763e600df06c17efa0159cb0213b16fce57f34886240e65ac5d9",
+      "afterSha256": "fa5536ba022d0709cac6d2c2d29d7dddc89e715bc756d0e880a140dd09097973"
+    },
+    {
+      "path": "featurecat/lizzie/rules/SGFParser$ParsedAnalysisInfo.class",
+      "beforeSha256": "50b00f1ec0547b6eda3dc03928fee1e28f94f6b17b17ff85bbc7bc334287a0c3",
+      "afterSha256": "d038c7043a264f209f037d69c1570843efef4224611d38e12b59dab1fdb2aae6"
+    },
+    {
+      "path": "featurecat/lizzie/rules/SGFParser.class",
+      "beforeSha256": "fde60036756187f8310a7596d9474f485a4474211bec82d3ca957c4e65c69ed5",
+      "afterSha256": "0d3a242216ea7e56edd4fe3132e382dfae141770ed76b3ae52a0dfa06f341d60"
+    }
+  ],
+  "fixtures": [
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "089896b19188695db3d0717e53c26d8d109cec31f0867bb4ae9ba13fd6eee683",
+      "bytes": 1551041,
+      "commentCharactersPerNode": 32,
+      "name": "wide-variations",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 21845,
+      "expectedForks": 5461
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "c26e7715e35f06e9c485fe2da86dd7c3d67032cffa544dc7c1aabcb167295351",
+      "bytes": 1603477,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-ownership",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 8,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 301,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "9abfe3c39489abb14622d3457ec9df76bdc28246c733be0c2f9db5617f1ad7fc",
+      "bytes": 4825457,
+      "commentCharactersPerNode": 12800,
+      "name": "long-multilingual-comments",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 201,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 32,
+      "sha256": "baf045fcaf912ac35f08da5f816f1b4f96192fd48a54985206feca225326ac68",
+      "bytes": 3040737,
+      "commentCharactersPerNode": 32,
+      "name": "dense-analysis-long-pv-visits",
+      "expectedPvVisitCount": 64,
+      "expectedPvLength": 64,
+      "expectedOwnershipValuesPerNode": 361,
+      "expectedNodes": 151,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "8687024f6943b79958ec6a24ec226bf3483cf74620bd9c39e5a20a46e9cde8d2",
+      "bytes": 24957,
+      "commentCharactersPerNode": 32,
+      "name": "late-game-main-line",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 361,
+      "expectedForks": 0
+    },
+    {
+      "expectedCandidatesPerNode": 0,
+      "sha256": "c39f4776c1fd2b1e7885a6fff9e7991acdca4c91763d22bc3b65fa61e7fed7dc",
+      "bytes": 191037,
+      "commentCharactersPerNode": 32,
+      "name": "late-game-review",
+      "expectedPvVisitCount": 0,
+      "expectedPvLength": 0,
+      "expectedOwnershipValuesPerNode": 0,
+      "expectedNodes": 2761,
+      "expectedForks": 120
+    }
+  ],
+  "screen": {
+    "order": [
+      "before-1",
+      "after-1"
+    ],
+    "startedUtc": "2026-11-16T03:34:21Z",
+    "finishedUtc": "2026-11-16T03:34:40Z",
+    "result": "PASS",
+    "pooledWithFinal": false
+  },
+  "scope": "Headless rules harness; original six fixture generators and semantic oracle; synchronous read/parse/install and edit core. No display/native engine or GUI file-open latency measured.",
+  "localDisplayLimitation": "Default execution denied Unix sockets; escalation was rejected by approval policy. No GUI timing samples were collected.",
+  "concurrency": "Sequential fresh JVMs. No other task-owned Java build/test/probe process ran concurrently.",
+  "allocationScope": "Calling-thread cumulative allocated bytes, not peak heap; all timed operations use the same thread. CPU excludes other/background threads, which are separately included in processCpuMs.",
+  "sums": "Per-sample sum of read-delete + delete + undo-delete; excludes between-operation validation and settlement. Medians of these sums are not sums of pooled medians.",
+  "sourceSha256": {
+    "src/main/java/featurecat/lizzie/rules/BoardData.java": "bb7c974e2bc6809a814e8406c7196b84e0b2642a2165874360639f4322412cf6",
+    "src/main/java/featurecat/lizzie/rules/BoardHistoryList.java": "0d0e1a408fee2772528ef20bbc93c6c38401d753959d60a4a4f65ace17322345",
+    "src/main/java/featurecat/lizzie/rules/SGFParser.java": "4e2e3bab810598b82978baf7f5cda772dbc4fe5c60e5870bb3079d459d495698",
+    "src/test/java/featurecat/lizzie/rules/AnalysisStringSharingProbe.java": "3a8792648a6605b365e3c6c5b507077c6f859f6854d4c2750eeeae8009524d0f",
+    "src/test/java/featurecat/lizzie/rules/EditUndoFootprintProbe.java": "60953dc3d7953048bc8ef39bcb0acfcf308813da7e9a55c3c28f132b6918a912",
+    "src/test/java/featurecat/lizzie/gui/SgfPerformanceProbe.java": "b3541f6b25de72ce1701852e7f67d1f2cec26935c384243e30441af749f5e43f",
+    "src/test/java/featurecat/lizzie/gui/EditUndoPerformanceProbe.java": "9bb02917c6932271be89aab0587c67ba31279129432297d7d3833c391697648b"
+  },
+  "collector": "G1 (confirmed with the same Java binary and JVM options using -XX:+PrintCommandLineFlags -version)",
+  "changedClassNotes": "BlunderMoves is declared in SGFParser.java; javap comparison shows only line-number-table changes. All other differing classes originate in the three changed production source files."
+}

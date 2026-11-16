@@ -159,7 +159,7 @@ class BoardEditUndoTest {
         "9223372036854775808", "-0", "0", "polygenelubricants"));
     int expectedSize = move.variation.size();
     source.bestMoves.add(move);
-    BoardData.RestoreStrings strings = new BoardData.RestoreStrings();
+    BoardData.AnalysisStrings strings = new BoardData.AnalysisStrings();
     BoardData copy = source.copyRestoreMetadata(strings);
     assertEquals(move.variation, copy.bestMoves.get(0).variation);
     int reused = 0;
@@ -176,7 +176,7 @@ class BoardEditUndoTest {
     move.variation.clear();
     assertEquals(expectedSize, copy.bestMoves.get(0).variation.size());
 
-    BoardData.RestoreStrings nextCapture = new BoardData.RestoreStrings();
+    BoardData.AnalysisStrings nextCapture = new BoardData.AnalysisStrings();
     move.variation.addAll(List.of(new String("x".repeat(64)), new String("x".repeat(64)),
         new String("x".repeat(65)), new String("x".repeat(65))));
     BoardData next = source.copyRestoreMetadata(nextCapture);

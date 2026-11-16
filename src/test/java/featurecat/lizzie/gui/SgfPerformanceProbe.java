@@ -336,7 +336,7 @@ public final class SgfPerformanceProbe {
         .put("max", ordered.get(ordered.size() - 1));
   }
 
-  static List<Fixture> fixtures(Path output) throws Exception {
+  public static List<Fixture> fixtures(Path output) throws Exception {
     StringBuilder variations = header(SHORT_COMMENT, false);
     appendBranches(variations, 0, 7);
     variations.append(')');
@@ -683,7 +683,7 @@ public final class SgfPerformanceProbe {
     return payload.append(']').toString();
   }
 
-  static String validate(Fixture fixture) throws Exception {
+  public static String validate(Fixture fixture) throws Exception {
     ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>();
     pending.push(Lizzie.board.getHistory().getStart());
     MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -832,7 +832,7 @@ public final class SgfPerformanceProbe {
     if (!valid) throw new AssertionError(message);
   }
 
-  record Fixture(
+  public record Fixture(
       String name,
       Path path,
       String text,
@@ -841,7 +841,7 @@ public final class SgfPerformanceProbe {
       String comment,
       boolean analysis,
       boolean longPv) {
-    JSONObject evidence() throws Exception {
+    public JSONObject evidence() throws Exception {
       return new JSONObject()
           .put("name", name)
           .put("bytes", Files.size(path))
