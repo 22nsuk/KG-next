@@ -74,13 +74,15 @@ PR 변경이 **루트 Markdown, `docs/`의 Markdown/reStructuredText, 또는
 `docs/performance/` 아래의 비실행 측정 기록 CSV·JSON뿐**일 때만
 `repository-checks`와 `ci-required`를 실행한다. repository 검사는 줄바꿈·로컬 링크·
 엔진/모델 메타데이터와 CI 선택 정책을 검사하고, 문서를 실제로 읽는 다음 기존
-Python 검사도 실행한다. 이 네 모듈은 portable scripts 그룹에서 repository 그룹으로
+Python 검사도 실행한다. 이 모듈은 portable scripts 그룹에서 repository 그룹으로
 옮겨 전체 CI에서도 한 번만 실행한다.
 
 - `test_validate_kg_metadata.py`: 메타데이터, 다국어 README, 패키지·지원 링크
 - `test_windows_download_guidance.py`: 하드웨어별 Windows 다운로드 안내
 - `test_validate_release_workflow_identity.py`: 릴리스 workflow와 체크리스트의 식별 정보
 - `test_macos_signing_security.py`: macOS 서명 실패 처리와 문서의 일치
+- `test_publish_release_request.py`: 외부 배포 없는 publisher fixture와 CI workflow 연결 검사.
+  실제 플랫폼 작업을 시작하기 전에 실행하며 scripts 그룹에서 중복 실행하지 않는다.
 
 측정 기록 예외는 실행 코드나 설정에 적용하지 않는다. `docs/`의 다른 JSON·CSV,
 코드·테스트·자원·엔진 카탈로그·빌드 도구·설정·알 수 없는 경로가 하나라도 바뀌면

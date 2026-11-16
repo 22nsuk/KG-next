@@ -112,6 +112,7 @@ class RunLocalCiTest(unittest.TestCase):
             "scripts.test_windows_download_guidance",
             "scripts.test_validate_release_workflow_identity",
             "scripts.test_macos_signing_security",
+            "scripts.test_publish_release_request",
         )
         for profile in ("portable", "all"):
             for group in ("all", "repository", "scripts"):

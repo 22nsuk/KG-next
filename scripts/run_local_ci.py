@@ -518,7 +518,6 @@ DIRECT_PYTHON_TESTS = (
 
 UNITTEST_MODULES = (
     "scripts.test_prefer_ubuntu_apt_mirror",
-    "scripts.test_publish_release_request",
     "scripts.test_release_asset_provenance",
     "scripts.test_release_asset_topology",
     "scripts.test_run_local_ci",
@@ -761,6 +760,10 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
         Step(
             "Verify macOS signing and documentation",
             (python, "-m", "unittest", "scripts.test_macos_signing_security"), group="repository",
+        ),
+        Step(
+            "Verify release publisher and CI workflow contracts",
+            (python, "-m", "unittest", "scripts.test_publish_release_request"), group="repository",
         ),
         Step("Compile release helper Python", (python, "-m", "py_compile", *PY_COMPILE_FILES)),
     ]

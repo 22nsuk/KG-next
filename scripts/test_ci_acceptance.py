@@ -367,6 +367,16 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertIn("bash -euo pipefail", execution)
         self.assertNotIn("continue-on-error", job)
 
+    def test_macos_job_keeps_native_execution_and_named_evidence_required(self):
+        text = (WORKFLOWS / "ci.yml").read_text()
+        job = text.split("\n  native-clipboard-macos:\n", 1)[1].split("\n  engine-process:\n", 1)[0]
+        self.assertIn("runs-on: macos-latest", job)
+        self.assertIn("python3 scripts/run_local_ci.py --profile portable --group native-clipboard", job)
+        self.assertIn("--require-clean --summary-dir target/local-ci/native-clipboard", job)
+        self.assertIn("target/native-clipboard", job)
+        self.assertIn("if: always()", job)
+        self.assertNotIn("continue-on-error", job)
+
     def test_aggregate_is_always_scheduled_and_depends_on_every_job(self):
         text = (WORKFLOWS / "ci.yml").read_text()
         jobs = set(re.findall(r"^  ([a-z0-9-]+):$", text.split("\njobs:\n", 1)[1], re.M))

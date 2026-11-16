@@ -141,7 +141,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 可只查看计划执行的步骤。`LIZZIE_PYTHON`、`LIZZIE_MAVEN`、`LIZZIE_BASH`
 和 `LIZZIE_POWERSHELL` 可用于指定工具路径。
 
-按职责选择 `--group all|repository|scripts|java|desktop|desktop-races|engine-process`（PowerShell 为
+按职责选择 `--group all|repository|scripts|java|desktop|desktop-races|engine-process|native-clipboard`（PowerShell 为
 `-Group All|Repository|Scripts|Java|Desktop|DesktopRaces|EngineProcess`），默认 `all` 保持原完整 headless 调用，
 不包含 `desktop`、`desktop-races` 或 `engine-process`。所有组都需要 Python 和 Git，并执行 `git diff --check`；
 `--require-clean` / `-RequireClean` 保留运行前后的干净工作树检查。
@@ -154,6 +154,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 | `desktop-races` | 显式声明的 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
+| `native-clipboard` | 真实 macOS 上的 AppKit 与跨进程剪贴板检查 | 仅允许 dry-run；不替代 macOS | macOS、Maven、JDK 21、可用显示环境 |
 
 显示测试的类选择和强制成功用例在 `scripts/run_local_ci.py` 中按类统一声明；
 `whole_class` 保留整类执行（包括未列为强制成功的其他用例），部分方法选择由强制用例名生成。
@@ -322,7 +323,7 @@ pwsh -NoProfile -File scripts/run_local_ci.ps1 -Profile Windows -Group EnginePro
 
 Actions 的 `ci.yml` 对所有 PR 执行 `repository-checks` 和 `ci-required`。
 `repository-checks` 还执行直接读取文档的元数据/README、Windows 下载指导、
-release workflow/checklist identity、macOS signing security 四个现有 Python 模块；
+release workflow/checklist identity、macOS signing security 以及 publisher/workflow fixture；
 这些模块已移出 portable scripts 组，因此完整 CI 也只执行一次。
 只有根目录 Markdown、`docs/` 下 Markdown/reStructuredText，以及 `docs/performance/` 下非执行的 CSV/JSON 测量记录改动可跳过其余执行 job；其他 JSON/CSV 不在例外内。
 含代码、资源、配置或未知路径的 PR，以及所有 main push 和 merge_group，仍执行
