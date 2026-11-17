@@ -69,6 +69,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -104,6 +105,8 @@ public class Leelaz {
   private static final ThreadLocal<CustomPdaTarget> CONSOLE_PONDER_TARGET = new ThreadLocal<>();
   private static final ScheduledExecutorService RUNTIME_THREAD_TIMEOUT_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(Leelaz::newCommandDispatchThread);
+  private static final ScheduledExecutorService POSITION_RESPONSE_TIMEOUT_EXECUTOR =
+      GtpResponseTimeoutScheduler.create();
 
   public enum ExclusiveGtpLeaseAvailability {
     AVAILABLE,
@@ -12573,26 +12576,25 @@ public class Leelaz {
     if (command.engineGameTransaction() == null
         && positionMutation
         && !command.isTrackedLoadSgf()) {
-      command.positionResponseTimeout = new Timer("lizzie-position-response-timeout", true);
-      command.positionResponseTimeout.schedule(
-          new TimerTask() {
-            @Override
-            public void run() {
-              try {
-                retireTimedOutNormalCommand(command.onResponse);
-              } finally {
-                command.finishPositionResponse();
-              }
-            }
-          },
-          Math.max(
-              1L,
-              command.restartBootstrapReceipt != null
-                      && Boolean.TRUE.equals(ordinaryEngineGameBootstrapCommands.get())
-                  ? Math.max(
-                      engineStartupSynchronizationTimeoutMillis(),
-                      engineTuningSynchronizationTimeoutMillis())
-                  : readBoardGmaRestoreResponseTimeoutMillis()));
+      command.positionResponseTimeout =
+          GtpResponseTimeoutScheduler.schedule(
+              POSITION_RESPONSE_TIMEOUT_EXECUTOR,
+              COMMAND_DISPATCH_EXECUTOR,
+              () -> {
+                try {
+                  retireTimedOutNormalCommand(command.onResponse);
+                } finally {
+                  command.finishPositionResponse();
+                }
+              },
+              Math.max(
+                  1L,
+                  command.restartBootstrapReceipt != null
+                          && Boolean.TRUE.equals(ordinaryEngineGameBootstrapCommands.get())
+                      ? Math.max(
+                          engineStartupSynchronizationTimeoutMillis(),
+                          engineTuningSynchronizationTimeoutMillis())
+                      : readBoardGmaRestoreResponseTimeoutMillis()));
     }
     if (command.engineGameTransaction() == null
         && startsNewAnalysisInfoPayload(command.command)) {
@@ -19614,13 +19616,14 @@ public class Leelaz {
     private boolean commandCountRetired;
     private volatile AnalysisStateLineage analysisStateLineage;
     private volatile ReaderStreamBinding analysisStateResponseBinding;
-    private volatile Timer positionResponseTimeout;
+    private volatile ScheduledFuture<?> positionResponseTimeout;
     private boolean analysisStateResponseRegistered;
     private boolean analysisStateResponseSettled;
 
     private void finishPositionResponse() {
-      Timer timer = positionResponseTimeout;
-      if (timer != null) timer.cancel();
+      ScheduledFuture<?> timeout = positionResponseTimeout;
+      // Retain the handle: its presence also marks commands that require a numbered response.
+      if (timeout != null) timeout.cancel(false);
     }
 
     private QueuedCommand(
