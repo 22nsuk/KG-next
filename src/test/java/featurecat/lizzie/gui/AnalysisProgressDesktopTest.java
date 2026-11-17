@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
 import java.awt.Robot;
@@ -17,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,16 +38,19 @@ class AnalysisProgressDesktopTest {
   @Test
   void progressWindowShowsGraphBeforeAnalysisCompletes() throws Exception {
     DesktopProbeProcess.requireDisplay();
-    Path result =
-        DesktopProbeProcess.run(getClass(), "analysis-progress", List.of(), List.of(), 45);
-    assertEquals("PASS", Files.readString(result));
-    assertTrue(Files.isRegularFile(result.resolveSibling("progress-ko.png")));
-    assertTrue(Files.isRegularFile(result.resolveSibling("progress-graph.png")));
+    for (String scenario : List.of("ordered", "delayed-metadata")) {
+      Path result = DesktopProbeProcess.run(
+          getClass(), "analysis-progress-" + scenario, List.of(), List.of(scenario), 45);
+      assertEquals("PASS", Files.readString(result));
+      assertTrue(Files.isRegularFile(result.resolveSibling("progress-ko.png")));
+      assertTrue(Files.isRegularFile(result.resolveSibling("progress-graph.png")));
+    }
   }
 
   public static void main(String[] args) throws Exception {
-    Path work = Path.of(args[0]);
-    Path result = Path.of(args[1]);
+    boolean delayedMetadata = args[0].equals("delayed-metadata");
+    Path work = Path.of(args[1]);
+    Path result = Path.of(args[2]);
     int exit = 1;
     try {
       Thread.UncaughtExceptionHandler previous = Thread.getDefaultUncaughtExceptionHandler();
@@ -55,7 +60,7 @@ class AnalysisProgressDesktopTest {
             if (previous != null) previous.uncaughtException(thread, failure);
             else failure.printStackTrace();
           });
-      prepareApplication(work);
+      prepareApplication(work, delayedMetadata);
       ControlledAnalysisEngine engine =
           onEdt(
               () -> {
@@ -110,7 +115,29 @@ class AnalysisProgressDesktopTest {
           result.resolveSibling("progress-ko.png").toFile());
       DesktopProbeProcess.phase(result, "eight-results-painted-with-progress-window-visible");
 
-      for (int index = 8; index < 17; index++) engine.complete(index);
+      if (delayedMetadata) {
+        DelayedMetadataBoard board = (DelayedMetadataBoard) Lizzie.board;
+        board.holdRefresh = true;
+        board.setMovelistAll();
+        try {
+          assertTrue(board.refreshEntered.await(5, TimeUnit.SECONDS));
+          // The last move arrives before its predecessor. Only the asynchronous metadata pass
+          // can fill in that final pair, after the immediate completion UI has already run.
+          engine.complete(16);
+          for (int index = 8; index < 16; index++) engine.complete(index);
+          awaitEdt(() -> !engine.isAnalysisInProgress() && !engine.waitFrame.isShowing()
+              && Lizzie.frame.isEnabled() && renderedAnalyzedMoves() == 17
+              && Lizzie.frame.getProblemListSnapshot().analyzedMoves == 15
+              && !Lizzie.frame.getProblemListSnapshot().analysisRunning);
+          AnalysisUiRefreshTestSupport.awaitIdle(Lizzie.frame);
+          AnalysisUiRefreshTestSupport.awaitSidebarIdle(Lizzie.frame);
+          DesktopProbeProcess.phase(result, "completion-ui-drained-before-metadata");
+        } finally {
+          board.releaseRefresh.countDown();
+        }
+      } else {
+        for (int index = 8; index < 17; index++) engine.complete(index);
+      }
       awaitEdt(
           () ->
               !engine.isAnalysisInProgress()
@@ -130,7 +157,7 @@ class AnalysisProgressDesktopTest {
     }
   }
 
-  private static void prepareApplication(Path work) throws Exception {
+  private static void prepareApplication(Path work, boolean delayedMetadata) throws Exception {
     JSONObject ui =
         new JSONObject()
             .put("autoload-empty", true)
@@ -169,6 +196,7 @@ class AnalysisProgressDesktopTest {
           Lizzie.config.isShowingBlunderTabel = true;
           Lizzie.frame.setCommentPaneContent();
           Lizzie.config.uiConfig.put(NameWinrates.SHOWN_KEY, true);
+          if (delayedMetadata) Lizzie.board = new DelayedMetadataBoard();
           StringBuilder sgf = new StringBuilder("(;FF[4]GM[1]SZ[19]KM[7.5]PB[Black]PW[White]");
           for (int move = 0; move < 17; move++) {
             sgf.append(move % 2 == 0 ? ";B[" : ";W[")
@@ -242,7 +270,19 @@ class AnalysisProgressDesktopTest {
     long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
     while (!onEdt(condition::getAsBoolean)) {
       assertNoUnexpectedFailure();
-      if (System.nanoTime() >= deadline) throw new AssertionError("Progress UI did not settle");
+      if (System.nanoTime() >= deadline) {
+        throw new AssertionError("Progress UI did not settle: " + onEdt(() -> {
+          AnalysisEngine engine = Lizzie.frame == null ? null : Lizzie.frame.analysisEngine;
+          if (engine == null || engine.waitFrame == null) return "progress window not ready";
+          return "running=" + engine.isAnalysisInProgress()
+              + ", showing=" + engine.waitFrame.isShowing()
+              + ", enabled=" + Lizzie.frame.isEnabled()
+              + ", rendered=" + renderedAnalyzedMoves()
+              + ", analyzed=" + analyzedMoves()
+              + ", problem=" + Lizzie.frame.getProblemListSnapshot().analyzedMoves
+              + ", problemRunning=" + Lizzie.frame.getProblemListSnapshot().analysisRunning;
+        }));
+      }
       Thread.sleep(20);
     }
   }
@@ -250,6 +290,26 @@ class AnalysisProgressDesktopTest {
   private static void assertNoUnexpectedFailure() {
     Throwable failure = unexpectedFailure.get();
     if (failure != null) throw new AssertionError("Unexpected application failure", failure);
+  }
+
+  private static final class DelayedMetadataBoard extends Board {
+    private final CountDownLatch refreshEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseRefresh = new CountDownLatch(1);
+    private volatile boolean holdRefresh;
+
+    @Override
+    public void updateMovelist(BoardHistoryNode node) {
+      if (holdRefresh && Thread.currentThread().getName().equals("lizzie-movelist-refresh")) {
+        refreshEntered.countDown();
+        try {
+          assertTrue(releaseRefresh.await(10, TimeUnit.SECONDS), "test must release metadata");
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError(interrupted);
+        }
+      }
+      super.updateMovelist(node);
+    }
   }
 
   private static final class ControlledAnalysisEngine extends AnalysisEngine {
