@@ -191,6 +191,19 @@ class TeacherPromptBuilderTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"ko-KR", "en-US", "zh-CN", "zh-TW", "ja-JP", "th-TH"})
+  void shapeNamesRequireTheirOwnGeometryEvidenceAndDoNotClaimValue(String language) {
+    String system = TeacherPromptBuilder.forPosition(
+        position(0, "D4"), Locale.forLanguageTag(language), null).get(0).content;
+    assertTrue(system.contains("only when its Move shapes entry supplies that name and supporting stones"));
+    assertTrue(system.contains("first replayed move, not later PV moves"));
+    assertTrue(system.contains("does not establish move quality, connection safety, successful attack"));
+    assertTrue(system.contains("life/death, joseki, forced replies or the cause of the game result"));
+    assertTrue(system.contains("Do not infer an unlisted shape from coordinates or knowledge text"));
+    assertTrue(system.contains("use the supplied Korean shape names"));
+  }
+
   @Test
   void preservesPointAndPercentagePointUnitsForAnEvaluatedRecordedMove() {
     TeacherEvidence.Position position =
@@ -296,7 +309,7 @@ class TeacherPromptBuilderTest {
     List<List<TeacherLlmClient.Message>> attempts = new ArrayList<>();
     String corrected = "Review each retained position using its shown liberties.";
     CommentaryClient replies =
-        (messages, cancellation, onText) -> {
+        (messages, cancellation, onText, requestCheck) -> {
           attempts.add(messages);
           assertTrue(contentCharacters(messages) <= 250_000);
           return attempts.size() == 1 ? "Z99 " + "x".repeat(23_996) : corrected;

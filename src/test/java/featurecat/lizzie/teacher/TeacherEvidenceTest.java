@@ -2,25 +2,194 @@ package featurecat.lizzie.teacher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class TeacherEvidenceTest {
+  @ParameterizedTest
+  @ValueSource(strings = {"restricted", "unreadable-restrictions", "invalidated"})
+  void excludesIneligibleEvaluationsWithoutDeletingTheirPayload(String state) {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    BoardData data = node.getData();
+    List<MoveData> moves = List.of(move("D4", 60, 3, 1000, 1));
+    data.bestMoves = moves;
+    data.setPlayouts(1000);
+    if (state.equals("invalidated")) data.invalidatePrimaryAnalysis();
+    else data.setPrimaryAnalysisProvenance(provenance(
+        state.equals("restricted") ? "kata-analyze 10 allow b D4 2" : "kata-analyze 10 allow"));
+
+    assertTrue(TeacherEvidence.current(node).isEmpty());
+    assertSame(moves, data.bestMoves);
+    assertEquals(1000, data.getPlayouts());
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"legacy", "ordinary", "ownership-only"})
+  void permitsCompatibleAnalysisWithoutWholeGameVisitOrPvRequirements(String state) {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    BoardData data = node.getData();
+    data.bestMoves = List.of(move("D4", 60, 3, 0, 0));
+    if (!state.equals("legacy")) data.setPrimaryAnalysisProvenance(provenance("kata-analyze 10"));
+    if (state.equals("ownership-only")) {
+      data.setPrimaryOwnershipProvenance(provenance("kata-analyze 10 allow b Q16 2"));
+    }
+
+    TeacherEvidence.Position position = TeacherEvidence.current(node).orElseThrow();
+
+    assertFalse(data.hasReusablePrimaryAnalysis(1000, false));
+    assertEquals("D4", position.candidates.get(0).coordinate);
+    assertSame(data.primaryAnalysisProvenance(), position.provenance);
+    assertEquals(state.equals("legacy"), TeacherPromptBuilder.formatPosition(position)
+        .contains("Analysis conditions were not recorded; unrestricted search is not established."));
+  }
+
+  @Test
+  void ordinaryReplacementCanBeCapturedButCannotReviveAnInvalidatedDiscussion() {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    BoardData data = node.getData();
+    data.bestMoves = List.of(move("D4", 60, 3, 1000, 1));
+    data.setPlayouts(1000);
+    TeacherEvidence.Position original = TeacherEvidence.current(node).orElseThrow();
+    data.setPrimaryAnalysisProvenance(provenance("kata-analyze 10 avoid b D4 2"));
+    assertTrue(TeacherEvidence.current(node).isEmpty());
+    assertTrue(original.analysisIsCurrent(), "a replacement does not change the frozen evaluation");
+
+    data.invalidatePrimaryAnalysis();
+    data.bestMoves = List.of(move("Q16", 80, 9, 200, 0));
+    data.setPlayouts(200);
+    data.setPrimaryAnalysisProvenance(provenance("kata-analyze 10"));
+    data.isChanged = false;
+
+    TeacherEvidence.Position replacement = TeacherEvidence.current(node).orElseThrow();
+    assertEquals("Q16", replacement.candidates.get(0).coordinate);
+    assertTrue(replacement.analysisIsCurrent());
+    assertFalse(original.analysisIsCurrent());
+    assertEquals("D4", original.candidates.get(0).coordinate);
+  }
+
+  @Test
+  void rangeCountsAndPromptRetainExclusionReasonsAfterSelection() {
+    BoardHistoryNode root = new BoardHistoryNode(BoardData.empty(19, 19));
+    BoardHistoryNode node = root;
+    for (int index = 0; index < 5; index++) {
+      node.getData().bestMoves = List.of(move("Q16", 60, 3, 1000, 0));
+      node.getData().setPlayouts(1000);
+      if (index == 1) node.getData().setPrimaryAnalysisProvenance(provenance("kata-analyze 10 allow b Q16 2"));
+      if (index == 2) node.getData().invalidatePrimaryAnalysis();
+      if (index == 3) node.getData().setPrimaryOwnershipProvenance(provenance("kata-analyze 10 allow b Q16 2"));
+      node = append(node, moveData(index + 1, index, 0, index % 2 != 0));
+    }
+
+    TeacherEvidence.Range range = TeacherEvidence.wholeGame(root);
+    assertEquals(List.of(0, 3, 4), range.positions.stream().map(position -> position.moveNumber).toList());
+    TeacherEvidence.Range selected = TeacherEvidence.selectKeyPositions(range, 2);
+    assertEquals(3, selected.analyzedPositions);
+    assertEquals(1, selected.omittedPositions);
+    assertEquals(1, selected.restrictedPositions);
+    assertEquals(1, selected.invalidatedPositions);
+    String prompt = TeacherPromptBuilder.forRange(
+        selected, TeacherPromptBuilder.Mode.WHOLE_GAME, Locale.ENGLISH, null).get(1).content;
+    assertTrue(prompt.contains("Analyzed positions: 3; selected key positions: 2"));
+    assertTrue(prompt.contains("excluded restricted analysis: 1; excluded invalidated analysis: 1"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void capturesCandidatesVisitsAndConditionsFromOneAtomicPublication(boolean restricted)
+      throws Exception {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    BoardData data = node.getData();
+    data.bestMoves = List.of(move("D4", 60, 3, 1000, 0));
+    data.setPlayouts(1000);
+    AnalysisProvenance incoming = provenance(restricted
+        ? "kata-analyze 10 allow b Q16 2" : "kata-analyze 10");
+    AnalysisProvenance original = provenance("kata-analyze 10");
+    data.setPrimaryAnalysisProvenance(original);
+    CountDownLatch copyingCandidates = new CountDownLatch(1);
+    CountDownLatch finishCapture = new CountDownLatch(1);
+    MoveData originalMove = data.bestMoves.get(0);
+    data.bestMoves = new AbstractList<>() {
+      @Override
+      public MoveData get(int index) {
+        copyingCandidates.countDown();
+        try {
+          assertTrue(finishCapture.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError(interrupted);
+        }
+        return originalMove;
+      }
+
+      @Override
+      public int size() { return 1; }
+    };
+    AtomicReference<Thread> publishingThread = new AtomicReference<>();
+    var workers = Executors.newFixedThreadPool(2);
+    try {
+      var captured = workers.submit(() -> TeacherEvidence.position(node));
+      assertTrue(copyingCandidates.await(5, TimeUnit.SECONDS));
+      var publisher = workers.submit(() -> {
+        publishingThread.set(Thread.currentThread());
+        synchronized (data) {
+          data.bestMoves = List.of(move("Q16", 80, 9, 2000, 0));
+          data.setPlayouts(2000);
+          data.setPrimaryAnalysisProvenance(incoming);
+        }
+        return null;
+      });
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      // The update must actually reach capture's lock (or incorrectly publish through it).
+      while (!publisher.isDone()
+          && (publishingThread.get() == null || publishingThread.get().getState() != Thread.State.BLOCKED)
+          && System.nanoTime() < deadline) {
+        Thread.sleep(1);
+      }
+      assertTrue(publisher.isDone()
+          || (publishingThread.get() != null && publishingThread.get().getState() == Thread.State.BLOCKED));
+      finishCapture.countDown();
+      TeacherEvidence.Position position = captured.get(5, TimeUnit.SECONDS).orElseThrow();
+      publisher.get(5, TimeUnit.SECONDS);
+      assertEquals("D4", position.candidates.get(0).coordinate);
+      assertEquals(1000, position.candidates.get(0).visits);
+      assertEquals(1000, position.playouts);
+      assertSame(original, position.provenance);
+      assertEquals(restricted, TeacherEvidence.position(node).isEmpty());
+    } finally {
+      finishCapture.countDown();
+      workers.shutdownNow();
+      assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS));
+    }
+  }
+
+  private static AnalysisProvenance provenance(String command) {
+    return new AnalysisProvenance("KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand(command));
+  }
+
   @Test
   void copiesTopThreeCandidatesActualMoveAndBoundedPv() {
     BoardHistoryNode parent = new BoardHistoryNode(BoardData.empty(19, 19));

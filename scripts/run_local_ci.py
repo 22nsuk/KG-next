@@ -189,7 +189,24 @@ DESKTOP_TESTS = {
         "disposalDropsAnAnswerAlreadyQueuedOnEdt",
         "gameSwitchDropsAnAnswerAlreadyQueuedOnEdt",
         "cancelledFollowUpRestoresQuestionAndLastVerifiedAnswer",
-        "settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork",
+        "frozenOrdinaryEvidenceSurvivesARestrictedLiveReplacement",
+        "analysisInvalidationRejectsAnAnswerAlreadyQueuedOnEdt",
+        *tuple(
+            f"ineligibleInitialEvidenceNeverReachesTheProvider(String, String)[{invocation}]"
+            for invocation in range(1, 9)
+        ),
+        *tuple(
+            f"mixedRangeAndWholeGameSendOnlyEligibleEvidenceIncludingFollowUp(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"invalidatedDiscussionCannotBeResentEvenAfterOrdinaryReplacement(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
+        *tuple(
+            f"settingsDialogContextChangeRejectsPreparedRequestBeforeNetwork(boolean)[{invocation}]"
+            for invocation in range(1, 3)
+        ),
         *tuple(
             f"replacementDropsOldCompletionOrFailureAlreadyQueuedOnEdt(boolean)[{invocation}]"
             for invocation in range(1, 3)

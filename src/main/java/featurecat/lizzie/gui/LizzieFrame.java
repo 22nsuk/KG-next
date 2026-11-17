@@ -8173,9 +8173,10 @@ public class LizzieFrame extends JFrame {
     analysisUiRefresh.requestGraph();
   }
 
-  void refreshCompletedSilentAnalysisProgress() {
+  /** Publishes the final graph and sidebar only after their move metadata has settled. */
+  public void refreshCompletedAnalysisProgress() {
     if (!SwingUtilities.isEventDispatchThread()) {
-      SwingUtilities.invokeLater(this::refreshCompletedSilentAnalysisProgress);
+      SwingUtilities.invokeLater(this::refreshCompletedAnalysisProgress);
       return;
     }
     if (Lizzie.board == null || Lizzie.board.getHistory() == null) {
@@ -12834,7 +12835,7 @@ public class LizzieFrame extends JFrame {
     releaseCompletedYikeCurveEngine(targetEngine);
     if (current) {
       if (!failed) {
-        refreshCompletedSilentAnalysisProgress();
+        refreshCompletedAnalysisProgress();
       }
       resumeForegroundAnalysisAfterQuickAnalysisComplete();
     }
@@ -16728,7 +16729,7 @@ public class LizzieFrame extends JFrame {
     } else {
       refresh();
     }
-    refreshCompletedSilentAnalysisProgress();
+    refreshCompletedAnalysisProgress();
     if (complete || reopen) {
       WholeGameAnalysisDialog completedDialog = wholeGameAnalysisDialog;
       wholeGameAnalysisDialog = null;
@@ -21524,7 +21525,7 @@ public class LizzieFrame extends JFrame {
               @Override
               public void completed(AutomaticQuickAnalysisTask.Settlement settlement) {
                 if (automaticQuickAnalysisRoot != root || currentHistoryRoot() != root) return;
-                refreshCompletedSilentAnalysisProgress();
+                refreshCompletedAnalysisProgress();
                 if (settlement.restore().permitsForegroundAnalysis()) {
                   resumeForegroundAnalysisForCurrentPosition(settlement.positionAlreadyConfirmed());
                 }
