@@ -33,7 +33,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     List<String> displayed = new ArrayList<>();
     if (timing.equals("before-first")) node.getData().invalidatePrimaryAnalysis();
-    CommentaryClient transport = (messages, cancellation, receiver) -> {
+    CommentaryClient transport = (messages, cancellation, receiver, requestCheck) -> {
       calls.incrementAndGet();
       node.getData().invalidatePrimaryAnalysis();
       return timing.equals("before-correction") ? "Play Q16." : "Compare D4.";
@@ -53,7 +53,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     List<String> displayed = new ArrayList<>();
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           receiver.accept("Incomplete ");
           receiver.accept("fragments");
@@ -73,7 +73,7 @@ class GroundedCommentaryClientTest {
     List<TeacherEvidence.Position> evidence = new ArrayList<>(List.of(position()));
     List<String> displayed = new ArrayList<>();
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           requests.add(messages);
           // A later caller change cannot replace the evidence used for this request.
           evidence.clear();
@@ -105,7 +105,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     List<String> displayed = new ArrayList<>();
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           receiver.accept("Play " + coordinate + ".");
           return "Play " + coordinate + ".";
@@ -123,7 +123,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     String reply = "D4 is the only move.";
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           return reply;
         };
@@ -139,7 +139,7 @@ class GroundedCommentaryClientTest {
     List<String> displayed = new ArrayList<>();
     IOException interruption = new IOException("stream ended prematurely");
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           receiver.accept("Compare D4.");
           throw interruption;
@@ -159,7 +159,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     List<String> displayed = new ArrayList<>();
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           cancellation.cancel();
           return "Compare D4.";
@@ -179,7 +179,7 @@ class GroundedCommentaryClientTest {
     AtomicInteger calls = new AtomicInteger();
     List<String> displayed = new ArrayList<>();
     CommentaryClient transport =
-        (messages, cancellation, receiver) -> {
+        (messages, cancellation, receiver, requestCheck) -> {
           calls.incrementAndGet();
           return reply;
         };

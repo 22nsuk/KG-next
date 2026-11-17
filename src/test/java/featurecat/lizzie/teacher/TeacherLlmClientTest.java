@@ -2,6 +2,7 @@ package featurecat.lizzie.teacher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -105,6 +106,34 @@ class TeacherLlmClientTest {
     assertEquals(result, streamed.toString());
     assertEquals(1, chatCalls.get());
     assertEquals(0, responsesCalls.get());
+  }
+
+  @Test
+  void failedRequestCheckPreventsTheInitialHttpRequest() throws Exception {
+    AtomicInteger calls = new AtomicInteger();
+    server.createContext(
+        "/v1",
+        exchange -> {
+          calls.incrementAndGet();
+          respond(exchange, 500, "unexpected request");
+        });
+    server.start();
+    IOException invalidated = new IOException("evidence invalidated");
+    IOException failure =
+        assertThrows(
+            IOException.class,
+            () ->
+                new TeacherLlmClient(baseUrl, "secret", "model")
+                    .stream(
+                        List.of(new TeacherLlmClient.Message("user", "Explain")),
+                        null,
+                        ignored -> {},
+                        () -> {
+                          throw invalidated;
+                        }));
+
+    assertSame(invalidated, failure);
+    assertEquals(0, calls.get());
   }
 
   @Test

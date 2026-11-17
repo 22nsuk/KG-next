@@ -102,6 +102,16 @@ public final class TeacherLlmClient implements CommentaryClient {
   @Override
   public String stream(List<Message> messages, Cancellation cancellation, Consumer<String> onText)
       throws IOException, InterruptedException {
+    return CommentaryClient.super.stream(messages, cancellation, onText);
+  }
+
+  @Override
+  public String stream(
+      List<Message> messages,
+      Cancellation cancellation,
+      Consumer<String> onText,
+      RequestCheck requestCheck)
+      throws IOException, InterruptedException {
     List<Message> safeMessages = validateMessages(messages);
     Cancellation requestCancellation = cancellation == null ? new Cancellation() : cancellation;
     Consumer<String> receiver = onText == null ? ignored -> {} : onText;
@@ -109,7 +119,8 @@ public final class TeacherLlmClient implements CommentaryClient {
     try (TeacherResponseBudget budget =
         new TeacherResponseBudget(responseLimits, requestCancellation)) {
       TeacherResponseBudget.Response chatResponse =
-          sendStreaming(endpoint("chat/completions"), chatCompletionsBody(safeMessages), budget);
+          sendStreaming(
+              endpoint("chat/completions"), chatCompletionsBody(safeMessages), budget, requestCheck);
       if (chatResponse.statusCode() / 100 == 2) {
         return parseChatCompletions(chatResponse.body(), budget, receiver);
       }
@@ -122,7 +133,7 @@ public final class TeacherLlmClient implements CommentaryClient {
       // cancellation, timeout, oversized and incomplete replies never trigger another paid request.
       budget.check();
       TeacherResponseBudget.Response responsesResponse =
-          sendStreaming(endpoint("responses"), responsesBody(safeMessages), budget);
+          sendStreaming(endpoint("responses"), responsesBody(safeMessages), budget, requestCheck);
       if (responsesResponse.statusCode() / 100 != 2) {
         throw httpFailure(responsesResponse.statusCode(), readErrorBody(responsesResponse.body()));
       }
@@ -131,7 +142,7 @@ public final class TeacherLlmClient implements CommentaryClient {
   }
 
   private TeacherResponseBudget.Response sendStreaming(
-      URI endpoint, JSONObject body, TeacherResponseBudget budget)
+      URI endpoint, JSONObject body, TeacherResponseBudget budget, RequestCheck requestCheck)
       throws IOException, InterruptedException {
     long started = System.nanoTime();
     HttpRequest request =
@@ -139,6 +150,8 @@ public final class TeacherLlmClient implements CommentaryClient {
             .header("Accept", "text/event-stream")
             .POST(HttpRequest.BodyPublishers.ofString(body.toString(), StandardCharsets.UTF_8))
             .build();
+    // One logical stream can make multiple HTTP requests. Revalidate at their shared boundary.
+    requestCheck.check();
     TeacherResponseBudget.Response response;
     try {
       response = budget.send(httpClient, request);
