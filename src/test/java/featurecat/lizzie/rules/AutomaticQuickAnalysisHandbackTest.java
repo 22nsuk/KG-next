@@ -175,6 +175,11 @@ class AutomaticQuickAnalysisHandbackTest {
     public void requestProblemListRefresh() {}
 
     @Override
+    public void refreshCompletedAnalysisProgress() {
+      Lizzie.board.setMovelistAll();
+    }
+
+    @Override
     public void renderVarTree(int x, int y, boolean a, boolean b) {}
   }
 }
