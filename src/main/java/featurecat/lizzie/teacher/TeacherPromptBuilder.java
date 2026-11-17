@@ -219,7 +219,7 @@ final class TeacherPromptBuilder {
           .append("\n");
     }
     if (position.board != null) {
-      text.append('\n').append(position.board.facts());
+      text.append('\n').append(position.board.facts(locale));
     }
     if (!position.knowledge.isBlank()) {
       text.append("\nPosition-specific knowledge:\n").append(position.knowledge).append('\n');
@@ -306,7 +306,13 @@ final class TeacherPromptBuilder {
         + "not necessarily the best defense. Candidate PVs are reference lines, not forced "
         + "sequences or KataGo's hidden reasoning. Winrate losses are percentage points; "
         + "score losses are points and must not be interchanged. Missing actual-move "
-        + "evaluation means the loss is unknown, not zero.\n";
+        + "evaluation means the loss is unknown, not zero.\n"
+        + "Name a move's shape only when its Move shapes entry supplies that name and supporting "
+        + "stones. These names describe geometry at the first replayed move, not later PV moves. "
+        + "A shape name alone does not establish move quality, connection safety, successful "
+        + "attack, life/death, joseki, forced replies or the cause of the game result. "
+        + "Do not infer an unlisted shape from coordinates or knowledge text. If no name is "
+        + "supplied, describe only the known facts. In Korean, use the supplied Korean shape names.\n";
   }
 
   private static String buildChinesePersona(TeacherSettings.Snapshot s) {

@@ -207,13 +207,17 @@ final class TeacherBoardContext {
     return List.copyOf(groups);
   }
 
-  private static String coordinate(int x, int y, int width, int height) {
+  static String coordinate(int x, int y, int width, int height) {
     return width > 25 || height > 25
         ? "(" + x + "," + y + ")"
         : String.valueOf((char) ('A' + x + (x >= 8 ? 1 : 0))) + (height - y);
   }
 
   String facts() {
+    return facts(Locale.ENGLISH);
+  }
+
+  String facts(Locale locale) {
     StringBuilder text = new StringBuilder("Board: ").append(width).append('x').append(height);
     text.append(
         "\nConnected groups (liberties are geometry, NOT proof of life/death or sente):\n");
@@ -227,6 +231,22 @@ final class TeacherBoardContext {
     }
     if (groups.isEmpty()) {
       text.append("Empty board.\n");
+    }
+    StringBuilder shapes = new StringBuilder();
+    for (Line line : lines) {
+      MoveShapes.describe(this, line)
+          .ifPresent(
+              shape ->
+                  shapes
+                      .append(line.label().equals("recorded") ? "Recorded " : "Candidate ")
+                      .append(line.frames().get(1).move())
+                      .append(": ")
+                      .append(shape.describe(locale))
+                      .append('\n'));
+    }
+    if (shapes.length() > 0) {
+      text.append("Move shapes (first replayed move only; geometry, NOT move quality):\n")
+          .append(shapes);
     }
     text.append(
         "Locally replayed lines (simple ko and no suicide; NOT proof of best replies, superko or forced play):\n");
