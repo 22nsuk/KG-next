@@ -274,6 +274,14 @@ DESKTOP_TESTS = {
     "featurecat.lizzie.gui.AnalysisProgressDesktopTest": TestSelection((
         "progressWindowShowsGraphBeforeAnalysisCompletes",
     )),
+    "featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest": TestSelection((
+        "runningMetadataFitsTheInitialDialogWithoutAnOrdinaryScrollbar",
+        "localizedProgressAndControlsRemainVisibleAtCommonDpiScales",
+        "customVisitSelectionShowsAnEditableBoundedValue",
+        "startCommitsTypedCustomVisitsAndRejectsAnUncommittedOutOfRangeValue",
+        "selectedReusePolicyReachesStartAndRejectsAnEstimateForTheOtherPolicy",
+        "displayedPositionSourceRefreshesAndItsTimerStopsWhenHiddenOrDisposed",
+    )),
     "featurecat.lizzie.gui.EngineGameParameterControlsTest": TestSelection((
         "gameMenuOffersThePanelWhileAnAnalysisGameIsRunningOrPaused",
         "gameMenuHidesThePanelOutsideAnAnalysisGame",
@@ -367,10 +375,27 @@ TENSORRT_UI_TESTS = {
     ), whole_class=False),
 }
 
+NATIVE_CLIPBOARD_TESTS = {
+    "featurecat.lizzie.gui.SgfCopyDesktopTest": DESKTOP_TESTS[
+        "featurecat.lizzie.gui.SgfCopyDesktopTest"
+    ],
+    "featurecat.lizzie.gui.ClipboardCopyTest": TestSelection((
+        "copyBurstRetiresQueuedWorkAndReleasesEveryWatch",
+        "latestSerializationFailureReleasesWatchAndAllowsRetry",
+        "unchangedClipboardPublishesAndClosesOnce",
+        "nativeChangePreservesNewContents",
+        "supersedingRequestReleasesOldWatchWithoutClosingNewOne",
+        "failedOrCancelledOperationClosesWithoutPublishing",
+        "observationFailureRejectsPublicationAndReleasesResources",
+        "nativeWriteFailureReleasesResourcesAndPropagates",
+    )),
+}
+
 DESKTOP_REQUIRED_TESTS = required_test_cases(DESKTOP_TESTS)
 DESKTOP_RACE_REQUIRED_TESTS = required_test_cases(DESKTOP_RACE_TESTS)
 ENGINE_PROCESS_REQUIRED_TESTS = required_test_cases(ENGINE_PROCESS_TESTS)
 TENSORRT_UI_REQUIRED_TESTS = required_test_cases(TENSORRT_UI_TESTS)
+NATIVE_CLIPBOARD_REQUIRED_TESTS = required_test_cases(NATIVE_CLIPBOARD_TESTS)
 
 
 PY_COMPILE_FILES = (
@@ -510,7 +535,6 @@ DIRECT_PYTHON_TESTS = (
 
 UNITTEST_MODULES = (
     "scripts.test_prefer_ubuntu_apt_mirror",
-    "scripts.test_publish_release_request",
     "scripts.test_release_asset_provenance",
     "scripts.test_release_asset_topology",
     "scripts.test_run_local_ci",
@@ -754,6 +778,10 @@ def portable_steps(maven: str, bash: str) -> list[Step]:
             "Verify macOS signing and documentation",
             (python, "-m", "unittest", "scripts.test_macos_signing_security"), group="repository",
         ),
+        Step(
+            "Verify release publisher and CI workflow contracts",
+            (python, "-m", "unittest", "scripts.test_publish_release_request"), group="repository",
+        ),
         Step("Compile release helper Python", (python, "-m", "py_compile", *PY_COMPILE_FILES)),
     ]
     steps.extend(
@@ -879,12 +907,17 @@ def build_steps(
                 group=group,
             )
         ]
-    if group == "engine-process":
-        evidence_dir = REPO_ROOT / "target" / "engine-process-smoke" / "probes"
-        reports_dir = REPO_ROOT / "target" / "engine-process-smoke" / "surefire-reports"
+    if group in {"engine-process", "native-clipboard"}:
+        native_clipboard = group == "native-clipboard"
+        report_root = REPO_ROOT / "target" / (
+            "native-clipboard" if native_clipboard else "engine-process-smoke"
+        )
+        selections = NATIVE_CLIPBOARD_TESTS if native_clipboard else ENGINE_PROCESS_TESTS
+        evidence_dir = report_root / "probes"
+        reports_dir = report_root / "surefire-reports"
         return [
             Step(
-                "Run engine process tests",
+                "Run native macOS clipboard tests" if native_clipboard else "Run engine process tests",
                 (
                     maven,
                     "-B",
@@ -894,10 +927,10 @@ def build_steps(
                     "-Dlizzie.desktop.required=true",
                     f"-Dlizzie.desktop.evidence.dir={evidence_dir}",
                     f"-Dsurefire.reportsDirectory={reports_dir}",
-                    f"-Dtest={surefire_test_selection(ENGINE_PROCESS_TESTS)}",
+                    f"-Dtest={surefire_test_selection(selections)}",
                     "test",
                 ),
-                group="engine-process",
+                group=group,
             )
         ]
     if group in {"all", "scripts"}:
@@ -971,21 +1004,26 @@ def collect_junit_summary(
             summary = summary.plus(parse_suite(report))
             for case in report.iter("testcase"):
                 classname = case.attrib.get("classname", "")
+                name = case.attrib.get("name", "")
+                failed = any(case.find(status) is not None for status in ("failure", "error"))
+                if failed:
+                    unsuccessful.append(f"{classname}.{name}")
                 if classname not in required_classes:
                     continue
-                name = case.attrib.get("name", "")
-                if any(case.find(status) is not None for status in ("skipped", "failure", "error")):
+                if case.find("skipped") is not None:
                     unsuccessful.append(f"{classname}.{name}")
-                else:
+                elif not failed:
                     missing.discard((classname, name))
         except (ET.ParseError, OSError, ValueError) as error:
             raise RuntimeError(f"Unable to parse JUnit report {path}: {error}") from error
-    if missing or unsuccessful:
+    if missing or unsuccessful or summary.failures or summary.errors:
         details = []
         if missing:
             details.append("missing successful cases: " + ", ".join(f"{c}.{n}" for c, n in sorted(missing)))
         if unsuccessful:
-            details.append("unsuccessful required-class cases: " + ", ".join(unsuccessful))
+            details.append("unsuccessful cases: " + ", ".join(unsuccessful))
+        if summary.failures or summary.errors:
+            details.append(f"JUnit reports contain {summary.failures} failures and {summary.errors} errors")
         raise RequiredJunitExecutionError(
             "Required JUnit execution not satisfied: " + "; ".join(details), summary
         )
@@ -1078,7 +1116,10 @@ def run(args: argparse.Namespace) -> int:
         desktop_root /= "races"
     engine_process_selected = args.group == "engine-process"
     tensorrt_ui_selected = args.group == "tensorrt-ui"
-    display_selected = desktop_selected or engine_process_selected or tensorrt_ui_selected
+    native_clipboard_selected = args.group == "native-clipboard"
+    display_selected = (
+        desktop_selected or engine_process_selected or tensorrt_ui_selected or native_clipboard_selected
+    )
     scripts_selected = args.group in {"all", "scripts"}
     needs_java = java_selected or display_selected
     java_details = "not executed"
@@ -1089,6 +1130,8 @@ def run(args: argparse.Namespace) -> int:
             require_clean_checkout()
         if tensorrt_ui_selected and args.profile != "windows":
             raise RuntimeError("The tensorrt-ui group requires --profile windows.")
+        if native_clipboard_selected and not args.dry_run and sys.platform != "darwin":
+            raise RuntimeError("Native clipboard CI requires an actual macOS host.")
         if display_selected and not args.dry_run:
             if sys.platform.startswith("linux") and not os.environ.get("DISPLAY", "").strip():
                 raise RuntimeError(
@@ -1104,7 +1147,12 @@ def run(args: argparse.Namespace) -> int:
             tensorrt_root.mkdir(parents=True, exist_ok=True)
             junit_executed = True
         elif display_selected and not args.dry_run:
-            report_root = desktop_root if desktop_selected else REPO_ROOT / "target" / "engine-process-smoke"
+            if desktop_selected:
+                report_root = desktop_root
+            else:
+                report_root = REPO_ROOT / "target" / (
+                    "native-clipboard" if native_clipboard_selected else "engine-process-smoke"
+                )
             reset_junit_reports(report_root)
             junit_executed = True
         maven = (args.maven or ("mvn" if args.dry_run else resolve_maven())) if needs_java else "mvn"
@@ -1189,6 +1237,9 @@ def run(args: argparse.Namespace) -> int:
             elif tensorrt_ui_selected:
                 required_tests = TENSORRT_UI_REQUIRED_TESTS
                 report_root = REPO_ROOT / "target" / "tensorrt-ui"
+            elif native_clipboard_selected:
+                required_tests = NATIVE_CLIPBOARD_REQUIRED_TESTS
+                report_root = REPO_ROOT / "target" / "native-clipboard"
             else:
                 required_tests = JAVA_REQUIRED_TESTS
                 if sys.platform == "win32":
@@ -1239,7 +1290,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--group",
         choices=(
-            "all", "repository", "scripts", "java", "desktop", "desktop-races", "engine-process", "tensorrt-ui"
+            "all", "repository", "scripts", "java", "desktop", "desktop-races", "engine-process",
+            "tensorrt-ui", "native-clipboard"
         ),
         default="all",
     )

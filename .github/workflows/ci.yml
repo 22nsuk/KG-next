@@ -155,6 +155,7 @@ jobs:
           name: jacoco-coverage-report-linux
           path: target/site/jacoco
           if-no-files-found: error
+          retention-days: 7
 
   # Keep full verification on Java 21; cover web and commentary HTTP boundaries on Java 17.
   java17-web:
@@ -173,7 +174,7 @@ jobs:
           cache: maven
       - name: Verify web message and commentary HTTP boundaries on Java 17
         run: >-
-          mvn -B -Djava.awt.headless=true
+          mvn -B -Djava.awt.headless=true -Djacoco.skip=true
           -Dtest=WebBoardHttpServerLifecycleTest,WebTrialMessageLifecycleTest,TeacherLlmClientTest,TeacherLlmStreamLimitsTest,TeacherResponseBudgetTest,GroundedCommentaryClientTest,TeacherRequestControllerTest
           test
       - name: Upload Java 17 test reports
@@ -236,6 +237,7 @@ jobs:
           name: jacoco-coverage-report-windows
           path: target/site/jacoco
           if-no-files-found: error
+          retention-days: 7
 
   desktop-smoke:
     needs: repository-checks
@@ -306,6 +308,7 @@ jobs:
           # A failed/cancelled run retains all images, including the unfinished races/ directory.
           path: |
             target/desktop-smoke
+            target/provenance-ui
             ${{ job.status == 'success' && '!target/desktop-smoke/races-1/**/*.png' || '' }}
             ${{ job.status == 'success' && '!target/desktop-smoke/races-1/**/*.bmp' || '' }}
             ${{ job.status == 'success' && '!target/desktop-smoke/races-2/**/*.png' || '' }}
@@ -337,75 +340,18 @@ jobs:
           cache: maven
       - name: Verify native pasteboard ownership and cross-process copying
         run: >-
-          mvn -B -Djava.awt.headless=false -Dlizzie.desktop.required=true
-          -Dtest=SgfCopyDesktopTest,ClipboardCopyTest test
+          python3 scripts/run_local_ci.py --profile portable --group native-clipboard
+          --require-clean --summary-dir target/local-ci/native-clipboard
       - name: Upload clipboard evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: native-clipboard-macos
           path: |
-            target/surefire-reports
-            target/desktop-smoke
+            target/native-clipboard
+            target/local-ci/native-clipboard
           if-no-files-found: warn
-
-  analysis-provenance-ui:
-    needs: repository-checks
-    if: ${{ needs.repository-checks.outputs.acceptance_required == 'true' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Set up Java 21
-        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '21'
-          cache: maven
-      - name: Install analysis UI display dependencies
-        run: |
-          sudo --preserve-env=GITHUB_ACTIONS,RUNNER_ENVIRONMENT,RUNNER_OS,RUNNER_ARCH python3 scripts/prefer_ubuntu_apt_mirror.py --install xvfb xauth fonts-dejavu-core fonts-noto-cjk fonts-thai-tlwg
-      - name: Run analysis provenance UI tests
-        timeout-minutes: 7
-        env:
-          LANG: C.UTF-8
-          LC_ALL: C.UTF-8
-        run: |
-          xvfb-run -a -s '-screen 0 3840x2160x24 -nolisten tcp' \
-            mvn -B -Dfmt.skip=true -Djacoco.skip=true -Djava.awt.headless=false -Dlizzie.desktop.required=true \
-              -Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports \
-              -Dtest=WholeGameAnalysisDialogLayoutTest test
-      - name: Require every analysis UI case to execute
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          from scripts.run_local_ci import collect_junit_summary
-
-          required_methods = (
-              "runningMetadataFitsTheInitialDialogWithoutAnOrdinaryScrollbar",
-              "localizedProgressAndControlsRemainVisibleAtCommonDpiScales",
-              "customVisitSelectionShowsAnEditableBoundedValue",
-              "startCommitsTypedCustomVisitsAndRejectsAnUncommittedOutOfRangeValue",
-              "selectedReusePolicyReachesStartAndRejectsAnEstimateForTheOtherPolicy",
-              "displayedPositionSourceRefreshesAndItsTimerStopsWhenHiddenOrDisposed",
-          )
-          summary = collect_junit_summary(
-              Path("target/provenance-ui"),
-              required_tests=tuple(
-                  ("featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest", method)
-                  for method in required_methods
-              ),
-          )
-          print(summary)
-          PY
-      - name: Upload analysis provenance UI artifacts
-        if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        with:
-          name: analysis-provenance-ui
-          path: target/provenance-ui
-          if-no-files-found: warn
+          retention-days: 14
 
   engine-process:
     needs: repository-checks
@@ -494,7 +440,7 @@ jobs:
   # Server-side enforcement is configured separately; see docs/CI_MERGE_POLICY.md.
   ci-required:
     if: ${{ always() }}
-    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, native-clipboard-macos, analysis-provenance-ui, engine-process, fox-search, b11-speed-notice, native-windows, sgf-cpu-acceptance]
+    needs: [repository-checks, script-tests, windows-script-tests, java-linux, java17-web, java-windows, desktop-smoke, native-clipboard-macos, engine-process, fox-search, b11-speed-notice, native-windows, sgf-cpu-acceptance]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

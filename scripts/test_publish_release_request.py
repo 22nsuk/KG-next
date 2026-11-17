@@ -886,7 +886,6 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
              ["xvfb", "xauth", "openbox", "x11-utils", "fonts-dejavu-core",
               "fonts-noto-cjk", "fonts-thai-tlwg"]),
             ("ci.yml", "Install Linux display dependencies", [*common_packages, "fonts-thai-tlwg"]),
-            ("ci.yml", "Install analysis UI display dependencies", [*common_packages, "fonts-thai-tlwg"]),
             ("acceptance-integration.yml", "Install isolated display dependencies",
              common_packages),
             ("fox-search.yml", "Install Linux display dependencies", common_packages),
@@ -961,30 +960,31 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
 
         root = SCRIPT_PATH.parents[1]
         ci = (root / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        job = ci.split("  analysis-provenance-ui:\n", 1)[1].split("\n  engine-process:", 1)[0]
+        job = ci.split("  desktop-smoke:\n", 1)[1].split("\n  native-clipboard-macos:", 1)[0]
         self.assertIn("-screen 0 3840x2160x24", job)
-        self.assertIn("-Djava.awt.headless=false", job)
-        self.assertIn("-Dtest=WholeGameAnalysisDialogLayoutTest test", job)
-        self.assertIn("-Dsurefire.reportsDirectory=target/provenance-ui/surefire-reports", job)
+        self.assertIn("--profile portable --group desktop --require-clean", job)
+        self.assertIn("target/provenance-ui", job)
+        step, = run_local_ci.build_steps("portable", "mvn", None, None, "desktop")
+        self.assertIn("-Djava.awt.headless=false", step.command)
+        self.assertIn("-Dlizzie.desktop.required=true", step.command)
+        selected = next(arg.removeprefix("-Dtest=") for arg in step.command if arg.startswith("-Dtest="))
+        self.assertIn("WholeGameAnalysisDialogLayoutTest", selected.split(","))
         self.assertIn("if: always()", job)
         self.assertNotIn("continue-on-error", job)
-        inline = textwrap.dedent(job.split("python3 - <<'PY'\n", 1)[1].split("          PY", 1)[0])
         source = (root / "src/test/java/featurecat/lizzie/gui/WholeGameAnalysisDialogLayoutTest.java").read_text(encoding="utf-8")
         methods = re.findall(r"(?m)^  void (\w+)\(", source)
-        self.assertEqual(6, len(methods))
+        self.assertTrue(methods)
         classname = "featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest"
         expected = {(classname, method) for method in methods}
+        required = tuple(case for case in run_local_ci.DESKTOP_REQUIRED_TESTS if case[0] == classname)
+        self.assertEqual(expected, set(required))
+        self.assertNotIn(classname, run_local_ci.DESKTOP_RACE_TESTS)
         collector = run_local_ci.collect_junit_summary
         with tempfile.TemporaryDirectory() as temporary:
             report_root = Path(temporary)
             reports = report_root / "surefire-reports"
             reports.mkdir()
             report = reports / "TEST-analysis-ui.xml"
-
-            def collect(required_root, required_tests):
-                self.assertEqual(Path("target/provenance-ui"), required_root)
-                self.assertEqual(expected, set(required_tests))
-                return collector(report_root, required_tests)
 
             for status in ("passed", "skipped", "failure", "error", "missing", "absent-report"):
                 with self.subTest(status=status):
@@ -1000,12 +1000,11 @@ class ReleaseWorkflowResilienceTest(unittest.TestCase):
                     )
                     if status == "absent-report":
                         report.unlink()
-                    with mock.patch.object(run_local_ci, "collect_junit_summary", side_effect=collect), mock.patch("sys.stdout", io.StringIO()):
-                        if status == "passed":
-                            exec(compile(inline, "analysis-ui-gate", "exec"), {})
-                        else:
-                            with self.assertRaises(run_local_ci.RequiredJunitExecutionError):
-                                exec(compile(inline, "analysis-ui-gate", "exec"), {})
+                    if status == "passed":
+                        collector(report_root, required)
+                    else:
+                        with self.assertRaises(run_local_ci.RequiredJunitExecutionError):
+                            collector(report_root, required)
 
     def select_ci_archive(self, releases):
         workflow = (

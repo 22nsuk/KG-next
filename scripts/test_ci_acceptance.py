@@ -34,8 +34,17 @@ def results(required="true", result="success"):
 
 
 class SelectionTest(unittest.TestCase):
-    def test_only_conventional_prose_is_exempt(self):
+    def test_prose_and_inert_performance_records_are_exempt(self):
         self.assertTrue(ci.documentation_only(["README.md", "docs/deep/guide.md", "docs/guide.rst"]))
+        self.assertTrue(ci.documentation_only([
+            "docs/performance/results.csv", "docs/performance/2026-11/run/summary.json",
+        ]))
+        self.assertTrue(ci.documentation_only([
+            "README.md", "docs/guide.rst", "docs/performance/2026-11/results.csv",
+            "docs/performance/2026-11/summary.json",
+        ]))
+
+    def test_code_resources_and_unknown_data_paths_still_require_execution(self):
         for path in (
             "pom.xml", "src/main/resources/katago-assets.json", "src/test/resources/input.sgf",
             "src/main/java/example/Worker.java", "src/test/java/example/WorkerTest.java",
@@ -43,9 +52,14 @@ class SelectionTest(unittest.TestCase):
             ".github/rulesets/main-ci.json", "scripts/ci_acceptance.py",
             "scripts/new-build-helper.py", "docs/generator.py", "docs/KG_MODEL_VERIFICATION.json",
             "packaging/launcher.cfg", "theme/default/theme.txt", "unknown/new-contract",
+            "results.csv", "summary.json", "data/results.csv", "data/summary.json",
+            "docs/results.csv", "docs/other/summary.json", "docs/performance-data/results.csv",
+            "docs/performance/run.py", "docs/performance/run.sh", "docs/performance/results.tsv",
         ):
             with self.subTest(path=path):
-                self.assertFalse(ci.documentation_only(["README.md", path]))
+                self.assertFalse(ci.documentation_only([
+                    "README.md", "docs/performance/results.csv", path,
+                ]))
 
     def test_no_changed_files_need_only_repository_checks(self):
         self.assertTrue(ci.documentation_only([]))
@@ -60,8 +74,9 @@ class SelectionTest(unittest.TestCase):
             ci.acceptance_required("workflow_dispatch", {}, ROOT)
 
     def test_pull_request_selection_uses_the_complete_diff(self):
-        with mock.patch.object(ci, "changed_paths", return_value=["docs/guide.md"]):
-            self.assertFalse(ci.acceptance_required("pull_request", {}, ROOT))
+        for paths in (["docs/guide.md"], ["docs/performance/2026-11/summary.json"]):
+            with self.subTest(paths=paths), mock.patch.object(ci, "changed_paths", return_value=paths):
+                self.assertFalse(ci.acceptance_required("pull_request", {}, ROOT))
         with mock.patch.object(ci, "changed_paths", return_value=["pom.xml"]):
             self.assertTrue(ci.acceptance_required("pull_request", {}, ROOT))
 
@@ -189,6 +204,12 @@ class GitDiffTest(unittest.TestCase):
         self.write("docs/한국어 문서.md", "documentation\n")
         self.assertFalse(ci.acceptance_required("pull_request", self.event(self.commit()), self.repo))
 
+    def test_performance_records_with_prose_skip(self):
+        self.write("docs/performance/2026-11/results.csv", "case,seconds\nfull,10\n")
+        self.write("docs/performance/2026-11/summary.json", '{"seconds":10}\n')
+        self.write("docs/performance/2026-11/README.md", "Measured records\n")
+        self.assertFalse(ci.acceptance_required("pull_request", self.event(self.commit()), self.repo))
+
     def test_deleted_code_requires_acceptance(self):
         (self.repo / "src/main/java/Old.java").unlink()
         self.assertTrue(ci.acceptance_required("pull_request", self.event(self.commit()), self.repo))
@@ -198,6 +219,26 @@ class GitDiffTest(unittest.TestCase):
         self.git("mv", "src/main/java/Old.java", "docs/Old.md")
         event = self.event(self.commit())
         self.assertEqual(set(ci.changed_paths(event, self.repo)), {"src/main/java/Old.java", "docs/Old.md"})
+        self.assertTrue(ci.acceptance_required("pull_request", event, self.repo))
+
+    def test_rename_from_code_into_performance_records_cannot_skip(self):
+        (self.repo / "docs/performance").mkdir(parents=True)
+        self.git("mv", "src/main/java/Old.java", "docs/performance/old.json")
+        event = self.event(self.commit())
+        self.assertEqual(set(ci.changed_paths(event, self.repo)), {
+            "src/main/java/Old.java", "docs/performance/old.json",
+        })
+        self.assertTrue(ci.acceptance_required("pull_request", event, self.repo))
+
+    def test_rename_from_performance_records_into_unknown_data_cannot_skip(self):
+        self.write("docs/performance/results.csv", "case,seconds\nfull,10\n")
+        base = self.commit()
+        (self.repo / "data").mkdir()
+        self.git("mv", "docs/performance/results.csv", "data/results.csv")
+        event = self.event(self.commit(), base=base)
+        self.assertEqual(set(ci.changed_paths(event, self.repo)), {
+            "docs/performance/results.csv", "data/results.csv",
+        })
         self.assertTrue(ci.acceptance_required("pull_request", event, self.repo))
 
     def test_code_after_more_than_300_documentation_paths_is_not_truncated(self):
@@ -307,17 +348,33 @@ class WorkflowContractTest(unittest.TestCase):
 
     def test_desktop_job_covers_one_full_pass_and_two_race_repeats_with_overhead(self):
         text = (WORKFLOWS / "ci.yml").read_text()
-        job = text.split("\n  desktop-smoke:\n", 1)[1].split("\n  analysis-provenance-ui:\n", 1)[0]
+        job = re.search(r"^  desktop-smoke:\n(.*?)(?=^  [a-z0-9-]+:|\Z)",
+                        text, re.M | re.S).group(1)
         job_minutes = int(re.search(r"^    timeout-minutes: (\d+)$", job, re.M).group(1))
-        step_minutes = [int(value) for value in re.findall(r"^        timeout-minutes: (\d+)$", job, re.M)]
-        self.assertEqual(len(step_minutes), 2, "compile and test execution must both be bounded")
+        steps = dict(re.findall(r"^      - name: ([^\n]+)\n(.*?)(?=^      - |\Z)", job,
+                                re.M | re.S))
+        step_minutes = [
+            int(re.search(r"^        timeout-minutes: (\d+)$", steps[name], re.M).group(1))
+            for name in ("Compile desktop smoke tests", "Run Linux desktop smoke verification")
+        ]
         self.assertGreater(job_minutes, sum(step_minutes), "reserve time for setup and artifacts too")
-        self.assertEqual(1, job.count("--profile portable --group desktop --require-clean"))
-        self.assertIn("for attempt in 1 2; do", job)
-        self.assertIn("--profile portable --group desktop-races --require-clean", job)
-        self.assertLess(job.index("--group desktop --require-clean"), job.index("for attempt in 1 2; do"))
-        self.assertIn('mv target/desktop-smoke/races "target/desktop-smoke/races-$attempt"', job)
-        self.assertIn("bash -euo pipefail", job)
+        execution = steps["Run Linux desktop smoke verification"]
+        before_repeats, repeats = execution.split("for attempt in 1 2; do", 1)
+        self.assertIn("--profile portable --group desktop --require-clean", before_repeats)
+        self.assertNotIn("--group desktop --require-clean", repeats)
+        self.assertIn("--profile portable --group desktop-races --require-clean", repeats)
+        self.assertIn('mv target/desktop-smoke/races "target/desktop-smoke/races-$attempt"', repeats)
+        self.assertIn("bash -euo pipefail", execution)
+        self.assertNotIn("continue-on-error", job)
+
+    def test_macos_job_keeps_native_execution_and_named_evidence_required(self):
+        text = (WORKFLOWS / "ci.yml").read_text()
+        job = text.split("\n  native-clipboard-macos:\n", 1)[1].split("\n  engine-process:\n", 1)[0]
+        self.assertIn("runs-on: macos-latest", job)
+        self.assertIn("python3 scripts/run_local_ci.py --profile portable --group native-clipboard", job)
+        self.assertIn("--require-clean --summary-dir target/local-ci/native-clipboard", job)
+        self.assertIn("target/native-clipboard", job)
+        self.assertIn("if: always()", job)
         self.assertNotIn("continue-on-error", job)
 
     def test_aggregate_is_always_scheduled_and_depends_on_every_job(self):
@@ -355,7 +412,11 @@ class WorkflowContractTest(unittest.TestCase):
         self.assertNotIn("paths-ignore:", triggers)
         self.assertNotIn("pull_request_target", triggers)
         self.assertIn("fetch-depth: 0", text)
-        self.assertEqual(text.count("-m unittest discover -s scripts -p test_ci_acceptance.py"), 2)
+        jobs = dict(re.findall(r"^  ([a-z0-9-]+):\n(.*?)(?=^  [a-z0-9-]+:|\Z)", text,
+                               re.M | re.S))
+        for name in ("repository-checks", "windows-script-tests"):
+            with self.subTest(job=name):
+                self.assertIn("-m unittest discover -s scripts -p test_ci_acceptance.py", jobs[name])
 
     def test_reusable_calls_match_the_gate_and_have_no_duplicate_pr_trigger(self):
         text = (WORKFLOWS / "ci.yml").read_text()

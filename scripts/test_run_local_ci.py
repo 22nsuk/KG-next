@@ -112,6 +112,7 @@ class RunLocalCiTest(unittest.TestCase):
             "scripts.test_windows_download_guidance",
             "scripts.test_validate_release_workflow_identity",
             "scripts.test_macos_signing_security",
+            "scripts.test_publish_release_request",
         )
         for profile in ("portable", "all"):
             for group in ("all", "repository", "scripts"):
@@ -207,6 +208,7 @@ class RunLocalCiTest(unittest.TestCase):
             ("desktop-races", "portable", run_local_ci.DESKTOP_RACE_REQUIRED_TESTS),
             ("engine-process", "portable", run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS),
             ("tensorrt-ui", "windows", run_local_ci.TENSORRT_UI_REQUIRED_TESTS),
+            ("native-clipboard", "portable", run_local_ci.NATIVE_CLIPBOARD_REQUIRED_TESTS),
         ):
             with self.subTest(group=group):
                 step, = run_local_ci.build_steps(profile, "mvn", None, None, group)
@@ -256,6 +258,11 @@ class RunLocalCiTest(unittest.TestCase):
         # These whole classes include cases outside the required-success list.
         self.assertIn("SetKataPDAParameterTest", selected)
         self.assertIn("MessageThemeTest", selected)
+        self.assertIn("WholeGameAnalysisDialogLayoutTest", selected)
+        self.assertNotIn(
+            "featurecat.lizzie.gui.WholeGameAnalysisDialogLayoutTest",
+            run_local_ci.DESKTOP_RACE_TESTS,
+        )
 
     def test_desktop_races_select_all_required_invocations_without_full_suite_repeats(self):
         step, = run_local_ci.build_steps("portable", "mvn", None, None, "desktop-races")
@@ -291,7 +298,13 @@ class RunLocalCiTest(unittest.TestCase):
         selector = next(arg.removeprefix("-Dtest=") for arg in step.command
                         if arg.startswith("-Dtest="))
         selected = selector.split(",")
-        self.assertEqual(7, len(selected))
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertEqual(
+            {"EngineProcessSmokeTest", "EngineProcessFailureTest", "ContributeStartupDesktopTest",
+             "ContributionLocalClearDesktopTest", "ContributeCertificateRecoveryTest",
+             "ContributeSavedEngineSelectionDesktopTest", "ContributeSshShutdownDesktopTest"},
+            {item.partition("#")[0] for item in selected},
+        )
         self.assertEqual(
             {"EngineProcessSmokeTest", "EngineProcessFailureTest"},
             {item.partition("#")[0] for item in selected if "#" in item},
@@ -301,7 +314,44 @@ class RunLocalCiTest(unittest.TestCase):
             + str(run_local_ci.REPO_ROOT / "target/engine-process-smoke/surefire-reports"),
             step.command,
         )
-        self.assertEqual(23, len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS))
+        self.assertEqual(
+            len(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS),
+            len(set(run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS)),
+        )
+
+    def test_native_clipboard_plan_keeps_both_classes_and_separate_evidence(self):
+        step, = run_local_ci.build_steps("portable", "mvn", None, None, "native-clipboard")
+        self.assertIn("-Dtest=SgfCopyDesktopTest,ClipboardCopyTest", step.command)
+        self.assertIn("-Djava.awt.headless=false", step.command)
+        self.assertIn("-Dlizzie.desktop.required=true", step.command)
+        self.assertIn("-Djacoco.skip=true", step.command)
+        root = run_local_ci.REPO_ROOT / "target/native-clipboard"
+        self.assertIn(f"-Dsurefire.reportsDirectory={root / 'surefire-reports'}", step.command)
+        self.assertIn(f"-Dlizzie.desktop.evidence.dir={root / 'probes'}", step.command)
+        self.assertEqual(
+            run_local_ci.DESKTOP_TESTS["featurecat.lizzie.gui.SgfCopyDesktopTest"],
+            run_local_ci.NATIVE_CLIPBOARD_TESTS["featurecat.lizzie.gui.SgfCopyDesktopTest"],
+        )
+
+    def test_native_clipboard_rejects_other_hosts_but_allows_dry_run_planning(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            for host in ("win32", "linux"):
+                with self.subTest(host=host), patch.object(run_local_ci.sys, "platform", host):
+                    args = run_local_ci.parse_args([
+                        "--profile", "portable", "--group", "native-clipboard", "--summary-dir", temporary,
+                    ])
+                    with patch.object(run_local_ci, "resolve_maven") as resolve:
+                        self.assertEqual(1, run_local_ci.run(args))
+                        resolve.assert_not_called()
+                    summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text(encoding="utf-8"))
+                    self.assertEqual("FAIL", summary["result"])
+                    self.assertEqual("not executed", summary["junit_status"])
+
+                    args.dry_run = True
+                    self.assertEqual(0, run_local_ci.run(args))
+                    summary = json.loads((Path(temporary) / "local-ci-summary.json").read_text(encoding="utf-8"))
+                    self.assertTrue(all(step["status"] == "planned" for step in summary["steps"]))
+                    self.assertEqual("not executed", summary["junit_status"])
 
     def test_tensorrt_ui_plan_is_windows_only_and_selects_exact_parent_methods(self):
         steps = run_local_ci.build_steps(
@@ -478,6 +528,8 @@ class RunLocalCiTest(unittest.TestCase):
                 good + '<testcase classname="critical.SmokeIT" name="additional"><skipped/></testcase>',
                 good + '<testcase classname="critical.SmokeIT" name="runs"><failure/></testcase>',
                 '<testcase classname="critical.SmokeIT" name="runs"><error/></testcase>',
+                good + '<testcase classname="optional.WindowTest" name="fails"><failure/></testcase>',
+                good + '<testcase classname="optional.WindowTest" name="errors"><error/></testcase>',
             ):
                 with self.subTest(case=bad):
                     report.write_text(f'<testsuite tests="3">{bad}{navigation}{optional}</testsuite>')
@@ -488,6 +540,12 @@ class RunLocalCiTest(unittest.TestCase):
                 run_local_ci.JunitSummary(suites=1, tests=3, skipped=1),
                 run_local_ci.collect_junit_summary(root, required),
             )
+            for status in ("failures", "errors"):
+                report.write_text(
+                    f'<testsuite tests="3" {status}="1">{good}{navigation}{optional}</testsuite>'
+                )
+                with self.subTest(status=status), self.assertRaisesRegex(RuntimeError, "JUnit reports contain"):
+                    run_local_ci.collect_junit_summary(root, required)
             run_local_ci.reset_junit_reports(root)
             with self.assertRaisesRegex(RuntimeError, "missing successful cases"):
                 run_local_ci.collect_junit_summary(root, required)
@@ -578,11 +636,13 @@ class RunLocalCiTest(unittest.TestCase):
                 '<testsuite tests="2" failures="0" errors="1" skipped="0"/>',
                 encoding="utf-8",
             )
+            with self.assertRaises(run_local_ci.RequiredJunitExecutionError) as failure:
+                run_local_ci.collect_junit_summary(target)
             self.assertEqual(
                 run_local_ci.JunitSummary(
                     suites=2, tests=7, failures=1, errors=1, skipped=2
                 ),
-                run_local_ci.collect_junit_summary(target),
+                failure.exception.summary,
             )
 
     def test_reset_junit_reports_removes_stale_results_only(self):
@@ -766,21 +826,22 @@ class RunLocalCiTest(unittest.TestCase):
                     self.assertEqual("PASS", summary["result"])
                     self.assertEqual(len(run_local_ci.DESKTOP_REQUIRED_TESTS), summary["junit"]["tests"])
 
+                # Check every manifest omission at its responsible parser boundary;
+                # the cases above retain the full runner-to-summary controls.
                 for missing in required:
-                    incomplete = suite_xml(
-                        *((case, "") for case in run_local_ci.DESKTOP_REQUIRED_TESTS
-                          if case != missing)
-                    )
-                    with self.subTest(missing=missing), patch.object(
-                        run_local_ci, "build_steps", return_value=make_step(incomplete)
+                    incomplete = suite_xml(*((case, "") for case in required if case != missing))
+                    (desktop_reports / "TEST-desktop.xml").write_text(incomplete, encoding="utf-8")
+                    with self.subTest(missing=missing), self.assertRaisesRegex(
+                        run_local_ci.RequiredJunitExecutionError, "missing successful cases"
                     ):
-                        self.assertEqual(1, run_local_ci.run(args))
+                        run_local_ci.collect_junit_summary(target / "desktop-smoke", required)
 
 
     def test_engine_process_and_desktop_races_reject_missing_or_skipped_required_cases(self):
         for group, directory, required in (
             ("engine-process", "engine-process-smoke", run_local_ci.ENGINE_PROCESS_REQUIRED_TESTS),
             ("desktop-races", "desktop-smoke/races", run_local_ci.DESKTOP_RACE_REQUIRED_TESTS),
+            ("native-clipboard", "native-clipboard", run_local_ci.NATIVE_CLIPBOARD_REQUIRED_TESTS),
         ):
             with self.subTest(group=group):
                 self.check_required_display_cases(group, directory, required)
@@ -860,6 +921,8 @@ class RunLocalCiTest(unittest.TestCase):
                         ],
                     ),
                     patch.object(run_local_ci, "REPO_ROOT", root),
+                    patch.object(run_local_ci.sys, "platform", "darwin" if group == "native-clipboard"
+                                 else run_local_ci.sys.platform),
                     patch.dict(os.environ, {"DISPLAY": ":99"}),
                 ):
                     result = run_local_ci.run(args)
@@ -884,6 +947,23 @@ class RunLocalCiTest(unittest.TestCase):
             self.assertEqual(0, result)
             self.assertEqual("PASS", summary["result"])
             self.assertEqual(len(required), summary["junit"]["tests"])
+
+            # The command succeeds and all required cases pass, but another test fails.
+            # Maven's failure-ignore settings must never turn this into a passing gate.
+            for status, count in (("failure", "failures"), ("error", "errors")):
+                failed_report = suite_xml(required).replace(
+                    f'tests="{len(required)}" skipped="0"',
+                    f'tests="{len(required) + 1}" skipped="0" {count}="1"',
+                ).replace(
+                    "</testsuite>",
+                    f'<testcase classname="other.Test" name="fails"><{status}/></testcase></testsuite>',
+                )
+                with self.subTest(status=status):
+                    result, summary = run_with_report(failed_report)
+                    self.assertEqual(1, result)
+                    self.assertEqual("FAIL", summary["result"])
+                    self.assertEqual(1, summary["junit"][count])
+                    self.assertTrue(all(step["status"] == "passed" for step in summary["steps"]))
 
     def test_desktop_and_java_and_nonjava_report_isolation(self):
         with tempfile.TemporaryDirectory() as temporary:

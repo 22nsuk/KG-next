@@ -15,20 +15,22 @@ from typing import Any, Mapping, Sequence
 
 EXECUTION_JOBS = (
     "script-tests", "windows-script-tests", "java-linux", "java17-web", "java-windows",
-    "desktop-smoke", "native-clipboard-macos", "analysis-provenance-ui", "engine-process",
+    "desktop-smoke", "native-clipboard-macos", "engine-process",
     "fox-search", "b11-speed-notice", "native-windows", "sgf-cpu-acceptance",
 )
 
 
 def documentation_only(paths: Sequence[str]) -> bool:
-    """Only conventional prose is exempt; unknown/build/resource paths run all lanes."""
-    def is_prose(path: str) -> bool:
+    """Exempt prose and inert performance records; all other paths run every lane."""
+    def is_documentation(path: str) -> bool:
         value = PurePosixPath(path)
+        if path.startswith("docs/performance/") and value.suffix.lower() in {".csv", ".json"}:
+            return True
         if path.startswith("docs/") and value.suffix.lower() in {".md", ".rst"}:
             return True
         return len(value.parts) == 1 and value.suffix.lower() == ".md"
 
-    return all(is_prose(path) for path in paths)
+    return all(is_documentation(path) for path in paths)
 
 
 def changed_paths(event: Mapping[str, Any], repository: Path) -> list[str]:

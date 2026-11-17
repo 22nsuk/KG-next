@@ -171,6 +171,8 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: macos-arm64-with-katago
+          compression-level: 0
+          retention-days: 7
           path: |
             dist/release/*mac-apple-silicon.with-katago.dmg
             dist/release-meta/*mac-apple-silicon-*.json
