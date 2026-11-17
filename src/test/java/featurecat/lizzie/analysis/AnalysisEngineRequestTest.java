@@ -1905,6 +1905,8 @@ class AnalysisEngineRequestTest {
             completed == 17 ? 1 : 0,
             frame.fullRefreshCalls,
             "intermediate results must not rebuild the full board render surface.");
+        assertEquals(completed == 17 ? 1 : 0, frame.completedProgressRefreshCalls,
+            "completion must schedule publication after move metadata settles");
       }
       assertFalse(engine.isAnalysisInProgress());
       waitForMovelistRefreshThreads();
@@ -5469,6 +5471,12 @@ class AnalysisEngineRequestTest {
     public void requestProblemListRefresh() {}
 
     @Override
+    public void refreshCompletedAnalysisProgress() {
+      // This engine fixture omits UI publication; the real completion path has a desktop probe.
+      Lizzie.board.setMovelistAll();
+    }
+
+    @Override
     public void clearKataEstimate() {}
 
     @Override
@@ -5495,6 +5503,7 @@ class AnalysisEngineRequestTest {
   private static final class SilentProgressTrackingFrame extends LizzieFrame {
     private int silentProgressRefreshCalls;
     private int fullRefreshCalls;
+    private int completedProgressRefreshCalls;
 
     private SilentProgressTrackingFrame() {}
 
@@ -5510,6 +5519,12 @@ class AnalysisEngineRequestTest {
 
     @Override
     public void requestProblemListRefresh() {}
+
+    @Override
+    public void refreshCompletedAnalysisProgress() {
+      completedProgressRefreshCalls++;
+      Lizzie.board.setMovelistAll();
+    }
   }
 
   private static final class SidebarProgressFrame extends LizzieFrame {

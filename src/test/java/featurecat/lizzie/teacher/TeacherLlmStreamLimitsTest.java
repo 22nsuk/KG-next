@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.*;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
+import featurecat.lizzie.analysis.AnalysisProvenance;
+import featurecat.lizzie.analysis.MoveData;
+import featurecat.lizzie.rules.BoardData;
+import featurecat.lizzie.rules.BoardHistoryNode;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
@@ -375,6 +380,97 @@ class TeacherLlmStreamLimitsTest {
     assertEquals(List.of("Compare D4."), displayed);
     assertEquals(2, chatCalls.get());
     assertEquals(0, responsesCalls.get());
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "404,false,invalidated",
+    "405,false,invalidated",
+    "404,true,invalidated",
+    "405,true,invalidated",
+    "404,false,regenerated",
+    "405,false,regenerated",
+    "404,true,regenerated",
+    "405,true,regenerated",
+    "404,false,replaced",
+    "405,false,replaced",
+    "404,true,replaced",
+    "405,true,replaced"
+  })
+  void fallbackRechecksFrozenEvidenceForInitialAndCorrectionRequests(
+      int status, boolean correction, String change) throws Exception {
+    BoardHistoryNode node = new BoardHistoryNode(BoardData.empty(19, 19));
+    MoveData move = new MoveData();
+    move.coordinate = "D4";
+    move.winrate = 60;
+    move.playouts = 1000;
+    node.getData().bestMoves = List.of(move);
+    node.getData().setPlayouts(1000);
+    TeacherEvidence.Position evidence = TeacherEvidence.current(node).orElseThrow();
+    CountDownLatch awaitingFallback = new CountDownLatch(1);
+    server.createContext(
+        "/v1/chat/completions",
+        exchange -> {
+          int call = chatCalls.incrementAndGet();
+          if (correction && call == 1) {
+            reply(exchange, delta("Play Q16.") + done(false));
+            return;
+          }
+          awaitingFallback.countDown();
+          if (!awaitRelease(10_000)) {
+            exchange.close();
+            return;
+          }
+          exchange.sendResponseHeaders(status, -1);
+          exchange.close();
+        });
+    server.createContext(
+        "/v1/responses",
+        exchange -> {
+          responsesCalls.incrementAndGet();
+          reply(exchange, responseDelta("Compare D4.") + done(true));
+        });
+    server.start();
+    List<String> displayed = new CopyOnWriteArrayList<>();
+    TeacherLlmClient.Cancellation cancellation = new TeacherLlmClient.Cancellation();
+    Future<String> result =
+        request(
+            new GroundedCommentaryClient(client(10_000, 5_000), List.of(evidence)),
+            cancellation,
+            displayed);
+    assertTrue(awaitingFallback.await(5, TimeUnit.SECONDS));
+
+    if (!change.equals("replaced")) node.getData().invalidatePrimaryAnalysis();
+    if (!change.equals("invalidated")) {
+      node.getData()
+          .setPrimaryAnalysisProvenance(
+              new AnalysisProvenance(
+                  "KataGo", "", "", "", "", "", null, null, null, "",
+                  AnalysisMoveRestrictions.fromCommand(
+                      change.equals("replaced") ? "kata-analyze 10 avoid b D4 2" : "kata-analyze 10")));
+      node.getData().isChanged = false;
+      if (change.equals("regenerated")) {
+        assertTrue(TeacherEvidence.current(node).orElseThrow().analysisIsCurrent());
+      }
+    }
+    release.countDown();
+
+    if (change.equals("replaced")) {
+      assertEquals("Compare D4.", result.get(5, TimeUnit.SECONDS));
+      assertEquals(List.of("Compare D4."), displayed);
+      assertEquals(1, responsesCalls.get());
+    } else {
+      IOException failure = assertInstanceOf(IOException.class, failed(result));
+      assertEquals(0, responsesCalls.get(), "Stale evidence must not be sent to the fallback endpoint");
+      assertEquals(
+          TeacherStrings.get(
+              "Teacher.status.analysisChanged",
+              "The analysis used for this commentary was invalidated. Analyze again and generate new commentary."),
+          failure.getMessage());
+      assertTrue(displayed.isEmpty());
+      assertFalse(cancellation.isCancelled(), "Invalidation must retain its own error diagnostic");
+    }
+    assertEquals(correction ? 2 : 1, chatCalls.get());
   }
 
   @Test

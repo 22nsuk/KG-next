@@ -5119,9 +5119,9 @@ class LizzieFrameRegressionTest {
     }
 
     @Override
-    void refreshCompletedSilentAnalysisProgress() {
+    public void refreshCompletedAnalysisProgress() {
       settledPublicationCount++;
-      super.refreshCompletedSilentAnalysisProgress();
+      super.refreshCompletedAnalysisProgress();
     }
   }
 

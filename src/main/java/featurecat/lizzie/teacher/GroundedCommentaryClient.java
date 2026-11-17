@@ -24,19 +24,26 @@ final class GroundedCommentaryClient implements CommentaryClient {
   public String stream(
       List<TeacherLlmClient.Message> messages,
       TeacherLlmClient.Cancellation cancellation,
-      Consumer<String> onText)
+      Consumer<String> onText,
+      RequestCheck requestCheck)
       throws IOException, InterruptedException {
     List<TeacherLlmClient.Message> input = new ArrayList<>(messages);
     TeacherLlmClient.Cancellation requestCancellation =
         cancellation == null ? new TeacherLlmClient.Cancellation() : cancellation;
     Consumer<String> receiver = onText == null ? ignored -> {} : onText;
+    RequestCheck groundedCheck =
+        () -> {
+          requestCheck.check();
+          checkAnalysis();
+        };
     for (int attempt = 0; attempt < 2; attempt++) {
       checkCancellation(requestCancellation);
-      checkAnalysis();
+      groundedCheck.check();
       // Partial or rejected text must never reach the UI or become follow-up context.
-      String result = delegate.stream(List.copyOf(input), requestCancellation, ignored -> {});
+      String result =
+          delegate.stream(List.copyOf(input), requestCancellation, ignored -> {}, groundedCheck);
       checkCancellation(requestCancellation);
-      checkAnalysis();
+      groundedCheck.check();
       if (result == null || result.isBlank()) {
         throw unverifiedReply();
       }
