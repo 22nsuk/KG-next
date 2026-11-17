@@ -296,7 +296,7 @@ class TeacherPromptBuilderTest {
     List<List<TeacherLlmClient.Message>> attempts = new ArrayList<>();
     String corrected = "Review each retained position using its shown liberties.";
     CommentaryClient replies =
-        (messages, cancellation, onText) -> {
+        (messages, cancellation, onText, requestCheck) -> {
           attempts.add(messages);
           assertTrue(contentCharacters(messages) <= 250_000);
           return attempts.size() == 1 ? "Z99 " + "x".repeat(23_996) : corrected;

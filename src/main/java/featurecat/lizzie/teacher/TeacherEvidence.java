@@ -1,5 +1,6 @@
 package featurecat.lizzie.teacher;
 
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -41,6 +42,8 @@ public final class TeacherEvidence {
     int normalizedLast = Math.max(normalizedFirst, lastMove);
     ArrayList<Position> available = new ArrayList<>();
     Map<Position, BoardHistoryNode> sources = new IdentityHashMap<>();
+    int restricted = 0;
+    int invalidated = 0;
     BoardHistoryNode parent = root;
     while (parent != null && parent.next().isPresent()) {
       BoardHistoryNode child = parent.next().get();
@@ -51,11 +54,13 @@ public final class TeacherEvidence {
       if (moveNumber >= normalizedFirst
           && moveNumber <= normalizedLast
           && isRecordedAction(parent.getData(), child)) {
-        Optional<Position> evidence = position(parent);
-        if (evidence.isPresent()) {
-          available.add(evidence.get());
-          sources.put(evidence.get(), parent);
+        Capture evidence = capture(parent);
+        if (evidence.position != null) {
+          available.add(evidence.position);
+          sources.put(evidence.position, parent);
         }
+        if (evidence.exclusion == Exclusion.RESTRICTED) restricted++;
+        if (evidence.exclusion == Exclusion.INVALIDATED) invalidated++;
       }
       if (moveNumber > normalizedLast) {
         break;
@@ -67,7 +72,9 @@ public final class TeacherEvidence {
     for (Position position : selected) {
       freeze(sources.get(position), position).ifPresent(frozen::add);
     }
-    return new Range(frozen, available.size(), Math.max(0, available.size() - frozen.size()));
+    return new Range(
+        frozen, available.size(), Math.max(0, available.size() - frozen.size()),
+        restricted, invalidated);
   }
 
   public static Range wholeGame(BoardHistoryNode root) {
@@ -79,7 +86,9 @@ public final class TeacherEvidence {
       return range;
     }
     List<Position> selected = selectKeyPositions(range.positions, limit);
-    return new Range(selected, range.analyzedPositions, range.analyzedPositions - selected.size());
+    return new Range(
+        selected, range.analyzedPositions, range.analyzedPositions - selected.size(),
+        range.restrictedPositions, range.invalidatedPositions);
   }
 
   private static Optional<Position> freeze(BoardHistoryNode node, Position position) {
@@ -91,14 +100,30 @@ public final class TeacherEvidence {
   }
 
   static Optional<Position> position(BoardHistoryNode parent) {
+    return Optional.ofNullable(capture(parent).position);
+  }
+
+  private enum Exclusion { NONE, MISSING, RESTRICTED, INVALIDATED }
+
+  private record Capture(Position position, Exclusion exclusion) {}
+
+  private static Capture capture(BoardHistoryNode parent) {
     if (parent == null || parent.getData() == null) {
-      return Optional.empty();
+      return new Capture(null, Exclusion.MISSING);
     }
     BoardData data = parent.getData();
-    List<MoveData> moves = stableCopy(data.bestMoves);
-    if (moves.isEmpty()) {
-      return Optional.empty();
+    // Share the engine's payload-publication lock. Never mix candidates, visits and conditions
+    // from different updates; board replay and knowledge matching happen after this lock ends.
+    synchronized (data) {
+      if (data.isChanged) return new Capture(null, Exclusion.INVALIDATED);
+      if (data.hasRestrictedPrimaryAnalysis()) return new Capture(null, Exclusion.RESTRICTED);
+      return captureEligible(parent, data);
     }
+  }
+
+  private static Capture captureEligible(BoardHistoryNode parent, BoardData data) {
+    List<MoveData> moves = data.bestMoves;
+    if (moves == null || moves.isEmpty()) return new Capture(null, Exclusion.MISSING);
 
     ArrayList<Candidate> candidates = new ArrayList<>();
     for (MoveData move : moves) {
@@ -111,7 +136,7 @@ public final class TeacherEvidence {
       }
     }
     if (candidates.isEmpty()) {
-      return Optional.empty();
+      return new Capture(null, Exclusion.MISSING);
     }
 
     BoardHistoryNode child = parent.next().orElse(null);
@@ -158,7 +183,7 @@ public final class TeacherEvidence {
       walk = walk.next().orElse(null);
     }
 
-    return Optional.of(
+    return new Capture(
         new Position(
             data.moveNumber,
             data.blackToPlay ? "B" : "W",
@@ -166,7 +191,13 @@ public final class TeacherEvidence {
             actualMove,
             actualLoss,
             candidates,
-            continuation));
+            continuation,
+            null,
+            "",
+            data.primaryAnalysisProvenance(),
+            data,
+            data.primaryAnalysisRevision()),
+        Exclusion.NONE);
   }
 
   private static Candidate candidate(int rank, MoveData move, boolean blackToPlay) {
@@ -229,20 +260,6 @@ public final class TeacherEvidence {
         && after.blackToPlay != before.blackToPlay
         && !child.hasRemovedStone()
         && (child.extraStones == null || child.extraStones.isEmpty());
-  }
-
-  private static List<MoveData> stableCopy(List<MoveData> source) {
-    if (source == null || source.isEmpty()) {
-      return Collections.emptyList();
-    }
-    for (int attempt = 0; attempt < 3; attempt++) {
-      try {
-        return new ArrayList<>(source);
-      } catch (RuntimeException concurrentUpdate) {
-        Thread.yield();
-      }
-    }
-    return Collections.emptyList();
   }
 
   private static List<Position> selectKeyPositions(List<Position> positions, int limit) {
@@ -422,6 +439,9 @@ public final class TeacherEvidence {
     public final List<Candidate> candidates;
     final TeacherBoardContext board;
     final String knowledge;
+    final AnalysisProvenance provenance;
+    private final BoardData analysisSource;
+    private final long analysisRevision;
 
     /** 实战手之后的棋谱实际续走序列（最多 5 手），无则空列表。 */
     public final List<String> playedContinuation;
@@ -453,7 +473,10 @@ public final class TeacherEvidence {
           candidates,
           playedContinuation,
           null,
-          "");
+          "",
+          null,
+          null,
+          0);
     }
 
     private Position(
@@ -465,7 +488,10 @@ public final class TeacherEvidence {
         Collection<Candidate> candidates,
         Collection<String> playedContinuation,
         TeacherBoardContext board,
-        String knowledge) {
+        String knowledge,
+        AnalysisProvenance provenance,
+        BoardData analysisSource,
+        long analysisRevision) {
       this.moveNumber = Math.max(0, moveNumber);
       this.toPlay = "W".equals(toPlay) ? "W" : "B";
       this.playouts = Math.max(0, playouts);
@@ -480,6 +506,9 @@ public final class TeacherEvidence {
               new ArrayList<>(playedContinuation == null ? List.of() : playedContinuation));
       this.board = board;
       this.knowledge = knowledge;
+      this.provenance = provenance;
+      this.analysisSource = analysisSource;
+      this.analysisRevision = analysisRevision;
     }
 
     private Position withContext(TeacherBoardContext board, String knowledge) {
@@ -492,7 +521,20 @@ public final class TeacherEvidence {
           candidates,
           playedContinuation,
           board,
-          knowledge);
+          knowledge,
+          provenance,
+          analysisSource,
+          analysisRevision);
+    }
+
+    boolean analysisIsCurrent() {
+      if (analysisSource == null) return true;
+      synchronized (analysisSource) {
+        // Normal updates may replace the live payload without invalidating this frozen evidence.
+        // A later ordinary result must not revive evidence invalidated by a rules/komi/turn edit.
+        return !analysisSource.isChanged
+            && analysisSource.primaryAnalysisRevision() == analysisRevision;
+      }
     }
 
     OptionalDouble actualScoreLoss() {
@@ -537,11 +579,21 @@ public final class TeacherEvidence {
     public final List<Position> positions;
     public final int analyzedPositions;
     public final int omittedPositions;
+    public final int restrictedPositions;
+    public final int invalidatedPositions;
 
     Range(List<Position> positions, int analyzedPositions, int omittedPositions) {
+      this(positions, analyzedPositions, omittedPositions, 0, 0);
+    }
+
+    Range(
+        List<Position> positions, int analyzedPositions, int omittedPositions,
+        int restrictedPositions, int invalidatedPositions) {
       this.positions = Collections.unmodifiableList(new ArrayList<>(positions));
       this.analyzedPositions = Math.max(0, analyzedPositions);
       this.omittedPositions = Math.max(0, omittedPositions);
+      this.restrictedPositions = Math.max(0, restrictedPositions);
+      this.invalidatedPositions = Math.max(0, invalidatedPositions);
     }
 
     public boolean isEmpty() {

@@ -169,6 +169,9 @@ public final class TeacherDialog extends JDialog {
         || (activeRequest != null && !activeRequest.context.owner.targetIsCurrent(root))
         || (lastCommentary != null && !lastCommentary.owner.targetIsCurrent(root))) {
       discardChangedContext();
+    } else if ((activeRequest != null && !activeRequest.context.analysisIsCurrent())
+        || (lastCommentary != null && !lastCommentary.analysisIsCurrent())) {
+      discardInvalidAnalysis();
     } else if (!requestRunning && lastCommentary == null) {
       BoardHistoryNode current = currentNodeProvider.get();
       view.setCurrentMove(current == null ? 0 : current.getData().moveNumber);
@@ -188,6 +191,20 @@ public final class TeacherDialog extends JDialog {
         TeacherStrings.get(
             "Teacher.status.gameChanged",
             "The game or commentary position changed. Generate a new commentary."),
+        TeacherDialogView.StatusTone.WARNING);
+  }
+
+  private void discardInvalidAnalysis() {
+    uiGeneration++;
+    activeRequest = null;
+    requests.cancel();
+    lastCommentary = null;
+    setRunning(false);
+    clearOutputForEmptyState();
+    setStatus(
+        TeacherStrings.get(
+            "Teacher.status.analysisChanged",
+            "The analysis used for this commentary was invalidated. Analyze again and generate new commentary."),
         TeacherDialogView.StatusTone.WARNING);
   }
 
@@ -348,7 +365,8 @@ public final class TeacherDialog extends JDialog {
       setStatus(
           TeacherStrings.get(
               "Teacher.status.rangeNeedsAnalysis",
-              "No analyzed positions were found in this range."),
+              "No eligible general analysis was found in this range.")
+              + excludedAnalysisStatus(evidence),
           TeacherDialogView.StatusTone.WARNING);
       return;
     }
@@ -374,8 +392,18 @@ public final class TeacherDialog extends JDialog {
             "{0} key positions selected ({1} analyzed, {2} omitted). Generating commentary...",
             selected.positions.size(),
             selected.analyzedPositions,
-            selected.omittedPositions),
+            selected.omittedPositions)
+            + excludedAnalysisStatus(selected),
         "");
+  }
+
+  private String excludedAnalysisStatus(TeacherEvidence.Range evidence) {
+    if (evidence.restrictedPositions == 0 && evidence.invalidatedPositions == 0) return "";
+    return " " + TeacherStrings.format(
+        "Teacher.status.excludedAnalysis",
+        "Excluded {0} restricted and {1} invalidated analysis positions.",
+        evidence.restrictedPositions,
+        evidence.invalidatedPositions);
   }
 
   private void askFollowUp() {
@@ -385,6 +413,10 @@ public final class TeacherDialog extends JDialog {
     if (displayedGame != rootNodeProvider.get()
         || (lastCommentary != null && !lastCommentary.owner.isCurrent(rootNodeProvider.get()))) {
       discardChangedContext();
+      return;
+    }
+    if (lastCommentary != null && !lastCommentary.analysisIsCurrent()) {
+      discardInvalidAnalysis();
       return;
     }
     String question = followUp.getText().trim();
@@ -431,7 +463,7 @@ public final class TeacherDialog extends JDialog {
     setStatus(
         TeacherStrings.get(
             "Teacher.status.needsAnalysis",
-            "This position has no KataGo candidates yet. Analyze it first."),
+            "This position needs valid general KataGo analysis. Analyze it without move restrictions."),
         TeacherDialogView.StatusTone.WARNING);
   }
 
@@ -447,6 +479,10 @@ public final class TeacherDialog extends JDialog {
     if (requestRunning || !context.owner.isCurrent(rootNodeProvider.get())) {
       return false;
     }
+    if (!context.analysisIsCurrent()) {
+      discardInvalidAnalysis();
+      return false;
+    }
     long preparationGeneration = uiGeneration;
     CommentaryClient client = configuredClient();
     if (client == null) {
@@ -456,6 +492,10 @@ public final class TeacherDialog extends JDialog {
     if (preparationGeneration != uiGeneration
         || !context.owner.isCurrent(rootNodeProvider.get())) {
       discardChangedContext();
+      return false;
+    }
+    if (!context.analysisIsCurrent()) {
+      discardInvalidAnalysis();
       return false;
     }
     Request request =
@@ -511,6 +551,10 @@ public final class TeacherDialog extends JDialog {
     }
     if (!request.context.owner.isCurrent(rootNodeProvider.get())) {
       discardChangedContext();
+      return false;
+    }
+    if (!request.context.analysisIsCurrent()) {
+      discardInvalidAnalysis();
       return false;
     }
     return true;
@@ -672,7 +716,7 @@ public final class TeacherDialog extends JDialog {
     if (position.isEmpty()) {
       return TeacherStrings.get(
           "Teacher.status.needsAnalysis",
-          "This position has no KataGo candidates yet. Analyze it first.");
+          "This position needs valid general KataGo analysis. Analyze it without move restrictions.");
     }
     return TeacherStrings.format(
         "Teacher.status.ready",
@@ -689,6 +733,10 @@ public final class TeacherDialog extends JDialog {
     private CommentaryContext {
       messages = List.copyOf(messages);
       positions = List.copyOf(positions);
+    }
+
+    boolean analysisIsCurrent() {
+      return positions.stream().allMatch(TeacherEvidence.Position::analysisIsCurrent);
     }
   }
 

@@ -152,7 +152,7 @@ powershell -ExecutionPolicy Bypass -File scripts/run_local_ci.ps1 -Profile All -
 | `scripts` | Python 辅助脚本、KataGo shell、Bash 语法、Linux 主机上的产品 runner fixture | JCEF、NVIDIA、RTX50 PowerShell 语法、原生 CI 进程监督检查 | Portable 需 Bash；Linux x86_64 另需 `unshare`、`ip`、`nft` 和可用的非特权 user/network namespace；Windows 需 PowerShell 7 |
 | `java` | 原完整 Maven verify | 完整 Maven verify（包括凭据测试） | Maven、JDK 21；不查找 Bash/PowerShell |
 | `desktop` | 生产窗口导航 / 搜索输入 / 解说与 SGF 保存测试 | 相同显式测试选择；不代表 Windows 原生 UI 验收 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
-| `desktop-races` | 48 个 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
+| `desktop-races` | 显式声明的 worker/EDT、保存、请求归属和窗口生命周期用例 | 相同显式测试选择 | 同 `desktop` |
 | `engine-process` | `ENGINE_PROCESS_REQUIRED_TESTS` 中的 23 个方法 | 相同 23 个方法的原生 Windows 执行 | Maven、JDK 21、可用显示环境；Linux 使用 Xvfb |
 
 显示测试的类选择和强制成功用例在 `scripts/run_local_ci.py` 中按类统一声明；
@@ -273,6 +273,13 @@ HumanSL40 用例在独立子 JVM 中打开实际应用。受控 policy worker �
 解说用例运行真实 `TeacherDialog` 和 API-key 客户端，以本地 HTTP/SSE 服务代替收费模型。
 它们验证冻结证据、一次有界修正、光标导航后的原节点保存、后续问题的原始上下文，以及
 取消、换谱、节点或实战续走编辑、模态设置和 EDT 排队回调的失效处理。
+一般解说不使用已知的限制分析或已失效的评价。候选、访问数、来源条件与失效代次在
+`BoardData` 的分析发布锁内一起捕获；只有所有权图受限时，未使用该图的解说仍可使用普通评价。
+旧 SGF 没有条件记录时保持兼容，并在提示中说明条件未知，不将其重新标记为已知无限制分析。
+区间和全局解说分别统计受限、失效的排除数，不将它们计入可用分析或低优先级省略数。
+普通分析更新仍保留讨论的冻结证据；明确失效后，即使新分析清除了失效标记，旧讨论也不能恢复。
+实际发送、自动修正、后续问题和完成保存均检查证据的失效代次；已发送的网络请求无法撤回。
+HTTP 用例检查这些入口的请求内容与拒绝行为，SGF 往返用例确认保留的受限评价仍可保存和读取。
 成功与换谱拒绝状态的截图保存在 `target/desktop-smoke/probes/teacher/`。
 该验收验证显示与保存边界；坐标、百分比和数值措辞检查不能证明所有自然语言棋理都正确。
 

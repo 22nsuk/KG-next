@@ -9,6 +9,8 @@ import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisMoveRestrictions;
+import featurecat.lizzie.analysis.AnalysisProvenance;
 import featurecat.lizzie.analysis.MoveData;
 import featurecat.lizzie.analysis.remote.CredentialStore;
 import featurecat.lizzie.rules.Board;
@@ -51,6 +53,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 /** Actual dialog, request controller, HTTP client, verifier and SGF writes share these scenarios. */
@@ -195,6 +198,166 @@ class TeacherDialogRequestOwnershipTest {
         "D4 remains in the supplied candidates.",
         TeacherCommentCodec.extract(savedNode.getData().comment).orElseThrow());
     assertTrue(TeacherCommentCodec.extract(next.getData().comment).isEmpty());
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "next, restricted", "next, invalidated",
+      "range, restricted", "range, invalidated",
+      "whole, restricted", "whole, invalidated",
+      "saved-follow-up, restricted", "saved-follow-up, invalidated"
+  })
+  void ineligibleInitialEvidenceNeverReachesTheProvider(String mode, String state) throws Exception {
+    BoardData data = root.get().getData();
+    data.setPlayouts(1000);
+    if (state.equals("restricted")) data.setPrimaryAnalysisProvenance(restrictedProvenance());
+    else data.invalidatePrimaryAnalysis();
+    append(root.get(), "Q16");
+    if (mode.equals("saved-follow-up")) {
+      data.comment = TeacherCommentCodec.upsert(data.comment, "Saved D4 answer.", "old");
+    }
+    String originalComment = data.comment;
+    respondWith("Must never be requested.");
+    openDialog();
+    onEdt(() -> {
+      switch (mode) {
+        case "next" -> view.explainNext().doClick();
+        case "range" -> view.explainRange().doClick();
+        case "whole" -> view.explainWhole().doClick();
+        case "saved-follow-up" -> {
+          view.followUp().setText("Why D4?");
+          view.ask().doClick();
+        }
+        default -> throw new AssertionError(mode);
+      }
+      assertFalse(view.stop().isEnabled());
+      assertTrue(view.status().getText().contains("general"), view.status().getText());
+      assertFalse(field(dialog, "requests", TeacherRequestController.class).isRunning());
+    });
+    assertEquals(0, sent.size());
+    assertEquals(originalComment, data.comment);
+    assertEquals(1000, data.getPlayouts());
+    if (mode.equals("next") && state.equals("restricted")) captureDialog("restricted-analysis.png");
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void mixedRangeAndWholeGameSendOnlyEligibleEvidenceIncludingFollowUp(boolean wholeGame)
+      throws Exception {
+    BoardHistoryNode restricted = append(root.get(), "Q16");
+    restricted.getData().bestMoves = List.of(candidate("A1"));
+    restricted.getData().bestMoves.get(0).winrate = 81.5;
+    restricted.getData().setPrimaryAnalysisProvenance(restrictedProvenance());
+    BoardHistoryNode invalidated = append(restricted, "Q4");
+    invalidated.getData().bestMoves = List.of(candidate("A2"));
+    invalidated.getData().bestMoves.get(0).winrate = 91.5;
+    invalidated.getData().setPlayouts(1000);
+    invalidated.getData().invalidatePrimaryAnalysis();
+    BoardHistoryNode ownershipOnly = append(invalidated, "C3");
+    ownershipOnly.getData().bestMoves = List.of(candidate("D16"));
+    ownershipOnly.getData().setPrimaryOwnershipProvenance(restrictedProvenance());
+    append(ownershipOnly, "C4");
+    CountDownLatch release = blockedResponse("Only the supplied positions have analysis.");
+    openDialog();
+    onEdt(() -> {
+      if (wholeGame) view.explainWhole().doClick();
+      else view.explainRange().doClick();
+      assertTrue(view.status().getText().contains("Excluded 1 restricted and 1 invalidated"));
+    });
+    await(() -> sent.size() == 1);
+    String evidence = sent.get(0).getJSONArray("messages").getJSONObject(1).getString("content");
+    assertTrue(evidence.contains("Analyzed positions: 2; selected key positions: 2"));
+    assertTrue(evidence.contains("excluded restricted analysis: 1; excluded invalidated analysis: 1"));
+    assertTrue(evidence.contains("move=D4"));
+    assertTrue(evidence.contains("move=D16"));
+    assertFalse(evidence.contains("move=A1"));
+    assertFalse(evidence.contains("move=A2"));
+    assertFalse(evidence.contains("winrate=81.5"));
+    assertFalse(evidence.contains("winrate=91.5"));
+    release.countDown();
+    awaitIdle();
+    onEdt(() -> {
+      view.followUp().setText("Which positions were excluded?");
+      view.ask().doClick();
+    });
+    awaitIdle();
+    assertEquals(2, sent.size());
+    assertEquals(evidence, sent.get(1).getJSONArray("messages").getJSONObject(1).getString("content"));
+    onEdt(() -> {
+      ownershipOnly.getData().invalidatePrimaryAnalysis();
+      view.followUp().setText("Explain again.");
+      view.ask().doClick();
+      assertFalse(view.stop().isEnabled());
+      assertTrue(view.status().getText().contains("invalidated"));
+    });
+    assertEquals(2, sent.size(), "an invalidated non-target evidence node must also block follow-up");
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void invalidatedDiscussionCannotBeResentEvenAfterOrdinaryReplacement(boolean replaceAnalysis)
+      throws Exception {
+    respondWith("Consider D4.", "Fresh Q4 evidence.");
+    openDialog();
+    onEdt(() -> view.explainNext().doClick());
+    awaitIdle();
+    String originalComment = root.get().getData().comment;
+    onEdt(() -> {
+      BoardData data = root.get().getData();
+      data.invalidatePrimaryAnalysis();
+      if (replaceAnalysis) {
+        data.bestMoves = List.of(candidate("Q4"));
+        data.setPrimaryAnalysisProvenance(null);
+        data.isChanged = false;
+      }
+      view.followUp().setText("Why D4?");
+      view.ask().doClick();
+      assertFalse(view.stop().isEnabled());
+      assertTrue(view.status().getText().contains("invalidated"));
+    });
+    assertEquals(1, sent.size());
+    assertEquals(originalComment, root.get().getData().comment);
+    if (replaceAnalysis) {
+      onEdt(() -> view.explainNext().doClick());
+      awaitIdle();
+      assertEquals(2, sent.size());
+      String evidence = sent.get(1).getJSONArray("messages").getJSONObject(1).getString("content");
+      assertTrue(evidence.contains("move=Q4"));
+      assertFalse(evidence.contains("move=D4"));
+    }
+  }
+
+  @Test
+  void frozenOrdinaryEvidenceSurvivesARestrictedLiveReplacement() throws Exception {
+    respondWith("Consider D4.", "D4 is supported by the original analysis.");
+    openDialog();
+    onEdt(() -> view.explainNext().doClick());
+    awaitIdle();
+    onEdt(() -> {
+      root.get().getData().bestMoves = List.of(candidate("A1"));
+      root.get().getData().setPrimaryAnalysisProvenance(restrictedProvenance());
+      view.followUp().setText("Why this candidate?");
+      view.ask().doClick();
+    });
+    awaitIdle();
+    assertEquals(2, sent.size());
+    assertEquals(sent.get(0).getJSONArray("messages").getJSONObject(1).getString("content"),
+        sent.get(1).getJSONArray("messages").getJSONObject(1).getString("content"));
+    assertFalse(sent.get(1).toString().contains("move=A1"));
+  }
+
+  @Test
+  void analysisInvalidationRejectsAnAnswerAlreadyQueuedOnEdt() throws Exception {
+    respondWith("Obsolete D4 answer.");
+    openDialog();
+    onEdt(() -> {
+      view.explainNext().doClick();
+      awaitWorkerWithEdtBlocked();
+      root.get().getData().invalidatePrimaryAnalysis();
+    });
+    awaitIdle();
+    assertEquals("user note", root.get().getData().comment);
+    onEdt(() -> assertFalse(view.output().getText().contains("Obsolete D4 answer.")));
   }
 
   @Test
@@ -454,8 +617,10 @@ class TeacherDialogRequestOwnershipTest {
         TeacherCommentCodec.extract(root.get().getData().comment).orElseThrow());
   }
 
-  @Test
-  void settingsDialogGameChangeRejectsPreparedRequestBeforeNetwork() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void settingsDialogContextChangeRejectsPreparedRequestBeforeNetwork(boolean invalidateAnalysis)
+      throws Exception {
     settings.save(settings.snapshot().baseUrl, "test-model", new char[0], false);
     respondWith("Must never be requested.");
     openDialog();
@@ -471,7 +636,8 @@ class TeacherDialogRequestOwnershipTest {
             if (window instanceof TeacherSettingsDialog
                 && window.isShowing()
                 && field(window, "saveButton", JButton.class).isEnabled()) {
-              switchGame();
+              if (invalidateAnalysis) root.get().getData().invalidatePrimaryAnalysis();
+              else switchGame();
               field(window, "apiKeyField", JPasswordField.class).setText("test-key");
               field(window, "saveButton", JButton.class).doClick();
               return true;
@@ -481,8 +647,8 @@ class TeacherDialogRequestOwnershipTest {
         });
     assertTrue(prepared.await(5, TimeUnit.SECONDS));
     awaitIdle();
-    assertEquals(0, sent.size(), "old-game evidence must not be sent after completing settings");
-    assertEquals("", root.get().getData().comment);
+    assertEquals(0, sent.size(), "obsolete evidence must not be sent after completing settings");
+    assertEquals(invalidateAnalysis ? "user note" : "", root.get().getData().comment);
   }
 
   private void openDialog() throws Exception {
@@ -638,6 +804,11 @@ class TeacherDialogRequestOwnershipTest {
     move.playouts = 1000;
     move.variation = List.of(coordinate);
     return move;
+  }
+
+  private static AnalysisProvenance restrictedProvenance() {
+    return new AnalysisProvenance("KataGo", "", "", "", "", "", null, null, null, "",
+        AnalysisMoveRestrictions.fromCommand("kata-analyze 10 allow b A1 2"));
   }
 
   private static <T> T field(Object target, String name, Class<T> type) {

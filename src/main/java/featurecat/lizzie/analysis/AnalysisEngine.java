@@ -1499,7 +1499,7 @@ public class AnalysisEngine {
       Lizzie.config.enableLizzieCache = false;
     }
     try {
-      Lizzie.board.setMovelistAll();
+      Lizzie.frame.refreshCompletedAnalysisProgress();
       if (!preserveBoardPositionOnCompletion
           && Lizzie.board.getHistory().getCurrentHistoryNode()
               == Lizzie.board.getHistory().getStart()) Lizzie.board.nextMove(true);
