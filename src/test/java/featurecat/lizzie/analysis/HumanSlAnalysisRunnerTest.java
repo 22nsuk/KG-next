@@ -139,11 +139,11 @@ class HumanSlAnalysisRunnerTest {
           assertTrue(process.waitForEntered.await(1, TimeUnit.SECONDS));
           assertFalse(closed.isDone(), "close must not return while the child is still alive");
 
-          process.allowExit.countDown();
+          process.finishExit();
           closed.get(1, TimeUnit.SECONDS);
           assertFalse(process.isAlive());
         } finally {
-          process.allowExit.countDown();
+          process.finishExit();
           shutdownWorker(worker);
         }
       }
@@ -171,12 +171,12 @@ class HumanSlAnalysisRunnerTest {
           assertFalse(restarted.isDone(), "replacement must wait for the old OS process");
           assertEquals(1, launches.get(), "a second process must not overlap the terminating one");
 
-          first.allowExit.countDown();
+          first.finishExit();
           assertTrue(restarted.get(1, TimeUnit.SECONDS));
           assertFalse(first.isAlive());
           assertEquals(2, launches.get());
         } finally {
-          first.allowExit.countDown();
+          first.finishExit();
           shutdownWorker(worker);
         }
       }
@@ -865,16 +865,32 @@ class HumanSlAnalysisRunnerTest {
   @Test
   void request_generalErrorFailsPendingRequestAndStopsProcess() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
-      FakeProcess process =
-          new FakeProcess(request -> new JSONObject().put("error", "Engine failure"));
+      DelayedExitProcess process =
+          new DelayedExitProcess(request -> new JSONObject().put("error", "Engine failure"));
       try (HumanSlAnalysisRunner runner =
           new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
-        IOException failure =
-            assertThrows(
-                IOException.class,
-                () -> runner.request(new JSONObject().put("id", "current"), Duration.ofSeconds(1)));
-        assertTrue(failure.getMessage().contains("Engine failure"));
-        assertFalse(runner.isStarted());
+        ExecutorService worker = Executors.newSingleThreadExecutor();
+        try {
+          IOException failure =
+              assertThrows(
+                  IOException.class,
+                  () -> runner.request(new JSONObject().put("id", "current"), Duration.ofSeconds(1)));
+          assertTrue(failure.getMessage().contains("Engine failure"));
+          assertFalse(runner.isStarted());
+          assertTrue(process.destroyRequested.await(1, TimeUnit.SECONDS));
+
+          Future<?> closed = worker.submit(runner::close);
+          assertTrue(process.waitForEntered.await(1, TimeUnit.SECONDS));
+          assertFalse(closed.isDone(), "close must wait for the detached child to exit");
+          assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+
+          process.finishExit();
+          closed.get(1, TimeUnit.SECONDS);
+          assertFalse(process.isAlive());
+        } finally {
+          process.finishExit();
+          shutdownWorker(worker);
+        }
       }
     }
   }
@@ -1346,7 +1362,7 @@ class HumanSlAnalysisRunnerTest {
     private final OutputStream stdin;
     private final List<JSONObject> sentRequests =
         java.util.Collections.synchronizedList(new ArrayList<JSONObject>());
-    private volatile boolean alive = true;
+    private final CountDownLatch exited = new CountDownLatch(1);
 
     private FakeProcess(ResponseFactory... responseFactories) throws IOException {
       this.stdout = new PipedInputStream();
@@ -1400,18 +1416,26 @@ class HumanSlAnalysisRunnerTest {
 
     @Override
     public int waitFor() throws InterruptedException {
-      alive = false;
+      exited.await();
       return 0;
     }
 
     @Override
+    public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+      return exited.await(timeout, unit);
+    }
+
+    @Override
     public int exitValue() {
-      return alive ? 0 : 0;
+      if (isAlive()) {
+        throw new IllegalThreadStateException("process is still running");
+      }
+      return 0;
     }
 
     @Override
     public void destroy() {
-      alive = false;
+      exited.countDown();
     }
 
     @Override
@@ -1422,18 +1446,20 @@ class HumanSlAnalysisRunnerTest {
 
     @Override
     public boolean isAlive() {
-      return alive;
+      return exited.getCount() != 0;
     }
   }
 
   private static final class DelayedExitProcess extends FakeProcess {
     private final CountDownLatch destroyRequested = new CountDownLatch(1);
     private final CountDownLatch waitForEntered = new CountDownLatch(1);
-    private final CountDownLatch allowExit = new CountDownLatch(1);
-    private volatile boolean exited;
 
     private DelayedExitProcess(ResponseFactory responseFactory) throws IOException {
       super(responseFactory);
+    }
+
+    private void finishExit() {
+      super.destroy();
     }
 
     @Override
@@ -1443,34 +1469,9 @@ class HumanSlAnalysisRunnerTest {
     }
 
     @Override
-    public int waitFor() throws InterruptedException {
-      waitForEntered.countDown();
-      allowExit.await();
-      exited = true;
-      return 0;
-    }
-
-    @Override
     public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
       waitForEntered.countDown();
-      if (!allowExit.await(timeout, unit)) {
-        return false;
-      }
-      exited = true;
-      return true;
-    }
-
-    @Override
-    public int exitValue() {
-      if (!exited) {
-        throw new IllegalThreadStateException("process is still running");
-      }
-      return 0;
-    }
-
-    @Override
-    public boolean isAlive() {
-      return !exited;
+      return super.waitFor(timeout, unit);
     }
   }
 

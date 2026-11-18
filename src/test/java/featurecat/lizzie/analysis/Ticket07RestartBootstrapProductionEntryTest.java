@@ -112,13 +112,13 @@ class Ticket07RestartBootstrapProductionEntryTest {
         manager.reStartEngine(0);
 
         assertTrue(engine.startCompleted.await(5, TimeUnit.SECONDS));
-        assertTrue(engine.startupNameQueued.await(5, TimeUnit.SECONDS));
         Process newProcess = (Process) getField(engine, "process");
         Object newBinding = getField(engine, "readerStreamBinding");
         long newPid = newProcess == null ? -1L : newProcess.pid();
         assertNotNull(newProcess, "public restart must publish a new process");
         assertTrue(newProcess.isAlive(), "new process must remain alive while startup is gated");
         assertNotSame(oldBinding, newBinding, "restart must publish a new reader binding");
+        assertTrue((boolean) getField(engine, "exclusiveGtpLifecycleQueueGate"));
         assertFalse(
             engine.sendRawConsoleCommand("showboard"),
             "non-receipt commands must not enter the new restart binding");
@@ -130,7 +130,7 @@ class Ticket07RestartBootstrapProductionEntryTest {
         boolean lifecycleGate = (boolean) getField(engine, "exclusiveGtpLifecycleQueueGate");
         assertTrue(
             markerCreated,
-            "startup name was queued but did not reach the new writer; newPid="
+            "restarted process did not receive its bootstrap name command; newPid="
                 + newPid
                 + ", lifecycleGate="
                 + lifecycleGate
@@ -142,6 +142,7 @@ class Ticket07RestartBootstrapProductionEntryTest {
                 + commandCounter
                 + ", output="
                 + readIfExists(commandLog));
+        manager.allowReadinessTimeout.countDown();
         assertTrue(
             manager.synchronizationFailed.await(2, TimeUnit.SECONDS),
             "readiness failure must settle the restart lifecycle");
@@ -151,6 +152,8 @@ class Ticket07RestartBootstrapProductionEntryTest {
         assertTrue(
             engine.hasUnrestoredReadBoardGmaState(), "failed restart must remain fail-closed");
         assertTrue(queueSize(engine) == 0, "failed receipt commands must be retired");
+      } finally {
+        manager.allowReadinessTimeout.countDown();
       }
     } finally {
       stopEngineForTest(engine);
@@ -296,7 +299,6 @@ class Ticket07RestartBootstrapProductionEntryTest {
 
   private static final class PhaseARestartLeelaz extends Leelaz {
     private final CountDownLatch startCompleted = new CountDownLatch(1);
-    private final CountDownLatch startupNameQueued = new CountDownLatch(1);
 
     private PhaseARestartLeelaz(String command) throws Exception {
       super(command);
@@ -310,18 +312,17 @@ class Ticket07RestartBootstrapProductionEntryTest {
     }
 
     @Override
+    long engineStartupSynchronizationTimeoutMillis() {
+      // The reader and readiness waiter share this binding's startup budget.
+      return 100L;
+    }
+
+    @Override
     public void startEngine(int index) throws IOException {
       super.startEngine(index);
       startCompleted.countDown();
     }
 
-    @Override
-    public void sendCommand(String command) {
-      if (isCheckingName && "name".equals(command)) {
-        startupNameQueued.countDown();
-      }
-      super.sendCommand(command);
-    }
   }
 
   public static final class FakeGtpProcess {
@@ -351,9 +352,17 @@ class Ticket07RestartBootstrapProductionEntryTest {
       super(engines);
     }
 
+    private final CountDownLatch allowReadinessTimeout = new CountDownLatch(1);
+
     @Override
-    protected long engineSynchronizationTimeoutMillis(Leelaz engine) {
-      return 100L;
+    void afterPkEngineReadinessProbeForTest(
+        EngineGameOwnerTransaction transaction, Leelaz engine, Object expectedIncarnation) {
+      try {
+        assertTrue(allowReadinessTimeout.await(10, TimeUnit.SECONDS), "bootstrap was not observed");
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(interrupted);
+      }
     }
 
     @Override

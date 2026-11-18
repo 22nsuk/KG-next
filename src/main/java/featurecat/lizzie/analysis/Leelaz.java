@@ -9429,8 +9429,11 @@ public class Leelaz {
       if (line.toLowerCase().contains("cl_platform_not_found"))
         Utils.showMsgNoModal(Lizzie.resourceBundle.getString("Leelaz.openclPlatfromNotFound"));
     }
-    if (Lizzie.gtpConsole.isVisible() || Lizzie.config.alwaysGtp || !this.isLoaded)
-      if (!line.startsWith("info")) Lizzie.gtpConsole.addErrorLine(line + "\n");
+    var console = Lizzie.gtpConsole;
+    if (console != null && (console.isVisible() || Lizzie.config.alwaysGtp || !isLoaded)
+        && !line.startsWith("info")) {
+      console.addErrorLine(line + "\n");
+    }
     EngineManager.EngineGameMoveResponseContext engineGameResponse =
         isZen ? pendingEngineGameMoveResponseContext(line, binding) : null;
     AnalysisOutputRoute analysisOutputRouteAtParse = analysisOutputRoute(binding, line);
