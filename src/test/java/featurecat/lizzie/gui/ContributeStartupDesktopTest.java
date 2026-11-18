@@ -51,13 +51,15 @@ public class ContributeStartupDesktopTest {
   }
 
   @Test
-  void suppressedLocalStartsAndRetriesFinishOwnedSession() {
-    assertAll(
-        () -> probe("suppressed-start-before-preparation"),
-        () -> probe("suppressed-start-before-spawn"),
-        () -> probe("suppressed-retry-before-preparation"),
-        () -> probe("suppressed-retry-before-spawn"),
-        () -> probe("suppressed-replaced"));
+  void suppressedLocalStartsAndRetriesFinishOwnedSession() throws Exception {
+    for (String scenario : List.of(
+        "suppressed-start-before-preparation",
+        "suppressed-start-before-spawn",
+        "suppressed-retry-before-preparation",
+        "suppressed-retry-before-spawn",
+        "suppressed-replaced")) {
+      probe(scenario);
+    }
   }
 
   @Test
