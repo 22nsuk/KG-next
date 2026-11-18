@@ -26,7 +26,10 @@ public final class AnalysisResourceCoordinator {
     PRELOADED_QUICK_ANALYSIS,
     USER_QUICK_ANALYSIS,
     WHOLE_GAME_ANALYSIS,
-    OTHER
+    OTHER,
+    COMPARE,
+    PRELOAD,
+    ENGINE_GAME
   }
 
   public enum ForegroundDecision {
@@ -317,11 +320,9 @@ public final class AnalysisResourceCoordinator {
     if (!EngineObservation.engineDiagnosticsEnabled() || command == null) {
       return;
     }
-    Matcher matcher = SET_PARAM.matcher(command);
-    if (!matcher.matches() && !command.trim().toLowerCase(Locale.ROOT).startsWith("kata-analyze")) {
-      return;
-    }
+    GtpCommandText parsed = GtpCommandText.parse(command);
     String purposeName = normalizedPurpose(purpose).name();
+    Matcher matcher = SET_PARAM.matcher(parsed.payload());
     if (matcher.matches()) {
       EngineObservation.recordProcessDetails(
           engineId,
@@ -329,9 +330,9 @@ public final class AnalysisResourceCoordinator {
           purposeName,
           -1L,
           matcher.group(1) + "=" + redactCommand(matcher.group(2)));
-    } else {
+    } else if (parsed.verb().equals("kata-analyze")) {
       EngineObservation.recordProcessDetails(
-          engineId, "analysis-started", purposeName, -1L, EngineObservation.commandName(command));
+          engineId, "analysis-started", purposeName, -1L, "kata-analyze");
     }
   }
 

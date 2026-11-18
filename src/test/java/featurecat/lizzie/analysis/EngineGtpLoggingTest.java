@@ -61,7 +61,7 @@ class EngineGtpLoggingTest {
   void tearDown() {
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
     Lizzie.config = previousConfig;
-    Lizzie.leelaz = previousLeelaz;
+    Lizzie.setPrimaryEngine(previousLeelaz);
     Lizzie.gtpConsole = previousConsole;
     Lizzie.board = previousBoard;
     Lizzie.frame = previousFrame;
@@ -407,6 +407,7 @@ class EngineGtpLoggingTest {
     Leelaz engine = prepareEngine();
     Lizzie.board = new Board();
     String first = EngineObservation.ensureStarted(engine, "MAIN_BOARD");
+    Leelaz replacement = new Leelaz("");
     ExactSnapshotRestoreProtocolFixture.install(
         engine,
         written -> {
@@ -414,6 +415,7 @@ class EngineGtpLoggingTest {
           awaitLogs(runtime);
           assertEquals(0L, eventCount(readApp(), event), readApp());
           EngineObservation.restartInstance(engine, "MAIN_BOARD");
+          Lizzie.setPrimaryEngine(replacement);
           return null;
         });
 
@@ -452,8 +454,14 @@ class EngineGtpLoggingTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void auxiliaryCommandDiagnosticsFollowTheTransportResult(boolean failFlush) throws Exception {
+  @CsvSource({
+    "123 kata-analyze B 10, analysis-started, kata-analyze, false",
+    "123 kata-analyze B 10, analysis-started, kata-analyze, true",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, false",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, true"
+  })
+  void auxiliaryCommandDiagnosticsFollowTheTransportResult(
+      String command, String event, String detail, boolean failFlush) throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
     AnalysisEngine engine = allocate(AnalysisEngine.class);
     setField(AnalysisEngine.class, engine, "purpose",
@@ -465,7 +473,7 @@ class EngineGtpLoggingTest {
           public void flush() throws IOException {
             try {
               awaitLogs(runtime);
-              assertEquals(0L, eventCount(readApp(), "dynamic-parameter"), readApp());
+              assertEquals(0L, eventCount(readApp(), event), readApp());
               EngineObservation.restartInstance(engine, "AUTO_QUICK_ANALYSIS");
             } catch (Exception error) {
               throw new IOException(error);
@@ -475,20 +483,26 @@ class EngineGtpLoggingTest {
         };
     setField(AnalysisEngine.class, engine, "outputStream", new BufferedOutputStream(output));
 
-    assertEquals(!failFlush, engine.sendCommand("kata-set-param numSearchThreads 12"));
-    assertEquals("kata-set-param numSearchThreads 12\n", output.toString(StandardCharsets.UTF_8));
+    assertEquals(!failFlush, engine.sendCommand(command));
+    assertEquals(command + "\n", output.toString(StandardCharsets.UTF_8));
     awaitLogs(runtime);
     String app = readApp();
-    assertEquals(failFlush ? 0L : 1L, eventCount(app, "dynamic-parameter"), app);
+    assertEquals(failFlush ? 0L : 1L, eventCount(app, event), app);
     if (!failFlush) {
-      assertEquals(first, engineIdOnEventLine(app, "engine event=dynamic-parameter"), app);
-      assertTrue(app.contains("purpose=AUTO_QUICK_ANALYSIS pid=-1 command=numSearchThreads=12"), app);
+      assertEquals(first, engineIdOnEventLine(app, "engine event=" + event), app);
+      assertTrue(app.contains("purpose=AUTO_QUICK_ANALYSIS pid=-1 command=" + detail), app);
     }
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void sharedCommandDiagnosticsFollowAdmissionAndFlush(boolean failFlush) throws Exception {
+  @CsvSource({
+    "234 kata-analyze B 10, analysis-started, false",
+    "234 kata-analyze B 10, analysis-started, true",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, false",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, true"
+  })
+  void sharedCommandDiagnosticsFollowAdmissionAndFlush(
+      String command, String event, boolean failFlush) throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
     AnalysisEngine engine = allocate(AnalysisEngine.class);
     setField(AnalysisEngine.class, engine, "purpose",
@@ -503,16 +517,16 @@ class EngineGtpLoggingTest {
         new ByteArrayOutputStream() {
           @Override
           public void flush() throws IOException {
-            if (failFlush && toString(StandardCharsets.UTF_8).contains("kata-set-param")) {
+            if (failFlush && toString(StandardCharsets.UTF_8).endsWith(command + "\n")) {
               throw new IOException("controlled shared flush failure");
             }
           }
         };
     foreground.installCommandOutputForTest(output);
 
-    assertFalse(engine.sendCommand("kata-set-param numSearchThreads 12"));
+    assertFalse(engine.sendCommand(command));
     awaitLogs(runtime);
-    assertEquals(0L, eventCount(readApp(), "dynamic-parameter"), readApp());
+    assertEquals(0L, eventCount(readApp(), event), readApp());
     try {
       assertEquals(Leelaz.ExclusiveGtpLeaseAvailability.AVAILABLE,
           foreground.beginExclusiveGtpSession(line -> {}, () -> {}, () -> {}));
@@ -522,18 +536,21 @@ class EngineGtpLoggingTest {
       assertTrue((Boolean) dispatch.invoke(foreground, "=" + stop.substring(0, stop.indexOf(' '))));
       assertTrue((Boolean) dispatch.invoke(foreground, ""));
 
-      assertEquals(!failFlush, engine.sendCommand("kata-set-param numSearchThreads 12"));
-      assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("kata-set-param numSearchThreads 12\n"));
+      assertEquals(!failFlush, engine.sendCommand(command));
+      assertTrue(output.toString(StandardCharsets.UTF_8).endsWith(command + "\n"));
       awaitLogs(runtime);
-      assertEquals(failFlush ? 0L : 1L, eventCount(readApp(), "dynamic-parameter"), readApp());
+      assertEquals(failFlush ? 0L : 1L, eventCount(readApp(), event), readApp());
     } finally {
       foreground.endExclusiveGtpSession();
     }
   }
 
-  @Test
-  void remoteConnectionIsRecordedOnceBeforePondering() throws Exception {
+  @ParameterizedTest
+  @ValueSource(strings = {"MAIN_BOARD", "PRELOAD", "COMPARE"})
+  void remoteConnectionKeepsItsLaunchPurposeWhenSelectedForPondering(String purpose)
+      throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
+    Leelaz previousCompare = Lizzie.leelaz2;
     Menu previousMenu = LizzieFrame.menu;
     EngineManager previousManager = Lizzie.engineManager;
     RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
@@ -542,7 +559,9 @@ class EngineGtpLoggingTest {
       Lizzie.frame = frame;
       LizzieFrame.menu = allocate(QuietMenu.class);
       Lizzie.engineManager = null;
-      Lizzie.leelaz = engine;
+      engine.preload = purpose.equals("PRELOAD");
+      Lizzie.leelaz2 = purpose.equals("COMPARE") ? engine : null;
+      Lizzie.setPrimaryEngine(purpose.equals("MAIN_BOARD") ? engine : new Leelaz(""));
       Lizzie.board = new Board();
       engine.startEngine(-1);
       assertTrue(engine.bootstrapFinished.await(5, TimeUnit.SECONDS), "startup command worker");
@@ -550,6 +569,9 @@ class EngineGtpLoggingTest {
       assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
       assertSameEngineIdentity(readApp(), "event=bootstrap", "event=process-started");
 
+      String started = eventLine(readApp(), "engine event=process-started");
+      assertTrue(started.contains("purpose=" + purpose + " "), started);
+      Lizzie.setPrimaryEngine(engine);
       engine.isLoaded = true;
       engine.isKatago = true;
       setField(engine, "endGetCommandList", true);
@@ -561,6 +583,7 @@ class EngineGtpLoggingTest {
       try {
         closeRemoteReaders(engine);
       } finally {
+        Lizzie.leelaz2 = previousCompare;
         LizzieFrame.menu = previousMenu;
         Lizzie.engineManager = previousManager;
       }
@@ -572,7 +595,7 @@ class EngineGtpLoggingTest {
     LoggingRuntime runtime = startEngineDiagnostics();
     RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
     try {
-      Lizzie.leelaz = engine;
+      Lizzie.setPrimaryEngine(engine);
       assertThrows(IOException.class, () -> engine.startEngine(-1));
       awaitLogs(runtime);
       assertEquals(0L, eventCount(readApp(), "process-started"), readApp());
@@ -758,7 +781,7 @@ class EngineGtpLoggingTest {
     engine.commandLists.addAll(List.of("stop", "kata-analyze", "name", "version"));
     setField(engine, "endGetCommandList", true);
     engine.installCommandOutputForTest(new ByteArrayOutputStream());
-    Lizzie.leelaz = engine;
+    Lizzie.setPrimaryEngine(engine);
     return engine;
   }
 

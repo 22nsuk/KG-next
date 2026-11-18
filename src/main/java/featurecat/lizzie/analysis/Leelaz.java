@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.EngineStartupStatus;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.Purpose;
 import featurecat.lizzie.analysis.gtp.KataRawNnResponse;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.analysis.remote.EngineTransport;
@@ -1313,6 +1314,13 @@ public class Leelaz {
     }
   }
 
+  private Purpose launchPurpose(EngineManager.EngineGameOwnerTransaction engineGameTransaction) {
+    if (engineGameTransaction != null) return Purpose.ENGINE_GAME;
+    if (this == Lizzie.leelaz) return Purpose.MAIN_BOARD;
+    if (this == Lizzie.leelaz2) return Purpose.COMPARE;
+    return preload ? Purpose.PRELOAD : Purpose.MAIN_BOARD;
+  }
+
   private void startEngineOwned(int index) throws IOException {
     ReaderStreamBinding previousModelBinding = readerStreamBinding;
     if (previousModelBinding != null) {
@@ -1347,21 +1355,17 @@ public class Leelaz {
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
+    Purpose launchPurpose = launchPurpose(engineGameStartupTransaction);
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-      String launchPurpose =
-          engineGameStartupTransaction != null
-              ? "ENGINE_GAME"
-              : this == Lizzie.leelaz
-                  ? "MAIN_BOARD"
-                  : this == Lizzie.leelaz2 ? "COMPARE" : preload ? "PRELOAD" : "MAIN_BOARD";
+      String purposeName = launchPurpose.name();
       loggingEngineId =
           EngineObservation.restartInstance(
-              this, launchPurpose, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+              this, purposeName, EngineStartupBootstrap.factsFor(engineCommand, purposeName));
       startupDiagnosticAttempt =
           EngineStartupDiagnostics.getDefault()
               .begin(
                   loggingEngineId,
-                  launchPurpose,
+                  purposeName,
                   commands,
                   !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand));
     }
@@ -1544,7 +1548,7 @@ public class Leelaz {
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
         recordUpdateEngineStartProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process,
+            this, launchPurpose, engineCommand, process,
             startupDiagnosticAttempt != null);
       } catch (IOException e) {
         if (startupDiagnosticAttempt != null)
@@ -1595,7 +1599,7 @@ public class Leelaz {
     }
     if (process == null) {
       AnalysisResourceCoordinator.processStarted(
-          this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, null);
+          this, launchPurpose, engineCommand, null);
     }
     // Send a version request to check that we have a supported version
     // Response handled in parseLine
@@ -13641,6 +13645,7 @@ public class Leelaz {
     List<Runnable> rawRulesEffects = new ArrayList<>();
     boolean analysisOutputBindingLocked = false;
     boolean physicalWriteCompleted = false;
+    boolean primaryAtWrite = false;
     if (currentOutputStream != null) {
       if (queuedCommand.restartBootstrapReceipt != null) {
         beforeRestartBootstrapOutputWriteClaim();
@@ -13850,6 +13855,7 @@ public class Leelaz {
           // normalCommandSendInProgress keeps this exact reader/output owned until completion.
           recordAnalysisConditionWrite(pendingHandler, outputBinding);
           synchronized (currentOutputStream) {
+            primaryAtWrite = Lizzie.capturePrimaryEngineGenerationSnapshot(this) >= 0;
             currentOutputStream.write((commandLine + "\n").getBytes());
             currentOutputStream.flush();
             if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
@@ -13953,7 +13959,7 @@ public class Leelaz {
       if (physicalWriteCompleted) {
         try {
           noteCommandSent(pendingHandler, commandLine);
-          if (this == Lizzie.leelaz) {
+          if (primaryAtWrite) {
             AnalysisResourceCoordinator.commandSentForInstance(
                 pendingHandler.loggingEngineId,
                 AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
