@@ -3,13 +3,17 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.LoggingRuntime;
 import java.awt.Window;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.regex.Pattern;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
@@ -28,6 +32,11 @@ public class ContributeStartupDesktopTest {
   @Test
   void outputOrderingReadinessAndRetryBudget() throws Exception {
     probe("lifecycle");
+  }
+
+  @Test
+  void retiresFailedAndRunningLocalObservations() throws Exception {
+    probe("observation");
   }
 
   @Test
@@ -94,6 +103,28 @@ public class ContributeStartupDesktopTest {
                   : "Contribute.tips.buildRejected");
           assertFalse(launches(run).get(0).contains("-cacerts"));
         }
+      } else if (args[0].equals("observation")) {
+        startCommand(quote(work.resolve("missing-contribution-engine.exe").toString()), true);
+        var failed = Lizzie.frame.contributeEngine;
+        await(() -> failureWindow() != null && bound(failureWindow()) != null);
+        var diagnostic = bound(failureWindow()).snapshot();
+        assertNotNull(diagnostic);
+        assertEquals("process-create", diagnostic.toJson().getString("phase"));
+        assertNull(EngineObservation.identityFor(failed));
+
+        Path run = start(work, "paused-clean-out", true);
+        var running = Lizzie.frame.contributeEngine;
+        waitFile(run.resolve("ready"));
+        ProcessHandle child =
+            ProcessHandle.of(Long.parseLong(Files.readString(run.resolve("pid")))).orElseThrow();
+        assertNotNull(EngineObservation.identityFor(running));
+        SwingUtilities.invokeAndWait(
+            () -> {
+              Lizzie.frame.closeContributeEngine();
+              running.normalQuit();
+            });
+        child.onExit().get(10, TimeUnit.SECONDS);
+        assertNull(EngineObservation.identityFor(running));
       } else if (args[0].equals("lifecycle")) {
         for (String mode : List.of("stdout-first", "stderr-first")) {
           Path run = start(work, mode, true);
@@ -445,6 +476,7 @@ public class ContributeStartupDesktopTest {
             Lizzie.frame.closeContributeEngine();
             for (Window window : Window.getWindows()) window.dispose();
           });
+      if (args[0].equals("observation")) assertContributionObservations(work, 5, 1);
       Files.writeString(
           result, new JSONObject().put("result", "passed").put("suite", args[0]).toString());
       System.exit(0);
@@ -629,6 +661,11 @@ public class ContributeStartupDesktopTest {
 
   private static Path start(Path work, String mode, boolean pure) throws Exception {
     Path run = Files.createTempDirectory(work, mode + "-");
+    startCommand(command(run, mode), pure);
+    return run;
+  }
+
+  private static void startCommand(String command, boolean pure) throws Exception {
     SwingUtilities.invokeAndWait(
         () -> {
           Lizzie.frame.closeContributeEngine();
@@ -637,10 +674,51 @@ public class ContributeStartupDesktopTest {
           Lizzie.config.contributeUsePureCommand = pure;
           Lizzie.config.contributeUserName = "fixture-user";
           Lizzie.config.contributePassword = "fixture-password";
-          Lizzie.config.contributeCommand = command(run, mode);
+          Lizzie.config.contributeCommand = command;
           Lizzie.frame.startContributeEngine();
         });
-    return run;
+  }
+
+  static void assertContributionObservations(Path work, int attempts, int localAttempts)
+      throws Exception {
+    LoggingRuntime.current().orElseThrow().shutdown();
+    List<String> log = Files.readAllLines(work.resolve("logs/app.log"));
+    List<String> starts =
+        log.stream()
+            .filter(line -> line.contains("engine event=started purpose=CONTRIBUTE"))
+            .toList();
+    assertEquals(attempts, starts.size(), "Logical contribution starts");
+
+    var timelines = EngineObservation.class.getDeclaredField("STARTUPS");
+    timelines.setAccessible(true);
+    Map<?, ?> startupStates = (Map<?, ?>) timelines.get(null);
+    Pattern engineId = Pattern.compile(" engine=(\\S+) ");
+    int registered = 0;
+    for (String start : starts) {
+      var match = engineId.matcher(start);
+      assertTrue(match.find(), start);
+      String id = match.group(1);
+      List<String> events =
+          log.stream().filter(line -> line.contains(" engine=" + id + " ")).toList();
+      assertEquals(
+          1,
+          events.stream().filter(line -> line.contains("engine event=started ")).count(),
+          id);
+      List<String> stops =
+          events.stream().filter(line -> line.contains("engine event=stopped ")).toList();
+      assertEquals(1, stops.size(), id);
+      assertTrue(stops.get(0).contains("reason=stopped"), stops.get(0));
+      assertFalse(startupStates.containsKey(id), "Retained startup timeline for " + id);
+
+      long processStarts =
+          events.stream().filter(line -> line.contains("engine event=process-started ")).count();
+      long processStops =
+          events.stream().filter(line -> line.contains("engine event=process-stopped ")).count();
+      assertTrue(processStarts <= 1, id);
+      assertEquals(processStarts, processStops, id);
+      registered += processStarts;
+    }
+    assertEquals(localAttempts, registered, "Physical contribution registrations");
   }
 
   private static String command(Path run, String mode) {

@@ -1,6 +1,8 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.EngineLaunch;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.Purpose;
 import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
@@ -108,6 +110,7 @@ public class ContributeEngine {
 
   private static final class Launch {
     final EngineStartupDiagnostics.Attempt diagnostic;
+    final EngineLaunch processRegistration;
     Process process;
     ContributeSSHController ssh;
     BufferedReader stdout;
@@ -123,8 +126,9 @@ public class ContributeEngine {
     Failure failure = Failure.OTHER;
     String error = "";
 
-    Launch(EngineStartupDiagnostics.Attempt diagnostic) {
+    Launch(EngineStartupDiagnostics.Attempt diagnostic, String engineId) {
       this.diagnostic = diagnostic;
+      processRegistration = new EngineLaunch(Purpose.OTHER, engineId);
     }
 
     boolean permanent() {
@@ -227,8 +231,23 @@ public class ContributeEngine {
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
     this.currentAttempt = attempt;
-    Launch launch = new Launch(attempt);
+    Launch launch = new Launch(attempt, engineId);
     active = launch;
+    try {
+      startTransport(launch, launchSpec);
+    } catch (RuntimeException | Error failure) {
+      launch.terminal = true;
+      try {
+        terminate(launch);
+      } catch (RuntimeException | Error cleanupFailure) {
+        failure.addSuppressed(cleanupFailure);
+      }
+      throw failure;
+    }
+  }
+
+  private void startTransport(Launch launch, CommandLaunchHelper.LaunchSpec launchSpec) {
+    EngineStartupDiagnostics.Attempt attempt = launch.diagnostic;
     if (this.useJavaSSH) {
       this.javaSSH = new ContributeSSHController(this, this.ip, this.port);
       launch.ssh = this.javaSSH;
@@ -260,11 +279,20 @@ public class ContributeEngine {
       processBuilder.redirectErrorStream(false);
       attempt.capture(processBuilder);
       try {
-        process = processBuilder.start();
+        process =
+            launch.processRegistration.startLocalProcess(
+                this,
+                () -> KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()
+                    ? null : processBuilder.start(),
+                engineCommand);
+        if (process == null) {
+          // Benchmark isolation won during preparation. No transport or retry owns this launch.
+          launch.terminal = true;
+          terminate(launch);
+          return;
+        }
         launch.process = process;
         attempt.attachProcess(process);
-        AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, true);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);
@@ -481,11 +509,13 @@ public class ContributeEngine {
   private synchronized void terminate(Launch launch) {
     if (launch.terminated) return;
     launch.terminated = true;
-    launch.diagnostic.beforeTermination();
-    AnalysisResourceCoordinator.processStopped(
-        this, AnalysisResourceCoordinator.Purpose.OTHER, launch.process);
-    if (launch.process != null) launch.process.destroy();
-    if (launch.ssh != null) launch.ssh.close();
+    try {
+      launch.diagnostic.beforeTermination();
+      launch.processRegistration.finishObservation(this);
+    } finally {
+      if (launch.process != null) launch.process.destroy();
+      if (launch.ssh != null) launch.ssh.close();
+    }
   }
 
   private void publish(Launch launch, Runnable action) {

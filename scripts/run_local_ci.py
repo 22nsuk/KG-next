@@ -342,6 +342,7 @@ ENGINE_PROCESS_TESTS = {
     "featurecat.lizzie.gui.ContributeStartupDesktopTest": TestSelection((
         "serverRejectionUsesOneLaunchAndRetainsFailure",
         "outputOrderingReadinessAndRetryBudget",
+        "retiresFailedAndRunningLocalObservations",
         "stderrEofKeepsProcessAliveUntilExitOrFatalError",
         "stopRestartAndValidGameDisplay",
         "permanentOutputSurvivesPausedEdt",

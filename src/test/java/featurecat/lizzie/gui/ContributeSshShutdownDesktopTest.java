@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.ssh.TestSshServer;
+import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.util.Utils;
 import java.awt.Window;
 import java.io.BufferedReader;
@@ -59,23 +60,29 @@ public class ContributeSshShutdownDesktopTest {
       for (String mode : List.of("stop", "clean", "fatal", "retry")) {
         int first = server.children.size();
         start(server, mode);
+        var owner = Lizzie.frame.contributeEngine;
         ContributeStartupDesktopTest.await(() -> server.children.size() > first);
         Child child = server.children.get(first);
         ContributeStartupDesktopTest.await(() -> Files.exists(child.work.resolve("ready")));
         if (mode.equals("stop")) {
-          var old = Lizzie.frame.contributeEngine;
           SwingUtilities.invokeAndWait(() -> Lizzie.frame.closeContributeEngine());
           verifyStopped(child);
+          assertNull(EngineObservation.identityFor(owner));
           start(server, mode);
           ContributeStartupDesktopTest.await(() -> server.children.size() == first + 2);
           Child successor = server.children.get(first + 1);
           ContributeStartupDesktopTest.await(() -> Files.exists(successor.work.resolve("ready")));
-          SwingUtilities.invokeAndWait(old::normalQuit);
+          var replacement = Lizzie.frame.contributeEngine;
+          String replacementId = EngineObservation.identityFor(replacement);
+          assertNotNull(replacementId);
+          SwingUtilities.invokeAndWait(owner::normalQuit);
+          assertEquals(replacementId, EngineObservation.identityFor(replacement));
           assertTrue(
               successor.process.isAlive(), "Old owner must not terminate the new SSH session");
           assertTrue(Lizzie.frame.isContributing);
           SwingUtilities.invokeAndWait(() -> Lizzie.frame.closeContributeEngine());
           verifyStopped(successor);
+          assertNull(EngineObservation.identityFor(replacement));
           assertEquals(first + 2, server.children.size());
         } else if (mode.equals("clean")) {
           ContributeStartupDesktopTest.await(() -> !Lizzie.frame.isContributing);
@@ -91,6 +98,7 @@ public class ContributeSshShutdownDesktopTest {
             verifyStopped(remote);
           assertFalse(Lizzie.frame.isContributing);
         }
+        assertNull(EngineObservation.identityFor(owner));
         assertNull(server.failure.get(), "SSH fixture must not fail");
       }
       SwingUtilities.invokeAndWait(
@@ -98,6 +106,7 @@ public class ContributeSshShutdownDesktopTest {
             Lizzie.frame.closeContributeEngine();
             for (Window window : Window.getWindows()) window.dispose();
           });
+      ContributeStartupDesktopTest.assertContributionObservations(work, 8, 0);
       Files.writeString(result, new JSONObject().put("result", "passed").toString());
     } catch (Throwable failure) {
       failure.printStackTrace();

@@ -826,25 +826,98 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
-  @Test
-  void killOtherEnginesCancelsQueuedBenchmarkAndKeepsCurrentEngine() throws Exception {
+  @ParameterizedTest
+  @CsvSource({"false, false", "true, false", "false, true", "true, true"})
+  void stopOthersDuringFastHandoffFinishesTheResizeAndKeepsOnlyTheTarget(
+      boolean preloaded, boolean pauseFinished) throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      CountDownLatch handoff = new CountDownLatch(1);
+      CountDownLatch resume = new CountDownLatch(1);
+      StartupSyncLeelaz previous =
+          new StartupSyncLeelaz() {
+            private boolean sentPause;
+
+            @Override
+            public void nameCmdfornoponder() {
+              if (!pauseFinished) {
+                handoff.countDown();
+                awaitLatch(resume);
+              }
+              super.nameCmdfornoponder();
+              sentPause = true;
+            }
+
+            @Override
+            public void notPondering() {
+              if (pauseFinished && sentPause) {
+                sentPause = false;
+                handoff.countDown();
+                awaitLatch(resume);
+              }
+              super.notPondering();
+            }
+          };
+      previous.startEngine(0);
+      StartupSyncLeelaz target = new StartupSyncLeelaz();
+      target.oriWidth = target.oriHeight = 9;
+      if (preloaded) {
+        target.startEngine(1);
+        target.beforeCommand =
+            command -> {
+              if (command.equals("name")) target.publishReady();
+            };
+      }
+      Lizzie.config.fastChange = true;
+      env.publish(previous, boardWithHistory(emptyRootHistory(0)));
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(List.of(previous, target));
+      Lizzie.engineManager = manager;
+
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
+      try {
+        assertTrue(handoff.await(5, TimeUnit.SECONDS));
+        assertEquals(9, Board.boardWidth);
+        manager.killOtherEngines();
+        assertEquals(!pauseFinished, previous.isStarted(), "finish the outgoing write before quit");
+      } finally {
+        resume.countDown();
+      }
+      assertTrue(manager.firstSynchronizationCompleted.await(5, TimeUnit.SECONDS));
+      assertSame(target, Lizzie.leelaz);
+      assertTrue(manager.isEngineSwitchActive(1, true));
+      assertFalse(previous.isStarted());
+      assertEngineMatchesBoardWithoutKomi(target, Lizzie.board, 9, 9);
+      assertLifecycleReservationReleased(previous);
+      assertLifecycleReservationReleased(target);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void killOtherEnginesCancelsQueuedSwitchAndKeepsCurrentEngine(boolean tool) throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       StartupSyncLeelaz previous = new StartupSyncLeelaz();
       AtomicInteger launches = new AtomicInteger();
-      Leelaz benchmark =
-          new Leelaz("katago benchmark") {
+      Leelaz target =
+          new Leelaz(tool ? "katago benchmark" : "katago gtp") {
             @Override
             public BenchmarkExecution startBenchmark(int index, boolean main) {
               launches.incrementAndGet();
               throw new AssertionError("the cancelled benchmark reached process launch");
             }
           };
-      previous.started = previous.isLoaded = true;
-      Lizzie.config.fastChange = false;
-      env.publish(previous, boardWithHistory(emptyRootHistory(1)));
+      target.oriWidth = target.oriHeight = 9;
+      Lizzie.config.fastChange = true;
+      env.publish(null, boardWithHistory(emptyRootHistory(0)));
+      EngineManager.currentEngineNo = -1;
+      EngineManager.isEmpty = true;
       ProductionEntryEngineManager manager =
-          new ProductionEntryEngineManager(List.of(previous, benchmark));
+          new ProductionEntryEngineManager(List.of(previous, target));
       Lizzie.engineManager = manager;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      assertTrue(manager.firstSynchronizationCompleted.await(5, TimeUnit.SECONDS));
+      assertTrue(manager.isEngineSwitchActive(0, true));
+      previous.Pondering();
 
       SwingUtilities.invokeAndWait(
           () -> {
@@ -858,6 +931,10 @@ class EngineManagerInitialStartupSynchronizationTest {
       }
       assertNull(managerAtomicReferenceValue(manager, "engineSwitchTransaction"));
       assertEquals(0, launches.get());
+      assertFalse(target.isStarted());
+      assertEquals(19, Board.boardWidth);
+      assertTrue(manager.isEngineSwitchActive(0, true));
+      assertTrue(previous.isPondering());
       assertEquals(0, previous.normalQuitCount);
       assertTrue(previous.isStarted());
       assertSame(previous, Lizzie.leelaz);

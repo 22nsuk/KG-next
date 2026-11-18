@@ -85,11 +85,6 @@ public final class AnalysisResourceCoordinator {
 
   public static void processStarted(
       Object owner, Purpose purpose, String command, Process process) {
-    processStarted(owner, purpose, command, process, false);
-  }
-
-  static void processStarted(
-      Object owner, Purpose purpose, String command, Process process, boolean startupObserved) {
     Purpose role = normalizedPurpose(purpose);
     EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, role.name());
     synchronized (REGISTERED_PROCESSES) {
@@ -98,7 +93,7 @@ public final class AnalysisResourceCoordinator {
           && (process != null || previous.engineId.equals(EngineObservation.identityFor(owner)))) {
         return;
       }
-      String id = startupObserved || process == null
+      String id = process == null
           ? EngineObservation.ensureStarted(owner, role.name(), facts)
           : EngineObservation.restartInstance(owner, role.name(), facts);
       new EngineLaunch(role, id).started(owner, process, command);
@@ -209,6 +204,16 @@ public final class AnalysisResourceCoordinator {
       if (stoppedProcess != null) trackUntilExit(stoppedProcess);
     }
 
+    /** End this logical launch even if startup never attached a local or remote carrier. */
+    void finishObservation(Object owner) {
+      Object sample = captureForegroundSampleIdentity(owner);
+      closed(owner);
+      if (EngineObservation.discardIdentityIfCurrent(owner, engineId)) {
+        removeForegroundSample(owner, sample);
+        EngineObservation.recordStopped(engineId, "stopped");
+      }
+    }
+
     private void recordStopped() {
       try {
         EngineObservation.recordProcessDetails(
@@ -240,12 +245,7 @@ public final class AnalysisResourceCoordinator {
       if (process != null) trackUntilExit(process);
       return;
     }
-    Object sample = captureForegroundSampleIdentity(owner);
-    registered.closed(owner);
-    if (EngineObservation.discardIdentityIfCurrent(owner, registered.engineId)) {
-      removeForegroundSample(owner, sample);
-      EngineObservation.recordStopped(registered.engineId, "stopped");
-    }
+    registered.finishObservation(owner);
   }
 
   /** Compatibility entry point for callers that already detached their logical engine ID. */

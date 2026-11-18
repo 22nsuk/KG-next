@@ -780,10 +780,7 @@ public class AnalysisEngine {
       cleanup = new Thread(() -> finishCleanup(preserveStartupTail), "analysis-engine-cleanup");
       cleanup.setDaemon(true);
       try {
-        launch.closed(AnalysisEngine.this);
-        if (EngineObservation.discardIdentityIfCurrent(AnalysisEngine.this, launch.engineId())) {
-          EngineObservation.recordStopped(launch.engineId(), "stopped");
-        }
+        launch.finishObservation(AnalysisEngine.this);
       } finally {
         cleanup.start();
       }

@@ -1007,14 +1007,13 @@ public class EngineManager {
     if (transaction == null) {
       throw new IllegalStateException("Initial engine startup transaction was unavailable");
     }
-    EngineSwitchUiSnapshot submitted;
+    EngineSwitchUiSnapshot submitted = transaction.submission;
     try {
-      submitted = beginEngineSwitchUiSnapshot(candidate.index, true, -1, null, candidate.engine);
+      publishEngineSwitchUiState(submitted);
     } catch (RuntimeException | Error presentationFailure) {
       finishEngineSwitchTransaction(transaction);
       throw presentationFailure;
     }
-    transaction.uiToken = submitted.token;
     launchInitialEngineStartup(
         candidate.index,
         candidate.engine,
@@ -1341,7 +1340,7 @@ public class EngineManager {
     failCloseUpdateEngineStartAttempts(
         startAttempt, null, new IllegalStateException("Selected initial engine was stopped"));
     engineSwitchUiTracker
-        .abandonPending(transaction.uiToken, true)
+        .abandonPending(transaction.submission.token, true)
         .ifPresent(this::publishEngineSwitchUiState);
     return true;
   }
@@ -4614,13 +4613,21 @@ public class EngineManager {
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
       EngineSwitchTransaction pending = engineSwitchTransaction.get();
       if (keepPrimary) {
-        retained.add(Lizzie.leelaz);
         if (pending != null
             && pending.main
-            && pending.phase == SwitchPhase.RETIRING_PREVIOUS
-            && pending.previousEngine == Lizzie.leelaz) {
-          // The worker owns the old engine's shutdown. Its successor must survive this sweep.
+            && pending.previousEngine == Lizzie.leelaz
+            && pending.isHandingOff()) {
+          // From the first board/engine side effect onwards the successor owns the slot.
           retained.add(pending.targetEngine);
+          if (pending.phase != SwitchPhase.PREVIOUS_PAUSED) {
+            // The worker still owns I/O on the outgoing endpoint, including its eventual quit.
+            retained.add(pending.previousEngine);
+            if (pending.targetEngine != pending.previousEngine) {
+              pending.phase = SwitchPhase.RETIRING_PREVIOUS;
+            }
+          }
+        } else {
+          retained.add(Lizzie.leelaz);
         }
       }
       suppressParticipantRecoveries(engine -> !retained.contains(engine));
@@ -4647,8 +4654,38 @@ public class EngineManager {
         || retained.contains(pending.targetEngine)) {
       return Optional.empty();
     }
+    EngineSwitchUiSnapshot retainedState = retainedPresentation(pending, retained);
     pending.phase = SwitchPhase.CANCELLED;
-    return engineSwitchUiTracker.abandonPending(pending.uiToken, pending.main);
+    Optional<EngineSwitchUiSnapshot> restored =
+        engineSwitchUiTracker.abandonPending(pending.submission.token, pending.main, retainedState);
+    if (restored.isPresent() && retainedState.phase == EngineSwitchUiPhase.TOOL) {
+      // The retained tool may have finished while the switch hid its progress.
+      BenchmarkExecution tool = pending.previousEngine.benchmarkExecution();
+      if (tool != null) {
+        return engineSwitchUiTracker.tool(
+            retainedState.token, true, retainedState.activeIndex, retainedState.activeName,
+            pending.previousEngine, benchmarkStatusText(tool.snapshot()));
+      }
+    }
+    return restored;
+  }
+
+  /** Only an untouched, still-selected primary can keep its prior presentation. */
+  private EngineSwitchUiSnapshot retainedPresentation(
+      EngineSwitchTransaction pending, Set<Leelaz> retained) {
+    EngineSwitchUiSnapshot previous = pending.previousPresentation;
+    if (pending.phase == SwitchPhase.QUEUED
+        && pending.main
+        && retained.contains(pending.previousEngine)
+        && previous.phase != EngineSwitchUiPhase.SWITCHING
+        && previous.activeEngineIdentity == pending.previousEngine
+        && previous.activeIndex == pending.previousIndex
+        && isCommittedEngineSelection(true, pending.previousEngine, pending.previousIndex)
+        && isExactCatalogSlot(this, pending.previousIndex, pending.previousEngine)
+        && (previous.phase != EngineSwitchUiPhase.ACTIVE || isSnapshotActiveEngineAvailable(previous))) {
+      return previous;
+    }
+    return EngineSwitchUiSnapshot.idle(pending.main);
   }
 
   /** Record stop intent even if EOF has arrived and no replacement process exists yet. */
@@ -4683,7 +4720,7 @@ public class EngineManager {
       }
       pending.targetEngine.cancelBenchmark();
       cancelled = engineSwitchUiTracker.tool(
-          pending.uiToken, main, pending.targetIndex,
+          pending.submission.token, main, pending.targetIndex,
           engineDisplayNameWithoutCatalogLookup(pending.targetEngine, pending.targetIndex),
           pending.targetEngine, resourceBundle.getString("Benchmark.cancelled")).orElse(null);
       finishEngineSwitchTransaction(pending);
@@ -4698,7 +4735,7 @@ public class EngineManager {
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
       EngineSwitchTransaction pending = engineSwitchTransaction.get();
       if (pending != null && pending.targetEngine.isBenchmark()) {
-        engineSwitchUiTracker.abandonPending(pending.uiToken, pending.main);
+        engineSwitchUiTracker.abandonPending(pending.submission.token, pending.main);
         finishEngineSwitchTransaction(pending);
       }
       java.util.Set<Leelaz> tools = new java.util.LinkedHashSet<>(engineList);
@@ -6034,11 +6071,12 @@ public class EngineManager {
     }
 
     synchronized Optional<EngineSwitchUiSnapshot> abandonPending(long token, boolean main) {
-      EngineSwitchUiSnapshot current = current(main);
-      if (current.token != token || current.phase != EngineSwitchUiPhase.SWITCHING) {
-        return Optional.empty();
-      }
-      EngineSwitchUiSnapshot abandoned = EngineSwitchUiSnapshot.idle(main);
+      return abandonPending(token, main, EngineSwitchUiSnapshot.idle(main));
+    }
+
+    synchronized Optional<EngineSwitchUiSnapshot> abandonPending(
+        long token, boolean main, EngineSwitchUiSnapshot abandoned) {
+      if (!isSwitching(token, main)) return Optional.empty();
       set(main, abandoned);
       return Optional.of(abandoned);
     }
@@ -6068,6 +6106,8 @@ public class EngineManager {
   private enum SwitchPhase {
     QUEUED,
     RETIRING_PREVIOUS,
+    PAUSING_PREVIOUS,
+    PREVIOUS_PAUSED,
     INSTALLED,
     CANCELLED
   }
@@ -6084,7 +6124,8 @@ public class EngineManager {
     private volatile boolean targetEngineIncarnationCaptured;
     private volatile Leelaz decisionPrimaryEngine;
     private volatile long decisionPrimaryGeneration = -1L;
-    private volatile long uiToken;
+    private final EngineSwitchUiSnapshot submission;
+    private final EngineSwitchUiSnapshot previousPresentation;
     private volatile Board rollbackBoard;
     private volatile Object rollbackLifecycleOwner;
     private volatile boolean rollbackResumePonder;
@@ -6116,7 +6157,11 @@ public class EngineManager {
         int previousIndex,
         Leelaz targetEngine,
         Board decisionBoard,
-        List<Leelaz> decisionEngineCatalog) {
+        List<Leelaz> decisionEngineCatalog,
+        EngineSwitchUiSnapshot submission,
+        EngineSwitchUiSnapshot previousPresentation) {
+      this.submission = submission;
+      this.previousPresentation = previousPresentation;
       this.main = main;
       this.targetIndex = targetIndex;
       this.previousEngine = previousEngine;
@@ -6124,6 +6169,12 @@ public class EngineManager {
       this.targetEngine = targetEngine;
       this.decisionBoard = decisionBoard;
       this.decisionEngineCatalog = decisionEngineCatalog;
+    }
+
+    private boolean isHandingOff() {
+      return phase == SwitchPhase.PAUSING_PREVIOUS
+          || phase == SwitchPhase.RETIRING_PREVIOUS
+          || phase == SwitchPhase.PREVIOUS_PAUSED;
     }
 
     private void prepareRollback(
@@ -6403,10 +6454,12 @@ public class EngineManager {
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
       return Lizzie.runWithEngineAuthorityMutation(
           () -> {
-            if (failedRollbackRecovery.get() != null
+            if (engineSwitchTransaction.get() != null
+                || failedRollbackRecovery.get() != null
                 || (targetEngine != null && FAILED_ENGINE_QUARANTINES.containsKey(targetEngine))) {
               return null;
             }
+            EngineSwitchUiSnapshot previousPresentation = engineSwitchUiTracker.current(main);
             EngineSwitchTransaction transaction =
                 new EngineSwitchTransaction(
                     main,
@@ -6415,8 +6468,12 @@ public class EngineManager {
                     previousIndex,
                     targetEngine,
                     Lizzie.board,
-                    engineList);
-            return engineSwitchTransaction.compareAndSet(null, transaction) ? transaction : null;
+                    engineList,
+                    beginSwitchPresentation(
+                        main, previousIndex, previousEngine, targetIndex, targetEngine),
+                    previousPresentation);
+            engineSwitchTransaction.set(transaction);
+            return transaction;
           });
     }
   }
@@ -6453,7 +6510,7 @@ public class EngineManager {
     EngineSwitchTransaction transaction = engineSwitchTransaction.get();
     if (snapshot == null || snapshot.phase != EngineSwitchUiPhase.SWITCHING
         || !engineSwitchUiTracker.isCurrent(snapshot) || transaction == null
-        || transaction.uiToken != snapshot.token || transaction.main != snapshot.main
+        || transaction.submission.token != snapshot.token || transaction.main != snapshot.main
         || !transaction.targetEngineIncarnationCaptured) {
       return null;
     }
@@ -6486,37 +6543,27 @@ public class EngineManager {
   }
 
   private long beginEngineSwitchUi(int index, boolean isMain, Leelaz targetEngine) {
-    return beginEngineSwitchUiSnapshot(index, isMain, targetEngine).token;
-  }
-
-  private EngineSwitchUiSnapshot beginEngineSwitchUiSnapshot(
-      int index, boolean isMain, Leelaz targetEngine) {
-    return beginEngineSwitchUiSnapshot(
-        index, isMain, isMain ? Lizzie.leelaz : Lizzie.leelaz2, targetEngine);
-  }
-
-  private EngineSwitchUiSnapshot beginEngineSwitchUiSnapshot(
-      int index, boolean isMain, Leelaz activeEngine, Leelaz targetEngine) {
-    int activeIndex;
+    EngineSwitchUiSnapshot snapshot;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      activeIndex = isMain ? currentEngineNo : currentEngineNo2;
+      snapshot =
+          beginSwitchPresentation(
+              isMain, isMain ? currentEngineNo : currentEngineNo2,
+              isMain ? Lizzie.leelaz : Lizzie.leelaz2, index, targetEngine);
     }
-    return beginEngineSwitchUiSnapshot(index, isMain, activeIndex, activeEngine, targetEngine);
+    publishEngineSwitchUiState(snapshot);
+    return snapshot.token;
   }
 
-  private EngineSwitchUiSnapshot beginEngineSwitchUiSnapshot(
-      int index, boolean isMain, int activeIndex, Leelaz activeEngine, Leelaz targetEngine) {
-    EngineSwitchUiSnapshot snapshot =
-        engineSwitchUiTracker.begin(
-            isMain,
-            activeIndex,
-            engineDisplayNameWithoutCatalogLookup(activeEngine, activeIndex),
-            activeEngine,
-            index,
-            engineDisplayNameWithoutCatalogLookup(targetEngine, index),
-            targetEngine);
-    publishEngineSwitchUiState(snapshot);
-    return snapshot;
+  private EngineSwitchUiSnapshot beginSwitchPresentation(
+      boolean isMain, int activeIndex, Leelaz activeEngine, int index, Leelaz targetEngine) {
+    return engineSwitchUiTracker.begin(
+        isMain,
+        activeIndex,
+        engineDisplayNameWithoutCatalogLookup(activeEngine, activeIndex),
+        activeEngine,
+        index,
+        engineDisplayNameWithoutCatalogLookup(targetEngine, index),
+        targetEngine);
   }
 
   private void completeEngineSwitchUi(long token, int index, boolean isMain, Leelaz targetEngine) {
@@ -6599,7 +6646,7 @@ public class EngineManager {
       return null;
     }
     boolean directTarget =
-        transaction.uiToken == failed.token
+        transaction.submission.token == failed.token
             && transaction.main == failed.main
             && transaction.targetEngine == failed.targetEngineIdentity;
     boolean primaryMirror =
@@ -6689,7 +6736,7 @@ public class EngineManager {
    */
   private static void captureFailurePresentationPrimaryAuthorityLocked(
       EngineSwitchTransaction transaction, long uiToken) {
-    if (transaction == null || transaction.uiToken != uiToken) {
+    if (transaction == null || transaction.submission.token != uiToken) {
       return;
     }
     Leelaz presentationPrimary = Lizzie.leelaz;
@@ -11590,21 +11637,14 @@ public class EngineManager {
       }
       return Optional.empty();
     }
-    EngineSwitchUiSnapshot submitted;
+    EngineSwitchUiSnapshot submitted = transaction.submission;
     try {
-      submitted =
-          beginEngineSwitchUiSnapshot(
-              index,
-              isMain,
-              transaction.previousIndex,
-              transaction.previousEngine,
-              transaction.targetEngine);
+      publishEngineSwitchUiState(submitted);
     } catch (RuntimeException | Error presentationFailure) {
       finishEngineSwitchTransaction(transaction);
       presentationFailure.printStackTrace();
       return Optional.empty();
     }
-    transaction.uiToken = submitted.token;
     boolean foregroundActivation = isMain && isEmpty && currentEngineNo < 0;
     boolean asynchronousSubmission = SwingUtilities.isEventDispatchThread();
     Object submittedLifecycleOwner = retainedLifecycleOwner;
@@ -11795,10 +11835,10 @@ public class EngineManager {
       if (!beginSwitchHandoff(transaction, retirePrevious)) {
         return;
       }
-      releasePreviousForSwitch(previous, retirePrevious);
+      releasePreviousForSwitch(previous, retirePrevious, transaction);
       synchronized (ENGINE_SELECTION_STATE_LOCK) {
         if (!isCurrentEngineSwitchTransaction(transaction)
-            || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) {
+            || !engineSwitchUiTracker.isSwitching(transaction.submission.token, transaction.main)) {
           return;
         }
         if (!installProvisionalEngineSelection(transaction.main, previous, target, transaction)) {
@@ -11831,14 +11871,28 @@ public class EngineManager {
     return previous != null && (previous.isBenchmark() || !Lizzie.config.fastChange);
   }
 
-  private static void releasePreviousForSwitch(Leelaz previous, boolean retirePrevious) {
+  private static void releasePreviousForSwitch(
+      Leelaz previous, boolean retirePrevious, EngineSwitchTransaction transaction) {
     if (previous == null) return;
     if (previous.isBenchmark()) {
       cancelAndReapBenchmark(previous);
     } else if (retirePrevious) {
       previous.normalQuit();
     } else {
-      previous.nameCmdfornoponder();
+      try {
+        previous.nameCmdfornoponder();
+      } finally {
+        boolean stopAfterPause = false;
+        if (transaction != null) {
+          synchronized (ENGINE_SELECTION_STATE_LOCK) {
+            stopAfterPause = transaction.phase == SwitchPhase.RETIRING_PREVIOUS;
+            if (transaction.phase == SwitchPhase.PAUSING_PREVIOUS) {
+              transaction.phase = SwitchPhase.PREVIOUS_PAUSED;
+            }
+          }
+        }
+        if (stopAfterPause) previous.forceQuit();
+      }
     }
   }
 
@@ -11856,15 +11910,14 @@ public class EngineManager {
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
       if (!isCurrentEngineSwitchTransaction(transaction)
           || transaction.phase != SwitchPhase.QUEUED
-          || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) {
+          || !engineSwitchUiTracker.isSwitching(transaction.submission.token, transaction.main)) {
         return false;
       }
       if (transaction.previousEngine != (transaction.main ? Lizzie.leelaz : Lizzie.leelaz2)) {
         throw new IllegalStateException("Engine selection changed before switch execution");
       }
-      if (retirePrevious) {
-        transaction.phase = SwitchPhase.RETIRING_PREVIOUS;
-      }
+      transaction.phase =
+          retirePrevious ? SwitchPhase.RETIRING_PREVIOUS : SwitchPhase.PAUSING_PREVIOUS;
       return true;
     }
   }
@@ -11887,7 +11940,7 @@ public class EngineManager {
         return;
       }
       presentation = engineSwitchUiTracker.tool(
-          transaction.uiToken, transaction.main, transaction.targetIndex,
+          transaction.submission.token, transaction.main, transaction.targetIndex,
           engineDisplayNameWithoutCatalogLookup(transaction.targetEngine, transaction.targetIndex),
           transaction.targetEngine, status).orElse(null);
     }
@@ -11911,14 +11964,11 @@ public class EngineManager {
     Runnable guardedWork =
         () -> {
           if (transaction.phase == SwitchPhase.CANCELLED) {
-            engineSwitchUiTracker
-                .abandonPending(transaction.uiToken, transaction.main)
-                .ifPresent(this::publishEngineSwitchUiState);
             finishEngineSwitchTransaction(transaction);
             return;
           }
           if (!isCurrentEngineSwitchTransaction(transaction)
-              || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) {
+              || !engineSwitchUiTracker.isSwitching(transaction.submission.token, transaction.main)) {
             rejectedOrFailed.run();
             return;
           }
@@ -11926,7 +11976,7 @@ public class EngineManager {
             work.run();
           } catch (RuntimeException | Error failure) {
             failEngineSwitchUi(
-                transaction.uiToken, transaction.main, engineSwitchFailureDetail(failure));
+                transaction.submission.token, transaction.main, engineSwitchFailureDetail(failure));
             rejectedOrFailed.run();
           }
         };
@@ -11939,7 +11989,7 @@ public class EngineManager {
             guardedWork,
             "lizzie-engine-switch-"
                 + (transaction.main ? "primary-" : "secondary-")
-                + transaction.uiToken);
+                + transaction.submission.token);
     worker.setDaemon(true);
     Runnable startWorker =
         () -> {
@@ -11947,7 +11997,7 @@ public class EngineManager {
             worker.start();
           } catch (RuntimeException | Error schedulingFailure) {
             failEngineSwitchUi(
-                transaction.uiToken,
+                transaction.submission.token,
                 transaction.main,
                 engineSwitchFailureDetail(schedulingFailure));
             rejectedOrFailed.run();
@@ -12522,7 +12572,6 @@ public class EngineManager {
         return;
       }
 
-    engineNo = index;
       if (rejectSameEngineSelection(index, isMain)) {
         return;
       }
@@ -12551,7 +12600,7 @@ public class EngineManager {
         Lizzie.board.reopenOnlyBoard(newEng.oriWidth, newEng.oriHeight);
       if (previous != null) {
         try {
-          releasePreviousForSwitch(previous, retirePrevious);
+          releasePreviousForSwitch(previous, retirePrevious, installedTransaction);
         } catch (Exception e) {
           e.printStackTrace();
         }
@@ -12568,6 +12617,7 @@ public class EngineManager {
           isMain, preparedSwitch.previousEngine, newEng, installedTransaction)) {
         throw new IllegalStateException("Engine selection changed before switch execution");
       }
+      engineNo = index;
       if (preparedSwitch.explicitRestart && isMain) {
         // Re-installing the same object deliberately advances the primary generation; bind the
         // restarted incarnation after that publication so its final READY/PDA callback is valid.
@@ -14106,13 +14156,12 @@ public class EngineManager {
       EngineSwitchTransaction transaction = engineSwitchTransaction.get();
       if (transaction == null
           || transaction.targetEngine != engine
-          || transaction.phase != SwitchPhase.INSTALLED
-          || transaction.uiToken <= 0L) {
+          || transaction.phase != SwitchPhase.INSTALLED) {
         return null;
       }
       EngineSwitchUiSnapshot switchingSnapshot =
           engineSwitchUiTracker.current(transaction.main);
-      if (switchingSnapshot.token != transaction.uiToken
+      if (switchingSnapshot.token != transaction.submission.token
           || switchingSnapshot.phase != EngineSwitchUiPhase.SWITCHING
           || switchingSnapshot.targetEngineIdentity != engine) {
         return null;
