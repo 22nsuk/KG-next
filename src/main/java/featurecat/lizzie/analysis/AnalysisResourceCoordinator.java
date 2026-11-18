@@ -54,7 +54,7 @@ public final class AnalysisResourceCoordinator {
   private static final Pattern LEADING_EXECUTABLE =
       Pattern.compile("^(\\s*)(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s]+)");
   private static final Map<Object, Sample> FOREGROUND_SAMPLES = new java.util.WeakHashMap<>();
-  private static final Map<Object, ProcessRegistration> REGISTERED_PROCESSES =
+  private static final Map<Object, EngineLaunch> REGISTERED_PROCESSES =
       new java.util.WeakHashMap<>();
   private static final Set<Process> ACTIVE_LOCAL_COMPUTE_PROCESSES =
       Collections.newSetFromMap(new IdentityHashMap<Process, Boolean>());
@@ -88,134 +88,132 @@ public final class AnalysisResourceCoordinator {
 
   static void processStarted(
       Object owner, Purpose purpose, String command, Process process, boolean startupObserved) {
-    if (process != null) {
-      synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
-        ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
-      }
-    }
-    String purposeName = normalizedPurpose(purpose).name();
-    if (process == null) {
-      try {
-        EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
-        EngineObservation.ensureStarted(owner, purposeName, facts);
-        if (EngineObservation.engineDiagnosticsEnabled()) {
-          EngineObservation.recordProcessDetails(
-              EngineObservation.identityFor(owner),
-              "process-started",
-              purposeName,
-              -1L,
-              diagnosticCommand(command));
-        }
-      } catch (RuntimeException ignored) {
-      }
-      return;
-    }
-    long pid = processId(process);
+    Purpose role = normalizedPurpose(purpose);
+    EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, role.name());
     synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
-      if (registered != null && registered.process == process) {
+      EngineLaunch previous = REGISTERED_PROCESSES.get(owner);
+      if (previous != null && previous.process == process
+          && (process != null || previous.engineId.equals(EngineObservation.identityFor(owner)))) {
         return;
       }
-      REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
+      String id = startupObserved || process == null
+          ? EngineObservation.ensureStarted(owner, role.name(), facts)
+          : EngineObservation.restartInstance(owner, role.name(), facts);
+      new EngineLaunch(role, id).started(owner, process, command);
+    }
+  }
+
+  /** One launch attempt owns its physical start/stop pair, including after the owner is reused. */
+  static final class EngineLaunch {
+    private enum State { PENDING, STARTED, CLOSED }
+
+    private final Purpose purpose;
+    private final String engineId;
+    // Guarded by REGISTERED_PROCESSES so the owner index and the event transition agree.
+    private State state = State.PENDING;
+    private Process process;
+    private long pid;
+
+    EngineLaunch(Purpose purpose, String engineId) {
+      this.purpose = normalizedPurpose(purpose);
+      this.engineId = engineId;
+    }
+
+    String engineId() {
+      return engineId;
+    }
+
+    Purpose purpose() {
+      return purpose;
+    }
+
+    void started(Object owner, Process process, String command) {
+      synchronized (REGISTERED_PROCESSES) {
+        if (state != State.PENDING) return;
+        this.process = process;
+        pid = processId(process);
+        state = State.STARTED;
+        if (engineId.equals(EngineObservation.identityFor(owner))) {
+          REGISTERED_PROCESSES.put(owner, this);
+        }
+        if (process != null) {
+          synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
+            ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
+          }
+        }
+        try {
+          EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
+          if (EngineObservation.engineDiagnosticsEnabled()) {
+            EngineObservation.recordProcessDetails(
+                engineId, "process-started", purpose.name(), pid, diagnosticCommand(command));
+          }
+        } catch (RuntimeException ignored) {
+          // Diagnostic publication cannot invalidate a successful launch.
+        }
+      }
+    }
+
+    void closed(Object owner) {
+      Process stoppedProcess;
+      synchronized (REGISTERED_PROCESSES) {
+        boolean hadCarrier = state == State.STARTED;
+        state = State.CLOSED;
+        if (!hadCarrier) return;
+        REGISTERED_PROCESSES.remove(owner, this);
+        stoppedProcess = process;
+        try {
+          EngineObservation.recordProcessDetails(engineId, "process-stopped", purpose.name(), pid, null);
+        } catch (RuntimeException ignored) {
+          // Resource accounting must still settle if the log sink fails.
+        }
+      }
+      if (stoppedProcess != null) trackUntilExit(stoppedProcess);
+    }
+  }
+
+  private static void trackUntilExit(Process process) {
+    if (!isProcessAlive(process)) {
+      removeTrackedLocalProcess(process);
+      return;
     }
     try {
-      EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
-      String engineId =
-          startupObserved
-              ? EngineObservation.ensureStarted(owner, purposeName, facts)
-              : EngineObservation.restartInstance(owner, purposeName, facts);
-      EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
-      if (EngineObservation.engineDiagnosticsEnabled()) {
-        EngineObservation.recordProcessDetails(
-            engineId, "process-started", purposeName, pid, diagnosticCommand(command));
-      }
-    } catch (RuntimeException ignored) {
+      process.onExit().whenComplete((ignored, failure) -> removeTrackedLocalProcess(process));
+    } catch (RuntimeException unsupportedExitNotification) {
+      // activeLocalComputeProcessCount() also prunes exited children.
     }
   }
 
   public static void processStopped(Object owner, Purpose purpose, Process process) {
-    processStopped(owner, purpose, process, null, false);
-  }
-
-  /**
-   * Releases process-accounting state after the caller atomically detached {@code engineId} from
-   * the engine incarnation. This variant never resolves or stops the owner's newer observation
-   * identity if the same engine object has already rebound.
-   */
-  public static void processStoppedAfterIdentityClaim(
-      Object owner,
-      Purpose purpose,
-      Process process,
-      String engineId,
-      Object expectedForegroundSample) {
-    processStopped(owner, purpose, process, engineId, true, expectedForegroundSample);
-  }
-
-  private static void processStopped(
-      Object owner,
-      Purpose purpose,
-      Process process,
-      String claimedEngineId,
-      boolean identityAlreadyClaimed) {
-    processStopped(owner, purpose, process, claimedEngineId, identityAlreadyClaimed, null);
-  }
-
-  private static void processStopped(
-      Object owner,
-      Purpose purpose,
-      Process process,
-      String claimedEngineId,
-      boolean identityAlreadyClaimed,
-      Object expectedForegroundSample) {
-    // Shutdown requests are asynchronous. Keep a still-alive child registered so benchmark
-    // isolation cannot race ahead while Metal/CoreML work is winding down. The next registry
-    // query can prune it, and the exit callback prevents dead Process objects accumulating when no
-    // benchmark is requested later.
-    if (process != null) {
-      if (!isProcessAlive(process)) {
-        removeTrackedLocalProcess(process);
-      } else {
-        try {
-          process.onExit().whenComplete((ignored, failure) -> removeTrackedLocalProcess(process));
-        } catch (RuntimeException unsupportedExitNotification) {
-          // activeLocalComputeProcessCount() remains a safe pruning fallback.
-        }
-      }
-    }
-    if (process == null) {
-      String purposeName = normalizedPurpose(purpose).name();
-      String engineId =
-          identityAlreadyClaimed ? claimedEngineId : EngineObservation.identityFor(owner);
-      EngineObservation.recordProcessDetails(engineId, "process-stopped", purposeName, -1L, null);
-      if (!identityAlreadyClaimed) {
-        EngineObservation.ensureStopped(owner, "stopped");
-      }
-      removeForegroundSample(owner, identityAlreadyClaimed, expectedForegroundSample);
+    EngineLaunch registered = registrationFor(owner, process);
+    if (registered == null) {
+      if (process != null) trackUntilExit(process);
       return;
     }
-    long stoppedPid = processId(process);
+    Object sample = captureForegroundSampleIdentity(owner);
+    registered.closed(owner);
+    if (EngineObservation.discardIdentityIfCurrent(owner, registered.engineId)) {
+      removeForegroundSample(owner, sample);
+      EngineObservation.recordStopped(registered.engineId, "stopped");
+    }
+  }
+
+  /** Compatibility entry point for callers that already detached their logical engine ID. */
+  public static void processStoppedAfterIdentityClaim(
+      Object owner, Purpose purpose, Process process, String engineId, Object expectedForegroundSample) {
+    EngineLaunch registered = registrationFor(owner, process);
+    if (registered != null && (process != null || registered.engineId.equals(engineId))) {
+      registered.closed(owner);
+    } else if (process != null) {
+      trackUntilExit(process);
+    }
+    removeForegroundSample(owner, expectedForegroundSample);
+  }
+
+  private static EngineLaunch registrationFor(Object owner, Process process) {
     synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
-      if (registered == null || registered.process != process) {
-        // The owner may already point at a replacement local/remote runtime. The captured sample
-        // identity is still safe to settle, while owner- or PID-only removal is not.
-        if (identityAlreadyClaimed) {
-          removeForegroundSample(owner, true, expectedForegroundSample);
-        }
-        return;
-      }
-      stoppedPid = registered.pid;
-      REGISTERED_PROCESSES.remove(owner);
+      EngineLaunch registered = REGISTERED_PROCESSES.get(owner);
+      return registered != null && registered.process == process ? registered : null;
     }
-    String purposeName = normalizedPurpose(purpose).name();
-    String engineId =
-        identityAlreadyClaimed ? claimedEngineId : EngineObservation.identityFor(owner);
-    EngineObservation.recordProcessDetails(
-        engineId, "process-stopped", purposeName, stoppedPid, null);
-    if (!identityAlreadyClaimed) {
-      EngineObservation.ensureStopped(owner, "stopped");
-    }
-    removeForegroundSample(owner, identityAlreadyClaimed, expectedForegroundSample);
   }
 
   static Object captureForegroundSampleIdentity(Object owner) {
@@ -226,27 +224,14 @@ public final class AnalysisResourceCoordinator {
 
   static boolean isRegisteredProcessIdentityForTesting(Object owner, Process process) {
     synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
+      EngineLaunch registered = REGISTERED_PROCESSES.get(owner);
       return registered != null && registered.process == process;
     }
   }
 
-  private static final class ProcessRegistration {
-    private final Process process;
-    private final long pid;
-
-    private ProcessRegistration(Process process, long pid) {
-      this.process = process;
-      this.pid = pid;
-    }
-  }
-
-  private static void removeForegroundSample(
-      Object owner, boolean identityAlreadyClaimed, Object expectedForegroundSample) {
+  static void removeForegroundSample(Object owner, Object expectedForegroundSample) {
     synchronized (FOREGROUND_SAMPLES) {
-      if (!identityAlreadyClaimed) {
-        FOREGROUND_SAMPLES.remove(owner);
-      } else if (expectedForegroundSample != null
+      if (expectedForegroundSample != null
           && FOREGROUND_SAMPLES.get(owner) == expectedForegroundSample) {
         FOREGROUND_SAMPLES.remove(owner);
       }
@@ -261,7 +246,7 @@ public final class AnalysisResourceCoordinator {
   public static boolean hasActiveLocalComputeOtherThan(Object owner) {
     Process owned;
     synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registration = REGISTERED_PROCESSES.get(owner);
+      EngineLaunch registration = REGISTERED_PROCESSES.get(owner);
       owned = registration == null ? null : registration.process;
     }
     synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {

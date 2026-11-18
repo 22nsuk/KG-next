@@ -240,6 +240,49 @@ class AnalysisResourceCoordinatorTest {
   }
 
   @Test
+  void delayedCloseRecordsOnlyItsOwnLaunchEvenAfterLocalToRemoteReplacement() throws Exception {
+    LoggingRuntime runtime = LoggingRuntime.initialize(
+        new WorkDirectoryResolution(tempDir, List.of()),
+        new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 256_000));
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true)
+        .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE)));
+    Object owner = new Object();
+    ControllableProcess child = new ControllableProcess(101L);
+    try {
+      String firstId = EngineObservation.restartInstance(owner, "PRELOAD");
+      var first = new AnalysisResourceCoordinator.EngineLaunch(
+          AnalysisResourceCoordinator.Purpose.PRELOAD, firstId);
+      first.started(owner, child, "katago gtp");
+      String nextId = EngineObservation.restartInstance(owner, "COMPARE");
+      var next = new AnalysisResourceCoordinator.EngineLaunch(
+          AnalysisResourceCoordinator.Purpose.COMPARE, nextId);
+      next.started(owner, null, "remote gtp");
+      assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+
+      first.closed(owner);
+      first.closed(owner);
+      first.started(owner, child, "late completion");
+      assertEquals(nextId, EngineObservation.identityFor(owner));
+      assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+      next.closed(owner);
+      awaitLogs(runtime);
+
+      String app = Files.readString(tempDir.resolve("logs/app.log"));
+      for (String id : List.of(firstId, nextId)) {
+        List<String> events = app.lines().filter(line -> line.contains("engine=" + id)
+            && line.contains("engine event=process-")).toList();
+        assertEquals(2, events.size(), app);
+        assertTrue(events.get(0).contains("event=process-started"), app);
+        assertTrue(events.get(1).contains("event=process-stopped"), app);
+      }
+    } finally {
+      child.destroy();
+      AnalysisResourceCoordinator.activeLocalComputeProcessCount();
+      runtime.shutdown();
+    }
+  }
+
+  @Test
   void staleProcessStopCannotRemoveReplacementDiagnosticsRegistration() throws Exception {
     LoggingRuntime runtime =
         LoggingRuntime.initialize(

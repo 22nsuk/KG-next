@@ -24,7 +24,6 @@ import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -44,6 +43,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
@@ -98,9 +98,7 @@ class EngineGtpLoggingTest {
     engine.setEngineCommand(
         "\"C:\\\\Users\\\\Player\\\\secret\\\\katago.exe\" gtp "
             + "-model \"C:\\\\Users\\\\Player\\\\secret\\\\model.bin.gz\"");
-    Method fail = Leelaz.class.getDeclaredMethod("noteEngineFailed", String.class);
-    fail.setAccessible(true);
-    fail.invoke(engine, "ssh login failed");
+    reportEngineFailure(engine, "ssh login failed");
     awaitLogs(runtime);
     String app = readApp();
     assertTrue(app.contains("engine event=failed reason=ssh login failed"), app);
@@ -120,9 +118,7 @@ class EngineGtpLoggingTest {
   void processStartFailureKeepsBootstrapIdentityWithoutStartedEvent() throws Exception {
     LoggingRuntime runtime = startRuntime();
     Leelaz engine = prepareEngine();
-    Method fail = Leelaz.class.getDeclaredMethod("noteEngineFailed", String.class);
-    fail.setAccessible(true);
-    fail.invoke(engine, "process start failed");
+    reportEngineFailure(engine, "process start failed");
     awaitLogs(runtime);
     String app = readApp();
     assertTrue(app.contains("engine event=bootstrap"), app);
@@ -140,9 +136,7 @@ class EngineGtpLoggingTest {
     Leelaz engine = prepareEngine();
     engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
     String identity = EngineObservation.identityFor(engine);
-    Method fail = Leelaz.class.getDeclaredMethod("noteEngineFailed", String.class);
-    fail.setAccessible(true);
-    fail.invoke(engine, "exit-before-ready");
+    reportEngineFailure(engine, "exit-before-ready");
     awaitLogs(runtime);
     String app = readApp();
     assertTrue(app.contains("engine event=bootstrap"), app);
@@ -198,10 +192,8 @@ class EngineGtpLoggingTest {
   void consecutiveFailuresAndRetryMintDistinctIdentities() throws Exception {
     LoggingRuntime runtime = startRuntime();
     Leelaz engine = prepareEngine();
-    Method fail = Leelaz.class.getDeclaredMethod("noteEngineFailed", String.class);
-    fail.setAccessible(true);
-    fail.invoke(engine, "ssh login failed");
-    fail.invoke(engine, "ssh login failed");
+    reportEngineFailure(engine, "ssh login failed");
+    reportEngineFailure(engine, "ssh login failed");
     engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
     awaitLogs(runtime);
     String app = readApp();
@@ -448,25 +440,37 @@ class EngineGtpLoggingTest {
 
   @ParameterizedTest
   @CsvSource({
-    "123 kata-analyze B 10, analysis-started, kata-analyze, false",
-    "123 kata-analyze B 10, analysis-started, kata-analyze, true",
-    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, false",
-    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, true"
+    "123 kata-analyze B 10, analysis-started, kata-analyze, false, true",
+    "123 kata-analyze B 10, analysis-started, kata-analyze, true, true",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, false, true",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12, true, true",
+    "123 kata-analyze B 10, analysis-started, kata-analyze, false, false"
   })
   void auxiliaryCommandDiagnosticsFollowTheTransportResult(
-      String command, String event, String detail, boolean failFlush) throws Exception {
-    LoggingRuntime runtime = startEngineDiagnostics();
+      String command, String event, String detail, boolean failFlush, boolean enableAtFlush)
+      throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    if (enableAtFlush) runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
+    else enableEngineDiagnostics(runtime);
+    assertEquals(!enableAtFlush, EngineObservation.engineDiagnosticsEnabled());
     AnalysisEngine engine = allocate(AnalysisEngine.class);
     setField(AnalysisEngine.class, engine, "purpose",
         AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS);
     String first = EngineObservation.ensureStarted(engine, "AUTO_QUICK_ANALYSIS");
     ByteArrayOutputStream output =
         new ByteArrayOutputStream() {
+          private boolean commandFlushed;
+
           @Override
           public void flush() throws IOException {
+            // Closing a BufferedOutputStream flushes it again without delivering a new command.
+            if (commandFlushed) return;
+            commandFlushed = true;
             try {
               awaitLogs(runtime);
               assertEquals(0L, eventCount(readApp(), event), readApp());
+              if (enableAtFlush) enableEngineDiagnostics(runtime);
+              else runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
               EngineObservation.restartInstance(engine, "AUTO_QUICK_ANALYSIS");
             } catch (Exception error) {
               throw new IOException(error);
@@ -474,16 +478,24 @@ class EngineGtpLoggingTest {
             if (failFlush) throw new IOException("controlled auxiliary flush failure");
           }
         };
-    setField(AnalysisEngine.class, engine, "outputStream", new BufferedOutputStream(output));
+    Method bind = AnalysisEngine.class.getDeclaredMethod(
+        "bindStartedCarrier", Process.class, AnalysisEngineSSHController.class, EngineTransport.class, String.class);
+    bind.setAccessible(true);
+    bind.invoke(engine, null, null, new QuietTransport(false, output), first);
 
-    assertEquals(!failFlush, engine.sendCommand(command));
-    assertEquals(command + "\n", output.toString(StandardCharsets.UTF_8));
-    awaitLogs(runtime);
-    String app = readApp();
-    assertEquals(failFlush ? 0L : 1L, eventCount(app, event), app);
-    if (!failFlush) {
-      assertEquals(first, engineIdOnEventLine(app, "engine event=" + event), app);
-      assertTrue(app.contains("purpose=AUTO_QUICK_ANALYSIS pid=-1 command=" + detail), app);
+    try {
+      assertEquals(!failFlush, engine.sendCommand(command));
+      assertEquals(command + "\n", output.toString(StandardCharsets.UTF_8));
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(!failFlush && enableAtFlush ? 1L : 0L, eventCount(app, event), app);
+      if (!failFlush && enableAtFlush) {
+        assertEquals(first, engineIdOnEventLine(app, "engine event=" + event), app);
+        assertTrue(app.contains("purpose=AUTO_QUICK_ANALYSIS pid=-1 command=" + detail), app);
+      }
+    } finally {
+      engine.shutdown();
+      AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
     }
   }
 
@@ -613,27 +625,86 @@ class EngineGtpLoggingTest {
   }
 
   @Test
-  void failedRemoteConnectionDoesNotRecordProcessStarted() throws Exception {
+  void eofBeforeReadyRetiresTheBoundLaunchAndPreservesTheNewObservation() throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
-    RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
+    EngineManager previousManager = Lizzie.engineManager;
+    try {
+      Lizzie.engineManager = null;
+      Lizzie.frame = allocate(QuietFrame.class);
+      Lizzie.board = new Board();
+      Lizzie.setPrimaryEngine(engine);
+      engine.startEngine(-1);
+      assertTrue(engine.bootstrapFinished.await(5, TimeUnit.SECONDS));
+      String first = EngineObservation.identityFor(engine);
+      String successor = EngineObservation.restartInstance(engine, "COMPARE");
+
+      engine.transport.close();
+      awaitRemoteReaders(engine);
+      engine.shutdown();
+      awaitLogs(runtime);
+
+      String app = readApp();
+      assertEquals(1L, eventCount(app, "process-stopped"), app);
+      assertEquals(first, engineIdOnEventLine(app, "event=process-stopped"), app);
+      assertEquals(first, engineIdOnEventLine(app, "event=failed reason=exit-before-ready"), app);
+      assertEquals(successor, EngineObservation.identityFor(engine));
+    } finally {
+      try {
+        closeRemoteReaders(engine);
+      } finally {
+        Lizzie.engineManager = previousManager;
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void preloadFailCloseOnlyRecordsACarrierThatConnected(boolean connected) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(!connected);
+    engine.transport.failStreams = connected;
     try {
       Lizzie.setPrimaryEngine(engine);
-      assertThrows(IOException.class, () -> engine.startEngine(-1));
+      Leelaz.UpdateEngineStartAttempt attempt = engine.beginUpdateEngineStartAttempt();
+      Throwable failure = connected
+          ? assertThrows(IllegalStateException.class, () -> attempt.startEngine(-1))
+          : assertThrows(IOException.class, () -> attempt.startEngine(-1));
+      attempt.failClose(failure);
+      assertEquals(0L, engine.transport.closed.getCount(), "failed transport was closed");
       awaitLogs(runtime);
-      assertEquals(0L, eventCount(readApp(), "process-started"), readApp());
-      assertTrue(readApp().contains("engine event=failed"), readApp());
+      String app = readApp();
+      assertEquals(connected ? 1L : 0L, eventCount(app, "process-started"), app);
+      assertEquals(connected ? 1L : 0L, eventCount(app, "process-stopped"), app);
+      if (connected) {
+        assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      } else {
+        assertTrue(app.contains("engine event=failed"), app);
+      }
     } finally {
       closeRemoteReaders(engine);
     }
   }
 
+  private static void reportEngineFailure(Leelaz engine, String reason) throws Exception {
+    Method fail = Leelaz.class.getDeclaredMethod(
+        "noteEngineFailed", AnalysisResourceCoordinator.EngineLaunch.class, String.class);
+    fail.setAccessible(true);
+    fail.invoke(engine, new AnalysisResourceCoordinator.EngineLaunch(
+        AnalysisResourceCoordinator.Purpose.MAIN_BOARD, EngineObservation.identityFor(engine)), reason);
+  }
+
   private LoggingRuntime startEngineDiagnostics() throws Exception {
     LoggingRuntime runtime = startRuntime();
+    enableEngineDiagnostics(runtime);
+    return runtime;
+  }
+
+  private static void enableEngineDiagnostics(LoggingRuntime runtime) {
     runtime.applySettings(
         LoggingSettings.defaults()
             .withDiagnosticsEnabled(true)
             .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE, DiagnosticModule.GTP_SUMMARY)));
-    return runtime;
   }
 
   private static long eventCount(String app, String event) {
@@ -663,6 +734,10 @@ class EngineGtpLoggingTest {
       engine.shutdown();
       engine.transport.close();
     }
+    awaitRemoteReaders(engine);
+  }
+
+  private static void awaitRemoteReaders(RemoteLoggingEngine engine) throws Exception {
     for (String name : List.of("executor", "executorErr")) {
       Field field = Leelaz.class.getDeclaredField(name);
       field.setAccessible(true);
@@ -697,11 +772,17 @@ class EngineGtpLoggingTest {
 
   private static final class QuietTransport implements EngineTransport {
     private final boolean failStart;
+    private boolean failStreams;
     private final CountDownLatch closed = new CountDownLatch(1);
-    private final OutputStream output = new ByteArrayOutputStream();
+    private final OutputStream output;
 
     private QuietTransport(boolean failStart) {
+      this(failStart, new ByteArrayOutputStream());
+    }
+
+    private QuietTransport(boolean failStart, OutputStream output) {
       this.failStart = failStart;
+      this.output = output;
     }
 
     @Override
@@ -711,6 +792,7 @@ class EngineGtpLoggingTest {
 
     @Override
     public InputStream stdout() {
+      if (failStreams) throw new IllegalStateException("controlled stream binding failure");
       return new InputStream() {
         @Override
         public int read() throws IOException {

@@ -38,6 +38,17 @@ class EngineObservationTest {
   }
 
   @Test
+  void delayedCleanupCannotDetachAReplacementEvenBeforeLoggingIsInitialized() {
+    LoggingRuntime.resetForTests();
+    Object owner = new Object();
+    String prior = EngineObservation.restartInstance(owner, "MAIN_BOARD");
+    String next = EngineObservation.restartInstance(owner, "PRELOAD");
+    assertFalse(EngineObservation.discardIdentityIfCurrent(owner, prior));
+    assertEquals(next, EngineObservation.identityFor(owner));
+    assertTrue(EngineObservation.discardIdentityIfCurrent(owner, next));
+  }
+
+  @Test
   void withoutRuntimeDoesNotEmitEvenWhenLoggersAreEnabled() {
     LoggingRuntime.resetForTests();
     Logger engine = (Logger) LoggerFactory.getLogger(LogCategories.ENGINE);

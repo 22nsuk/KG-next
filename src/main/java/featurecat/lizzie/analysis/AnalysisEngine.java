@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.EngineLaunch;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.analysis.remote.ZhiziGtpTransport;
@@ -88,7 +89,6 @@ public class AnalysisEngine {
   public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
 
-  private BufferedOutputStream outputStream;
   private transient EngineTransport remoteTransport;
   private volatile ReaderResources readerResources;
 
@@ -425,16 +425,29 @@ public class AnalysisEngine {
                 launchPurpose,
                 commands,
                 isLocal);
+    try {
+      startDedicatedEngine(engineCommand, launchSpec, engineId);
+    } finally {
+      ReaderResources resources = readerResources;
+      if (resources == null || !engineId.equals(resources.launch.engineId())) {
+        EngineObservation.discardIdentityIfCurrent(this, engineId);
+      }
+    }
+  }
+
+  private void startDedicatedEngine(
+      String engineCommand, CommandLaunchHelper.LaunchSpec launchSpec, String engineId) {
+    ReaderResources resources;
     if (this.useRemoteCompute) {
       this.useJavaSSH = false;
       process = null;
       try {
-        remoteTransport = RemoteComputeConfig.createTransportForCommand(engineCommand);
-        remoteTransport.start();
-        initializeStreams(
-            remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
-        if (remoteTransport instanceof ZhiziGtpTransport zhizi) {
-          readerResources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
+        EngineTransport transport = RemoteComputeConfig.createTransportForCommand(engineCommand);
+        remoteTransport = transport;
+        transport.start();
+        resources = bindStartedCarrier(null, null, transport, engineId);
+        if (transport instanceof ZhiziGtpTransport zhizi) {
+          resources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
         }
         isLoaded = true;
       } catch (IOException e) {
@@ -449,20 +462,20 @@ public class AnalysisEngine {
         return;
       }
     } else if (this.useJavaSSH) {
-      this.javaSSH = new AnalysisEngineSSHController(this, this.ip, this.port, this.isPreLoad);
+      AnalysisEngineSSHController ssh = new AnalysisEngineSSHController(this, ip, port, isPreLoad);
+      this.javaSSH = ssh;
       boolean loginStatus = false;
       if (this.useKeyGen) {
         loginStatus =
-            this.javaSSH
+            ssh
                 .loginByFileKey(this.engineCommand, this.userName, new File(this.keyGenPath))
                 .booleanValue();
       } else {
         loginStatus =
-            this.javaSSH.login(this.engineCommand, this.userName, this.password).booleanValue();
+            ssh.login(this.engineCommand, this.userName, this.password).booleanValue();
       }
       if (loginStatus) {
-        initializeStreams(
-            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+        resources = bindStartedCarrier(null, ssh, null, engineId);
         javaSSHClosed = false;
         isLoaded = true;
       } else {
@@ -532,16 +545,14 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-      initializeStreams();
-      readerResources.modelIdentity =
+      resources = bindStartedCarrier(process, null, null, engineId);
+      resources.modelIdentity =
           AnalysisModelIdentity.local(
               launchCommands,
               processBuilder.directory() == null ? Path.of("") : processBuilder.directory().toPath());
     }
     isNormalEnd = false;
-    AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
-    readerResources.start();
+    resources.start();
   }
 
   private void showErrMsg(String errMsg) {
@@ -613,25 +624,43 @@ public class AnalysisEngine {
     return DiagnosticActionResult.of(dialog.get());
   }
 
-  private void initializeStreams() {
-    initializeStreams(
-        process.getInputStream(), process.getOutputStream(), process.getErrorStream());
-  }
-
-  private void initializeStreams(InputStream stdout, OutputStream stdin, InputStream stderr) {
-    ReaderResources resources =
-        new ReaderResources(
-            process,
-            useJavaSSH ? javaSSH : null,
-            useRemoteCompute ? remoteTransport : null,
-            startupDiagnosticAttempt,
-            stdout,
-            stdin,
-            stderr);
-    readerResources = resources;
-    outputStream = resources.stdin;
-    synchronized (ACTIVE_READER_RESOURCES) {
-      ACTIVE_READER_RESOURCES.add(resources);
+  private ReaderResources bindStartedCarrier(
+      Process child, AnalysisEngineSSHController ssh, EngineTransport transport, String engineId) {
+    EngineLaunch launch = new EngineLaunch(purpose, engineId);
+    launch.started(this, child, engineCommand);
+    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
+    try {
+      InputStream stdout;
+      OutputStream stdin;
+      InputStream stderr;
+      if (transport != null) {
+        stdout = transport.stdout();
+        stdin = transport.stdin();
+        stderr = transport.stderr();
+      } else if (ssh != null) {
+        stdout = ssh.getStdout();
+        stdin = ssh.getStdin();
+        stderr = ssh.getSterr();
+      } else {
+        stdout = child.getInputStream();
+        stdin = child.getOutputStream();
+        stderr = child.getErrorStream();
+      }
+      ReaderResources resources = new ReaderResources(child, ssh, transport, attempt, launch, stdout, stdin, stderr);
+      synchronized (ACTIVE_READER_RESOURCES) {
+        ACTIVE_READER_RESOURCES.add(resources);
+        readerResources = resources;
+      }
+      return resources;
+    } catch (RuntimeException | Error bindFailure) {
+      try {
+        closeBackend(child, ssh, transport, attempt);
+      } catch (RuntimeException | Error closeFailure) {
+        if (closeFailure != bindFailure) bindFailure.addSuppressed(closeFailure);
+      } finally {
+        launch.closed(this);
+      }
+      throw bindFailure;
     }
   }
 
@@ -655,6 +684,7 @@ public class AnalysisEngine {
     private final AnalysisEngineSSHController ssh;
     private final EngineTransport transport;
     private final EngineStartupDiagnostics.Attempt attempt;
+    private final EngineLaunch launch;
     private final BufferedReader stdout;
     private final BufferedOutputStream stdin;
     private final BufferedReader stderr;
@@ -669,6 +699,7 @@ public class AnalysisEngine {
         AnalysisEngineSSHController ssh,
         EngineTransport transport,
         EngineStartupDiagnostics.Attempt attempt,
+        EngineLaunch launch,
         InputStream stdout,
         OutputStream stdin,
         InputStream stderr) {
@@ -676,6 +707,7 @@ public class AnalysisEngine {
       this.ssh = ssh;
       this.transport = transport;
       this.attempt = attempt;
+      this.launch = launch;
       this.stdout = new BufferedReader(new InputStreamReader(stdout));
       this.stdin = new BufferedOutputStream(stdin);
       this.stderr = new BufferedReader(new InputStreamReader(stderr));
@@ -712,7 +744,14 @@ public class AnalysisEngine {
       if (cleanup != null) return;
       cleanup = new Thread(() -> finishCleanup(preserveStartupTail), "analysis-engine-cleanup");
       cleanup.setDaemon(true);
-      cleanup.start();
+      try {
+        launch.closed(AnalysisEngine.this);
+        if (EngineObservation.discardIdentityIfCurrent(AnalysisEngine.this, launch.engineId())) {
+          EngineObservation.recordStopped(launch.engineId(), "stopped");
+        }
+      } finally {
+        cleanup.start();
+      }
     }
 
     private void closeForExit() {
@@ -882,7 +921,6 @@ public class AnalysisEngine {
     if (!isNormalEnd) {
       showErrMsg(resourceBundle.getString("Leelaz.engineEndUnormalHint"), null, attempt);
     }
-    AnalysisResourceCoordinator.processStopped(this, purpose, resources.process);
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     releaseSharedForegroundLease();
     finishAbortedAnalysis();
@@ -1563,7 +1601,6 @@ public class AnalysisEngine {
     requestShutdown();
     isNormalEnd = true;
     isLoaded = false;
-    AnalysisResourceCoordinator.processStopped(this, purpose, process);
     closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     if (sharedForegroundEngine != null) {
@@ -3035,7 +3072,6 @@ public class AnalysisEngine {
   public void shutdown() {
     requestShutdown();
     isLoaded = false;
-    AnalysisResourceCoordinator.processStopped(this, purpose, process);
     closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     releaseSharedForegroundLease();
@@ -3061,16 +3097,16 @@ public class AnalysisEngine {
     if (sharedForegroundEngine != null) {
       return sharedForegroundEngine.sendExclusiveGtpCommand(command, purpose);
     }
-    String engineId =
-        EngineObservation.engineDiagnosticsEnabled() ? EngineObservation.identityFor(this) : null;
+    ReaderResources resources = readerResources;
+    if (resources == null) return false;
     try {
-      outputStream.write((command + "\n").getBytes());
-      outputStream.flush();
+      resources.stdin.write((command + "\n").getBytes());
+      resources.stdin.flush();
     } catch (Exception e) {
       e.printStackTrace();
       return false;
     }
-    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(engineId, purpose, command);
+    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(resources.launch.engineId(), purpose, command);
     return true;
   }
 

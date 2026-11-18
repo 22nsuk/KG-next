@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisEngineSSHController;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.enginegame.Acceptance;
 import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameParsedStart;
@@ -65,9 +67,11 @@ class LizzieShutdownTest {
         GatedAnalysisProcess process = new GatedAnalysisProcess()) {
       AnalysisEngine analysis = allocate(AnalysisEngine.class);
       analysis.process = process;
-      Method initialize = AnalysisEngine.class.getDeclaredMethod("initializeStreams");
+      Method initialize = AnalysisEngine.class.getDeclaredMethod(
+          "bindStartedCarrier", Process.class, AnalysisEngineSSHController.class,
+          EngineTransport.class, String.class);
       initialize.setAccessible(true);
-      initialize.invoke(analysis);
+      initialize.invoke(analysis, process, null, null, "shutdown-test-engine");
       harness.frame.analysisEngine = analysis;
       if (alreadyDetached) {
         analysis.normalQuit();
