@@ -943,6 +943,50 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
+  private enum SlotStop { CURRENT, OTHERS, ALL, FORCE_ALL }
+
+  @ParameterizedTest
+  @CsvSource({"true,CURRENT", "false,CURRENT", "false,OTHERS", "true,ALL", "false,FORCE_ALL"})
+  void stoppedSlotCannotStopOrRetireItsFormerEngineAfterTheOtherSlotSelectsIt(
+      boolean stoppedPrimary, SlotStop firstStop) throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz moving = new StartupSyncLeelaz();
+      StartupSyncLeelaz other = new StartupSyncLeelaz();
+      StartupSyncLeelaz replacement = new StartupSyncLeelaz();
+      moving.startEngine(0);
+      other.startEngine(1);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      Lizzie.config.fastChange = false;
+      env.publish(stoppedPrimary ? moving : other, boardWithHistory(emptyRootHistory(1)));
+      Lizzie.leelaz2 = stoppedPrimary ? other : moving;
+      EngineManager.currentEngineNo = stoppedPrimary ? 0 : 1;
+      EngineManager.currentEngineNo2 = stoppedPrimary ? 1 : 0;
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(List.of(moving, other, replacement));
+      Lizzie.engineManager = manager;
+
+      Runnable stop = stoppedPrimary ? manager::killThisEngines : manager::killThisEngines2;
+      switch (firstStop) {
+        case CURRENT -> stop.run();
+        case OTHERS -> manager.killOtherEngines();
+        case ALL -> assertTrue(manager.killAllEngines());
+        case FORCE_ALL -> manager.forceKillAllEngines();
+      }
+      assertEquals(-1, stoppedPrimary ? EngineManager.currentEngineNo : EngineManager.currentEngineNo2);
+      assertTrue(manager.switchEngineIfAvailable(0, !stoppedPrimary));
+      assertTrue(manager.firstSynchronizationCompleted.await(5, TimeUnit.SECONDS));
+      assertTrue(manager.isEngineSwitchActive(0, !stoppedPrimary));
+      Object running = moving.currentEngineIncarnation();
+      stop.run();
+      assertTrue(moving.isCurrentLiveEngineIncarnation(running), "stop reached the occupied slot");
+
+      assertTrue(manager.switchEngineIfAvailable(2, stoppedPrimary));
+      assertTrue(manager.secondSynchronizationCompleted.await(5, TimeUnit.SECONDS));
+      assertTrue(manager.isEngineSwitchActive(2, stoppedPrimary));
+      assertTrue(moving.isCurrentLiveEngineIncarnation(running), "handoff retired the opposite slot");
+    }
+  }
+
   @Test
   void ordinarySwitchClosesAReaderPublishedBeforeStartThrowsAndRollsBackSelection()
       throws Exception {
@@ -1089,8 +1133,9 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
-  @Test
-  void stopAllCancelsAUserSwitchBeforeTheEdtStartsItsWorker() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void stopCancelsAUserSwitchBeforeTheEdtStartsItsWorker(boolean currentOnly) throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       StartupSyncLeelaz current = new StartupSyncLeelaz();
       StartupSyncLeelaz target = new StartupSyncLeelaz();
@@ -1111,7 +1156,8 @@ class EngineManagerInitialStartupSynchronizationTest {
                 EngineManager.EngineSwitchUiPhase.SWITCHING,
                 manager.engineSwitchUiSnapshot(true).phase());
             // The queued worker cannot begin preparation before this EDT event returns.
-            assertTrue(manager.killAllEngines());
+            if (currentOnly) manager.killThisEngines();
+            else assertTrue(manager.killAllEngines());
           });
 
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
@@ -1762,8 +1808,9 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
-  @Test
-  void selectedInitialStartupStoppedWhileQueuedDoesNotLaunch() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void selectedInitialStartupStoppedWhileQueuedDoesNotLaunch(boolean currentOnly) throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       StartupSyncLeelaz engine = new StartupSyncLeelaz();
       AtomicReference<Thread> queuedWorker = new AtomicReference<>();
@@ -1801,7 +1848,8 @@ class EngineManagerInitialStartupSynchronizationTest {
                 command -> engine);
         assertNotNull(queuedWorker.get());
 
-        manager.forceKillAllEngines();
+        if (currentOnly) manager.killThisEngines();
+        else manager.forceKillAllEngines();
         queuedWorker.get().start();
         queuedWorker.get().join(TimeUnit.SECONDS.toMillis(5));
 

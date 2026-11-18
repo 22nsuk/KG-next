@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.PersistenceSanitizer;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -86,6 +87,13 @@ public final class AnalysisResourceCoordinator {
   public static void processStarted(
       Object owner, Purpose purpose, String command, Process process) {
     Purpose role = normalizedPurpose(purpose);
+    if (process != null) {
+      // Compatibility callers can supply an already-running child. Account for it before
+      // inspecting the executable or emitting bootstrap diagnostics.
+      synchronized (REGISTERED_PROCESSES) {
+        ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
+      }
+    }
     EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, role.name());
     synchronized (REGISTERED_PROCESSES) {
       EngineLaunch previous = REGISTERED_PROCESSES.get(owner);
@@ -96,7 +104,37 @@ public final class AnalysisResourceCoordinator {
       String id = process == null
           ? EngineObservation.ensureStarted(owner, role.name(), facts)
           : EngineObservation.restartInstance(owner, role.name(), facts);
-      new EngineLaunch(role, id).started(owner, process, command);
+      new EngineLaunch(role, id).publishStarted(owner, process, command);
+    }
+  }
+
+  public static Process startAuxiliaryLocalProcess(ProcessBuilder builder) throws IOException {
+    return startAuxiliaryLocalProcess(builder::start);
+  }
+
+  static Process startAuxiliaryLocalProcess(EngineLaunch.LocalProcessFactory factory)
+      throws IOException {
+    synchronized (REGISTERED_PROCESSES) {
+      if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+        throw new IOException("KataGo tuning is using the local compute device.");
+      }
+      localCreationsInProgress++;
+    }
+    return startReservedLocalProcess(factory);
+  }
+
+  private static Process startReservedLocalProcess(EngineLaunch.LocalProcessFactory factory)
+      throws IOException {
+    Process child = null;
+    try {
+      child = factory.start();
+      return child;
+    } finally {
+      synchronized (REGISTERED_PROCESSES) {
+        // A benchmark cannot observe a gap between the pending factory and its live child.
+        localCreationsInProgress--;
+        if (child != null) ACTIVE_LOCAL_COMPUTE_PROCESSES.add(child);
+      }
     }
   }
 
@@ -140,7 +178,7 @@ public final class AnalysisResourceCoordinator {
       }
       Process child = null;
       try {
-        child = factory.start();
+        child = startReservedLocalProcess(factory);
         return child;
       } finally {
         finishLocalCreation(owner, child, command);
@@ -150,8 +188,6 @@ public final class AnalysisResourceCoordinator {
     private void finishLocalCreation(Object owner, Process child, String command) {
       boolean retired;
       synchronized (REGISTERED_PROCESSES) {
-        // Keep benchmarks excluded continuously as a reservation becomes a physical process.
-        localCreationsInProgress--;
         if (child == null) {
           state = State.CLOSED;
           return;
@@ -166,13 +202,13 @@ public final class AnalysisResourceCoordinator {
     void started(Object owner, Process process, String command) {
       synchronized (REGISTERED_PROCESSES) {
         if (state != State.PENDING) return;
+        if (process != null) ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
         publishStarted(owner, process, command);
       }
     }
 
     private void publishStarted(Object owner, Process process, String command) {
       this.process = process;
-      if (process != null) ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
       if (state != State.CLOSED) {
         state = State.STARTED;
         if (engineId.equals(EngineObservation.identityFor(owner))) {

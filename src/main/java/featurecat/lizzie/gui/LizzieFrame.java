@@ -22087,6 +22087,7 @@ public class LizzieFrame extends JFrame {
     }
   }
 
+  private boolean contributionEstimateOverridden;
   private boolean savedIsHiddenKataEstimate;
   private boolean savedShowKataGoEstimate;
   private boolean savedShowKataGoEstimateOnMainbord;
@@ -22133,13 +22134,13 @@ public class LizzieFrame extends JFrame {
         openContributeSettings();
         return;
       }
-    if (contributeEngine != null) contributeEngine.normalQuit();
+    closeContributeEngine();
     Lizzie.engineManager.forceKillAllEngines();
-    Lizzie.leelaz.isLoaded = true;
-    EngineManager.isEmpty = true;
+    if (Lizzie.leelaz != null) Lizzie.leelaz.isLoaded = true;
     contributeEngine = new ContributeEngine();
     Lizzie.frame.openContributeView();
     if (Lizzie.config.contributeShowEstimate) {
+      contributionEstimateOverridden = true;
       savedIsHiddenKataEstimate = Lizzie.config.isHiddenKataEstimate;
       savedShowKataGoEstimate = Lizzie.config.showKataGoEstimate;
       savedShowKataGoEstimateOnMainbord = Lizzie.config.showKataGoEstimateOnMainbord;
@@ -22173,10 +22174,13 @@ public class LizzieFrame extends JFrame {
     if (contributeEngine != null) {
       contributeEngine.normalQuit();
     }
-    Lizzie.config.isHiddenKataEstimate = savedIsHiddenKataEstimate;
-    Lizzie.config.showKataGoEstimate = savedShowKataGoEstimate;
-    Lizzie.config.showKataGoEstimateOnMainbord = savedShowKataGoEstimateOnMainbord;
-    Lizzie.config.showKataGoEstimateOnSubbord = savedShowKataGoEstimateOnSubbord;
+    if (contributionEstimateOverridden) {
+      contributionEstimateOverridden = false;
+      Lizzie.config.isHiddenKataEstimate = savedIsHiddenKataEstimate;
+      Lizzie.config.showKataGoEstimate = savedShowKataGoEstimate;
+      Lizzie.config.showKataGoEstimateOnMainbord = savedShowKataGoEstimateOnMainbord;
+      Lizzie.config.showKataGoEstimateOnSubbord = savedShowKataGoEstimateOnSubbord;
+    }
   }
 
   public void openContributeView() {

@@ -199,6 +199,7 @@ public class ContributeEngine {
     this.useKeyGen = remoteData.useKeyGen;
     this.keyGenPath = remoteData.keyGenPath;
     if (!this.useJavaSSH && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+      finishSuppressedStart();
       return;
     }
 
@@ -222,6 +223,7 @@ public class ContributeEngine {
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
     if (!this.useJavaSSH && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+      finishSuppressedStart();
       return;
     }
     String engineId =
@@ -286,9 +288,7 @@ public class ContributeEngine {
                     ? null : processBuilder.start(),
                 engineCommand);
         if (process == null) {
-          // Benchmark isolation won during preparation. No transport or retry owns this launch.
-          launch.terminal = true;
-          terminate(launch);
+          finishSuppressedStart();
           return;
         }
         launch.process = process;
@@ -808,12 +808,28 @@ public class ContributeEngine {
     togglePause();
   }
 
-  public synchronized void normalQuit() {
+  private synchronized void stopSession() {
     stopped = true;
     isNormalEnd = true;
-    if (active != null) terminate(active);
-    lifecycle.shutdownNow();
-    if (watchGameThread != null) watchGameThread.interrupt();
+    try {
+      if (active != null) terminate(active);
+    } finally {
+      lifecycle.shutdownNow();
+      if (watchGameThread != null) watchGameThread.interrupt();
+    }
+  }
+
+  private void finishSuppressedStart() {
+    stopSession();
+    // The frame installs a newly constructed session and its view on the EDT.
+    SwingUtilities.invokeLater(
+        () -> {
+          if (Lizzie.frame.contributeEngine == this) Lizzie.frame.closeContributeEngine();
+        });
+  }
+
+  public synchronized void normalQuit() {
+    stopSession();
     Runnable update =
         () -> {
           if (Lizzie.frame.contributeEngine != null && Lizzie.frame.contributeEngine != this)
@@ -1458,45 +1474,48 @@ public class ContributeEngine {
                 // TODO Auto-generated catch block
                 break;
               }
-              if (changeWatchingGameIndex >= 0) {
-                if (changeWatchingGameIndex > contributeGames.size() - 1)
-                  changeWatchingGameIndex = contributeGames.size() - 1;
-                if (changeWatchingGameIndex != watchingGameIndex) {
-                  watchingGameIndex = changeWatchingGameIndex;
-                  changeWatchingGameIndex = -1;
-                  changeGame(watchingGameIndex);
-                  node = Lizzie.board.getHistory().getCurrentHistoryNode();
-                  timeCount = 0;
+              synchronized (ContributeEngine.this) {
+                if (stopped) break;
+                if (changeWatchingGameIndex >= 0) {
+                  if (changeWatchingGameIndex > contributeGames.size() - 1)
+                    changeWatchingGameIndex = contributeGames.size() - 1;
+                  if (changeWatchingGameIndex != watchingGameIndex) {
+                    watchingGameIndex = changeWatchingGameIndex;
+                    changeWatchingGameIndex = -1;
+                    changeGame(watchingGameIndex);
+                    node = Lizzie.board.getHistory().getCurrentHistoryNode();
+                    timeCount = 0;
+                  }
                 }
-              }
-              if (Lizzie.config.contributeWatchAutoPlay) {
-                if (timeCount * 50.0 / 1000.0 >= Lizzie.config.contributeWatchAutoPlayInterval) {
-                  if (node == Lizzie.board.getHistory().getCurrentHistoryNode()) {
-                    if (!Lizzie.board.nextMove(true)) {
-                      boolean shouldGoToNextGame = Lizzie.config.contributeWatchAutoPlayNextGame;
-                      if (shouldGoToNextGame && currentWatchGame.complete) {
-                        boolean needChange = false;
-                        while (shouldGoToNextGame
-                            && contributeGames.size() > watchingGameIndex + 1) {
-                          watchingGameIndex++;
-                          needChange = true;
-                          shouldGoToNextGame = false;
-                          if (Lizzie.config.contributeWatchSkipNone19) {
-                            if (contributeGames.get(watchingGameIndex).sizeX != 19
-                                || contributeGames.get(watchingGameIndex).sizeY != 19)
-                              shouldGoToNextGame = true;
+                if (Lizzie.config.contributeWatchAutoPlay) {
+                  if (timeCount * 50.0 / 1000.0 >= Lizzie.config.contributeWatchAutoPlayInterval) {
+                    if (node == Lizzie.board.getHistory().getCurrentHistoryNode()) {
+                      if (!Lizzie.board.nextMove(true)) {
+                        boolean shouldGoToNextGame = Lizzie.config.contributeWatchAutoPlayNextGame;
+                        if (shouldGoToNextGame && currentWatchGame.complete) {
+                          boolean needChange = false;
+                          while (shouldGoToNextGame
+                              && contributeGames.size() > watchingGameIndex + 1) {
+                            watchingGameIndex++;
+                            needChange = true;
+                            shouldGoToNextGame = false;
+                            if (Lizzie.config.contributeWatchSkipNone19) {
+                              if (contributeGames.get(watchingGameIndex).sizeX != 19
+                                  || contributeGames.get(watchingGameIndex).sizeY != 19)
+                                shouldGoToNextGame = true;
+                            }
                           }
-                        }
-                        if (needChange) {
-                          changeGame(watchingGameIndex);
-                          node = Lizzie.board.getHistory().getCurrentHistoryNode();
-                          timeCount = 0;
+                          if (needChange) {
+                            changeGame(watchingGameIndex);
+                            node = Lizzie.board.getHistory().getCurrentHistoryNode();
+                            timeCount = 0;
+                          }
                         }
                       }
                     }
+                    node = Lizzie.board.getHistory().getCurrentHistoryNode();
+                    timeCount = 0;
                   }
-                  node = Lizzie.board.getHistory().getCurrentHistoryNode();
-                  timeCount = 0;
                 }
               }
             }

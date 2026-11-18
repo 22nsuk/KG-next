@@ -200,6 +200,32 @@ class GtpConfigurationProbeTest {
   }
 
   @Test
+  void realProbeReservesComputeBeforePublishingBootstrapDiagnostics() throws Exception {
+    LoggingRuntime runtime = startProbeDiagnostics();
+    AtomicReference<Boolean> occupiedAtBootstrap = new AtomicReference<>();
+    Logger engine = (Logger) LoggerFactory.getLogger(LogCategories.ENGINE);
+    ListAppender<ILoggingEvent> observer = new ListAppender<>() {
+      @Override
+      protected void append(ILoggingEvent event) {
+        if (event.getFormattedMessage().startsWith("engine event=bootstrap")) {
+          occupiedAtBootstrap.set(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+        }
+      }
+    };
+    observer.start();
+    engine.addAppender(observer);
+    try {
+      assertTrue(new GtpConfigurationProbe().inspect(fakeEngineCommand()).supported());
+      assertEquals(Boolean.TRUE, occupiedAtBootstrap.get());
+      assertFalse(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+    } finally {
+      engine.detachAppender(observer);
+      observer.stop();
+      runtime.shutdown();
+    }
+  }
+
+  @Test
   void stderrOnSuccessfulProbeDoesNotChangeInspectResult() throws Exception {
     LoggingRuntime runtime = startProbeDiagnostics();
     try {

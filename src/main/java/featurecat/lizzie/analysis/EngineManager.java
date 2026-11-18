@@ -4581,16 +4581,7 @@ public class EngineManager {
   }
 
   private void killAllEnginesUnderReservation() {
-    cancelBenchmarks();
-    forceQuitCatalogEngines(false);
-    currentEngineNo2 = -1;
-    currentEngineNo = -1;
-    isEmpty = true;
-    Leelaz primaryEngine = Lizzie.leelaz;
-    if (primaryEngine != null) {
-      primaryEngine.notPondering();
-      primaryEngine.isLoaded = primaryEngine.hasGtpCapability();
-    }
+    forceKillAllEngines();
     if (Menu.engineMenu != null) {
       Menu.engineMenu.setText(resourceBundle.getString("Menu.noEngine"));
     }
@@ -4603,14 +4594,19 @@ public class EngineManager {
   public void forceKillAllEngines() {
     cancelBenchmarks();
     forceQuitCatalogEngines(false);
-    Leelaz primaryEngine = Lizzie.leelaz;
-    if (primaryEngine != null) primaryEngine.notPondering();
   }
 
   private void forceQuitCatalogEngines(boolean keepPrimary) {
     Set<Leelaz> retained = Collections.newSetFromMap(new IdentityHashMap<>());
     Optional<EngineSwitchUiSnapshot> abandoned;
+    Leelaz primary;
+    Leelaz secondary;
+    boolean releasePrimary;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      primary = Lizzie.leelaz;
+      secondary = Lizzie.leelaz2;
+      releasePrimary = !keepPrimary
+          && (!isEmpty || currentEngineNo >= 0 || (primary != null && primary.hasEngineToStop()));
       EngineSwitchTransaction pending = engineSwitchTransaction.get();
       if (keepPrimary) {
         if (pending != null
@@ -4644,6 +4640,11 @@ public class EngineManager {
         }
       }
     }
+    if (releasePrimary) {
+      if (primary != null) primary.notPondering();
+      deselectStoppedPrimary(primary);
+    }
+    rollbackSecondaryEngineSelection(secondary, null, -1);
   }
 
   /** Caller holds selection state. Installed targets already have an endpoint to stop. */
@@ -4990,7 +4991,6 @@ public class EngineManager {
 
   public void killOtherEngines() {
     forceQuitCatalogEngines(true);
-    currentEngineNo2 = -1;
   }
 
   public void killOtherEngines(int engineBlack, int engineWhite) {
@@ -5028,15 +5028,16 @@ public class EngineManager {
   public void killThisEngines() {
     if (cancelPendingBenchmarkSelection(true)) return;
     Leelaz currentForegroundEngine = Lizzie.leelaz;
-    if (currentForegroundEngine == null) return;
     Leelaz.ExclusiveGtpLifecycleReservation reservation =
-        currentForegroundEngine.beginExclusiveGtpLifecycleReservation();
-    if (reservation == null) {
+        currentForegroundEngine == null
+            ? null
+            : currentForegroundEngine.beginExclusiveGtpLifecycleReservation();
+    if (currentForegroundEngine != null && reservation == null) {
       showForegroundEngineLeaseInUse();
       return;
     }
     try (reservation) {
-      suppressParticipantRecoveries(engine -> engine == currentForegroundEngine);
+      if (!claimSlotStop(true, currentForegroundEngine) || currentForegroundEngine == null) return;
       if (currentForegroundEngine.isBenchmark()) {
         currentForegroundEngine.cancelBenchmark();
         return;
@@ -5044,10 +5045,10 @@ public class EngineManager {
       // Startup publishes the selected engine before committing its catalog index.
       if (currentForegroundEngine.hasEngineToStop()) {
         currentForegroundEngine.forceQuit();
+      } else if (selectedCatalogEngine(true) == null) {
+        return;
       }
-      currentEngineNo = -1;
-      isEmpty = true;
-      currentForegroundEngine.isLoaded = true;
+      deselectStoppedPrimary(currentForegroundEngine);
       currentForegroundEngine.notPondering();
       currentForegroundEngine.clearBestMoves();
       if (Lizzie.frame != null) Lizzie.frame.invalidateTrackingAnalysis();
@@ -5057,16 +5058,39 @@ public class EngineManager {
   public void killThisEngines2() {
     if (cancelPendingBenchmarkSelection(false)) return;
     Leelaz currentSecondaryEngine = Lizzie.leelaz2;
-    if (currentSecondaryEngine == null) return;
-    suppressParticipantRecoveries(engine -> engine == currentSecondaryEngine);
+    if (!claimSlotStop(false, currentSecondaryEngine) || currentSecondaryEngine == null) return;
     if (currentSecondaryEngine.isBenchmark()) {
       currentSecondaryEngine.cancelBenchmark();
       return;
     }
     currentSecondaryEngine.normalQuit();
-    currentEngineNo2 = -1;
+    rollbackSecondaryEngineSelection(currentSecondaryEngine, null, -1);
     currentSecondaryEngine.notPondering();
     currentSecondaryEngine.clearBestMoves();
+  }
+
+  /** Stop the submitted work and its selected endpoint as one slot operation. */
+  private boolean claimSlotStop(boolean main, Leelaz expected) {
+    Optional<EngineSwitchUiSnapshot> abandoned = Optional.empty();
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      if ((main ? Lizzie.leelaz : Lizzie.leelaz2) != expected) return false;
+      EngineSwitchTransaction pending = engineSwitchTransaction.get();
+      if (pending != null && pending.main == main) {
+        abandoned = cancelUninstalledSwitchExcept(Collections.emptySet());
+      }
+      if (expected != null) suppressParticipantRecoveries(engine -> engine == expected);
+    }
+    abandoned.ifPresent(this::publishEngineSwitchUiState);
+    return true;
+  }
+
+  private static void deselectStoppedPrimary(Leelaz stopped) {
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      if (Lizzie.leelaz == stopped) {
+        publishPrimarySelectionState(
+            stopped == null ? null : stopped.offlineBoardPlaceholder(), -1, true);
+      }
+    }
   }
 
   protected void showForegroundEngineLeaseInUse() {
@@ -12925,7 +12949,9 @@ public class EngineManager {
                 && Lizzie.leelaz != null
                 && Lizzie.leelaz.isPondering());
     Leelaz proposedRestoreMirror =
-        Lizzie.config.isDoubleEngineMode() ? (isMain ? Lizzie.leelaz2 : Lizzie.leelaz) : null;
+        Lizzie.config.isDoubleEngineMode()
+            ? (isMain ? Lizzie.leelaz2 : selectedCatalogEngine(true))
+            : null;
     if (proposedRestoreMirror != null && !proposedRestoreMirror.hasGtpCapability()) {
       proposedRestoreMirror = null;
     }

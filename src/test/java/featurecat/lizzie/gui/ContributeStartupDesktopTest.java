@@ -2,22 +2,33 @@ package featurecat.lizzie.gui;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.AppenderBase;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.ContributeEngine;
 import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
 import java.awt.Window;
+import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 
 /** Real contribution constructors/readers and child processes in an isolated application. */
 public class ContributeStartupDesktopTest {
@@ -37,6 +48,16 @@ public class ContributeStartupDesktopTest {
   @Test
   void retiresFailedAndRunningLocalObservations() throws Exception {
     probe("observation");
+  }
+
+  @Test
+  void suppressedLocalStartsAndRetriesFinishOwnedSession() {
+    assertAll(
+        () -> probe("suppressed-start-before-preparation"),
+        () -> probe("suppressed-start-before-spawn"),
+        () -> probe("suppressed-retry-before-preparation"),
+        () -> probe("suppressed-retry-before-spawn"),
+        () -> probe("suppressed-replaced"));
   }
 
   @Test
@@ -125,6 +146,8 @@ public class ContributeStartupDesktopTest {
             });
         child.onExit().get(10, TimeUnit.SECONDS);
         assertNull(EngineObservation.identityFor(running));
+      } else if (args[0].startsWith("suppressed-")) {
+        verifySuppressedStart(work, args[0]);
       } else if (args[0].equals("lifecycle")) {
         for (String mode : List.of("stdout-first", "stderr-first")) {
           Path run = start(work, mode, true);
@@ -489,6 +512,156 @@ public class ContributeStartupDesktopTest {
     }
   }
 
+  private static void verifySuppressedStart(Path work, String suite) throws Exception {
+    Field suppression = privateField(KataGoRuntimeHelper.class, "benchmarkEngineSyncSuppressed");
+    Path run = Files.createTempDirectory(work, suite + "-");
+    String command = command(run, "game-retry");
+    boolean retry = suite.startsWith("suppressed-retry-");
+    boolean suppressAtSpawn = suite.endsWith("before-spawn") || suite.equals("suppressed-replaced");
+    int expectedStarts = (retry ? 1 : 0) + (suppressAtSpawn ? 1 : 0);
+    // The log is emitted synchronously between the two production suppression checks.
+    AtomicInteger startNumber = new AtomicInteger();
+    Logger logger = (Logger) LoggerFactory.getLogger(LogCategories.ENGINE);
+    AppenderBase<ILoggingEvent> hook =
+        new AppenderBase<>() {
+          @Override
+          protected void append(ILoggingEvent event) {
+            if (event.getFormattedMessage().equals("engine event=started purpose=CONTRIBUTE")
+                && startNumber.incrementAndGet() == expectedStarts
+                && suppressAtSpawn) {
+              setSuppression(suppression, true);
+            }
+          }
+        };
+    hook.start();
+    logger.addAppender(hook);
+    JSONObject config = Lizzie.config.leelazConfig;
+    try {
+      Lizzie.config.isHiddenKataEstimate = true;
+      Lizzie.config.showKataGoEstimate = false;
+      Lizzie.config.contributeShowEstimate = !suite.equals("suppressed-start-before-preparation");
+      if (suite.equals("suppressed-start-before-preparation")) {
+        // Win the race after the public frame checks, as the constructor resolves transport.
+        Lizzie.config.leelazConfig =
+            new JSONObject(config.toString()) {
+              @Override
+              public JSONObject optJSONObject(String key) {
+                if ("contribute-engine-ssh-info".equals(key)) setSuppression(suppression, true);
+                return super.optJSONObject(key);
+              }
+            };
+      }
+      if (suite.equals("suppressed-replaced")) {
+        Path successor = Files.createTempDirectory(work, "suppression-successor-");
+        AtomicReference<ContributeEngine> replacement = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              startOnEdt(command, true);
+              ContributeEngine cancelled = Lizzie.frame.contributeEngine;
+              assertNotNull(cancelled);
+              assertTrue(lifecycle(cancelled).isShutdown(), "Suppressed session worker");
+              setSuppression(suppression, false);
+              startOnEdt(command(successor, "game"), true);
+              replacement.set(Lizzie.frame.contributeEngine);
+              assertNotSame(cancelled, replacement.get());
+            });
+        await(() -> replacement.get().watchingGameIndex == 0);
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertSame(replacement.get(), Lizzie.frame.contributeEngine);
+              assertTrue(Lizzie.frame.isContributing);
+              assertTrue(Lizzie.frame.isShowingContributeGame);
+              assertFalse(viewHasExited());
+              assertFalse(Lizzie.config.isHiddenKataEstimate);
+              assertTrue(Lizzie.config.showKataGoEstimate);
+              assertNull(failureWindow());
+            });
+        assertFalse(Files.exists(run.resolve("launches.txt")));
+        assertEquals(1, launches(successor).size());
+        return;
+      }
+      ContributeEngine owner = startCommand(command, true);
+      assertNotNull(owner);
+      Thread watcher = null;
+      if (retry) {
+        waitFile(run.resolve("ready"));
+        await(() -> owner.watchingGameIndex == 0);
+        AtomicReference<Thread> watched = new AtomicReference<>();
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertTrue(Lizzie.frame.isShowingContributeGame);
+              watched.set((Thread) privateValue(owner, "watchGameThread"));
+            });
+        watcher = watched.get();
+        assertTrue(watcher.isAlive());
+        if (!suppressAtSpawn) setSuppression(suppression, true);
+        Files.writeString(run.resolve("release"), "release");
+        var child = ProcessHandle.of(Long.parseLong(Files.readString(run.resolve("pid"))));
+        if (child.isPresent()) child.get().onExit().get(10, TimeUnit.SECONDS);
+      }
+      // Worker termination ensures the retry has queued UI cleanup before the next EDT event.
+      assertTrue(lifecycle(owner).awaitTermination(10, TimeUnit.SECONDS), "Suppressed session worker");
+      if (watcher != null) {
+        watcher.join(TimeUnit.SECONDS.toMillis(10));
+        assertFalse(watcher.isAlive(), "Suppressed retry must stop the game watcher");
+      }
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertNull(Lizzie.frame.contributeEngine, "Suppressed session must release ownership");
+            assertFalse(Lizzie.frame.isContributing);
+            assertFalse(Lizzie.frame.isShowingContributeGame);
+            assertEquals(Lizzie.resourceBundle.getString("Menu.noEngine"), Menu.engineMenu.getText());
+            assertTrue(viewHasExited());
+            assertTrue(Lizzie.config.isHiddenKataEstimate);
+            assertFalse(Lizzie.config.showKataGoEstimate);
+            assertNull(failureWindow());
+          });
+      assertNull(EngineObservation.identityFor(owner));
+      assertEquals(expectedStarts, startNumber.get(), "Contribution attempt registrations");
+      if (retry) assertEquals(1, launches(run).size(), "Suppression must prevent a retry spawn");
+      else assertFalse(Files.exists(run.resolve("launches.txt")), "Suppression must prevent spawn");
+    } finally {
+      setSuppression(suppression, false);
+      Lizzie.config.leelazConfig = config;
+      logger.detachAppender(hook);
+      hook.stop();
+    }
+  }
+
+  private static boolean viewHasExited() {
+    return (Boolean) privateValue(Lizzie.frame.contributeView, "exitedAfterSignal");
+  }
+
+  private static ExecutorService lifecycle(ContributeEngine engine) {
+    return (ExecutorService) privateValue(engine, "lifecycle");
+  }
+
+  private static Field privateField(Class<?> type, String name) {
+    try {
+      Field field = type.getDeclaredField(name);
+      field.setAccessible(true);
+      return field;
+    } catch (ReflectiveOperationException error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  private static Object privateValue(Object target, String name) {
+    try {
+      return privateField(target.getClass(), name).get(target);
+    } catch (IllegalAccessException error) {
+      throw new AssertionError(error);
+    }
+  }
+
+  private static void setSuppression(Field field, boolean value) {
+    try {
+      field.setBoolean(null, value);
+    } catch (IllegalAccessException error) {
+      throw new AssertionError(error);
+    }
+  }
+
   private static void child(String[] args) throws Exception {
     Path run = Path.of(args[1]);
     String mode = args[2];
@@ -609,12 +782,16 @@ public class ContributeStartupDesktopTest {
         if (mode.equals("starting-log"))
           System.out.println(new JSONObject().put("error", REJECTION));
       }
-      case "game", "game-ready", "game-exit" -> {
+      case "game", "game-ready", "game-exit", "game-retry" -> {
         System.out.println(gameOutput());
+        if (mode.equals("game-retry")) {
+          Files.writeString(run.resolve("pid"), Long.toString(ProcessHandle.current().pid()));
+          Files.writeString(run.resolve("ready"), "ready");
+        }
         if (!mode.equals("game-exit")) {
           waitFile(run.resolve("release"));
           Files.writeString(run.resolve("emitted"), "emitted");
-          System.out.println(new JSONObject().put("error", REJECTION));
+          if (!mode.equals("game-retry")) System.out.println(new JSONObject().put("error", REJECTION));
         }
       }
       default ->
@@ -665,18 +842,25 @@ public class ContributeStartupDesktopTest {
     return run;
   }
 
-  private static void startCommand(String command, boolean pure) throws Exception {
+  private static ContributeEngine startCommand(String command, boolean pure) throws Exception {
+    AtomicReference<ContributeEngine> owner = new AtomicReference<>();
     SwingUtilities.invokeAndWait(
         () -> {
-          Lizzie.frame.closeContributeEngine();
-          for (Window window : Window.getWindows()) if (window instanceof JDialog) window.dispose();
-          Lizzie.config.contributeUseCommand = true;
-          Lizzie.config.contributeUsePureCommand = pure;
-          Lizzie.config.contributeUserName = "fixture-user";
-          Lizzie.config.contributePassword = "fixture-password";
-          Lizzie.config.contributeCommand = command;
-          Lizzie.frame.startContributeEngine();
+          startOnEdt(command, pure);
+          owner.set(Lizzie.frame.contributeEngine);
         });
+    return owner.get();
+  }
+
+  private static void startOnEdt(String command, boolean pure) {
+    Lizzie.frame.closeContributeEngine();
+    for (Window window : Window.getWindows()) if (window instanceof JDialog) window.dispose();
+    Lizzie.config.contributeUseCommand = true;
+    Lizzie.config.contributeUsePureCommand = pure;
+    Lizzie.config.contributeUserName = "fixture-user";
+    Lizzie.config.contributePassword = "fixture-password";
+    Lizzie.config.contributeCommand = command;
+    Lizzie.frame.startContributeEngine();
   }
 
   static void assertContributionObservations(Path work, int attempts, int localAttempts)
@@ -859,23 +1043,13 @@ public class ContributeStartupDesktopTest {
   private static featurecat.lizzie.analysis.EngineStartupDiagnostics.Attempt bound(
       EngineFailedMessage dialog) {
     return (featurecat.lizzie.analysis.EngineStartupDiagnostics.Attempt)
-        field(dialog, "boundAttempt");
+        privateValue(dialog, "boundAttempt");
   }
 
   private static featurecat.lizzie.analysis.EngineStartupDiagnostic displayed(
       EngineFailedMessage dialog) {
     return (featurecat.lizzie.analysis.EngineStartupDiagnostic)
-        field(dialog, "displayedDiagnostic");
-  }
-
-  private static Object field(EngineFailedMessage dialog, String name) {
-    try {
-      var field = EngineFailedMessage.class.getDeclaredField(name);
-      field.setAccessible(true);
-      return field.get(dialog);
-    } catch (Exception error) {
-      throw new AssertionError(error);
-    }
+        privateValue(dialog, "displayedDiagnostic");
   }
 
   private static List<String> launches(Path run) {

@@ -174,7 +174,9 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
     clearStartupDiagnostics();
     reportStartupStage(StartupStage.STARTING, "");
     try {
-      Process launchedProcess = processStarter.start(processBuilder);
+      Process launchedProcess =
+          AnalysisResourceCoordinator.startAuxiliaryLocalProcess(
+              () -> processStarter.start(processBuilder));
       // Publish ownership immediately so every later unchecked failure can terminate this process.
       process = launchedProcess;
       BufferedReader launchedInput =

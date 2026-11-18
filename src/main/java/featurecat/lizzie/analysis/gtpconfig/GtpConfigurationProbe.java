@@ -351,30 +351,45 @@ public final class GtpConfigurationProbe {
     private final Thread stderrDrainer;
     private int nextCommandId = 1;
 
-    private ProcessSession(Process process, Duration timeout) {
-      this.process = process;
+    private ProcessSession(ProcessBuilder builder, String engineCommand, Duration timeout)
+        throws IOException {
+      this.process = AnalysisResourceCoordinator.startAuxiliaryLocalProcess(builder);
       this.timeout = timeout;
-      this.reader =
+      try {
+        this.reader =
+            new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+        this.writer =
+            new BufferedWriter(
+                new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
+        this.readerExecutor =
+            Executors.newSingleThreadExecutor(daemonThreadFactory("gtp-configuration-probe-reader"));
+        this.stderrDrainer = new Thread(this::drainStderr, "gtp-configuration-probe-stderr");
+        stderrDrainer.setDaemon(true);
+        stderrDrainer.start();
+        AnalysisResourceCoordinator.processStarted(
+            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process);
+        recordStartedQuietly();
+      } catch (RuntimeException | Error failure) {
+        try {
+          process.destroyForcibly();
+        } catch (RuntimeException | Error cleanupFailure) {
+          failure.addSuppressed(cleanupFailure);
+        } finally {
+          AnalysisResourceCoordinator.processStopped(
+              this, AnalysisResourceCoordinator.Purpose.OTHER, process);
+        }
+        throw failure;
+      }
+    }
+
+    private void drainStderr() {
+      try (BufferedReader stderr =
           new BufferedReader(
-              new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-      this.writer =
-          new BufferedWriter(
-              new OutputStreamWriter(process.getOutputStream(), StandardCharsets.UTF_8));
-      this.readerExecutor =
-          Executors.newSingleThreadExecutor(daemonThreadFactory("gtp-configuration-probe-reader"));
-      this.stderrDrainer =
-          new Thread(
-              () -> {
-                try (BufferedReader stderr =
-                    new BufferedReader(
-                        new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                  drainProbeStderr(stderr, stderrTail, () -> EngineObservation.identityFor(this));
-                } catch (IOException | RuntimeException ignored) {
-                }
-              },
-              "gtp-configuration-probe-stderr");
-      stderrDrainer.setDaemon(true);
-      stderrDrainer.start();
+              new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+        drainProbeStderr(stderr, stderrTail, () -> EngineObservation.identityFor(this));
+      } catch (IOException | RuntimeException ignored) {
+      }
     }
 
     static ProcessSession open(String engineCommand, Duration timeout) throws IOException {
@@ -394,11 +409,7 @@ public final class GtpConfigurationProbe {
       }
       ProcessBuilder builder = new ProcessBuilder(launchSpec.getCommandParts());
       CommandLaunchHelper.configureProcessBuilder(builder, launchSpec);
-      ProcessSession session = new ProcessSession(builder.start(), timeout);
-      AnalysisResourceCoordinator.processStarted(
-          session, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, session.process);
-      session.recordStartedQuietly();
-      return session;
+      return new ProcessSession(builder, engineCommand, timeout);
     }
 
     @Override

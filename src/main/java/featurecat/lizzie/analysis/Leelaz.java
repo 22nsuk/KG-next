@@ -1151,7 +1151,11 @@ public class Leelaz {
    * @throws IOException
    */
   public Leelaz(String engineCommand) throws IOException, JSONException {
-    // board = new Board();
+    this();
+    setEngineCommand(engineCommand);
+  }
+
+  private Leelaz() {
     bestMoves = List.of();
     currentTotalPlayouts = 0;
     // bestMovesTemp = new ArrayList<>();
@@ -1163,7 +1167,21 @@ public class Leelaz {
     currentCmdNum = 0;
     cmdQueue = new ArrayDeque<QueuedCommand>();
     pendingResponseHandlers = new ArrayDeque<PendingResponseHandler>();
-    setEngineCommand(engineCommand);
+  }
+
+  /** The offline board needs engine defaults but must never address a reusable catalog endpoint. */
+  Leelaz offlineBoardPlaceholder() {
+    Leelaz offline = new Leelaz();
+    offline.setEngineCommand("");
+    offline.isLoaded = hasGtpCapability();
+    offline.isKatago = isKatago;
+    offline.komi = komi;
+    offline.orikomi = orikomi;
+    offline.width = width;
+    offline.height = height;
+    offline.oriWidth = oriWidth;
+    offline.oriHeight = oriHeight;
+    return offline;
   }
 
   public String getEngineCommand() {

@@ -65,6 +65,10 @@ DESKTOP_TESTS = {
         "drawsDisplayConfirmAndReopenAcrossRulesLanguagesAndThemes",
         "winsRetainMarginsColorsAndRuleToggleRecalculatesTheConfirmedResult",
     )),
+    "featurecat.lizzie.gui.EngineSynchronizationFailureDesktopTest": TestSelection((
+        "basicSynchronizationFailureSurvivesWindowClipboardAndExport",
+        "bundledStartupTimeoutWindowsShareTheCurrentFailurePolicy",
+    )),
     "featurecat.lizzie.gui.FunctionSearchNavigationTest": TestSelection((
         "navigationPreservesRealStateAcrossNativeAndCustomMenus",
     )),
@@ -343,6 +347,7 @@ ENGINE_PROCESS_TESTS = {
         "serverRejectionUsesOneLaunchAndRetainsFailure",
         "outputOrderingReadinessAndRetryBudget",
         "retiresFailedAndRunningLocalObservations",
+        "suppressedLocalStartsAndRetriesFinishOwnedSession",
         "stderrEofKeepsProcessAliveUntilExitOrFatalError",
         "stopRestartAndValidGameDisplay",
         "permanentOutputSurvivesPausedEdt",

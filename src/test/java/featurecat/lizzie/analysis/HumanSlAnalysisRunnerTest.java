@@ -13,6 +13,7 @@ import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -130,13 +131,21 @@ class HumanSlAnalysisRunnerTest {
       DelayedExitProcess process =
           new DelayedExitProcess(request -> new JSONObject().put("id", request.optString("id")));
       try (HumanSlAnalysisRunner runner =
-          new HumanSlAnalysisRunner(fakeCommand, ignored -> process)) {
+          new HumanSlAnalysisRunner(
+              fakeCommand,
+              ignored -> {
+                assertTrue(
+                    AnalysisResourceCoordinator.hasActiveLocalComputeProcess(),
+                    "the process factory must already exclude benchmarks");
+                return process;
+              })) {
         ExecutorService worker = Executors.newSingleThreadExecutor();
         try {
           assertTrue(runner.start());
           Future<?> closed = worker.submit(runner::close);
           assertTrue(process.destroyRequested.await(1, TimeUnit.SECONDS));
           assertTrue(process.waitForEntered.await(1, TimeUnit.SECONDS));
+          assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
           assertFalse(closed.isDone(), "close must not return while the child is still alive");
 
           process.finishExit();
@@ -146,6 +155,37 @@ class HumanSlAnalysisRunnerTest {
           process.finishExit();
           shutdownWorker(worker);
         }
+      }
+    }
+  }
+
+  @Test
+  void benchmarkAdmittedAfterPreparationPreventsHumanSlSpawn() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open();
+        HumanSlAnalysisRunner runner =
+            new HumanSlAnalysisRunner(
+                fakeCommand,
+                ignored -> {
+                  throw new AssertionError("a benchmark already owns the compute device");
+                })) {
+      assertFalse(KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed());
+      var previousPrimary = Lizzie.leelaz;
+      var previousFrame = Lizzie.frame;
+      try {
+        Lizzie.leelaz = null;
+        Lizzie.frame = null;
+        runner.setStartupListener((stage, detail) -> {
+          if (stage == HumanSlAnalysisRunner.StartupStage.STARTING) {
+            KataGoRuntimeHelper.pauseCurrentAnalysisForBenchmark();
+          }
+        });
+        assertFalse(runner.start());
+        assertTrue(runner.getUnavailableReason().contains("tuning"));
+        assertTrue(KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed());
+      } finally {
+        KataGoRuntimeHelper.restoreAnalysisAfterBenchmark(false);
+        Lizzie.frame = previousFrame;
+        Lizzie.leelaz = previousPrimary;
       }
     }
   }
