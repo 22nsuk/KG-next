@@ -20,6 +20,59 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PositionConfirmedAnalysisTest {
   @Test
+  void navigationBurstDoesNotCreateAThreadPerPendingPosition() throws Exception {
+    long baseline = positionTimeoutThreads();
+    ShortTimeoutLeelaz engine = new ShortTimeoutLeelaz();
+    engine.timeoutMillis.set(TimeUnit.MINUTES.toMillis(1));
+    try (Fixture fixture = new Fixture(engine, false)) {
+      try {
+        for (int i = 0; i < 128; i++) engine.sendCommand("undo");
+        engine.sendCommand("kata-analyze B 10");
+        assertEquals(128, fixture.transport.commands().size());
+        long additionalThreads = positionTimeoutThreads() - baseline;
+        assertTrue(
+            additionalThreads <= 1, "Position timeout threads created: " + additionalThreads);
+        for (int i = 0; i < 127; i++) fixture.respond(i, "=");
+        assertEquals(128, fixture.transport.commands().size(), "analysis must wait for every ACK");
+        fixture.respond(127, "=");
+        assertEquals(129, fixture.transport.commands().size());
+        assertEquals("kata-analyze B 10", fixture.transport.commands().get(128));
+      } finally {
+        int pendingPositions = Math.min(128, fixture.transport.commands().size());
+        for (int i = 0; i < pendingPositions; i++) fixture.respond(i, "=");
+      }
+    }
+  }
+
+  private static long positionTimeoutThreads() {
+    return Thread.getAllStackTraces().keySet().stream()
+        .filter(
+            thread ->
+                thread.getName().equals("lizzie-position-response-timeout")
+                    || thread.getName().equals("lizzie-gtp-response-timeouts"))
+        .count();
+  }
+
+  @Test
+  void dispatchedTimeoutAfterAcknowledgementCannotRetireSuccessorPosition() throws Exception {
+    try (Fixture fixture = new Fixture()) {
+      Runnable oldResponse = () -> {};
+      fixture.engine.sendCommandWithResponseForTest("undo", oldResponse);
+      fixture.respond(0, "=");
+      fixture.engine.sendCommand("set_position B D4");
+      fixture.engine.sendCommand("kata-analyze B 10");
+
+      // Cancellation cannot recall an expiration already handed to the command dispatcher.
+      fixture.engine.retireTimedOutNormalCommandForTest(oldResponse);
+
+      assertEquals(List.of("undo", "set_position B D4"), fixture.transport.commands());
+      fixture.respond(1, "=");
+      assertEquals(
+          List.of("undo", "set_position B D4", "kata-analyze B 10"), fixture.transport.commands());
+    }
+  }
+
+  @Test
   void commandDiscoveryOwnsPayloadWhileNumberedPositionResponseIsPending() throws Exception {
     try (Fixture fixture = new Fixture()) {
       fixture.engine.dispatchReaderLineForTest("= protocol_version");
