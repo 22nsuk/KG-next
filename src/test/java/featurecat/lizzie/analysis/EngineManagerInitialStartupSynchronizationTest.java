@@ -782,6 +782,90 @@ class EngineManagerInitialStartupSynchronizationTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void killOtherEnginesKeepsSwitchTargetAfterPreviousEngineEnteredQuit(boolean preloaded)
+      throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz previous = new StartupSyncLeelaz();
+      StartupSyncLeelaz target = new StartupSyncLeelaz();
+      previous.started = previous.isLoaded = true;
+      previous.normalQuitEntered = new CountDownLatch(1);
+      previous.normalQuitGate = new CountDownLatch(1);
+      Lizzie.config.fastChange = false;
+      env.publish(previous, boardWithHistory(emptyRootHistory(1)));
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(List.of(previous, target));
+      Lizzie.engineManager = manager;
+      if (preloaded) {
+        target.startEngine(1);
+        target.beforeCommand =
+            command -> {
+              if (command.equals("name")) target.publishReady();
+            };
+      }
+      Object preloadedIncarnation = preloaded ? target.currentEngineIncarnation() : null;
+
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
+      try {
+        assertTrue(previous.normalQuitEntered.await(2, TimeUnit.SECONDS));
+        assertSame(previous, Lizzie.leelaz, "the switch has not published the target yet");
+        manager.killOtherEngines();
+      } finally {
+        previous.normalQuitGate.countDown();
+      }
+
+      assertTrue(manager.firstSynchronizationCompleted.await(5, TimeUnit.SECONDS));
+      assertTrue(manager.isEngineSwitchActive(1, true));
+      assertSame(target, Lizzie.leelaz);
+      assertTrue(target.isStarted());
+      if (preloaded) assertSame(preloadedIncarnation, target.currentEngineIncarnation());
+      assertFalse(previous.isStarted());
+      assertLifecycleReservationReleased(previous);
+      assertLifecycleReservationReleased(target);
+    }
+  }
+
+  @Test
+  void killOtherEnginesCancelsQueuedBenchmarkAndKeepsCurrentEngine() throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz previous = new StartupSyncLeelaz();
+      AtomicInteger launches = new AtomicInteger();
+      Leelaz benchmark =
+          new Leelaz("katago benchmark") {
+            @Override
+            public BenchmarkExecution startBenchmark(int index, boolean main) {
+              launches.incrementAndGet();
+              throw new AssertionError("the cancelled benchmark reached process launch");
+            }
+          };
+      previous.started = previous.isLoaded = true;
+      Lizzie.config.fastChange = false;
+      env.publish(previous, boardWithHistory(emptyRootHistory(1)));
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(List.of(previous, benchmark));
+      Lizzie.engineManager = manager;
+
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertTrue(manager.switchEngineIfAvailable(1, true));
+            manager.killOtherEngines();
+          });
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (managerAtomicReferenceValue(manager, "engineSwitchTransaction") != null
+          && System.nanoTime() < deadline) {
+        Thread.sleep(5);
+      }
+      assertNull(managerAtomicReferenceValue(manager, "engineSwitchTransaction"));
+      assertEquals(0, launches.get());
+      assertEquals(0, previous.normalQuitCount);
+      assertTrue(previous.isStarted());
+      assertSame(previous, Lizzie.leelaz);
+      assertEquals(0, EngineManager.currentEngineNo);
+      assertLifecycleReservationReleased(previous);
+    }
+  }
+
   @Test
   void ordinarySwitchClosesAReaderPublishedBeforeStartThrowsAndRollsBackSelection()
       throws Exception {

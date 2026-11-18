@@ -488,6 +488,58 @@ class EngineManagerLifecycleReservationTest {
   }
 
   @Test
+  void updateEnginesKeepsEmptySelectionWhenSavedEngineHasEmptyName() throws Exception {
+    AssertionError unexpectedStart = new AssertionError("catalog refresh scheduled a replacement");
+    UpdateFailureLeelaz savedEngine = new UpdateFailureLeelaz();
+    try (UpdateFailureState state = new UpdateFailureState(savedEngine, unexpectedStart)) {
+      state.install();
+      state.setEmptyForegroundName();
+      UpdateForegroundLeelaz previousMirror = new UpdateForegroundLeelaz();
+      previousMirror.oriEnginename = "update-mirror";
+      Lizzie.config.leelazConfig
+          .getJSONArray("engine-settings-list")
+          .put(
+              new JSONObject()
+                  .put("command", "controlled-update-mirror")
+                  .put("name", "update-mirror"));
+      Lizzie.leelaz = null;
+      Lizzie.leelaz2 = previousMirror;
+      EngineManager.isEmpty = true;
+      EngineManager.currentEngineNo = -1;
+      EngineManager.currentEngineNo2 = 1;
+
+      state.manager.updateEngines();
+
+      assertEquals(2, state.manager.engineList.size());
+      assertSame(savedEngine, state.manager.engineList.get(0));
+      Leelaz rebuiltMirror = state.manager.engineList.get(1);
+      assertEquals("update-mirror", rebuiltMirror.oriEnginename);
+      assertNull(Lizzie.leelaz2);
+      assertFalse(rebuiltMirror.hasEngineToStop());
+      assertNull(Lizzie.leelaz);
+      assertEquals(-1, EngineManager.currentEngineNo);
+      assertEquals(-1, EngineManager.currentEngineNo2);
+      assertTrue(EngineManager.isEmpty);
+      assertFalse(EngineManager.isUpdating);
+    }
+  }
+
+  @Test
+  void updateEnginesReplacesSelectedEngineWithEmptyName() throws Exception {
+    AssertionError startFailure = new AssertionError("controlled replacement start failure");
+    UpdateFailureLeelaz replacement = new UpdateFailureLeelaz();
+    try (UpdateFailureState state = new UpdateFailureState(replacement, startFailure)) {
+      state.install();
+      state.setEmptyForegroundName();
+
+      assertSame(startFailure, assertThrows(AssertionError.class, state.manager::updateEngines));
+      assertSame(replacement, Lizzie.leelaz);
+      assertEquals(0, EngineManager.currentEngineNo);
+      assertFalse(EngineManager.isUpdating);
+    }
+  }
+
+  @Test
   void updateEnginesSameSizeFreezesExactRestoreBeforeReplacementStarts() throws Exception {
     UpdateEnginesState state = new UpdateEnginesState(19, 19);
     try {
@@ -8037,7 +8089,6 @@ class EngineManagerLifecycleReservationTest {
       if (incarnation == null) {
         throw new AssertionError("controlled target has no exact runtime binding");
       }
-      setField(transaction, "targetInstalled", true);
       setField(transaction, "targetEngineIncarnation", incarnation);
       setField(transaction, "targetEngineIncarnationCaptured", true);
     } catch (ReflectiveOperationException failure) {
@@ -10187,7 +10238,7 @@ class EngineManagerLifecycleReservationTest {
       if (createFailure instanceof Error) {
         throw (Error) createFailure;
       }
-      return replacement;
+      return engineData.index == 0 ? replacement : super.createUnstartedEngine(engineData);
     }
 
     @Override
@@ -10213,6 +10264,7 @@ class EngineManagerLifecycleReservationTest {
     private final Board previousBoard = Lizzie.board;
     private final LizzieFrame previousFrame = Lizzie.frame;
     private final Config previousConfig = Lizzie.config;
+    private final Menu previousMenu = LizzieFrame.menu;
     private final JFontMenu previousEngineMenu = Menu.engineMenu;
     private final boolean previousEmpty = EngineManager.isEmpty;
     private final boolean previousUpdating = EngineManager.isUpdating;
@@ -10260,6 +10312,7 @@ class EngineManagerLifecycleReservationTest {
       config.uiConfig = new JSONObject();
       Lizzie.config = config;
       Lizzie.frame = allocate(SilentSwitchFrame.class);
+      LizzieFrame.menu = allocate(SilentUpdateMenu.class);
       Lizzie.board = preparedRestoreBoard();
       Lizzie.leelaz = previousForegroundEngine;
       Lizzie.leelaz2 = null;
@@ -10272,6 +10325,14 @@ class EngineManagerLifecycleReservationTest {
       EngineManager.currentEngineNo2 = -1;
     }
 
+    private void setEmptyForegroundName() {
+      previousForegroundEngine.oriEnginename = "";
+      Lizzie.config.leelazConfig
+          .getJSONArray("engine-settings-list")
+          .getJSONObject(0)
+          .put("name", "");
+    }
+
     @Override
     public void close() {
       Lizzie.leelaz = previousPrimary;
@@ -10279,6 +10340,7 @@ class EngineManagerLifecycleReservationTest {
       Lizzie.board = previousBoard;
       Lizzie.frame = previousFrame;
       Lizzie.config = previousConfig;
+      LizzieFrame.menu = previousMenu;
       Menu.engineMenu = previousEngineMenu;
       EngineManager.isEmpty = previousEmpty;
       EngineManager.isUpdating = previousUpdating;
