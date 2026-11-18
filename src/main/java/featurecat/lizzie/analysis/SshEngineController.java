@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.text.MessageFormat;
+import java.util.function.BooleanSupplier;
 import javax.swing.SwingUtilities;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -113,9 +114,13 @@ abstract class SshEngineController {
   }
 
   protected final void publishFailure(Runnable action) {
+    publishFailure(() -> !isClosed(), action);
+  }
+
+  protected final void publishFailure(BooleanSupplier mayPresentFailure, Runnable action) {
     Runnable publish =
         () -> {
-          if (isClosed()) return;
+          if (!mayPresentFailure.getAsBoolean()) return;
           try {
             action.run();
           } catch (org.json.JSONException failure) {

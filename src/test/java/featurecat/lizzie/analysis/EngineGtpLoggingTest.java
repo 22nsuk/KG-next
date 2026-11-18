@@ -1,15 +1,17 @@
 package featurecat.lizzie.analysis;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
+import featurecat.lizzie.EngineStartupStatus;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
@@ -39,6 +41,7 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -61,15 +64,22 @@ class EngineGtpLoggingTest {
   private GtpConsolePane previousConsole;
   private Board previousBoard;
   private LizzieFrame previousFrame;
+  private EngineStartupStatus.Snapshot previousStartupStatus;
+  private boolean previousFirstLaunchSession;
 
   @AfterEach
-  void tearDown() {
+  void tearDown() throws Exception {
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
     Lizzie.config = previousConfig;
     Lizzie.setPrimaryEngine(previousLeelaz);
     Lizzie.gtpConsole = previousConsole;
     Lizzie.board = previousBoard;
     Lizzie.frame = previousFrame;
+    if (previousStartupStatus != null) {
+      setField(Lizzie.class, null, "firstLaunchSession", previousFirstLaunchSession);
+      setField(
+          EngineStartupStatus.class, Lizzie.engineStartupStatus, "snapshot", previousStartupStatus);
+    }
   }
 
   @Test
@@ -685,7 +695,13 @@ class EngineGtpLoggingTest {
       if (connected) {
         assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
       } else {
-        assertTrue(app.contains("engine event=failed"), app);
+        assertTrue(engine.isDownWithError);
+        assertEquals(
+            EngineStartupStatus.State.START_FAILED, Lizzie.engineStartupStatus.snapshot().state);
+        assertEquals(1L, eventCount(app, "failed"), app);
+        assertEquals(1L, eventCount(app, "startup-failed"), app);
+        assertSameEngineIdentity(app, "event=failed", "event=startup-failed");
+        assertTrue(app.contains("controlled remote connection failure"), app);
       }
     } finally {
       closeRemoteReaders(engine);
@@ -753,32 +769,180 @@ class EngineGtpLoggingTest {
     }
   }
 
-  @Test
-  void shutdownWhileConnectingCannotPublishTheClosedTransport() throws Exception {
-    startRuntime();
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void delayedPreloadCannotSupersedeNewStart(boolean successorAlreadyBound) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    QuietTransport successor = new QuietTransport(false);
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(new QuietTransport(false), successor);
+    engine.preload = true;
+    engine.finishCreatingFirstTransport = new CountDownLatch(1);
+    successor.finishStart = new CountDownLatch(successorAlreadyBound ? 0 : 1);
+    Lizzie.setPrimaryEngine(new Leelaz(""));
+    Lizzie.board = new Board();
+
+    FutureTask<Void> preload = startRemoteInBackground(engine);
+    FutureTask<Void> replacement = null;
+    try {
+      assertTrue(engine.creatingFirstTransport.await(5, TimeUnit.SECONDS), "preload factory entered");
+      replacement = startRemoteInBackground(engine);
+      assertTrue(successor.starting.await(5, TimeUnit.SECONDS), "replacement connection entered");
+      String successorId = EngineObservation.identityFor(engine);
+      assertNotNull(successorId);
+      Object successorReader = null;
+      if (successorAlreadyBound) {
+        replacement.get(5, TimeUnit.SECONDS);
+        successorReader = engine.currentEngineIncarnation();
+        assertNotNull(successorReader);
+      }
+
+      engine.finishCreatingFirstTransport.countDown();
+      assertStartupCancelled(preload);
+      assertEquals(1, engine.transport.closeCalls.get(), "late preload transport closed");
+      assertEquals(0, successor.closeCalls.get(), "replacement transport remains open");
+      assertEquals(successorId, EngineObservation.identityFor(engine));
+      if (successorAlreadyBound) {
+        assertSame(successorReader, engine.currentEngineIncarnation());
+      }
+
+      successor.finishStart.countDown();
+      replacement.get(5, TimeUnit.SECONDS);
+      assertTrue(engine.started);
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(1L, eventCount(app, "process-started"), app);
+      assertEquals(successorId, engineIdOnEventLine(app, "event=process-started"), app);
+      assertEquals(0L, eventCount(app, "failed"), app);
+      assertEquals(0L, eventCount(app, "startup-failed"), app);
+    } finally {
+      engine.finishCreatingFirstTransport.countDown();
+      successor.finishStart.countDown();
+      try {
+        awaitStartupSettlement(preload);
+        if (replacement != null) awaitStartupSettlement(replacement);
+      } finally {
+        closeRemoteReaders(engine);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void shutdownDuringRemoteStartCannotPublishTransport(boolean beforeAcquisition) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
     RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
-    engine.transport.finishStart = new CountDownLatch(1);
+    Lizzie.setPrimaryEngine(new Leelaz(""));
+    Lizzie.board = new Board();
+    CountDownLatch entered;
+    CountDownLatch proceed = new CountDownLatch(1);
+    if (beforeAcquisition) {
+      engine.finishCreatingFirstTransport = proceed;
+      entered = engine.creatingFirstTransport;
+    } else {
+      engine.transport.finishStart = proceed;
+      entered = engine.transport.starting;
+    }
+    FutureTask<Void> startup = startRemoteInBackground(engine);
+    try {
+      assertTrue(entered.await(5, TimeUnit.SECONDS), "remote startup entered");
+      engine.shutdown();
+      assertEquals(beforeAcquisition ? 0 : 1, engine.transport.closeCalls.get());
+      proceed.countDown();
+      assertStartupCancelled(startup);
+      assertFalse(engine.started);
+      assertEquals(1, engine.transport.closeCalls.get());
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(0L, eventCount(app, "failed"), app);
+      assertEquals(0L, eventCount(app, "startup-failed"), app);
+    } finally {
+      proceed.countDown();
+      try {
+        awaitStartupSettlement(startup);
+      } finally {
+        closeRemoteReaders(engine);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, false", "true, true", "false, true"})
+  void ownerClosedRemoteConnectionDoesNotReportStartupFailure(
+      boolean explicitShutdown, boolean startReplacement)
+      throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    QuietTransport interrupted = new QuietTransport(false);
+    interrupted.failStartAfterClose = true;
+    interrupted.finishStart = new CountDownLatch(1);
+    QuietTransport successor = new QuietTransport(false);
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(interrupted, successor);
+    Lizzie.setPrimaryEngine(engine);
+    Lizzie.board = new Board();
+
+    FutureTask<Void> startup = startRemoteInBackground(engine);
+    FutureTask<Void> replacement = null;
+    try {
+      assertTrue(interrupted.starting.await(5, TimeUnit.SECONDS), "connection entered");
+      if (explicitShutdown) engine.shutdown();
+      if (startReplacement) {
+        replacement = startRemoteInBackground(engine);
+        replacement.get(5, TimeUnit.SECONDS);
+      }
+      assertEquals(1, interrupted.closeCalls.get(), "owner closed the pending connection");
+      Object successorReader = engine.currentEngineIncarnation();
+      String successorId = EngineObservation.identityFor(engine);
+      EngineStartupStatus.Snapshot startupStatus = Lizzie.engineStartupStatus.snapshot();
+
+      interrupted.finishStart.countDown();
+      assertStartupCancelled(startup);
+      awaitLogs(runtime);
+      String app = readApp();
+      assertAll(
+          () -> assertFalse(engine.isDownWithError, "connection closed by its owner"),
+          () -> assertSame(startupStatus, Lizzie.engineStartupStatus.snapshot()),
+          () -> assertEquals(0L, eventCount(app, "failed"), app),
+          () -> assertEquals(0L, eventCount(app, "startup-failed"), app),
+          () -> assertEquals(startReplacement, engine.started),
+          () -> assertSame(successorReader, engine.currentEngineIncarnation()),
+          () -> assertEquals(successorId, EngineObservation.identityFor(engine)),
+          () -> assertEquals(1, interrupted.closeCalls.get()));
+    } finally {
+      interrupted.finishStart.countDown();
+      try {
+        if (interrupted.closed.getCount() != 0) interrupted.close();
+        awaitStartupSettlement(startup);
+        if (replacement != null) awaitStartupSettlement(replacement);
+      } finally {
+        closeRemoteReaders(engine);
+      }
+    }
+  }
+
+  private static FutureTask<Void> startRemoteInBackground(RemoteLoggingEngine engine) {
     FutureTask<Void> startup = new FutureTask<>(() -> {
       engine.startEngine(-1);
       return null;
     });
-    Thread worker = new Thread(startup, "closing-pending-engine-start");
+    Thread worker = new Thread(startup, "controlled-remote-engine-start");
     worker.setDaemon(true);
     worker.start();
+    return startup;
+  }
+
+  private static void assertStartupCancelled(FutureTask<Void> startup) {
+    ExecutionException failure = assertThrows(
+        ExecutionException.class, () -> startup.get(5, TimeUnit.SECONDS));
+    assertTrue(
+        failure.getCause() instanceof IOException
+            || failure.getCause() instanceof IllegalStateException,
+        () -> "Expected a cancelled start, got " + failure.getCause());
+  }
+
+  private static void awaitStartupSettlement(FutureTask<Void> startup) throws Exception {
     try {
-      assertTrue(engine.transport.starting.await(5, TimeUnit.SECONDS));
-      engine.shutdown();
-      assertEquals(1, engine.transport.closeCalls.get());
-      engine.transport.finishStart.countDown();
-      var failure = assertThrows(java.util.concurrent.ExecutionException.class,
-          () -> startup.get(5, TimeUnit.SECONDS));
-      assertTrue(failure.getCause() instanceof IllegalStateException);
-      assertFalse(engine.started);
-      assertEquals(1, engine.transport.closeCalls.get());
-    } finally {
-      engine.transport.finishStart.countDown();
-      worker.join(TimeUnit.SECONDS.toMillis(5));
-      closeRemoteReaders(engine);
+      startup.get(5, TimeUnit.SECONDS);
+    } catch (ExecutionException ignored) {
+      // Cleanup only waits for the worker to exit.
     }
   }
 
@@ -829,6 +993,7 @@ class EngineGtpLoggingTest {
     } finally {
       engine.shutdown();
       engine.transport.close();
+      if (engine.successorTransport != null) engine.successorTransport.close();
     }
     awaitRemoteReaders(engine);
   }
@@ -844,15 +1009,30 @@ class EngineGtpLoggingTest {
 
   private static final class RemoteLoggingEngine extends Leelaz {
     private final QuietTransport transport;
+    private final QuietTransport successorTransport;
+    private final AtomicInteger transportCreations = new AtomicInteger();
+    private final CountDownLatch creatingFirstTransport = new CountDownLatch(1);
+    private CountDownLatch finishCreatingFirstTransport = new CountDownLatch(0);
     private final CountDownLatch bootstrapFinished = new CountDownLatch(1);
 
     private RemoteLoggingEngine(boolean failStart) throws IOException {
+      this(new QuietTransport(failStart), null);
+    }
+
+    private RemoteLoggingEngine(QuietTransport transport, QuietTransport successorTransport)
+        throws IOException {
       super(RemoteComputeConfig.COMMAND_ZHIZI);
-      transport = new QuietTransport(failStart);
+      this.transport = transport;
+      this.successorTransport = successorTransport;
     }
 
     @Override
-    protected EngineTransport createRemoteTransport() {
+    protected EngineTransport createRemoteTransport() throws IOException {
+      if (transportCreations.getAndIncrement() != 0 && successorTransport != null) {
+        return successorTransport;
+      }
+      creatingFirstTransport.countDown();
+      awaitStartupGate(finishCreatingFirstTransport, "acquire controlled remote transport");
       return transport;
     }
 
@@ -866,14 +1046,12 @@ class EngineGtpLoggingTest {
         EngineManager.EngineGameOwnerTransaction transaction) {
       bootstrapFinished.countDown();
     }
-
-    @Override
-    public void tryToDignostic(String message, boolean isModal) {}
   }
 
   private static final class QuietTransport implements EngineTransport {
     private final boolean failStart;
     private boolean failStreams;
+    private boolean failStartAfterClose;
     private final CountDownLatch starting = new CountDownLatch(1);
     private CountDownLatch finishStart = new CountDownLatch(0);
     private final CountDownLatch closed = new CountDownLatch(1);
@@ -892,14 +1070,11 @@ class EngineGtpLoggingTest {
     @Override
     public void start() throws IOException {
       starting.countDown();
-      try {
-        if (!finishStart.await(5, TimeUnit.SECONDS)) {
-          throw new IOException("timed out waiting to finish the controlled remote connection");
-        }
-      } catch (InterruptedException interrupted) {
-        Thread.currentThread().interrupt();
-        throw new IOException(interrupted);
+      if (failStartAfterClose) {
+        awaitStartupGate(closed, "close controlled remote connection");
       }
+      awaitStartupGate(finishStart, "finish controlled remote connection");
+      if (failStartAfterClose) throw new IOException("controlled remote connection closed");
       if (failStart) throw new IOException("controlled remote connection failure");
     }
 
@@ -952,6 +1127,17 @@ class EngineGtpLoggingTest {
     }
   }
 
+  private static void awaitStartupGate(CountDownLatch gate, String operation) throws IOException {
+    try {
+      if (!gate.await(5, TimeUnit.SECONDS)) {
+        throw new IOException("timed out waiting to " + operation);
+      }
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new IOException(interrupted);
+    }
+  }
+
   private static final class QuietFrame extends LizzieFrame {
     private int ponderNotifications;
 
@@ -985,6 +1171,10 @@ class EngineGtpLoggingTest {
     previousConsole = Lizzie.gtpConsole;
     previousBoard = Lizzie.board;
     previousFrame = Lizzie.frame;
+    previousStartupStatus = Lizzie.engineStartupStatus.snapshot();
+    previousFirstLaunchSession = Lizzie.isFirstLaunchSession();
+    // Exercise startup status publication without opening the repair dialog.
+    setField(Lizzie.class, null, "firstLaunchSession", true);
     Lizzie.config = ConfigTestHelper.createForTests(tempDir);
     Lizzie.gtpConsole = null;
     Lizzie.frame = allocate(LizzieFrame.class);

@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,12 +21,18 @@ import java.nio.file.Path;
 import java.security.KeyPair;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import javax.swing.SwingUtilities;
 import org.apache.sshd.common.config.keys.PublicKeyEntry;
 import org.apache.sshd.common.config.keys.writer.openssh.OpenSSHKeyPairResourceWriter;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 @Timeout(60)
 class SshEngineControllerTest {
@@ -85,6 +92,56 @@ class SshEngineControllerTest {
           passwordsBeforeInterception,
           server.passwordAttempts.get(),
           "no password is sent to a server whose host key changed");
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void backgroundHostKeyFailureSurvivesCleanupOnlyWhileItsStartOwnsPresentation(boolean replaced)
+      throws Exception {
+    try (TestSshServer server = TestSshServer.builder().password("s3cret").start()) {
+      Path knownHosts = temp.resolve("known_hosts");
+      String host = "[127.0.0.1]:" + server.port();
+      Files.writeString(
+          knownHosts,
+          host + " " + PublicKeyEntry.toString(TestSshServer.ecKeyPair().getPublic()) + "\n");
+      AtomicBoolean currentStart = new AtomicBoolean(true);
+      AtomicReference<String> diagnostic = new AtomicReference<>();
+      SSHController controller =
+          new SSHController(
+              "127.0.0.1",
+              String.valueOf(server.port()),
+              currentStart::get,
+              message -> {
+                diagnostic.set(message);
+                currentStart.set(false); // Simulate a replacement while the modal dialog is open.
+              }) {
+            @Override
+            SshKnownHosts knownHosts() {
+              return new SshKnownHosts(knownHosts);
+            }
+          };
+
+      CountDownLatch releaseEdt = new CountDownLatch(1);
+      FutureTask<Boolean> edtBlocked =
+          new FutureTask<>(() -> releaseEdt.await(20, TimeUnit.SECONDS));
+      SwingUtilities.invokeLater(edtBlocked);
+      try {
+        assertFalse(controller.login("katago gtp", "player", Utils.doEncrypt("s3cret")));
+        controller.close();
+        if (replaced) currentStart.set(false);
+      } finally {
+        releaseEdt.countDown();
+      }
+      SwingUtilities.invokeAndWait(() -> {});
+      assertTrue(edtBlocked.get(), "EDT should stay blocked until the failed transport is closed");
+      if (replaced) {
+        assertNull(diagnostic.get());
+      } else {
+        assertNotNull(diagnostic.get(), "Closing the failed transport dropped its diagnostic");
+        assertTrue(diagnostic.get().contains(host), diagnostic.get());
+      }
+      assertEquals(0, server.passwordAttempts.get());
     }
   }
 

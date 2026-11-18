@@ -1173,6 +1173,60 @@ class EngineManagerInitialStartupSynchronizationTest {
   }
 
   @Test
+  void killAllEnginesCancelsPreloadBeforeScheduledWorkerEnters() throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      AtomicInteger launches = new AtomicInteger();
+      Leelaz engine =
+          new Leelaz("") {
+            @Override
+            public void startEngine(int index) {
+              launches.incrementAndGet();
+            }
+          };
+      EngineData data = engineData(23, "queued-initial-preload", false);
+      data.preload = true;
+      AtomicReference<Thread> scheduledWorker = new AtomicReference<>();
+      EngineManager.setInitialEnginePreloadSchedulerForTest(
+          new EngineManager.InitialEnginePreloadScheduler() {
+            @Override
+            public Thread create(Runnable work, String name) {
+              return new Thread(work, name);
+            }
+
+            @Override
+            public void configure(Thread worker) {
+              worker.setDaemon(true);
+            }
+
+            @Override
+            public void start(Thread worker) {
+              scheduledWorker.set(worker);
+            }
+          });
+      try {
+        Lizzie.board = boardWithHistory(emptyRootHistory(0));
+        Lizzie.leelaz = null;
+        Lizzie.config.uiConfig = new org.json.JSONObject();
+        EngineManager manager =
+            new EngineManager(
+                Lizzie.config, -1, false, new ArrayList<>(List.of(data)), command -> engine);
+
+        Thread worker = scheduledWorker.get();
+        assertNotNull(worker);
+        assertTrue(manager.killAllEngines());
+        worker.start();
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+
+        assertFalse(worker.isAlive(), "the retired preload worker must settle");
+        assertEquals(0, launches.get(), "the retired preload must never start an engine");
+      } finally {
+        EngineManager.setInitialEnginePreloadSchedulerForTest(null);
+        engine.forceQuit();
+      }
+    }
+  }
+
+  @Test
   void nonSelectedInitialPreloadClosesAReaderPublishedBeforeStartThrows() throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
       PartialInitialPreloadLeelaz engine = new PartialInitialPreloadLeelaz();
