@@ -4999,14 +4999,11 @@ class EngineManagerInitialStartupSynchronizationTest {
       engine.startEngine(0);
 
       EngineManager.InitialEngineStartupSynchronization startup = captureStartup(engine, board);
+      long generation = Lizzie.capturePrimaryEngineGeneration(engine);
       AtomicInteger readyDuringBarrier = new AtomicInteger(-1);
       startup.beforeRestore =
           () -> {
-            try {
-              invokeCloseBundledStartupDialog(engine);
-            } catch (Exception ex) {
-              throw new AssertionError("closeBundledStartupDialog invocation failed", ex);
-            }
+            engine.closeBundledStartupDialog(generation, engine.captureEngineIncarnationFence());
             readyDuringBarrier.set(env.readyTransitions.get());
           };
       int readyBaseline = env.readyTransitions.get();
@@ -6871,12 +6868,6 @@ class EngineManagerInitialStartupSynchronizationTest {
     binding.setAccessible(true);
     binding.set(engine, null);
     return engine.currentEngineIncarnation();
-  }
-
-  private static void invokeCloseBundledStartupDialog(Leelaz engine) throws Exception {
-    Method method = Leelaz.class.getDeclaredMethod("closeBundledStartupDialog");
-    method.setAccessible(true);
-    method.invoke(engine);
   }
 
   private static void invokeParseLine(Leelaz engine, String line) throws Exception {

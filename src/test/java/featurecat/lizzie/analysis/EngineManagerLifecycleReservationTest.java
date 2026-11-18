@@ -1321,7 +1321,8 @@ class EngineManagerLifecycleReservationTest {
       Lizzie.engineStartupStatus.addListener(readyListener);
       workerClose.start();
       assertTrue(target.closeEntered.await(2, TimeUnit.SECONDS));
-      invokeCloseBundledStartupDialog(target);
+      target.closeBundledStartupDialog(
+          targetAttempt.primaryEngineGeneration(), target.captureEngineIncarnationFence());
       assertEquals(
           EngineStartupStatus.State.CHECKING,
           Lizzie.engineStartupStatus.snapshot().state,
@@ -2398,7 +2399,7 @@ class EngineManagerLifecycleReservationTest {
           new Thread(
               () -> {
                 try {
-                  invokeCloseBundledStartupDialog(target);
+                  target.closeBundledStartupDialog(generation, target.captureEngineIncarnationFence());
                 } catch (Throwable failure) {
                   bundledFailure.set(failure);
                 }
@@ -7871,12 +7872,6 @@ class EngineManagerLifecycleReservationTest {
     Field field = Leelaz.class.getDeclaredField(name);
     field.setAccessible(true);
     field.set(engine, value);
-  }
-
-  private static void invokeCloseBundledStartupDialog(Leelaz engine) throws Exception {
-    Method method = Leelaz.class.getDeclaredMethod("closeBundledStartupDialog");
-    method.setAccessible(true);
-    method.invoke(engine);
   }
 
   private static void awaitLatch(CountDownLatch latch) {

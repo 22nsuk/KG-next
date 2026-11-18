@@ -24456,7 +24456,7 @@ public class Leelaz {
     if (notification.get() != null) notification.get().run();
   }
 
-  private void closeBundledStartupDialog(
+  void closeBundledStartupDialog(
       long expectedPrimaryGeneration, Object expectedEngineIncarnation) {
     if (expectedPrimaryGeneration < 0L
         || expectedEngineIncarnation == null
