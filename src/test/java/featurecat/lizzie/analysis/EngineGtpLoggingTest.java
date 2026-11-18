@@ -3,13 +3,17 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.remote.EngineTransport;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.logging.DiagnosticModule;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogStream;
@@ -20,7 +24,11 @@ import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -29,10 +37,14 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
@@ -361,6 +373,361 @@ class EngineGtpLoggingTest {
     assertFalse(Files.exists(tempDir.resolve("logs/engine-trace.log")));
   }
 
+  @Test
+  void coalescedAnalysisIsRecordedOnlyWhenTheLastRequestIsWritten() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Leelaz engine = prepareEngine();
+    Lizzie.board = new Board();
+    EngineObservation.ensureStarted(engine, "MAIN_BOARD");
+    ExactSnapshotRestoreProtocolFixture.Transport transport =
+        ExactSnapshotRestoreProtocolFixture.install(engine, command -> null);
+    engine.sendCommand("undo");
+    for (int i = 0; i < 128; i++) {
+      engine.sendCommand("kata-analyze B " + (10 + i));
+    }
+    assertEquals(List.of("undo"), transport.commands());
+    awaitLogs(runtime);
+    assertFalse(readApp().contains("engine event=analysis-started"), readApp());
+
+    String undo = transport.rawCommands().get(0);
+    engine.processCommandResponseLineForTest("=" + undo.substring(0, undo.indexOf(' ')));
+    assertEquals(List.of("undo", "kata-analyze B 137"), transport.commands());
+    awaitLogs(runtime);
+    assertEquals(1L, eventCount(readApp(), "analysis-started"), readApp());
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "kata-analyze B 10, analysis-started, kata-analyze",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12"
+  })
+  void commandDiagnosticsWaitForFlushAndKeepTheWrittenInstance(
+      String command, String event, String detail) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Leelaz engine = prepareEngine();
+    Lizzie.board = new Board();
+    String first = EngineObservation.ensureStarted(engine, "MAIN_BOARD");
+    ExactSnapshotRestoreProtocolFixture.install(
+        engine,
+        written -> {
+          assertEquals(command, written);
+          awaitLogs(runtime);
+          assertEquals(0L, eventCount(readApp(), event), readApp());
+          EngineObservation.restartInstance(engine, "MAIN_BOARD");
+          return null;
+        });
+
+    // The response callback adds a protocol ID on the wire; diagnostics still classify payloads.
+    engine.sendCommandWithResponseForTest(command, () -> {});
+    awaitLogs(runtime);
+    String app = readApp();
+    assertEquals(1L, eventCount(app, event), app);
+    assertNotEquals(first, EngineObservation.identityFor(engine));
+    assertEquals(first, engineIdOnEventLine(app, "engine event=" + event), app);
+    assertTrue(eventLine(app, "engine event=" + event).contains("command=" + detail), app);
+    assertTrue(eventLine(app, "engine event=" + event).contains("purpose=MAIN_BOARD"), app);
+    assertSameEngineIdentity(app, "engine event=" + event, "outcome=sent");
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "kata-analyze B 10, analysis-started, write",
+    "kata-analyze B 10, analysis-started, flush",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, write",
+    "kata-set-param numSearchThreads 12, dynamic-parameter, flush"
+  })
+  void failedWritesNeverRecordSuccessfulCommandDiagnostics(
+      String command, String event, String failureStage) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Leelaz engine = prepareEngine();
+    Lizzie.board = new Board();
+    EngineObservation.ensureStarted(engine, "MAIN_BOARD");
+    engine.installCommandOutputForTest(failingOutput(failureStage));
+
+    engine.sendCommand(command);
+    awaitLogs(runtime);
+    String app = readApp();
+    assertEquals(0L, eventCount(app, event), app);
+    assertTrue(app.contains("outcome=failed"), app);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void auxiliaryCommandDiagnosticsFollowTheTransportResult(boolean failFlush) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    AnalysisEngine engine = allocate(AnalysisEngine.class);
+    setField(AnalysisEngine.class, engine, "purpose",
+        AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS);
+    String first = EngineObservation.ensureStarted(engine, "AUTO_QUICK_ANALYSIS");
+    ByteArrayOutputStream output =
+        new ByteArrayOutputStream() {
+          @Override
+          public void flush() throws IOException {
+            try {
+              awaitLogs(runtime);
+              assertEquals(0L, eventCount(readApp(), "dynamic-parameter"), readApp());
+              EngineObservation.restartInstance(engine, "AUTO_QUICK_ANALYSIS");
+            } catch (Exception error) {
+              throw new IOException(error);
+            }
+            if (failFlush) throw new IOException("controlled auxiliary flush failure");
+          }
+        };
+    setField(AnalysisEngine.class, engine, "outputStream", new BufferedOutputStream(output));
+
+    assertEquals(!failFlush, engine.sendCommand("kata-set-param numSearchThreads 12"));
+    assertEquals("kata-set-param numSearchThreads 12\n", output.toString(StandardCharsets.UTF_8));
+    awaitLogs(runtime);
+    String app = readApp();
+    assertEquals(failFlush ? 0L : 1L, eventCount(app, "dynamic-parameter"), app);
+    if (!failFlush) {
+      assertEquals(first, engineIdOnEventLine(app, "engine event=dynamic-parameter"), app);
+      assertTrue(app.contains("purpose=AUTO_QUICK_ANALYSIS pid=-1 command=numSearchThreads=12"), app);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void sharedCommandDiagnosticsFollowAdmissionAndFlush(boolean failFlush) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    AnalysisEngine engine = allocate(AnalysisEngine.class);
+    setField(AnalysisEngine.class, engine, "purpose",
+        AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS);
+    Leelaz foreground = prepareEngine();
+    foreground.commandLists.addAll(
+        List.of("boardsize", "komi", "clear_board", "play", "set_position",
+            "kata-get-rules", "kata-set-rules"));
+    setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
+    EngineObservation.ensureStarted(engine, "AUTO_QUICK_ANALYSIS");
+    ByteArrayOutputStream output =
+        new ByteArrayOutputStream() {
+          @Override
+          public void flush() throws IOException {
+            if (failFlush && toString(StandardCharsets.UTF_8).contains("kata-set-param")) {
+              throw new IOException("controlled shared flush failure");
+            }
+          }
+        };
+    foreground.installCommandOutputForTest(output);
+
+    assertFalse(engine.sendCommand("kata-set-param numSearchThreads 12"));
+    awaitLogs(runtime);
+    assertEquals(0L, eventCount(readApp(), "dynamic-parameter"), readApp());
+    try {
+      assertEquals(Leelaz.ExclusiveGtpLeaseAvailability.AVAILABLE,
+          foreground.beginExclusiveGtpSession(line -> {}, () -> {}, () -> {}));
+      String stop = output.toString(StandardCharsets.UTF_8);
+      Method dispatch = Leelaz.class.getDeclaredMethod("dispatchExclusiveGtpLine", String.class);
+      dispatch.setAccessible(true);
+      assertTrue((Boolean) dispatch.invoke(foreground, "=" + stop.substring(0, stop.indexOf(' '))));
+      assertTrue((Boolean) dispatch.invoke(foreground, ""));
+
+      assertEquals(!failFlush, engine.sendCommand("kata-set-param numSearchThreads 12"));
+      assertTrue(output.toString(StandardCharsets.UTF_8).endsWith("kata-set-param numSearchThreads 12\n"));
+      awaitLogs(runtime);
+      assertEquals(failFlush ? 0L : 1L, eventCount(readApp(), "dynamic-parameter"), readApp());
+    } finally {
+      foreground.endExclusiveGtpSession();
+    }
+  }
+
+  @Test
+  void remoteConnectionIsRecordedOnceBeforePondering() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Menu previousMenu = LizzieFrame.menu;
+    EngineManager previousManager = Lizzie.engineManager;
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
+    try {
+      QuietFrame frame = allocate(QuietFrame.class);
+      Lizzie.frame = frame;
+      LizzieFrame.menu = allocate(QuietMenu.class);
+      Lizzie.engineManager = null;
+      Lizzie.leelaz = engine;
+      Lizzie.board = new Board();
+      engine.startEngine(-1);
+      assertTrue(engine.bootstrapFinished.await(5, TimeUnit.SECONDS), "startup command worker");
+      awaitLogs(runtime);
+      assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
+      assertSameEngineIdentity(readApp(), "event=bootstrap", "event=process-started");
+
+      engine.isLoaded = true;
+      engine.isKatago = true;
+      setField(engine, "endGetCommandList", true);
+      for (int i = 0; i < 3; i++) engine.ponder();
+      awaitLogs(runtime);
+      assertEquals(3, frame.ponderNotifications, "Foreground resource coordination must still run");
+      assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
+    } finally {
+      try {
+        closeRemoteReaders(engine);
+      } finally {
+        LizzieFrame.menu = previousMenu;
+        Lizzie.engineManager = previousManager;
+      }
+    }
+  }
+
+  @Test
+  void failedRemoteConnectionDoesNotRecordProcessStarted() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
+    try {
+      Lizzie.leelaz = engine;
+      assertThrows(IOException.class, () -> engine.startEngine(-1));
+      awaitLogs(runtime);
+      assertEquals(0L, eventCount(readApp(), "process-started"), readApp());
+      assertTrue(readApp().contains("engine event=failed"), readApp());
+    } finally {
+      closeRemoteReaders(engine);
+    }
+  }
+
+  private LoggingRuntime startEngineDiagnostics() throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    runtime.applySettings(
+        LoggingSettings.defaults()
+            .withDiagnosticsEnabled(true)
+            .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE, DiagnosticModule.GTP_SUMMARY)));
+    return runtime;
+  }
+
+  private static long eventCount(String app, String event) {
+    return app.lines().filter(line -> line.contains("engine event=" + event + " ")).count();
+  }
+
+  private static OutputStream failingOutput(String stage) {
+    return new OutputStream() {
+      @Override
+      public void write(int value) throws IOException {
+        if (stage.equals("write")) throw new IOException("controlled write failure");
+      }
+
+      @Override
+      public void flush() throws IOException {
+        if (stage.equals("flush")) throw new IOException("controlled flush failure");
+      }
+    };
+  }
+
+  private static void closeRemoteReaders(RemoteLoggingEngine engine) throws Exception {
+    try {
+      if (engine.started) {
+        assertTrue(engine.bootstrapFinished.await(5, TimeUnit.SECONDS), "startup command worker");
+      }
+    } finally {
+      engine.shutdown();
+      engine.transport.close();
+    }
+    for (String name : List.of("executor", "executorErr")) {
+      Field field = Leelaz.class.getDeclaredField(name);
+      field.setAccessible(true);
+      ScheduledExecutorService executor = (ScheduledExecutorService) field.get(engine);
+      if (executor != null) assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), name);
+    }
+  }
+
+  private static final class RemoteLoggingEngine extends Leelaz {
+    private final QuietTransport transport;
+    private final CountDownLatch bootstrapFinished = new CountDownLatch(1);
+
+    private RemoteLoggingEngine(boolean failStart) throws IOException {
+      super(RemoteComputeConfig.COMMAND_ZHIZI);
+      transport = new QuietTransport(failStart);
+    }
+
+    @Override
+    protected EngineTransport createRemoteTransport() {
+      return transport;
+    }
+
+    @Override
+    void afterEngineGameBootstrapWorkerForTest(
+        EngineManager.EngineGameOwnerTransaction transaction) {
+      bootstrapFinished.countDown();
+    }
+
+    @Override
+    public void tryToDignostic(String message, boolean isModal) {}
+  }
+
+  private static final class QuietTransport implements EngineTransport {
+    private final boolean failStart;
+    private final CountDownLatch closed = new CountDownLatch(1);
+    private final OutputStream output = new ByteArrayOutputStream();
+
+    private QuietTransport(boolean failStart) {
+      this.failStart = failStart;
+    }
+
+    @Override
+    public void start() throws IOException {
+      if (failStart) throw new IOException("controlled remote connection failure");
+    }
+
+    @Override
+    public InputStream stdout() {
+      return new InputStream() {
+        @Override
+        public int read() throws IOException {
+          try {
+            closed.await();
+            return -1;
+          } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new IOException(interrupted);
+          }
+        }
+      };
+    }
+
+    @Override
+    public InputStream stderr() {
+      return stdout();
+    }
+
+    @Override
+    public OutputStream stdin() {
+      return output;
+    }
+
+    @Override
+    public boolean isOpen() {
+      return !failStart && closed.getCount() != 0;
+    }
+
+    @Override
+    public String description() {
+      return "controlled diagnostic transport";
+    }
+
+    @Override
+    public void abort() {
+      close();
+    }
+
+    @Override
+    public void close() {
+      closed.countDown();
+    }
+  }
+
+  private static final class QuietFrame extends LizzieFrame {
+    private int ponderNotifications;
+
+    @Override
+    public void onMainEnginePonder() {
+      ponderNotifications++;
+    }
+
+    @Override
+    public void clearSelectImage() {}
+  }
+
+  private static final class QuietMenu extends Menu {
+    @Override
+    public void toggleEngineMenuStatus(boolean isPondering, boolean isThinking) {}
+  }
+
   private LoggingRuntime startRuntime() throws Exception {
     LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
     LoggingRuntime runtime =
@@ -437,7 +804,12 @@ class EngineGtpLoggingTest {
   }
 
   private static void setField(Object target, String name, Object value) throws Exception {
-    Field field = Leelaz.class.getDeclaredField(name);
+    setField(Leelaz.class, target, name, value);
+  }
+
+  private static void setField(Class<?> owner, Object target, String name, Object value)
+      throws Exception {
+    Field field = owner.getDeclaredField(name);
     field.setAccessible(true);
     field.set(target, value);
   }

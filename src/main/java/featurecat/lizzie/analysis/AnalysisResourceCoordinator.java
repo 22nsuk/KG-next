@@ -306,6 +306,14 @@ public final class AnalysisResourceCoordinator {
   }
 
   public static void commandSent(Object owner, Purpose purpose, String command) {
+    if (!EngineObservation.engineDiagnosticsEnabled()) {
+      return;
+    }
+    commandSentForInstance(EngineObservation.identityFor(owner), purpose, command);
+  }
+
+  /** Records delivery using the identity captured for the physical write. */
+  static void commandSentForInstance(String engineId, Purpose purpose, String command) {
     if (!EngineObservation.engineDiagnosticsEnabled() || command == null) {
       return;
     }
@@ -314,7 +322,6 @@ public final class AnalysisResourceCoordinator {
       return;
     }
     String purposeName = normalizedPurpose(purpose).name();
-    String engineId = EngineObservation.identityFor(owner);
     if (matcher.matches()) {
       EngineObservation.recordProcessDetails(
           engineId,
