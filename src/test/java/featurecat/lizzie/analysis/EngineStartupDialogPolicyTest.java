@@ -19,15 +19,18 @@ import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineStartupDialogPolicyTest {
   @TempDir Path tempDir;
 
-  @Test
-  void headlessSecondaryDiagnosticPreservesStatusAndClearsPendingEngineGame() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void headlessSecondaryDiagnosticPreservesStatusAndOnlyForegroundClearsPendingEngineGame(
+      boolean backgroundPreload) throws Exception {
     assumeTrue(GraphicsEnvironment.isHeadless());
     Config previousConfig = Lizzie.config;
     Leelaz previousPrimary = Lizzie.leelaz;
@@ -50,11 +53,21 @@ class EngineStartupDialogPolicyTest {
           Lizzie.engineManager, EngineGamePlans.harness(0, 1, false), null, true);
       Lizzie.engineStartupStatus.ready();
 
-      secondary.tryToDignostic("controlled headless secondary failure", false);
+      if (backgroundPreload) {
+        Object request = startupResources(secondary.beginPreloadStartAttempt());
+        Method diagnostic =
+            Leelaz.class.getDeclaredMethod(
+                "showStartupDiagnostic", request.getClass(), String.class, boolean.class,
+                boolean.class);
+        diagnostic.setAccessible(true);
+        diagnostic.invoke(secondary, request, "controlled background preload failure", true, true);
+      } else {
+        secondary.tryToDignostic("controlled headless secondary failure", false);
+      }
 
       assertEquals(EngineStartupStatus.State.READY, Lizzie.engineStartupStatus.snapshot().state);
-      assertFalse(EngineManager.hasActiveEngineGameTransaction());
-      assertFalse(Lizzie.board.isPkBoard);
+      assertEquals(backgroundPreload, EngineManager.hasActiveEngineGameTransaction());
+      assertEquals(backgroundPreload, Lizzie.board.isPkBoard);
     } finally {
       EngineManager.resetEngineGameTransactionStateForTest();
       Lizzie.config = previousConfig;
@@ -84,7 +97,9 @@ class EngineStartupDialogPolicyTest {
       Leelaz opponent = new Leelaz("");
       Lizzie.setPrimaryEngine(oldPrimary);
       long capturedGeneration = Lizzie.capturePrimaryEngineGeneration(oldPrimary);
-      Object capturedIncarnation = oldPrimary.captureEngineIncarnationFence();
+      Field startupGeneration = Leelaz.class.getDeclaredField("startupPrimaryEngineGeneration");
+      startupGeneration.setAccessible(true);
+      startupGeneration.setLong(oldPrimary, capturedGeneration);
       Lizzie.setPrimaryEngine(replacement);
       Lizzie.engineManager = new EngineManager(List.of(replacement, opponent));
       Lizzie.board = new Board();
@@ -94,22 +109,7 @@ class EngineStartupDialogPolicyTest {
           Lizzie.engineManager, EngineGamePlans.harness(0, 1, false), null, true);
       Lizzie.engineStartupStatus.ready();
 
-      Method diagnostic =
-          Leelaz.class.getDeclaredMethod(
-              "showDiagnosticOnEventDispatchThread",
-              String.class, boolean.class, long.class, boolean.class, Object.class, boolean.class,
-              EngineStartupDiagnostics.Attempt.class);
-      diagnostic.setAccessible(true);
-      SwingUtilities.invokeAndWait(
-          () -> {
-            try {
-              diagnostic.invoke(
-                  oldPrimary, "old startup failure", false, capturedGeneration, true,
-                  capturedIncarnation, true, null);
-            } catch (ReflectiveOperationException failure) {
-              throw new AssertionError(failure);
-            }
-          });
+      oldPrimary.tryToDignostic("old startup failure", false);
 
       assertSame(replacement, Lizzie.leelaz);
       assertTrue(EngineManager.hasActiveEngineGameTransaction());
@@ -276,14 +276,17 @@ class EngineStartupDialogPolicyTest {
   }
 
   private static Object reserveStartup(Leelaz engine) throws Exception {
-    Leelaz.UpdateEngineStartAttempt attempt = engine.beginUpdateEngineStartAttempt();
-    Field resources = attempt.getClass().getDeclaredField("resources");
-    resources.setAccessible(true);
-    Object request = resources.get(attempt);
+    Object request = startupResources(engine.beginUpdateEngineStartAttempt());
     Field primaryGeneration = request.getClass().getDeclaredField("primaryGeneration");
     primaryGeneration.setAccessible(true);
     primaryGeneration.setLong(request, Lizzie.capturePrimaryEngineGeneration(engine));
     return request;
+  }
+
+  private static Object startupResources(Leelaz.UpdateEngineStartAttempt attempt) throws Exception {
+    Field resources = attempt.getClass().getDeclaredField("resources");
+    resources.setAccessible(true);
+    return resources.get(attempt);
   }
 
   private static void invokeBundledStartupStage(Leelaz engine, Object request) throws Exception {

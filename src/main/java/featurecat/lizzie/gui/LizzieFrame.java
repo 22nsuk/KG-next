@@ -2376,17 +2376,14 @@ public class LizzieFrame extends JFrame {
   }
 
   public static void openMoreEngineDialog() {
-    //    boolean oriPonder = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-    //    if (Lizzie.leelaz != null && Lizzie.leelaz.isPondering()) Lizzie.leelaz.togglePonder();
-    //    ConfigDialog configDialog = new ConfigDialog();
-    //    configDialog.setVisible(true);
-    //    if (oriPonder) Lizzie.leelaz.togglePonder();
-    boolean oriPonder = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-    if (Lizzie.leelaz != null && Lizzie.leelaz.isPondering()) Lizzie.leelaz.togglePonder();
-    JDialog moreEngines;
-    moreEngines = MoreEngines.createDialog();
-    moreEngines.setVisible(true);
-    if (oriPonder) Lizzie.leelaz.ponder();
+    Leelaz engine = Lizzie.leelaz;
+    long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+    boolean resumePonder = generation >= 0L && engine != null && engine.isPondering();
+    if (resumePonder) engine.togglePonder();
+    MoreEngines.createDialog().setVisible(true);
+    if (resumePonder && Lizzie.capturePrimaryEngineGeneration(engine) == generation) {
+      engine.ponder();
+    }
   }
 
   public static void openProgramDialog() {

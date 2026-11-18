@@ -30,7 +30,14 @@ public class SSHController extends SshEngineController {
   @Override
   protected void onAuthenticationRejected() {
     publishStartupFailure(
-        () -> Utils.showMsg(Lizzie.resourceBundle.getString("SSHController.connectFailed")));
+        () -> {
+          String message = Lizzie.resourceBundle.getString("SSHController.connectFailed");
+          if (standaloneOwner != null) {
+            Utils.showMsg(message);
+          } else {
+            showDiagnostic.accept(message);
+          }
+        });
   }
 
   @Override
@@ -42,10 +49,12 @@ public class SSHController extends SshEngineController {
   }
 
   private void publishStartupFailure(Runnable showFailure) {
-    // Managed starts publish state through their request owner. Standalone controllers keep
-    // their original failure-state transition.
-    if (standaloneOwner != null) standaloneOwner.isLoaded = false;
-    // A failed start closes its SSH transport before the EDT necessarily gets to the failure.
+    if (standaloneOwner == null) {
+      // The request can still report its failure after the SSH transport is closed.
+      publishFailure(mayPresentFailure, showFailure);
+      return;
+    }
+    standaloneOwner.isLoaded = false;
     publishFailure(
         mayPresentFailure,
         () -> {

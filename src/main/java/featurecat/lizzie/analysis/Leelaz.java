@@ -78,6 +78,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -567,6 +568,8 @@ public class Leelaz {
   public boolean stopByPlayouts = false;
   public boolean outOfPlayoutsLimit = false;
   private EngineFailedMessage engineFailedMessage;
+  // Confined to the EDT, including the nested event loops of both modal windows.
+  private long startupDiagnosticPresentationGeneration = -1L;
   private final AtomicReference<TensorRtRepairContext> pendingTensorRtRepairContext =
       new AtomicReference<>();
 
@@ -1312,7 +1315,7 @@ public class Leelaz {
     UpdateEngineStartFailureCleanup superseded;
     synchronized (engineArbitrationLock()) {
       superseded = update == null ? retirePendingStartupLocked() : null;
-      resources = update == null ? reserveStartupLocked() : update.resources;
+      resources = update == null ? reserveStartupLocked(false) : update.resources;
       resources.requireActive();
     }
     Throwable failure = null;
@@ -1465,7 +1468,7 @@ public class Leelaz {
       SSHController ssh = new SSHController(
           ip, port,
           () -> canPresentStartupFailure(resources),
-          message -> showStartupDiagnostic(resources, message, true));
+          message -> showStartupDiagnostic(resources, message, true, true));
       synchronized (engineArbitrationLock()) {
         resources.ssh = ssh;
         resources.requireActive();
@@ -2189,7 +2192,7 @@ public class Leelaz {
   }
 
   private StartupBootstrap bootstrapForTest(EngineManager.EngineGameOwnerTransaction transaction) {
-    StartupRequest request = new StartupRequest(startupRequestGeneration);
+    StartupRequest request = new StartupRequest(startupRequestGeneration, false);
     request.primaryGeneration = Lizzie.capturePrimaryEngineGeneration(this);
     request.binding = currentReaderStreamBinding();
     request.bootstrapReceipt = currentRestartBootstrapReceipt();
@@ -2805,12 +2808,14 @@ public class Leelaz {
     private RestartBootstrapReceipt bootstrapReceipt;
     private volatile boolean retired;
     private final long generation;
+    private final boolean backgroundPreload;
     private long primaryGeneration = -1L;
     private boolean deferred;
     private volatile boolean failed;
 
-    private StartupRequest(long generation) {
+    private StartupRequest(long generation, boolean backgroundPreload) {
       this.generation = generation;
+      this.backgroundPreload = backgroundPreload;
     }
 
     private boolean isCurrent() {
@@ -2839,14 +2844,12 @@ public class Leelaz {
     private final AtomicBoolean invocationStarted = new AtomicBoolean();
     private final AtomicBoolean settled = new AtomicBoolean();
     private final AtomicBoolean failureReportClaimed = new AtomicBoolean();
-    private final boolean backgroundPreload;
     private boolean successfulStart;
     private UpdateEngineStartCompletion completionClaim;
     private volatile long primaryEngineGeneration = -1L;
 
-    private UpdateEngineStartAttempt(StartupRequest resources, boolean backgroundPreload) {
+    private UpdateEngineStartAttempt(StartupRequest resources) {
       this.resources = resources;
-      this.backgroundPreload = backgroundPreload;
       initialBinding = readerStreamBinding;
     }
 
@@ -2856,7 +2859,7 @@ public class Leelaz {
 
     private boolean isActiveLocked() {
       return !settled.get() && !resources.retired && !isSuperseded()
-          && (backgroundPreload || activeUpdateEngineStartAttempt == this);
+          && (resources.backgroundPreload || activeUpdateEngineStartAttempt == this);
     }
 
     void startEngine(int index) throws IOException {
@@ -3004,8 +3007,8 @@ public class Leelaz {
   }
 
   /** Linearization point for direct starts, scheduled preloads and paired catalog updates. */
-  private StartupRequest reserveStartupLocked() {
-    pendingStartup = new StartupRequest(advanceStartupGenerationLocked());
+  private StartupRequest reserveStartupLocked(boolean backgroundPreload) {
+    pendingStartup = new StartupRequest(advanceStartupGenerationLocked(), backgroundPreload);
     return pendingStartup;
   }
 
@@ -3018,7 +3021,17 @@ public class Leelaz {
       if (pendingStartup != null || activeUpdateEngineStartAttempt != null || isStarted()) {
         throw new IllegalStateException("Engine is already starting or started");
       }
-      return new UpdateEngineStartAttempt(reserveStartupLocked(), true);
+      return new UpdateEngineStartAttempt(reserveStartupLocked(true));
+    }
+  }
+
+  UpdateEngineStartAttempt tryBeginRecoveryStartAttempt(Object failedIncarnation) {
+    synchronized (engineArbitrationLock()) {
+      if (failedIncarnation == null || readerStreamBinding != failedIncarnation
+          || pendingStartup != null || activeUpdateEngineStartAttempt != null) {
+        return null;
+      }
+      return reserveUpdateEngineStartAttemptLocked();
     }
   }
 
@@ -3030,8 +3043,7 @@ public class Leelaz {
         throw new IllegalStateException("An update-engine start attempt is already active");
       }
       superseded = retirePendingStartupLocked();
-      attempt = new UpdateEngineStartAttempt(reserveStartupLocked(), false);
-      activeUpdateEngineStartAttempt = attempt;
+      attempt = reserveUpdateEngineStartAttemptLocked();
     }
     try {
       if (superseded != null) superseded.finish();
@@ -3040,6 +3052,12 @@ public class Leelaz {
       attempt.failClose(failure);
       throw failure;
     }
+  }
+
+  private UpdateEngineStartAttempt reserveUpdateEngineStartAttemptLocked() {
+    UpdateEngineStartAttempt attempt = new UpdateEngineStartAttempt(reserveStartupLocked(false));
+    activeUpdateEngineStartAttempt = attempt;
+    return attempt;
   }
 
   static void completeUpdateEngineStartAttempts(
@@ -3358,7 +3376,7 @@ public class Leelaz {
     boolean modal = startupFailureDiagnosticIsModal(repair);
     String message = startupFailureMessage(
         failure, Lizzie.resourceBundle.getString("Leelaz.engineStartNoExceptionMessage"));
-    showStartupDiagnostic(resources, message, modal, modal && shouldOpenInteractiveDiagnostic());
+    showStartupDiagnostic(resources, message, modal, modal);
   }
 
   private static String startupFailureMessage(IOException failure, String fallback) {
@@ -3375,13 +3393,10 @@ public class Leelaz {
       StartupRequest resources, String message, boolean modal, boolean openSettings) {
     if (!canPresentStartupFailure(resources)) return;
     EngineFailedMessage.runOnEventDispatchThreadAndWait(
-        () -> {
-          if (!canPresentStartupFailure(resources)) return;
-          showDiagnosticOnEventDispatchThread(
-              message, modal, resources.primaryGeneration, resources.primaryGeneration >= 0L,
-              resources.binding, true, resources.diagnostic);
-          if (openSettings && canPresentStartupFailure(resources)) LizzieFrame.openMoreEngineDialog();
-        });
+        () ->
+            showDiagnosticOnEventDispatchThread(
+                message, modal, resources.primaryGeneration, resources.primaryGeneration >= 0L,
+                resources.binding, true, resources.diagnostic, resources, openSettings));
   }
 
   private UpdateEngineStartFailureCleanup retireStartupLocked(
@@ -4652,7 +4667,7 @@ public class Leelaz {
       Path processWorkingDirectory,
       SnapshotFileAccessKind snapshotFileAccessKind,
       EngineLaunch launch) {
-    StartupRequest resources = new StartupRequest(startupRequestGeneration);
+    StartupRequest resources = new StartupRequest(startupRequestGeneration, false);
     resources.launch = launch;
     resources.diagnostic = startupDiagnosticAttempt;
     resources.process = process;
@@ -24282,9 +24297,7 @@ public class Leelaz {
       return;
     }
     long primaryGeneration = startupPrimaryEngineGeneration;
-    boolean primaryEngine =
-        primaryGeneration >= 0L
-            && Lizzie.capturePrimaryEngineGeneration(this) == primaryGeneration;
+    boolean primaryEngine = primaryGeneration >= 0L;
     Object expectedEngineIncarnation = captureEngineIncarnationFence();
     EngineStartupDiagnostics.Attempt diagnosticAttempt = startupDiagnosticAttempt;
     EngineFailedMessage.runOnEventDispatchThreadAndWait(
@@ -24296,7 +24309,9 @@ public class Leelaz {
                 primaryEngine,
                 expectedEngineIncarnation,
                 true,
-                diagnosticAttempt));
+                diagnosticAttempt,
+                null,
+                false));
   }
 
   void tryToDignosticForTerminalReader(
@@ -24317,7 +24332,9 @@ public class Leelaz {
                 primaryEngine,
                 expectedEngineIncarnation,
                 false,
-                diagnosticAttempt));
+                diagnosticAttempt,
+                null,
+                false));
   }
 
   private void showDiagnosticOnEventDispatchThread(
@@ -24327,60 +24344,87 @@ public class Leelaz {
       boolean primaryEngine,
       Object expectedEngineIncarnation,
       boolean mayClearEngineGame,
-      EngineStartupDiagnostics.Attempt diagnosticAttempt) {
-    if (diagnosticAttempt != null && diagnosticAttempt != startupDiagnosticAttempt) return;
-    closeBundledStartupDialog(primaryGeneration, expectedEngineIncarnation);
-    if (primaryEngine) {
-      boolean currentPrimary = Lizzie.runIfPrimaryEngine(
-          this,
-          primaryGeneration,
-          () -> {
-            if (hasMissingLocalStartupAsset(commands, useRemoteCompute, useJavaSSH)) {
-              Lizzie.engineStartupStatus.needsRepair(
-                  "EngineStartup.needsRepair", "AI is not ready - click to repair", message);
-            } else {
-              Lizzie.engineStartupStatus.failed(
-                  "EngineStartup.failed", "AI failed to start - click to repair", message);
-            }
-          });
-      if (!currentPrimary) {
+      EngineStartupDiagnostics.Attempt diagnosticAttempt,
+      StartupRequest request,
+      boolean openSettings) {
+    long generation = request == null ? startupRequestGeneration : request.generation;
+    BooleanSupplier current = () ->
+        (!primaryEngine || Lizzie.capturePrimaryEngineGeneration(this) == primaryGeneration)
+            && (request == null || canPresentStartupFailure(request))
+            && (diagnosticAttempt == null || diagnosticAttempt == startupDiagnosticAttempt)
+            && isCurrentDiagnosticSource(expectedEngineIncarnation)
+            && generation == startupRequestGeneration;
+    if (startupDiagnosticPresentationGeneration == generation || !current.getAsBoolean()) return;
+
+    long previousPresentation = startupDiagnosticPresentationGeneration;
+    startupDiagnosticPresentationGeneration = generation;
+    try {
+      closeBundledStartupDialog(primaryGeneration, expectedEngineIncarnation);
+      if (primaryEngine) {
+        Lizzie.runIfPrimaryEngine(
+            this,
+            primaryGeneration,
+            () -> {
+              if (!current.getAsBoolean()) return;
+              if (hasMissingLocalStartupAsset(commands, useRemoteCompute, useJavaSSH)) {
+                Lizzie.engineStartupStatus.needsRepair(
+                    "EngineStartup.needsRepair", "AI is not ready - click to repair", message);
+              } else {
+                Lizzie.engineStartupStatus.failed(
+                    "EngineStartup.failed", "AI failed to start - click to repair", message);
+              }
+            });
+      }
+      TensorRtRepairContext repairContext = pendingTensorRtRepairContext.get();
+      if ((request != null && request.backgroundPreload)
+          || !shouldOpenInteractiveDiagnostic(Lizzie.isFirstLaunchSession(), repairContext)
+          || !current.getAsBoolean()) {
         return;
       }
+      if (mayClearEngineGame
+          && Lizzie.config != null
+          && !Lizzie.config.autoCheckEngineAlive
+          && Lizzie.engineManager != null
+          && EngineManager.occupiesEngineGameAdmission()) {
+        Lizzie.engineManager.clearEngineGame();
+      }
+      if (GraphicsEnvironment.isHeadless() || !current.getAsBoolean()) return;
+      if (engineFailedMessage != null && engineFailedMessage.isVisible()
+          && presentedStartupDiagnosticAttempt == diagnosticAttempt) return;
+      EngineFailedMessage.showDialog(
+          commands,
+          engineCommand,
+          message,
+          !useJavaSSH && OsPlatform.isWindows(),
+          true,
+          false,
+          isModal,
+          repairContext,
+          dialog -> {
+            engineFailedMessage = dialog;
+            presentedStartupDiagnosticAttempt = diagnosticAttempt;
+            if (diagnosticAttempt != null && diagnosticAttempt.snapshot() != null) {
+              dialog.bindStartupDiagnostic(diagnosticAttempt);
+            }
+          });
+      // Modal dialogs dispatch queued events. Settings must still belong to the same failure.
+      if (openSettings && current.getAsBoolean()
+          && shouldOpenInteractiveDiagnostic(
+              Lizzie.isFirstLaunchSession(), pendingTensorRtRepairContext.get())) {
+        LizzieFrame.openMoreEngineDialog();
+      }
+    } finally {
+      startupDiagnosticPresentationGeneration = previousPresentation;
     }
-    TensorRtRepairContext repairContext = pendingTensorRtRepairContext.get();
-    if (!shouldOpenInteractiveDiagnostic(Lizzie.isFirstLaunchSession(), repairContext)) {
-      return;
-    }
-    if (mayClearEngineGame
-        && Lizzie.config != null
-        && !Lizzie.config.autoCheckEngineAlive
-        && Lizzie.engineManager != null
-        && EngineManager.occupiesEngineGameAdmission())
-      Lizzie.engineManager.clearEngineGame();
-    if (GraphicsEnvironment.isHeadless()) return;
-    if (engineFailedMessage != null && engineFailedMessage.isVisible()
-        && presentedStartupDiagnosticAttempt == diagnosticAttempt) return;
-    EngineFailedMessage.showDialog(
-        commands,
-        engineCommand,
-        message,
-        !useJavaSSH && OsPlatform.isWindows(),
-        true,
-        false,
-        isModal,
-        repairContext,
-        dialog -> { engineFailedMessage = dialog;
-          presentedStartupDiagnosticAttempt = diagnosticAttempt;
-          if (diagnosticAttempt != null && diagnosticAttempt.snapshot() != null)
-            dialog.bindStartupDiagnostic(diagnosticAttempt);
-        });
   }
 
-  private boolean shouldOpenInteractiveDiagnostic() {
-    if (isDeferredEngineGameRecoveryStartup()) {
-      return false;
-    }
-    return shouldOpenInteractiveDiagnostic(Lizzie.isFirstLaunchSession(), null);
+  private boolean isCurrentDiagnosticSource(Object expectedIncarnation) {
+    if (expectedIncarnation == null) return true;
+    ReaderStreamBinding binding = readerStreamBinding;
+    return binding == expectedIncarnation
+        && !readerStreamRebindInProgress
+        && !binding.suppressGlobalEnginePresentation
+        && !binding.deferredEngineGameRecoveryPresentationSuppressed;
   }
 
   public static boolean shouldOpenInteractiveDiagnostic(
@@ -24605,13 +24649,8 @@ public class Leelaz {
 
   private void dispatchBundledStartupTimeoutPresentation(
       StartupRequest request, boolean frozenSuppression, String message) {
-    if (frozenSuppression) return;
-    SwingUtilities.invokeLater(() -> {
-      if (isCurrentEngineIncarnation(request.binding)
-          && !suppressesGlobalEnginePresentation(request.binding)) {
-        showStartupDiagnostic(request, message, true, true);
-      }
-    });
+    if (frozenSuppression || request.binding == null) return;
+    SwingUtilities.invokeLater(() -> showStartupDiagnostic(request, message, true, true));
   }
 
   void dispatchBundledStartupTimeoutPresentationForTest(Object expectedIncarnation, String message) {

@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.ssh.SshKnownHosts;
 import featurecat.lizzie.analysis.ssh.SshTarget;
 import featurecat.lizzie.analysis.ssh.TestSshServer;
 import featurecat.lizzie.util.Utils;
+import java.awt.GraphicsEnvironment;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -112,10 +115,7 @@ class SshEngineControllerTest {
               "127.0.0.1",
               String.valueOf(server.port()),
               currentStart::get,
-              message -> {
-                diagnostic.set(message);
-                currentStart.set(false); // Simulate a replacement while the modal dialog is open.
-              }) {
+              diagnostic::set) {
             @Override
             SshKnownHosts knownHosts() {
               return new SshKnownHosts(knownHosts);
@@ -142,6 +142,29 @@ class SshEngineControllerTest {
         assertTrue(diagnostic.get().contains(host), diagnostic.get());
       }
       assertEquals(0, server.passwordAttempts.get());
+    }
+  }
+
+  @Test
+  void managedAuthenticationRejectionUsesTheStartupOwnersDiagnosticPolicy() throws Exception {
+    assumeTrue(GraphicsEnvironment.isHeadless());
+    try (TestSshServer server = TestSshServer.builder().password("s3cret").start()) {
+      AtomicReference<String> diagnostic = new AtomicReference<>();
+      SSHController controller =
+          new SSHController("127.0.0.1", String.valueOf(server.port()), () -> true, diagnostic::set) {
+            @Override
+            SshKnownHosts knownHosts() {
+              return new SshKnownHosts(temp.resolve("known_hosts"));
+            }
+          };
+      try {
+        assertFalse(controller.login("katago gtp", "player", Utils.doEncrypt("wrong")));
+      } finally {
+        controller.close();
+      }
+      SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(
+          Lizzie.resourceBundle.getString("SSHController.connectFailed"), diagnostic.get());
     }
   }
 

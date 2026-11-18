@@ -411,6 +411,7 @@ public class AnalysisEngine {
       isLoaded = false;
       return;
     }
+    isNormalEnd = false;
     startupDiagnosticAttempt = null;
     String launchPurpose = purpose == null ? "OTHER" : purpose.name();
     String engineId =
@@ -446,10 +447,6 @@ public class AnalysisEngine {
         remoteTransport = transport;
         transport.start();
         resources = bindStartedCarrier(null, null, transport, engineId);
-        if (transport instanceof ZhiziGtpTransport zhizi) {
-          resources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
-        }
-        isLoaded = true;
       } catch (IOException e) {
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.fail("remote-connect", e.toString());
@@ -477,7 +474,6 @@ public class AnalysisEngine {
       if (loginStatus) {
         resources = bindStartedCarrier(null, ssh, null, engineId);
         javaSSHClosed = false;
-        isLoaded = true;
       } else {
         javaSSHClosed = true;
         isLoaded = false;
@@ -521,20 +517,24 @@ public class AnalysisEngine {
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
-      CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
-      KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
-      // KataGo can write diagnostic fragments while another thread emits a JSON result.
-      // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
-      processBuilder.redirectErrorStream(false);
-      if (startupDiagnosticAttempt != null) {
-        startupDiagnosticAttempt.capture(processBuilder);
-      }
+      EngineLaunch.LocalProcessFactory create =
+          prepareLocalProcess(processBuilder, launchSpec, engineExecutable);
+      EngineLaunch launch = new EngineLaunch(purpose, engineId);
+      Process child;
       try {
-        process = processBuilder.start();
-        if (startupDiagnosticAttempt != null) {
-          startupDiagnosticAttempt.attachProcess(process);
+        // Recheck suppression after reserving the creation, since preflight may overlap a pause.
+        child =
+            launch.startLocalProcess(
+                this,
+                () -> shutdownRequested || KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()
+                    ? null
+                    : create.start(),
+                engineCommand);
+        if (child == null) {
+          process = null;
+          isLoaded = false;
+          return;
         }
-        isLoaded = true;
       } catch (IOException e) {
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.fail("process-create", e.toString());
@@ -545,14 +545,21 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-      resources = bindStartedCarrier(process, null, null, engineId);
-      resources.modelIdentity =
-          AnalysisModelIdentity.local(
-              launchCommands,
-              processBuilder.directory() == null ? Path.of("") : processBuilder.directory().toPath());
+      resources = bindCarrier(child, null, null, launch, processBuilder);
+      process = child;
     }
-    isNormalEnd = false;
     resources.start();
+  }
+
+  EngineLaunch.LocalProcessFactory prepareLocalProcess(
+      ProcessBuilder builder, CommandLaunchHelper.LaunchSpec spec, Path executable) {
+    CommandLaunchHelper.configureProcessBuilder(builder, spec);
+    KataGoRuntimeHelper.configureBundledProcessBuilder(builder, executable);
+    // KataGo can write diagnostic fragments while another thread emits a JSON result.
+    // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
+    builder.redirectErrorStream(false);
+    if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(builder);
+    return builder::start;
   }
 
   private void showErrMsg(String errMsg) {
@@ -628,8 +635,18 @@ public class AnalysisEngine {
       Process child, AnalysisEngineSSHController ssh, EngineTransport transport, String engineId) {
     EngineLaunch launch = new EngineLaunch(purpose, engineId);
     launch.started(this, child, engineCommand);
+    return bindCarrier(child, ssh, transport, launch, null);
+  }
+
+  private ReaderResources bindCarrier(
+      Process child,
+      AnalysisEngineSSHController ssh,
+      EngineTransport transport,
+      EngineLaunch launch,
+      ProcessBuilder localBuilder) {
     EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
     try {
+      if (child != null && attempt != null) attempt.attachProcess(child);
       InputStream stdout;
       OutputStream stdin;
       InputStream stderr;
@@ -646,7 +663,16 @@ public class AnalysisEngine {
         stdin = child.getOutputStream();
         stderr = child.getErrorStream();
       }
-      ReaderResources resources = new ReaderResources(child, ssh, transport, attempt, launch, stdout, stdin, stderr);
+      ReaderResources resources =
+          new ReaderResources(child, ssh, transport, attempt, launch, stdout, stdin, stderr);
+      if (localBuilder != null) {
+        resources.modelIdentity =
+            AnalysisModelIdentity.local(
+                localBuilder.command(),
+                localBuilder.directory() == null ? Path.of("") : localBuilder.directory().toPath());
+      } else if (transport instanceof ZhiziGtpTransport zhizi) {
+        resources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
+      }
       synchronized (ACTIVE_READER_RESOURCES) {
         ACTIVE_READER_RESOURCES.add(resources);
         readerResources = resources;
@@ -715,10 +741,18 @@ public class AnalysisEngine {
 
     private synchronized void start() {
       if (cleanup != null) return;
+      if (shutdownRequested) {
+        close(false);
+        return;
+      }
+      isLoaded = true;
       CountDownLatch started = new CountDownLatch(1);
       try {
         executor.execute(() -> runReader(started, () -> read(this)));
         executorErr.execute(() -> runReader(started, () -> readError(this)));
+      } catch (RuntimeException | Error submitFailure) {
+        close(false);
+        throw submitFailure;
       } finally {
         // Neither EOF nor cancellation can leave a reader submitted to a closed executor.
         started.countDown();
@@ -736,6 +770,7 @@ public class AnalysisEngine {
     }
 
     private synchronized void close(boolean preserveStartupTail) {
+      if (readerResources == this) isLoaded = false;
       if (modelIdentity != null) modelIdentity.close();
       // Do not interrupt or await the reader that may itself be completing an analysis.
       executor.shutdown();

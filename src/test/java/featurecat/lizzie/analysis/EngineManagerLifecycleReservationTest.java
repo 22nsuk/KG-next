@@ -30,6 +30,7 @@ import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.Utils;
 import java.io.BufferedOutputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -58,6 +59,9 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineManagerLifecycleReservationTest {
   private JFontMenu previousEngineMenu;
@@ -487,13 +491,25 @@ class EngineManagerLifecycleReservationTest {
     }
   }
 
-  @Test
-  void updateEnginesKeepsEmptySelectionWhenSavedEngineHasEmptyName() throws Exception {
+  private enum EmptyPrimary { FAILED, STARTUP_PLACEHOLDER, STOPPED }
+
+  @ParameterizedTest
+  @EnumSource(EmptyPrimary.class)
+  void updateEnginesKeepsEmptySelectionWhenSavedEngineHasEmptyName(EmptyPrimary emptyPrimary)
+      throws Exception {
     AssertionError unexpectedStart = new AssertionError("catalog refresh scheduled a replacement");
     UpdateFailureLeelaz savedEngine = new UpdateFailureLeelaz();
     try (UpdateFailureState state = new UpdateFailureState(savedEngine, unexpectedStart)) {
       state.install();
       state.setEmptyForegroundName();
+      savedEngine.oriWidth = savedEngine.oriHeight = 13;
+      Lizzie.config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(0)
+          .put("width", 13).put("height", 13);
+      UpdateBoard board = allocate(UpdateBoard.class);
+      BoardHistoryList history = preparedRestoreBoard(2).getHistory();
+      board.startStonelist = new ArrayList<>();
+      board.setHistory(history);
+      Lizzie.board = board;
       UpdateForegroundLeelaz previousMirror = new UpdateForegroundLeelaz();
       previousMirror.oriEnginename = "update-mirror";
       Lizzie.config.leelazConfig
@@ -502,7 +518,15 @@ class EngineManagerLifecycleReservationTest {
               new JSONObject()
                   .put("command", "controlled-update-mirror")
                   .put("name", "update-mirror"));
-      Lizzie.leelaz = null;
+      Leelaz emptyOwner = switch (emptyPrimary) {
+        case FAILED -> null;
+        case STARTUP_PLACEHOLDER -> new Leelaz("");
+        case STOPPED -> {
+          state.manager.killThisEngines();
+          yield state.previousForegroundEngine;
+        }
+      };
+      Lizzie.leelaz = emptyOwner;
       Lizzie.leelaz2 = previousMirror;
       EngineManager.isEmpty = true;
       EngineManager.currentEngineNo = -1;
@@ -516,7 +540,12 @@ class EngineManagerLifecycleReservationTest {
       assertEquals("update-mirror", rebuiltMirror.oriEnginename);
       assertNull(Lizzie.leelaz2);
       assertFalse(rebuiltMirror.hasEngineToStop());
-      assertNull(Lizzie.leelaz);
+      assertSame(emptyOwner, Lizzie.leelaz);
+      assertSame(history, Lizzie.board.getHistory());
+      assertEquals(0, board.clearCount);
+      assertEquals(19, Board.boardWidth);
+      assertEquals(19, Board.boardHeight);
+      assertFalse(savedEngine.hasEngineToStop());
       assertEquals(-1, EngineManager.currentEngineNo);
       assertEquals(-1, EngineManager.currentEngineNo2);
       assertTrue(EngineManager.isEmpty);
@@ -524,18 +553,48 @@ class EngineManagerLifecycleReservationTest {
     }
   }
 
-  @Test
-  void updateEnginesReplacesSelectedEngineWithEmptyName() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void updateEnginesReplacesSelectedEngineWithEmptyName(boolean reordered) throws Exception {
     AssertionError startFailure = new AssertionError("controlled replacement start failure");
     UpdateFailureLeelaz replacement = new UpdateFailureLeelaz();
     try (UpdateFailureState state = new UpdateFailureState(replacement, startFailure)) {
       state.install();
       state.setEmptyForegroundName();
+      if (reordered) {
+        JSONArray entries = Lizzie.config.leelazConfig.getJSONArray("engine-settings-list");
+        JSONObject selected = entries.getJSONObject(0);
+        state.previousForegroundEngine.savedEntryId = "selected-entry";
+        selected.put("id", "selected-entry");
+        entries.put(0, new JSONObject(selected.toString()).put("id", "other-entry")
+            .put("command", "other-engine"));
+        entries.put(selected);
+      }
 
       assertSame(startFailure, assertThrows(AssertionError.class, state.manager::updateEngines));
       assertSame(replacement, Lizzie.leelaz);
-      assertEquals(0, EngineManager.currentEngineNo);
+      assertEquals(reordered ? 1 : 0, EngineManager.currentEngineNo);
       assertFalse(EngineManager.isUpdating);
+    }
+  }
+
+  @Test
+  void refreshEngineCatalogKeepsStoppedEngineDeselectedWhenReusingItsEntry() throws Exception {
+    try (UpdateFailureState state = new UpdateFailureState(new UpdateFailureLeelaz(), null)) {
+      state.install();
+      Lizzie.config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(0)
+          .put("id", "saved-entry");
+      EngineManager manager = new EngineManager(new ArrayList<>());
+      Leelaz engine = manager.createUnstartedEngine(Utils.getEngineData().get(0));
+      manager.engineList.add(engine);
+      Lizzie.leelaz = engine;
+      manager.killThisEngines();
+
+      SwingUtilities.invokeAndWait(() -> assertDoesNotThrow(manager::refreshEngineCatalog));
+
+      assertSame(engine, manager.engineList.get(0));
+      assertTrue(EngineManager.isEmpty);
+      assertEquals(-1, EngineManager.currentEngineNo);
     }
   }
 
@@ -10238,7 +10297,8 @@ class EngineManagerLifecycleReservationTest {
       if (createFailure instanceof Error) {
         throw (Error) createFailure;
       }
-      return engineData.index == 0 ? replacement : super.createUnstartedEngine(engineData);
+      return "controlled-update-engine".equals(engineData.commands)
+          ? replacement : super.createUnstartedEngine(engineData);
     }
 
     @Override

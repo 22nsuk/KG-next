@@ -6531,8 +6531,10 @@ class EngineManagerEngineGameStateMachineTest {
     assertTrue(EngineManager.isCurrentEngineGameTransaction(successor));
   }
 
-  @Test
-  void stopAllCancelsADeferredRecoveryBeforeItsWorkerRequestsStartup() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void catalogStopCancelsADeferredRecoveryBeforeItsWorkerRequestsStartup(boolean keepPrimary)
+      throws Exception {
     CountDownLatch workerEntered = new CountDownLatch(1);
     CountDownLatch allowRecovery = new CountDownLatch(1);
     AtomicReference<Thread> worker = new AtomicReference<>();
@@ -6554,22 +6556,93 @@ class EngineManagerEngineGameStateMachineTest {
               }
             });
     activeTransaction(manager, gameInfo(), black, 0);
-    black.enableDeferredRecoveryStart = true;
+    StateMachineLeelaz stoppedEngine = keepPrimary ? white : black;
+    stoppedEngine.enableDeferredRecoveryStart = true;
 
     try {
-      manager.restartUnresponsiveRemoteEngine(black, 0);
+      if (keepPrimary) {
+        invokeStartupReaderLoop(white);
+        assertFalse(white.hasEngineToStop());
+      } else {
+        manager.restartUnresponsiveRemoteEngine(black, 0);
+      }
       assertTrue(workerEntered.await(2, TimeUnit.SECONDS));
       assertTrue(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
 
-      manager.forceKillAllEngines();
+      if (keepPrimary) {
+        manager.killOtherEngines();
+        assertTrue(black.isStarted());
+      } else {
+        manager.forceKillAllEngines();
+      }
     } finally {
       allowRecovery.countDown();
       if (worker.get() != null) worker.get().join(TimeUnit.SECONDS.toMillis(5));
     }
 
     assertFalse(worker.get().isAlive());
-    assertEquals(0, black.deferredRecoveryStartCount.get());
+    assertEquals(0, stoppedEngine.deferredRecoveryStartCount.get());
     assertFalse(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
+  }
+
+  @Test
+  void stopOthersDuringRetirementAllowsOnlyTheRetainedParticipantToRecover() throws Exception {
+    DeferredUiEngineManager manager = installManager(new DeferredUiEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction game = activeTransaction(manager, gameInfo(), black, 0);
+    Object blackIncarnation = black.currentEngineIncarnation();
+    black.enableDeferredRecoveryStart = true;
+    white.enableDeferredRecoveryStart = true;
+
+    invokeStartupReaderLoop(white);
+    assertFalse(white.hasEngineToStop());
+    assertEquals(EngineManager.EngineGamePhase.FAILED, game.phase());
+    manager.killOtherEngines();
+    assertTrue(black.isCurrentLiveEngineIncarnation(blackIncarnation));
+
+    invokeStartupReaderLoop(black);
+    manager.runPendingUi();
+    awaitCondition(game::retirementFinishedForTest);
+
+    assertEquals(0, white.deferredRecoveryStartCount.get());
+    assertFalse(white.isStarted());
+    assertEquals(1, black.deferredRecoveryStartCount.get());
+    assertNotSame(blackIncarnation, black.currentEngineIncarnation());
+    assertTrue(black.isCurrentLiveEngineIncarnation(black.currentEngineIncarnation()));
+    assertFalse(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void deferredRecoveryPreservesAStartupReservedAfterEof(boolean stopOthers) throws Exception {
+    DeferredUiEngineManager manager = installManager(new DeferredUiEngineManager(allEngines()));
+    EngineManager.EngineGameOwnerTransaction game = activeTransaction(manager, gameInfo(), black, 0);
+    white.enableDeferredRecoveryStart = true;
+    invokeStartupReaderLoop(white);
+    CountDownLatch workerEntered = new CountDownLatch(1);
+    CountDownLatch releaseWorker = new CountDownLatch(1);
+    white.beforeLifecycleReservation =
+        () -> {
+          workerEntered.countDown();
+          await(releaseWorker);
+        };
+    manager.runPendingUi();
+
+    Leelaz.UpdateEngineStartAttempt successor;
+    try {
+      assertTrue(workerEntered.await(2, TimeUnit.SECONDS));
+      assertFalse(white.hasEngineToStop());
+      if (stopOthers) manager.killOtherEngines();
+      successor = white.beginPreloadStartAttempt();
+    } finally {
+      releaseWorker.countDown();
+    }
+    awaitCondition(game::retirementFinishedForTest);
+    assertFalse(successor.isSuperseded(), "deferred recovery invalidated the newer startup");
+    assertEquals(0, white.deferredRecoveryStartCount.get());
+    successor.startEngine(1);
+    successor.complete();
+    assertTrue(white.isStarted());
+    assertFalse(white.deferredRecoveryIsolationObserved);
   }
 
   @Test
@@ -7605,6 +7678,7 @@ class EngineManagerEngineGameStateMachineTest {
     private final AtomicInteger deferredOpenClPrepareCount = new AtomicInteger();
     private volatile ExactSnapshotRestoreProtocolFixture.Transport recoveryTransport;
     private volatile Runnable beforeLiveIncarnationAction;
+    private volatile Runnable beforeLifecycleReservation;
     private volatile Runnable beforePonder;
     private volatile Runnable afterPonder;
     private volatile Runnable beforeNameCommand;
@@ -7638,6 +7712,14 @@ class EngineManagerEngineGameStateMachineTest {
         return String.join(System.lineSeparator(), recoveryOutput.rawCommands());
       }
       return commandOutput == null ? "" : commandOutput.toString();
+    }
+
+    @Override
+    ExclusiveGtpLifecycleReservation beginExclusiveGtpLifecycleReservation(Object owner) {
+      Runnable before = beforeLifecycleReservation;
+      beforeLifecycleReservation = null;
+      if (before != null) before.run();
+      return super.beginExclusiveGtpLifecycleReservation(owner);
     }
 
     @Override

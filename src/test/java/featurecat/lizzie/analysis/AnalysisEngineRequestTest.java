@@ -30,6 +30,7 @@ import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.OsPlatform;
 import java.io.BufferedOutputStream;
@@ -126,6 +127,63 @@ class AnalysisEngineRequestTest {
           assertFalse(session.engine.sendRequest(history.getStart()));
         }
       }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void benchmarkPauseDuringDedicatedLocalStartup(boolean pauseBeforeSpawn) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      Lizzie.config.analysisReuseCurrentEngine = true;
+      // Defer construction of the dedicated carrier until its launch checkpoints are installed.
+      PausingAnalysisEngine engine = new PausingAnalysisEngine(pauseBeforeSpawn);
+      try {
+        engine.startEngine(LocalAnalysisSession.command("respond"));
+        assertTrue(engine.pause.accepted());
+        if (pauseBeforeSpawn) {
+          assertTrue(engine.pause.computeIsolated());
+          assertNull(engine.child, "a benchmark admitted after preparation must prevent the spawn");
+        } else {
+          assertFalse(engine.pause.computeIsolated(), "the factory still owns a live child");
+          assertTrue(engine.child.waitFor(5, TimeUnit.SECONDS), "shutdown lost the late child");
+        }
+        assertFalse(engine.isLoaded());
+        assertFalse(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+      } finally {
+        engine.shutdown();
+        if (engine.child != null && engine.child.isAlive()) engine.child.destroyForcibly();
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+        if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+          KataGoRuntimeHelper.restoreAnalysisAfterBenchmark(false);
+        }
+      }
+    }
+  }
+
+  private static final class PausingAnalysisEngine extends AnalysisEngine {
+    private final boolean pauseBeforeSpawn;
+    private Process child;
+    private KataGoRuntimeHelper.BenchmarkPauseResult pause;
+
+    PausingAnalysisEngine(boolean pauseBeforeSpawn) throws IOException {
+      super(true);
+      this.pauseBeforeSpawn = pauseBeforeSpawn;
+    }
+
+    @Override
+    AnalysisResourceCoordinator.EngineLaunch.LocalProcessFactory prepareLocalProcess(
+        ProcessBuilder builder, CommandLaunchHelper.LaunchSpec spec, Path executable) {
+      var create = super.prepareLocalProcess(builder, spec, executable);
+      if (pauseBeforeSpawn) pause = KataGoRuntimeHelper.pauseCurrentAnalysisForBenchmark();
+      return () -> {
+        child = create.start();
+        if (!pauseBeforeSpawn) {
+          pause = KataGoRuntimeHelper.pauseCurrentAnalysisForBenchmark();
+          shutdown();
+        }
+        return child;
+      };
     }
   }
 
@@ -380,8 +438,14 @@ class AnalysisEngineRequestTest {
 
     private static LocalAnalysisSession open(boolean preload, String mode) throws Exception {
       Lizzie.config.leelazConfig = new JSONObject();
-      Lizzie.config.analysisEngineCommand =
-          "\""
+      Lizzie.config.analysisEngineCommand = command(mode);
+      GtpConsolePane previousConsole = Lizzie.gtpConsole;
+      Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
+      return new LocalAnalysisSession(new AnalysisEngine(preload), previousConsole);
+    }
+
+    private static String command(String mode) {
+      return "\""
               + java.nio.file.Path.of(System.getProperty("java.home"), "bin", "java")
               + "\" -cp \""
               + System.getProperty("java.class.path")
@@ -389,9 +453,6 @@ class AnalysisEngineRequestTest {
               + InterleavedAnalysisProcess.class.getName()
               + " "
               + mode;
-      GtpConsolePane previousConsole = Lizzie.gtpConsole;
-      Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
-      return new LocalAnalysisSession(new AnalysisEngine(preload), previousConsole);
     }
 
     private void assertStopped() throws Exception {

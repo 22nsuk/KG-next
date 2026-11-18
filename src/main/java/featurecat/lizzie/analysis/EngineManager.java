@@ -37,6 +37,7 @@ import featurecat.lizzie.rules.Movelist;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.Utils;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
@@ -69,6 +70,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
@@ -328,7 +330,8 @@ public class EngineManager {
     /** Guarded by {@link #ENGINE_SELECTION_STATE_LOCK}. */
     private final List<EngineGameDeferredRecovery> deferredRecoveries = new ArrayList<>();
     /** Guarded by {@link #ENGINE_SELECTION_STATE_LOCK}. */
-    private boolean deferredRecoveryCancelled;
+    private final Set<Leelaz> stoppedParticipants =
+        Collections.newSetFromMap(new IdentityHashMap<>());
     private volatile EngineGamePhase phase = EngineGamePhase.PREPARING;
     /** Exact bindings published while each participant is still PREPARING/DISPATCHED. */
     private volatile Object blackStartupIncarnation;
@@ -579,14 +582,10 @@ public class EngineManager {
 
   private static final class EngineGameRecoveryBatch {
     private final EngineGameOwnerTransaction transaction;
-    private final List<EngineGameDeferredRecovery> recoveries;
-    private int nextIndex;
     private EngineGameDeferredRecovery current;
 
-    private EngineGameRecoveryBatch(
-        EngineGameOwnerTransaction transaction, List<EngineGameDeferredRecovery> recoveries) {
+    private EngineGameRecoveryBatch(EngineGameOwnerTransaction transaction) {
       this.transaction = transaction;
-      this.recoveries = recoveries;
     }
   }
 
@@ -3858,34 +3857,24 @@ public class EngineManager {
   }
 
   private void updateEnginesWhileMarkedUpdating() throws JSONException, IOException {
-    int preIndex = currentEngineNo;
-    List<Leelaz> previousCatalog = engineList;
-    Leelaz previousForegroundEngine = Lizzie.leelaz;
-    Leelaz previousSecondaryEngine = Lizzie.leelaz2;
-    ArrayList<EngineData> engineData = Utils.getEngineData();
-    EngineData selectedEngineData = null;
-    EngineData matchingSecondaryData = null;
-    for (EngineData engineDt : engineData) {
-      if (!engineDt.useJavaSSH
-          && featurecat.lizzie.util.CommandLaunchHelper.classifyCommand(
-                  Utils.splitCommand(engineDt.commands))
-              == featurecat.lizzie.util.CommandLaunchHelper.EngineCommandPurpose.BENCHMARK) {
-        continue;
-      }
-      if (selectedEngineData == null
-          && previousForegroundEngine != null
-          && engineDt.name.equals(previousForegroundEngine.oriEnginename)) {
-        selectedEngineData = engineDt;
-      }
-      if (matchingSecondaryData == null
-          && previousSecondaryEngine != null
-          && !engineDt.name.isEmpty()
-          && engineDt.name.equals(previousSecondaryEngine.oriEnginename)
-          && engineDt != selectedEngineData) {
-        matchingSecondaryData = engineDt;
-      }
+    int preIndex;
+    List<Leelaz> previousCatalog;
+    Leelaz previousForegroundEngine;
+    Leelaz previousSecondaryEngine;
+    int secondaryIndex;
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      previousCatalog = engineList;
+      previousForegroundEngine = selectedCatalogEngine(true);
+      preIndex = previousForegroundEngine == null ? -1 : currentEngineNo;
+      previousSecondaryEngine = Lizzie.leelaz2;
+      secondaryIndex = selectedCatalogEngine(false) == null ? -1 : currentEngineNo2;
     }
-    EngineData selectedSecondaryData = selectedEngineData == null ? null : matchingSecondaryData;
+    ArrayList<EngineData> engineData = Utils.getEngineData();
+    EngineData selectedEngineData =
+        findSelectedCatalogEntry(engineData, previousForegroundEngine, preIndex, null);
+    EngineData selectedSecondaryData =
+        selectedEngineData == null ? null : findSelectedCatalogEntry(
+            engineData, previousSecondaryEngine, secondaryIndex, selectedEngineData);
     Board restoreBoard = Lizzie.board;
     boolean resumePonder =
         previousForegroundEngine != null
@@ -4348,6 +4337,32 @@ public class EngineManager {
     }
   }
 
+  private static EngineData findSelectedCatalogEntry(
+      List<EngineData> entries, Leelaz selected, int previousIndex, EngineData excluded) {
+    if (selected == null || previousIndex < 0) return null;
+    EngineData legacyMatch = null;
+    for (EngineData entry : entries) {
+      if (entry == excluded || (!entry.useJavaSSH
+          && CommandLaunchHelper.classifyCommand(Utils.splitCommand(entry.commands))
+              == CommandLaunchHelper.EngineCommandPurpose.BENCHMARK)) {
+        continue;
+      }
+      if (selected.savedEntryId != null && !selected.savedEntryId.isBlank() && !entry.id.isBlank()) {
+        if (entry.id.equals(selected.savedEntryId)) return entry;
+      } else if (entry.name.equals(selected.oriEnginename)
+          && (legacyMatch == null || entry.index == previousIndex)) {
+        legacyMatch = entry;
+      }
+    }
+    return legacyMatch;
+  }
+
+  /** The UI can retain a stopped engine or an empty placeholder after the slot is deselected. */
+  private static Leelaz selectedCatalogEngine(boolean main) {
+    if (main) return !isEmpty && currentEngineNo >= 0 ? Lizzie.leelaz : null;
+    return currentEngineNo2 >= 0 ? Lizzie.leelaz2 : null;
+  }
+
   public void refreshEngineCatalog() throws JSONException, IOException {
     EngineGameOwnerTransaction catalogGame;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
@@ -4383,8 +4398,12 @@ public class EngineManager {
     List<Leelaz> previousEngines = new ArrayList<Leelaz>(engineList);
     boolean[] matched = new boolean[previousEngines.size()];
     List<Leelaz> refreshedEngines = new ArrayList<Leelaz>();
-    Leelaz currentMainEngine = Lizzie.leelaz;
-    Leelaz currentSecondaryEngine = Lizzie.leelaz2;
+    Leelaz currentMainEngine;
+    Leelaz currentSecondaryEngine;
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      currentMainEngine = selectedCatalogEngine(true);
+      currentSecondaryEngine = selectedCatalogEngine(false);
+    }
     int refreshedCurrentEngineNo = -1;
     int refreshedCurrentEngineNo2 = -1;
 
@@ -4399,7 +4418,7 @@ public class EngineManager {
       if (engine == currentSecondaryEngine) refreshedCurrentEngineNo2 = i;
     }
 
-    if (!isEmpty && currentMainEngine != null && refreshedCurrentEngineNo < 0) {
+    if (currentMainEngine != null && refreshedCurrentEngineNo < 0) {
       updateEngines();
       return;
     }
@@ -4410,11 +4429,13 @@ public class EngineManager {
       Lizzie.runWithEngineAuthorityMutation(
           () -> {
             engineList = refreshedEngines;
-            if (frozenCurrentEngineNo >= 0) {
+            if (frozenCurrentEngineNo >= 0 && selectedCatalogEngine(true) == currentMainEngine) {
               currentEngineNo = frozenCurrentEngineNo;
               engineNo = frozenCurrentEngineNo;
             }
-            currentEngineNo2 = frozenCurrentEngineNo2;
+            if (selectedCatalogEngine(false) == currentSecondaryEngine) {
+              currentEngineNo2 = frozenCurrentEngineNo2;
+            }
             return null;
           });
     }
@@ -4602,13 +4623,7 @@ public class EngineManager {
           retained.add(pending.targetEngine);
         }
       }
-      if (!keepPrimary || Lizzie.leelaz == null) {
-        suppressEngineGameRecovery(activeEngineGameTransaction);
-        suppressEngineGameRecovery(retiringEngineGameTransaction);
-        if (activeEngineGameRecoveryBatch != null) {
-          suppressEngineGameRecovery(activeEngineGameRecoveryBatch.transaction);
-        }
-      }
+      suppressParticipantRecoveries(engine -> !retained.contains(engine));
       abandoned = cancelUninstalledSwitchExcept(retained);
     }
     abandoned.ifPresent(this::publishEngineSwitchUiState);
@@ -4636,10 +4651,26 @@ public class EngineManager {
     return engineSwitchUiTracker.abandonPending(pending.uiToken, pending.main);
   }
 
-  /** Caller holds selection state. */
-  private void suppressEngineGameRecovery(EngineGameOwnerTransaction transaction) {
+  /** Record stop intent even if EOF has arrived and no replacement process exists yet. */
+  private void suppressParticipantRecoveries(Predicate<Leelaz> shouldStop) {
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      suppressParticipantRecoveries(activeEngineGameTransaction, shouldStop);
+      suppressParticipantRecoveries(retiringEngineGameTransaction, shouldStop);
+      if (activeEngineGameRecoveryBatch != null) {
+        suppressParticipantRecoveries(activeEngineGameRecoveryBatch.transaction, shouldStop);
+      }
+    }
+  }
+
+  private void suppressParticipantRecoveries(
+      EngineGameOwnerTransaction transaction, Predicate<Leelaz> shouldStop) {
     if (transaction != null && transaction.manager == this) {
-      transaction.deferredRecoveryCancelled = true;
+      if (shouldStop.test(transaction.blackEngine)) {
+        transaction.stoppedParticipants.add(transaction.blackEngine);
+      }
+      if (shouldStop.test(transaction.whiteEngine)) {
+        transaction.stoppedParticipants.add(transaction.whiteEngine);
+      }
     }
   }
 
@@ -4926,6 +4957,9 @@ public class EngineManager {
   }
 
   public void killOtherEngines(int engineBlack, int engineWhite) {
+    suppressParticipantRecoveries(
+        engine -> !isExactCatalogSlot(this, engineBlack, engine)
+            && !isExactCatalogSlot(this, engineWhite, engine));
     for (int i = 0; i < engineList.size(); i++) {
       Leelaz engine = engineList.get(i);
       if (i != engineBlack
@@ -4965,6 +4999,7 @@ public class EngineManager {
       return;
     }
     try (reservation) {
+      suppressParticipantRecoveries(engine -> engine == currentForegroundEngine);
       if (currentForegroundEngine.isBenchmark()) {
         currentForegroundEngine.cancelBenchmark();
         return;
@@ -4986,6 +5021,7 @@ public class EngineManager {
     if (cancelPendingBenchmarkSelection(false)) return;
     Leelaz currentSecondaryEngine = Lizzie.leelaz2;
     if (currentSecondaryEngine == null) return;
+    suppressParticipantRecoveries(engine -> engine == currentSecondaryEngine);
     if (currentSecondaryEngine.isBenchmark()) {
       currentSecondaryEngine.cancelBenchmark();
       return;
@@ -5596,7 +5632,6 @@ public class EngineManager {
         // Still fail and retire the exact participant below, but never restart a rejected engine.
         if (recovery != null) {
           transaction.deferredRecoveries.remove(recovery);
-          if (recoveryBatch != null) recoveryBatch.recoveries.remove(recovery);
         }
       } else if (recovery == null) {
         recovery =
@@ -5607,11 +5642,6 @@ public class EngineManager {
                 failedIncarnation,
                 cause == null ? EngineGameRecoveryCause.PROCESS_EXIT : cause);
         transaction.deferredRecoveries.add(recovery);
-        if (recoveryBatch != null
-            && recoveryBatch.transaction == transaction
-            && !recoveryBatch.recoveries.contains(recovery)) {
-          recoveryBatch.recoveries.add(recovery);
-        }
       } else {
         recovery.mergeCause(cause);
       }
@@ -8330,7 +8360,7 @@ public class EngineManager {
     return recovery != null
         && recoveryToken == recovery
         && recoveryBatch.transaction == recovery.transaction
-        && !recovery.transaction.deferredRecoveryCancelled
+        && !recovery.transaction.stoppedParticipants.contains(engine)
         && !recovery.completed.get()
         && recovery.engine == engine
         && recovery.startAttempt != null
@@ -9041,10 +9071,8 @@ public class EngineManager {
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
       if (retiringEngineGameTransaction == transaction) {
         retiringEngineGameTransaction = null;
-        if (!transaction.deferredRecoveryCancelled && !transaction.deferredRecoveries.isEmpty()) {
-          recoveryBatch =
-              new EngineGameRecoveryBatch(
-                  transaction, new ArrayList<>(transaction.deferredRecoveries));
+        if (!transaction.deferredRecoveries.isEmpty()) {
+          recoveryBatch = new EngineGameRecoveryBatch(transaction);
           activeEngineGameRecoveryBatch = recoveryBatch;
         }
       }
@@ -9076,15 +9104,21 @@ public class EngineManager {
       if (activeEngineGameRecoveryBatch != recoveryBatch) {
         return;
       }
-      if (recoveryBatch.transaction.deferredRecoveryCancelled
-          || recoveryBatch.nextIndex >= recoveryBatch.recoveries.size()) {
+      EngineGameOwnerTransaction transaction = recoveryBatch.transaction;
+      for (EngineGameDeferredRecovery next : transaction.deferredRecoveries) {
+        if (!next.completed.get() && !transaction.stoppedParticipants.contains(next.engine)) {
+          recovery = next;
+          break;
+        }
+      }
+      if (recovery == null) {
         recoveryBatch.current = null;
         activeEngineGameRecoveryBatch = null;
         // Keep the selection lock across batch-gate release and exact unquarantine. Analysis
         // output admission also takes this lock, so no ordinary output can observe the gate open
         // while a successfully recovered binding is still presentation-suppressed. Failed or
         // superseded replacements remain quarantined and are closed by their start attempt.
-        for (EngineGameDeferredRecovery completedRecovery : recoveryBatch.recoveries) {
+        for (EngineGameDeferredRecovery completedRecovery : transaction.deferredRecoveries) {
           if (completedRecovery.recoveredSuccessfully
               && completedRecovery.replacementIncarnation != null) {
             completedRecovery.engine
@@ -9097,7 +9131,6 @@ public class EngineManager {
         recoveryBatch.transaction.retirementFinished.set(true);
         finished = true;
       } else {
-        recovery = recoveryBatch.recoveries.get(recoveryBatch.nextIndex++);
         recoveryBatch.current = recovery;
       }
     }
@@ -9173,9 +9206,15 @@ public class EngineManager {
       synchronization.acquireReservation();
       synchronization.beginLifecycleCompletionClaim();
       final InitialEngineStartupSynchronization recoverySynchronization = synchronization;
-      Leelaz.UpdateEngineStartAttempt startAttempt = engine.beginUpdateEngineStartAttempt();
-      recovery.startAttempt = startAttempt;
-      if (!isDeferredEngineGameRecoveryCurrent(recoveryBatch, recovery, recovery.failedIncarnation)) {
+      Leelaz.UpdateEngineStartAttempt startAttempt;
+      synchronized (ENGINE_SELECTION_STATE_LOCK) {
+        startAttempt =
+            isDeferredEngineGameRecoveryCurrent(recoveryBatch, recovery, recovery.failedIncarnation)
+                ? engine.tryBeginRecoveryStartAttempt(recovery.failedIncarnation)
+                : null;
+        recovery.startAttempt = startAttempt;
+      }
+      if (startAttempt == null) {
         completeDeferredEngineGameRecovery(recoveryBatch, recovery, null, null);
         return;
       }
@@ -9324,7 +9363,7 @@ public class EngineManager {
           && expectedIncarnation != null
           && activeEngineGameRecoveryBatch == recoveryBatch
           && recoveryBatch.transaction == recovery.transaction
-          && !recovery.transaction.deferredRecoveryCancelled
+          && !recovery.transaction.stoppedParticipants.contains(recovery.engine)
           && recoveryBatch.current == recovery
           && !recovery.completed.get()
           && recovery.transaction.manager != null
