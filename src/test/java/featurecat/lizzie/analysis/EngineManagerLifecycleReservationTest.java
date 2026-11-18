@@ -2724,6 +2724,24 @@ class EngineManagerLifecycleReservationTest {
     }
   }
 
+  @Test
+  void failedQuitAfterRebindBelongsToRetiredReader() throws Exception {
+    QuietExitLeelaz engine = new QuietExitLeelaz();
+    engine.installFreshCommandOutputForTest(new ByteArrayOutputStream() {
+      @Override
+      public void flush() throws java.io.IOException {
+        engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
+        throw new java.io.IOException("retired pipe");
+      }
+    });
+    Object retired = engine.currentEngineIncarnation();
+    engine.normalQuit();
+    Object replacement = engine.currentEngineIncarnation();
+    assertFalse(retired == replacement);
+    assertTrue(((java.util.Collection<?>) getField(replacement, "stderrLines")).isEmpty());
+    assertTrue(getField(retired, "stderrLines").toString().contains("retired pipe"));
+  }
+
   private static void assertStaleBindingExitDoesNotAffectReplacement(
       boolean normalQuit, boolean retiredLocal, boolean replacementLocal) throws Exception {
     Leelaz previousPrimary = Lizzie.leelaz;

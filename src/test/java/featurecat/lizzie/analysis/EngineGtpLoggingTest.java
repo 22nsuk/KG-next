@@ -3,7 +3,9 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -11,6 +13,7 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
+import featurecat.lizzie.enginegame.EngineGamePlans;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
@@ -36,8 +39,11 @@ import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -686,6 +692,96 @@ class EngineGtpLoggingTest {
     }
   }
 
+  @Test
+  void cancelledEngineGameClosesConnectionThatFinishesBeforeBinding() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
+    Leelaz otherParticipant = new Leelaz("");
+    EngineManager previousManager = Lizzie.engineManager;
+    EngineManager manager = new EngineManager(List.of(engine, otherParticipant));
+    engine.transport.finishStart = new CountDownLatch(1);
+    Lizzie.engineManager = manager;
+    Lizzie.board = new Board();
+    Lizzie.setPrimaryEngine(otherParticipant);
+    try {
+      EngineManager.EngineGameOwnerTransaction transaction =
+          EngineManager.beginEngineGameTransaction(manager, EngineGamePlans.harness(0, 1, true),
+              null, true);
+      assertNotNull(transaction);
+      FutureTask<EngineManager.PkEngineSynchronization> startup = new FutureTask<>(
+          () -> manager.startEngineForPkSynchronizationForTest(transaction, 0, engine));
+      Thread worker = new Thread(startup, "cancelled-engine-game-remote-start");
+      worker.setDaemon(true);
+      worker.start();
+      try {
+        assertTrue(engine.transport.starting.await(5, TimeUnit.SECONDS), "remote startup entered");
+        String launchId = EngineObservation.identityFor(engine);
+        assertNotNull(launchId);
+        manager.clearEngineGame();
+        assertEquals(EngineManager.EngineGamePhase.CANCELLED, transaction.phase());
+        String successor = EngineObservation.restartInstance(engine, "PRELOAD");
+        engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
+        Object successorReader = engine.currentEngineIncarnation();
+        engine.isLoaded = true;
+
+        engine.transport.finishStart.countDown();
+        assertTrue(startup.get(5, TimeUnit.SECONDS).hasFailed(), "cancelled participant startup");
+
+        awaitLogs(runtime);
+        String app = readApp();
+        assertEquals(1, engine.transport.closeCalls.get(), app);
+        assertEquals(1L, eventCount(app, "process-started"), app);
+        assertEquals(1L, eventCount(app, "process-stopped"), app);
+        assertEquals(launchId, engineIdOnEventLine(app, "event=process-started"), app);
+        assertEquals(launchId, engineIdOnEventLine(app, "event=process-stopped"), app);
+        assertEquals(successor, EngineObservation.identityFor(engine));
+        assertSame(successorReader, engine.currentEngineIncarnation());
+        assertTrue(engine.isLoaded(), "cancelled startup must preserve the successor reader");
+      } finally {
+        engine.transport.finishStart.countDown();
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+      }
+    } finally {
+      try {
+        closeRemoteReaders(engine);
+        SwingUtilities.invokeAndWait(() -> {});
+      } finally {
+        EngineManager.resetEngineGameTransactionStateForTest();
+        EngineObservation.discardIdentity(engine);
+        Lizzie.engineManager = previousManager;
+      }
+    }
+  }
+
+  @Test
+  void shutdownWhileConnectingCannotPublishTheClosedTransport() throws Exception {
+    startRuntime();
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(false);
+    engine.transport.finishStart = new CountDownLatch(1);
+    FutureTask<Void> startup = new FutureTask<>(() -> {
+      engine.startEngine(-1);
+      return null;
+    });
+    Thread worker = new Thread(startup, "closing-pending-engine-start");
+    worker.setDaemon(true);
+    worker.start();
+    try {
+      assertTrue(engine.transport.starting.await(5, TimeUnit.SECONDS));
+      engine.shutdown();
+      assertEquals(1, engine.transport.closeCalls.get());
+      engine.transport.finishStart.countDown();
+      var failure = assertThrows(java.util.concurrent.ExecutionException.class,
+          () -> startup.get(5, TimeUnit.SECONDS));
+      assertTrue(failure.getCause() instanceof IllegalStateException);
+      assertFalse(engine.started);
+      assertEquals(1, engine.transport.closeCalls.get());
+    } finally {
+      engine.transport.finishStart.countDown();
+      worker.join(TimeUnit.SECONDS.toMillis(5));
+      closeRemoteReaders(engine);
+    }
+  }
+
   private static void reportEngineFailure(Leelaz engine, String reason) throws Exception {
     Method fail = Leelaz.class.getDeclaredMethod(
         "noteEngineFailed", AnalysisResourceCoordinator.EngineLaunch.class, String.class);
@@ -761,6 +857,11 @@ class EngineGtpLoggingTest {
     }
 
     @Override
+    public String getEngineName(int index) {
+      return super.getEngineName(-1);
+    }
+
+    @Override
     void afterEngineGameBootstrapWorkerForTest(
         EngineManager.EngineGameOwnerTransaction transaction) {
       bootstrapFinished.countDown();
@@ -773,7 +874,10 @@ class EngineGtpLoggingTest {
   private static final class QuietTransport implements EngineTransport {
     private final boolean failStart;
     private boolean failStreams;
+    private final CountDownLatch starting = new CountDownLatch(1);
+    private CountDownLatch finishStart = new CountDownLatch(0);
     private final CountDownLatch closed = new CountDownLatch(1);
+    private final AtomicInteger closeCalls = new AtomicInteger();
     private final OutputStream output;
 
     private QuietTransport(boolean failStart) {
@@ -787,6 +891,15 @@ class EngineGtpLoggingTest {
 
     @Override
     public void start() throws IOException {
+      starting.countDown();
+      try {
+        if (!finishStart.await(5, TimeUnit.SECONDS)) {
+          throw new IOException("timed out waiting to finish the controlled remote connection");
+        }
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+        throw new IOException(interrupted);
+      }
       if (failStart) throw new IOException("controlled remote connection failure");
     }
 
@@ -834,6 +947,7 @@ class EngineGtpLoggingTest {
 
     @Override
     public void close() {
+      closeCalls.incrementAndGet();
       closed.countDown();
     }
   }

@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LeelazExclusiveRemoteGtpSessionTest {
   @Test
@@ -1908,6 +1910,38 @@ class LeelazExclusiveRemoteGtpSessionTest {
       assertFalse(harness.engine.isLoaded());
       assertEquals(0, harness.engine.ponderCount);
       assertEquals(0, harness.completions.get());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"active", "final-stop", "restoring"})
+  void replacingBorrowedReaderRetiresHandbackWithoutTouchingReplacement(String phase)
+      throws Exception {
+    try (RestoreHarness harness = RestoreHarness.open(true, false, true)) {
+      AtomicInteger failures = new AtomicInteger();
+      boolean releaseFirst = !phase.equals("active");
+      if (releaseFirst) {
+        assertTrue(harness.owner.release(
+            harness.completions::incrementAndGet, failures::incrementAndGet));
+        if (phase.equals("restoring")) {
+          assertTrue(dispatch(harness.engine, "=800000001"));
+          assertTrue(dispatch(harness.engine, ""));
+          waitUntil(() -> harness.board.resendCount == 1);
+        }
+      }
+      ByteArrayOutputStream replacement = new ByteArrayOutputStream();
+      harness.engine.installFreshCommandOutputForTest(replacement);
+      assertFalse(harness.owner.isOwned());
+      assertFalse(harness.owner.release(
+          harness.completions::incrementAndGet, failures::incrementAndGet));
+      assertFalse(dispatch(harness.engine, "=800000001"));
+      assertEquals(0, replacement.size());
+      assertTrue(harness.engine.isLoaded());
+      assertFalse(harness.engine.hasExclusiveGtpWorkInProgress());
+      assertEquals(0, harness.completions.get());
+      assertEquals(releaseFirst ? 1 : 0, failures.get());
+      assertEquals(java.util.Optional.of(Leelaz.ForegroundAnalysisLeaseFailure.TRANSPORT_CLOSED),
+          harness.owner.failureReason());
     }
   }
 
