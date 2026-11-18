@@ -315,6 +315,15 @@ public final class AnalysisResourceCoordinator {
     commandSentForInstance(EngineObservation.identityFor(owner), purpose, command);
   }
 
+  static void recordAuxiliaryCommandSent(String engineId, Purpose purpose, String command) {
+    try {
+      commandSentForInstance(engineId, purpose, command);
+    } catch (RuntimeException observationFailure) {
+      // A diagnostic failure cannot undo a successful transport write.
+      observationFailure.printStackTrace();
+    }
+  }
+
   /** Records delivery using the identity captured for the physical write. */
   static void commandSentForInstance(String engineId, Purpose purpose, String command) {
     if (!EngineObservation.engineDiagnosticsEnabled() || command == null) {

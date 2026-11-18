@@ -3058,27 +3058,19 @@ public class AnalysisEngine {
   }
 
   public boolean sendCommand(String command) {
+    if (sharedForegroundEngine != null) {
+      return sharedForegroundEngine.sendExclusiveGtpCommand(command, purpose);
+    }
     String engineId =
         EngineObservation.engineDiagnosticsEnabled() ? EngineObservation.identityFor(this) : null;
-    if (sharedForegroundEngine != null) {
-      if (!sharedForegroundEngine.sendExclusiveGtpCommand(command)) {
-        return false;
-      }
-    } else {
-      try {
-        outputStream.write((command + "\n").getBytes());
-        outputStream.flush();
-      } catch (Exception e) {
-        e.printStackTrace();
-        return false;
-      }
-    }
     try {
-      AnalysisResourceCoordinator.commandSentForInstance(engineId, purpose, command);
-    } catch (RuntimeException observationFailure) {
-      // Diagnostics cannot turn a completed transport write into a failed command.
-      observationFailure.printStackTrace();
+      outputStream.write((command + "\n").getBytes());
+      outputStream.flush();
+    } catch (Exception e) {
+      e.printStackTrace();
+      return false;
     }
+    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(engineId, purpose, command);
     return true;
   }
 

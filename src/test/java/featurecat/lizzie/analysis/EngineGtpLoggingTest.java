@@ -44,7 +44,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
@@ -139,9 +138,7 @@ class EngineGtpLoggingTest {
   void exitBeforeReadyReusesBootstrapIdentity() throws Exception {
     LoggingRuntime runtime = startRuntime();
     Leelaz engine = prepareEngine();
-    Method started = Leelaz.class.getDeclaredMethod("noteEngineStarted");
-    started.setAccessible(true);
-    started.invoke(engine);
+    engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
     String identity = EngineObservation.identityFor(engine);
     Method fail = Leelaz.class.getDeclaredMethod("noteEngineFailed", String.class);
     fail.setAccessible(true);
@@ -172,9 +169,7 @@ class EngineGtpLoggingTest {
         "\""
             + enginePath.toAbsolutePath().normalize()
             + "\" gtp -model kata1.bin.gz -config gtp.cfg");
-    Method started = Leelaz.class.getDeclaredMethod("noteEngineStarted");
-    started.setAccessible(true);
-    started.invoke(engine);
+    engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
     Method loaded = Leelaz.class.getDeclaredMethod("markEngineLoaded");
     loaded.setAccessible(true);
     engine.isLoaded = false;
@@ -207,9 +202,7 @@ class EngineGtpLoggingTest {
     fail.setAccessible(true);
     fail.invoke(engine, "ssh login failed");
     fail.invoke(engine, "ssh login failed");
-    Method started = Leelaz.class.getDeclaredMethod("noteEngineStarted");
-    started.setAccessible(true);
-    started.invoke(engine);
+    engine.installFreshCommandOutputForTest(new ByteArrayOutputStream());
     awaitLogs(runtime);
     String app = readApp();
     java.util.regex.Matcher matcher =
@@ -512,13 +505,14 @@ class EngineGtpLoggingTest {
         List.of("boardsize", "komi", "clear_board", "play", "set_position",
             "kata-get-rules", "kata-set-rules"));
     setField(AnalysisEngine.class, engine, "sharedForegroundEngine", foreground);
-    EngineObservation.ensureStarted(engine, "AUTO_QUICK_ANALYSIS");
+    String carrierId = EngineObservation.ensureStarted(foreground, "MAIN_BOARD");
     ByteArrayOutputStream output =
         new ByteArrayOutputStream() {
           @Override
           public void flush() throws IOException {
-            if (failFlush && toString(StandardCharsets.UTF_8).endsWith(command + "\n")) {
-              throw new IOException("controlled shared flush failure");
+            if (toString(StandardCharsets.UTF_8).endsWith(command + "\n")) {
+              EngineObservation.restartInstance(foreground, "MAIN_BOARD");
+              if (failFlush) throw new IOException("controlled shared flush failure");
             }
           }
         };
@@ -539,15 +533,28 @@ class EngineGtpLoggingTest {
       assertEquals(!failFlush, engine.sendCommand(command));
       assertTrue(output.toString(StandardCharsets.UTF_8).endsWith(command + "\n"));
       awaitLogs(runtime);
-      assertEquals(failFlush ? 0L : 1L, eventCount(readApp(), event), readApp());
+      String app = readApp();
+      assertEquals(failFlush ? 0L : 1L, eventCount(app, event), app);
+      if (!failFlush) {
+        String token = "engine event=" + event;
+        assertEquals(carrierId, engineIdOnEventLine(app, token), app);
+        assertTrue(eventLine(app, token).contains("purpose=AUTO_QUICK_ANALYSIS "), app);
+
+        ByteArrayOutputStream replacement = new ByteArrayOutputStream();
+        foreground.installFreshCommandOutputForTest(replacement);
+        assertFalse(engine.sendCommand(command), "The old lease cannot write to a new carrier");
+        assertEquals(0, replacement.size());
+        awaitLogs(runtime);
+        assertEquals(1L, eventCount(readApp(), event), readApp());
+      }
     } finally {
       foreground.endExclusiveGtpSession();
     }
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"MAIN_BOARD", "PRELOAD", "COMPARE"})
-  void remoteConnectionKeepsItsLaunchPurposeWhenSelectedForPondering(String purpose)
+  @CsvSource({"MAIN_BOARD, false", "PRELOAD, false", "COMPARE, true"})
+  void remoteConnectionKeepsItsLaunchPurposeWhenSelectedForPondering(String purpose, boolean forceQuit)
       throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
     Leelaz previousCompare = Lizzie.leelaz2;
@@ -579,6 +586,21 @@ class EngineGtpLoggingTest {
       awaitLogs(runtime);
       assertEquals(3, frame.ponderNotifications, "Foreground resource coordination must still run");
       assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
+
+      // A new launch can publish its observation before replacing the old transport.
+      String successor = purpose.equals("PRELOAD")
+          ? EngineObservation.restartInstance(engine, "MAIN_BOARD") : null;
+      if (forceQuit) {
+        assertTrue(engine.forceQuitIfCurrentIncarnation(engine.captureEngineIncarnationFence()));
+      } else {
+        engine.shutdown();
+      }
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(1L, eventCount(app, "process-stopped"), app);
+      assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      if (successor != null) assertEquals(successor, EngineObservation.identityFor(engine));
+      assertTrue(eventLine(app, "event=process-stopped").contains("purpose=" + purpose + " "), app);
     } finally {
       try {
         closeRemoteReaders(engine);
