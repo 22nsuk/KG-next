@@ -290,7 +290,7 @@ public class Leelaz {
    * Cold-start PK bootstrap stays unnumbered until 引擎对局参与者名称识别完成. Only name/version/list_commands
    * GTP errors are ignored; later setup commands still fail the transaction.
    */
-  private static final ThreadLocal<Boolean> ordinaryEngineGameBootstrapCommands =
+  private static final ThreadLocal<StartupBootstrap> startupBootstrapContext =
       new ThreadLocal<>();
   /** Isolates a retired match participant restart from ordinary foreground startup presentation. */
   private static final ThreadLocal<Boolean> deferredEngineGameRecoveryStartupContext =
@@ -318,7 +318,7 @@ public class Leelaz {
   private Process process;
   // Guarded by engineArbitrationLock. Whole-engine shutdown can cancel a connecting transport
   // before its reader exists. Exact-reader shutdown continues to target just that reader.
-  private StartupResources pendingStartup;
+  private StartupRequest pendingStartup;
   // Failure presentation survives resource cleanup, but never a newer request or explicit stop.
   private volatile long startupRequestGeneration;
   private volatile BenchmarkExecution currentBenchmarkExecution;
@@ -422,7 +422,6 @@ public class Leelaz {
   private volatile int initialBoardSynchronizationDepth = 0;
   private volatile EngineManager.InitialEngineSyncAdmission initialEngineSyncAdmission;
   private volatile Object initialBoardSynchronizationLock = new Object();
-  private volatile long bundledStartupToken = 0L;
   private volatile long startupPrimaryEngineGeneration = -1L;
   private long pdaStartupQueryGeneration;
   private volatile boolean openClFp32CompatibilityActive = false;
@@ -1309,19 +1308,12 @@ public class Leelaz {
 
   public void startEngine(int index) throws IOException {
     UpdateEngineStartAttempt update = updateEngineStartAttemptContext.get();
-    StartupResources resources = update == null ? new StartupResources() : update.resources;
+    StartupRequest resources;
     UpdateEngineStartFailureCleanup superseded;
     synchronized (engineArbitrationLock()) {
+      superseded = update == null ? retirePendingStartupLocked() : null;
+      resources = update == null ? reserveStartupLocked() : update.resources;
       resources.requireActive();
-      if (resources.generation == 0) {
-        superseded =
-            pendingStartup == null ? null : claimStartupResourcesLocked(pendingStartup, null);
-        admitStartupLocked(resources);
-      } else {
-        // Background preloads reserve their place when scheduled, before the worker can run.
-        if (pendingStartup != resources) throw new IllegalStateException("Stale engine preload");
-        superseded = null;
-      }
     }
     Throwable failure = null;
     try {
@@ -1330,7 +1322,7 @@ public class Leelaz {
       startEngineOwned(index, resources);
     } catch (IOException | RuntimeException | Error startupFailure) {
       failure = startupFailure;
-      if (resources.diagnostic != null && !resources.retired) {
+      if (resources.diagnostic != null && resources.isCurrent()) {
         runEngineCleanupStep(startupFailure,
             () -> resources.diagnostic.fail("startup-handshake", startupFailure.toString()));
       }
@@ -1343,7 +1335,7 @@ public class Leelaz {
         boolean pendingTransport = resources.hasTransport();
         if ((update == null && (failure != null || pendingTransport))
             || (resources.retired && pendingTransport)) {
-          cleanup = claimStartupResourcesLocked(resources, failure);
+          cleanup = retireStartupLocked(resources, failure);
         } else if (pendingStartup == resources && !pendingTransport) {
           pendingStartup = null;
         }
@@ -1359,19 +1351,23 @@ public class Leelaz {
     return preload ? Purpose.PRELOAD : Purpose.MAIN_BOARD;
   }
 
-  private void startEngineOwned(int index, StartupResources resources) throws IOException {
-    ReaderStreamBinding previousModelBinding = readerStreamBinding;
+  private void startEngineOwned(int index, StartupRequest resources) throws IOException {
+    ReaderStreamBinding previousModelBinding;
+    synchronized (engineArbitrationLock()) {
+      resources.requireActive();
+      previousModelBinding = readerStreamBinding;
+      storePendingTensorRtRepairContext(null);
+      launchCommandSetsKataGoThreads = false;
+    }
     if (previousModelBinding != null) {
       previousModelBinding.speedModelLookup = null;
       previousModelBinding.closeAnalysisModelLookup();
     }
     List<String> modelLaunchCommands = List.of();
-    storePendingTensorRtRepairContext(null);
     EngineManager.EngineGameOwnerTransaction engineGameStartupTransaction =
         engineGameStartupCommandContext.get();
     boolean deferredEngineGameRecovery = isDeferredEngineGameRecoveryStartup();
     requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
-    launchCommandSetsKataGoThreads = false;
     if (engineCommand.trim().isEmpty()) {
       if (!deferredEngineGameRecovery) {
         Utils.showMsg(Lizzie.resourceBundle.getString("EngineFaied.empty"));
@@ -1390,14 +1386,7 @@ public class Leelaz {
     List<String> commandParts = launchSpec.getCommandParts();
     boolean remoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
     boolean localProcess = !useJavaSSH && !remoteCompute;
-    if (localProcess && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-      synchronized (engineArbitrationLock()) {
-        resources.requireActive();
-        isLoaded = false;
-        started = false;
-      }
-      return;
-    }
+    if (localProcess && skipLocalStartupForBenchmark(resources)) return;
     Purpose launchPurpose = launchPurpose(engineGameStartupTransaction);
     String purposeName = launchPurpose.name();
     var facts = EngineStartupBootstrap.factsFor(engineCommand, purposeName);
@@ -1510,34 +1499,18 @@ public class Leelaz {
         return;
       }
     } else {
-      if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-        synchronized (engineArbitrationLock()) {
-          resources.requireActive();
-          if (EngineObservation.discardIdentityIfCurrent(this, launch.engineId())) {
-            EngineObservation.recordStopped(launch.engineId(), "benchmark");
-          }
-          isLoaded = false;
-          started = false;
-        }
-        return;
-      }
       Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commandParts);
       boolean bundledCommand = Config.isBundledKataGoCommand(engineCommand);
       boolean nvidiaBundled = KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable);
-      long startupToken = 0L;
       if (bundledCommand) {
-        startupToken = beginBundledStartup(engineExecutable);
-      }
-      if (Config.isBundledKataGoCommand(engineCommand)) {
+        updateBundledStartupStage(resources, engineExecutable, 1,
+            "BundledEngineStartup.status.checking", "Checking built-in engine files...");
         try {
           if (nvidiaBundled) {
             updateBundledStartupStage(
-                engineExecutable,
-                nvidiaBundled ? 2 : 1,
+                resources, engineExecutable, 2,
                 "BundledEngineStartup.status.preparingRuntime",
-                "Preparing NVIDIA acceleration...",
-                "BundledEngineStartup.hint.nvidia",
-                "First launch on the NVIDIA package may take a little longer.");
+                "Preparing NVIDIA acceleration...");
           }
           KataGoRuntimeHelper.ensureBundledRuntimeReady(
               engineExecutable,
@@ -1555,27 +1528,27 @@ public class Leelaz {
       resources.requireActive();
       if (bundledCommand) {
         updateBundledStartupStage(
-            engineExecutable,
+            resources, engineExecutable,
             nvidiaBundled ? 3 : 2,
             "BundledEngineStartup.status.startingProcess",
-            "Starting KataGo...",
-            nvidiaBundled ? "BundledEngineStartup.hint.nvidia" : "BundledEngineStartup.hint",
-            nvidiaBundled
-                ? "First launch on the NVIDIA package may take a little longer."
-                : "First launch may take a little longer.");
+            "Starting KataGo...");
       }
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(commandParts, engineExecutable);
       launchCommands =
           KataGoRuntimeHelper.applyEntryLaunchPolicy(
               launchCommands, engineExecutable, policy);
-      rememberKataGoThreadLaunchOverride(launchCommands);
-      appliedSearchThreads = selectedThreads;
-      openClFp32CompatibilityActive =
+      boolean fp32Compatibility =
           KataGoRuntimeHelper.isOpenClFp32CompatibilityActive(launchCommands, engineExecutable);
-      if (openClFp32CompatibilityActive && bundledCommand && !preload) {
+      synchronized (engineArbitrationLock()) {
+        resources.requireActive();
+        rememberKataGoThreadLaunchOverride(launchCommands);
+        appliedSearchThreads = selectedThreads;
+        openClFp32CompatibilityActive = fp32Compatibility;
+      }
+      if (fp32Compatibility && bundledCommand && !preload) {
         publishBundledStartupStatus(
-            "BundledEngineStartup.status.openclCompatibility",
+            resources, "BundledEngineStartup.status.openclCompatibility",
             "Using stable NVIDIA OpenCL compatibility mode...");
       }
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
@@ -1586,11 +1559,17 @@ public class Leelaz {
       if (resources.diagnostic != null) resources.diagnostic.capture(processBuilder);
       Process child;
       try {
-        child = processBuilder.start();
+        child = launch.startLocalProcess(
+            this,
+            // The resource coordinator now counts this creation. A benchmark that acquired
+            // isolation during runtime preparation can still prevent the spawn.
+            () -> skipLocalStartupForBenchmark(resources) ? null : processBuilder.start(),
+            engineCommand);
+        if (child == null) return;
         synchronized (engineArbitrationLock()) {
+          // Even a retired request owns the handle that its launch returns.
           resources.process = child;
           resources.requireActive();
-          launch.started(this, child, engineCommand);
         }
         if (resources.diagnostic != null) {
           resources.diagnostic.attachProcess(child);
@@ -1610,45 +1589,18 @@ public class Leelaz {
       bindCurrentEngineGameStartupIncarnation(engineGameStartupTransaction, resources.binding);
       if (bundledCommand) {
         updateBundledStartupStage(
-            engineExecutable,
+            resources, engineExecutable,
             nvidiaBundled ? 4 : 3,
             "BundledEngineStartup.status.waitingResponse",
-            "Waiting for engine response...",
-            "BundledEngineStartup.hint.waiting",
-            "The first response can take a little longer while the engine finishes loading.");
-        Object watchdogIncarnation = resources.binding;
-        startBundledStartupWatchdog(
-            startupToken,
-            watchdogIncarnation,
-            suppressesGlobalEnginePresentation(watchdogIncarnation));
+            "Waiting for engine response...");
+        startBundledStartupWatchdog(resources, suppressesGlobalEnginePresentation(resources.binding));
       }
     }
     resources.requireActive();
-    // Send a version request to check that we have a supported version
-    // Response handled in parseLine
-    prepareEngineBootstrapState(engineGameStartupTransaction);
-    // sendCommand("turnon");
-    RestartBootstrapReceipt startupReceipt = currentRestartBootstrapReceipt();
-    requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
-    if (!isSSH) {
-      dispatchStartupBootstrapCommands(
-          engineGameStartupTransaction, startupReceipt, false);
-    }
-    if (engineGameStartupTransaction == null
-        && !deferredEngineGameRecovery
-        && this == Lizzie.leelaz
-        && shouldApplyInitialEngineKomiToCurrentGame()) {
-      Lizzie.board.getHistory().getGameInfo().setKomi(komi);
-    }
-    if (isSSH) {
-      dispatchStartupBootstrapCommands(
-          engineGameStartupTransaction, startupReceipt, true);
-    }
-    // if(width!=19||height!=19)
+    StartupBootstrap bootstrap = new StartupBootstrap(resources, engineGameStartupTransaction, isSSH);
+    bootstrap.prepare(deferredEngineGameRecovery);
+    bootstrap.dispatch();
 
-    // start a thread to continuously read Leelaz output
-    // new Thread(this::read).start();
-    // can stop engine for switching weights
     ReaderStreamBinding startedReaderStreamBinding = resources.binding;
     AnalysisModelIdentity.Lookup provenanceLookup;
     if (startedReaderStreamBinding.remoteTransport instanceof ZhiziGtpTransport zhizi) {
@@ -1680,8 +1632,21 @@ public class Leelaz {
       return;
     }
 
-    publishEngineStartupPresentation(
-        engineGameStartupTransaction, startedReaderStreamBinding);
+    bootstrap.publishPresentation();
+  }
+
+  private boolean skipLocalStartupForBenchmark(StartupRequest request) {
+    synchronized (engineArbitrationLock()) {
+      request.requireActive();
+      if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) return false;
+      String id = request.launch.engineId();
+      if (id != null && EngineObservation.discardIdentityIfCurrent(this, id)) {
+        EngineObservation.recordStopped(id, "benchmark");
+      }
+      isLoaded = false;
+      started = false;
+      return true;
+    }
   }
 
   protected EngineTransport createRemoteTransport() throws IOException {
@@ -2041,144 +2006,154 @@ public class Leelaz {
     }
   }
 
-  private void dispatchStartupBootstrapCommands(
-      EngineManager.EngineGameOwnerTransaction transaction,
-      RestartBootstrapReceipt startupReceipt,
-      boolean sshBootstrap) {
-    Runnable bootstrap =
-        () -> {
-          try {
-            runStartupBootstrapCommands(transaction, startupReceipt, sshBootstrap);
-          } catch (RuntimeException | Error failure) {
-            if (transaction != null
-                && !EngineManager.isCurrentEngineGameTransaction(transaction)) {
-              return;
-            }
-            throw failure;
-          } finally {
-            afterEngineGameBootstrapWorkerForTest(transaction);
+  /** One handshake may issue commands and publish readiness only for its own startup and reader. */
+  private final class StartupBootstrap {
+    private final StartupRequest request;
+    private final ReaderStreamBinding binding;
+    private final EngineManager.EngineGameOwnerTransaction transaction;
+    private final boolean ssh;
+
+    StartupBootstrap(StartupRequest request, EngineManager.EngineGameOwnerTransaction transaction,
+        boolean ssh) {
+      this.request = request;
+      this.binding = request.binding;
+      this.transaction = transaction;
+      this.ssh = ssh;
+    }
+
+    boolean isCurrent() {
+      return request.isCurrent()
+          && binding != null && !binding.readerShutdownRequested
+          && isCurrentStartupEngineIncarnation(binding);
+    }
+
+    private void mutate(Runnable action) {
+      Runnable bound = () -> {
+        synchronized (engineArbitrationLock()) {
+          if (isCurrent()) action.run();
+        }
+      };
+      if (transaction == null) bound.run();
+      else EngineManager.runIfCurrentEngineGameTransaction(transaction, bound);
+    }
+
+    void prepare(boolean deferredRecovery) {
+      mutate(() -> {
+        isCheckingVersion = true;
+        isCheckingName = true;
+        readBoardGmaUnsupportedPromptShown = false;
+        if (!engineStateUnrestored) clearReadBoardGmaSearchLimitSnapshots();
+      });
+      if (transaction == null && !deferredRecovery) publishPrimaryKomi(false);
+    }
+
+    void publishPresentation() {
+      beforeEngineGameBootstrapPresentationForTest(transaction);
+      if (transaction != null || !isCurrent() || suppressesGlobalEnginePresentation(binding)) return;
+      EngineManager.publishStartedEngineIconIfCurrent(Leelaz.this, binding);
+      Lizzie.runIfPrimaryEngine(Leelaz.this, request.primaryGeneration, () -> mutate(() -> {
+        if (Lizzie.frame != null) {
+          Lizzie.frame.isShowingHeatmap = false;
+          Lizzie.frame.isShowingPolicy = false;
+        }
+      }));
+    }
+
+    private void publishPrimaryKomi(boolean firstBoardSetup) {
+      if (request.primaryGeneration < 0L) return;
+      AtomicReference<GameInfo> changedGame = new AtomicReference<>();
+      Lizzie.runIfPrimaryEngine(Leelaz.this, request.primaryGeneration, () -> {
+        synchronized (engineArbitrationLock()) {
+          if (!isCurrent() || (firstBoardSetup && !firstLoad)) return;
+          if (shouldApplyInitialEngineKomiToCurrentGame()) {
+            GameInfo game = Lizzie.board.getHistory().getGameInfo();
+            game.setKomiNoMenu(komi);
+            changedGame.set(game);
           }
-        };
-    if (transaction == null) {
-      Thread thread = new Thread(bootstrap, "lizzie-engine-startup-bootstrap");
-      thread.start();
-      return;
+          if (firstBoardSetup) GameInfo.DEFAULT_KOMI = komi;
+        }
+      });
+      if (changedGame.get() != null) changedGame.get().refreshKomiDisplay();
     }
-    if (!EngineManager.dispatchEngineGameStartupWorker(
-        transaction, "lizzie-engine-game-bootstrap-" + currentEngineN, bootstrap)) {
-      throw new IllegalStateException(
-          "engine-game startup transaction retired before bootstrap dispatch");
-    }
-  }
 
-  private void runStartupBootstrapCommands(
-      EngineManager.EngineGameOwnerTransaction transaction,
-      RestartBootstrapReceipt startupReceipt,
-      boolean sshBootstrap) {
-    runWithEngineGameStartupCommandContext(
-        transaction,
-        () ->
-            runWithRestartBootstrapReceipt(
-                startupReceipt,
-                () -> {
-                  beforeEngineGameBootstrapCommandsForTest(transaction);
-                  if (sshBootstrap && !sleepForEngineBootstrap(transaction, 500L)) {
-                    return;
-                  }
-                  int times = 0;
-                  while (!sshBootstrap && outputStream == null && times < 10) {
-                    if (!sleepForEngineBootstrap(transaction, 100L)) {
-                      return;
-                    }
-                    times++;
-                  }
-                  runWithOrdinaryEngineGameBootstrap(
-                      () -> {
-                        int nameRequests = sshBootstrap ? 3 : 1;
-                        for (int request = 0; request < nameRequests; request++) {
-                          sendEngineBootstrapCommand(transaction, "name");
-                        }
-                        sendEngineBootstrapCommand(transaction, "version");
-                        sendEngineBootstrapCommand(transaction, "list_commands");
-                        requireCurrentEngineGameStartupTransaction(transaction);
-                        enqueueSavedGtpConfiguration();
-                        if (!sshBootstrap
-                            && !(Lizzie.frame.isPlayingAgainstLeelaz
-                                || Lizzie.frame.isAnaPlayingAgainstLeelaz)) {
-                          sendEngineBootstrapCommand(transaction, "komi " + komi);
-                        }
-                        if (transaction == null) {
-                          boardSizeForEngine(width, height);
-                        } else {
-                          boardSizeForEngineGame(transaction, width, height);
-                        }
-                        if (sshBootstrap
-                            && !(Lizzie.frame.isPlayingAgainstLeelaz
-                                || Lizzie.frame.isAnaPlayingAgainstLeelaz)) {
-                          sendEngineBootstrapCommand(transaction, "komi " + komi);
-                        }
-                        if (initialCommand != null && !initialCommand.equals("")) {
-                          String[] initialCommands = initialCommand.trim().split(";");
-                          for (String command : initialCommands) {
-                            sendEngineBootstrapCommand(transaction, command);
-                          }
-                        }
-                        if (sshBootstrap && transaction == null) {
-                          requireCurrentEngineGameStartupTransaction(transaction);
-                          setResponseUpToDate();
-                        }
-                      });
-                  afterEngineGameBootstrapCommandsForTest(transaction);
-                }));
-  }
-
-  private boolean sleepForEngineBootstrap(
-      EngineManager.EngineGameOwnerTransaction transaction, long millis) {
-    requireCurrentEngineGameStartupTransaction(transaction);
-    try {
-      Thread.sleep(millis);
-      requireCurrentEngineGameStartupTransaction(transaction);
-      return true;
-    } catch (InterruptedException interrupted) {
-      Thread.currentThread().interrupt();
-      return false;
-    }
-  }
-
-  private static void runWithOrdinaryEngineGameBootstrap(Runnable action) {
-    Boolean previous = ordinaryEngineGameBootstrapCommands.get();
-    ordinaryEngineGameBootstrapCommands.set(Boolean.TRUE);
-    try {
-      action.run();
-    } finally {
-      if (previous == null) {
-        ordinaryEngineGameBootstrapCommands.remove();
-      } else {
-        ordinaryEngineGameBootstrapCommands.set(previous);
+    void dispatch() {
+      Runnable worker = () -> {
+        try {
+          runWithEngineGameStartupCommandContext(transaction,
+              () -> runWithRestartBootstrapReceipt(request.bootstrapReceipt, this::run));
+        } catch (RuntimeException failure) {
+          if (transaction == null || EngineManager.isCurrentEngineGameTransaction(transaction)) throw failure;
+        } finally {
+          afterEngineGameBootstrapWorkerForTest(transaction);
+        }
+      };
+      if (transaction == null) {
+        new Thread(worker, "lizzie-engine-startup-bootstrap").start();
+      } else if (!EngineManager.dispatchEngineGameStartupWorker(
+          transaction, "lizzie-engine-game-bootstrap-" + currentEngineN, worker)) {
+        throw new IllegalStateException("engine-game startup transaction retired before bootstrap dispatch");
       }
     }
+
+    private void run() {
+      beforeEngineGameBootstrapCommandsForTest(transaction);
+      if (ssh) {
+        try {
+          Thread.sleep(500L);
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      }
+      if (!isCurrent()) return;
+      for (int i = 0; i < (ssh ? 3 : 1); i++) send("name");
+      send("version");
+      send("list_commands");
+      configurationProfileCommand(gtpConfigurationProtocol, gtpConfigurationProfile).ifPresent(this::send);
+      if (!isCurrent()) return;
+      if (!ssh) sendKomi();
+      if (send(boardSizeCommand(width, height))) {
+        if (transaction == null) publishPrimaryKomi(true);
+        mutate(() -> firstLoad = false);
+      }
+      if (ssh) sendKomi();
+      if (initialCommand != null && !initialCommand.isEmpty()) {
+        for (String command : initialCommand.trim().split(";")) send(command);
+      }
+      if (ssh && transaction == null) mutate(Leelaz.this::setResponseUpToDate);
+      afterEngineGameBootstrapCommandsForTest(transaction);
+    }
+
+    private void sendKomi() {
+      if (!(Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz)) {
+        send("komi " + komi);
+      }
+    }
+
+    private boolean send(String command) {
+      if (!isCurrent()) return false;
+      requireCurrentEngineGameStartupTransaction(transaction);
+      StartupBootstrap previous = startupBootstrapContext.get();
+      startupBootstrapContext.set(this);
+      try {
+        // Each launch configures its own endpoint, including in comparison mode.
+        return sendCommand(command, null, null, false, false, null, false, binding);
+      } finally {
+        if (previous == null) startupBootstrapContext.remove();
+        else startupBootstrapContext.set(previous);
+      }
+    }
+  }
+
+  private static StartupBootstrap bootstrapFor(ReaderStreamBinding binding) {
+    StartupBootstrap bootstrap = startupBootstrapContext.get();
+    return bootstrap != null && bootstrap.binding == binding ? bootstrap : null;
   }
 
   private static boolean isNameRecognitionBootstrapCommand(String command) {
     return "name".equals(command)
         || "version".equals(command)
         || "list_commands".equals(command);
-  }
-
-  private void sendEngineBootstrapCommand(
-      EngineManager.EngineGameOwnerTransaction transaction, String command) {
-    requireCurrentEngineGameStartupTransaction(transaction);
-    Boolean previous = ordinaryEngineGameBootstrapCommands.get();
-    ordinaryEngineGameBootstrapCommands.set(Boolean.TRUE);
-    try {
-      sendCommand(command);
-    } finally {
-      if (previous == null) {
-        ordinaryEngineGameBootstrapCommands.remove();
-      } else {
-        ordinaryEngineGameBootstrapCommands.set(previous);
-      }
-    }
   }
 
   private static void requireCurrentEngineGameStartupTransaction(
@@ -2199,32 +2174,6 @@ public class Leelaz {
     }
   }
 
-  private void prepareEngineBootstrapState(
-      EngineManager.EngineGameOwnerTransaction transaction) {
-    Runnable mutation =
-        () -> {
-          isCheckingVersion = true;
-          isCheckingName = true;
-          endGetCommandList = false;
-          startGetCommandList = false;
-          commandListBinding = null;
-          commandListPendingBinding = null;
-          commandLists.clear();
-          readBoardGmaUnsupportedPromptShown = false;
-          if (!engineStateUnrestored) {
-            clearReadBoardGmaSearchLimitSnapshots();
-          }
-        };
-    if (transaction == null) {
-      mutation.run();
-      return;
-    }
-    if (!EngineManager.runIfCurrentEngineGameTransaction(transaction, mutation)) {
-      throw new IllegalStateException(
-          "engine-game startup transaction retired before bootstrap state publication");
-    }
-  }
-
   void beforeEngineGameBootstrapCommandsForTest(
       EngineManager.EngineGameOwnerTransaction transaction) {}
 
@@ -2236,19 +2185,15 @@ public class Leelaz {
 
   void dispatchEngineGameBootstrapCommandsForTest(
       EngineManager.EngineGameOwnerTransaction transaction) {
-    dispatchStartupBootstrapCommands(transaction, null, false);
+    bootstrapForTest(transaction).dispatch();
   }
 
-  private void publishEngineStartupPresentation(
-      EngineManager.EngineGameOwnerTransaction transaction, Object startedReaderStreamBinding) {
-    beforeEngineGameBootstrapPresentationForTest(transaction);
-    if (transaction != null
-        || suppressesGlobalEnginePresentation(startedReaderStreamBinding)) {
-      return;
-    }
-    EngineManager.publishStartedEngineIconIfCurrent(this, startedReaderStreamBinding);
-    if (Lizzie.frame.isShowingHeatmap) Lizzie.frame.isShowingHeatmap = false;
-    if (Lizzie.frame.isShowingPolicy) Lizzie.frame.isShowingPolicy = false;
+  private StartupBootstrap bootstrapForTest(EngineManager.EngineGameOwnerTransaction transaction) {
+    StartupRequest request = new StartupRequest(startupRequestGeneration);
+    request.primaryGeneration = Lizzie.capturePrimaryEngineGeneration(this);
+    request.binding = currentReaderStreamBinding();
+    request.bootstrapReceipt = currentRestartBootstrapReceipt();
+    return new StartupBootstrap(request, transaction, isSSH);
   }
 
   static boolean isDeferredEngineGameRecoveryStartup() {
@@ -2284,7 +2229,7 @@ public class Leelaz {
 
   void publishEngineGameBootstrapPresentationForTest(
       EngineManager.EngineGameOwnerTransaction transaction) {
-    publishEngineStartupPresentation(transaction, currentEngineIncarnation());
+    bootstrapForTest(transaction).publishPresentation();
   }
 
   private boolean startReaderExecutors(
@@ -2652,7 +2597,7 @@ public class Leelaz {
     ReaderStreamBinding reader;
     UpdateEngineStartFailureCleanup pending;
     synchronized (engineArbitrationLock()) {
-      ++startupRequestGeneration;
+      advanceStartupGenerationLocked();
       if (pendingStartup == null) return currentReaderStreamBinding();
       if (pendingStartup.binding != null) {
         // Publication transferred the handles to the reader. Its ordinary stop owns cleanup.
@@ -2661,7 +2606,7 @@ public class Leelaz {
         return readerStreamBinding;
       }
       reader = readerStreamBinding;
-      pending = claimStartupResourcesLocked(pendingStartup, null);
+      pending = retireStartupLocked(pendingStartup, null);
     }
     pending.finish();
     return reader;
@@ -2849,25 +2794,37 @@ public class Leelaz {
   }
 
   /** Resources acquired by one start invocation, before and after reader publication. */
-  private static final class StartupResources {
+  /** One start request owns the provisional handles until it publishes exactly one reader. */
+  private final class StartupRequest {
     private EngineLaunch launch = new EngineLaunch(Purpose.MAIN_BOARD, null);
     private EngineStartupDiagnostics.Attempt diagnostic;
     private Process process;
     private EngineTransport remote;
     private SSHController ssh;
     private ReaderStreamBinding binding;
+    private RestartBootstrapReceipt bootstrapReceipt;
     private volatile boolean retired;
-    private volatile long generation;
+    private final long generation;
     private long primaryGeneration = -1L;
     private boolean deferred;
     private volatile boolean failed;
+
+    private StartupRequest(long generation) {
+      this.generation = generation;
+    }
+
+    private boolean isCurrent() {
+      return !retired && generation == startupRequestGeneration;
+    }
 
     private boolean hasTransport() {
       return process != null || remote != null || ssh != null;
     }
 
     private void requireActive() {
-      if (retired) throw new IllegalStateException("Engine start has already been retired");
+      if (!isCurrent()) {
+        throw new IllegalStateException("Engine start has already been retired");
+      }
     }
   }
 
@@ -2878,7 +2835,7 @@ public class Leelaz {
    */
   final class UpdateEngineStartAttempt {
     private final ReaderStreamBinding initialBinding;
-    private final StartupResources resources = new StartupResources();
+    private final StartupRequest resources;
     private final AtomicBoolean invocationStarted = new AtomicBoolean();
     private final AtomicBoolean settled = new AtomicBoolean();
     private final AtomicBoolean failureReportClaimed = new AtomicBoolean();
@@ -2887,13 +2844,14 @@ public class Leelaz {
     private UpdateEngineStartCompletion completionClaim;
     private volatile long primaryEngineGeneration = -1L;
 
-    private UpdateEngineStartAttempt(boolean backgroundPreload) {
+    private UpdateEngineStartAttempt(StartupRequest resources, boolean backgroundPreload) {
+      this.resources = resources;
       this.backgroundPreload = backgroundPreload;
       initialBinding = readerStreamBinding;
     }
 
     boolean isSuperseded() {
-      return resources.generation != 0 && resources.generation != startupRequestGeneration;
+      return resources.generation != startupRequestGeneration;
     }
 
     private boolean isActiveLocked() {
@@ -3038,9 +2996,21 @@ public class Leelaz {
     }
   }
 
-  private void admitStartupLocked(StartupResources resources) {
-    resources.generation = ++startupRequestGeneration;
-    pendingStartup = resources;
+  private long advanceStartupGenerationLocked() {
+    if (activeUpdateEngineStartAttempt != null && activeUpdateEngineStartAttempt.completionClaim == null) {
+      activeUpdateEngineStartAttempt = null;
+    }
+    return ++startupRequestGeneration;
+  }
+
+  /** Linearization point for direct starts, scheduled preloads and paired catalog updates. */
+  private StartupRequest reserveStartupLocked() {
+    pendingStartup = new StartupRequest(advanceStartupGenerationLocked());
+    return pendingStartup;
+  }
+
+  private UpdateEngineStartFailureCleanup retirePendingStartupLocked() {
+    return pendingStartup == null ? null : retireStartupLocked(pendingStartup, null);
   }
 
   UpdateEngineStartAttempt beginPreloadStartAttempt() {
@@ -3048,20 +3018,27 @@ public class Leelaz {
       if (pendingStartup != null || activeUpdateEngineStartAttempt != null || isStarted()) {
         throw new IllegalStateException("Engine is already starting or started");
       }
-      UpdateEngineStartAttempt preload = new UpdateEngineStartAttempt(true);
-      admitStartupLocked(preload.resources);
-      return preload;
+      return new UpdateEngineStartAttempt(reserveStartupLocked(), true);
     }
   }
 
   UpdateEngineStartAttempt beginUpdateEngineStartAttempt() {
+    UpdateEngineStartAttempt attempt;
+    UpdateEngineStartFailureCleanup superseded;
     synchronized (engineArbitrationLock()) {
       if (activeUpdateEngineStartAttempt != null) {
         throw new IllegalStateException("An update-engine start attempt is already active");
       }
-      UpdateEngineStartAttempt attempt = new UpdateEngineStartAttempt(false);
+      superseded = retirePendingStartupLocked();
+      attempt = new UpdateEngineStartAttempt(reserveStartupLocked(), false);
       activeUpdateEngineStartAttempt = attempt;
+    }
+    try {
+      if (superseded != null) superseded.finish();
       return attempt;
+    } catch (RuntimeException | Error failure) {
+      attempt.failClose(failure);
+      throw failure;
     }
   }
 
@@ -3268,6 +3245,9 @@ public class Leelaz {
     private void abandonLocked(UpdateEngineStartAttempt attempt) {
       if (attempt.completionClaim == this) {
         attempt.completionClaim = null;
+        if (attempt.isSuperseded() && attempt.owner().activeUpdateEngineStartAttempt == attempt) {
+          attempt.owner().activeUpdateEngineStartAttempt = null;
+        }
         attempt.owner().engineArbitrationLock().notifyAll();
       }
     }
@@ -3338,7 +3318,7 @@ public class Leelaz {
       }
       attempt.completionClaim = null;
       engineArbitrationLock().notifyAll();
-      return claimStartupResourcesLocked(attempt.resources, primaryFailure);
+      return retireStartupLocked(attempt.resources, primaryFailure);
     }
   }
 
@@ -3351,16 +3331,16 @@ public class Leelaz {
     }
   }
 
-  private boolean canPresentStartupFailure(StartupResources resources) {
+  private boolean canPresentStartupFailure(StartupRequest resources) {
     return !resources.deferred && resources.generation == startupRequestGeneration
         && (!resources.retired || resources.failed);
   }
 
   private boolean recordStartupFailure(
-      StartupResources resources, String stage, String detail, String reason,
+      StartupRequest resources, String stage, String detail, String reason,
       TensorRtRepairContext repairContext) {
     synchronized (engineArbitrationLock()) {
-      if (resources.retired || resources.generation != startupRequestGeneration) return false;
+      if (!resources.isCurrent()) return false;
       resources.failed = true;
       isLoaded = false;
       isDownWithError = true;
@@ -3372,7 +3352,7 @@ public class Leelaz {
   }
 
   private void reportLocalStartupFailure(
-      StartupResources resources, String stage, IOException failure, TensorRtRepairContext repair) {
+      StartupRequest resources, String stage, IOException failure, TensorRtRepairContext repair) {
     if (!recordStartupFailure(
         resources, stage, failure.toString(), failure.getLocalizedMessage(), repair)) return;
     boolean modal = startupFailureDiagnosticIsModal(repair);
@@ -3387,12 +3367,12 @@ public class Leelaz {
         + ": " + (detail == null ? fallback : detail);
   }
 
-  private void showStartupDiagnostic(StartupResources resources, String message, boolean modal) {
+  private void showStartupDiagnostic(StartupRequest resources, String message, boolean modal) {
     showStartupDiagnostic(resources, message, modal, false);
   }
 
   private void showStartupDiagnostic(
-      StartupResources resources, String message, boolean modal, boolean openSettings) {
+      StartupRequest resources, String message, boolean modal, boolean openSettings) {
     if (!canPresentStartupFailure(resources)) return;
     EngineFailedMessage.runOnEventDispatchThreadAndWait(
         () -> {
@@ -3404,8 +3384,8 @@ public class Leelaz {
         });
   }
 
-  private UpdateEngineStartFailureCleanup claimStartupResourcesLocked(
-      StartupResources resources, Throwable primaryFailure) {
+  private UpdateEngineStartFailureCleanup retireStartupLocked(
+      StartupRequest resources, Throwable primaryFailure) {
     resources.retired = true;
     if (pendingStartup == resources) pendingStartup = null;
     ReaderStreamBinding binding = resources.binding;
@@ -3453,7 +3433,7 @@ public class Leelaz {
 
   private void finishClaimedUpdateEngineStartFailure(UpdateEngineStartFailureCleanup cleanup) {
     Throwable cleanupFailure = null;
-    if (cleanup.unboundObservation != null || cleanup.extraProcess != null
+    if (cleanup.binding == null || cleanup.extraProcess != null
         || cleanup.extraRemoteTransport != null || cleanup.extraJavaSsh != null) {
       cleanupFailure =
           runEngineCleanupStep(
@@ -4672,7 +4652,7 @@ public class Leelaz {
       Path processWorkingDirectory,
       SnapshotFileAccessKind snapshotFileAccessKind,
       EngineLaunch launch) {
-    StartupResources resources = new StartupResources();
+    StartupRequest resources = new StartupRequest(startupRequestGeneration);
     resources.launch = launch;
     resources.diagnostic = startupDiagnosticAttempt;
     resources.process = process;
@@ -4683,7 +4663,7 @@ public class Leelaz {
 
   private void initializeStreams(
       InputStream stdout, OutputStream stdin, InputStream stderr, Path processWorkingDirectory,
-      SnapshotFileAccessKind snapshotFileAccessKind, StartupResources resources) {
+      SnapshotFileAccessKind snapshotFileAccessKind, StartupRequest resources) {
     EngineLaunch launch = resources.launch;
     if (launch.engineId() == null) noteEngineStarted(launch.purpose());
     BufferedReader nextInputStream = new BufferedReader(new InputStreamReader(stdout));
@@ -4782,7 +4762,7 @@ public class Leelaz {
       OutputStream stdin,
       Path processWorkingDirectory,
       SnapshotFileAccessKind snapshotFileAccessKind,
-      StartupResources resources) {
+      StartupRequest resources) {
     resources.requireActive();
     ReaderStreamBinding nextBinding =
         new ReaderStreamBinding(
@@ -4832,6 +4812,7 @@ public class Leelaz {
     recordUpdateEngineStartBindingLocked(readerStreamBinding);
     synchronized (commandQueue()) {
       publishRestartBootstrapReceiptLocked(readerStreamBinding, nextOutputStream);
+      resources.bootstrapReceipt = nextBinding.restartBootstrapReceipt;
     }
   }
 
@@ -9212,9 +9193,12 @@ public class Leelaz {
         });
   }
 
+  private static String boardSizeCommand(int width, int height) {
+    return width == height ? "boardsize " + width : "rectangular_boardsize " + width + " " + height;
+  }
+
   public void boardSizeForEngine(int width, int height) {
-    if (width != height) sendCommand("rectangular_boardsize " + width + " " + height);
-    else sendCommand("boardsize " + width);
+    sendCommand(boardSizeCommand(width, height));
     applyBoardSize(width, height, false);
   }
 
@@ -9225,11 +9209,7 @@ public class Leelaz {
       return;
     }
     requireCurrentEngineGameStartupTransaction(transaction);
-    if (width != height) {
-      sendCommand("rectangular_boardsize " + width + " " + height);
-    } else {
-      sendCommand("boardsize " + width);
-    }
+    sendCommand(boardSizeCommand(width, height));
     if (!EngineManager.runIfCurrentEngineGameTransaction(
         transaction,
         () -> {
@@ -11803,13 +11783,13 @@ public class Leelaz {
     if (settlement == null
         && startupTransaction != null
         && !(onResponse instanceof EngineGameResponseHandler)) {
-      ReaderStreamBinding startupBinding = currentReaderStreamBinding();
+      ReaderStreamBinding startupBinding = readBoardGmaResponseBinding != null
+          ? readBoardGmaResponseBinding : currentReaderStreamBinding();
       if (startupBinding == null) {
         throw new IllegalStateException(
             "Engine-game startup command has no live reader binding: " + command);
       }
-      boolean ordinaryBootstrap =
-          Boolean.TRUE.equals(ordinaryEngineGameBootstrapCommands.get());
+      boolean ordinaryBootstrap = bootstrapFor(startupBinding) != null;
       settlement =
           new EngineGameStartupCommandPermit(
               this,
@@ -12428,7 +12408,9 @@ public class Leelaz {
     if (consoleTarget != null
         && ((this != consoleTarget.owner && this != consoleTarget.mirror)
             || !consoleTarget.isCurrentSelection())) return false;
+    StartupBootstrap bootstrap = bootstrapFor(readBoardGmaResponseBinding);
     return hasGtpCapability()
+        && (bootstrap == null || bootstrap.isCurrent())
         && !shouldDropStaleForegroundRestoreCommand()
         && !shouldSuppressNormalCommandForForegroundAnalysis()
         && !shouldDropCommandDuringInitialBoardSynchronizationAtAdmission(command)
@@ -12579,8 +12561,7 @@ public class Leelaz {
               },
               Math.max(
                   1L,
-                  command.restartBootstrapReceipt != null
-                          && Boolean.TRUE.equals(ordinaryEngineGameBootstrapCommands.get())
+                  command.restartBootstrapReceipt != null && command.bootstrap != null
                       ? Math.max(
                           engineStartupSynchronizationTimeoutMillis(),
                           engineTuningSynchronizationTimeoutMillis())
@@ -13256,11 +13237,6 @@ public class Leelaz {
   }
 
 
-  private void enqueueSavedGtpConfiguration() {
-    configurationProfileCommand(gtpConfigurationProtocol, gtpConfigurationProfile)
-        .ifPresent(command -> sendCommand(command, null, false, false));
-  }
-
   public static Optional<String> configurationProfileCommand(
       String protocol, JSONObject profile) {
     if (!GtpConfigurationProbe.ZENGTP_PROTOCOL.equals(protocol) || profile == null) {
@@ -13674,13 +13650,6 @@ public class Leelaz {
       return null;
     }
     Runnable deferredResponse = null;
-    if (command.startsWith("fixed_handicap")
-        || (isKatago && command.startsWith("place_free_handicap"))) isSettingHandicap = true;
-    if (command.startsWith("benchmark")) {
-      synchronized (commandQueue()) {
-        currentCmdNum++;
-      }
-    }
     Runnable responseHandler =
         queuedCommand.onResponse == null ? NO_OP_RESPONSE_HANDLER : queuedCommand.onResponse;
     PendingResponseHandler pendingHandler =
@@ -13704,7 +13673,8 @@ public class Leelaz {
       ReaderStreamBinding expectedOutputBinding = queuedCommand.readBoardGmaResponseBinding;
       if (expectedOutputBinding != null
           && (outputBinding != expectedOutputBinding
-              || expectedOutputBinding.terminated)) {
+              || expectedOutputBinding.terminated
+              || (queuedCommand.bootstrap != null && !queuedCommand.bootstrap.isCurrent()))) {
         queuedCommand.cancelBeforeOutputWrite(
             new IllegalStateException(
                 "GTP command reader binding changed before physical output write"));
@@ -13738,6 +13708,13 @@ public class Leelaz {
       if (!claimRestartBootstrapReceiptForOutputWrite(queuedCommand, currentOutputStream)) {
         finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
         return null;
+      }
+      if (command.startsWith("fixed_handicap")
+          || (isKatago && command.startsWith("place_free_handicap"))) isSettingHandicap = true;
+      if (command.startsWith("benchmark")) {
+        synchronized (commandQueue()) {
+          currentCmdNum++;
+        }
       }
       if (!addPendingResponseHandler(pendingHandler)) {
         finishRejectedCommandBeforeOutputWrite(queuedCommand, pendingHandler);
@@ -19640,6 +19617,7 @@ public class Leelaz {
     private final QueuedCommandSettlement settlement;
     private final boolean countedCommand;
     private final RestartBootstrapReceipt restartBootstrapReceipt;
+    private final StartupBootstrap bootstrap;
     private AnalysisInfoTarget ordinaryAnalysisTarget;
     private ReaderStreamBinding ordinaryAnalysisBinding;
     private final ReaderStreamBinding readBoardGmaResponseBinding;
@@ -19708,6 +19686,7 @@ public class Leelaz {
               || lifecycleCompletionCommandContext.get() != null
           ? null : restartBootstrapReceipt;
       this.readBoardGmaResponseBinding = readBoardGmaResponseBinding;
+      this.bootstrap = bootstrapFor(readBoardGmaResponseBinding);
       if (onResponse instanceof MoveFocusResponse) {
         ((MoveFocusResponse) onResponse).command = this;
       }
@@ -24453,52 +24432,28 @@ public class Leelaz {
     return currentEngineN;
   }
 
-  private long beginBundledStartup(Path engineExecutable) {
-    long token = System.nanoTime();
-    bundledStartupToken = token;
-    updateBundledStartupStage(
-        engineExecutable,
-        1,
-        "BundledEngineStartup.status.checking",
-        "Checking built-in engine files...",
-        KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable)
-            ? "BundledEngineStartup.hint.nvidia"
-            : "BundledEngineStartup.hint",
-        KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable)
-            ? "First launch on the NVIDIA package may take a little longer."
-            : "First launch may take a little longer.");
-    return token;
-  }
-
   private void updateBundledStartupStage(
-      Path engineExecutable,
-      int step,
-      String statusKey,
-      String statusFallback,
-      String hintKey,
-      String hintFallback) {
+      StartupRequest request, Path engineExecutable, int step, String statusKey, String statusFallback) {
     if (preload || useJavaSSH || !Config.isBundledKataGoCommand(engineCommand)) {
       return;
     }
     final boolean nvidiaBundled = KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable);
     final int totalSteps = nvidiaBundled ? 4 : 3;
     String progressFallback = statusFallback + " (" + step + "/" + totalSteps + ")";
-    publishBundledStartupStatus(statusKey, progressFallback);
+    publishBundledStartupStatus(request, statusKey, progressFallback);
   }
 
-  private void publishBundledStartupStatus(String statusKey, String statusFallback) {
-    long primaryGeneration = startupPrimaryEngineGeneration;
-    if (primaryGeneration >= 0L) {
-      Lizzie.runIfPrimaryEngine(
-          this,
-          primaryGeneration,
-          () -> Lizzie.engineStartupStatus.checking(statusKey, statusFallback));
-    }
-  }
-
-  private void closeBundledStartupDialog() {
-    closeBundledStartupDialog(
-        startupPrimaryEngineGeneration, captureEngineIncarnationFence());
+  private void publishBundledStartupStatus(StartupRequest request, String statusKey, String fallback) {
+    if (request.primaryGeneration < 0L) return;
+    AtomicReference<EngineStartupStatus.PreparedNotification> notification = new AtomicReference<>();
+    Lizzie.runIfPrimaryEngine(this, request.primaryGeneration, () -> {
+      synchronized (engineArbitrationLock()) {
+        if (request.isCurrent()) {
+          notification.set(Lizzie.engineStartupStatus.prepareChecking(statusKey, fallback));
+        }
+      }
+    });
+    if (notification.get() != null) notification.get().run();
   }
 
   private void closeBundledStartupDialog(
@@ -24576,24 +24531,16 @@ public class Leelaz {
         && Lizzie.engineStartupStatus.snapshot().state != EngineStartupStatus.State.READY;
   }
 
-  private void startBundledStartupWatchdog(
-      long token,
-      Object expectedIncarnation,
-      boolean suppressGlobalPresentation) {
-    if (token <= 0L || preload || useJavaSSH || !Config.isBundledKataGoCommand(engineCommand)) {
-      return;
-    }
-    if (!(expectedIncarnation instanceof ReaderStreamBinding)) {
-      return;
-    }
-    ReaderStreamBinding expectedBinding = (ReaderStreamBinding) expectedIncarnation;
+  private void startBundledStartupWatchdog(StartupRequest request, boolean suppressGlobalPresentation) {
+    if (preload || useJavaSSH || !Config.isBundledKataGoCommand(engineCommand)) return;
+    ReaderStreamBinding expectedBinding = request.binding;
     Process expectedProcess = expectedBinding.process;
     EngineStartupProgress progress = startupProgress(expectedBinding);
     Thread watchdog =
         new Thread(
             () -> {
               while (!progress.expired(System.nanoTime())) {
-                if (token != bundledStartupToken
+                if (!request.isCurrent()
                     || readerStreamBinding != expectedBinding
                     || isLoaded
                     || isDownWithError
@@ -24611,7 +24558,7 @@ public class Leelaz {
                 }
               }
               synchronized (engineArbitrationLock()) {
-                if (token != bundledStartupToken
+                if (!request.isCurrent()
                     || readerStreamBinding != expectedBinding
                     || expectedBinding.terminated || expectedBinding.readerShutdownRequested
                     || isLoaded || isDownWithError || isNormalEnd) {
@@ -24646,8 +24593,7 @@ public class Leelaz {
                       + text("BundledEngineStartup.workDir", "Working folder")
                       + ": "
                       + Lizzie.config.getRuntimeWorkDirectory().getAbsolutePath();
-              dispatchBundledStartupTimeoutPresentation(
-                  expectedBinding, suppressGlobalPresentation, message);
+              dispatchBundledStartupTimeoutPresentation(request, suppressGlobalPresentation, message);
             },
             "bundled-engine-startup-watchdog");
     watchdog.setDaemon(true);
@@ -24655,34 +24601,22 @@ public class Leelaz {
   }
 
   private void dispatchBundledStartupTimeoutPresentation(
-      Object expectedIncarnation, boolean frozenSuppression, String message) {
-    if (frozenSuppression) {
-      return;
-    }
-    SwingUtilities.invokeLater(
-        () -> {
-          if (!isCurrentEngineIncarnation(expectedIncarnation)
-              || suppressesGlobalEnginePresentation(expectedIncarnation)) {
-            return;
-          }
-          closeBundledStartupDialog();
-          try {
-            tryToDignostic(message, true);
-            if (shouldOpenInteractiveDiagnostic()) {
-              LizzieFrame.openMoreEngineDialog();
-            }
-          } catch (JSONException e) {
-            e.printStackTrace();
-          }
-        });
+      StartupRequest request, boolean frozenSuppression, String message) {
+    if (frozenSuppression) return;
+    SwingUtilities.invokeLater(() -> {
+      if (isCurrentEngineIncarnation(request.binding)
+          && !suppressesGlobalEnginePresentation(request.binding)) {
+        showStartupDiagnostic(request, message, true, true);
+      }
+    });
   }
 
-  void dispatchBundledStartupTimeoutPresentationForTest(
-      Object expectedIncarnation, String message) {
-    dispatchBundledStartupTimeoutPresentation(
-        expectedIncarnation,
-        suppressesGlobalEnginePresentation(expectedIncarnation),
-        message);
+  void dispatchBundledStartupTimeoutPresentationForTest(Object expectedIncarnation, String message) {
+    StartupRequest request = bootstrapForTest(null).request;
+    if (request.binding == expectedIncarnation) {
+      dispatchBundledStartupTimeoutPresentation(
+          request, suppressesGlobalEnginePresentation(expectedIncarnation), message);
+    }
   }
 
   private String text(String key, String fallback) {

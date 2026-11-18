@@ -143,7 +143,7 @@ class EngineStartupDialogPolicyTest {
       Lizzie.setPrimaryEngine(primary);
       Lizzie.engineStartupStatus.ready();
 
-      invokeBundledStartupStage(secondary);
+      invokeBundledStartupStage(secondary, reserveStartup(secondary));
 
       assertEquals(EngineStartupStatus.State.READY, Lizzie.engineStartupStatus.snapshot().state);
     } finally {
@@ -158,10 +158,9 @@ class EngineStartupDialogPolicyTest {
     Leelaz primary = new Leelaz("engines/katago/windows-x64-opencl/katago.exe");
     try {
       Lizzie.setPrimaryEngine(primary);
-      bindStartupPrimaryGeneration(primary);
       Lizzie.engineStartupStatus.ready();
 
-      invokeBundledStartupStage(primary);
+      invokeBundledStartupStage(primary, reserveStartup(primary));
 
       assertEquals(EngineStartupStatus.State.CHECKING, Lizzie.engineStartupStatus.snapshot().state);
     } finally {
@@ -180,7 +179,7 @@ class EngineStartupDialogPolicyTest {
       Lizzie.engineStartupStatus.ready();
 
       invokeBundledStartupStatus(
-          secondary,
+          secondary, reserveStartup(secondary),
           "BundledEngineStartup.status.openclCompatibility",
           "Using stable NVIDIA OpenCL compatibility mode...");
 
@@ -198,12 +197,12 @@ class EngineStartupDialogPolicyTest {
     try {
       Lizzie.setPrimaryEngine(engine);
       long staleGeneration = Lizzie.capturePrimaryEngineGeneration(engine);
-      bindStartupPrimaryGeneration(engine);
+      Object request = reserveStartup(engine);
       Lizzie.setPrimaryEngine(engine);
       Lizzie.engineStartupStatus.failed("failed", "Failed", "new owner failure");
 
       invokeBundledStartupStatus(
-          engine,
+          engine, request,
           "BundledEngineStartup.status.checking",
           "stale startup must be ignored");
       Lizzie.initializeAfterVersionCheck(false, engine, false, staleGeneration);
@@ -259,40 +258,48 @@ class EngineStartupDialogPolicyTest {
             List.of(executable.toString(), "gtp"), true, false));
   }
 
-  private static void invokeBundledStartupStage(Leelaz engine) throws Exception {
-    Method method =
-        Leelaz.class.getDeclaredMethod(
-            "updateBundledStartupStage",
-            Path.class,
-            int.class,
-            String.class,
-            String.class,
-            String.class,
-            String.class);
+  @Test
+  void stoppedStartupCannotOverwriteStatusOnSamePrimary() throws Exception {
+    Leelaz previous = Lizzie.leelaz;
+    Leelaz primary = new Leelaz("engines/katago/windows-x64-opencl/katago.exe");
+    try {
+      Lizzie.setPrimaryEngine(primary);
+      Object stopped = reserveStartup(primary);
+      primary.normalQuit();
+      Lizzie.engineStartupStatus.ready();
+      invokeBundledStartupStage(primary, stopped);
+      assertEquals(EngineStartupStatus.State.READY, Lizzie.engineStartupStatus.snapshot().state);
+    } finally {
+      Lizzie.setPrimaryEngine(previous);
+      Lizzie.engineStartupStatus.ready();
+    }
+  }
+
+  private static Object reserveStartup(Leelaz engine) throws Exception {
+    Leelaz.UpdateEngineStartAttempt attempt = engine.beginUpdateEngineStartAttempt();
+    Field resources = attempt.getClass().getDeclaredField("resources");
+    resources.setAccessible(true);
+    Object request = resources.get(attempt);
+    Field primaryGeneration = request.getClass().getDeclaredField("primaryGeneration");
+    primaryGeneration.setAccessible(true);
+    primaryGeneration.setLong(request, Lizzie.capturePrimaryEngineGeneration(engine));
+    return request;
+  }
+
+  private static void invokeBundledStartupStage(Leelaz engine, Object request) throws Exception {
+    Method method = Leelaz.class.getDeclaredMethod("updateBundledStartupStage",
+        request.getClass(), Path.class, int.class, String.class, String.class);
     method.setAccessible(true);
-    method.invoke(
-        engine,
-        Path.of("engines/katago/windows-x64-opencl/katago.exe"),
-        1,
-        "BundledEngineStartup.status.checking",
-        "Checking built-in engine files...",
-        "BundledEngineStartup.hint",
-        "First launch may take a little longer.");
+    method.invoke(engine, request, Path.of("engines/katago/windows-x64-opencl/katago.exe"), 1,
+        "BundledEngineStartup.status.checking", "Checking built-in engine files...");
   }
 
   private static void invokeBundledStartupStatus(
-      Leelaz engine, String statusKey, String statusFallback) throws Exception {
-    Method method =
-        Leelaz.class.getDeclaredMethod(
-            "publishBundledStartupStatus", String.class, String.class);
+      Leelaz engine, Object request, String statusKey, String statusFallback) throws Exception {
+    Method method = Leelaz.class.getDeclaredMethod("publishBundledStartupStatus",
+        request.getClass(), String.class, String.class);
     method.setAccessible(true);
-    method.invoke(engine, statusKey, statusFallback);
-  }
-
-  private static void bindStartupPrimaryGeneration(Leelaz engine) throws Exception {
-    Field field = Leelaz.class.getDeclaredField("startupPrimaryEngineGeneration");
-    field.setAccessible(true);
-    field.setLong(engine, Lizzie.capturePrimaryEngineGeneration(engine));
+    method.invoke(engine, request, statusKey, statusFallback);
   }
 
   private static boolean forceFirstLaunchSession(boolean value) throws Exception {

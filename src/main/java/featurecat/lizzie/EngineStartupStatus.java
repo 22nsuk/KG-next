@@ -102,13 +102,17 @@ public final class EngineStartupStatus {
 
   /** Commits READY without invoking arbitrary listeners under the caller's identity locks. */
   public PreparedNotification prepareReady() {
-    PreparedNotification notification;
-    synchronized (this) {
-      Snapshot next = newSnapshot(State.READY, "", "", "");
-      notification = new PreparedNotification(this, next);
-      snapshot = next;
-    }
-    return notification;
+    return prepare(State.READY, "", "");
+  }
+
+  public PreparedNotification prepareChecking(String messageKey, String fallback) {
+    return prepare(State.CHECKING, messageKey, fallback);
+  }
+
+  private synchronized PreparedNotification prepare(State state, String messageKey, String fallback) {
+    Snapshot next = newSnapshot(state, messageKey, fallback, "");
+    snapshot = next;
+    return new PreparedNotification(this, next);
   }
 
   public void checking(String messageKey, String fallback) {

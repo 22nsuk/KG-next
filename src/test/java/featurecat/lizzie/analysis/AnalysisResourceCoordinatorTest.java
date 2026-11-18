@@ -2,6 +2,8 @@ package featurecat.lizzie.analysis;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.logging.DiagnosticModule;
@@ -10,6 +12,7 @@ import featurecat.lizzie.logging.LoggingLimits;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.LoggingSettings;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Method;
@@ -20,6 +23,9 @@ import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -279,6 +285,91 @@ class AnalysisResourceCoordinatorTest {
       child.destroy();
       AnalysisResourceCoordinator.activeLocalComputeProcessCount();
       runtime.shutdown();
+    }
+  }
+
+  @Test
+  void retiredLocalCreationExcludesBenchmarksUntilItsLateChildExits() throws Exception {
+    Object owner = new Object();
+    String firstId = EngineObservation.restartInstance(owner, "PRELOAD");
+    var first = new AnalysisResourceCoordinator.EngineLaunch(
+        AnalysisResourceCoordinator.Purpose.PRELOAD, firstId);
+    ControllableProcess child = new ControllableProcess(101L);
+    CountDownLatch creating = new CountDownLatch(1);
+    CountDownLatch deliverChild = new CountDownLatch(1);
+    FutureTask<Process> creation = new FutureTask<>(
+        () -> first.startLocalProcess(
+            owner,
+            () -> {
+              creating.countDown();
+              try {
+                if (deliverChild.await(10, TimeUnit.SECONDS)) return child;
+              } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                throw new IOException(interrupted);
+              }
+              throw new IOException("test did not release the process factory");
+            },
+            "katago gtp"));
+    Thread worker = new Thread(creation, "test-engine-process-creation");
+    worker.setDaemon(true);
+    worker.start();
+    try {
+      assertTrue(creating.await(10, TimeUnit.SECONDS));
+      assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+      first.closed(owner);
+      assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+
+      String nextId = EngineObservation.restartInstance(owner, "COMPARE");
+      var next = new AnalysisResourceCoordinator.EngineLaunch(
+          AnalysisResourceCoordinator.Purpose.COMPARE, nextId);
+      next.started(owner, null, "remote gtp");
+      try {
+        deliverChild.countDown();
+        assertSame(child, creation.get(10, TimeUnit.SECONDS));
+        assertTrue(AnalysisResourceCoordinator.isRegisteredProcessIdentityForTesting(owner, null));
+        assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+
+        child.destroy();
+        assertEquals(0, AnalysisResourceCoordinator.rawLocalComputeProcessCountForTesting());
+        assertFalse(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+      } finally {
+        next.closed(owner);
+        EngineObservation.discardIdentityIfCurrent(owner, nextId);
+      }
+    } finally {
+      first.closed(owner);
+      deliverChild.countDown();
+      child.destroy();
+      worker.join(10_000L);
+      EngineObservation.discardIdentityIfCurrent(owner, firstId);
+    }
+  }
+
+  @Test
+  void failedLocalCreationReleasesBenchmarkExclusionWithoutAChild() {
+    Object owner = new Object();
+    String id = EngineObservation.restartInstance(owner, "PRELOAD");
+    var launch = new AnalysisResourceCoordinator.EngineLaunch(
+        AnalysisResourceCoordinator.Purpose.PRELOAD, id);
+    IOException createFailure = new IOException("process could not start");
+    try {
+      assertSame(
+          createFailure,
+          assertThrows(
+              IOException.class,
+              () -> launch.startLocalProcess(
+                  owner,
+                  () -> {
+                    assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+                    throw createFailure;
+                  },
+                  "katago gtp")));
+      assertFalse(AnalysisResourceCoordinator.hasActiveLocalComputeProcess());
+      assertFalse(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+    } finally {
+      launch.closed(owner);
+      EngineObservation.discardIdentityIfCurrent(owner, id);
     }
   }
 

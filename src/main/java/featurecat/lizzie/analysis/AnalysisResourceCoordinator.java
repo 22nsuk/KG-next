@@ -54,10 +54,12 @@ public final class AnalysisResourceCoordinator {
   private static final Pattern LEADING_EXECUTABLE =
       Pattern.compile("^(\\s*)(\\\"[^\\\"]*\\\"|'[^']*'|[^\\s]+)");
   private static final Map<Object, Sample> FOREGROUND_SAMPLES = new java.util.WeakHashMap<>();
+  // Also guards the pending creations and tracked physical processes.
   private static final Map<Object, EngineLaunch> REGISTERED_PROCESSES =
       new java.util.WeakHashMap<>();
   private static final Set<Process> ACTIVE_LOCAL_COMPUTE_PROCESSES =
       Collections.newSetFromMap(new IdentityHashMap<Process, Boolean>());
+  private static int localCreationsInProgress;
 
   private AnalysisResourceCoordinator() {}
 
@@ -105,7 +107,12 @@ public final class AnalysisResourceCoordinator {
 
   /** One launch attempt owns its physical start/stop pair, including after the owner is reused. */
   static final class EngineLaunch {
-    private enum State { PENDING, STARTED, CLOSED }
+    private enum State { PENDING, CREATING_LOCAL, STARTED, CLOSED }
+
+    @FunctionalInterface
+    interface LocalProcessFactory {
+      Process start() throws IOException;
+    }
 
     private final Purpose purpose;
     private final String engineId;
@@ -127,29 +134,65 @@ public final class AnalysisResourceCoordinator {
       return purpose;
     }
 
+    Process startLocalProcess(Object owner, LocalProcessFactory factory, String command)
+        throws IOException {
+      synchronized (REGISTERED_PROCESSES) {
+        if (state != State.PENDING) {
+          throw new IllegalStateException("Engine start has already been retired");
+        }
+        state = State.CREATING_LOCAL;
+        localCreationsInProgress++;
+      }
+      Process child = null;
+      try {
+        child = factory.start();
+        return child;
+      } finally {
+        finishLocalCreation(owner, child, command);
+      }
+    }
+
+    private void finishLocalCreation(Object owner, Process child, String command) {
+      boolean retired;
+      synchronized (REGISTERED_PROCESSES) {
+        // Keep benchmarks excluded continuously as a reservation becomes a physical process.
+        localCreationsInProgress--;
+        if (child == null) {
+          state = State.CLOSED;
+          return;
+        }
+        retired = state == State.CLOSED;
+        publishStarted(owner, child, command);
+        if (retired) recordStopped();
+      }
+      if (retired) trackUntilExit(child);
+    }
+
     void started(Object owner, Process process, String command) {
       synchronized (REGISTERED_PROCESSES) {
         if (state != State.PENDING) return;
-        this.process = process;
-        pid = processId(process);
+        publishStarted(owner, process, command);
+      }
+    }
+
+    private void publishStarted(Object owner, Process process, String command) {
+      this.process = process;
+      if (process != null) ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
+      if (state != State.CLOSED) {
         state = State.STARTED;
         if (engineId.equals(EngineObservation.identityFor(owner))) {
           REGISTERED_PROCESSES.put(owner, this);
         }
-        if (process != null) {
-          synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
-            ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
-          }
+      }
+      pid = processId(process);
+      try {
+        EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
+        if (EngineObservation.engineDiagnosticsEnabled()) {
+          EngineObservation.recordProcessDetails(
+              engineId, "process-started", purpose.name(), pid, diagnosticCommand(command));
         }
-        try {
-          EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
-          if (EngineObservation.engineDiagnosticsEnabled()) {
-            EngineObservation.recordProcessDetails(
-                engineId, "process-started", purpose.name(), pid, diagnosticCommand(command));
-          }
-        } catch (RuntimeException ignored) {
-          // Diagnostic publication cannot invalidate a successful launch.
-        }
+      } catch (RuntimeException ignored) {
+        // Diagnostic publication cannot invalidate a successful launch.
       }
     }
 
@@ -161,13 +204,18 @@ public final class AnalysisResourceCoordinator {
         if (!hadCarrier) return;
         REGISTERED_PROCESSES.remove(owner, this);
         stoppedProcess = process;
-        try {
-          EngineObservation.recordProcessDetails(engineId, "process-stopped", purpose.name(), pid, null);
-        } catch (RuntimeException ignored) {
-          // Resource accounting must still settle if the log sink fails.
-        }
+        recordStopped();
       }
       if (stoppedProcess != null) trackUntilExit(stoppedProcess);
+    }
+
+    private void recordStopped() {
+      try {
+        EngineObservation.recordProcessDetails(
+            engineId, "process-stopped", purpose.name(), pid, null);
+      } catch (RuntimeException ignored) {
+        // Resource accounting must still settle if the log sink fails.
+      }
     }
   }
 
@@ -177,7 +225,10 @@ public final class AnalysisResourceCoordinator {
       return;
     }
     try {
-      process.onExit().whenComplete((ignored, failure) -> removeTrackedLocalProcess(process));
+      process.onExit().whenComplete(
+          (ignored, failure) -> {
+            if (!isProcessAlive(process)) removeTrackedLocalProcess(process);
+          });
     } catch (RuntimeException unsupportedExitNotification) {
       // activeLocalComputeProcessCount() also prunes exited children.
     }
@@ -238,28 +289,27 @@ public final class AnalysisResourceCoordinator {
     }
   }
 
-  /** Returns whether any registered local analysis process is still alive. */
+  /** Returns whether a local analysis process is being created or is still alive. */
   public static boolean hasActiveLocalComputeProcess() {
     return activeLocalComputeProcessCount() > 0;
   }
 
   public static boolean hasActiveLocalComputeOtherThan(Object owner) {
-    Process owned;
     synchronized (REGISTERED_PROCESSES) {
+      // A pending child has no published owner registration to exempt.
+      if (localCreationsInProgress > 0) return true;
       EngineLaunch registration = REGISTERED_PROCESSES.get(owner);
-      owned = registration == null ? null : registration.process;
-    }
-    synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
+      Process owned = registration == null ? null : registration.process;
       for (Process process : ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         if (process != owned && isProcessAlive(process)) return true;
       }
+      return false;
     }
-    return false;
   }
 
   static int activeLocalComputeProcessCount() {
-    synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
-      int alive = 0;
+    synchronized (REGISTERED_PROCESSES) {
+      int alive = localCreationsInProgress;
       Iterator<Process> processes = ACTIVE_LOCAL_COMPUTE_PROCESSES.iterator();
       while (processes.hasNext()) {
         Process process = processes.next();
@@ -274,7 +324,7 @@ public final class AnalysisResourceCoordinator {
   }
 
   static int rawLocalComputeProcessCountForTesting() {
-    synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
+    synchronized (REGISTERED_PROCESSES) {
       return ACTIVE_LOCAL_COMPUTE_PROCESSES.size();
     }
   }
@@ -288,7 +338,7 @@ public final class AnalysisResourceCoordinator {
   }
 
   private static void removeTrackedLocalProcess(Process process) {
-    synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
+    synchronized (REGISTERED_PROCESSES) {
       ACTIVE_LOCAL_COMPUTE_PROCESSES.remove(process);
     }
   }
@@ -447,7 +497,7 @@ public final class AnalysisResourceCoordinator {
   private static long processId(Process process) {
     try {
       return process == null ? -1L : process.pid();
-    } catch (UnsupportedOperationException e) {
+    } catch (RuntimeException e) {
       return -1L;
     }
   }

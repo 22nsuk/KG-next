@@ -646,6 +646,9 @@ class EngineManagerLifecycleReservationTest {
 
       assertSame(startFailure, thrown);
       assertEquals(0, replacement.startCount);
+      assertFalse(replacement.hasEngineToStop(), "failed scheduling must release pending startup");
+      Leelaz.UpdateEngineStartAttempt retry = replacement.beginUpdateEngineStartAttempt();
+      retry.failClose(new IllegalStateException("controlled scheduling retry settlement"));
       assertFalse(EngineManager.isUpdating);
       assertLifecycleAvailable(state.previousForegroundEngine);
       assertLifecycleAvailable(replacement);
@@ -653,6 +656,90 @@ class EngineManagerLifecycleReservationTest {
           replacement.tryBeginLifecycleCompletion(new Object(), null);
       assertNotNull(freshClaim, "the failed Thread.start must release the completion claim");
       freshClaim.abandonBeforeFence();
+    }
+  }
+
+  @Test
+  void updateEnginesStopWhileReplacementWorkerIsQueuedCancelsBothStarts() throws Exception {
+    CatalogStopEngineManager manager = new CatalogStopEngineManager(true);
+    UpdateEnginesState state = new UpdateEnginesState(19, 19, true, false, false, manager);
+    try {
+      state.install();
+      manager.updateEngines();
+
+      manager.forceKillAllEngines();
+      manager.replacementWorker.start();
+      manager.awaitWorker();
+
+      assertEquals(0, manager.primaryStarts.get());
+      assertEquals(0, manager.mirrorStarts.get());
+      assertLifecycleAvailable(manager.engineList.get(0));
+      assertLifecycleAvailable(manager.engineList.get(1));
+    } finally {
+      manager.finishPrimaryStart.countDown();
+      if (manager.replacementWorker != null
+          && manager.replacementWorker.getState() == Thread.State.NEW) {
+        manager.replacementWorker.start();
+      }
+      state.restore();
+    }
+  }
+
+  @Test
+  void updateEnginesStopMirrorWhilePrimaryStartsCancelsReservedMirror() throws Exception {
+    CatalogStopEngineManager manager = new CatalogStopEngineManager(false);
+    UpdateEnginesState state = new UpdateEnginesState(19, 19, true, false, false, manager);
+    try {
+      state.install();
+      manager.updateEngines();
+      assertTrue(manager.primaryStarted.await(10, TimeUnit.SECONDS));
+      assertEquals(1, manager.primaryStarts.get());
+
+      manager.killThisEngines2();
+      manager.finishPrimaryStart.countDown();
+      manager.awaitWorker();
+
+      assertEquals(0, manager.mirrorStarts.get());
+      assertEquals(-1, EngineManager.currentEngineNo2);
+      assertLifecycleAvailable(manager.engineList.get(0));
+      assertLifecycleAvailable(manager.engineList.get(1));
+    } finally {
+      manager.finishPrimaryStart.countDown();
+      state.restore();
+    }
+  }
+
+  @Test
+  void updateEnginesReportsAdmissionFailureAndKeepsPreviousSelection() throws Exception {
+    IllegalStateException admissionFailure =
+        new IllegalStateException("controlled update admission failure");
+    UpdateFailureLeelaz replacement =
+        new UpdateFailureLeelaz() {
+          @Override
+          UpdateEngineStartAttempt beginUpdateEngineStartAttempt() {
+            throw admissionFailure;
+          }
+        };
+    EngineManager previousManager = Lizzie.engineManager;
+    try (UpdateFailureState state = new UpdateFailureState(replacement, null)) {
+      state.install();
+      Lizzie.engineManager = state.manager;
+      Lizzie.setPrimaryEngine(state.previousForegroundEngine);
+      state.manager.engineList = List.of(state.previousForegroundEngine);
+      EngineStartupStatus.Snapshot beforeUpdate = Lizzie.engineStartupStatus.snapshot();
+
+      state.manager.updateEngines();
+      SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(admissionFailure.getMessage(), state.manager.failureDetail.get());
+      assertSame(state.previousForegroundEngine, Lizzie.leelaz);
+      assertEquals(List.of(state.previousForegroundEngine), state.manager.engineList);
+      assertSame(beforeUpdate, Lizzie.engineStartupStatus.snapshot());
+      assertTrue(state.previousForegroundEngine.isStarted());
+      assertLifecycleAvailable(state.previousForegroundEngine);
+      assertLifecycleAvailable(replacement);
+    } finally {
+      Lizzie.engineManager = previousManager;
     }
   }
 
@@ -1867,7 +1954,7 @@ class EngineManagerLifecycleReservationTest {
       EngineStartupStatus.Snapshot replacementStatus = Lizzie.engineStartupStatus.snapshot();
 
       manager.reportUpdateEngineStartAcquisitionFailure(
-          0, target, expectedIncarnation, staleGeneration, failure);
+          0, manager.engineList, target, expectedIncarnation, staleGeneration, target, failure);
       SwingUtilities.invokeAndWait(() -> {});
 
       assertSame(replacementStatus, Lizzie.engineStartupStatus.snapshot());
@@ -9201,6 +9288,66 @@ class EngineManagerLifecycleReservationTest {
     }
   }
 
+  private static final class CatalogStopEngineManager extends TrustedUpdateEngineManager {
+    private final boolean queueWorker;
+    private final CountDownLatch primaryStarted = new CountDownLatch(1);
+    private final CountDownLatch finishPrimaryStart = new CountDownLatch(1);
+    private final AtomicInteger primaryStarts = new AtomicInteger();
+    private final AtomicInteger mirrorStarts = new AtomicInteger();
+    private Thread replacementWorker;
+
+    private CatalogStopEngineManager(boolean queueWorker) {
+      super(List.of());
+      this.queueWorker = queueWorker;
+    }
+
+    @Override
+    protected Leelaz createUnstartedEngine(EngineData data) throws IOException {
+      boolean primary = data.name.equals("update-target");
+      Leelaz engine =
+          new Leelaz(data.commands) {
+            @Override
+            public void startEngine(int index) throws IOException {
+              if (!primary) {
+                mirrorStarts.incrementAndGet();
+                super.startEngine(index);
+                return;
+              }
+              primaryStarts.incrementAndGet();
+              super.startEngine(index);
+              primaryStarted.countDown();
+              try {
+                if (!finishPrimaryStart.await(10, TimeUnit.SECONDS)) {
+                  throw new IOException("Timed out waiting to finish the primary start");
+                }
+              } catch (InterruptedException failure) {
+                Thread.currentThread().interrupt();
+                throw new IOException(failure);
+              }
+            }
+          };
+      engine.oriWidth = data.width;
+      engine.oriHeight = data.height;
+      engine.oriEnginename = data.name;
+      engine.trustDirectLocalSnapshotFileAccessForTest();
+      return engine;
+    }
+
+    @Override
+    protected void startUpdateEngineReplacement(Thread worker) {
+      replacementWorker = worker;
+      worker.setDaemon(true);
+      if (!queueWorker) {
+        super.startUpdateEngineReplacement(worker);
+      }
+    }
+
+    private void awaitWorker() throws InterruptedException {
+      replacementWorker.join(TimeUnit.SECONDS.toMillis(10));
+      assertFalse(replacementWorker.isAlive());
+    }
+  }
+
   private static final class FailingOuterUpdateSchedulerEngineManager
       extends TrustedUpdateEngineManager {
     private final AssertionError schedulingFailure =
@@ -10018,6 +10165,7 @@ class EngineManagerLifecycleReservationTest {
     private final Leelaz replacement;
     private final Error replacementStartFailure;
     private final Throwable createFailure;
+    private final AtomicReference<String> failureDetail = new AtomicReference<>();
     private int createAttemptCount;
 
     private UpdateFailureEngineManager(Leelaz replacement, Error replacementStartFailure) {
@@ -10056,7 +10204,9 @@ class EngineManagerLifecycleReservationTest {
     }
 
     @Override
-    protected void showEngineSynchronizationFailure(Leelaz engine, String detail) {}
+    protected void showEngineSynchronizationFailure(Leelaz engine, String detail) {
+      failureDetail.set(detail);
+    }
 
     @Override
     protected void showForegroundEngineLeaseInUse() {}
@@ -10205,6 +10355,23 @@ class EngineManagerLifecycleReservationTest {
         boolean mirrorStartFails,
         boolean failSynchronizationScheduling)
         throws Exception {
+      this(
+          targetWidth,
+          targetHeight,
+          doubleEngine,
+          mirrorStartFails,
+          failSynchronizationScheduling,
+          null);
+    }
+
+    private UpdateEnginesState(
+        int targetWidth,
+        int targetHeight,
+        boolean doubleEngine,
+        boolean mirrorStartFails,
+        boolean failSynchronizationScheduling,
+        EngineManager replacementManager)
+        throws Exception {
       this.targetWidth = targetWidth;
       this.targetHeight = targetHeight;
       this.doubleEngine = doubleEngine;
@@ -10249,7 +10416,11 @@ class EngineManagerLifecycleReservationTest {
       history.add(moveNode(15, 15, Stone.WHITE, true, 1));
       board.setHistory(history);
       manager =
-          schedulerManager == null ? new TrustedUpdateEngineManager(List.of()) : schedulerManager;
+          replacementManager != null
+              ? replacementManager
+              : schedulerManager == null
+                  ? new TrustedUpdateEngineManager(List.of())
+                  : schedulerManager;
     }
 
     private void install() {

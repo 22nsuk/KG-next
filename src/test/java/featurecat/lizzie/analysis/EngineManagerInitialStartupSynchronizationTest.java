@@ -929,6 +929,47 @@ class EngineManagerInitialStartupSynchronizationTest {
   }
 
   @Test
+  void stopAllCancelsAUserSwitchBeforeTheEdtStartsItsWorker() throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz current = new StartupSyncLeelaz();
+      StartupSyncLeelaz target = new StartupSyncLeelaz();
+      current.started = true;
+      current.isLoaded = true;
+      Lizzie.board = boardWithHistory(emptyRootHistory(1));
+      Lizzie.setPrimaryEngine(current);
+      EngineManager.isEmpty = false;
+      EngineManager.currentEngineNo = 0;
+      ProductionEntryEngineManager manager =
+          new ProductionEntryEngineManager(new ArrayList<>(List.of(current, target)));
+      Lizzie.engineManager = manager;
+
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertTrue(manager.switchEngineIfAvailable(1, true));
+            assertEquals(
+                EngineManager.EngineSwitchUiPhase.SWITCHING,
+                manager.engineSwitchUiSnapshot(true).phase());
+            // The queued worker cannot begin preparation before this EDT event returns.
+            assertTrue(manager.killAllEngines());
+          });
+
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while (managerAtomicReferenceValue(manager, "engineSwitchTransaction") != null
+          && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+      }
+      assertNull(managerAtomicReferenceValue(manager, "engineSwitchTransaction"));
+      assertEquals(1L, target.startEntered.getCount());
+      assertFalse(target.isStarted());
+      assertTrue(EngineManager.isEmpty);
+      assertEquals(-1, EngineManager.currentEngineNo);
+      assertEquals(
+          EngineManager.EngineSwitchUiPhase.IDLE,
+          manager.engineSwitchUiSnapshot(true).phase());
+    }
+  }
+
+  @Test
   void edtSwitchReturnsBeforeBlockingStartupAndKeepsSwitchingThroughTheFirstPump()
       throws Exception {
     try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
@@ -1556,6 +1597,70 @@ class EngineManagerInitialStartupSynchronizationTest {
       } finally {
         EngineManager.setInitialEngineStartFailureSettlementHookForTest(null);
         engine.forceQuit();
+      }
+    }
+  }
+
+  @Test
+  void selectedInitialStartupStoppedWhileQueuedDoesNotLaunch() throws Exception {
+    try (StartupTestEnvironment env = StartupTestEnvironment.open()) {
+      StartupSyncLeelaz engine = new StartupSyncLeelaz();
+      AtomicReference<Thread> queuedWorker = new AtomicReference<>();
+      EngineManager.setInitialEngineStartupSchedulerForTest(
+          new EngineManager.InitialEngineStartupScheduler() {
+            @Override
+            public Thread create(Runnable work, String name) {
+              return new Thread(work, name);
+            }
+
+            @Override
+            public void configure(Thread worker) {
+              worker.setDaemon(true);
+            }
+
+            @Override
+            public void start(Thread worker) {
+              queuedWorker.set(worker);
+            }
+
+            @Override
+            public void dispatch(Runnable work) {
+              SwingUtilities.invokeLater(work);
+            }
+          });
+      try {
+        Lizzie.board = boardWithHistory(emptyRootHistory(0));
+        Lizzie.setPrimaryEngine(null);
+        EngineManager manager =
+            new EngineManager(
+                Lizzie.config,
+                0,
+                false,
+                new ArrayList<>(List.of(engineData(37, "selected-startup-stop", false))),
+                command -> engine);
+        assertNotNull(queuedWorker.get());
+
+        manager.forceKillAllEngines();
+        queuedWorker.get().start();
+        queuedWorker.get().join(TimeUnit.SECONDS.toMillis(5));
+
+        assertFalse(queuedWorker.get().isAlive());
+        assertEquals(1L, engine.startEntered.getCount());
+        assertNull(Lizzie.leelaz);
+        assertNull(managerAtomicReferenceValue(manager, "engineSwitchTransaction"));
+        assertEquals(
+            EngineManager.EngineSwitchUiPhase.IDLE,
+            manager.engineSwitchUiSnapshot(true).phase());
+        assertFalse(engine.hasEngineToStop());
+        assertLifecycleReservationReleased(engine);
+      } finally {
+        EngineManager.setInitialEngineStartupSchedulerForTest(null);
+        engine.forceQuit();
+        Thread worker = queuedWorker.get();
+        if (worker != null && worker.getState() == Thread.State.NEW) {
+          worker.start();
+          worker.join(TimeUnit.SECONDS.toMillis(5));
+        }
       }
     }
   }

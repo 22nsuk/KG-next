@@ -6532,6 +6532,47 @@ class EngineManagerEngineGameStateMachineTest {
   }
 
   @Test
+  void stopAllCancelsADeferredRecoveryBeforeItsWorkerRequestsStartup() throws Exception {
+    CountDownLatch workerEntered = new CountDownLatch(1);
+    CountDownLatch allowRecovery = new CountDownLatch(1);
+    AtomicReference<Thread> worker = new AtomicReference<>();
+    ImmediateUiEngineManager manager =
+        installManager(
+            new ImmediateUiEngineManager(allEngines()) {
+              @Override
+              protected Thread createDeferredEngineGameRecoveryWorker(Runnable task, String name) {
+                Thread threadedRecovery =
+                    new Thread(
+                        () -> {
+                          workerEntered.countDown();
+                          await(allowRecovery);
+                          task.run();
+                        },
+                        name);
+                worker.set(threadedRecovery);
+                return threadedRecovery;
+              }
+            });
+    activeTransaction(manager, gameInfo(), black, 0);
+    black.enableDeferredRecoveryStart = true;
+
+    try {
+      manager.restartUnresponsiveRemoteEngine(black, 0);
+      assertTrue(workerEntered.await(2, TimeUnit.SECONDS));
+      assertTrue(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
+
+      manager.forceKillAllEngines();
+    } finally {
+      allowRecovery.countDown();
+      if (worker.get() != null) worker.get().join(TimeUnit.SECONDS.toMillis(5));
+    }
+
+    assertFalse(worker.get().isAlive());
+    assertEquals(0, black.deferredRecoveryStartCount.get());
+    assertFalse(EngineManager.hasDeferredEngineGameRecoveryGateForTest());
+  }
+
+  @Test
   void pkRestartEntryDefersExactParticipantUntilRetirement() throws Exception {
     RecoveryGateEngineManager manager =
         installManager(new RecoveryGateEngineManager(allEngines(), false));
