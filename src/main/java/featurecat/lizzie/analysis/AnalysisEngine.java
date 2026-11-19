@@ -453,7 +453,7 @@ public class AnalysisEngine {
     ReaderResources resources;
     if (remoteCompute) {
       try {
-        EngineTransport transport = RemoteComputeConfig.createTransportForCommand(engineCommand);
+        EngineTransport transport = createRemoteTransport(engineCommand);
         if (!installStartingRemoteCarrier(attempt, null, transport)) {
           transport.close();
           return;
@@ -600,6 +600,10 @@ public class AnalysisEngine {
     } finally {
       EngineObservation.recordFailedIfCurrent(this, launch.engineId(), phase);
     }
+  }
+
+  EngineTransport createRemoteTransport(String command) throws IOException {
+    return RemoteComputeConfig.createTransportForCommand(command);
   }
 
   EngineLaunch.LocalProcessFactory prepareLocalProcess(

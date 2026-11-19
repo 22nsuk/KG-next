@@ -9,10 +9,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.AnalysisEngine;
-import featurecat.lizzie.analysis.AnalysisEngineSSHController;
+import featurecat.lizzie.analysis.ControlledAnalysisEngine;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
-import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.enginegame.Acceptance;
 import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameParsedStart;
@@ -65,13 +64,9 @@ class LizzieShutdownTest {
   void exitWaitsForAnalysisCleanupWithoutBlockingEdt(boolean alreadyDetached) throws Exception {
     try (Harness harness = Harness.open();
         GatedAnalysisProcess process = new GatedAnalysisProcess()) {
-      AnalysisEngine analysis = allocate(AnalysisEngine.class);
-      analysis.process = process;
-      Method initialize = AnalysisEngine.class.getDeclaredMethod(
-          "bindStartedCarrier", Process.class, AnalysisEngineSSHController.class,
-          EngineTransport.class, String.class);
-      initialize.setAccessible(true);
-      initialize.invoke(analysis, process, null, null, "shutdown-test-engine");
+      Lizzie.config.analysisReuseCurrentEngine = true;
+      ControlledAnalysisEngine analysis = new ControlledAnalysisEngine();
+      analysis.startWith(process);
       harness.frame.analysisEngine = analysis;
       if (alreadyDetached) {
         analysis.normalQuit();
@@ -102,16 +97,7 @@ class LizzieShutdownTest {
         assertFalse(process.isAlive(), "JVM exit ran while the analysis child was alive");
       } finally {
         process.allowDestroy.countDown();
-        Field resourcesField = AnalysisEngine.class.getDeclaredField("readerResources");
-        resourcesField.setAccessible(true);
-        Object resources = resourcesField.get(analysis);
-        Field cleanupField = resources.getClass().getDeclaredField("cleanup");
-        cleanupField.setAccessible(true);
-        Thread cleanup = (Thread) cleanupField.get(resources);
-        if (cleanup != null) {
-          cleanup.join(TimeUnit.SECONDS.toMillis(5));
-          assertFalse(cleanup.isAlive(), "cleanup did not finish after releasing the gate");
-        }
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
       }
     }
   }

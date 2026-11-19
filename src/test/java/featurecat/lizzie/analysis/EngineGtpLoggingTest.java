@@ -469,10 +469,11 @@ class EngineGtpLoggingTest {
     if (enableAtFlush) runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
     else enableEngineDiagnostics(runtime);
     assertEquals(!enableAtFlush, EngineObservation.engineDiagnosticsEnabled());
-    AnalysisEngine engine = allocate(AnalysisEngine.class);
+    Lizzie.config.analysisReuseCurrentEngine = true;
+    Lizzie.setPrimaryEngine(null);
+    ControlledAnalysisEngine engine = new ControlledAnalysisEngine();
     setField(AnalysisEngine.class, engine, "purpose",
         AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS);
-    String first = EngineObservation.ensureStarted(engine, "AUTO_QUICK_ANALYSIS");
     ByteArrayOutputStream output =
         new ByteArrayOutputStream() {
           private boolean commandFlushed;
@@ -494,10 +495,9 @@ class EngineGtpLoggingTest {
             if (failFlush) throw new IOException("controlled auxiliary flush failure");
           }
         };
-    Method bind = AnalysisEngine.class.getDeclaredMethod(
-        "bindStartedCarrier", Process.class, AnalysisEngineSSHController.class, EngineTransport.class, String.class);
-    bind.setAccessible(true);
-    bind.invoke(engine, null, null, new QuietTransport(false, output), first);
+    engine.startWith(new QuietTransport(false, output));
+    String first = EngineObservation.identityFor(engine);
+    assertNotNull(first);
 
     try {
       assertEquals(!failFlush, engine.sendCommand(command));

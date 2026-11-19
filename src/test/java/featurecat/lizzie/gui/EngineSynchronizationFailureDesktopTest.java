@@ -192,7 +192,7 @@ class EngineSynchronizationFailureDesktopTest {
     }
 
     Lizzie.setPrimaryEngine(engine);
-    engine.pondering = true;
+    engine.Pondering();
     dispatchBundledTimeout(engine);
     SwingUtilities.invokeAndWait(
         () -> {
@@ -227,25 +227,13 @@ class EngineSynchronizationFailureDesktopTest {
   }
 
   private static final class PonderProbe extends Leelaz {
-    private boolean pondering;
-
     private PonderProbe(String command) throws Exception {
       super(command);
     }
 
     @Override
-    public boolean isPondering() {
-      return pondering;
-    }
-
-    @Override
-    public void togglePonder() {
-      pondering = !pondering;
-    }
-
-    @Override
     public void ponder() {
-      pondering = true;
+      Pondering();
     }
   }
 
