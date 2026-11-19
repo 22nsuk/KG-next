@@ -388,6 +388,16 @@ class SgfCopyDesktopTest {
     try {
       String text = "native clipboard text";
       writeNative(input, output, text);
+      // The writer can acknowledge before this JVM processes the loss of clipboard ownership.
+      // Establish the external baseline before starting the same-owner, same-text copy race.
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      String observed = clipboard();
+      while (!text.equals(observed) && System.nanoTime() < deadline) {
+        Thread.sleep(10);
+        observed = clipboard();
+      }
+      assertEquals(text, observed, "the initial external clipboard write must be visible");
+
       // Repeated identical copies by the same OS owner must also retire SGF publication.
       for (int attempt = 0; attempt < 2; attempt++) {
         try (var blocked = new WorkerBlock(worker)) {
