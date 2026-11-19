@@ -221,8 +221,8 @@ public class ContributeEngine {
       return;
     }
     String engineId =
-        EngineObservation.restartInstance(
-            this, "CONTRIBUTE", EngineStartupBootstrap.factsFor(engineCommand, "CONTRIBUTE"));
+        EngineObservation.beginLaunch(
+            this, EngineStartupBootstrap.factsFor(engineCommand, "CONTRIBUTE"));
     EngineStartupDiagnostics.Attempt attempt =
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
@@ -247,6 +247,7 @@ public class ContributeEngine {
         this.outputStream = new BufferedOutputStream(this.javaSSH.getStdin());
         this.errorStream = new BufferedReader(new InputStreamReader(this.javaSSH.getSterr()));
         javaSSHClosed = false;
+        EngineObservation.recordStarted(engineId, "CONTRIBUTE");
       } else {
         javaSSHClosed = true;
         launch.error = "SSH login failed";
@@ -263,6 +264,7 @@ public class ContributeEngine {
         process = processBuilder.start();
         launch.process = process;
         attempt.attachProcess(process);
+        EngineObservation.recordStarted(engineId, "CONTRIBUTE");
         AnalysisResourceCoordinator.processStarted(
             this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, engineId);
       } catch (IOException e) {

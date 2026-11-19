@@ -415,12 +415,10 @@ public class AnalysisEngine {
       return;
     }
     startupDiagnosticAttempt = null;
-    String launchPurpose = purpose == null ? "OTHER" : purpose.name();
+    String launchPurpose = purpose().name();
     String engineId =
-        EngineObservation.restartInstance(
-            this,
-            launchPurpose,
-            EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+        EngineObservation.beginLaunch(
+            this, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
@@ -655,6 +653,7 @@ public class AnalysisEngine {
       synchronized (ACTIVE_READER_RESOURCES) {
         ACTIVE_READER_RESOURCES.add(resources);
       }
+      EngineObservation.recordStarted(engineId, purpose().name());
       AnalysisResourceCoordinator.processStarted(
           this, purpose, launchedCommand, resources.process, engineId);
     }

@@ -12,6 +12,7 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
+import featurecat.lizzie.analysis.ssh.TestSshServer;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
@@ -25,6 +26,7 @@ import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.Utils;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -634,6 +636,7 @@ class EngineGtpLoggingTest {
       if (benchmarkAtAdmission) {
         awaitLogs(runtime);
         String app = readApp();
+        assertEquals(0L, eventCount(app, "started"), app);
         assertEquals(0L, eventCount(app, "process-started"), app);
         assertSameEngineIdentity(app, "event=bootstrap", "event=stopped reason=benchmark");
         return;
@@ -674,7 +677,9 @@ class EngineGtpLoggingTest {
       assertTrue(engine.stderrRead.await(5, TimeUnit.SECONDS));
       awaitLogs(runtime);
       assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
-      assertSameEngineIdentity(readApp(), "event=bootstrap", "event=process-started");
+      assertEquals(1L, eventCount(readApp(), "started"), readApp());
+      assertSameEngineIdentity(readApp(), "event=bootstrap", "event=started");
+      assertSameEngineIdentity(readApp(), "event=started", "event=process-started");
 
       String started = eventLine(readApp(), "engine event=process-started");
       assertTrue(started.contains("purpose=" + purpose + " "), started);
@@ -769,9 +774,13 @@ class EngineGtpLoggingTest {
         return new QuietTransport(!connected);
       }
     };
-    engine.startEngine(RemoteComputeConfig.COMMAND_ZHIZI);
-    String successor = connected ? EngineObservation.restartInstance(engine, "replacement") : null;
     try {
+      engine.startEngine(RemoteComputeConfig.COMMAND_ZHIZI);
+      awaitLogs(runtime);
+      String launchLog = readApp();
+      assertEquals(connected ? 1L : 0L, eventCount(launchLog, "started"), launchLog);
+      if (connected) assertSameEngineIdentity(launchLog, "event=started", "event=process-started");
+      String successor = connected ? EngineObservation.restartInstance(engine, "replacement") : null;
       engine.shutdown();
       engine.shutdown();
       AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
@@ -786,21 +795,60 @@ class EngineGtpLoggingTest {
     }
   }
 
-  @Test
-  void failedRemoteConnectionAndCleanupDoNotRecordAProcess() throws Exception {
-    LoggingRuntime runtime = startEngineDiagnostics();
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedRemoteConnectionAndCleanupDoNotRecordAStart(boolean diagnostics) throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    if (diagnostics) {
+      enableEngineDiagnostics(runtime);
+    } else {
+      runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
+    }
     RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
     try {
       Lizzie.setPrimaryEngine(engine);
       assertThrows(IOException.class, () -> engine.startEngine(-1));
       engine.shutdown();
       awaitLogs(runtime);
-      assertEquals(0L, eventCount(readApp(), "process-started"), readApp());
       String app = readApp();
+      assertEquals(0L, eventCount(app, "started"), app);
+      assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
+      assertEquals(0L, eventCount(app, "process-started"), app);
       assertEquals(0L, eventCount(app, "process-stopped"), app);
-      assertSameEngineIdentity(app, "event=failed", "event=stderr facts=controlled remote connection failure");
+      if (diagnostics) {
+        assertSameEngineIdentity(
+            app, "event=failed", "event=stderr facts=controlled remote connection failure");
+      } else {
+        assertEquals(0L, eventCount(app, "stderr"), app);
+      }
     } finally {
       closeRemoteReaders(engine);
+    }
+  }
+
+  @Test
+  void rejectedSshLoginKeepsOnlyTheStartupAttempt() throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
+    Lizzie.config.analysisReuseCurrentEngine = true;
+    Lizzie.setPrimaryEngine(null);
+    AnalysisEngine engine = new AnalysisEngine(true);
+    try (TestSshServer server = TestSshServer.builder().password("accepted").start()) {
+      engine.useJavaSSH = true;
+      engine.ip = "127.0.0.1";
+      engine.port = Integer.toString(server.port());
+      engine.userName = "player";
+      engine.password = Utils.doEncrypt("rejected");
+      engine.startEngine("katago analysis");
+      assertTrue(server.passwordAttempts.get() > 0);
+      assertTrue(server.commands.isEmpty());
+      assertFalse(engine.isLoaded());
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(1L, eventCount(app, "bootstrap"), app);
+      assertEquals(0L, eventCount(app, "started"), app);
+    } finally {
+      engine.shutdown();
     }
   }
 

@@ -70,7 +70,9 @@ public final class EngineObservation {
       if (existing != null) return existing;
       id = mintIdentity(owner);
     }
-    return startInstance(id, purpose, facts);
+    recordBootstrap(id, facts == null ? EngineBootstrapFacts.unknown(purpose) : facts);
+    recordStarted(id, purpose);
+    return id;
   }
 
   public static String restartInstance(Object owner, String purpose) {
@@ -78,6 +80,13 @@ public final class EngineObservation {
   }
 
   public static String restartInstance(Object owner, String purpose, EngineBootstrapFacts facts) {
+    String id = beginLaunch(owner, facts == null ? EngineBootstrapFacts.unknown(purpose) : facts);
+    recordStarted(id, purpose);
+    return id;
+  }
+
+  /** Opens a bootstrap timeline before the process or remote streams are available. */
+  public static String beginLaunch(Object owner, EngineBootstrapFacts facts) {
     String previous;
     String id;
     synchronized (IDENTITY_LOCK) {
@@ -85,7 +94,8 @@ public final class EngineObservation {
       id = mintIdentity(owner);
     }
     if (previous != null) recordStopped(previous, "replaced");
-    return startInstance(id, purpose, facts);
+    recordBootstrap(id, facts);
+    return id;
   }
 
   public static void ensureStopped(Object owner, String reason) {
@@ -572,16 +582,6 @@ public final class EngineObservation {
     }
     STARTUPS.remove(expectedIdentity);
     return true;
-  }
-
-  private static String startInstance(String id, String purpose, EngineBootstrapFacts facts) {
-    try {
-      EngineBootstrapFacts safe = facts == null ? EngineBootstrapFacts.unknown(purpose) : facts;
-      recordBootstrap(id, safe);
-      recordStarted(id, purpose);
-    } catch (RuntimeException ignored) {
-    }
-    return id;
   }
 
   private static String formatKnownStages(String engineId) {

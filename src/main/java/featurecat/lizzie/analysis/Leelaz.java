@@ -1306,7 +1306,12 @@ public class Leelaz {
       String engineId,
       String command,
       EngineStartupDiagnostics.Attempt diagnostic,
-      ArrayDeque<String> stderrLines) {}
+      ArrayDeque<String> stderrLines) {
+    void processStarted(Leelaz owner, Process process) {
+      EngineObservation.recordStarted(engineId, purpose.name());
+      AnalysisResourceCoordinator.processStarted(owner, purpose, command, process, engineId);
+    }
+  }
 
   private Purpose launchPurpose(EngineManager.EngineGameOwnerTransaction engineGameTransaction) {
     if (engineGameTransaction != null) return Purpose.ENGINE_GAME;
@@ -1377,8 +1382,8 @@ public class Leelaz {
   }
 
   private EngineLaunch beginEngineLaunch(Purpose purpose, boolean collectStartupDiagnostic) {
-    String id = EngineObservation.restartInstance(
-        this, purpose.name(), EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
+    String id = EngineObservation.beginLaunch(
+        this, EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
     EngineStartupDiagnostics.Attempt diagnostic = collectStartupDiagnostic
         ? EngineStartupDiagnostics.getDefault().begin(
             id, purpose.name(), commands,
@@ -1587,8 +1592,7 @@ public class Leelaz {
         process = processBuilder.start();
         if (diagnostic != null) diagnostic.attachProcess(process);
         recordUpdateEngineStartProcess(process);
-        AnalysisResourceCoordinator.processStarted(
-            this, launch.purpose(), launch.command(), process, launch.engineId());
+        launch.processStarted(this, process);
       } catch (IOException e) {
         if (diagnostic != null)
           diagnostic.fail("process-create", e.toString());
@@ -4824,9 +4828,7 @@ public class Leelaz {
     beforeReaderBindingPublicationForTest();
     readerStreamBinding = binding;
     if (binding.launch != null && (binding.remoteTransport != null || binding.javaSSH != null)) {
-      EngineLaunch launch = binding.launch;
-      AnalysisResourceCoordinator.processStarted(
-          this, launch.purpose(), launch.command(), null, launch.engineId());
+      binding.launch.processStarted(this, null);
     }
   }
 
