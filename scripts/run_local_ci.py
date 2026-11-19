@@ -339,6 +339,10 @@ ENGINE_PROCESS_TESTS = {
         "drainsPeerPipeBurstAndRemainsResponsive",
         "cleansUpPeerThatRefusesQuit",
     ), whole_class=False),
+    "featurecat.lizzie.gui.EngineStartupDiagnosticsDesktopTest": TestSelection((
+        "sshExitShowsStderrOnlyInTheLocalFailureWindow(String)[1]",
+        "sshExitShowsStderrOnlyInTheLocalFailureWindow(String)[2]",
+    ), whole_class=False),
     "featurecat.lizzie.gui.ContributeStartupDesktopTest": TestSelection((
         "serverRejectionUsesOneLaunchAndRetainsFailure",
         "outputOrderingReadinessAndRetryBudget",

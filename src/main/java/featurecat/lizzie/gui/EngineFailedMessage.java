@@ -73,6 +73,8 @@ public class EngineFailedMessage extends JDialog {
   private final JButton tensorRtRepairButton;
   private boolean tensorRtRepairInvoked;
   private final JDialog diagnosticWindow;
+  private final JTextArea messageArea;
+  private final String failureMessage;
   private final JTextArea summaryArea;
   private final JScrollPane detailsPane;
   private final JTextArea detailsArea;
@@ -280,6 +282,8 @@ public class EngineFailedMessage extends JDialog {
 
     Font textFont = new Font(Config.sysDefaultFontName, Font.PLAIN, Config.frameFontSize);
     JScrollPane messagePane = createScrollableText(message, textFont);
+    messageArea = (JTextArea) messagePane.getViewport().getView();
+    failureMessage = messageArea.getText();
     messagePane.setPreferredSize(new Dimension(1, 92));
     messagePane
         .getAccessibleContext()
@@ -572,6 +576,13 @@ public class EngineFailedMessage extends JDialog {
     if (Lizzie.frame != null) {
       Lizzie.frame.openKataGoAutoSetup(repairContext);
     }
+  }
+
+  /** Updates only the local message pane. Copy and export consume the separate diagnostic. */
+  public void setLocalStderr(String stderr) {
+    if (stderr.isEmpty()) return;
+    messageArea.setText(failureMessage + "\n\nRecent stderr:\n" + redactSensitiveText(stderr));
+    messageArea.setCaretPosition(messageArea.getDocument().getLength());
   }
 
   public void bindStartupDiagnostic(EngineStartupDiagnostics.Attempt attempt) {

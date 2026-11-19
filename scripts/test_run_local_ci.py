@@ -300,13 +300,14 @@ class RunLocalCiTest(unittest.TestCase):
         selected = selector.split(",")
         self.assertEqual(len(selected), len(set(selected)))
         self.assertEqual(
-            {"EngineProcessSmokeTest", "EngineProcessFailureTest", "ContributeStartupDesktopTest",
+            {"EngineProcessSmokeTest", "EngineProcessFailureTest", "EngineStartupDiagnosticsDesktopTest",
+             "ContributeStartupDesktopTest",
              "ContributionLocalClearDesktopTest", "ContributeCertificateRecoveryTest",
              "ContributeSavedEngineSelectionDesktopTest", "ContributeSshShutdownDesktopTest"},
             {item.partition("#")[0] for item in selected},
         )
         self.assertEqual(
-            {"EngineProcessSmokeTest", "EngineProcessFailureTest"},
+            {"EngineProcessSmokeTest", "EngineProcessFailureTest", "EngineStartupDiagnosticsDesktopTest"},
             {item.partition("#")[0] for item in selected if "#" in item},
         )
         self.assertIn(

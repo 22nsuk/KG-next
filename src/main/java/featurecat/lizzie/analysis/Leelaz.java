@@ -1306,6 +1306,11 @@ public class Leelaz {
       String engineId,
       String command,
       EngineStartupDiagnostics.Attempt diagnostic) {
+    boolean usesSsh() {
+      return (diagnostic != null && diagnostic.isSsh())
+          || EngineThreadPolicy.isExternalSshCommand(command);
+    }
+
     void processStarted(Leelaz owner, Process process) {
       EngineObservation.recordStarted(engineId, purpose.name());
       AnalysisResourceCoordinator.processStarted(owner, purpose, command, process, engineId);
@@ -1613,7 +1618,7 @@ public class Leelaz {
           isDownWithError = true;
         }
         noteEngineFailed(launch,
-            EngineThreadPolicy.isExternalSshCommand(launch.command()) ? "ssh process creation failed" : err);
+            launch.usesSsh() ? "ssh process creation failed" : err);
         return;
       }
       requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
@@ -5286,11 +5291,34 @@ public class Leelaz {
     UNSUPPORTED
   }
 
+  /** Private to this connection's failure window. Shared diagnostics only record stderr presence. */
+  private static final class LocalSshStderr {
+    private static final int MAX_LINE_BYTES = 2048;
+    private final ArrayDeque<String> lines = new ArrayDeque<>();
+    private final CompletableFuture<Void> readerDone = new CompletableFuture<>();
+
+    void add(String line) {
+      rememberRecentLine(lines, EngineStartupDiagnostic.bounded(line, MAX_LINE_BYTES));
+    }
+
+    void showIn(EngineFailedMessage dialog) {
+      // stdout EOF can open the window before the independent stderr reader finishes.
+      if (!readerDone.isDone()) {
+        readerDone.thenRunAsync(
+            () -> {
+              if (dialog.isShowing()) dialog.setLocalStderr(snapshotRecentLines(lines));
+            },
+            SwingUtilities::invokeLater);
+      }
+      dialog.setLocalStderr(snapshotRecentLines(lines));
+    }
+  }
+
   private static final class ReaderStreamBinding {
     private final BufferedReader stdout;
     private final BufferedReader stderr;
     private final ArrayDeque<String> stderrLines = new ArrayDeque<>();
-    private final boolean ssh;
+    private final LocalSshStderr localSshStderr;
     private volatile OutputStream rawOutput;
     private volatile BufferedOutputStream output;
     private final Process process;
@@ -5394,8 +5422,8 @@ public class Leelaz {
         SnapshotFileAccessKind snapshotFileAccessKind,
         EngineLaunch launch, boolean externalSsh) {
       this.launch = launch;
-      this.ssh = javaSSH != null || (launch == null ? externalSsh
-          : EngineThreadPolicy.isExternalSshCommand(launch.command()));
+      boolean ssh = javaSSH != null || (launch == null ? externalSsh : launch.usesSsh());
+      this.localSshStderr = ssh ? new LocalSshStderr() : null;
       this.stdout = stdout;
       this.stderr = stderr;
       this.rawOutput = output;
@@ -9416,14 +9444,21 @@ public class Leelaz {
     String line = "";
     try {
       while ((line = binding.stderr.readLine()) != null) {
+        if (binding.localSshStderr != null) binding.localSshStderr.add(line);
         if (binding.startupDiagnostic != null) binding.startupDiagnostic.output("stderr", line);
         if (!beginReaderLine(binding)) {
+          // Drain this failed connection's private tail without sending late lines to the parser.
+          if (binding.localSshStderr != null && binding == readerStreamBinding
+              && binding.terminated && !binding.normalExitRequested) {
+            continue;
+          }
           if (binding.startupDiagnostic == null || !binding.startupDiagnostic.collectingOutput())
-          return;
+            return;
           continue;
         }
         try {
-          String diagnosticLine = binding.ssh ? EngineObservation.SSH_STDERR_OMITTED : line;
+          String diagnosticLine =
+              binding.localSshStderr == null ? line : EngineObservation.SSH_STDERR_OMITTED;
           if (TrialDiag.ENABLED && !line.isEmpty()) {
             System.out.println("[katago-stderr] " + diagnosticLine);
           }
@@ -9453,6 +9488,7 @@ public class Leelaz {
             failure);
       }
     } finally {
+      if (binding.localSshStderr != null) binding.localSshStderr.readerDone.complete(null);
       if (binding.startupDiagnostic != null) binding.startupDiagnostic.streamEnded("stderr", null);
     }
   }
@@ -20083,7 +20119,7 @@ public class Leelaz {
   }
 
 
-  private void rememberRecentLine(ArrayDeque<String> lines, String line) {
+  private static void rememberRecentLine(ArrayDeque<String> lines, String line) {
     if (lines == null || line == null) {
       return;
     }
@@ -20137,7 +20173,7 @@ public class Leelaz {
     builder.append("\n").append(title).append(":\n").append(tail);
   }
 
-  private String snapshotRecentLines(ArrayDeque<String> lines) {
+  private static String snapshotRecentLines(ArrayDeque<String> lines) {
     StringBuilder builder = new StringBuilder();
     synchronized (lines) {
       for (String line : lines) {
@@ -24263,10 +24299,7 @@ public class Leelaz {
         false,
         pendingTensorRtRepairContext.get(),
         useJavaSSH, attempt,
-        dialog -> {
-          engineFailedMessage = dialog;
-          presentedStartupDiagnosticAttempt = attempt;
-        });
+        dialog -> bindFailureWindow(dialog, attempt, readerStreamBinding));
     return true;
   }
 
@@ -24363,9 +24396,18 @@ public class Leelaz {
         isModal,
         repairContext,
         useJavaSSH, diagnosticAttempt,
-        dialog -> { engineFailedMessage = dialog;
-          presentedStartupDiagnosticAttempt = diagnosticAttempt;
-        });
+        dialog -> bindFailureWindow(dialog, diagnosticAttempt, expectedEngineIncarnation));
+  }
+
+  private void bindFailureWindow(
+      EngineFailedMessage dialog, EngineStartupDiagnostics.Attempt attempt, Object incarnation) {
+    engineFailedMessage = dialog;
+    presentedStartupDiagnosticAttempt = attempt;
+    if (incarnation instanceof ReaderStreamBinding binding
+        && binding.startupDiagnostic == attempt
+        && binding.localSshStderr != null) {
+      binding.localSshStderr.showIn(dialog);
+    }
   }
 
   private boolean shouldOpenInteractiveDiagnostic() {
