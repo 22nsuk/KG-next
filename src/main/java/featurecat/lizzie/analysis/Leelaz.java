@@ -1305,8 +1305,7 @@ public class Leelaz {
       Purpose purpose,
       String engineId,
       String command,
-      EngineStartupDiagnostics.Attempt diagnostic,
-      ArrayDeque<String> stderrLines) {
+      EngineStartupDiagnostics.Attempt diagnostic) {
     void processStarted(Leelaz owner, Process process) {
       EngineObservation.recordStarted(engineId, purpose.name());
       AnalysisResourceCoordinator.processStarted(owner, purpose, command, process, engineId);
@@ -1389,8 +1388,7 @@ public class Leelaz {
             id, purpose.name(), commands,
             !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand))
         : null;
-    EngineLaunch launch =
-        new EngineLaunch(purpose, id, engineCommand, diagnostic, new ArrayDeque<>());
+    EngineLaunch launch = new EngineLaunch(purpose, id, engineCommand, diagnostic);
     startupDiagnosticAttempt = diagnostic;
     UpdateEngineStartAttempt attempt = updateEngineStartAttemptContext.get();
     if (attempt != null) attempt.launch = launch;
@@ -1455,14 +1453,13 @@ public class Leelaz {
         isDownWithError = true;
         if (diagnostic != null)
           diagnostic.fail("remote-connect", e.toString());
-        rememberRecentLine(launch.stderrLines(), e.getLocalizedMessage());
-        EngineObservation.markStartupStage(launch.engineId(), EngineObservation.STAGE_FIRST_STDERR);
-        noteEngineFailed(launch, e.getLocalizedMessage());
+        String reason = e.getLocalizedMessage();
+        noteEngineFailed(launch, reason == null ? e.toString() : reason);
         try {
           tryToDignostic(
               Lizzie.resourceBundle.getString("Leelaz.engineFailed")
                   + ": "
-                  + (e.getLocalizedMessage() == null ? "远程算力连接失败" : e.getLocalizedMessage()),
+                  + (reason == null ? "远程算力连接失败" : reason),
               true);
         } catch (JSONException diagnosticError) {
           diagnosticError.printStackTrace();
@@ -4858,7 +4855,7 @@ public class Leelaz {
   }
 
   private void noteEngineFailed(EngineLaunch launch, String reason) {
-    noteEngineFailed(launch, reason, launch.stderrLines());
+    noteEngineFailed(launch, reason, null);
   }
 
   private void noteEngineFailed(EngineLaunch launch, String reason, ArrayDeque<String> stderrLines) {
@@ -5290,7 +5287,7 @@ public class Leelaz {
   private static final class ReaderStreamBinding {
     private final BufferedReader stdout;
     private final BufferedReader stderr;
-    private final ArrayDeque<String> stderrLines;
+    private final ArrayDeque<String> stderrLines = new ArrayDeque<>();
     private volatile OutputStream rawOutput;
     private volatile BufferedOutputStream output;
     private final Process process;
@@ -5396,7 +5393,6 @@ public class Leelaz {
       this.launch = launch;
       this.stdout = stdout;
       this.stderr = stderr;
-      this.stderrLines = launch == null ? new ArrayDeque<>() : launch.stderrLines();
       this.rawOutput = output;
       this.output = output;
       this.process = process;
@@ -9426,6 +9422,10 @@ public class Leelaz {
             System.out.println("[katago-stderr] " + line);
           }
           rememberStderr(binding, line);
+          String engineId = observationIdentity(binding.launch);
+          if (binding.launch != null || readerStreamBinding == binding) {
+            EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_FIRST_STDERR);
+          }
           try {
             parseLineForError(line, binding);
           } catch (Exception e) {
@@ -20091,11 +20091,6 @@ public class Leelaz {
 
   private void rememberStderr(ReaderStreamBinding binding, String line) {
     rememberRecentLine(binding == null ? unboundStderrLines : binding.stderrLines, line);
-    if (binding == null || line == null) return;
-    String id = observationIdentity(binding.launch);
-    if (binding.launch != null || readerStreamBinding == binding) {
-      EngineObservation.markStartupStage(id, EngineObservation.STAGE_FIRST_STDERR);
-    }
   }
 
   private String buildEngineExitDiagnostic(String baseMessage) {

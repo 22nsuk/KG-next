@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.Purpose;
 import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
@@ -107,6 +108,7 @@ public class ContributeEngine {
   }
 
   private static final class Launch {
+    final String engineId;
     final EngineStartupDiagnostics.Attempt diagnostic;
     Process process;
     ContributeSSHController ssh;
@@ -117,13 +119,15 @@ public class ContributeEngine {
     boolean draining;
     boolean terminal;
     boolean terminated;
+    boolean carrierStarted;
     boolean presented;
     int pendingUi;
     long deadline;
     Failure failure = Failure.OTHER;
     String error = "";
 
-    Launch(EngineStartupDiagnostics.Attempt diagnostic) {
+    Launch(String engineId, EngineStartupDiagnostics.Attempt diagnostic) {
+      this.engineId = engineId;
       this.diagnostic = diagnostic;
     }
 
@@ -220,14 +224,13 @@ public class ContributeEngine {
     if (!this.useJavaSSH && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       return;
     }
+    String purpose = Purpose.CONTRIBUTE.name();
     String engineId =
-        EngineObservation.beginLaunch(
-            this, EngineStartupBootstrap.factsFor(engineCommand, "CONTRIBUTE"));
+        EngineObservation.beginLaunch(this, EngineStartupBootstrap.factsFor(engineCommand, purpose));
     EngineStartupDiagnostics.Attempt attempt =
-        EngineStartupDiagnostics.getDefault()
-            .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
+        EngineStartupDiagnostics.getDefault().begin(engineId, purpose, commands, !this.useJavaSSH);
     this.currentAttempt = attempt;
-    Launch launch = new Launch(attempt);
+    Launch launch = new Launch(engineId, attempt);
     active = launch;
     if (this.useJavaSSH) {
       this.javaSSH = new ContributeSSHController(this, this.ip, this.port);
@@ -247,7 +250,7 @@ public class ContributeEngine {
         this.outputStream = new BufferedOutputStream(this.javaSSH.getStdin());
         this.errorStream = new BufferedReader(new InputStreamReader(this.javaSSH.getSterr()));
         javaSSHClosed = false;
-        EngineObservation.recordStarted(engineId, "CONTRIBUTE");
+        registerCarrier(launch);
       } else {
         javaSSHClosed = true;
         launch.error = "SSH login failed";
@@ -264,9 +267,7 @@ public class ContributeEngine {
         process = processBuilder.start();
         launch.process = process;
         attempt.attachProcess(process);
-        EngineObservation.recordStarted(engineId, "CONTRIBUTE");
-        AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, engineId);
+        registerCarrier(launch);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);
@@ -282,6 +283,18 @@ public class ContributeEngine {
     reader(launch, launch.stderr, true);
     if (launch.process != null) launch.process.onExit().thenRun(() -> beginDrain(launch));
     publish(launch, () -> setTip(Lizzie.resourceBundle.getString("ContributeView.lblTip")));
+  }
+
+  private void registerCarrier(Launch launch) {
+    launch.carrierStarted = true;
+    EngineObservation.recordStarted(launch.engineId, Purpose.CONTRIBUTE.name());
+    // Remote shell commands can contain credentials. Only the connection is needed here.
+    AnalysisResourceCoordinator.processStarted(
+        this,
+        Purpose.CONTRIBUTE,
+        launch.process == null ? null : engineCommand,
+        launch.process,
+        launch.engineId);
   }
 
   private void reader(Launch launch, BufferedReader reader, boolean stderr) {
@@ -484,8 +497,13 @@ public class ContributeEngine {
     if (launch.terminated) return;
     launch.terminated = true;
     launch.diagnostic.beforeTermination();
-    AnalysisResourceCoordinator.processStopped(
-        this, AnalysisResourceCoordinator.Purpose.OTHER, launch.process);
+    if (launch.carrierStarted) {
+      AnalysisResourceCoordinator.processStoppedAfterIdentityClaim(
+          this, Purpose.CONTRIBUTE, launch.process, launch.engineId, null);
+    }
+    if (EngineObservation.discardIdentityIfCurrent(this, launch.engineId)) {
+      EngineObservation.recordStopped(launch.engineId, "stopped");
+    }
     if (launch.process != null) launch.process.destroy();
     if (launch.ssh != null) launch.ssh.close();
   }

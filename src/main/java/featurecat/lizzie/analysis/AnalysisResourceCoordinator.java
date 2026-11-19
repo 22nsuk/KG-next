@@ -29,7 +29,8 @@ public final class AnalysisResourceCoordinator {
     OTHER,
     COMPARE,
     PRELOAD,
-    ENGINE_GAME
+    ENGINE_GAME,
+    CONTRIBUTE
   }
 
   public enum ForegroundDecision {

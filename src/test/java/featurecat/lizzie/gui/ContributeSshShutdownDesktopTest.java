@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.ssh.TestSshServer;
+import featurecat.lizzie.logging.DiagnosticModule;
+import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.logging.LoggingSettings;
 import featurecat.lizzie.util.Utils;
 import java.awt.Window;
 import java.io.BufferedReader;
@@ -13,12 +16,14 @@ import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.regex.Pattern;
 import javax.swing.JDialog;
 import javax.swing.SwingUtilities;
 import org.apache.sshd.common.SshConstants;
@@ -56,6 +61,9 @@ public class ContributeSshShutdownDesktopTest {
       System.setProperty("lizzie.work.dir", work.toString());
       Lizzie.main(new String[0]);
       ContributeStartupDesktopTest.await(() -> Lizzie.frame != null && Lizzie.frame.isShowing());
+      LoggingRuntime runtime = LoggingRuntime.current().orElseThrow();
+      runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true)
+          .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE)));
       for (String mode : List.of("stop", "clean", "fatal", "retry")) {
         int first = server.children.size();
         start(server, mode);
@@ -98,6 +106,13 @@ public class ContributeSshShutdownDesktopTest {
             Lizzie.frame.closeContributeEngine();
             for (Window window : Window.getWindows()) window.dispose();
           });
+      runtime.shutdown();
+      List<String> log = Files.readAllLines(work.resolve("logs/app.log"));
+      List<String> launches = contributionIds(log, "started");
+      assertEquals(server.children.size(), launches.size());
+      assertEquals(launches.size(), launches.stream().distinct().count());
+      assertEquals(launches, contributionIds(log, "process-started"));
+      assertEquals(launches, contributionIds(log, "process-stopped"));
       Files.writeString(result, new JSONObject().put("result", "passed").toString());
     } catch (Throwable failure) {
       failure.printStackTrace();
@@ -107,6 +122,14 @@ public class ContributeSshShutdownDesktopTest {
       System.exit(1);
     }
     System.exit(0);
+  }
+
+  private static List<String> contributionIds(List<String> log, String event) {
+    Pattern pattern = Pattern.compile(" engine=(eng-\\S+) engine event=" + event + " purpose=CONTRIBUTE\\b");
+    return log.stream()
+        .flatMap(line -> pattern.matcher(line).results())
+        .map(match -> match.group(1))
+        .toList();
   }
 
   private static void start(SshFixture server, String mode) throws Exception {

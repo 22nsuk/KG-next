@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,7 @@ import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.analysis.ssh.TestSshServer;
 import featurecat.lizzie.gui.GtpConsolePane;
+import featurecat.lizzie.gui.JFontMenu;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.logging.DiagnosticModule;
@@ -42,6 +44,8 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import javax.swing.SwingUtilities;
+import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -737,6 +741,7 @@ class EngineGtpLoggingTest {
     Method readError = Leelaz.class.getDeclaredMethod("readError");
     readError.setAccessible(true);
     readError.invoke(engine);
+    EngineObservation.recordReady(first);
     Leelaz.ExactForceQuitClaim firstClose = null;
     if (deferFirstClose) {
       firstClose = engine.claimForceQuitIfCurrentIncarnation(engine.captureEngineIncarnationFence());
@@ -755,6 +760,7 @@ class EngineGtpLoggingTest {
     engine.shutdown();
     awaitLogs(runtime);
     String app = readApp();
+    assertTrue(eventLine(app, "engine event=ready").contains("first-stderr="), app);
     assertEquals(first, engineIdOnEventLine(app, "engine event=stderr facts=first-runtime-error"), app);
     if (deferFirstClose) {
       assertEquals(second, engineIdOnEventLine(app, "engine event=stderr facts=second-runtime-error"), app);
@@ -796,15 +802,22 @@ class EngineGtpLoggingTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {false, true})
-  void failedRemoteConnectionAndCleanupDoNotRecordAStart(boolean diagnostics) throws Exception {
+  @CsvSource({"false, false", "true, false", "true, true"})
+  void failedRemoteConnectionAndCleanupDoNotRecordAStart(boolean diagnostics, boolean failCreation)
+      throws Exception {
     LoggingRuntime runtime = startRuntime();
     if (diagnostics) {
       enableEngineDiagnostics(runtime);
     } else {
       runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
     }
-    RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
+    RemoteLoggingEngine engine = new RemoteLoggingEngine(true) {
+      @Override
+      protected EngineTransport createRemoteTransport() throws IOException {
+        if (failCreation) throw new IOException();
+        return super.createRemoteTransport();
+      }
+    };
     try {
       Lizzie.setPrimaryEngine(engine);
       assertThrows(IOException.class, () -> engine.startEngine(-1));
@@ -815,12 +828,11 @@ class EngineGtpLoggingTest {
       assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
       assertEquals(0L, eventCount(app, "process-started"), app);
       assertEquals(0L, eventCount(app, "process-stopped"), app);
-      if (diagnostics) {
-        assertSameEngineIdentity(
-            app, "event=failed", "event=stderr facts=controlled remote connection failure");
-      } else {
-        assertEquals(0L, eventCount(app, "stderr"), app);
-      }
+      String failure = eventLine(app, "engine event=failed");
+      String reason = failCreation ? "java.io.IOException" : "controlled remote connection failure";
+      assertTrue(failure.contains("reason=" + reason), failure);
+      assertFalse(failure.contains("first-stderr="), failure);
+      assertEquals(0L, eventCount(app, "stderr"), app);
     } finally {
       closeRemoteReaders(engine);
     }
@@ -849,6 +861,57 @@ class EngineGtpLoggingTest {
       assertEquals(0L, eventCount(app, "started"), app);
     } finally {
       engine.shutdown();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedContributionRetriesCloseAttemptsWithoutProcessEvents(boolean ssh) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Lizzie.frame = allocate(QuietFrame.class);
+    Lizzie.board = new Board() {
+      @Override
+      public void clearWithoutPrimaryEngineForwarding() {}
+    };
+    JFontMenu previousMenu = Menu.engineMenu;
+    CountDownLatch finalFailure = new CountDownLatch(1);
+    try (TestSshServer server = ssh ? TestSshServer.builder().password("accepted").start() : null) {
+      Menu.engineMenu = new JFontMenu();
+      Lizzie.config.leelazConfig = new JSONObject();
+      Lizzie.config.contributeUseCommand = true;
+      Lizzie.config.contributeUsePureCommand = true;
+      Lizzie.config.contributeCommand =
+          ssh ? "katago contribute" : "\"" + tempDir.resolve("missing-contribution-engine") + "\"";
+      if (ssh) {
+        Lizzie.config.leelazConfig.put("contribute-engine-ssh-info", new JSONObject()
+            .put("useJavaSSH", true).put("ip", "127.0.0.1").put("port", server.port())
+            .put("userName", "player").put("password", Utils.doEncrypt("rejected")));
+      }
+      ContributeEngine engine = new ContributeEngine() {
+        @Override
+        public void tryToDignostic(String message, EngineStartupDiagnostics.Attempt attempt) {
+          finalFailure.countDown();
+        }
+      };
+      try {
+        assertTrue(finalFailure.await(15, TimeUnit.SECONDS));
+        if (ssh) {
+          assertTrue(server.passwordAttempts.get() >= 4);
+          assertTrue(server.commands.isEmpty());
+        }
+        assertNull(EngineObservation.identityFor(engine));
+        awaitLogs(runtime);
+        String app = readApp();
+        assertEquals(4L, eventCount(app, "bootstrap"), app);
+        assertEquals(4L, eventCount(app, "stopped"), app);
+        assertEquals(0L, eventCount(app, "started"), app);
+        assertEquals(0L, eventCount(app, "process-started"), app);
+        assertEquals(0L, eventCount(app, "process-stopped"), app);
+      } finally {
+        SwingUtilities.invokeAndWait(engine::normalQuit);
+      }
+    } finally {
+      Menu.engineMenu = previousMenu;
     }
   }
 
@@ -900,7 +963,7 @@ class EngineGtpLoggingTest {
     }
   }
 
-  private static final class RemoteLoggingEngine extends Leelaz {
+  private static class RemoteLoggingEngine extends Leelaz {
     private final QuietTransport transport;
     private final CountDownLatch bootstrapFinished = new CountDownLatch(1);
 
@@ -924,7 +987,7 @@ class EngineGtpLoggingTest {
     }
 
     @Override
-    protected EngineTransport createRemoteTransport() {
+    protected EngineTransport createRemoteTransport() throws IOException {
       return transport;
     }
 
@@ -1006,6 +1069,9 @@ class EngineGtpLoggingTest {
 
   private static final class QuietFrame extends LizzieFrame {
     private int ponderNotifications;
+
+    @Override
+    public void refresh() {}
 
     @Override
     public void onMainEnginePonder() {
