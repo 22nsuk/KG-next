@@ -232,7 +232,7 @@ public class EngineFailedMessage extends JDialog {
                   repairContext,
                   EngineStartupDiagnostic.basic(commands, command, message,
                       managedSsh || (attempt != null && attempt.isSsh())));
-          if (attempt != null && attempt.snapshot() != null) dialog.bindStartupDiagnostic(attempt);
+          if (attempt != null) dialog.bindStartupDiagnostic(attempt);
           if (onCreated != null) {
             onCreated.accept(dialog);
           }
