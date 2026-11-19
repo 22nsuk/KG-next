@@ -19,6 +19,7 @@ import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.Font;
 import java.awt.GraphicsEnvironment;
+import java.awt.Robot;
 import java.awt.image.BufferedImage;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
@@ -46,15 +47,24 @@ class WholeGameAnalysisDialogLayoutTest {
   void runningMetadataFitsTheInitialDialogWithoutAnOrdinaryScrollbar() throws Exception {
     Assumptions.assumeFalse(GraphicsEnvironment.isHeadless());
     ResourceBundle previous = Lizzie.resourceBundle;
+    AtomicReference<WholeGameAnalysisDialog> shown = new AtomicReference<>();
     try {
       Lizzie.resourceBundle =
           ResourceBundle.getBundle("l10n.DisplayStrings", Locale.SIMPLIFIED_CHINESE);
+      SwingUtilities.invokeAndWait(
+          () -> {
+            shown.set(new WholeGameAnalysisDialog(null));
+            shown.get().showOnScreen();
+          });
+      // On X11, pack() can use provisional decoration insets until the window is mapped.
+      waitOnEdt(shown.get()::isFocused);
+      new Robot().waitForIdle();
+
       AtomicReference<Throwable> failure = new AtomicReference<>();
       SwingUtilities.invokeAndWait(
           () -> {
-            WholeGameAnalysisDialog dialog = null;
             try {
-              dialog = new WholeGameAnalysisDialog(null);
+              WholeGameAnalysisDialog dialog = shown.get();
               JLabel progress =
                   (JLabel) findByName(dialog.getContentPane(), "wholeGameProgressText");
               JLabel mode = (JLabel) findByName(dialog.getContentPane(), "wholeGameMode");
@@ -76,17 +86,17 @@ class WholeGameAnalysisDialogLayoutTest {
               assertTextFits(remaining, Locale.SIMPLIFIED_CHINESE);
             } catch (Throwable throwable) {
               failure.set(throwable);
-            } finally {
-              if (dialog != null) {
-                dialog.dispose();
-              }
             }
           });
       if (failure.get() != null) {
         throw new AssertionError("Running-state layout failed", failure.get());
       }
     } finally {
-      Lizzie.resourceBundle = previous;
+      try {
+        if (shown.get() != null) SwingUtilities.invokeAndWait(shown.get()::dispose);
+      } finally {
+        Lizzie.resourceBundle = previous;
+      }
     }
   }
 
@@ -414,7 +424,7 @@ class WholeGameAnalysisDialogLayoutTest {
       if (Boolean.TRUE.equals(ready.get())) return;
       Thread.sleep(20);
     }
-    throw new AssertionError("Timed out waiting for provenance UI state");
+    throw new AssertionError("Timed out waiting for whole-game analysis dialog state");
   }
 
   private static Field field(Class<?> type, String name) throws NoSuchFieldException {
