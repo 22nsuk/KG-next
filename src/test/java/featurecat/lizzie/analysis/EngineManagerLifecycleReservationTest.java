@@ -9481,7 +9481,7 @@ class EngineManagerLifecycleReservationTest {
 
   private static final class FallbackProcess extends Process {
     private final AtomicInteger forcibleDestroyCount = new AtomicInteger();
-    private volatile boolean alive = true;
+    private final CountDownLatch exited = new CountDownLatch(1);
 
     @Override
     public java.io.OutputStream getOutputStream() {
@@ -9499,19 +9499,19 @@ class EngineManagerLifecycleReservationTest {
     }
 
     @Override
-    public int waitFor() {
-      alive = false;
+    public int waitFor() throws InterruptedException {
+      exited.await();
       return 0;
     }
 
     @Override
-    public boolean waitFor(long timeout, TimeUnit unit) {
-      return !alive;
+    public boolean waitFor(long timeout, TimeUnit unit) throws InterruptedException {
+      return exited.await(timeout, unit);
     }
 
     @Override
     public int exitValue() {
-      if (alive) {
+      if (isAlive()) {
         throw new IllegalThreadStateException("controlled process still alive");
       }
       return 0;
@@ -9523,13 +9523,13 @@ class EngineManagerLifecycleReservationTest {
     @Override
     public Process destroyForcibly() {
       forcibleDestroyCount.incrementAndGet();
-      alive = false;
+      exited.countDown();
       return this;
     }
 
     @Override
     public boolean isAlive() {
-      return alive;
+      return exited.getCount() != 0;
     }
   }
 
