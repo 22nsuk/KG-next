@@ -1,5 +1,6 @@
 package featurecat.lizzie.logging;
 
+import featurecat.lizzie.analysis.GtpCommandText;
 import java.io.IOException;
 import java.util.Optional;
 import java.util.UUID;
@@ -93,23 +94,7 @@ public final class EngineObservation {
   }
 
   public static String commandName(String command) {
-    if (command == null) {
-      return "";
-    }
-    String trimmed = command.trim();
-    if (trimmed.isEmpty()) {
-      return "";
-    }
-    int space = trimmed.indexOf(' ');
-    String first = space < 0 ? trimmed : trimmed.substring(0, space);
-    int i = 0;
-    while (i < first.length() && Character.isDigit(first.charAt(i))) {
-      i++;
-    }
-    if (i > 0 && i < first.length()) {
-      return first.substring(i);
-    }
-    return first;
+    return GtpCommandText.parse(command).verb();
   }
 
   public static String commandIdentity(int protocolId) {

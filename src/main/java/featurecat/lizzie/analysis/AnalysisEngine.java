@@ -428,16 +428,35 @@ public class AnalysisEngine {
                 launchPurpose,
                 commands,
                 isLocal);
+    try {
+      startDedicatedTransport(engineCommand, launchSpec, engineId);
+    } finally {
+      ReaderResources resources = readerResources;
+      if (resources == null || !engineId.equals(resources.engineId)) {
+        finishLaunchObservation(engineId);
+      }
+    }
+  }
+
+  private void finishLaunchObservation(String engineId) {
+    if (EngineObservation.discardIdentityIfCurrent(this, engineId)) {
+      EngineObservation.recordStopped(engineId, "stopped");
+    }
+  }
+
+  private void startDedicatedTransport(
+      String engineCommand, CommandLaunchHelper.LaunchSpec launchSpec, String engineId) {
+    ReaderResources resources;
     if (this.useRemoteCompute) {
       this.useJavaSSH = false;
       process = null;
       try {
         remoteTransport = createRemoteTransport(engineCommand);
         remoteTransport.start();
-        initializeStreams(
-            engineId, remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
+        resources = initializeStreams(
+            engineId, engineCommand, remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
         if (remoteTransport instanceof ZhiziGtpTransport zhizi) {
-          readerResources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
+          resources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
         }
         isLoaded = true;
       } catch (IOException e) {
@@ -464,8 +483,8 @@ public class AnalysisEngine {
             this.javaSSH.login(this.engineCommand, this.userName, this.password).booleanValue();
       }
       if (loginStatus) {
-        initializeStreams(
-            engineId, this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+        resources = initializeStreams(
+            engineId, engineCommand, this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
         javaSSHClosed = false;
         isLoaded = true;
       } else {
@@ -535,16 +554,16 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-      initializeStreams(engineId);
-      readerResources.modelIdentity =
+      resources = initializeStreams(
+          engineId, engineCommand,
+          process.getInputStream(), process.getOutputStream(), process.getErrorStream());
+      resources.modelIdentity =
           AnalysisModelIdentity.local(
               launchCommands,
               processBuilder.directory() == null ? Path.of("") : processBuilder.directory().toPath());
     }
     isNormalEnd = false;
-    AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, engineId);
-    readerResources.start();
+    resources.start();
   }
 
   private void showErrMsg(String errMsg) {
@@ -616,13 +635,9 @@ public class AnalysisEngine {
     return DiagnosticActionResult.of(dialog.get());
   }
 
-  private void initializeStreams(String engineId) {
-    initializeStreams(
-        engineId, process.getInputStream(), process.getOutputStream(), process.getErrorStream());
-  }
-
-  private void initializeStreams(
-      String engineId, InputStream stdout, OutputStream stdin, InputStream stderr) {
+  private ReaderResources initializeStreams(
+      String engineId, String launchedCommand,
+      InputStream stdout, OutputStream stdin, InputStream stderr) {
     ReaderResources resources =
         new ReaderResources(
             engineId,
@@ -633,10 +648,17 @@ public class AnalysisEngine {
             stdout,
             stdin,
             stderr);
-    readerResources = resources;
-    synchronized (ACTIVE_READER_RESOURCES) {
-      ACTIVE_READER_RESOURCES.add(resources);
+    // Publish for application shutdown first. A concurrent close uses this same reader lock
+    // and can record the stop only after this carrier's start has been registered.
+    synchronized (resources) {
+      readerResources = resources;
+      synchronized (ACTIVE_READER_RESOURCES) {
+        ACTIVE_READER_RESOURCES.add(resources);
+      }
+      AnalysisResourceCoordinator.processStarted(
+          this, purpose, launchedCommand, resources.process, engineId);
     }
+    return resources;
   }
 
   /**
@@ -719,7 +741,13 @@ public class AnalysisEngine {
       if (cleanup != null) return;
       cleanup = new Thread(() -> finishCleanup(preserveStartupTail), "analysis-engine-cleanup");
       cleanup.setDaemon(true);
-      cleanup.start();
+      try {
+        AnalysisResourceCoordinator.processStoppedAfterIdentityClaim(
+            AnalysisEngine.this, purpose, process, engineId, null);
+        finishLaunchObservation(engineId);
+      } finally {
+        cleanup.start();
+      }
     }
 
     private void closeForExit() {
@@ -889,7 +917,6 @@ public class AnalysisEngine {
     if (!isNormalEnd) {
       showErrMsg(resourceBundle.getString("Leelaz.engineEndUnormalHint"), null, attempt);
     }
-    AnalysisResourceCoordinator.processStopped(this, purpose, resources.process);
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     releaseSharedForegroundLease();
     finishAbortedAnalysis();
@@ -1570,7 +1597,6 @@ public class AnalysisEngine {
     requestShutdown();
     isNormalEnd = true;
     isLoaded = false;
-    AnalysisResourceCoordinator.processStopped(this, purpose, process);
     closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     if (sharedForegroundEngine != null) {
@@ -3042,7 +3068,6 @@ public class AnalysisEngine {
   public void shutdown() {
     requestShutdown();
     isLoaded = false;
-    AnalysisResourceCoordinator.processStopped(this, purpose, process);
     closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();
     releaseSharedForegroundLease();

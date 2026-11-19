@@ -175,7 +175,7 @@ class Ticket07RestartBootstrapProductionEntryTest {
     }
   }
 
-  private static String fakeGtpCommand(Path commandLog, Path nameMarker) {
+  static String fakeGtpCommand(Path commandLog, Path nameMarker) {
     Path javaExecutable =
         Path.of(
             System.getProperty("java.home"),

@@ -338,6 +338,23 @@ class EngineGtpLoggingTest {
     assertFalse(app.contains("numSearchThreads 12"), app);
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"123 play B D4", "123\tplay\tB\tD4"})
+  void numberedMoveSummaryLogsOnlyTheVerb(String command) throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true)
+        .withDiagnosticModules(EnumSet.of(DiagnosticModule.GTP_SUMMARY)));
+    Leelaz engine = prepareEngine();
+    Lizzie.board = new Board();
+    engine.sendCommand(command);
+    engine.processCommandResponseLineForTest("=123");
+    awaitLogs(runtime);
+    String app = readApp();
+    assertTrue(app.contains("gtp command=play outcome=sent"), app);
+    assertTrue(app.contains("gtp command=play outcome=ok"), app);
+    assertFalse(app.contains("D4"), app);
+  }
+
   @Test
   void stalledTraceQueueDoesNotBlockCommandSend() throws Exception {
     LoggingRuntime runtime =
@@ -583,6 +600,58 @@ class EngineGtpLoggingTest {
   }
 
   @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void localStartupFollowsBenchmarkAtAdmission(boolean benchmarkAtAdmission) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Field suppression = KataGoRuntimeHelper.class.getDeclaredField("benchmarkEngineSyncSuppressed");
+    suppression.setAccessible(true);
+    boolean previous = suppression.getBoolean(null);
+    CountDownLatch bootstrap = new CountDownLatch(1);
+    String command = Ticket07RestartBootstrapProductionEntryTest.fakeGtpCommand(
+        tempDir.resolve("commands.log"), tempDir.resolve("name-marker"));
+    Leelaz engine = new Leelaz(command) {
+      @Override
+      public String getEngineName(int index) {
+        try {
+          suppression.setBoolean(null, benchmarkAtAdmission);
+        } catch (IllegalAccessException e) {
+          throw new AssertionError(e);
+        }
+        return "local diagnostic fixture";
+      }
+
+      @Override
+      void afterEngineGameBootstrapWorkerForTest(EngineManager.EngineGameOwnerTransaction tx) {
+        bootstrap.countDown();
+      }
+    };
+    try {
+      Lizzie.frame = allocate(QuietFrame.class);
+      Lizzie.setPrimaryEngine(engine);
+      Lizzie.board = new Board();
+      suppression.setBoolean(null, !benchmarkAtAdmission);
+      engine.startEngine(-1);
+      if (benchmarkAtAdmission) {
+        awaitLogs(runtime);
+        String app = readApp();
+        assertEquals(0L, eventCount(app, "process-started"), app);
+        assertSameEngineIdentity(app, "event=bootstrap", "event=stopped reason=benchmark");
+        return;
+      }
+      assertTrue(bootstrap.await(5, TimeUnit.SECONDS));
+      engine.shutdown();
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(1L, eventCount(app, "started"), app);
+      assertSameEngineIdentity(app, "event=bootstrap", "event=process-started");
+      assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+    } finally {
+      suppression.setBoolean(null, previous);
+      engine.shutdown();
+    }
+  }
+
+  @ParameterizedTest
   @CsvSource({"MAIN_BOARD, false", "PRELOAD, false", "COMPARE, true"})
   void remoteConnectionKeepsItsLaunchPurposeWhenSelectedForPondering(String purpose, boolean forceQuit)
       throws Exception {
@@ -602,6 +671,7 @@ class EngineGtpLoggingTest {
       Lizzie.board = new Board();
       engine.startEngine(-1);
       assertTrue(engine.bootstrapFinished.await(5, TimeUnit.SECONDS), "startup command worker");
+      assertTrue(engine.stderrRead.await(5, TimeUnit.SECONDS));
       awaitLogs(runtime);
       assertEquals(1L, eventCount(readApp(), "process-started"), readApp());
       assertSameEngineIdentity(readApp(), "event=bootstrap", "event=process-started");
@@ -635,6 +705,8 @@ class EngineGtpLoggingTest {
       String app = readApp();
       assertEquals(1L, eventCount(app, "process-stopped"), app);
       assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      assertEquals(1L, eventCount(app, "stderr"), app);
+      assertSameEngineIdentity(app, "event=process-started", "event=stderr facts=remote-stderr");
       if (successor != null) assertEquals(successor, EngineObservation.identityFor(engine));
       assertTrue(eventLine(app, "event=process-stopped").contains("purpose=" + purpose + " "), app);
     } finally {
@@ -683,6 +755,35 @@ class EngineGtpLoggingTest {
       assertEquals(second, engineIdOnEventLine(app, "engine event=stderr facts=second-runtime-error"), app);
     }
     assertEquals(deferFirstClose ? 2 : 1, eventCount(app, "stderr"), app);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void dedicatedRemoteCleanupRecordsOnlyConnectedCarrier(boolean connected) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Lizzie.config.analysisReuseCurrentEngine = true;
+    Lizzie.setPrimaryEngine(null);
+    AnalysisEngine engine = new AnalysisEngine(true) {
+      @Override
+      EngineTransport createRemoteTransport(String command) {
+        return new QuietTransport(!connected);
+      }
+    };
+    engine.startEngine(RemoteComputeConfig.COMMAND_ZHIZI);
+    String successor = connected ? EngineObservation.restartInstance(engine, "replacement") : null;
+    try {
+      engine.shutdown();
+      engine.shutdown();
+      AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      awaitLogs(runtime);
+      String app = readApp();
+      assertEquals(connected ? 1L : 0L, eventCount(app, "process-started"), app);
+      assertEquals(connected ? 1L : 0L, eventCount(app, "process-stopped"), app);
+      if (connected) assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      assertEquals(successor, EngineObservation.identityFor(engine));
+    } finally {
+      engine.shutdown();
+    }
   }
 
   @Test
@@ -755,9 +856,23 @@ class EngineGtpLoggingTest {
     private final QuietTransport transport;
     private final CountDownLatch bootstrapFinished = new CountDownLatch(1);
 
+    private final CountDownLatch stderrRead = new CountDownLatch(1);
+
     private RemoteLoggingEngine(boolean failStart) throws IOException {
       super(RemoteComputeConfig.COMMAND_ZHIZI);
-      transport = new QuietTransport(failStart);
+      transport = new QuietTransport(failStart) {
+        @Override
+        public InputStream stderr() {
+          return new ByteArrayInputStream("remote-stderr\n".getBytes(StandardCharsets.UTF_8)) {
+            @Override
+            public synchronized int read(byte[] bytes, int offset, int length) {
+              int count = super.read(bytes, offset, length);
+              if (count < 0) stderrRead.countDown();
+              return count;
+            }
+          };
+        }
+      };
     }
 
     @Override
@@ -775,7 +890,7 @@ class EngineGtpLoggingTest {
     public void tryToDignostic(String message, boolean isModal) {}
   }
 
-  private static final class QuietTransport implements EngineTransport {
+  private static class QuietTransport implements EngineTransport {
     private final boolean failStart;
     private final CountDownLatch closed = new CountDownLatch(1);
     private final OutputStream output;

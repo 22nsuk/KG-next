@@ -65,9 +65,12 @@ class LizzieShutdownTest {
         GatedAnalysisProcess process = new GatedAnalysisProcess()) {
       AnalysisEngine analysis = allocate(AnalysisEngine.class);
       analysis.process = process;
-      Method initialize = AnalysisEngine.class.getDeclaredMethod("initializeStreams", String.class);
+      Method initialize = AnalysisEngine.class.getDeclaredMethod(
+          "initializeStreams", String.class, String.class,
+          InputStream.class, OutputStream.class, InputStream.class);
       initialize.setAccessible(true);
-      initialize.invoke(analysis, "shutdown-test");
+      initialize.invoke(analysis, "shutdown-test", "controlled-analysis-process",
+          process.getInputStream(), process.getOutputStream(), process.getErrorStream());
       harness.frame.analysisEngine = analysis;
       if (alreadyDetached) {
         analysis.normalQuit();
