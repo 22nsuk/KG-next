@@ -288,13 +288,8 @@ public class ContributeEngine {
   private void registerCarrier(Launch launch) {
     launch.carrierStarted = true;
     EngineObservation.recordStarted(launch.engineId, Purpose.CONTRIBUTE.name());
-    // Remote shell commands can contain credentials. Only the connection is needed here.
     AnalysisResourceCoordinator.processStarted(
-        this,
-        Purpose.CONTRIBUTE,
-        launch.process == null ? null : engineCommand,
-        launch.process,
-        launch.engineId);
+        this, Purpose.CONTRIBUTE, engineCommand, launch.process, launch.engineId);
   }
 
   private void reader(Launch launch, BufferedReader reader, boolean stderr) {

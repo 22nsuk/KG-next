@@ -111,8 +111,10 @@ public final class AnalysisResourceCoordinator {
       }
       EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
       if (EngineObservation.engineDiagnosticsEnabled()) {
+        // Remote shell commands can contain credentials in arbitrary arguments.
+        String localCommand = process == null ? null : diagnosticCommand(command);
         EngineObservation.recordProcessDetails(
-            engineId, "process-started", purposeName, pid, diagnosticCommand(command));
+            engineId, "process-started", purposeName, pid, localCommand);
       }
     } catch (RuntimeException ignored) {
     }

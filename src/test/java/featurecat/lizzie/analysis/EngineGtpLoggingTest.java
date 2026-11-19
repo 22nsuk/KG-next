@@ -839,6 +839,47 @@ class EngineGtpLoggingTest {
   }
 
   @Test
+  void sshPreloadExecutesTheRemoteCommandWithoutPersistingIt() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    String command =
+        "env AWS_SECRET_ACCESS_KEY=fixture-key /opt/katago gtp --profile fixture-profile";
+    CountDownLatch bootstrap = new CountDownLatch(1);
+    Leelaz engine = new Leelaz(command) {
+      @Override
+      void afterEngineGameBootstrapCommandsForTest(EngineManager.EngineGameOwnerTransaction tx) {
+        bootstrap.countDown();
+      }
+    };
+    Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
+    Lizzie.frame = allocate(QuietFrame.class);
+    Lizzie.board = new Board();
+    Lizzie.setPrimaryEngine(null);
+    engine.preload = true;
+    engine.useJavaSSH = true;
+    try (TestSshServer server = TestSshServer.builder().password("accepted").start()) {
+      engine.ip = "127.0.0.1";
+      engine.port = Integer.toString(server.port());
+      engine.userName = "player";
+      engine.password = Utils.doEncrypt("accepted");
+      try {
+        engine.startEngine(-1);
+        assertTrue(bootstrap.await(5, TimeUnit.SECONDS), "SSH startup commands");
+        assertEquals(List.of(command), server.commands);
+      } finally {
+        engine.shutdown();
+      }
+      awaitLogs(runtime);
+      String app = readApp();
+      String started = eventLine(app, "engine event=process-started");
+      assertNotNull(started, app);
+      assertTrue(started.contains("purpose=PRELOAD "), started);
+      assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      assertFalse(app.contains("fixture-key"), app);
+      assertFalse(app.contains("fixture-profile"), app);
+    }
+  }
+
+  @Test
   void rejectedSshLoginKeepsOnlyTheStartupAttempt() throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));

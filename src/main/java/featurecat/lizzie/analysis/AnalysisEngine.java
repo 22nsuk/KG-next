@@ -469,6 +469,7 @@ public class AnalysisEngine {
         return;
       }
     } else if (this.useJavaSSH) {
+      process = null;
       this.javaSSH = new AnalysisEngineSSHController(this, this.ip, this.port, this.isPreLoad);
       boolean loginStatus = false;
       if (this.useKeyGen) {

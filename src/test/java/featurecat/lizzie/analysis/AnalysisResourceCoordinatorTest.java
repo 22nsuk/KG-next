@@ -179,20 +179,22 @@ class AnalysisResourceCoordinatorTest {
             .withDiagnosticsEnabled(true)
             .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE)));
     Object owner = new Object();
+    ControllableProcess process = new ControllableProcess(42L);
     AnalysisResourceCoordinator.processStarted(
         owner,
         AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
         "/Users/private-user/KataGo/katago gtp --token=private-value "
             + "-model /Users/private-user/weights/model.bin.gz",
-        null);
+        process);
     AnalysisResourceCoordinator.commandSent(
         owner,
         AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
         "kata-set-param numSearchThreads 12");
     AnalysisResourceCoordinator.foregroundPausedForAuxiliary(
         owner, AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS);
+    process.destroy();
     AnalysisResourceCoordinator.processStopped(
-        owner, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, null);
+        owner, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, process);
     awaitLogs(runtime);
 
     String app = Files.readString(tempDir.resolve("logs/app.log"), StandardCharsets.UTF_8);
@@ -202,7 +204,8 @@ class AnalysisResourceCoordinatorTest {
     assertTrue(app.contains("backend=unknown"), app);
     assertTrue(app.contains("model=model.bin.gz"), app);
     assertTrue(app.contains("engine event=started"), app);
-    assertTrue(app.contains("engine event=process-started"), app);
+    assertTrue(
+        app.contains("engine event=process-started purpose=MAIN_BOARD pid=42 command=katago gtp"), app);
     assertTrue(app.contains("engine event=dynamic-parameter"), app);
     assertTrue(app.contains("numSearchThreads=12"), app);
     assertTrue(app.contains("engine event=foreground-paused"), app);
