@@ -4739,7 +4739,7 @@ public class Leelaz {
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
                 snapshotFileAccessKind,
-                launch);
+                launch, isSSH);
         nextBinding.rawOutput = stdin;
         attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
@@ -4786,7 +4786,7 @@ public class Leelaz {
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
                 snapshotFileAccessKind,
-                launch);
+                launch, isSSH);
         nextBinding.rawOutput = stdin;
         attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
@@ -4938,7 +4938,7 @@ public class Leelaz {
                 useRemoteCompute || useJavaSSH || isSSH
                     ? SnapshotFileAccessKind.UNSUPPORTED
                     : SnapshotFileAccessKind.DIRECT_LOCAL,
-                null);
+                null, isSSH);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
@@ -5288,6 +5288,7 @@ public class Leelaz {
     private final BufferedReader stdout;
     private final BufferedReader stderr;
     private final ArrayDeque<String> stderrLines = new ArrayDeque<>();
+    private final boolean ssh;
     private volatile OutputStream rawOutput;
     private volatile BufferedOutputStream output;
     private final Process process;
@@ -5373,7 +5374,7 @@ public class Leelaz {
           null,
           null,
           SnapshotFileAccessKind.DIRECT_LOCAL,
-          null);
+          null, false);
     }
 
     private ReaderStreamBinding(
@@ -5389,8 +5390,10 @@ public class Leelaz {
         Object analysisOutputRecoveryToken,
         Path processWorkingDirectory,
         SnapshotFileAccessKind snapshotFileAccessKind,
-        EngineLaunch launch) {
+        EngineLaunch launch, boolean externalSsh) {
       this.launch = launch;
+      this.ssh = javaSSH != null || (launch == null ? externalSsh
+          : EngineThreadPolicy.isExternalSshCommand(launch.command()));
       this.stdout = stdout;
       this.stderr = stderr;
       this.rawOutput = output;
@@ -9418,10 +9421,11 @@ public class Leelaz {
           continue;
         }
         try {
-          if (TrialDiag.ENABLED && line != null && !line.isEmpty()) {
-            System.out.println("[katago-stderr] " + line);
+          String diagnosticLine = binding.ssh ? EngineObservation.SSH_STDERR_OMITTED : line;
+          if (TrialDiag.ENABLED && !line.isEmpty()) {
+            System.out.println("[katago-stderr] " + diagnosticLine);
           }
-          rememberStderr(binding, line);
+          rememberStderr(binding, diagnosticLine);
           String engineId = observationIdentity(binding.launch);
           if (binding.launch != null || readerStreamBinding == binding) {
             EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_FIRST_STDERR);

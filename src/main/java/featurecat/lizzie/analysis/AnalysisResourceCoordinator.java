@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.PersistenceSanitizer;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -112,7 +113,8 @@ public final class AnalysisResourceCoordinator {
       EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
       if (EngineObservation.engineDiagnosticsEnabled()) {
         // Remote shell commands can contain credentials in arbitrary arguments.
-        String localCommand = process == null ? null : diagnosticCommand(command);
+        String localCommand = process == null || EngineThreadPolicy.isExternalSshCommand(command)
+            ? null : diagnosticCommand(command);
         EngineObservation.recordProcessDetails(
             engineId, "process-started", purposeName, pid, localCommand);
       }

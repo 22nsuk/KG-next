@@ -4,6 +4,7 @@ import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.util.CommandLaunchHelper;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
 import java.io.BufferedReader;
@@ -347,11 +348,13 @@ public final class GtpConfigurationProbe {
     private final Duration timeout;
     private final ExecutorService readerExecutor;
     private final ProbeStderrTail stderrTail = new ProbeStderrTail();
+    private final boolean ssh;
     private final AtomicReference<String> pendingFailureStage = new AtomicReference<>();
     private final Thread stderrDrainer;
     private int nextCommandId = 1;
 
-    private ProcessSession(Process process, Duration timeout) {
+    private ProcessSession(Process process, Duration timeout, boolean ssh) {
+      this.ssh = ssh;
       this.process = process;
       this.timeout = timeout;
       this.reader =
@@ -394,7 +397,8 @@ public final class GtpConfigurationProbe {
       }
       ProcessBuilder builder = new ProcessBuilder(launchSpec.getCommandParts());
       CommandLaunchHelper.configureProcessBuilder(builder, launchSpec);
-      ProcessSession session = new ProcessSession(builder.start(), timeout);
+      boolean ssh = EngineThreadPolicy.isExternalSshExecutable(builder.command().get(0));
+      ProcessSession session = new ProcessSession(builder.start(), timeout, ssh);
       AnalysisResourceCoordinator.processStarted(
           session, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, session.process);
       session.recordStartedQuietly();
@@ -507,7 +511,7 @@ public final class GtpConfigurationProbe {
         EngineObservation.recordProbeFailed(id, stage);
         String facts = stderrTail.snapshot();
         if (!facts.isEmpty()) {
-          EngineObservation.recordProbeStderr(id, facts);
+          EngineObservation.recordProbeStderr(id, ssh ? EngineObservation.SSH_STDERR_OMITTED : facts);
         }
       } catch (RuntimeException ignored) {
       }

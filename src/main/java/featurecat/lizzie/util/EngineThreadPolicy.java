@@ -193,7 +193,7 @@ public final class EngineThreadPolicy {
     return tokens != null && !tokens.isEmpty() && isExternalSshExecutable(tokens.get(0));
   }
 
-  private static boolean isExternalSshExecutable(String token) {
+  public static boolean isExternalSshExecutable(String token) {
     String executable = token.replace('\\', '/');
     executable = executable.substring(executable.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
     return executable.equals("ssh")

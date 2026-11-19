@@ -850,7 +850,13 @@ class EngineGtpLoggingTest {
         bootstrap.countDown();
       }
     };
-    Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
+    CountDownLatch stderrReceived = new CountDownLatch(1);
+    SilentGtpConsole console = allocate(SilentGtpConsole.class);
+    console.onErrorLine = line -> {
+      if (line.contains("fixture-key")) stderrReceived.countDown();
+    };
+    Lizzie.gtpConsole = console;
+    Lizzie.config.alwaysGtp = true;
     Lizzie.frame = allocate(QuietFrame.class);
     Lizzie.board = new Board();
     Lizzie.setPrimaryEngine(null);
@@ -865,6 +871,7 @@ class EngineGtpLoggingTest {
         engine.startEngine(-1);
         assertTrue(bootstrap.await(5, TimeUnit.SECONDS), "SSH startup commands");
         assertEquals(List.of(command), server.commands);
+        assertTrue(stderrReceived.await(5, TimeUnit.SECONDS), "SSH stderr reached the live console");
       } finally {
         engine.shutdown();
       }
@@ -874,6 +881,7 @@ class EngineGtpLoggingTest {
       assertNotNull(started, app);
       assertTrue(started.contains("purpose=PRELOAD "), started);
       assertSameEngineIdentity(app, "event=process-started", "event=process-stopped");
+      assertSameEngineIdentity(app, "event=started", "event=stderr");
       assertFalse(app.contains("fixture-key"), app);
       assertFalse(app.contains("fixture-profile"), app);
     }
@@ -1222,6 +1230,8 @@ class EngineGtpLoggingTest {
   }
 
   private static final class SilentGtpConsole extends GtpConsolePane {
+    private java.util.function.Consumer<String> onErrorLine;
+
     private SilentGtpConsole() {
       super(null);
     }
@@ -1235,6 +1245,8 @@ class EngineGtpLoggingTest {
     public void addLine(String line) {}
 
     @Override
-    public void addErrorLine(String line) {}
+    public void addErrorLine(String line) {
+      if (onErrorLine != null) onErrorLine.accept(line);
+    }
   }
 }

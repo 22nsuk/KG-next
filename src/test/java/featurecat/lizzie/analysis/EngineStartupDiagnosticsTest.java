@@ -40,6 +40,22 @@ class EngineStartupDiagnosticsTest {
   }
 
   @Test
+  void sshStartupFailureOmitsShellStderrFromCapturedEvidence() {
+    try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      for (boolean external : List.of(true, false)) {
+        var command = external ? List.of("/usr/bin/ssh", "host", "katago") : List.of("katago");
+        var attempt = service.begin("eng-ssh", "PRELOAD", command, external);
+        attempt.output("stderr", "+ env AWS_SECRET_ACCESS_KEY=trace-fixture katago");
+        attempt.output("stderr", "positional-fixture");
+        var failure = attempt.fail("startup-exit", "EOF before ready").toJson();
+        assertFalse(failure.toString().contains("fixture"));
+        assertFalse(failure.getString("stderr").isBlank());
+        assertEquals("startup-exit", failure.getString("phase"));
+      }
+    }
+  }
+
+  @Test
   void decodesWindowsBitPatternsWithoutGuessingUnknownCodes() {
     assertEquals("STATUS_DLL_NOT_FOUND", EngineStartupDiagnostic.windowsStatus(-1073741515));
     assertEquals("STATUS_INVALID_IMAGE_FORMAT", EngineStartupDiagnostic.windowsStatus(0xC000007B));

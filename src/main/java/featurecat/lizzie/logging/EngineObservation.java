@@ -13,6 +13,8 @@ import org.slf4j.LoggerFactory;
 
 public final class EngineObservation {
   public static final String STAGE_PROCESS_STARTED = "process-started";
+  // SSH stderr can echo arbitrary shell arguments, including positional credentials.
+  public static final String SSH_STDERR_OMITTED = "[SSH stderr omitted]";
   public static final String STAGE_FIRST_STDERR = "first-stderr";
   public static final String STAGE_GTP_NAME = "gtp-name";
   public static final String STAGE_GTP_VERSION = "gtp-version";

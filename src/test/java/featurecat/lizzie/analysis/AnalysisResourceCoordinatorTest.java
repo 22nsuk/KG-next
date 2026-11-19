@@ -186,6 +186,15 @@ class AnalysisResourceCoordinatorTest {
         "/Users/private-user/KataGo/katago gtp --token=private-value "
             + "-model /Users/private-user/weights/model.bin.gz",
         process);
+    for (String client : List.of("ssh", "\"C:\\Program Files\\PuTTY\\PLINK.EXE\"")) {
+      ControllableProcess ssh = new ControllableProcess(43L);
+      Object remote = new Object();
+      AnalysisResourceCoordinator.processStarted(
+          remote, AnalysisResourceCoordinator.Purpose.COMPARE,
+          client + " host env AWS_SECRET_ACCESS_KEY=ssh-fixture katago gtp", ssh);
+      ssh.destroy();
+      AnalysisResourceCoordinator.processStopped(remote, AnalysisResourceCoordinator.Purpose.COMPARE, ssh);
+    }
     AnalysisResourceCoordinator.commandSent(
         owner,
         AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
@@ -211,6 +220,8 @@ class AnalysisResourceCoordinatorTest {
     assertTrue(app.contains("engine event=foreground-paused"), app);
     assertTrue(app.contains("AUTO_QUICK_ANALYSIS"), app);
     assertTrue(app.contains("engine event=stopped"), app);
+    assertEquals(2L, app.lines().filter(line -> line.contains("event=process-started purpose=COMPARE pid=43 ")).count());
+    assertFalse(app.contains("ssh-fixture"), app);
     assertFalse(app.contains("private-value"), app);
     assertFalse(app.contains("private-user"), app);
     assertFalse(Files.exists(jsonl));

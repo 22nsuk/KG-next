@@ -7,6 +7,7 @@ import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.training.HumanMoveDecision;
 import featurecat.lizzie.util.CommandLaunchHelper;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
@@ -195,7 +196,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
       AnalysisResourceCoordinator.processStarted(
           this,
           AnalysisResourceCoordinator.Purpose.OTHER,
-          String.join(" ", launchCommands),
+          EngineThreadPolicy.isRemoteManaged(launchCommands) ? null : String.join(" ", launchCommands),
           launchedProcess);
       return true;
     } catch (IOException e) {

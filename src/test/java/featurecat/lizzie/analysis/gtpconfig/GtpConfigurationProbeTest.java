@@ -280,6 +280,27 @@ class GtpConfigurationProbeTest {
     }
   }
 
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  @Test
+  void externalSshProbeRecordsFailureWithoutItsRemoteCommandOrStderr() throws Exception {
+    Path client = tempDir.resolve("ssh");
+    Files.writeString(client, "#!/bin/sh\nread request\necho '+ env CUSTOM_VAR=trace-fixture' >&2\n");
+    Files.setPosixFilePermissions(client, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+    LoggingRuntime runtime = startProbeDiagnostics();
+    try {
+      String command = quote(client.toString()) + " host remote-command-fixture";
+      assertThrows(IOException.class, () -> new GtpConfigurationProbe().inspect(command, Duration.ofSeconds(5)));
+      awaitLogs(runtime);
+      String app = Files.readString(tempDir.resolve("logs/app.log"));
+      assertTrue(app.contains("probe event=failed stage=exited"), app);
+      assertTrue(app.contains("probe event=stderr facts="), app);
+      assertFalse(app.contains("remote-command-fixture"), app);
+      assertFalse(app.contains("trace-fixture"), app);
+    } finally {
+      runtime.shutdown();
+    }
+  }
+
   @Test
   void malformedSuccessfulGtpRepliesThrowIOException() throws Exception {
     LoggingRuntime runtime = startProbeDiagnostics();

@@ -1,6 +1,8 @@
 package featurecat.lizzie.analysis;
 
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper.NvidiaRuntimeStatus;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -91,6 +93,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private final List<Finding> preflight = new ArrayList<>();
     private final Tail stdout = new Tail();
     private final Tail stderr = new Tail();
+    private final boolean ssh;
     private Process process;
     private boolean ready;
     private boolean terminatedByOwner;
@@ -109,6 +112,9 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private EngineStartupDiagnostic published;
 
     private Attempt(String engineId, String purpose, List<String> command, boolean local) {
+      String executable = command.isEmpty() ? "" : command.get(0);
+      ssh = EngineThreadPolicy.isExternalSshExecutable(executable)
+          || (!local && !RemoteComputeConfig.isRemoteComputeEngineCommand(executable));
       launch
           .put("engineId", limited(engineId, 128))
           .put("launchPurpose", limited(purpose, 128))
@@ -225,7 +231,12 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     public synchronized void output(String stream, String line) {
       if (!collectingOutput()) return;
       if ("merged".equals(stream)) stdoutMerged = true;
-      ("stderr".equals(stream) ? stderr : stdout).add(line);
+      Tail target = "stderr".equals(stream) ? stderr : stdout;
+      if (ssh && ("stderr".equals(stream) || "merged".equals(stream))) {
+        if (target.lines.isEmpty()) target.add(EngineObservation.SSH_STDERR_OMITTED);
+      } else {
+        target.add(line);
+      }
     }
 
     public synchronized void streamEnded(String stream, String error) {
