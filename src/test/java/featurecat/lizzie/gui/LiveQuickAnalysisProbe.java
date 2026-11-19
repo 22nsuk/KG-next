@@ -372,13 +372,13 @@ public final class LiveQuickAnalysisProbe {
             + field(engine, "currentRootVisits")
             + " childVisits="
             + featurecat.lizzie.analysis.MoveData.getPlayouts(engine.getBestMoves()));
-    record(
-        "display-errors="
-            + ((java.util.Collection<?>) field(engine, "recentStderrLines"))
-                .stream()
-                    .map(String::valueOf)
-                    .filter(line -> line.startsWith("Ignored analysis display"))
-                    .toList());
+    Object reader = field(engine, "readerStreamBinding");
+    var stderr = (java.util.Collection<?>) (reader == null
+        ? field(engine, "unboundStderrLines") : field(reader, "stderrLines"));
+    synchronized (stderr) {
+      record("display-errors=" + stderr.stream().map(String::valueOf)
+          .filter(line -> line.startsWith("Ignored analysis display")).toList());
+    }
     if (Lizzie.frame.analysisEngine != null) {
       var auxiliary = Lizzie.frame.analysisEngine;
       record(

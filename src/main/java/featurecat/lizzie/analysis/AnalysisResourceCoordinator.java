@@ -122,9 +122,8 @@ public final class AnalysisResourceCoordinator {
   }
 
   /**
-   * Releases process-accounting state after the caller atomically detached {@code engineId} from
-   * the engine incarnation. This variant never resolves or stops the owner's newer observation
-   * identity if the same engine object has already rebound.
+   * Releases accounting for the caller's one-shot physical-close claim. The captured engine ID
+   * identifies the carrier even after replacement. A null ID performs accounting only.
    */
   public static void processStoppedAfterIdentityClaim(
       Object owner,
@@ -166,36 +165,25 @@ public final class AnalysisResourceCoordinator {
         }
       }
     }
-    if (process == null) {
-      String purposeName = normalizedPurpose(purpose).name();
-      String engineId =
-          identityAlreadyClaimed ? claimedEngineId : EngineObservation.identityFor(owner);
-      EngineObservation.recordProcessDetails(engineId, "process-stopped", purposeName, -1L, null);
-      if (!identityAlreadyClaimed) {
-        EngineObservation.ensureStopped(owner, "stopped");
-      }
-      removeForegroundSample(owner, identityAlreadyClaimed, expectedForegroundSample);
-      return;
-    }
     long stoppedPid = processId(process);
-    synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
-      if (registered == null || registered.process != process) {
-        // The owner may already point at a replacement local/remote runtime. The captured sample
-        // identity is still safe to settle, while owner- or PID-only removal is not.
-        if (identityAlreadyClaimed) {
-          removeForegroundSample(owner, true, expectedForegroundSample);
+    if (process != null) {
+      synchronized (REGISTERED_PROCESSES) {
+        ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
+        if (registered != null && registered.process == process) {
+          stoppedPid = registered.pid;
+          REGISTERED_PROCESSES.remove(owner);
+        } else if (!identityAlreadyClaimed) {
+          // An owner-only callback cannot identify a superseded launch.
+          return;
         }
-        return;
       }
-      stoppedPid = registered.pid;
-      REGISTERED_PROCESSES.remove(owner);
     }
-    String purposeName = normalizedPurpose(purpose).name();
     String engineId =
         identityAlreadyClaimed ? claimedEngineId : EngineObservation.identityFor(owner);
-    EngineObservation.recordProcessDetails(
-        engineId, "process-stopped", purposeName, stoppedPid, null);
+    if (engineId != null) {
+      EngineObservation.recordProcessDetails(
+          engineId, "process-stopped", normalizedPurpose(purpose).name(), stoppedPid, null);
+    }
     if (!identityAlreadyClaimed) {
       EngineObservation.ensureStopped(owner, "stopped");
     }
@@ -323,9 +311,11 @@ public final class AnalysisResourceCoordinator {
           purposeName,
           -1L,
           matcher.group(1) + "=" + redactCommand(matcher.group(2)));
-    } else if (parsed.verb().equals("kata-analyze")) {
-      EngineObservation.recordProcessDetails(
-          engineId, "analysis-started", purposeName, -1L, "kata-analyze");
+      return;
+    }
+    String verb = parsed.verb();
+    if (verb.equals("kata-analyze") || verb.equals("kata-analyze_interval")) {
+      EngineObservation.recordProcessDetails(engineId, "analysis-started", purposeName, -1L, verb);
     }
   }
 

@@ -25,6 +25,7 @@ import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -44,6 +45,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
@@ -398,6 +400,7 @@ class EngineGtpLoggingTest {
   @ParameterizedTest
   @CsvSource({
     "kata-analyze B 10, analysis-started, kata-analyze",
+    "kata-analyze_interval B 10, analysis-started, kata-analyze_interval",
     "kata-set-param numSearchThreads 12, dynamic-parameter, numSearchThreads=12"
   })
   void commandDiagnosticsWaitForFlushAndKeepTheWrittenInstance(
@@ -434,6 +437,7 @@ class EngineGtpLoggingTest {
   @CsvSource({
     "kata-analyze B 10, analysis-started, write",
     "kata-analyze B 10, analysis-started, flush",
+    "kata-analyze_interval B 10, analysis-started, flush",
     "kata-set-param numSearchThreads 12, dynamic-parameter, write",
     "kata-set-param numSearchThreads 12, dynamic-parameter, flush"
   })
@@ -644,16 +648,56 @@ class EngineGtpLoggingTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void shutdownRecordsOnlyTheClosingStreamsStderr(boolean deferFirstClose) throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    Leelaz engine = prepareEngine();
+    engine.installFreshCommandStreamsForTest(
+        InputStream.nullInputStream(), new ByteArrayOutputStream(),
+        new ByteArrayInputStream("first-runtime-error\n".getBytes(StandardCharsets.UTF_8)));
+    String first = EngineObservation.identityFor(engine);
+    Method readError = Leelaz.class.getDeclaredMethod("readError");
+    readError.setAccessible(true);
+    readError.invoke(engine);
+    Leelaz.ExactForceQuitClaim firstClose = null;
+    if (deferFirstClose) {
+      firstClose = engine.claimForceQuitIfCurrentIncarnation(engine.captureEngineIncarnationFence());
+      assertNotNull(firstClose);
+    } else {
+      engine.shutdown();
+    }
+    String successorStderr = deferFirstClose ? "second-runtime-error\n" : "";
+    engine.installFreshCommandStreamsForTest(
+        InputStream.nullInputStream(), new ByteArrayOutputStream(),
+        new ByteArrayInputStream(successorStderr.getBytes(StandardCharsets.UTF_8)));
+    readError.invoke(engine);
+    String second = EngineObservation.identityFor(engine);
+    assertNotEquals(first, second);
+    if (firstClose != null) firstClose.finish();
+    engine.shutdown();
+    awaitLogs(runtime);
+    String app = readApp();
+    assertEquals(first, engineIdOnEventLine(app, "engine event=stderr facts=first-runtime-error"), app);
+    if (deferFirstClose) {
+      assertEquals(second, engineIdOnEventLine(app, "engine event=stderr facts=second-runtime-error"), app);
+    }
+    assertEquals(deferFirstClose ? 2 : 1, eventCount(app, "stderr"), app);
+  }
+
   @Test
-  void failedRemoteConnectionDoesNotRecordProcessStarted() throws Exception {
+  void failedRemoteConnectionAndCleanupDoNotRecordAProcess() throws Exception {
     LoggingRuntime runtime = startEngineDiagnostics();
     RemoteLoggingEngine engine = new RemoteLoggingEngine(true);
     try {
       Lizzie.setPrimaryEngine(engine);
       assertThrows(IOException.class, () -> engine.startEngine(-1));
+      engine.shutdown();
       awaitLogs(runtime);
       assertEquals(0L, eventCount(readApp(), "process-started"), readApp());
-      assertTrue(readApp().contains("engine event=failed"), readApp());
+      String app = readApp();
+      assertEquals(0L, eventCount(app, "process-stopped"), app);
+      assertSameEngineIdentity(app, "event=failed", "event=stderr facts=controlled remote connection failure");
     } finally {
       closeRemoteReaders(engine);
     }

@@ -278,6 +278,41 @@ class AnalysisResourceCoordinatorTest {
   }
 
   @Test
+  void claimedStopIsRecordedAfterRegistrationIsReplaced() throws Exception {
+    LoggingRuntime runtime = LoggingRuntime.initialize(
+        new WorkDirectoryResolution(tempDir, List.of()),
+        new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 256_000));
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true)
+        .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE)));
+    Object owner = new Object();
+    ControllableProcess first = new ControllableProcess(303L);
+    ControllableProcess next = new ControllableProcess(303L);
+    var purpose = AnalysisResourceCoordinator.Purpose.MAIN_BOARD;
+    try {
+      AnalysisResourceCoordinator.processStarted(owner, purpose, "first", first);
+      String id = EngineObservation.identityFor(owner);
+      assertTrue(EngineObservation.discardIdentityIfCurrent(owner, id));
+      AnalysisResourceCoordinator.processStarted(owner, purpose, "next", next);
+      String nextId = EngineObservation.identityFor(owner);
+      // The old child still consumes compute until it exits, even after its close is claimed.
+      AnalysisResourceCoordinator.processStoppedAfterIdentityClaim(owner, purpose, first, id, null);
+      assertTrue(AnalysisResourceCoordinator.hasActiveLocalComputeOtherThan(owner));
+      first.destroy();
+      assertTrue(AnalysisResourceCoordinator.isRegisteredProcessIdentityForTesting(owner, next));
+      assertEquals(nextId, EngineObservation.identityFor(owner));
+      awaitLogs(runtime);
+      String app = Files.readString(tempDir.resolve("logs/app.log"), StandardCharsets.UTF_8);
+      assertEquals(1L, app.lines().filter(line -> line.contains("engine=" + id)
+          && line.contains("event=process-stopped purpose=MAIN_BOARD pid=303 ")).count(), app);
+    } finally {
+      first.destroy();
+      next.destroy();
+      AnalysisResourceCoordinator.processStopped(owner, purpose, next);
+      runtime.shutdown();
+    }
+  }
+
+  @Test
   void staleStopCannotRetireSamePidReplacementRegistrationOrSample() throws Exception {
     LoggingRuntime runtime =
         LoggingRuntime.initialize(
