@@ -579,9 +579,12 @@ public class EngineFailedMessage extends JDialog {
   }
 
   /** Updates only the local message pane. Copy and export consume the separate diagnostic. */
-  public void setLocalStderr(String stderr) {
-    if (stderr.isEmpty()) return;
-    messageArea.setText(failureMessage + "\n\nRecent stderr:\n" + redactSensitiveText(stderr));
+  public void setLocalOutput(String stdout, String stderr) {
+    if (stdout.isEmpty() && stderr.isEmpty()) return;
+    StringBuilder message = new StringBuilder(failureMessage);
+    if (!stdout.isEmpty()) message.append("\n\nRecent stdout:\n").append(redactSensitiveText(stdout));
+    if (!stderr.isEmpty()) message.append("\n\nRecent stderr:\n").append(redactSensitiveText(stderr));
+    messageArea.setText(message.toString());
     messageArea.setCaretPosition(messageArea.getDocument().getLength());
   }
 

@@ -342,6 +342,7 @@ ENGINE_PROCESS_TESTS = {
     "featurecat.lizzie.gui.EngineStartupDiagnosticsDesktopTest": TestSelection((
         "sshExitShowsStderrOnlyInTheLocalFailureWindow(String)[1]",
         "sshExitShowsStderrOnlyInTheLocalFailureWindow(String)[2]",
+        "sshExitShowsStderrOnlyInTheLocalFailureWindow(String)[3]",
     ), whole_class=False),
     "featurecat.lizzie.gui.ContributeStartupDesktopTest": TestSelection((
         "serverRejectionUsesOneLaunchAndRetainsFailure",

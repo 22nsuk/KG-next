@@ -40,6 +40,8 @@ import org.slf4j.LoggerFactory;
 /** Real GUI/SSH transport and children that deliberately survive stdin EOF, as KataGo does. */
 public class ContributeSshShutdownDesktopTest {
   private static final String REMOTE_ARGUMENT = "ssh-positional-canary";
+  private static final String REMOTE_VERSION = "remote-version-canary";
+  private static final String REMOTE_DETAIL = "GPU device unavailable on launch ";
   private static final String REMOTE_ERROR = "ssh-error-canary";
 
   @Test
@@ -101,7 +103,7 @@ public class ContributeSshShutdownDesktopTest {
           for (Child remote : server.children.subList(first, server.children.size()))
             verifyStopped(remote);
           assertFalse(Lizzie.frame.isContributing);
-          if (mode.equals("retry")) verifyFailureReport();
+          if (mode.equals("retry")) verifyFailureReport(work);
         }
         assertNull(server.failure.get(), "SSH fixture must not fail");
       }
@@ -114,6 +116,7 @@ public class ContributeSshShutdownDesktopTest {
       List<String> log = Files.readAllLines(work.resolve("logs/app.log"));
       assertTrue(log.stream().anyMatch(line -> line.contains("engine event=startup-failed")));
       assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_ARGUMENT) || line.contains(REMOTE_ERROR)));
+      assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_DETAIL) || line.contains(REMOTE_VERSION)));
       List<String> launches = contributionIds(log, "started");
       assertEquals(server.children.size(), launches.size());
       assertEquals(launches.size(), launches.stream().distinct().count());
@@ -130,20 +133,30 @@ public class ContributeSshShutdownDesktopTest {
     System.exit(0);
   }
 
-  private static void verifyFailureReport() throws Exception {
+  private static void verifyFailureReport(Path work) throws Exception {
+    EngineFailedMessage dialog = ContributeStartupDesktopTest.failureWindow();
+    EngineStartupDiagnosticsDesktopTest.verifySharedOutput(
+        dialog, work, List.of(REMOTE_ARGUMENT, REMOTE_ERROR, REMOTE_DETAIL, REMOTE_VERSION));
     SwingUtilities.invokeAndWait(() -> {
-      EngineFailedMessage dialog = ContributeStartupDesktopTest.failureWindow();
       // The operator still sees the actual error. Neither report used by Copy or Export contains it.
       assertTrue(ContributeStartupDesktopTest.text(dialog).contains(REMOTE_ERROR));
+      String local = ContributeStartupDesktopTest.text(dialog);
+      assertTrue(local.contains(REMOTE_DETAIL + "4"));
+      assertTrue(local.contains(REMOTE_VERSION));
+      assertFalse(local.contains(REMOTE_DETAIL + "3"));
       var captured = ContributeStartupDesktopTest.displayed(dialog);
       assertEquals("startup-exit", captured.toJson().getString("phase"));
       assertFalse(captured.shareText().contains(REMOTE_ARGUMENT));
       assertFalse(captured.shareText().contains(REMOTE_ERROR));
+      assertFalse(captured.shareText().contains(REMOTE_DETAIL));
+      assertFalse(captured.shareText().contains(REMOTE_VERSION));
       dialog.bindStartupDiagnostic(null);
       var fallback = ContributeStartupDesktopTest.displayed(dialog);
       assertEquals("unknown", fallback.engineId());
       assertFalse(fallback.shareText().contains(REMOTE_ARGUMENT));
       assertFalse(fallback.shareText().contains(REMOTE_ERROR));
+      assertFalse(fallback.shareText().contains(REMOTE_DETAIL));
+      assertFalse(fallback.shareText().contains(REMOTE_VERSION));
     });
   }
 
@@ -193,6 +206,7 @@ public class ContributeSshShutdownDesktopTest {
     }
     if (mode.equals("fatal")) System.out.println(ContributeStartupDesktopTest.REJECTION);
     if (mode.equals("retry")) {
+      System.out.println("fixture time KataGo v1." + REMOTE_VERSION + ".0");
       System.out.println("Ending remote session");
       System.out.close();
     }
@@ -212,6 +226,7 @@ public class ContributeSshShutdownDesktopTest {
   private record Child(Process process, Path work) {}
 
   private static final class SshFixture implements AutoCloseable {
+    final java.util.concurrent.atomic.AtomicInteger retries = new java.util.concurrent.atomic.AtomicInteger();
     final SshServer server = SshServer.setUpDefaultServer();
     final List<Child> children = new CopyOnWriteArrayList<>();
     final AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -272,6 +287,7 @@ public class ContributeSshShutdownDesktopTest {
           if (command.equals("retry -config " + REMOTE_ARGUMENT)) {
             mode = "retry";
             stderr.write(("{\"error\":\"" + REMOTE_ERROR + "\"}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            stderr.write((REMOTE_DETAIL + retries.incrementAndGet() + "\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
             stderr.flush();
           }
           if (!List.of("stop", "clean", "fatal", "retry").contains(mode))

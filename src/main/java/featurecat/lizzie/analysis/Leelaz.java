@@ -4476,9 +4476,9 @@ public class Leelaz {
   private static ReaderExecutorSnapshot requestReaderShutdown(
       ReaderStreamBinding binding, boolean normalExitRequested) {
     synchronized (binding.readerExecutorLock) {
-      if (binding.startupDiagnostic != null) {
-        if (normalExitRequested) binding.startupDiagnostic.cancel();
-        else binding.startupDiagnostic.beforeTermination();
+      if (binding.readerOutput.attempt != null) {
+        if (normalExitRequested) binding.readerOutput.attempt.cancel();
+        else binding.readerOutput.attempt.beforeTermination();
       }
       binding.readerShutdownRequested = true;
       binding.closeAnalysisModelLookup();
@@ -4493,7 +4493,7 @@ public class Leelaz {
   private static ForceReaderExecutorSnapshot claimReaderForceClose(
       ReaderStreamBinding binding) {
     synchronized (binding.readerExecutorLock) {
-      if (binding.startupDiagnostic != null) binding.startupDiagnostic.cancel();
+      if (binding.readerOutput.attempt != null) binding.readerOutput.attempt.cancel();
       if (binding.forceCloseClaimed) {
         return null;
       }
@@ -4746,9 +4746,8 @@ public class Leelaz {
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
                 snapshotFileAccessKind,
-                launch, isSSH);
+                launch, readerOutputForLaunch(launch));
         nextBinding.rawOutput = stdin;
-        attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
@@ -4793,9 +4792,8 @@ public class Leelaz {
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
                 snapshotFileAccessKind,
-                launch, isSSH);
+                launch, readerOutputForLaunch(launch));
         nextBinding.rawOutput = stdin;
-        attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
@@ -4836,15 +4834,11 @@ public class Leelaz {
     }
   }
 
-  private void attachStartupDiagnostic(ReaderStreamBinding binding) {
-    EngineStartupDiagnostics.Attempt attempt =
-        binding.launch == null ? startupDiagnosticAttempt : binding.launch.diagnostic();
-    if (attempt != null) {
-      binding.startupDiagnostic = attempt;
-      attempt.attach(binding.process, binding.incarnation);
-    }
+  private EngineReaderOutput readerOutputForLaunch(EngineLaunch launch) {
+    return new EngineReaderOutput(
+        launch == null ? startupDiagnosticAttempt : launch.diagnostic(),
+        useJavaSSH || (launch == null ? isSSH : launch.usesSsh()));
   }
-
 
   private void noteEngineStarted() {
     try {
@@ -4896,8 +4890,8 @@ public class Leelaz {
     }
     isLoaded = true;
     isTuning = false;
-    if (loadedBinding != null && loadedBinding.startupDiagnostic != null)
-      loadedBinding.startupDiagnostic.ready();
+    if (loadedBinding != null && loadedBinding.readerOutput.attempt != null)
+      loadedBinding.readerOutput.attempt.ready();
     if (!already) {
       try {
         EngineObservation.recordReady(currentObservationIdentity());
@@ -4945,7 +4939,7 @@ public class Leelaz {
                 useRemoteCompute || useJavaSSH || isSSH
                     ? SnapshotFileAccessKind.UNSUPPORTED
                     : SnapshotFileAccessKind.DIRECT_LOCAL,
-                null, isSSH);
+                null, new EngineReaderOutput(null, useJavaSSH || isSSH));
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
@@ -5291,34 +5285,11 @@ public class Leelaz {
     UNSUPPORTED
   }
 
-  /** Private to this connection's failure window. Shared diagnostics only record stderr presence. */
-  private static final class LocalSshStderr {
-    private static final int MAX_LINE_BYTES = 2048;
-    private final ArrayDeque<String> lines = new ArrayDeque<>();
-    private final CompletableFuture<Void> readerDone = new CompletableFuture<>();
-
-    void add(String line) {
-      rememberRecentLine(lines, EngineStartupDiagnostic.bounded(line, MAX_LINE_BYTES));
-    }
-
-    void showIn(EngineFailedMessage dialog) {
-      // stdout EOF can open the window before the independent stderr reader finishes.
-      if (!readerDone.isDone()) {
-        readerDone.thenRunAsync(
-            () -> {
-              if (dialog.isShowing()) dialog.setLocalStderr(snapshotRecentLines(lines));
-            },
-            SwingUtilities::invokeLater);
-      }
-      dialog.setLocalStderr(snapshotRecentLines(lines));
-    }
-  }
-
   private static final class ReaderStreamBinding {
     private final BufferedReader stdout;
     private final BufferedReader stderr;
     private final ArrayDeque<String> stderrLines = new ArrayDeque<>();
-    private final LocalSshStderr localSshStderr;
+    private final EngineReaderOutput readerOutput;
     private volatile OutputStream rawOutput;
     private volatile BufferedOutputStream output;
     private final Process process;
@@ -5327,7 +5298,6 @@ public class Leelaz {
     private final long incarnation;
     private final long startupStartedNanos = System.nanoTime();
     private volatile EngineStartupProgress startupProgress;
-    private EngineStartupDiagnostics.Attempt startupDiagnostic;
     private final EngineLaunch launch;
     private final Path processWorkingDirectory;
     private final SnapshotFileAccessKind snapshotFileAccessKind;
@@ -5404,7 +5374,7 @@ public class Leelaz {
           null,
           null,
           SnapshotFileAccessKind.DIRECT_LOCAL,
-          null, false);
+          null, new EngineReaderOutput(null, javaSSH != null));
     }
 
     private ReaderStreamBinding(
@@ -5420,10 +5390,10 @@ public class Leelaz {
         Object analysisOutputRecoveryToken,
         Path processWorkingDirectory,
         SnapshotFileAccessKind snapshotFileAccessKind,
-        EngineLaunch launch, boolean externalSsh) {
+        EngineLaunch launch, EngineReaderOutput readerOutput) {
       this.launch = launch;
-      boolean ssh = javaSSH != null || (launch == null ? externalSsh : launch.usesSsh());
-      this.localSshStderr = ssh ? new LocalSshStderr() : null;
+      this.readerOutput = readerOutput;
+      if (readerOutput.attempt != null) readerOutput.attempt.attach(process, incarnation);
       this.stdout = stdout;
       this.stderr = stderr;
       this.rawOutput = output;
@@ -7052,8 +7022,8 @@ public class Leelaz {
     }
     isLoaded = false;
     isDownWithError = true;
-    if (binding.startupDiagnostic != null)
-      binding.startupDiagnostic.fail("startup-handshake", failure.toString());
+    if (binding.readerOutput.attempt != null)
+      binding.readerOutput.attempt.fail("startup-handshake", failure.toString());
     isCheckingPda = false;
     cancelParameterRead();
     try {
@@ -9442,23 +9412,23 @@ public class Leelaz {
 
   private void readError(ReaderStreamBinding binding) {
     String line = "";
+    String readError = null;
     try {
       while ((line = binding.stderr.readLine()) != null) {
-        if (binding.localSshStderr != null) binding.localSshStderr.add(line);
-        if (binding.startupDiagnostic != null) binding.startupDiagnostic.output("stderr", line);
+        binding.readerOutput.line(true, line);
         if (!beginReaderLine(binding)) {
           // Drain this failed connection's private tail without sending late lines to the parser.
-          if (binding.localSshStderr != null && binding == readerStreamBinding
+          if (binding.readerOutput.isSsh() && binding == readerStreamBinding
               && binding.terminated && !binding.normalExitRequested) {
             continue;
           }
-          if (binding.startupDiagnostic == null || !binding.startupDiagnostic.collectingOutput())
+          if (binding.readerOutput.attempt == null || !binding.readerOutput.attempt.collectingOutput())
             return;
           continue;
         }
         try {
           String diagnosticLine =
-              binding.localSshStderr == null ? line : EngineObservation.SSH_STDERR_OMITTED;
+              !binding.readerOutput.isSsh() ? line : EngineObservation.SSH_STDERR_OMITTED;
           if (TrialDiag.ENABLED && !line.isEmpty()) {
             System.out.println("[katago-stderr] " + diagnosticLine);
           }
@@ -9470,7 +9440,7 @@ public class Leelaz {
           try {
             parseLineForError(line, binding);
           } catch (Exception e) {
-            e.printStackTrace();
+            EngineReaderOutput.reportReaderException(binding.readerOutput.isSsh(), e);
           }
           // A retired reader may still drain its own diagnostic tail, never parser/UI state.
         } finally {
@@ -9478,8 +9448,7 @@ public class Leelaz {
         }
       }
     } catch (IOException | RuntimeException failure) {
-      if (binding.startupDiagnostic != null)
-        binding.startupDiagnostic.streamEnded("stderr", failure.toString());
+      readError = failure.toString();
       if (isCurrentReaderStreamBinding(binding)) {
         EngineObservation.recordTransportFailure(
             observationIdentity(binding.launch),
@@ -9488,8 +9457,7 @@ public class Leelaz {
             failure);
       }
     } finally {
-      if (binding.localSshStderr != null) binding.localSshStderr.readerDone.complete(null);
-      if (binding.startupDiagnostic != null) binding.startupDiagnostic.streamEnded("stderr", null);
+      binding.readerOutput.ended(true, readError);
     }
   }
 
@@ -10371,12 +10339,12 @@ public class Leelaz {
     try {
       String line = "";
       while ((line = binding.stdout.readLine()) != null) {
-        if (binding.startupDiagnostic != null) binding.startupDiagnostic.output("stdout", line);
+        binding.readerOutput.line(false, line);
         if (!beginReaderLine(binding)) {
           return;
         }
         lineInProgress = true;
-        rememberRecentLine(recentStdoutLines, line);
+        if (!binding.readerOutput.isSsh()) rememberRecentLine(recentStdoutLines, line);
         if (dispatchMoveFocusLine(binding, line)) {
           lineInProgress = false;
           endReaderLine(binding);
@@ -10434,7 +10402,7 @@ public class Leelaz {
           } catch (StartupPostActionFailure startupFailure) {
             throw startupFailure;
           } catch (Exception e) {
-            e.printStackTrace();
+            EngineReaderOutput.reportReaderException(binding.readerOutput.isSsh(), e);
           }
 
         } else {
@@ -10445,7 +10413,7 @@ public class Leelaz {
           } catch (StartupPostActionFailure startupFailure) {
             throw startupFailure;
           } catch (Exception e) {
-            e.printStackTrace();
+            EngineReaderOutput.reportReaderException(binding.readerOutput.isSsh(), e);
           }
         }
         if (isCommandLine) {
@@ -10478,9 +10446,7 @@ public class Leelaz {
     } catch (IOException | RuntimeException | Error readFailure) {
       failure = readFailure;
     } finally {
-      if (binding.startupDiagnostic != null)
-        binding.startupDiagnostic.streamEnded(
-            "stdout", failure == null ? null : failure.toString());
+      binding.readerOutput.ended(false, failure == null ? null : failure.toString());
       if (lineInProgress) {
         endReaderLine(binding);
       }
@@ -10537,8 +10503,8 @@ public class Leelaz {
                 : terminalFailure instanceof IOException ? "io-error" : "reader-error",
             terminalFailure);
         if (!isLoaded) {
-          if (binding.startupDiagnostic != null)
-            binding.startupDiagnostic.fail(
+          if (binding.readerOutput.attempt != null)
+            binding.readerOutput.attempt.fail(
                 "startup-exit",
                 terminalFailure == null ? "stdout EOF before ready" : terminalFailure.toString());
           noteEngineFailed(binding.launch, "exit-before-ready",
@@ -20139,14 +20105,16 @@ public class Leelaz {
     StringBuilder builder = new StringBuilder(baseMessage == null ? "" : baseMessage);
     ReaderStreamBinding binding = readerStreamBinding;
     EngineStartupDiagnostic diagnostic =
-        binding == null || binding.startupDiagnostic == null
+        binding == null || binding.readerOutput.attempt == null
             ? null
-            : binding.startupDiagnostic.snapshot();
+            : binding.readerOutput.attempt.snapshot();
     if (diagnostic != null) return builder.append('\n').append(diagnostic.shareText()).toString();
     appendExitCode(builder);
     appendRecentLines(
         builder, "Recent stderr", binding == null ? unboundStderrLines : binding.stderrLines);
-    appendRecentLines(builder, "Recent stdout", recentStdoutLines);
+    if (binding == null || !binding.readerOutput.isSsh()) {
+      appendRecentLines(builder, "Recent stdout", recentStdoutLines);
+    }
     return builder.toString();
   }
 
@@ -24256,7 +24224,7 @@ public class Leelaz {
 
   void recordStartupFailure(Object expectedIncarnation, String stage, String detail) {
     if (expectedIncarnation instanceof ReaderStreamBinding binding
-        && binding.startupDiagnostic != null) binding.startupDiagnostic.fail(stage, detail);
+        && binding.readerOutput.attempt != null) binding.readerOutput.attempt.fail(stage, detail);
   }
 
   /** Called by the manager only after its existing startup-failure presentation fence succeeds. */
@@ -24332,7 +24300,7 @@ public class Leelaz {
       Object expectedEngineIncarnation) {
     EngineStartupDiagnostics.Attempt diagnosticAttempt =
         expectedEngineIncarnation instanceof ReaderStreamBinding
-            ? ((ReaderStreamBinding) expectedEngineIncarnation).startupDiagnostic
+            ? ((ReaderStreamBinding) expectedEngineIncarnation).readerOutput.attempt
             : null;
     EngineFailedMessage.runOnEventDispatchThreadAndWait(
         () ->
@@ -24404,9 +24372,8 @@ public class Leelaz {
     engineFailedMessage = dialog;
     presentedStartupDiagnosticAttempt = attempt;
     if (incarnation instanceof ReaderStreamBinding binding
-        && binding.startupDiagnostic == attempt
-        && binding.localSshStderr != null) {
-      binding.localSshStderr.showIn(dialog);
+        && binding.readerOutput.attempt == attempt) {
+      binding.readerOutput.showLocalOutput(dialog);
     }
   }
 
@@ -24642,10 +24609,10 @@ public class Leelaz {
                 }
                 isDownWithError = true;
               }
-              if (expectedBinding.startupDiagnostic != null) {
-                expectedBinding.startupDiagnostic.fail(
+              if (expectedBinding.readerOutput.attempt != null) {
+                expectedBinding.readerOutput.attempt.fail(
                     "startup-timeout", "Engine startup watchdog expired");
-                expectedBinding.startupDiagnostic.beforeTermination();
+                expectedBinding.readerOutput.attempt.beforeTermination();
               }
               if (expectedProcess != null) {
                 try {

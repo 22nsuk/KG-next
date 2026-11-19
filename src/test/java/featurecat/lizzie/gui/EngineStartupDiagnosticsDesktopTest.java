@@ -3,6 +3,7 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.Leelaz;
@@ -81,8 +82,10 @@ public class EngineStartupDiagnosticsDesktopTest {
 
   private static final String SSH_ERROR = "remote GPU allocation failed (fixture 284)";
 
+  private static final String SSH_STDOUT = "remote output fixture 395";
+
   @ParameterizedTest
-  @ValueSource(strings = {"before-ready", "after-ready"})
+  @ValueSource(strings = {"before-ready", "after-ready", "dedicated-analysis"})
   void sshExitShowsStderrOnlyInTheLocalFailureWindow(String phase) throws Exception {
     DesktopProbeProcess.requireDisplay();
     Path result =
@@ -99,7 +102,7 @@ public class EngineStartupDiagnosticsDesktopTest {
                 () -> {
                   try {
                     await(() -> Files.exists(work.resolve("release-crash")));
-                    failSshPeer();
+                    failSshPeer(false);
                   } catch (Exception e) {
                     throw new AssertionError(e);
                   }
@@ -109,7 +112,7 @@ public class EngineStartupDiagnosticsDesktopTest {
         crash.start();
         ControlledGtpPeer.main(new String[] {work.resolve("peer").toString()});
       } else {
-        failSshPeer();
+        failSshPeer(args[1].equals("dedicated-analysis"));
       }
       return;
     }
@@ -603,7 +606,9 @@ public class EngineStartupDiagnosticsDesktopTest {
         });
   }
 
-  private static void failSshPeer() {
+  private static void failSshPeer(boolean analysis) {
+    System.out.println(analysis ? new JSONObject().put("error", SSH_STDOUT) : SSH_STDOUT);
+    System.out.flush();
     System.err.println("discarded-early-fixture");
     for (int i = 0; i < 40; i++) System.err.println("engine warning " + i);
     System.err.println("oversized-line " + "x".repeat(8192) + "discarded-line-suffix");
@@ -646,7 +651,16 @@ public class EngineStartupDiagnosticsDesktopTest {
             Lizzie.config.autoCheckEngineAlive = false;
             Lizzie.gtpConsole.setVisible(false);
           });
-      assertTrue(Lizzie.engineManager.switchEngineIfAvailable(0, true));
+      if (phase.equals("dedicated-analysis")) {
+        Lizzie.config.analysisReuseCurrentEngine = false;
+        Lizzie.config.analysisEngineCommand = "katago analysis";
+        Lizzie.config.leelazConfig.put("analysis-engine-ssh-info", new JSONObject()
+            .put("useJavaSSH", true).put("ip", entry.ip).put("port", entry.port)
+            .put("userName", entry.userName).put("password", entry.password));
+        Lizzie.frame.analysisEngine = new AnalysisEngine(false);
+      } else {
+        assertTrue(Lizzie.engineManager.switchEngineIfAvailable(0, true));
+      }
       if (phase.equals("after-ready")) {
         await(() -> isEngineReadyOnEdt(0));
         Files.createFile(work.resolve("release-crash"));
@@ -654,43 +668,49 @@ public class EngineStartupDiagnosticsDesktopTest {
       await(() -> failedWindow() != null);
       EngineFailedMessage dialog = failedWindow();
       await(() -> componentTextWithoutOwnedOnEdt(dialog).contains(SSH_ERROR));
+      await(() -> componentTextWithoutOwnedOnEdt(dialog).contains(SSH_STDOUT));
       String visible = componentTextWithoutOwnedOnEdt(dialog);
       assertFalse(visible.contains("discarded-early-fixture"), "Keep only the recent lines");
       assertTrue(visible.contains("oversized-line"));
       assertFalse(visible.contains("discarded-line-suffix"), "Bound individual stderr lines");
       assertFalse(visible.contains("local-secret-fixture"), "Preserve the window's credential masking");
-      SwingUtilities.invokeAndWait(() -> button(dialog, "EngineFailedMessage.copyError").doClick());
-      String copied =
-          (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
-      assertEquals(displayedDiagnostic(dialog).shareText(), copied);
-      assertFalse(copied.contains(SSH_ERROR));
-
-      SwingUtilities.invokeAndWait(
-          () -> button(dialog, "EngineFailedMessage.exportDiagnostics").doClick());
-      var request = new AtomicReference<DiagnosticBundleRequest>();
-      SwingUtilities.invokeAndWait(
-          () -> {
-            for (Window window : Window.getWindows()) {
-              DiagnosticsDialog panel = findPanel(window);
-              if (panel != null && window.isVisible()) request.set(panel.currentRequest());
-            }
-          });
-      assertNotNull(request.get());
-      Path zip = new DiagnosticBundleExporter(work.resolve("export")).export(request.get());
-      try (ZipFile archive = new ZipFile(zip.toFile())) {
-        assertNotNull(archive.getEntry("snapshots/engine-startup-failure.json"));
-        for (var file : java.util.Collections.list(archive.entries())) {
-          String text = new String(archive.getInputStream(file).readAllBytes(), StandardCharsets.UTF_8);
-          assertFalse(text.contains(SSH_ERROR), file.getName());
-          assertFalse(text.contains("local-secret-fixture"), file.getName());
-        }
-      }
+      verifySharedOutput(dialog, work, List.of(SSH_ERROR, SSH_STDOUT, "local-secret-fixture"));
       runtime.shutdown();
       String log = Files.readString(work.resolve("logs/app.log"));
       assertTrue(log.contains("engine event=process-stopped"), log);
       assertFalse(log.contains(SSH_ERROR));
+      assertFalse(log.contains(SSH_STDOUT));
       assertFalse(log.contains("local-secret-fixture"));
       Files.writeString(result, new JSONObject().put("result", "passed").toString());
+    }
+  }
+
+  static void verifySharedOutput(EngineFailedMessage dialog, Path work, List<String> privateMarkers)
+      throws Exception {
+    SwingUtilities.invokeAndWait(() -> button(dialog, "EngineFailedMessage.copyError").doClick());
+    String copied =
+        (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
+    assertEquals(displayedDiagnostic(dialog).shareText(), copied);
+    for (String marker : privateMarkers) assertFalse(copied.contains(marker));
+
+    SwingUtilities.invokeAndWait(
+        () -> button(dialog, "EngineFailedMessage.exportDiagnostics").doClick());
+    var request = new AtomicReference<DiagnosticBundleRequest>();
+    SwingUtilities.invokeAndWait(
+        () -> {
+          for (Window window : Window.getWindows()) {
+            DiagnosticsDialog panel = findPanel(window);
+            if (panel != null && window.isVisible()) request.set(panel.currentRequest());
+          }
+        });
+    assertNotNull(request.get());
+    Path zip = new DiagnosticBundleExporter(work.resolve("export")).export(request.get());
+    try (ZipFile archive = new ZipFile(zip.toFile())) {
+      assertNotNull(archive.getEntry("snapshots/engine-startup-failure.json"));
+      for (var file : java.util.Collections.list(archive.entries())) {
+        String text = new String(archive.getInputStream(file).readAllBytes(), StandardCharsets.UTF_8);
+        for (String marker : privateMarkers) assertFalse(text.contains(marker), file.getName());
+      }
     }
   }
 

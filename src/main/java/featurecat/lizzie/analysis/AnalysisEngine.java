@@ -104,6 +104,9 @@ public class AnalysisEngine {
   // private BoardHistoryNode startAnalyzeNode;
   public WaitForAnalysis waitFrame;
   private volatile EngineStartupDiagnostics.Attempt startupDiagnosticAttempt;
+  // parseResult is also a public, overridable entry point. The reader that supplied a response
+  // determines its log policy even if another connection replaces it during parsing.
+  private static final ThreadLocal<EngineReaderOutput> PARSING_OUTPUT = new ThreadLocal<>();
   private EngineStartupDiagnostics.Attempt presentedStartupDiagnosticAttempt;
   private EngineFailedMessage engineFailedMessage;
 
@@ -627,6 +630,10 @@ public class AnalysisEngine {
         createdDialog -> {
           engineFailedMessage = createdDialog;
           presentedStartupDiagnosticAttempt = diagnosticAttempt;
+          ReaderResources resources = readerResources;
+          if (resources != null && resources.readerOutput.attempt == diagnosticAttempt) {
+            resources.readerOutput.showLocalOutput(createdDialog);
+          }
           dialog.set(createdDialog);
         });
     return DiagnosticActionResult.of(dialog.get());
@@ -679,7 +686,7 @@ public class AnalysisEngine {
     private final Process process;
     private final AnalysisEngineSSHController ssh;
     private final EngineTransport transport;
-    private final EngineStartupDiagnostics.Attempt attempt;
+    private final EngineReaderOutput readerOutput;
     private final BufferedReader stdout;
     private final BufferedOutputStream stdin;
     private final BufferedReader stderr;
@@ -702,7 +709,7 @@ public class AnalysisEngine {
       this.process = process;
       this.ssh = ssh;
       this.transport = transport;
-      this.attempt = attempt;
+      this.readerOutput = new EngineReaderOutput(attempt, ssh != null);
       this.stdout = new BufferedReader(new InputStreamReader(stdout));
       this.stdin = new BufferedOutputStream(stdin);
       this.stderr = new BufferedReader(new InputStreamReader(stderr));
@@ -749,9 +756,12 @@ public class AnalysisEngine {
     }
 
     private void closeForExit() {
-      requestShutdown();
-      isNormalEnd = true;
-      isLoaded = false;
+      if (readerResources == this) {
+        requestShutdown();
+        isNormalEnd = true;
+        isLoaded = false;
+        if (ssh != null) javaSSHClosed = true;
+      }
       close(false);
     }
 
@@ -776,14 +786,16 @@ public class AnalysisEngine {
     }
 
     private void closeResources(boolean preserveStartupTail) {
+      EngineStartupDiagnostics.Attempt attempt = readerOutput.attempt;
       try {
-        if (preserveStartupTail && process != null && attempt != null && attempt.collectingOutput()) {
+        if (preserveStartupTail
+            && (readerOutput.isSsh() || (process != null && attempt != null && attempt.collectingOutput()))) {
           long budget =
               TimeUnit.MILLISECONDS.toNanos(
                   EngineStartupDiagnostics.Policy.production().deadlineMillis());
           long deadline = System.nanoTime() + budget;
           // Startup failures may close stdout before writing their final stderr and exit status.
-          if (process.waitFor(budget, TimeUnit.NANOSECONDS)) {
+          if (process == null || process.waitFor(budget, TimeUnit.NANOSECONDS)) {
             executorErr.awaitTermination(
                 Math.max(0L, deadline - System.nanoTime()), TimeUnit.NANOSECONDS);
           }
@@ -796,19 +808,19 @@ public class AnalysisEngine {
         } finally {
           // Reader.close and the stdin flush can wait for I/O locks. Keep them off the EDT
           // and outside the AnalysisEngine monitor used by response parsing and handback.
-          closeStream(stdin);
-          closeStream(stdout);
-          closeStream(stderr);
+          closeStream(stdin, readerOutput.isSsh());
+          closeStream(stdout, readerOutput.isSsh());
+          closeStream(stderr, readerOutput.isSsh());
         }
       }
     }
   }
 
-  private static void closeStream(Closeable stream) {
+  private static void closeStream(Closeable stream, boolean ssh) {
     try {
       stream.close();
     } catch (IOException failure) {
-      failure.printStackTrace();
+      EngineReaderOutput.reportReaderException(ssh, failure);
     }
   }
 
@@ -824,6 +836,7 @@ public class AnalysisEngine {
   }
 
   private void closeReaderResources() {
+    if (useJavaSSH) javaSSHClosed = true;
     ReaderResources resources = readerResources;
     if (resources != null) {
       resources.close(false);
@@ -834,27 +847,22 @@ public class AnalysisEngine {
   }
 
   private void readError(ReaderResources resources) {
-    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
     String line = "";
     Throwable error = null;
     try {
       while ((line = resources.stderr.readLine()) != null) {
-        if (attempt != null) {
-          attempt.output("stderr", line);
-        }
+        resources.readerOutput.line(true, line);
         try {
           parseLineForError(line);
         } catch (Exception e) {
-          e.printStackTrace();
+          EngineReaderOutput.reportReaderException(resources.readerOutput.isSsh(), e);
         }
       }
     } catch (IOException e) {
       error = e;
-      e.printStackTrace();
+      EngineReaderOutput.reportReaderException(resources.readerOutput.isSsh(), e);
     } finally {
-      if (attempt != null) {
-        attempt.streamEnded("stderr", error == null ? null : error.toString());
-      }
+      resources.readerOutput.ended(true, error == null ? null : error.toString());
       // Stderr EOF alone does not end the stdout protocol or the engine process.
       resources.executorErr.shutdown();
     }
@@ -865,19 +873,17 @@ public class AnalysisEngine {
   }
 
   private void read(ReaderResources resources) {
-    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
     Throwable error = null;
+    PARSING_OUTPUT.set(resources.readerOutput);
     try {
       String line = "";
       while ((line = resources.stdout.readLine()) != null) {
-        if (attempt != null) {
-          attempt.output("stdout", line);
-          if (attempt != startupDiagnosticAttempt) continue;
-        }
+        resources.readerOutput.line(false, line);
+        if (resources.readerOutput.attempt != startupDiagnosticAttempt) continue;
         try {
           parseLine(line.toString());
         } catch (Exception ex) {
-          ex.printStackTrace();
+          EngineReaderOutput.reportReaderException(resources.readerOutput.isSsh(), ex);
         }
       }
       System.out.println("Flash analyze process ended.");
@@ -885,9 +891,8 @@ public class AnalysisEngine {
       error = e;
     } finally {
       try {
-        if (attempt != null) {
-          attempt.streamEnded("stdout", error == null ? null : error.toString());
-        }
+        PARSING_OUTPUT.remove();
+        resources.readerOutput.ended(false, error == null ? null : error.toString());
         readerEnded(resources, error);
       } finally {
         resources.close(readerResources == resources && !isNormalEnd);
@@ -897,7 +902,7 @@ public class AnalysisEngine {
 
   private void readerEnded(ReaderResources resources, Throwable error) {
     if (readerResources != resources) return;
-    EngineStartupDiagnostics.Attempt attempt = resources.attempt;
+    EngineStartupDiagnostics.Attempt attempt = resources.readerOutput.attempt;
     if (!isNormalEnd) {
       if (attempt != null) {
         attempt.fail(
@@ -929,7 +934,7 @@ public class AnalysisEngine {
         try {
           parseResult(line);
         } catch (Exception e) {
-          e.printStackTrace();
+          EngineReaderOutput.reportReaderException(parsingSshOutput(), e);
           requestDispatchFailed = true;
           finishFailedRequestDispatch(!silentProgress);
         }
@@ -1019,9 +1024,20 @@ public class AnalysisEngine {
     if (canFinalizeCurrentRequest() && responseCount == analyzeMap.size()) setResult();
   }
 
+  private boolean parsingSshOutput() {
+    EngineReaderOutput source = PARSING_OUTPUT.get();
+    if (source != null) return source.isSsh();
+    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
+    return attempt != null && attempt.isSsh();
+  }
+
   private void reportJsonDiagnostic(JSONObject response) {
     String diagnostic = KataGoAnalysisResponse.diagnostic(response);
-    LOG.warn("{}", diagnostic);
+    if (parsingSshOutput()) {
+      LOG.warn("KataGo SSH response: {}", KataGoAnalysisResponse.kind(response));
+    } else {
+      LOG.warn("{}", diagnostic);
+    }
     if (Lizzie.gtpConsole != null) Lizzie.gtpConsole.addErrorLine(diagnostic);
   }
 
@@ -3065,6 +3081,7 @@ public class AnalysisEngine {
 
   public void shutdown() {
     requestShutdown();
+    isNormalEnd = true;
     isLoaded = false;
     closeReaderResources();
     shutdownRemoteGtpSetupAckTimeoutExecutor();

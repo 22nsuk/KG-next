@@ -112,6 +112,7 @@ public class ContributeEngine {
     final EngineStartupDiagnostics.Attempt diagnostic;
     Process process;
     ContributeSSHController ssh;
+    EngineReaderOutput readerOutput;
     BufferedReader stdout;
     BufferedReader stderr;
     boolean stdoutEnded;
@@ -277,6 +278,7 @@ public class ContributeEngine {
       }
       initializeStreams();
     }
+    launch.readerOutput = new EngineReaderOutput(attempt, launch.ssh != null);
     launch.stdout = inputStream;
     launch.stderr = errorStream;
     isNormalEnd = false;
@@ -302,7 +304,7 @@ public class ContributeEngine {
                 String line;
                 while ((line = reader.readLine()) != null) {
                   synchronized (ContributeEngine.this) {
-                    launch.diagnostic.output(stderr ? "stderr" : "stdout", line);
+                    launch.readerOutput.line(stderr, line);
                     if (active == launch && !stopped && !launch.terminal && !launch.permanent())
                       consumeOutput(launch, line, stderr);
                   }
@@ -310,7 +312,7 @@ public class ContributeEngine {
               } catch (Exception failure) {
                 error = failure.toString();
               } finally {
-                launch.diagnostic.streamEnded(stderr ? "stderr" : "stdout", error);
+                launch.readerOutput.ended(stderr, error);
                 synchronized (ContributeEngine.this) {
                   if (stderr) launch.stderrEnded = true;
                   else launch.stdoutEnded = true;
@@ -563,7 +565,7 @@ public class ContributeEngine {
                   true);
             }
           } catch (NumberFormatException e) {
-            e.printStackTrace();
+            EngineReaderOutput.reportReaderException(launch.readerOutput.isSsh(), e);
           }
           getVersion = true;
         }
@@ -1423,7 +1425,7 @@ public class ContributeEngine {
         true,
         true,
         null,
-        useJavaSSH, attempt, null);
+        useJavaSSH, attempt, launch.readerOutput == null ? null : launch.readerOutput::showLocalOutput);
   }
 
   private void startWatchingGameThread() {
