@@ -26,7 +26,10 @@ public final class AnalysisResourceCoordinator {
     PRELOADED_QUICK_ANALYSIS,
     USER_QUICK_ANALYSIS,
     WHOLE_GAME_ANALYSIS,
-    OTHER
+    OTHER,
+    COMPARE,
+    PRELOAD,
+    ENGINE_GAME
   }
 
   public enum ForegroundDecision {
@@ -80,47 +83,31 @@ public final class AnalysisResourceCoordinator {
 
   public static void processStarted(
       Object owner, Purpose purpose, String command, Process process) {
-    processStarted(owner, purpose, command, process, false);
+    processStarted(owner, purpose, command, process, null);
   }
 
   static void processStarted(
-      Object owner, Purpose purpose, String command, Process process, boolean startupObserved) {
+      Object owner, Purpose purpose, String command, Process process, String engineId) {
+    long pid = -1L;
     if (process != null) {
       synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
       }
+      pid = processId(process);
+      synchronized (REGISTERED_PROCESSES) {
+        ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
+        if (registered != null && registered.process == process) return;
+        REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
+      }
     }
     String purposeName = normalizedPurpose(purpose).name();
-    if (process == null) {
-      try {
-        EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
-        EngineObservation.ensureStarted(owner, purposeName, facts);
-        if (EngineObservation.engineDiagnosticsEnabled()) {
-          EngineObservation.recordProcessDetails(
-              EngineObservation.identityFor(owner),
-              "process-started",
-              purposeName,
-              -1L,
-              diagnosticCommand(command));
-        }
-      } catch (RuntimeException ignored) {
-      }
-      return;
-    }
-    long pid = processId(process);
-    synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
-      if (registered != null && registered.process == process) {
-        return;
-      }
-      REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
-    }
     try {
-      EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
-      String engineId =
-          startupObserved
-              ? EngineObservation.ensureStarted(owner, purposeName, facts)
-              : EngineObservation.restartInstance(owner, purposeName, facts);
+      if (engineId == null) {
+        EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
+        engineId = process == null
+            ? EngineObservation.ensureStarted(owner, purposeName, facts)
+            : EngineObservation.restartInstance(owner, purposeName, facts);
+      }
       EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
       if (EngineObservation.engineDiagnosticsEnabled()) {
         EngineObservation.recordProcessDetails(
@@ -306,15 +293,29 @@ public final class AnalysisResourceCoordinator {
   }
 
   public static void commandSent(Object owner, Purpose purpose, String command) {
+    if (!EngineObservation.engineDiagnosticsEnabled()) {
+      return;
+    }
+    commandSentForInstance(EngineObservation.identityFor(owner), purpose, command);
+  }
+
+  static void recordAuxiliaryCommandSent(String engineId, Purpose purpose, String command) {
+    try {
+      commandSentForInstance(engineId, purpose, command);
+    } catch (RuntimeException observationFailure) {
+      // A diagnostic failure cannot undo a successful transport write.
+      observationFailure.printStackTrace();
+    }
+  }
+
+  /** Records delivery using the identity captured for the physical write. */
+  static void commandSentForInstance(String engineId, Purpose purpose, String command) {
     if (!EngineObservation.engineDiagnosticsEnabled() || command == null) {
       return;
     }
-    Matcher matcher = SET_PARAM.matcher(command);
-    if (!matcher.matches() && !command.trim().toLowerCase(Locale.ROOT).startsWith("kata-analyze")) {
-      return;
-    }
+    GtpCommandText parsed = GtpCommandText.parse(command);
     String purposeName = normalizedPurpose(purpose).name();
-    String engineId = EngineObservation.identityFor(owner);
+    Matcher matcher = SET_PARAM.matcher(parsed.payload());
     if (matcher.matches()) {
       EngineObservation.recordProcessDetails(
           engineId,
@@ -322,9 +323,9 @@ public final class AnalysisResourceCoordinator {
           purposeName,
           -1L,
           matcher.group(1) + "=" + redactCommand(matcher.group(2)));
-    } else {
+    } else if (parsed.verb().equals("kata-analyze")) {
       EngineObservation.recordProcessDetails(
-          engineId, "analysis-started", purposeName, -1L, EngineObservation.commandName(command));
+          engineId, "analysis-started", purposeName, -1L, "kata-analyze");
     }
   }
 

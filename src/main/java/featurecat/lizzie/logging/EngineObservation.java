@@ -2,6 +2,7 @@ package featurecat.lizzie.logging;
 
 import java.io.IOException;
 import java.util.Optional;
+import java.util.UUID;
 import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -62,11 +63,13 @@ public final class EngineObservation {
   }
 
   public static String ensureStarted(Object owner, String purpose, EngineBootstrapFacts facts) {
-    String existing = identityFor(owner);
-    if (existing != null) {
-      return existing;
+    String id;
+    synchronized (IDENTITY_LOCK) {
+      String existing = identityFor(owner);
+      if (existing != null) return existing;
+      id = mintIdentity(owner);
     }
-    return startInstance(owner, purpose, facts);
+    return startInstance(id, purpose, facts);
   }
 
   public static String restartInstance(Object owner, String purpose) {
@@ -74,17 +77,19 @@ public final class EngineObservation {
   }
 
   public static String restartInstance(Object owner, String purpose, EngineBootstrapFacts facts) {
-    ensureStopped(owner, "replaced");
-    return startInstance(owner, purpose, facts);
+    String previous;
+    String id;
+    synchronized (IDENTITY_LOCK) {
+      previous = identityFor(owner);
+      id = mintIdentity(owner);
+    }
+    if (previous != null) recordStopped(previous, "replaced");
+    return startInstance(id, purpose, facts);
   }
 
   public static void ensureStopped(Object owner, String reason) {
     String id = identityFor(owner);
-    if (id == null) {
-      return;
-    }
-    recordStopped(id, reason);
-    discardIdentity(owner);
+    if (discardIdentityIfCurrent(owner, id)) recordStopped(id, reason);
   }
 
   public static String commandName(String command) {
@@ -149,7 +154,9 @@ public final class EngineObservation {
       if (engineId == null || stage == null || stage.isEmpty()) {
         return;
       }
-      STARTUPS.computeIfAbsent(engineId, ignored -> new StartupState()).mark(stage);
+      // A delayed reader can report its old ID after replacement; it cannot reopen that timeline.
+      StartupState startup = STARTUPS.get(engineId);
+      if (startup != null) startup.mark(stage);
     } catch (RuntimeException ignored) {
     }
   }
@@ -533,15 +540,15 @@ public final class EngineObservation {
   }
 
   public static String allocateIdentity(Object owner) {
-    String existing = identityFor(owner);
-    if (existing != null) {
-      return existing;
+    synchronized (IDENTITY_LOCK) {
+      String existing = identityFor(owner);
+      return existing != null ? existing : mintIdentity(owner);
     }
-    return mintIdentity(owner);
   }
 
   public static String mintIdentity(Object owner) {
-    String id = LoggingRuntime.current().map(LoggingRuntime::newEngineIdentity).orElse("eng-none");
+    String id = LoggingRuntime.current().map(LoggingRuntime::newEngineIdentity)
+        .orElseGet(() -> "eng-" + UUID.randomUUID());
     if (owner != null) {
       synchronized (IDENTITY_LOCK) {
         String previous = ENGINE_IDS.put(owner, id);
@@ -550,7 +557,7 @@ public final class EngineObservation {
         }
       }
     }
-    STARTUPS.put(id, new StartupState());
+    if (runtimeActive()) STARTUPS.put(id, new StartupState());
     return id;
   }
 
@@ -582,8 +589,7 @@ public final class EngineObservation {
     return true;
   }
 
-  private static String startInstance(Object owner, String purpose, EngineBootstrapFacts facts) {
-    String id = allocateIdentity(owner);
+  private static String startInstance(String id, String purpose, EngineBootstrapFacts facts) {
     try {
       EngineBootstrapFacts safe = facts == null ? EngineBootstrapFacts.unknown(purpose) : facts;
       recordBootstrap(id, safe);

@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.EngineStartupStatus;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator.Purpose;
 import featurecat.lizzie.analysis.gtp.KataRawNnResponse;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.analysis.remote.EngineTransport;
@@ -37,7 +38,6 @@ import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRuntimeException;
 import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
-import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.Component;
 import java.awt.GraphicsEnvironment;
 import java.io.BufferedOutputStream;
@@ -365,7 +365,6 @@ public class Leelaz {
       new IdentityHashMap<>();
   private final ArrayDeque<String> recentStdoutLines = new ArrayDeque<String>();
   private final ArrayDeque<String> recentStderrLines = new ArrayDeque<String>();
-  private volatile String loggingEngineId;
   private volatile EngineStartupDiagnostics.Attempt startupDiagnosticAttempt;
   private EngineStartupDiagnostics.Attempt presentedStartupDiagnosticAttempt;
 
@@ -1302,25 +1301,22 @@ public class Leelaz {
     return base;
   }
 
-  public void startEngine(int index) throws IOException {
-    EngineStartupDiagnostics.Attempt previous = startupDiagnosticAttempt;
-    try {
-      startEngineOwned(index);
-    } catch (IOException | RuntimeException failure) {
-      EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
-      if (attempt != null && attempt != previous)
-        attempt.fail("startup-handshake", failure.toString());
-      throw failure;
-    }
+  private record EngineLaunch(
+      Purpose purpose, String engineId, String command, EngineStartupDiagnostics.Attempt diagnostic) {}
+
+  private Purpose launchPurpose(EngineManager.EngineGameOwnerTransaction engineGameTransaction) {
+    if (engineGameTransaction != null) return Purpose.ENGINE_GAME;
+    if (this == Lizzie.leelaz) return Purpose.MAIN_BOARD;
+    if (this == Lizzie.leelaz2) return Purpose.COMPARE;
+    return preload ? Purpose.PRELOAD : Purpose.MAIN_BOARD;
   }
 
-  private void startEngineOwned(int index) throws IOException {
+  public void startEngine(int index) throws IOException {
     ReaderStreamBinding previousModelBinding = readerStreamBinding;
     if (previousModelBinding != null) {
       previousModelBinding.speedModelLookup = null;
       previousModelBinding.closeAnalysisModelLookup();
     }
-    List<String> modelLaunchCommands = List.of();
     storePendingTensorRtRepairContext(null);
     EngineManager.EngineGameOwnerTransaction engineGameStartupTransaction =
         engineGameStartupCommandContext.get();
@@ -1348,24 +1344,43 @@ public class Leelaz {
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
+    Purpose launchPurpose = launchPurpose(engineGameStartupTransaction);
+    String launchId = null;
+    EngineStartupDiagnostics.Attempt diagnostic = null;
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-      String launchPurpose =
-          engineGameStartupTransaction != null
-              ? "ENGINE_GAME"
-              : this == Lizzie.leelaz
-                  ? "MAIN_BOARD"
-                  : this == Lizzie.leelaz2 ? "COMPARE" : preload ? "PRELOAD" : "MAIN_BOARD";
-      loggingEngineId =
+      String purposeName = launchPurpose.name();
+      launchId =
           EngineObservation.restartInstance(
-              this, launchPurpose, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
-      startupDiagnosticAttempt =
+              this, purposeName, EngineStartupBootstrap.factsFor(engineCommand, purposeName));
+      diagnostic =
           EngineStartupDiagnostics.getDefault()
               .begin(
-                  loggingEngineId,
-                  launchPurpose,
+                  launchId,
+                  purposeName,
                   commands,
                   !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand));
     }
+    startupDiagnosticAttempt = diagnostic;
+    EngineLaunch launch = new EngineLaunch(launchPurpose, launchId, engineCommand, diagnostic);
+    UpdateEngineStartAttempt attempt = updateEngineStartAttemptContext.get();
+    if (attempt != null) attempt.launch = launch;
+    try {
+      startEngineTransport(
+          index, engineGameStartupTransaction, deferredEngineGameRecovery, launchSpec, launch);
+    } catch (IOException | RuntimeException failure) {
+      if (diagnostic != null) diagnostic.fail("startup-handshake", failure.toString());
+      throw failure;
+    }
+  }
+
+  private void startEngineTransport(
+      int index,
+      EngineManager.EngineGameOwnerTransaction engineGameStartupTransaction,
+      boolean deferredEngineGameRecovery,
+      CommandLaunchHelper.LaunchSpec launchSpec,
+      EngineLaunch launch) throws IOException {
+    EngineStartupDiagnostics.Attempt diagnostic = launch.diagnostic();
+    List<String> modelLaunchCommands = List.of();
     rememberKataGoThreadLaunchOverride(commands);
     threadPolicyAtStart = EngineThreadPolicy.findSavedEntry(savedEntryId);
     if (threadPolicyAtStart != null && !engineCommand.equals(threadPolicyAtStart.commands))
@@ -1402,14 +1417,17 @@ public class Leelaz {
         initializeStreams(
             this.remoteTransport.stdout(),
             this.remoteTransport.stdin(),
-            this.remoteTransport.stderr());
+            this.remoteTransport.stderr(),
+            null,
+            SnapshotFileAccessKind.UNSUPPORTED,
+            launch);
         bindCurrentEngineGameStartupIncarnation(engineGameStartupTransaction);
       } catch (IOException e) {
         isDownWithError = true;
-        if (startupDiagnosticAttempt != null)
-          startupDiagnosticAttempt.fail("remote-connect", e.toString());
+        if (diagnostic != null)
+          diagnostic.fail("remote-connect", e.toString());
         rememberRecentLine(recentStderrLines, e.getLocalizedMessage());
-        noteEngineFailed(e.getLocalizedMessage());
+        noteEngineFailed(launch, e.getLocalizedMessage());
         try {
           tryToDignostic(
               Lizzie.resourceBundle.getString("Leelaz.engineFailed")
@@ -1439,13 +1457,18 @@ public class Leelaz {
         this.javaSSHClosed = false;
         requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
         initializeStreams(
-            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+            this.javaSSH.getStdout(),
+            this.javaSSH.getStdin(),
+            this.javaSSH.getSterr(),
+            null,
+            SnapshotFileAccessKind.UNSUPPORTED,
+            launch);
         bindCurrentEngineGameStartupIncarnation(engineGameStartupTransaction);
       } else {
         isDownWithError = true;
-        if (startupDiagnosticAttempt != null)
-          startupDiagnosticAttempt.fail("remote-connect", "ssh login failed");
-        noteEngineFailed("ssh login failed");
+        if (diagnostic != null)
+          diagnostic.fail("remote-connect", "ssh login failed");
+        noteEngineFailed(launch, "ssh login failed");
         return;
       }
     } else {
@@ -1477,10 +1500,10 @@ public class Leelaz {
               commands,
               engineCommand,
               deferredEngineGameRecovery ? null : Lizzie.frame,
-              startupDiagnosticAttempt == null ? null : startupDiagnosticAttempt::runtimePreflight);
+              diagnostic == null ? null : diagnostic::runtimePreflight);
         } catch (IOException e) {
-          if (startupDiagnosticAttempt != null)
-            startupDiagnosticAttempt.fail("runtime-preflight", e.toString());
+          if (diagnostic != null)
+            diagnostic.fail("runtime-preflight", e.toString());
           TensorRtRepairContext repairContext =
               e instanceof TensorRtRuntimeException
                   ? ((TensorRtRuntimeException) e).context
@@ -1505,7 +1528,7 @@ public class Leelaz {
             isDownWithError = true;
           }
           isDownWithError = true;
-          noteEngineFailed(e.getLocalizedMessage());
+          noteEngineFailed(launch, e.getLocalizedMessage());
           return;
         }
       }
@@ -1539,17 +1562,16 @@ public class Leelaz {
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
       processBuilder.redirectErrorStream(false);
-      if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(processBuilder);
+      if (diagnostic != null) diagnostic.capture(processBuilder);
       try {
         process = processBuilder.start();
-        if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
+        if (diagnostic != null) diagnostic.attachProcess(process);
         recordUpdateEngineStartProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process,
-            startupDiagnosticAttempt != null);
+            this, launch.purpose(), launch.command(), process, launch.engineId());
       } catch (IOException e) {
-        if (startupDiagnosticAttempt != null)
-          startupDiagnosticAttempt.fail("process-create", e.toString());
+        if (diagnostic != null)
+          diagnostic.fail("process-create", e.toString());
         closeBundledStartupDialog();
         String err = e.getLocalizedMessage();
         try {
@@ -1568,7 +1590,7 @@ public class Leelaz {
           e1.printStackTrace();
           isDownWithError = true;
         }
-        noteEngineFailed(err);
+        noteEngineFailed(launch, err);
         return;
       }
       requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
@@ -1577,7 +1599,7 @@ public class Leelaz {
           process.getOutputStream(),
           process.getErrorStream(),
           processBuilder.directory() == null ? null : processBuilder.directory().toPath(),
-          classifySnapshotFileAccess(launchCommands));
+          classifySnapshotFileAccess(launchCommands), launch);
       bindCurrentEngineGameStartupIncarnation(engineGameStartupTransaction);
       if (bundledCommand) {
         updateBundledStartupStage(
@@ -2739,7 +2761,7 @@ public class Leelaz {
       // Deliberately avoid notPondering and all output-producing hooks. This state-only transition
       // is the exact linearization point; a replacement may be published as soon as the claim
       // returns without becoming a target of the old binding's deferred cleanup.
-      stoppedObservation = markEngineStoppedLocked(null, executors.ownsPhysicalClose);
+      stoppedObservation = markEngineStoppedLocked(binding.launch, null, executors.ownsPhysicalClose);
     }
     return new ExactForceQuitClaim(this, binding, executors, stoppedObservation);
   }
@@ -2820,6 +2842,7 @@ public class Leelaz {
     private final AtomicBoolean settled = new AtomicBoolean();
     private final AtomicBoolean failureReportClaimed = new AtomicBoolean();
     private ReaderStreamBinding publishedBinding;
+    private volatile EngineLaunch launch;
     private Process publishedProcess;
     private EngineTransport publishedRemoteTransport;
     private SSHController publishedJavaSsh;
@@ -3231,6 +3254,7 @@ public class Leelaz {
     private final EngineTransport extraRemoteTransport;
     private final SSHController extraJavaSsh;
     private final EngineStopObservation unboundObservation;
+    private final EngineLaunch launch;
     private final AtomicBoolean finished = new AtomicBoolean();
 
     private UpdateEngineStartFailureCleanup(
@@ -3241,7 +3265,9 @@ public class Leelaz {
         Process extraProcess,
         EngineTransport extraRemoteTransport,
         SSHController extraJavaSsh,
-        EngineStopObservation unboundObservation) {
+        EngineStopObservation unboundObservation,
+        EngineLaunch launch) {
+      this.launch = launch;
       this.primaryFailure = primaryFailure;
       this.binding = binding;
       this.executors = executors;
@@ -3336,7 +3362,7 @@ public class Leelaz {
         Throwable preparationFailure = null;
         preparationFailure =
             runEngineCleanupStep(preparationFailure, Leelaz.this::notPondering);
-        unboundObservation = markEngineStoppedLocked(preparationFailure, true);
+        unboundObservation = markEngineStoppedLocked(attempt.launch, preparationFailure, true);
       }
       ReaderStreamBinding current = readerStreamBinding;
       extraProcess =
@@ -3361,18 +3387,20 @@ public class Leelaz {
         extraProcess,
         extraRemoteTransport,
         extraJavaSsh,
-        unboundObservation);
+        unboundObservation,
+        attempt.launch);
   }
 
   private void finishClaimedUpdateEngineStartFailure(UpdateEngineStartFailureCleanup cleanup) {
     Throwable cleanupFailure = null;
-    if (cleanup.unboundObservation != null || cleanup.extraProcess != null) {
+    if (cleanup.extraProcess != null
+        || (cleanup.launch == null && cleanup.unboundObservation != null)) {
       cleanupFailure =
           runEngineCleanupStep(
               cleanupFailure,
               () ->
                   notifyClaimedProcessStopped(
-                      cleanup.extraProcess, true, cleanup.unboundObservation));
+                      cleanup.extraProcess, cleanup.launch, true, cleanup.unboundObservation));
     }
     if (cleanup.binding != null && cleanup.executors != null) {
       cleanupFailure =
@@ -3477,7 +3505,7 @@ public class Leelaz {
     }
 
     notifyClaimedProcessStopped(
-        binding.process, executors.ownsPhysicalClose, stoppedObservation);
+        binding.process, binding.launch, executors.ownsPhysicalClose, stoppedObservation);
     Throwable cleanupFailure =
         stoppedObservation == null ? null : stoppedObservation.preparationFailure;
     cleanupFailure =
@@ -3522,28 +3550,27 @@ public class Leelaz {
       ReaderExecutorSnapshot executors,
       EngineStopObservation stoppedObservation) {
     notifyClaimedProcessStopped(
-        binding.process, executors.ownsTransportClose, stoppedObservation);
+        binding.process, binding.launch, executors.ownsTransportClose, stoppedObservation);
   }
 
   private void notifyClaimedProcessStopped(
       Process stoppedProcess,
+      EngineLaunch launch,
       boolean ownsTransportClose,
       EngineStopObservation stoppedObservation) {
     if (!ownsTransportClose) {
       return;
     }
-    // A stale SSH/remote binding has no process identity with which the coordinator can fence its
-    // owner-keyed bookkeeping. Its exact transport is still closed below, but it must not clear a
-    // same-object replacement runtime's foreground sample or observation state.
-    if (stoppedObservation == null && stoppedProcess == null) {
+    if (launch == null && stoppedObservation == null && stoppedProcess == null) {
       return;
     }
+    String claimedId = stoppedObservation == null ? null : stoppedObservation.engineId;
     try {
       AnalysisResourceCoordinator.processStoppedAfterIdentityClaim(
           this,
-          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+          launch == null ? Purpose.MAIN_BOARD : launch.purpose(),
           stoppedProcess,
-          stoppedObservation == null ? null : stoppedObservation.engineId,
+          launch != null && launch.engineId() != null ? launch.engineId() : claimedId,
           stoppedObservation == null ? null : stoppedObservation.foregroundSample);
     } catch (RuntimeException | Error observationFailure) {
       observationFailure.printStackTrace();
@@ -3600,31 +3627,30 @@ public class Leelaz {
     // may cross the started/isLoaded transition and promote a stopped recovery endpoint.
     binding.analysisOutputMutationLock.lock();
     try {
-      return markEngineStoppedLocked(null, executors.ownsTransportClose);
+      return markEngineStoppedLocked(binding.launch, null, executors.ownsTransportClose);
     } finally {
       binding.analysisOutputMutationLock.unlock();
     }
   }
 
   private EngineStopObservation markEngineStoppedLocked(
-      Throwable preparationFailure, boolean ownsTransportClose) {
+      EngineLaunch launch, Throwable preparationFailure, boolean ownsTransportClose) {
     isNormalEnd = true;
     started = false;
     isLoaded = false;
     isPondering = false;
+    return claimStopObservationLocked(launch, preparationFailure, ownsTransportClose);
+  }
+
+  private EngineStopObservation claimStopObservationLocked(
+      EngineLaunch launch, Throwable preparationFailure, boolean ownsTransportClose) {
     String engineId = null;
     if (ownsTransportClose) {
       try {
-        engineId = loggingEngineId;
-        if (engineId == null) {
-          engineId = EngineObservation.identityFor(this);
-        }
-        if (engineId != null && EngineObservation.discardIdentityIfCurrent(this, engineId)) {
-          if (engineId.equals(loggingEngineId)) {
-            loggingEngineId = null;
-          }
-        } else {
-          engineId = null;
+        engineId = observationIdentity(launch);
+        if (engineId != null && !EngineObservation.discardIdentityIfCurrent(this, engineId)) {
+          // The replacement owns both the owner-keyed identity and its foreground sample.
+          return new EngineStopObservation(null, null, preparationFailure);
         }
       } catch (RuntimeException | Error observationFailure) {
         preparationFailure =
@@ -4604,9 +4630,26 @@ public class Leelaz {
       InputStream stderr,
       Path processWorkingDirectory,
       SnapshotFileAccessKind snapshotFileAccessKind) {
+    initializeStreams(stdout, stdin, stderr, processWorkingDirectory, snapshotFileAccessKind, null);
+  }
+
+  private void initializeStreams(
+      InputStream stdout,
+      OutputStream stdin,
+      InputStream stderr,
+      Path processWorkingDirectory,
+      SnapshotFileAccessKind snapshotFileAccessKind,
+      EngineLaunch launch) {
     BufferedReader nextInputStream = new BufferedReader(new InputStreamReader(stdout));
     BufferedOutputStream nextOutputStream = createCommandOutputStream(stdin);
     BufferedReader nextErrorStream = new BufferedReader(new InputStreamReader(stderr));
+    if (launch != null && launch.engineId() == null) {
+      // A remote connection can still start while local benchmark synchronization is suppressed.
+      String purpose = launch.purpose().name();
+      String id = EngineObservation.restartInstance(
+          this, purpose, EngineStartupBootstrap.factsFor(launch.command(), purpose));
+      launch = new EngineLaunch(launch.purpose(), id, launch.command(), launch.diagnostic());
+    }
     GtpCommandStateReset rebindCommandStateReset = null;
     boolean interrupted = false;
     boolean rebindCommandStateCutover = false;
@@ -4667,14 +4710,14 @@ public class Leelaz {
                 isDeferredEngineGameRecoveryStartup(),
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
-                snapshotFileAccessKind);
+                snapshotFileAccessKind,
+                launch);
         nextBinding.rawOutput = stdin;
         attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
-        beforeReaderBindingPublicationForTest();
-        readerStreamBinding = nextBinding;
+        publishReaderBindingLocked(nextBinding);
         isTuning = false;
         startGetCommandList = false;
         endGetCommandList = false;
@@ -4714,14 +4757,14 @@ public class Leelaz {
                 isDeferredEngineGameRecoveryStartup(),
                 analysisOutputRecoveryTokenContext.get(),
                 processWorkingDirectory,
-                snapshotFileAccessKind);
+                snapshotFileAccessKind,
+                launch);
         nextBinding.rawOutput = stdin;
         attachStartupDiagnostic(nextBinding);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
-        beforeReaderBindingPublicationForTest();
-        readerStreamBinding = nextBinding;
+        publishReaderBindingLocked(nextBinding);
         isTuning = false;
         startGetCommandList = false;
         endGetCommandList = false;
@@ -4747,11 +4790,22 @@ public class Leelaz {
     if (interrupted) {
       Thread.currentThread().interrupt();
     }
-    noteEngineStarted();
+    if (launch == null) noteEngineStarted();
+  }
+
+  private void publishReaderBindingLocked(ReaderStreamBinding binding) {
+    beforeReaderBindingPublicationForTest();
+    readerStreamBinding = binding;
+    if (binding.launch != null && (binding.remoteTransport != null || binding.javaSSH != null)) {
+      EngineLaunch launch = binding.launch;
+      AnalysisResourceCoordinator.processStarted(
+          this, launch.purpose(), launch.command(), null, launch.engineId());
+    }
   }
 
   private void attachStartupDiagnostic(ReaderStreamBinding binding) {
-    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
+    EngineStartupDiagnostics.Attempt attempt =
+        binding.launch == null ? startupDiagnosticAttempt : binding.launch.diagnostic();
     if (attempt != null) {
       binding.startupDiagnostic = attempt;
       attempt.attach(binding.process, binding.incarnation);
@@ -4761,50 +4815,38 @@ public class Leelaz {
 
   private void noteEngineStarted() {
     try {
-      String id = EngineObservation.identityFor(this);
-      if (id == null) {
-        id =
-            EngineObservation.ensureStarted(
-                this, "MAIN_BOARD", EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+      if (EngineObservation.identityFor(this) == null) {
+        Purpose purpose = launchPurpose(engineGameStartupCommandContext.get());
+        EngineObservation.ensureStarted(
+            this, purpose.name(), EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
       }
-      loggingEngineId = id;
     } catch (RuntimeException ignored) {
     }
-  }
-
-  private void noteEngineStopped() {
-    try {
-      if (EngineObservation.engineDiagnosticsEnabled()) {
-        EngineObservation.recordRecentStderr(
-            loggingEngineId, snapshotRecentLines(recentStderrLines));
-      }
-      EngineObservation.ensureStopped(this, "stopped");
-    } catch (RuntimeException ignored) {
-    }
-    loggingEngineId = null;
   }
 
   private void noteEngineFailed(String reason) {
+    noteEngineFailed(null, reason);
+  }
+
+  private void noteEngineFailed(EngineLaunch launch, String reason) {
     try {
-      String id = EngineObservation.identityFor(this);
+      String id = observationIdentity(launch);
       if (id == null) {
         id = EngineObservation.mintIdentity(this);
+        Purpose purpose = launch == null
+            ? launchPurpose(engineGameStartupCommandContext.get()) : launch.purpose();
         EngineObservation.recordBootstrap(
-            id, EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+            id, EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
       }
-      loggingEngineId = id;
       try {
         if (EngineObservation.engineDiagnosticsEnabled()) {
-          EngineObservation.recordRecentStderr(
-              loggingEngineId, snapshotRecentLines(recentStderrLines));
+          EngineObservation.recordRecentStderr(id, snapshotRecentLines(recentStderrLines));
         }
-        EngineObservation.recordFailed(loggingEngineId, reason);
+        EngineObservation.recordFailed(id, reason);
       } finally {
-        EngineObservation.discardIdentity(this);
-        loggingEngineId = null;
+        EngineObservation.discardIdentityIfCurrent(this, id);
       }
     } catch (RuntimeException ignored) {
-      loggingEngineId = null;
     }
   }
 
@@ -4828,8 +4870,13 @@ public class Leelaz {
   }
 
   private String currentObservationIdentity() {
-    String id = loggingEngineId;
-    return id != null ? id : EngineObservation.identityFor(this);
+    ReaderStreamBinding binding = readerStreamBinding;
+    return observationIdentity(binding == null ? null : binding.launch);
+  }
+
+  private String observationIdentity(EngineLaunch launch) {
+    return launch != null && launch.engineId() != null
+        ? launch.engineId() : EngineObservation.identityFor(this);
   }
 
 
@@ -4861,12 +4908,12 @@ public class Leelaz {
                 null,
                 useRemoteCompute || useJavaSSH || isSSH
                     ? SnapshotFileAccessKind.UNSUPPORTED
-                    : SnapshotFileAccessKind.DIRECT_LOCAL);
+                    : SnapshotFileAccessKind.DIRECT_LOCAL,
+                null);
         nextBinding.suppressGlobalEnginePresentation =
             nextBinding.suppressGlobalEnginePresentation
                 || suppressGlobalEnginePresentationUntilOwned;
-        beforeReaderBindingPublicationForTest();
-        readerStreamBinding = nextBinding;
+        publishReaderBindingLocked(nextBinding);
         if (suppressGlobalEnginePresentationUntilOwned) {
           nextBinding.suppressGlobalEnginePresentation = true;
         }
@@ -5220,6 +5267,7 @@ public class Leelaz {
     private final long startupStartedNanos = System.nanoTime();
     private volatile EngineStartupProgress startupProgress;
     private EngineStartupDiagnostics.Attempt startupDiagnostic;
+    private final EngineLaunch launch;
     private final Path processWorkingDirectory;
     private final SnapshotFileAccessKind snapshotFileAccessKind;
     private volatile Object analysisOutputRecoveryToken;
@@ -5294,7 +5342,8 @@ public class Leelaz {
           false,
           null,
           null,
-          SnapshotFileAccessKind.DIRECT_LOCAL);
+          SnapshotFileAccessKind.DIRECT_LOCAL,
+          null);
     }
 
     private ReaderStreamBinding(
@@ -5309,7 +5358,9 @@ public class Leelaz {
         boolean deferredEngineGameRecoveryPresentationSuppressed,
         Object analysisOutputRecoveryToken,
         Path processWorkingDirectory,
-        SnapshotFileAccessKind snapshotFileAccessKind) {
+        SnapshotFileAccessKind snapshotFileAccessKind,
+        EngineLaunch launch) {
+      this.launch = launch;
       this.stdout = stdout;
       this.stderr = stderr;
       this.rawOutput = output;
@@ -7704,9 +7755,6 @@ public class Leelaz {
                   outcome.remoteProgressTransport = remoteTransport;
                   outcome.acceptedRemotePlayouts = parsedInfo.totalPlayouts;
                 }
-                if (treatCurrentInfoAsPrimary) {
-                  YikeSyncDebugLog.log("Leelaz parseLine bestMoves size=" + this.bestMoves.size());
-                }
                 if (!this.bestMoves.isEmpty()) {
                   outcome.notifyAutoPk = route.acceptsExactEngineGameOutput();
                   outcome.notifyAutoPlay = route.acceptsOrdinaryOutput();
@@ -7950,22 +7998,10 @@ public class Leelaz {
     long startupPrimaryGenerationAtParse =
         captureStartupPrimaryGeneration(sourceEngineIncarnation);
     if (line.startsWith("info")) {
-        EngineObservation.traceRawStream(loggingEngineId, null, line);
+        EngineObservation.traceRawStream(currentObservationIdentity(), null, line);
         boolean upToDate = isAnalysisResponseUpToDateSnapshot(analysisOutputRouteAtParse);
         afterAnalysisInfoAdmissionSnapshotCapturedForTest();
         treatCurrentInfoAsPrimary = this == primaryAtParse && primaryGenerationAtParse >= 0L;
-        if (this == Lizzie.leelaz) {
-          int[] responseWatermark = commandWatermarkSnapshot();
-          YikeSyncDebugLog.log(
-              "Leelaz parseLine info upToDate="
-                  + upToDate
-                  + " currentCmd="
-                  + responseWatermark[1]
-                  + " cmd="
-                  + responseWatermark[0]
-                  + " isPondering="
-                  + isPondering);
-        }
         if ((upToDate)) {
           if (engineGameContextAtParse != null
               && engineManagerAtParse != null
@@ -8120,21 +8156,6 @@ public class Leelaz {
         String[] params = line.trim().split(" ");
         boolean shouldStopPonder =
             !isInputCommand && params.length == 2 && shouldStopPonderAfterEnginePlayLine();
-        YikeSyncDebugLog.log(
-            "Leelaz parse play line="
-                + line
-                + " isInputCommand="
-                + isInputCommand
-                + " isPonderingBefore="
-                + isPondering
-                + " shouldStopPonder="
-                + shouldStopPonder
-                + " playingAgainst="
-                + (Lizzie.frame != null && Lizzie.frame.isPlayingAgainstLeelaz)
-                + " autoPlaying="
-                + (Lizzie.frame != null && Lizzie.frame.isAnaPlayingAgainstLeelaz)
-                + " engineGame="
-                + EngineManager.occupiesEngineGameAdmission());
         ReadBoardGmaResponseBinding readBoardGmaBinding = currentReadBoardGmaResponseBinding();
         ReadBoard readBoardGmaOwner =
             readBoardGmaBinding == null ? null : readBoardGmaBinding.owner;
@@ -8152,7 +8173,6 @@ public class Leelaz {
           isCommandLine = false;
           if (shouldStopPonder && !retainReadBoardNativePonder) {
             isPondering = false;
-            YikeSyncDebugLog.log("Leelaz marked isPondering=false after ReadBoard GMA play line");
           }
           isThinking = false;
           return;
@@ -8207,7 +8227,6 @@ public class Leelaz {
         }
         if (shouldStopPonder) {
           isPondering = false;
-          YikeSyncDebugLog.log("Leelaz marked isPondering=false after engine play line");
         }
         isThinking = false;
         if (isInputCommand && manualGenmoveRequestOwner == null) {
@@ -9346,23 +9365,11 @@ public class Leelaz {
   }
 
   public void nameCmdfornoponder() {
-    YikeSyncDebugLog.log(
-        "Leelaz nameCmdfornoponder isKatago="
-            + isKatago
-            + " isPondering="
-            + isPondering
-            + " caller="
-            + buildPonderCallerTrace());
     if (isKatago) sendCommand("stop");
     else sendCommand("name");
   }
 
   boolean nameCmdfornoponder(EngineManager.EngineGamePostMoveToken turn) {
-    YikeSyncDebugLog.log(
-        "Leelaz exact engine-game nameCmdfornoponder isKatago="
-            + isKatago
-            + " isPondering="
-            + isPondering);
     return sendEngineGameCommand(isKatago ? "stop" : "name", turn);
   }
 
@@ -9400,7 +9407,7 @@ public class Leelaz {
         binding.startupDiagnostic.streamEnded("stderr", failure.toString());
       if (isCurrentReaderStreamBinding(binding)) {
         EngineObservation.recordTransportFailure(
-            loggingEngineId,
+            observationIdentity(binding.launch),
             "stderr",
             failure instanceof IOException ? "io-error" : "reader-error",
             failure);
@@ -10447,7 +10454,7 @@ public class Leelaz {
       if (!binding.normalExitRequested) {
         Throwable terminalFailure = binding.terminalFailure;
         EngineObservation.recordTransportFailure(
-            loggingEngineId,
+            observationIdentity(binding.launch),
             "stdout",
             terminalFailure == null
                 ? "unexpected-eof"
@@ -10458,14 +10465,14 @@ public class Leelaz {
             binding.startupDiagnostic.fail(
                 "startup-exit",
                 terminalFailure == null ? "stdout EOF before ready" : terminalFailure.toString());
-          noteEngineFailed("exit-before-ready");
+          noteEngineFailed(binding.launch, "exit-before-ready");
         }
       }
       try {
         shutdownReaderTransport(binding);
       } catch (RuntimeException shutdownFailure) {
         EngineObservation.recordTransportFailure(
-            loggingEngineId, "stdout", "shutdown-error", shutdownFailure);
+            observationIdentity(binding.launch), "stdout", "shutdown-error", shutdownFailure);
       }
       markReaderBindingTerminatedIfCurrent(binding);
       deferredNonModalDiagnostic = finishTerminatedReaderIncarnation(binding);
@@ -10557,22 +10564,7 @@ public class Leelaz {
 
 
   private void shutdownReaderTransport(ReaderStreamBinding binding) {
-    ReaderExecutorSnapshot executors = requestReaderShutdown(binding);
-    try {
-      if (executors.ownsTransportClose) {
-        if (binding.javaSSH != null) {
-          binding.javaSSH.close();
-        } else {
-          if (binding.remoteTransport != null) {
-            binding.remoteTransport.close();
-          } else if (binding.process != null) {
-            binding.process.destroy();
-          }
-        }
-      }
-    } finally {
-      shutdownReaderExecutors(executors);
-    }
+    shutdown(binding, requestReaderShutdown(binding));
   }
 
   private void markReaderBindingTerminatedIfCurrent(ReaderStreamBinding binding) {
@@ -10852,30 +10844,6 @@ public class Leelaz {
       String command, boolean interactive, Double admittedPda) {
     if (!hasGtpCapability()) {
       return false;
-    }
-    if (this == Lizzie.leelaz) {
-      AnalysisResourceCoordinator.commandSent(
-          this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, command);
-    }
-    if (command != null
-        && (command.startsWith("clear_board") || command.startsWith("kata-analyze"))) {
-      StringBuilder sb = new StringBuilder();
-      StackTraceElement[] st = Thread.currentThread().getStackTrace();
-      int taken = 0;
-      for (StackTraceElement e : st) {
-        if (!e.getClassName().startsWith("featurecat.lizzie")) continue;
-        if (e.getClassName().equals(Leelaz.class.getName())
-            && (e.getMethodName().equals("sendCommand")
-                || e.getMethodName().equals("getStackTrace"))) continue;
-        if (sb.length() > 0) sb.append(" <- ");
-        sb.append(e.getClassName().substring("featurecat.lizzie.".length()))
-            .append("#")
-            .append(e.getMethodName())
-            .append(":")
-            .append(e.getLineNumber());
-        if (++taken >= 6) break;
-      }
-      YikeSyncDebugLog.log("Leelaz sendCommand TRACE command=" + command + " caller=" + sb);
     }
     if (TrialDiag.ENABLED) {
       System.out.println("[katago-cmd] " + command);
@@ -13684,7 +13652,6 @@ public class Leelaz {
       return null;
     }
     Runnable deferredResponse = null;
-    logInterestingCommand(command, "sendCommandToLeelaz");
     if (command.startsWith("fixed_handicap")
         || (isKatago && command.startsWith("place_free_handicap"))) isSettingHandicap = true;
     if (command.startsWith("benchmark")) {
@@ -13694,11 +13661,11 @@ public class Leelaz {
     }
     Runnable responseHandler =
         queuedCommand.onResponse == null ? NO_OP_RESPONSE_HANDLER : queuedCommand.onResponse;
-    PendingResponseHandler pendingHandler =
-        buildPendingResponseHandler(command, responseHandler, queuedCommand);
-    String commandLine = buildCommandLine(command, pendingHandler.responseCommandId);
-    BufferedOutputStream currentOutputStream = outputStream;
     ReaderStreamBinding outputBinding = currentReaderStreamBinding();
+    BufferedOutputStream currentOutputStream = outputStream;
+    PendingResponseHandler pendingHandler =
+        buildPendingResponseHandler(command, responseHandler, queuedCommand, outputBinding);
+    String commandLine = buildCommandLine(command, pendingHandler.responseCommandId);
     AnalysisStateMutation stateMutation = analysisStateMutation(command);
     AnalysisOutputOwnershipPublication analysisOutputPublication = null;
     EngineManager.TransactionlessAnalysisWriteLease transactionlessAnalysisWrite = null;
@@ -13707,6 +13674,7 @@ public class Leelaz {
     List<Runnable> rawRulesEffects = new ArrayList<>();
     boolean analysisOutputBindingLocked = false;
     boolean physicalWriteCompleted = false;
+    boolean primaryAtWrite = false;
     if (currentOutputStream != null) {
       if (queuedCommand.restartBootstrapReceipt != null) {
         beforeRestartBootstrapOutputWriteClaim();
@@ -13916,6 +13884,9 @@ public class Leelaz {
           // normalCommandSendInProgress keeps this exact reader/output owned until completion.
           recordAnalysisConditionWrite(pendingHandler, outputBinding);
           synchronized (currentOutputStream) {
+            primaryAtWrite =
+                outputBinding.output == currentOutputStream
+                    && Lizzie.capturePrimaryEngineGenerationSnapshot(this) >= 0;
             currentOutputStream.write((commandLine + "\n").getBytes());
             currentOutputStream.flush();
             if (analysisOutputTransaction == null && isOrdinaryPositionAnalysisCommand(command)
@@ -14019,6 +13990,12 @@ public class Leelaz {
       if (physicalWriteCompleted) {
         try {
           noteCommandSent(pendingHandler, commandLine);
+          if (primaryAtWrite) {
+            AnalysisResourceCoordinator.commandSentForInstance(
+                pendingHandler.loggingEngineId,
+                Purpose.MAIN_BOARD,
+                command);
+          }
         } catch (RuntimeException observationFailure) {
           // Diagnostics are downstream of a completed protocol write and cannot redefine delivery.
           rememberRecentLine(
@@ -14417,14 +14394,13 @@ public class Leelaz {
   }
 
   private PendingResponseHandler buildPendingResponseHandler(
-      String command, Runnable handler, QueuedCommand queuedCommand) {
+      String command, Runnable handler, QueuedCommand queuedCommand, ReaderStreamBinding outputBinding) {
     boolean exactLoadSgf = isExactSnapshotLoadSgf(command, handler);
     ReaderStreamBinding responseBinding = queuedCommand.readBoardGmaResponseBinding;
     if (responseBinding == null && handler instanceof EngineRulesResponseHandler) {
       responseBinding = ((EngineRulesResponseHandler) handler).readerBinding;
     }
-    String engineId =
-        loggingEngineId != null ? loggingEngineId : EngineObservation.identityFor(this);
+    String engineId = observationIdentity(outputBinding.launch);
     int protocolId = nextResponseCommandId(command, handler, queuedCommand);
     return new PendingResponseHandler(
         command,
@@ -15472,6 +15448,10 @@ public class Leelaz {
   }
 
   public boolean sendExclusiveGtpCommand(String command) {
+    return sendExclusiveGtpCommand(command, null);
+  }
+
+  boolean sendExclusiveGtpCommand(String command, Purpose analysisPurpose) {
     ExclusiveGtpSession session;
     synchronized (engineArbitrationLock()) {
       session = exclusiveGtpSession;
@@ -15479,8 +15459,15 @@ public class Leelaz {
         return false;
       }
     }
-    return writeExclusiveGtpCommand(
-        session, ExclusiveGtpWritePhase.ACTIVE_COMMAND, 0, command);
+    String engineId =
+        observationIdentity(session.readerBinding == null ? null : session.readerBinding.launch);
+    if (!writeExclusiveGtpCommand(session, ExclusiveGtpWritePhase.ACTIVE_COMMAND, 0, command)) {
+      return false;
+    }
+    if (analysisPurpose != null) {
+      AnalysisResourceCoordinator.recordAuxiliaryCommandSent(engineId, analysisPurpose, command);
+    }
+    return true;
   }
 
 
@@ -17019,7 +17006,11 @@ public class Leelaz {
     try {
       synchronized (currentOutputStream) {
         synchronized (engineArbitrationLock()) {
-          if (!canWriteExclusiveGtpCommand(expectedSession, phase, expectedCommandId)) {
+          if (!canWriteExclusiveGtpCommand(expectedSession, phase, expectedCommandId)
+              || (phase == ExclusiveGtpWritePhase.ACTIVE_COMMAND
+                  && (expectedSession.readerBinding != readerStreamBinding
+                      || expectedSession.readerBinding == null
+                      || expectedSession.readerBinding.output != currentOutputStream))) {
             return ExclusiveGtpWriteResult.NOT_CLAIMED;
           }
         }
@@ -20121,13 +20112,6 @@ public class Leelaz {
       }
     }
     return builder.toString();
-  }
-
-  /** Check whether leelaz is responding to the last command */
-  private int[] commandWatermarkSnapshot() {
-    synchronized (commandQueue()) {
-      return new int[] {cmdNumber, currentCmdNum};
-    }
   }
 
   int commandNumberSnapshot() {
@@ -23412,7 +23396,6 @@ public class Leelaz {
 
   public void clear() {
     synchronized (this) {
-      YikeSyncDebugLog.log("Leelaz clear() entered isPondering=" + isPondering);
       sendStatefulOrdinaryCommands(
           List.of("clear_board"), StatefulOrdinaryMutationKind.NONE);
       afterClearStateCommandForTest();
@@ -23526,25 +23509,12 @@ public class Leelaz {
       focus.paused = false;
     }
     if (shouldRejectCommandDuringLifecycleCompletion()) {
-      YikeSyncDebugLog.log("Leelaz ponder deferred: lifecycle completion pending");
       return;
     }
     if (noAnalyze) return;
     if (isInitialBoardSynchronizationActive()) {
-      YikeSyncDebugLog.log("Leelaz ponder deferred: initial board synchronization active");
       return;
     }
-    YikeSyncDebugLog.log(
-        "Leelaz ponder request addPlayer="
-            + addPlayer
-            + " blackToPlay="
-            + blackToPlay
-            + " isPonderingBefore="
-            + isPondering
-            + " started="
-            + started
-            + " loaded="
-            + isLoaded);
     isPondering = true;
     underPonder = false;
     if (stopByPlayouts) outOfPlayoutsLimit = true;
@@ -23561,8 +23531,6 @@ public class Leelaz {
       return;
     }
     if (this == Lizzie.leelaz && Lizzie.frame != null) {
-      AnalysisResourceCoordinator.processStarted(
-          this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process);
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {
@@ -23655,13 +23623,6 @@ public class Leelaz {
       }
       return;
     }
-    YikeSyncDebugLog.log(
-        "Leelaz togglePonder before isPondering="
-            + isPondering
-            + " underPonder="
-            + underPonder
-            + " caller="
-            + buildPonderCallerTrace());
     if (underPonder) {
       ponder();
       return;
@@ -23677,7 +23638,6 @@ public class Leelaz {
     } else {
       nameCmd();
     }
-    YikeSyncDebugLog.log("Leelaz togglePonder after isPondering=" + isPondering);
   }
 
 
@@ -23771,39 +23731,6 @@ public class Leelaz {
     }
   }
 
-  private String buildPonderCallerTrace() {
-    StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-    StringBuilder builder = new StringBuilder();
-    int collected = 0;
-    for (StackTraceElement element : stack) {
-      String className = element.getClassName();
-      String methodName = element.getMethodName();
-      if (!className.startsWith("featurecat.lizzie")) {
-        continue;
-      }
-      if (className.equals(Leelaz.class.getName())
-          && (methodName.equals("togglePonder")
-              || methodName.equals("nameCmdfornoponder")
-              || methodName.equals("buildPonderCallerTrace"))) {
-        continue;
-      }
-      if (builder.length() > 0) {
-        builder.append(" <- ");
-      }
-      builder
-          .append(className)
-          .append("#")
-          .append(methodName)
-          .append(":")
-          .append(element.getLineNumber());
-      collected++;
-      if (collected >= 6) {
-        break;
-      }
-    }
-    return builder.length() == 0 ? "unknown" : builder.toString();
-  }
-
   public void clearPonderLimit() {
     outOfPlayoutsLimit = false;
     stopByPlayouts = false;
@@ -23821,15 +23748,13 @@ public class Leelaz {
   private void shutdown(ReaderStreamBinding binding, ReaderExecutorSnapshot executors) {
     try {
       if (executors.ownsTransportClose) {
-        AnalysisResourceCoordinator.processStopped(
-            this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, binding.process);
-        if (binding.javaSSH != null) {
-          binding.javaSSH.close();
-        } else if (binding.remoteTransport != null) {
-          binding.remoteTransport.close();
-        } else {
-          if (binding.process != null) binding.process.destroy();
+        EngineStopObservation observation;
+        synchronized (engineArbitrationLock()) {
+          observation = readerStreamBinding == binding
+              ? claimStopObservationLocked(binding.launch, null, true) : null;
         }
+        notifyClaimedReaderBindingStopped(binding, executors, observation);
+        closeClaimedReaderBindingTransport(binding, executors);
       }
     } finally {
       shutdownReaderExecutors(executors);
@@ -23872,30 +23797,10 @@ public class Leelaz {
 
   public void Pondering() {
     isPondering = true;
-    YikeSyncDebugLog.log("Leelaz Pondering() set true");
   }
 
   public void notPondering() {
     isPondering = false;
-    YikeSyncDebugLog.log("Leelaz notPondering() set false");
-  }
-
-  private void logInterestingCommand(String command, String source) {
-    if (command == null) {
-      return;
-    }
-    if (command.startsWith("play ")
-        || command.equals("clear_board")
-        || command.startsWith("loadsgf ")
-        || command.startsWith("kata-analyze")
-        || command.startsWith("lz-analyze")
-        || command.startsWith("analyze ")
-        || command.equals("name")
-        || command.equals("stop")
-        || command.equals("stop-ponder")) {
-      YikeSyncDebugLog.log(
-          "Leelaz " + source + " command=" + command + " isPondering=" + isPondering);
-    }
   }
 
   public class WinrateStats {

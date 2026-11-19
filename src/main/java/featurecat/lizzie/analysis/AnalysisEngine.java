@@ -88,7 +88,6 @@ public class AnalysisEngine {
   public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
 
-  private BufferedOutputStream outputStream;
   private transient EngineTransport remoteTransport;
   private volatile ReaderResources readerResources;
 
@@ -396,6 +395,10 @@ public class AnalysisEngine {
     return !isPreLoad && (result == null || !result.directedRepairOpened);
   }
 
+  EngineTransport createRemoteTransport(String command) throws IOException {
+    return RemoteComputeConfig.createTransportForCommand(command);
+  }
+
   public void startEngine(String engineCommand) {
     this.engineCommand = engineCommand;
     CommandLaunchHelper.LaunchSpec launchSpec =
@@ -429,10 +432,10 @@ public class AnalysisEngine {
       this.useJavaSSH = false;
       process = null;
       try {
-        remoteTransport = RemoteComputeConfig.createTransportForCommand(engineCommand);
+        remoteTransport = createRemoteTransport(engineCommand);
         remoteTransport.start();
         initializeStreams(
-            remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
+            engineId, remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
         if (remoteTransport instanceof ZhiziGtpTransport zhizi) {
           readerResources.modelIdentity = AnalysisModelIdentity.knownModel(zhizi.modelIdentifier());
         }
@@ -462,7 +465,7 @@ public class AnalysisEngine {
       }
       if (loginStatus) {
         initializeStreams(
-            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+            engineId, this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
         javaSSHClosed = false;
         isLoaded = true;
       } else {
@@ -532,7 +535,7 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-      initializeStreams();
+      initializeStreams(engineId);
       readerResources.modelIdentity =
           AnalysisModelIdentity.local(
               launchCommands,
@@ -540,7 +543,7 @@ public class AnalysisEngine {
     }
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
+        this, purpose, engineCommand, process, engineId);
     readerResources.start();
   }
 
@@ -613,14 +616,16 @@ public class AnalysisEngine {
     return DiagnosticActionResult.of(dialog.get());
   }
 
-  private void initializeStreams() {
+  private void initializeStreams(String engineId) {
     initializeStreams(
-        process.getInputStream(), process.getOutputStream(), process.getErrorStream());
+        engineId, process.getInputStream(), process.getOutputStream(), process.getErrorStream());
   }
 
-  private void initializeStreams(InputStream stdout, OutputStream stdin, InputStream stderr) {
+  private void initializeStreams(
+      String engineId, InputStream stdout, OutputStream stdin, InputStream stderr) {
     ReaderResources resources =
         new ReaderResources(
+            engineId,
             process,
             useJavaSSH ? javaSSH : null,
             useRemoteCompute ? remoteTransport : null,
@@ -629,7 +634,6 @@ public class AnalysisEngine {
             stdin,
             stderr);
     readerResources = resources;
-    outputStream = resources.stdin;
     synchronized (ACTIVE_READER_RESOURCES) {
       ACTIVE_READER_RESOURCES.add(resources);
     }
@@ -651,6 +655,7 @@ public class AnalysisEngine {
 
   /** Owns the pipes and readers of one launch, including cleanup after a stale reader exits. */
   private final class ReaderResources {
+    private final String engineId;
     private final Process process;
     private final AnalysisEngineSSHController ssh;
     private final EngineTransport transport;
@@ -665,6 +670,7 @@ public class AnalysisEngine {
     private Thread cleanup;
 
     private ReaderResources(
+        String engineId,
         Process process,
         AnalysisEngineSSHController ssh,
         EngineTransport transport,
@@ -672,6 +678,7 @@ public class AnalysisEngine {
         InputStream stdout,
         OutputStream stdin,
         InputStream stderr) {
+      this.engineId = engineId;
       this.process = process;
       this.ssh = ssh;
       this.transport = transport;
@@ -3058,18 +3065,20 @@ public class AnalysisEngine {
   }
 
   public boolean sendCommand(String command) {
-    AnalysisResourceCoordinator.commandSent(this, purpose, command);
     if (sharedForegroundEngine != null) {
-      return sharedForegroundEngine.sendExclusiveGtpCommand(command);
+      return sharedForegroundEngine.sendExclusiveGtpCommand(command, purpose);
     }
+    ReaderResources resources = readerResources;
+    if (resources == null) return false;
     try {
-      outputStream.write((command + "\n").getBytes());
-      outputStream.flush();
-      return true;
+      resources.stdin.write((command + "\n").getBytes());
+      resources.stdin.flush();
     } catch (Exception e) {
       e.printStackTrace();
       return false;
     }
+    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(resources.engineId, purpose, command);
+    return true;
   }
 
   public synchronized boolean isAnalysisInProgress() {

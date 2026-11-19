@@ -264,7 +264,7 @@ public class ContributeEngine {
         launch.process = process;
         attempt.attachProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, true);
+            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, engineId);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);
