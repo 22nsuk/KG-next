@@ -8,21 +8,21 @@ import org.junit.jupiter.api.Test;
 
 class EngineStartupDiagnosticsTest {
   @Test
-  void basicFailureRetainsCredentialArgumentBoundaries() {
+  void basicSshFailureOmitsAllRemoteArguments() {
     for (String secret : List.of("CANARY space&suffix;end", "CANARY\"quote suffix", "CANARY\\path suffix")) {
       var command = List.of("plink", "-pw", secret, "remote-engine");
       for (String missingCommand : new String[] {null, "", "   "}) {
         String shared = EngineStartupDiagnostic.basic(command, missingCommand, "fixture failure").shareText();
         assertFalse(shared.contains("CANARY"), shared);
         assertFalse(shared.contains("suffix"), shared);
-        assertTrue(shared.contains("remote-engine"), shared);
+        assertFalse(shared.contains("remote-engine"), shared);
         assertEquals(secret, command.get(2));
       }
     }
   }
 
   @Test
-  void sharedFailureRetainsCredentialArgumentBoundaries() {
+  void capturedSshFailureOmitsAllRemoteArguments() {
     for (String secret : List.of("CANARY space&suffix;end", "CANARY\"quote suffix", "CANARY\\path suffix")) {
       try (var service =
           new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
@@ -33,7 +33,7 @@ class EngineStartupDiagnosticsTest {
         String shared = attempt.fail("startup-exit", "fixture failure").shareText();
         assertFalse(shared.contains("CANARY"), shared);
         assertFalse(shared.contains("suffix"), shared);
-        assertTrue(shared.contains("remote-engine"), shared);
+        assertFalse(shared.contains("remote-engine"), shared);
         assertEquals(command, builder.command());
       }
     }
@@ -52,6 +52,32 @@ class EngineStartupDiagnosticsTest {
         assertFalse(failure.getString("stderr").isBlank());
         assertEquals("startup-exit", failure.getString("phase"));
       }
+    }
+  }
+
+  @Test
+  void startupReportUsesTheSelectedTransportEvenIfTheCommandLooksLikeAnotherProvider() {
+    try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      List<String> command = List.of("remote-compute://zhizi", "positional-fixture");
+      var ssh = service.begin("eng-ssh", "CONTRIBUTE", command, EngineStartupDiagnostics.Transport.JAVA_SSH);
+      assertFalse(ssh.fail("remote-connect", "failure-fixture").toJson().toString().contains("fixture"));
+      var provider = service.begin("eng-provider", "PRELOAD", command,
+          EngineStartupDiagnostics.Transport.REMOTE_COMPUTE);
+      assertEquals("provider unavailable",
+          provider.fail("remote-connect", "provider unavailable").toJson().getString("originalError"));
+    }
+  }
+
+  @Test
+  void finalSshExecutableRestrictsEvidenceCollectedBeforeProcessCreation() {
+    try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var attempt = service.begin("eng-final", "PRELOAD", List.of("wrapper", "fixture-configured"), true);
+      attempt.output("stdout", "fixture-before-capture");
+      attempt.capture(new ProcessBuilder("/usr/bin/ssh", "host", "fixture-final"));
+      var report = attempt.fail("fixture-unknown-stage", "fixture-error").toJson();
+      assertEquals("ssh", report.getJSONObject("launch").getString("transport"));
+      assertEquals("unknown", report.getString("phase"));
+      assertFalse(report.toString().contains("fixture"), report.toString());
     }
   }
 

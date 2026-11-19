@@ -771,7 +771,7 @@ public class ContributeStartupDesktopTest {
     throw new AssertionError("Missing button " + key);
   }
 
-  private static String text(java.awt.Component component) {
+  static String text(java.awt.Component component) {
     String value = component instanceof javax.swing.text.JTextComponent t ? t.getText() : "";
     if (component instanceof java.awt.Container container)
       for (var child : container.getComponents()) value += text(child);
@@ -784,7 +784,7 @@ public class ContributeStartupDesktopTest {
         field(dialog, "boundAttempt");
   }
 
-  private static featurecat.lizzie.analysis.EngineStartupDiagnostic displayed(
+  static featurecat.lizzie.analysis.EngineStartupDiagnostic displayed(
       EngineFailedMessage dialog) {
     return (featurecat.lizzie.analysis.EngineStartupDiagnostic)
         field(dialog, "displayedDiagnostic");

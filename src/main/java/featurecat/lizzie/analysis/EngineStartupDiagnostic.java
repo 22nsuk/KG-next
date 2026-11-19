@@ -1,7 +1,9 @@
 package featurecat.lizzie.analysis;
 
+import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.ObservationText;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
@@ -18,13 +20,21 @@ public final class EngineStartupDiagnostic {
   private final int sizeBytes;
   private static final int DEFAULT_MAX_BYTES = 256 * 1024;
   public static EngineStartupDiagnostic basic(List<String> commands, String command, String detail) {
+    return basic(commands, command, detail, false);
+  }
+
+  public static EngineStartupDiagnostic basic(
+      List<String> commands, String command, String detail, boolean managedSsh) {
+    boolean ssh = managedSsh || EngineThreadPolicy.isExternalSshCommand(command)
+        || (commands != null && !commands.isEmpty()
+            && EngineThreadPolicy.isExternalSshExecutable(commands.get(0)));
     String resolvedCommand = "";
-    if (command != null && !command.isBlank()) {
+    if (!ssh && command != null && !command.isBlank()) {
       resolvedCommand = command.trim();
-    } else if (commands != null && !commands.isEmpty()) {
+    } else if (!ssh && commands != null && !commands.isEmpty()) {
       resolvedCommand = renderCommand(commands);
     }
-    String resolvedDetail = detail == null ? "" : detail;
+    String resolvedDetail = ssh || detail == null ? "" : detail;
     boolean windows =
         System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
 
@@ -70,7 +80,7 @@ public final class EngineStartupDiagnostic {
             .put("outcome", "unavailable")
             .put("truncated", false);
 
-    return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES);
+    return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES, ssh);
   }
 
   static String renderCommand(List<String> command) {
@@ -85,8 +95,39 @@ public final class EngineStartupDiagnostic {
     return text.toString();
   }
 
-  EngineStartupDiagnostic(JSONObject value, int maxBytes) {
-    JSONObject bounded = new JSONObject(value.toString());
+  /**
+   * All log, clipboard and bundle consumers read this immutable snapshot. Only application-owned
+   * lifecycle metadata crosses that boundary for SSH. A new local diagnostic field is private by
+   * default, even when a remote error or command has been copied into it under a different name.
+   */
+  private static JSONObject sshMetadata(JSONObject value) {
+    JSONObject result = new JSONObject(value, "attemptId", "engineId", "launchPurpose",
+        "failedAt", "checkedAt", "exitCode", "exitHex", "statusName", "errorDomain",
+        "exitObservation", "collectionState", "stdoutOrigin", "stdoutTruncated", "stderrTruncated", "truncated");
+    String phase = value.optString("phase");
+    result.put("phase", switch (phase) {
+      case "remote-connect", "process-create", "runtime-preflight", "startup-exit",
+          "startup-handshake", "startup-output", "startup-timeout" -> phase;
+      default -> "unknown";
+    });
+    JSONObject launch = new JSONObject(value.getJSONObject("launch"), "engineId", "launchPurpose",
+        "startedAt", "environmentState", "local", "platform", "pid", "readerIncarnation");
+    result.put("launch", launch.put("transport", "ssh"));
+    JSONObject sources = new JSONObject();
+    for (String name : List.of("basic", "process-tail")) {
+      JSONObject source = value.getJSONObject("sources").optJSONObject(name);
+      if (source != null) sources.put(name, new JSONObject(source, "collectionState", "terminalReason"));
+    }
+    return result.put("sources", sources)
+        .put("findings", new JSONArray())
+        .put("outcome", "unavailable")
+        .put("originalError", "")
+        .put("stdout", value.optString("stdout").isEmpty() ? "" : "[SSH stdout omitted]")
+        .put("stderr", value.optString("stderr").isEmpty() ? "" : EngineObservation.SSH_STDERR_OMITTED);
+  }
+
+  EngineStartupDiagnostic(JSONObject value, int maxBytes, boolean ssh) {
+    JSONObject bounded = ssh ? sshMetadata(value) : new JSONObject(value.toString());
     // Identity and original status outrank optional detail when a policy limit is reached.
     for (String field : List.of("findings", "stdout", "stderr", "launch", "originalError")) {
       if (bytes(bounded.toString()) <= maxBytes) break;

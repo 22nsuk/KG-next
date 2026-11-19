@@ -1382,11 +1382,12 @@ public class Leelaz {
 
   private EngineLaunch beginEngineLaunch(Purpose purpose, boolean collectStartupDiagnostic) {
     String id = EngineObservation.beginLaunch(
-        this, EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
+        this, EngineStartupBootstrap.factsFor(engineCommand, purpose.name(), useJavaSSH));
     EngineStartupDiagnostics.Attempt diagnostic = collectStartupDiagnostic
         ? EngineStartupDiagnostics.getDefault().begin(
             id, purpose.name(), commands,
-            !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand))
+            EngineStartupDiagnostics.Transport.forEngine(
+                useJavaSSH, RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand)))
         : null;
     EngineLaunch launch = new EngineLaunch(purpose, id, engineCommand, diagnostic);
     startupDiagnosticAttempt = diagnostic;
@@ -1611,7 +1612,8 @@ public class Leelaz {
           e1.printStackTrace();
           isDownWithError = true;
         }
-        noteEngineFailed(launch, err);
+        noteEngineFailed(launch,
+            EngineThreadPolicy.isExternalSshCommand(launch.command()) ? "ssh process creation failed" : err);
         return;
       }
       requireCurrentEngineGameStartupTransaction(engineGameStartupTransaction);
@@ -4844,7 +4846,7 @@ public class Leelaz {
       if (EngineObservation.identityFor(this) == null) {
         Purpose purpose = launchPurpose(engineGameStartupCommandContext.get());
         EngineObservation.ensureStarted(
-            this, purpose.name(), EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
+            this, purpose.name(), EngineStartupBootstrap.factsFor(engineCommand, purpose.name(), useJavaSSH));
       }
     } catch (RuntimeException ignored) {
     }
@@ -4866,7 +4868,7 @@ public class Leelaz {
         Purpose purpose = launch == null
             ? launchPurpose(engineGameStartupCommandContext.get()) : launch.purpose();
         EngineObservation.recordBootstrap(
-            id, EngineStartupBootstrap.factsFor(engineCommand, purpose.name()));
+            id, EngineStartupBootstrap.factsFor(engineCommand, purpose.name(), useJavaSSH));
       }
       try {
         if (stderrLines != null && EngineObservation.engineDiagnosticsEnabled()) {
@@ -24260,12 +24262,10 @@ public class Leelaz {
         false,
         false,
         pendingTensorRtRepairContext.get(),
+        useJavaSSH, attempt,
         dialog -> {
           engineFailedMessage = dialog;
           presentedStartupDiagnosticAttempt = attempt;
-          if (hasSnapshot) {
-            dialog.bindStartupDiagnostic(attempt);
-          }
         });
     return true;
   }
@@ -24362,10 +24362,9 @@ public class Leelaz {
         false,
         isModal,
         repairContext,
+        useJavaSSH, diagnosticAttempt,
         dialog -> { engineFailedMessage = dialog;
           presentedStartupDiagnosticAttempt = diagnosticAttempt;
-          if (diagnosticAttempt != null && diagnosticAttempt.snapshot() != null)
-            dialog.bindStartupDiagnostic(diagnosticAttempt);
         });
   }
 

@@ -161,9 +161,8 @@ public final class SshKnownHosts {
                   ? io
                   : new IOException("Unable to verify SSH known_hosts " + file, error);
           LOG.warn(
-              "Refused SSH connection because host-key verification failed for {}",
-              target.knownHostsName(),
-              failure);
+              "Refused SSH connection because host-key verification failed for {} ({})",
+              target.knownHostsName(), failure.getClass().getSimpleName());
           return false;
         }
       };

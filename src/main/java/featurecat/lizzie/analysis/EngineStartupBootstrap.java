@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.logging.EngineBootstrapFacts;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.Utils;
 import java.nio.file.Path;
@@ -12,6 +13,14 @@ final class EngineStartupBootstrap {
   private EngineStartupBootstrap() {}
 
   static EngineBootstrapFacts factsFor(String command, String purpose) {
+    return factsFor(command, purpose, false);
+  }
+
+  static EngineBootstrapFacts factsFor(String command, String purpose, boolean managedSsh) {
+    if (managedSsh || EngineThreadPolicy.isExternalSshCommand(command)) {
+      // Remote shell arguments do not identify files on the client.
+      return EngineBootstrapFacts.unknown(purpose);
+    }
     EngineBootstrapFacts parsed = EngineBootstrapFacts.fromCommand(command, purpose);
     try {
       List<String> parts = Utils.splitCommand(command == null ? "" : command);

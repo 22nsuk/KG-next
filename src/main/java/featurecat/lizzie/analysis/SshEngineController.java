@@ -43,7 +43,7 @@ abstract class SshEngineController {
     try {
       plaintext = SshEnginePasswords.reveal(password);
     } catch (IOException e) {
-      LOG.warn("Saved SSH password for {}:{} is unavailable", host, port, e);
+      LOG.warn("Saved SSH password for {}:{} is unavailable ({})", host, port, e.getClass().getSimpleName());
       if (!isClosed()) onConnectionFailed(savedPasswordUnavailableMessage(e));
       return Boolean.FALSE;
     }
@@ -93,7 +93,8 @@ abstract class SshEngineController {
       if (!isClosed()) onAuthenticationRejected();
       return Boolean.FALSE;
     } catch (IOException | RuntimeException e) {
-      LOG.warn("Remote SSH engine connection to {}:{} failed", host, port, e);
+      // A channel-open failure can include text supplied by the server.
+      LOG.warn("Remote SSH engine connection to {}:{} failed ({})", host, port, e.getClass().getSimpleName());
       if (!isClosed()) onConnectionFailed(describeFailure(e));
       return Boolean.FALSE;
     } finally {
@@ -119,7 +120,7 @@ abstract class SshEngineController {
           try {
             action.run();
           } catch (org.json.JSONException failure) {
-            LOG.warn("Unable to display SSH connection failure", failure);
+            LOG.warn("Unable to display SSH connection failure ({})", failure.getClass().getSimpleName());
           }
         };
     if (SwingUtilities.isEventDispatchThread()) publish.run();

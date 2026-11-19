@@ -888,6 +888,29 @@ class EngineGtpLoggingTest {
   }
 
   @Test
+  void sshConnectionFailuresKeepDetailedExceptionsInTheInteractivePath() throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    String marker = "private-key-path-fixture";
+    var interactiveError = new java.util.concurrent.atomic.AtomicReference<String>();
+    try (TestSshServer server = TestSshServer.builder().password("accepted").start()) {
+      var controller = new SshEngineController("127.0.0.1", Integer.toString(server.port())) {
+        @Override protected void onAuthenticationRejected() { throw new AssertionError("unexpected rejection"); }
+        @Override protected void onConnectionFailed(String message) { interactiveError.set(message); }
+      };
+      try {
+        assertFalse(controller.loginByFileKey("katago", "player", tempDir.resolve(marker).toFile()));
+      } finally {
+        controller.close();
+      }
+    }
+    assertTrue(interactiveError.get().contains(marker));
+    awaitLogs(runtime);
+    String app = readApp();
+    assertTrue(app.contains("Remote SSH engine connection"), app);
+    assertFalse(app.contains(marker), app);
+  }
+
+  @Test
   void rejectedSshLoginKeepsOnlyTheStartupAttempt() throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));

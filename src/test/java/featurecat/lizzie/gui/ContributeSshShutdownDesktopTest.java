@@ -39,6 +39,9 @@ import org.slf4j.LoggerFactory;
 
 /** Real GUI/SSH transport and children that deliberately survive stdin EOF, as KataGo does. */
 public class ContributeSshShutdownDesktopTest {
+  private static final String REMOTE_ARGUMENT = "ssh-positional-canary";
+  private static final String REMOTE_ERROR = "ssh-error-canary";
+
   @Test
   void stopsRemoteChildrenOnUserStopFatalErrorAndRetry() throws Exception {
     DesktopProbeProcess.requireDisplay();
@@ -98,6 +101,7 @@ public class ContributeSshShutdownDesktopTest {
           for (Child remote : server.children.subList(first, server.children.size()))
             verifyStopped(remote);
           assertFalse(Lizzie.frame.isContributing);
+          if (mode.equals("retry")) verifyFailureReport();
         }
         assertNull(server.failure.get(), "SSH fixture must not fail");
       }
@@ -108,6 +112,8 @@ public class ContributeSshShutdownDesktopTest {
           });
       runtime.shutdown();
       List<String> log = Files.readAllLines(work.resolve("logs/app.log"));
+      assertTrue(log.stream().anyMatch(line -> line.contains("engine event=startup-failed")));
+      assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_ARGUMENT) || line.contains(REMOTE_ERROR)));
       List<String> launches = contributionIds(log, "started");
       assertEquals(server.children.size(), launches.size());
       assertEquals(launches.size(), launches.stream().distinct().count());
@@ -122,6 +128,23 @@ public class ContributeSshShutdownDesktopTest {
       System.exit(1);
     }
     System.exit(0);
+  }
+
+  private static void verifyFailureReport() throws Exception {
+    SwingUtilities.invokeAndWait(() -> {
+      EngineFailedMessage dialog = ContributeStartupDesktopTest.failureWindow();
+      // The operator still sees the actual error. Neither report used by Copy or Export contains it.
+      assertTrue(ContributeStartupDesktopTest.text(dialog).contains(REMOTE_ERROR));
+      var captured = ContributeStartupDesktopTest.displayed(dialog);
+      assertEquals("startup-exit", captured.toJson().getString("phase"));
+      assertFalse(captured.shareText().contains(REMOTE_ARGUMENT));
+      assertFalse(captured.shareText().contains(REMOTE_ERROR));
+      dialog.bindStartupDiagnostic(null);
+      var fallback = ContributeStartupDesktopTest.displayed(dialog);
+      assertEquals("unknown", fallback.engineId());
+      assertFalse(fallback.shareText().contains(REMOTE_ARGUMENT));
+      assertFalse(fallback.shareText().contains(REMOTE_ERROR));
+    });
   }
 
   private static List<String> contributionIds(List<String> log, String event) {
@@ -140,7 +163,7 @@ public class ContributeSshShutdownDesktopTest {
           Lizzie.config.contributeUseCommand = true;
           Lizzie.config.contributeUsePureCommand = true;
           Lizzie.config.contributeUserName = "fixture-user";
-          Lizzie.config.contributeCommand = mode;
+          Lizzie.config.contributeCommand = mode.equals("retry") ? mode + " -config " + REMOTE_ARGUMENT : mode;
           Lizzie.config.leelazConfig.put(
               "contribute-engine-ssh-info",
               new JSONObject()
@@ -170,7 +193,7 @@ public class ContributeSshShutdownDesktopTest {
     }
     if (mode.equals("fatal")) System.out.println(ContributeStartupDesktopTest.REJECTION);
     if (mode.equals("retry")) {
-      System.out.println("ERROR controlled remote failure");
+      System.out.println("Ending remote session");
       System.out.close();
     }
     var input = new BufferedReader(new InputStreamReader(System.in));
@@ -216,6 +239,7 @@ public class ContributeSshShutdownDesktopTest {
     private final class RemoteCommand implements Command {
       private final String command;
       private InputStream input;
+      private OutputStream stderr;
       private ExitCallback exit;
 
       private RemoteCommand(String command) {
@@ -233,7 +257,7 @@ public class ContributeSshShutdownDesktopTest {
       }
 
       @Override
-      public void setErrorStream(OutputStream error) {}
+      public void setErrorStream(OutputStream error) { this.stderr = error; }
 
       @Override
       public void setExitCallback(ExitCallback exit) {
@@ -244,7 +268,13 @@ public class ContributeSshShutdownDesktopTest {
       public void start(ChannelSession channel, org.apache.sshd.server.Environment environment)
           throws IOException {
         try {
-          if (!List.of("stop", "clean", "fatal", "retry").contains(command))
+          String mode = command;
+          if (command.equals("retry -config " + REMOTE_ARGUMENT)) {
+            mode = "retry";
+            stderr.write(("{\"error\":\"" + REMOTE_ERROR + "\"}\n").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            stderr.flush();
+          }
+          if (!List.of("stop", "clean", "fatal", "retry").contains(mode))
             throw new IOException("Unexpected fixture command");
           Path run = Files.createTempDirectory(work, "ssh-child-");
           List<String> args =
@@ -259,7 +289,7 @@ public class ContributeSshShutdownDesktopTest {
                   ContributeSshShutdownDesktopTest.class.getName(),
                   "child",
                   run.toString(),
-                  command);
+                  mode);
           Process process =
               new ProcessBuilder(args).redirectError(run.resolve("stderr.log").toFile()).start();
           children.add(new Child(process, run));

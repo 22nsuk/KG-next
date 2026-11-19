@@ -418,14 +418,14 @@ public class AnalysisEngine {
     String launchPurpose = purpose().name();
     String engineId =
         EngineObservation.beginLaunch(
-            this, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+            this, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose, useJavaSSH));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
                 engineId,
                 launchPurpose,
                 commands,
-                isLocal);
+                EngineStartupDiagnostics.Transport.forEngine(useJavaSSH, useRemoteCompute));
     try {
       startDedicatedTransport(engineCommand, launchSpec, engineId);
     } finally {
@@ -623,13 +623,11 @@ public class AnalysisEngine {
         false,
         true,
         repairContext,
+        useJavaSSH, diagnosticAttempt,
         createdDialog -> {
           engineFailedMessage = createdDialog;
           presentedStartupDiagnosticAttempt = diagnosticAttempt;
           dialog.set(createdDialog);
-          if (diagnosticAttempt != null && diagnosticAttempt.snapshot() != null) {
-            createdDialog.bindStartupDiagnostic(diagnosticAttempt);
-          }
         });
     return DiagnosticActionResult.of(dialog.get());
   }

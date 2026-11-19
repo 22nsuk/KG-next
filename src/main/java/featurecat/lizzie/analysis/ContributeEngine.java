@@ -226,9 +226,10 @@ public class ContributeEngine {
     }
     String purpose = Purpose.CONTRIBUTE.name();
     String engineId =
-        EngineObservation.beginLaunch(this, EngineStartupBootstrap.factsFor(engineCommand, purpose));
+        EngineObservation.beginLaunch(this, EngineStartupBootstrap.factsFor(engineCommand, purpose, useJavaSSH));
     EngineStartupDiagnostics.Attempt attempt =
-        EngineStartupDiagnostics.getDefault().begin(engineId, purpose, commands, !this.useJavaSSH);
+        EngineStartupDiagnostics.getDefault().begin(engineId, purpose, commands,
+            EngineStartupDiagnostics.Transport.forEngine(useJavaSSH, false));
     this.currentAttempt = attempt;
     Launch launch = new Launch(engineId, attempt);
     active = launch;
@@ -1422,11 +1423,7 @@ public class ContributeEngine {
         true,
         true,
         null,
-        dialog -> {
-          if (attempt != null && attempt == this.currentAttempt) {
-            dialog.bindStartupDiagnostic(attempt);
-          }
-        });
+        useJavaSSH, attempt, null);
   }
 
   private void startWatchingGameThread() {

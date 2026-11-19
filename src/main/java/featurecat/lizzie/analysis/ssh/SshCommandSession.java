@@ -402,19 +402,19 @@ public final class SshCommandSession implements AutoCloseable {
         channel.close(false).await(CLOSE_TIMEOUT);
       }
     } catch (IOException | RuntimeException e) {
-      LOG.debug("Unable to close SSH channel cleanly", e);
+      LOG.debug("Unable to close SSH channel cleanly ({})", e.getClass().getSimpleName());
     }
     try {
       if (session != null) {
         session.close(false).await(CLOSE_TIMEOUT);
       }
     } catch (IOException | RuntimeException e) {
-      LOG.debug("Unable to close SSH session cleanly", e);
+      LOG.debug("Unable to close SSH session cleanly ({})", e.getClass().getSimpleName());
     }
     try {
       client.stop();
     } catch (RuntimeException e) {
-      LOG.debug("Unable to stop SSH client cleanly", e);
+      LOG.debug("Unable to stop SSH client cleanly ({})", e.getClass().getSimpleName());
     }
   }
 }

@@ -1,6 +1,5 @@
 package featurecat.lizzie.analysis;
 
-import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper.NvidiaRuntimeStatus;
@@ -81,8 +80,22 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     tails.setRemoveOnCancelPolicy(true);
   }
 
+  enum Transport {
+    LOCAL_PROCESS, JAVA_SSH, REMOTE_COMPUTE;
+
+    static Transport forEngine(boolean useJavaSsh, boolean useRemoteCompute) {
+      if (useRemoteCompute) return REMOTE_COMPUTE;
+      return useJavaSsh ? JAVA_SSH : LOCAL_PROCESS;
+    }
+  }
+
   public Attempt begin(String engineId, String purpose, List<String> command, boolean local) {
-    return new Attempt(engineId, purpose, command, local);
+    // When the caller cannot identify a nonlocal transport, publish metadata only.
+    return begin(engineId, purpose, command, local ? Transport.LOCAL_PROCESS : Transport.JAVA_SSH);
+  }
+
+  Attempt begin(String engineId, String purpose, List<String> command, Transport transport) {
+    return new Attempt(engineId, purpose, command, transport);
   }
 
   public final class Attempt {
@@ -93,7 +106,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private final List<Finding> preflight = new ArrayList<>();
     private final Tail stdout = new Tail();
     private final Tail stderr = new Tail();
-    private final boolean ssh;
+    private boolean ssh;
     private Process process;
     private boolean ready;
     private boolean terminatedByOwner;
@@ -102,7 +115,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private boolean stdoutMerged;
     private boolean launchTruncated;
     private boolean finished;
-    private String outputError;
+    private boolean outputReadFailed;
     private Integer naturalExit;
     private String phase;
     private String originalError;
@@ -111,18 +124,21 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private ScheduledFuture<?> tailTask;
     private EngineStartupDiagnostic published;
 
-    private Attempt(String engineId, String purpose, List<String> command, boolean local) {
+    private Attempt(String engineId, String purpose, List<String> command, Transport transport) {
       String executable = command.isEmpty() ? "" : command.get(0);
-      ssh = EngineThreadPolicy.isExternalSshExecutable(executable)
-          || (!local && !RemoteComputeConfig.isRemoteComputeEngineCommand(executable));
+      ssh = transport == Transport.JAVA_SSH || EngineThreadPolicy.isExternalSshExecutable(executable);
       launch
           .put("engineId", limited(engineId, 128))
           .put("launchPurpose", limited(purpose, 128))
           .put("startedAt", Instant.now().toString())
           .put("environmentState", "not-formed")
-          .put("local", local)
-          .put("platform", windows ? "windows" : "non-windows")
-          .put("configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+          .put("local", transport == Transport.LOCAL_PROCESS)
+          .put("platform", windows ? "windows" : "non-windows");
+      if (!ssh) launch.put("configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+    }
+
+    public synchronized boolean isSsh() {
+      return ssh;
     }
 
     public String id() {
@@ -139,6 +155,13 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     public synchronized void capture(ProcessBuilder builder) {
       if (process != null || !"not-formed".equals(launch.getString("environmentState")))
         throw new IllegalStateException("Launch context already frozen");
+      // The executable after launch preparation can differ from the configured command.
+      ssh |= EngineThreadPolicy.isExternalSshExecutable(builder.command().get(0));
+      if (ssh) {
+        launch.remove("configuredCommand");
+        launch.put("environmentState", "final");
+        return;
+      }
       Path cwd =
           builder.directory() == null
               ? Path.of("").toAbsolutePath()
@@ -232,8 +255,9 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       if (!collectingOutput()) return;
       if ("merged".equals(stream)) stdoutMerged = true;
       Tail target = "stderr".equals(stream) ? stderr : stdout;
-      if (ssh && ("stderr".equals(stream) || "merged".equals(stream))) {
-        if (target.lines.isEmpty()) target.add(EngineObservation.SSH_STDERR_OMITTED);
+      if (ssh) {
+        // Record that the stream produced output without retaining shell-controlled text.
+        if (line != null && target.lines.isEmpty()) target.add("observed");
       } else {
         target.add(line);
       }
@@ -242,7 +266,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     public synchronized void streamEnded(String stream, String error) {
       if ("stderr".equals(stream)) stderrEnded = true;
       else stdoutEnded = true;
-      if (error != null) outputError = limited(error, 1024);
+      outputReadFailed |= error != null;
     }
 
     /** Observe before destroy: an owner-induced exit is not evidence of a Loader failure. */
@@ -254,13 +278,13 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     public synchronized EngineStartupDiagnostic fail(String stage, String error) {
       if (ready || failedAt != null) return published;
       phase = limited(stage, 128);
-      originalError = limited(error, 16384);
+      originalError = ssh ? "" : limited(error, 16384);
       failedAt = Instant.now();
       deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(policy.deadlineMillis());
       observeExit();
       if (process == null || tailComplete()) {
         finish(
-            outputError != null
+            outputReadFailed
                 ? "read-error"
                 : terminatedByOwner && naturalExit == null ? "exit-unavailable" : "");
       } else if (!slots.tryAcquire()) {
@@ -287,7 +311,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       observeExit();
       if (tailComplete()) {
         finish(
-            outputError != null
+            outputReadFailed
                 ? "read-error"
                 : terminatedByOwner && naturalExit == null ? "exit-unavailable" : "");
       } else if (System.nanoTime() >= deadlineNanos) {
@@ -379,7 +403,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
                       ? "collecting"
                       : identified ? "evidence-available" : "no-specific-dll-identified")
               .put("truncated", truncated);
-      published = new EngineStartupDiagnostic(value, policy.diagnosticBytes());
+      published = new EngineStartupDiagnostic(value, policy.diagnosticBytes(), ssh);
       if (publisher != null) {
         try {
           publisher.accept(published);

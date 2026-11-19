@@ -402,6 +402,40 @@ class DiagnosticBundleExporterTest {
     }
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+  void sshFailureExportsOnlyLifecycleMetadata(boolean externalClient) throws Exception {
+    LoggingRuntime runtime = start();
+    String marker = "private-positional-fixture";
+    List<String> command = externalClient
+        ? List.of("plink", "host", "wrapper", marker + "-argument")
+        : List.of("wrapper", marker + "-argument");
+    try (var service = new EngineStartupDiagnostics(
+        EngineStartupDiagnostics.Policy.production(), EngineObservation::recordStartupDiagnostic)) {
+      var attempt = service.begin("eng-ssh", "CONTRIBUTE", command, externalClient);
+      if (externalClient) attempt.capture(new ProcessBuilder(command));
+      attempt.attach(null, 12);
+      attempt.output("stdout", marker + "-stdout");
+      attempt.output("stderr", marker + "-stderr");
+      attempt.streamEnded("stderr", marker + "-exception");
+      var failure = attempt.fail("startup-exit", "Error " + marker + "-reason");
+      assertEquals("startup-exit", failure.toJson().getString("phase"));
+      assertEquals(12, failure.toJson().getJSONObject("launch").getLong("readerIncarnation"));
+      assertFalse(failure.shareText().contains(marker), failure.shareText());
+      runtime.awaitIdle();
+      String app = Files.readString(runtime.logsDirectory().resolve("app.log"));
+      assertTrue(app.contains("event=startup-failed"), app);
+      assertFalse(app.contains(marker), app);
+      var request = new DiagnosticBundleRequest(runtime, Set.of(), false, false,
+          new JSONObject(), emptySnapshot(), ReadBoardLoggingSnapshot.detached(), "test", "unknown", failure);
+      var entries = unzipEntries(new DiagnosticBundleExporter(tempDir.resolve("ssh-export")).export(request));
+      assertTrue(text(entries, "snapshots/engine-startup-failure.json").contains(failure.attemptId()));
+      for (byte[] bytes : entries.values()) {
+        assertFalse(new String(bytes, StandardCharsets.UTF_8).contains(marker));
+      }
+    }
+  }
+
   @Test
   void defaultExportWritesAtomicPackageWithManifestAndSafeSources() throws Exception {
     LoggingRuntime runtime = start();

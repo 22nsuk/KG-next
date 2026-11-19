@@ -211,6 +211,14 @@ public class EngineFailedMessage extends JDialog {
       boolean modal,
       TensorRtRepairContext repairContext,
       Consumer<EngineFailedMessage> onCreated) {
+    showDialog(commands, command, message, canUseCmdDignostic, isGtpEngine, restartContribute,
+        modal, repairContext, false, null, onCreated);
+  }
+
+  public static void showDialog(
+      List<String> commands, String command, String message, boolean canUseCmdDignostic,
+      boolean isGtpEngine, boolean restartContribute, boolean modal, TensorRtRepairContext repairContext,
+      boolean managedSsh, EngineStartupDiagnostics.Attempt attempt, Consumer<EngineFailedMessage> onCreated) {
     runOnEventDispatchThreadAndWait(
         () -> {
           EngineFailedMessage dialog =
@@ -221,7 +229,10 @@ public class EngineFailedMessage extends JDialog {
                   canUseCmdDignostic,
                   isGtpEngine,
                   restartContribute,
-                  repairContext);
+                  repairContext,
+                  EngineStartupDiagnostic.basic(commands, command, message,
+                      managedSsh || (attempt != null && attempt.isSsh())));
+          if (attempt != null && attempt.snapshot() != null) dialog.bindStartupDiagnostic(attempt);
           if (onCreated != null) {
             onCreated.accept(dialog);
           }
@@ -248,9 +259,15 @@ public class EngineFailedMessage extends JDialog {
       boolean isGtpEngine,
       boolean restartContribute,
       TensorRtRepairContext repairContext) {
-    // this.setModal(true);
-    // setType(Type.POPUP);
-    this.basicDiagnostic = EngineStartupDiagnostic.basic(commands, command, message);
+    this(commands, command, message, canUseCmdDignostic, isGtpEngine, restartContribute,
+        repairContext, EngineStartupDiagnostic.basic(commands, command, message));
+  }
+
+  private EngineFailedMessage(
+      List<String> commands, String command, String message, boolean canUseCmdDignostic,
+      boolean isGtpEngine, boolean restartContribute, TensorRtRepairContext repairContext,
+      EngineStartupDiagnostic basicDiagnostic) {
+    this.basicDiagnostic = basicDiagnostic;
     setTitle(Lizzie.resourceBundle.getString("Leelaz.engineFailed")); // "消息提醒");
     setAlwaysOnTop(true);
     try {
