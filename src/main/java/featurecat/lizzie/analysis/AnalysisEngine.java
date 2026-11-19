@@ -11,6 +11,7 @@ import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.RemoteEngineData;
 import featurecat.lizzie.gui.WaitForAnalysis;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
@@ -397,97 +398,105 @@ public class AnalysisEngine {
   }
 
   public void startEngine(String engineCommand) {
-    this.engineCommand = engineCommand;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
-    commands = launchSpec.getCommandParts();
-    this.useRemoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
-    if (this.useRemoteCompute) {
-      this.useJavaSSH = false;
-    }
-    boolean isLocal = !this.useRemoteCompute && !this.useJavaSSH;
-    if (isLocal && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-      process = null;
-      isLoaded = false;
-      return;
-    }
-    isNormalEnd = false;
-    startupDiagnosticAttempt = null;
+    boolean remoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
+    boolean useSsh = useJavaSSH && !remoteCompute;
+    boolean isLocal = !remoteCompute && !useSsh;
+    if (isLocal && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) return;
     String launchPurpose = purpose == null ? "OTHER" : purpose.name();
-    String engineId =
-        EngineObservation.restartInstance(
-            this,
-            launchPurpose,
-            EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
-    startupDiagnosticAttempt =
-        EngineStartupDiagnostics.getDefault()
-            .begin(
-                engineId,
-                launchPurpose,
-                commands,
-                isLocal);
+    EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(engineCommand, launchPurpose);
+    String engineId = null;
     try {
-      startDedicatedEngine(engineCommand, launchSpec, engineId);
-    } finally {
-      ReaderResources resources = readerResources;
-      if (resources == null || !engineId.equals(resources.launch.engineId())) {
-        EngineObservation.discardIdentityIfCurrent(this, engineId);
+      EngineStartupDiagnostics.Attempt attempt;
+      ReaderResources replacedReaders;
+      AnalysisEngineSSHController replacedSsh;
+      EngineTransport replacedTransport;
+      synchronized (this) {
+        engineId = EngineObservation.restartInstance(this, launchPurpose, facts);
+        attempt =
+            EngineStartupDiagnostics.getDefault()
+                .begin(engineId, launchPurpose, launchSpec.getCommandParts(), isLocal);
+        this.engineCommand = engineCommand;
+        commands = launchSpec.getCommandParts();
+        useRemoteCompute = remoteCompute;
+        useJavaSSH = useSsh;
+        startupDiagnosticAttempt = attempt;
+        replacedReaders = readerResources;
+        replacedSsh = javaSSH;
+        replacedTransport = remoteTransport;
+        readerResources = null;
+        javaSSH = null;
+        remoteTransport = null;
+        process = null;
+        isLoaded = false;
+        isNormalEnd = false;
       }
+      if (replacedReaders != null) replacedReaders.close(false);
+      else closeBackend(null, replacedSsh, replacedTransport, null);
+      startDedicatedEngine(
+          engineCommand, launchSpec, new EngineLaunch(purpose, engineId), attempt, remoteCompute,
+          useSsh);
+    } catch (RuntimeException | Error failure) {
+      EngineObservation.recordFailedIfCurrent(this, engineId, "startup");
+      throw failure;
     }
   }
 
   private void startDedicatedEngine(
-      String engineCommand, CommandLaunchHelper.LaunchSpec launchSpec, String engineId) {
+      String engineCommand,
+      CommandLaunchHelper.LaunchSpec launchSpec,
+      EngineLaunch launch,
+      EngineStartupDiagnostics.Attempt attempt,
+      boolean remoteCompute,
+      boolean useSsh) {
     ReaderResources resources;
-    if (this.useRemoteCompute) {
-      this.useJavaSSH = false;
-      process = null;
+    if (remoteCompute) {
       try {
         EngineTransport transport = RemoteComputeConfig.createTransportForCommand(engineCommand);
-        remoteTransport = transport;
-        transport.start();
-        resources = bindStartedCarrier(null, null, transport, engineId);
-      } catch (IOException e) {
-        if (startupDiagnosticAttempt != null) {
-          startupDiagnosticAttempt.fail("remote-connect", e.toString());
+        if (!installStartingRemoteCarrier(attempt, null, transport)) {
+          transport.close();
+          return;
         }
+        transport.start();
+        launch.started(this, null, engineCommand);
+        resources = bindCarrier(null, null, transport, launch, attempt, null);
+      } catch (IOException e) {
+        failUnboundStartup(launch, attempt, "remote-connect", e.toString());
         showErrMsg(
             resourceBundle.getString("Leelaz.engineFailed")
                 + ": "
-                + (e.getLocalizedMessage() == null ? "远程算力连接失败" : e.getLocalizedMessage()));
-        isLoaded = false;
+                + (e.getLocalizedMessage() == null ? "远程算力连接失败" : e.getLocalizedMessage()),
+            null,
+            attempt);
         return;
       }
-    } else if (this.useJavaSSH) {
+    } else if (useSsh) {
       AnalysisEngineSSHController ssh = new AnalysisEngineSSHController(this, ip, port, isPreLoad);
-      this.javaSSH = ssh;
+      if (!installStartingRemoteCarrier(attempt, ssh, null)) {
+        ssh.close();
+        return;
+      }
       boolean loginStatus = false;
       if (this.useKeyGen) {
         loginStatus =
             ssh
-                .loginByFileKey(this.engineCommand, this.userName, new File(this.keyGenPath))
+                .loginByFileKey(engineCommand, this.userName, new File(this.keyGenPath))
                 .booleanValue();
       } else {
         loginStatus =
-            ssh.login(this.engineCommand, this.userName, this.password).booleanValue();
+            ssh.login(engineCommand, this.userName, this.password).booleanValue();
       }
       if (loginStatus) {
-        resources = bindStartedCarrier(null, ssh, null, engineId);
-        javaSSHClosed = false;
+        launch.started(this, null, engineCommand);
+        resources = bindCarrier(null, ssh, null, launch, attempt, null);
       } else {
-        javaSSHClosed = true;
-        isLoaded = false;
-        if (startupDiagnosticAttempt != null) {
-          startupDiagnosticAttempt.fail("remote-connect", "ssh login failed");
-        }
+        failUnboundStartup(launch, attempt, "remote-connect", "ssh login failed");
         return;
       }
     } else {
-      if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
-        process = null;
-        isLoaded = false;
-        return;
-      }
+      if (stopSuppressedLocalStartup(launch, attempt)) return;
+      List<String> commands = launchSpec.getCommandParts();
       Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       if (Config.isBundledKataGoCommand(engineCommand)) {
         try {
@@ -496,20 +505,17 @@ public class AnalysisEngine {
               commands,
               engineCommand,
               Lizzie.frame,
-              startupDiagnosticAttempt == null ? null : startupDiagnosticAttempt::runtimePreflight);
+              attempt::runtimePreflight);
         } catch (IOException e) {
-          if (startupDiagnosticAttempt != null) {
-            startupDiagnosticAttempt.fail("runtime-preflight", e.toString());
-          }
+          failUnboundStartup(launch, attempt, "runtime-preflight", e.toString());
           TensorRtRepairContext repairContext =
               e instanceof TensorRtRuntimeException
                   ? ((TensorRtRuntimeException) e).context
                   : null;
           showErrMsg(
               resourceBundle.getString("Leelaz.engineFailed") + ": " + e.getLocalizedMessage(),
-              repairContext);
-          process = null;
-          isLoaded = false;
+              repairContext,
+              attempt);
           return;
         }
       }
@@ -519,36 +525,81 @@ public class AnalysisEngine {
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       EngineLaunch.LocalProcessFactory create =
           prepareLocalProcess(processBuilder, launchSpec, engineExecutable);
-      EngineLaunch launch = new EngineLaunch(purpose, engineId);
+      attempt.capture(processBuilder);
       Process child;
       try {
         // Recheck suppression after reserving the creation, since preflight may overlap a pause.
         child =
             launch.startLocalProcess(
                 this,
-                () -> shutdownRequested || KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()
-                    ? null
-                    : create.start(),
+                () -> stopSuppressedLocalStartup(launch, attempt) ? null : create.start(),
                 engineCommand);
         if (child == null) {
-          process = null;
-          isLoaded = false;
+          launch.finishObservation(this);
           return;
         }
       } catch (IOException e) {
-        if (startupDiagnosticAttempt != null) {
-          startupDiagnosticAttempt.fail("process-create", e.toString());
-        }
+        failUnboundStartup(launch, attempt, "process-create", e.toString());
         showErrMsg(
-            resourceBundle.getString("Leelaz.engineFailed") + ": " + e.getLocalizedMessage());
-        process = null;
-        isLoaded = false;
+            resourceBundle.getString("Leelaz.engineFailed") + ": " + e.getLocalizedMessage(),
+            null,
+            attempt);
         return;
       }
-      resources = bindCarrier(child, null, null, launch, processBuilder);
-      process = child;
+      resources = bindCarrier(child, null, null, launch, attempt, processBuilder);
     }
-    resources.start();
+    synchronized (this) {
+      if (startupDiagnosticAttempt == attempt) {
+        readerResources = resources;
+        process = resources.process;
+        if (resources.ssh != null) javaSSHClosed = false;
+        resources.start();
+        return;
+      }
+    }
+    resources.close(false);
+  }
+
+  private synchronized boolean installStartingRemoteCarrier(
+      EngineStartupDiagnostics.Attempt attempt,
+      AnalysisEngineSSHController ssh,
+      EngineTransport transport) {
+    if (startupDiagnosticAttempt != attempt) return false;
+    javaSSH = ssh;
+    if (ssh != null) javaSSHClosed = true;
+    remoteTransport = transport;
+    return true;
+  }
+
+  synchronized void sshCarrierClosed(AnalysisEngineSSHController ssh) {
+    if (javaSSH != ssh) return;
+    javaSSHClosed = true;
+    isNormalEnd = true;
+  }
+
+  private boolean stopSuppressedLocalStartup(
+      EngineLaunch launch, EngineStartupDiagnostics.Attempt attempt) {
+    if (startupDiagnosticAttempt != attempt) return true;
+    String reason;
+    if (shutdownRequested) {
+      reason = "shutdown";
+    } else if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
+      reason = "benchmark";
+    } else {
+      return false;
+    }
+    launch.finishObservation(this, reason);
+    return true;
+  }
+
+  private void failUnboundStartup(
+      EngineLaunch launch, EngineStartupDiagnostics.Attempt attempt, String phase, String error) {
+    if (startupDiagnosticAttempt != attempt) return;
+    try {
+      attempt.fail(phase, error);
+    } finally {
+      EngineObservation.recordFailedIfCurrent(this, launch.engineId(), phase);
+    }
   }
 
   EngineLaunch.LocalProcessFactory prepareLocalProcess(
@@ -558,16 +609,7 @@ public class AnalysisEngine {
     // KataGo can write diagnostic fragments while another thread emits a JSON result.
     // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
     builder.redirectErrorStream(false);
-    if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(builder);
     return builder::start;
-  }
-
-  private void showErrMsg(String errMsg) {
-    showErrMsg(errMsg, (TensorRtRepairContext) null);
-  }
-
-  private void showErrMsg(String errMsg, TensorRtRepairContext repairContext) {
-    showErrMsg(errMsg, repairContext, startupDiagnosticAttempt);
   }
 
   private void showErrMsg(
@@ -631,20 +673,13 @@ public class AnalysisEngine {
     return DiagnosticActionResult.of(dialog.get());
   }
 
-  private ReaderResources bindStartedCarrier(
-      Process child, AnalysisEngineSSHController ssh, EngineTransport transport, String engineId) {
-    EngineLaunch launch = new EngineLaunch(purpose, engineId);
-    launch.started(this, child, engineCommand);
-    return bindCarrier(child, ssh, transport, launch, null);
-  }
-
   private ReaderResources bindCarrier(
       Process child,
       AnalysisEngineSSHController ssh,
       EngineTransport transport,
       EngineLaunch launch,
+      EngineStartupDiagnostics.Attempt attempt,
       ProcessBuilder localBuilder) {
-    EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
     try {
       if (child != null && attempt != null) attempt.attachProcess(child);
       InputStream stdout;
@@ -675,7 +710,6 @@ public class AnalysisEngine {
       }
       synchronized (ACTIVE_READER_RESOURCES) {
         ACTIVE_READER_RESOURCES.add(resources);
-        readerResources = resources;
       }
       return resources;
     } catch (RuntimeException | Error bindFailure) {
@@ -751,7 +785,11 @@ public class AnalysisEngine {
         executor.execute(() -> runReader(started, () -> read(this)));
         executorErr.execute(() -> runReader(started, () -> readError(this)));
       } catch (RuntimeException | Error submitFailure) {
-        close(false);
+        try {
+          EngineObservation.recordFailedIfCurrent(AnalysisEngine.this, launch.engineId(), "reader-start");
+        } finally {
+          close(false);
+        }
         throw submitFailure;
       } finally {
         // Neither EOF nor cancellation can leave a reader submitted to a closed executor.
@@ -947,9 +985,12 @@ public class AnalysisEngine {
     }
     // Claim EOF cleanup before publishing failure: callers can immediately normalQuit() again.
     resources.close(!isNormalEnd);
-    requestShutdown();
-    if (this.useJavaSSH) javaSSHClosed = true;
-    isLoaded = false;
+    synchronized (this) {
+      if (readerResources != resources) return;
+      requestShutdown();
+      if (resources.ssh != null) javaSSHClosed = true;
+      isLoaded = false;
+    }
     if (!isNormalEnd) {
       showErrMsg(resourceBundle.getString("Leelaz.engineEndUnormalHint"), null, attempt);
     }

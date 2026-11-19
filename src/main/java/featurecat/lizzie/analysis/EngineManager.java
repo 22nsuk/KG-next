@@ -50,6 +50,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Date;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -3845,6 +3846,30 @@ public class EngineManager {
     //    }
   }
 
+  // Only the modal settings action and its synchronous catalog edits access this EDT-owned scope.
+  private EngineSettingsPause settingsPause;
+
+  public static void withAnalysisPausedForSettings(Runnable showDialog) {
+    EngineManager manager = Lizzie.engineManager;
+    Leelaz engine = Lizzie.leelaz;
+    long generation = Lizzie.capturePrimaryEngineGeneration(engine);
+    if (engine == null || generation < 0 || !engine.isPondering()) {
+      showDialog.run();
+      return;
+    }
+    EngineSettingsPause pause = new EngineSettingsPause(engine, generation);
+    EngineSettingsPause outer = manager == null ? null : manager.settingsPause;
+    if (manager != null) manager.settingsPause = pause;
+    try {
+      engine.notPondering();
+      engine.nameCmd();
+      showDialog.run();
+    } finally {
+      if (manager != null) manager.settingsPause = outer;
+      pause.close();
+    }
+  }
+
   public void updateEngines() throws JSONException, IOException {
     if (rejectForegroundEngineStartDuringSetup(true)) return;
     isUpdating = true;
@@ -3878,6 +3903,11 @@ public class EngineManager {
     boolean resumePonder =
         previousForegroundEngine != null
             && previousForegroundEngine.isPondering();
+    EngineSettingsPause inheritedPause = SwingUtilities.isEventDispatchThread() ? settingsPause : null;
+    if (inheritedPause != null
+        && !inheritedPause.canFollow(previousForegroundEngine, selectedEngineData)) {
+      inheritedPause = null;
+    }
     Leelaz preparedTarget = null;
     Leelaz preparedMirror = null;
     Leelaz.UpdateEngineStartAttempt targetStartAttempt = null;
@@ -4012,6 +4042,10 @@ public class EngineManager {
           final int frozenReplacementIndex = i;
           int mirrorEngineIndex = selectedSecondaryData == null ? -1 : selectedSecondaryData.index;
           long primaryGeneration = Lizzie.capturePrimaryEngineGeneration(e);
+          if (inheritedPause != null) {
+            inheritedPause.follow(e, primaryGeneration);
+            frozenLifecycleSynchronization.settingsPause = inheritedPause;
+          }
           replacementDispatch =
               new EngineStartupDispatch(
                   () ->
@@ -4363,8 +4397,15 @@ public class EngineManager {
   }
 
   public void refreshEngineCatalog() throws JSONException, IOException {
+    while (!refreshCurrentEngineCatalog()) {
+      // Another refresh published first. Reread both the settings and the current endpoints.
+    }
+  }
+
+  private boolean refreshCurrentEngineCatalog() throws JSONException, IOException {
     EngineGameOwnerTransaction catalogGame;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      if (!ownsCatalogSelections()) return true;
       catalogGame =
           activeEngineGameTransaction != null && activeEngineGameTransaction.manager == this
               ? activeEngineGameTransaction
@@ -4387,59 +4428,88 @@ public class EngineManager {
               new IllegalStateException(
                       "Engine catalog refresh could not be scheduled after game retirement")
                   .printStackTrace());
-      return;
+      return true;
     }
-    if (engineList == null) {
+    List<Leelaz> previousCatalog = engineList;
+    if (previousCatalog == null) {
       updateEngines();
-      return;
+      return true;
     }
     ArrayList<EngineData> engineData = loadEngineCatalogSnapshot();
-    List<Leelaz> previousEngines = new ArrayList<Leelaz>(engineList);
+    List<Leelaz> previousEngines = new ArrayList<>(previousCatalog);
     boolean[] matched = new boolean[previousEngines.size()];
-    List<Leelaz> refreshedEngines = new ArrayList<Leelaz>();
-    Leelaz currentMainEngine;
-    Leelaz currentSecondaryEngine;
-    synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      currentMainEngine = selectedCatalogEngine(true);
-      currentSecondaryEngine = selectedCatalogEngine(false);
-    }
-    int refreshedCurrentEngineNo = -1;
-    int refreshedCurrentEngineNo2 = -1;
+    List<Leelaz> refreshedEngines = new ArrayList<>();
+    String[] retainedDisplayNames = new String[engineData.size()];
 
     for (int i = 0; i < engineData.size(); i++) {
       EngineData engineDt = engineData.get(i);
       int matchIndex = findMatchingEngine(previousEngines, matched, engineDt, i);
       Leelaz engine =
           matchIndex >= 0 ? previousEngines.get(matchIndex) : createUnstartedEngine(engineDt);
-      applySavedEngineMetadata(engine, engineDt, i);
+      if (matchIndex >= 0) {
+        retainedDisplayNames[i] = Leelaz.friendlyEngineName(engineDt.name, engineDt.commands);
+      }
       refreshedEngines.add(engine);
-      if (engine == currentMainEngine) refreshedCurrentEngineNo = i;
-      if (engine == currentSecondaryEngine) refreshedCurrentEngineNo2 = i;
     }
 
-    if (currentMainEngine != null && refreshedCurrentEngineNo < 0) {
-      updateEngines();
-      return;
-    }
-
-    int frozenCurrentEngineNo = refreshedCurrentEngineNo;
-    int frozenCurrentEngineNo2 = refreshedCurrentEngineNo2;
+    Set<Leelaz> retained = new LinkedHashSet<>(refreshedEngines);
+    Set<Leelaz> retired = new LinkedHashSet<>(previousEngines);
+    retired.removeAll(retained);
+    Optional<EngineSwitchUiSnapshot> abandoned = Optional.empty();
+    boolean rebuildPrimary;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      Lizzie.runWithEngineAuthorityMutation(
-          () -> {
-            engineList = refreshedEngines;
-            if (frozenCurrentEngineNo >= 0 && selectedCatalogEngine(true) == currentMainEngine) {
-              currentEngineNo = frozenCurrentEngineNo;
-              engineNo = frozenCurrentEngineNo;
-            }
-            if (selectedCatalogEngine(false) == currentSecondaryEngine) {
-              currentEngineNo2 = frozenCurrentEngineNo2;
-            }
-            return null;
-          });
+      if (!ownsCatalogSelections()) return true;
+      // A concurrent refresh may already have retired objects in this snapshot.
+      if (engineList != previousCatalog) return false;
+      if (activeEngineGameTransaction != null && activeEngineGameTransaction.manager == this) {
+        return false;
+      }
+      Leelaz primary = selectedCatalogEngine(true);
+      int primaryIndex = refreshedEngines.indexOf(primary);
+      rebuildPrimary = primary != null && primaryIndex < 0;
+      if (!rebuildPrimary) {
+        boolean published = Lizzie.runWithEngineAuthorityMutation(
+            () -> {
+              if (!ownsCatalogSelections()) return false;
+              for (int i = 0; i < retainedDisplayNames.length; i++) {
+                if (retainedDisplayNames[i] != null) {
+                  applySavedEngineMetadata(
+                      refreshedEngines.get(i), engineData.get(i), retainedDisplayNames[i]);
+                }
+              }
+              engineList = refreshedEngines;
+              if (primaryIndex >= 0) {
+                currentEngineNo = primaryIndex;
+                engineNo = primaryIndex;
+              } else if (Lizzie.leelaz != null && retired.contains(Lizzie.leelaz)) {
+                // A provisional primary can own a startup before it has a committed index.
+                deselectStoppedPrimary(Lizzie.leelaz);
+              }
+              if (Lizzie.leelaz2 != null && !retained.contains(Lizzie.leelaz2)) {
+                retired.add(Lizzie.leelaz2);
+                rollbackSecondaryEngineSelection(Lizzie.leelaz2, null, -1);
+              } else if (currentEngineNo2 >= 0) {
+                currentEngineNo2 = refreshedEngines.indexOf(Lizzie.leelaz2);
+              }
+              return true;
+            });
+        if (!published) return true;
+        abandoned = cancelUninstalledSwitchExcept(retained);
+      }
     }
+    if (rebuildPrimary) {
+      updateEngines();
+      return true;
+    }
+    Throwable cleanupFailure = null;
+    for (Leelaz engine : retired) {
+      cleanupFailure = runLifecycleCleanupStep(cleanupFailure, () -> forceQuitCatalogEngine(engine));
+    }
+    rethrowLifecycleCleanupFailure(cleanupFailure);
+    abandoned.ifPresent(this::publishEngineSwitchUiState);
     runEngineSwitchUiUpdate(
         () -> {
+          if (!ownsCatalogSelections() || engineList != refreshedEngines) return;
           refreshEngineSelectionControls(engineData);
           if (LizzieFrame.menu != null) {
             LizzieFrame.menu.updateEngineMenu();
@@ -4456,11 +4526,17 @@ public class EngineManager {
                     + displayedEngines.get(currentEngineNo).oriEnginename);
           }
         });
+    return true;
   }
 
   /** Catalog I/O seam; callers may run this off the Swing event thread. */
   protected ArrayList<EngineData> loadEngineCatalogSnapshot() {
     return Utils.getEngineData();
+  }
+
+  private boolean ownsCatalogSelections() {
+    EngineManager active = Lizzie.engineManager;
+    return active == null || active == this;
   }
 
   private int findMatchingEngine(
@@ -4502,11 +4578,12 @@ public class EngineManager {
 
   protected Leelaz createUnstartedEngine(EngineData engineDt) throws JSONException, IOException {
     Leelaz engine = new Leelaz(engineDt.commands);
-    applySavedEngineMetadata(engine, engineDt, engineDt.index);
+    applySavedEngineMetadata(
+        engine, engineDt, Leelaz.friendlyEngineName(engineDt.name, engineDt.commands));
     return engine;
   }
 
-  private void applySavedEngineMetadata(Leelaz engine, EngineData engineDt, int index) {
+  private void applySavedEngineMetadata(Leelaz engine, EngineData engineDt, String displayName) {
     if (engine.savedEntryId.isBlank()) engine.savedEntryId = engineDt.id;
     engine.preload = engineDt.preload;
     engine.width = engineDt.width;
@@ -4525,7 +4602,7 @@ public class EngineManager {
     engine.initialCommand = engineDt.initialCommand;
     engine.gtpConfigurationProtocol = engineDt.gtpConfigurationProtocol;
     engine.gtpConfigurationProfile = copyProfile(engineDt.gtpConfigurationProfile);
-    engine.getEngineName(index);
+    engine.applySavedEngineName(displayName, engineDt.commands);
   }
 
   private static JSONObject copyProfile(JSONObject profile) {
@@ -4598,17 +4675,20 @@ public class EngineManager {
 
   private void forceQuitCatalogEngines(boolean keepPrimary) {
     Set<Leelaz> retained = Collections.newSetFromMap(new IdentityHashMap<>());
+    Set<Leelaz> toStop;
     Optional<EngineSwitchUiSnapshot> abandoned;
     Leelaz primary;
     Leelaz secondary;
     boolean releasePrimary;
+    boolean ownsSelections;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      primary = Lizzie.leelaz;
-      secondary = Lizzie.leelaz2;
-      releasePrimary = !keepPrimary
+      ownsSelections = ownsCatalogSelections();
+      primary = ownsSelections ? Lizzie.leelaz : null;
+      secondary = ownsSelections ? Lizzie.leelaz2 : null;
+      releasePrimary = ownsSelections && !keepPrimary
           && (!isEmpty || currentEngineNo >= 0 || (primary != null && primary.hasEngineToStop()));
       EngineSwitchTransaction pending = engineSwitchTransaction.get();
-      if (keepPrimary) {
+      if (ownsSelections && keepPrimary) {
         if (pending != null
             && pending.main
             && pending.previousEngine == Lizzie.leelaz
@@ -4628,23 +4708,31 @@ public class EngineManager {
       }
       suppressParticipantRecoveries(engine -> !retained.contains(engine));
       abandoned = cancelUninstalledSwitchExcept(retained);
+      toStop = new LinkedHashSet<>(engineList);
+      toStop.add(primary);
+      toStop.add(secondary);
+      toStop.removeAll(retained);
     }
     abandoned.ifPresent(this::publishEngineSwitchUiState);
-    for (Leelaz engine : engineList) {
-      if (engine != null
-          && !retained.contains(engine)
-          && (engine.hasEngineToStop() || engine.isBenchmark())) {
-        try {
-          engine.forceQuit();
-        } catch (Exception ignored) {
-        }
+    for (Leelaz engine : toStop) {
+      try {
+        forceQuitCatalogEngine(engine);
+      } catch (Exception ignored) {
       }
     }
-    if (releasePrimary) {
-      if (primary != null) primary.notPondering();
-      deselectStoppedPrimary(primary);
+    if (ownsSelections && ownsCatalogSelections()) {
+      if (releasePrimary) {
+        if (primary != null) primary.notPondering();
+        deselectStoppedPrimary(primary);
+      }
+      rollbackSecondaryEngineSelection(secondary, null, -1);
     }
-    rollbackSecondaryEngineSelection(secondary, null, -1);
+  }
+
+  private static void forceQuitCatalogEngine(Leelaz engine) {
+    if (engine != null && (engine.hasEngineToStop() || engine.isBenchmark())) {
+      engine.forceQuit();
+    }
   }
 
   /** Caller holds selection state. Installed targets already have an endpoint to stop. */
@@ -4739,9 +4827,11 @@ public class EngineManager {
         engineSwitchUiTracker.abandonPending(pending.submission.token, pending.main);
         finishEngineSwitchTransaction(pending);
       }
-      java.util.Set<Leelaz> tools = new java.util.LinkedHashSet<>(engineList);
-      tools.add(Lizzie.leelaz);
-      tools.add(Lizzie.leelaz2);
+      Set<Leelaz> tools = new LinkedHashSet<>(engineList);
+      if (ownsCatalogSelections()) {
+        tools.add(Lizzie.leelaz);
+        tools.add(Lizzie.leelaz2);
+      }
       for (Leelaz engine : tools) {
         BenchmarkExecution execution = engine == null ? null : engine.benchmarkExecution();
         if (execution != null) {
@@ -13151,6 +13241,12 @@ public class EngineManager {
                 }
                 readyNotification = preparedReady.get();
               }
+              EngineSettingsPause pause = lifecycleSynchronization.settingsPause;
+              if (pause != null) {
+                Object incarnation = targetAttempt.publishedIncarnation();
+                SwingUtilities.invokeLater(() -> pause.replacementReady(
+                    target, readyPublication.primaryGeneration(), incarnation));
+              }
               if (readyNotification != null) {
                 publishUpdateEngineReadyIfCurrent(
                     expectedTargetIndex,
@@ -15219,6 +15315,7 @@ public class EngineManager {
    * captures and reserves a new catch-up route under the same owner and admission.
    */
   static final class InitialEngineStartupSynchronization implements AutoCloseable {
+    private EngineSettingsPause settingsPause;
     private final Leelaz previousEngine;
     private final Leelaz targetEngine;
     private final Leelaz mirrorEngine;

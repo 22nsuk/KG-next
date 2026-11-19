@@ -35,8 +35,7 @@ public class AnalysisEngineSSHController extends SshEngineController {
 
   @Override
   public void close() {
-    owner.javaSSHClosed = true;
-    owner.isNormalEnd = true;
+    owner.sshCarrierClosed(this);
     super.close();
   }
 }

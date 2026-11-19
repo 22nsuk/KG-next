@@ -2376,14 +2376,7 @@ public class LizzieFrame extends JFrame {
   }
 
   public static void openMoreEngineDialog() {
-    Leelaz engine = Lizzie.leelaz;
-    long generation = Lizzie.capturePrimaryEngineGeneration(engine);
-    boolean resumePonder = generation >= 0L && engine != null && engine.isPondering();
-    if (resumePonder) engine.togglePonder();
-    MoreEngines.createDialog().setVisible(true);
-    if (resumePonder && Lizzie.capturePrimaryEngineGeneration(engine) == generation) {
-      engine.ponder();
-    }
+    EngineManager.withAnalysisPausedForSettings(() -> MoreEngines.createDialog().setVisible(true));
   }
 
   public static void openProgramDialog() {

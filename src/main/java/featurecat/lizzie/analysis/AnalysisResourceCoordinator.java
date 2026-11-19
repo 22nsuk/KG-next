@@ -242,11 +242,15 @@ public final class AnalysisResourceCoordinator {
 
     /** End this logical launch even if startup never attached a local or remote carrier. */
     void finishObservation(Object owner) {
+      finishObservation(owner, "stopped");
+    }
+
+    void finishObservation(Object owner, String reason) {
       Object sample = captureForegroundSampleIdentity(owner);
       closed(owner);
       if (EngineObservation.discardIdentityIfCurrent(owner, engineId)) {
         removeForegroundSample(owner, sample);
-        EngineObservation.recordStopped(engineId, "stopped");
+        EngineObservation.recordStopped(engineId, reason);
       }
     }
 

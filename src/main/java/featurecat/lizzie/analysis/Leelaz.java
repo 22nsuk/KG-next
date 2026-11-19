@@ -104,7 +104,7 @@ public class Leelaz {
       Executors.newCachedThreadPool(Leelaz::newCommandDispatchThread);
   // Mark commands during admission so later EDT drains still hand off physical output.
   private static final ThreadLocal<Boolean> DEFER_COMMAND_TRANSPORT = new ThreadLocal<>();
-  private static final ThreadLocal<CustomPdaTarget> CONSOLE_PONDER_TARGET = new ThreadLocal<>();
+  private static final ThreadLocal<CustomPdaTarget> CAPTURED_PONDER_TARGET = new ThreadLocal<>();
   private static final ScheduledExecutorService RUNTIME_THREAD_TIMEOUT_EXECUTOR =
       Executors.newSingleThreadScheduledExecutor(Leelaz::newCommandDispatchThread);
   private static final ScheduledExecutorService POSITION_RESPONSE_TIMEOUT_EXECUTOR =
@@ -1219,8 +1219,11 @@ public class Leelaz {
     if (index < 0) return Lizzie.resourceBundle.getString("Menu.noEngine");
     ArrayList<EngineData> engineData = Utils.getEngineData();
     EngineData data = engineData.get(index);
-    String rawName = data.name;
-    currentEnginename = deriveDisplayName(rawName, data.commands);
+    return applySavedEngineName(deriveDisplayName(data.name, data.commands), data.commands);
+  }
+
+  String applySavedEngineName(String displayName, String command) {
+    currentEnginename = displayName;
     oriEnginename = currentEnginename;
     String regEx = "[`~!@#$%^&*()+=|{}':;',\\[\\].<>/?~！@#￥%……&*（）——+|{}【】‘；：”“’。，、？]";
     String aa = "";
@@ -1228,7 +1231,7 @@ public class Leelaz {
     Matcher m = p.matcher(currentEnginename);
     currentEnginename = m.replaceAll(aa).trim();
     bestMovesEnginename =
-        RemoteComputeConfig.compactDisplayNameForCommand(data.commands, currentEnginename)
+        RemoteComputeConfig.compactDisplayNameForCommand(command, currentEnginename)
             .replaceAll(" ", "");
     return currentEnginename;
   }
@@ -11563,18 +11566,31 @@ public class Leelaz {
     return java.util.concurrent.CompletableFuture.runAsync(() -> {
       if (target == null || target.owner != this) return;
       DEFER_COMMAND_TRANSPORT.set(true);
-      CONSOLE_PONDER_TARGET.set(target);
       try {
-        // Ponder also consults selection and UI state: never hold PRIMARY around that work.
-        // Its eventual command admission reclaims the captured target below.
-        // The optimistic pondering read is not permission to undo a later user pause.
-        // Reuse the pause/handback gate through command admission, including mirrored analysis.
-        if (target.isCurrentSelection() && isPondering()) ponderIfAnalysisControlAllows();
+        ponderForCapturedSelection(target, true);
       } finally {
-        CONSOLE_PONDER_TARGET.remove();
         DEFER_COMMAND_TRANSPORT.remove();
       }
     }, COMMAND_DISPATCH_EXECUTOR);
+  }
+
+  void resumeSettingsPonder(long generation, Object incarnation) {
+    CustomPdaTarget target = captureConsolePdaTarget(generation, incarnation);
+    if (target != null) ponderForCapturedSelection(target, false);
+  }
+
+  private void ponderForCapturedSelection(CustomPdaTarget target, boolean expectedPondering) {
+    // Revalidate the selection again at command admission, without holding PRIMARY around UI work.
+    CustomPdaTarget outer = CAPTURED_PONDER_TARGET.get();
+    CAPTURED_PONDER_TARGET.set(target);
+    try {
+      if (target.isCurrentSelection() && isPondering() == expectedPondering) {
+        ponderIfAnalysisControlAllows();
+      }
+    } finally {
+      if (outer == null) CAPTURED_PONDER_TARGET.remove();
+      else CAPTURED_PONDER_TARGET.set(outer);
+    }
   }
 
   /** Captured PDA readers; a replacement engine or comparison reader cannot inherit the target. */
@@ -12007,7 +12023,7 @@ public class Leelaz {
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission,
       boolean defaultMirrorMustRemainAbsent,
       Supplier<Boolean> admission) {
-    CustomPdaTarget consoleTarget = CONSOLE_PONDER_TARGET.get();
+    CustomPdaTarget consoleTarget = CAPTURED_PONDER_TARGET.get();
     if (consoleTarget != null) {
       return consoleTarget.owner == this
           && consoleTarget.admit(() -> {
@@ -12090,7 +12106,7 @@ public class Leelaz {
                 || isOrdinaryPositionAnalysisCommand(mirroredCommand));
     boolean accepted = withOrdinaryPdaAdmission(
         admittedPda, settlement, startupTransactionAtAdmission, () ->
-        (analysisCommand || CONSOLE_PONDER_TARGET.get() != null)
+        (analysisCommand || CAPTURED_PONDER_TARGET.get() != null)
             ? withOrdinaryAnalysisSelectionLocks(
                 command,
                 mirroredEngine,
@@ -12294,7 +12310,7 @@ public class Leelaz {
     OrdinaryEnqueueEffects effects = new OrdinaryEnqueueEffects();
     boolean accepted = withOrdinaryPdaAdmission(
         admittedPda, settlement, startupTransactionAtAdmission, () ->
-        (isOrdinaryPositionAnalysisCommand(command) || CONSOLE_PONDER_TARGET.get() != null)
+        (isOrdinaryPositionAnalysisCommand(command) || CAPTURED_PONDER_TARGET.get() != null)
             ? withOrdinaryAnalysisSelectionLocks(
                 command,
                 null,
@@ -12440,7 +12456,7 @@ public class Leelaz {
       ReaderStreamBinding readBoardGmaResponseBinding,
       RestartBootstrapReceipt bootstrapReceipt,
       EngineManager.EngineGameOwnerTransaction startupTransactionAtAdmission) {
-    CustomPdaTarget consoleTarget = CONSOLE_PONDER_TARGET.get();
+    CustomPdaTarget consoleTarget = CAPTURED_PONDER_TARGET.get();
     if (consoleTarget != null
         && ((this != consoleTarget.owner && this != consoleTarget.mirror)
             || !consoleTarget.isCurrentSelection())) return false;

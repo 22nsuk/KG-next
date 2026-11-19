@@ -21,6 +21,11 @@ import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.ProblemListSideFilter;
 import featurecat.lizzie.gui.ProblemListSnapshot;
 import featurecat.lizzie.gui.WaitForAnalysis;
+import featurecat.lizzie.logging.DiagnosticModule;
+import featurecat.lizzie.logging.EngineObservation;
+import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.logging.LoggingSettings;
+import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -43,6 +48,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
@@ -132,7 +138,10 @@ class AnalysisEngineRequestTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
-  void benchmarkPauseDuringDedicatedLocalStartup(boolean pauseBeforeSpawn) throws Exception {
+  void benchmarkPauseDuringDedicatedLocalStartup(boolean pauseBeforeSpawn, @TempDir Path logFolder)
+      throws Exception {
+    LoggingRuntime logging = observeEngineStartup(logFolder);
+    String engineId;
     try (TestEnvironment env = TestEnvironment.open()) {
       Lizzie.leelaz = null;
       Lizzie.config.analysisReuseCurrentEngine = true;
@@ -140,6 +149,8 @@ class AnalysisEngineRequestTest {
       PausingAnalysisEngine engine = new PausingAnalysisEngine(pauseBeforeSpawn);
       try {
         engine.startEngine(LocalAnalysisSession.command("respond"));
+        engineId = engine.engineId;
+        assertNull(EngineObservation.identityFor(engine));
         assertTrue(engine.pause.accepted());
         if (pauseBeforeSpawn) {
           assertTrue(engine.pause.computeIsolated());
@@ -158,11 +169,24 @@ class AnalysisEngineRequestTest {
           KataGoRuntimeHelper.restoreAnalysisAfterBenchmark(false);
         }
       }
+    } finally {
+      logging.shutdown();
+    }
+    List<String> events = observedEngineLifecycle(logFolder, engineId);
+    if (pauseBeforeSpawn) {
+      assertEquals(List.of("started", "stopped"), eventNames(events), events.toString());
+      assertEquals("stopped reason=benchmark", events.get(1));
+    } else {
+      assertEquals(
+          List.of("started", "process-started", "process-stopped", "stopped"),
+          eventNames(events),
+          events.toString());
     }
   }
 
   private static final class PausingAnalysisEngine extends AnalysisEngine {
     private final boolean pauseBeforeSpawn;
+    private String engineId;
     private Process child;
     private KataGoRuntimeHelper.BenchmarkPauseResult pause;
 
@@ -174,6 +198,7 @@ class AnalysisEngineRequestTest {
     @Override
     AnalysisResourceCoordinator.EngineLaunch.LocalProcessFactory prepareLocalProcess(
         ProcessBuilder builder, CommandLaunchHelper.LaunchSpec spec, Path executable) {
+      engineId = EngineObservation.identityFor(this);
       var create = super.prepareLocalProcess(builder, spec, executable);
       if (pauseBeforeSpawn) pause = KataGoRuntimeHelper.pauseCurrentAnalysisForBenchmark();
       return () -> {
@@ -185,6 +210,150 @@ class AnalysisEngineRequestTest {
         return child;
       };
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void delayedDedicatedStartupCannotTerminateItsReplacement(
+      boolean startsLate, @TempDir Path logFolder)
+      throws Exception {
+    LoggingRuntime logging = observeEngineStartup(logFolder);
+    String originalId;
+    String replacementId;
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      Lizzie.config.analysisReuseCurrentEngine = true;
+      CountDownLatch creating = new CountDownLatch(1);
+      CountDownLatch resumeCreation = new CountDownLatch(1);
+      AtomicReference<Process> lateChild = new AtomicReference<>();
+      class ReplacingAnalysisEngine extends AnalysisEngine {
+        ReplacingAnalysisEngine() throws IOException {
+          super(true);
+        }
+
+        @Override
+        AnalysisResourceCoordinator.EngineLaunch.LocalProcessFactory prepareLocalProcess(
+            ProcessBuilder builder, CommandLaunchHelper.LaunchSpec spec, Path executable) {
+          var create = super.prepareLocalProcess(builder, spec, executable);
+          if (!builder.command().contains("delayed-create")) return create;
+          return () -> {
+            creating.countDown();
+            try {
+              assertTrue(resumeCreation.await(5, TimeUnit.SECONDS));
+            } catch (InterruptedException e) {
+              Thread.currentThread().interrupt();
+              throw new IOException(e);
+            }
+            if (!startsLate) throw new IOException("original creation failed");
+            Process child = create.start();
+            lateChild.set(child);
+            return child;
+          };
+        }
+      }
+      AnalysisEngine engine = new ReplacingAnalysisEngine();
+      FutureTask<Void> original =
+          new FutureTask<>(
+              () -> engine.startEngine(LocalAnalysisSession.command("delayed-create")), null);
+      Thread worker = new Thread(original, "test-original-analysis-startup");
+      worker.setDaemon(true);
+      worker.start();
+      try {
+        assertTrue(creating.await(5, TimeUnit.SECONDS));
+        originalId = EngineObservation.identityFor(engine);
+        assertNotNull(originalId);
+        engine.startEngine(LocalAnalysisSession.command("respond"));
+        replacementId = EngineObservation.identityFor(engine);
+        Process replacement = engine.process;
+        assertNotNull(replacement);
+        assertNotNull(replacementId);
+        assertFalse(originalId.equals(replacementId));
+
+        resumeCreation.countDown();
+        original.get(5, TimeUnit.SECONDS);
+
+        assertSame(replacement, engine.process);
+        assertEquals(replacementId, EngineObservation.identityFor(engine));
+        assertNull(engine.startupDiagnosticAttempt().snapshot());
+        assertTrue(engine.isRunning());
+        if (startsLate) {
+          assertNotNull(lateChild.get());
+          assertTrue(lateChild.get().waitFor(5, TimeUnit.SECONDS), "superseded child was left alive");
+        }
+      } finally {
+        resumeCreation.countDown();
+        engine.shutdown();
+        worker.join(TimeUnit.SECONDS.toMillis(5));
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      }
+    } finally {
+      logging.shutdown();
+    }
+    List<String> originalEvents = observedEngineLifecycle(logFolder, originalId);
+    assertEquals(
+        startsLate
+            ? List.of("started", "stopped", "process-started", "process-stopped")
+            : List.of("started", "stopped"),
+        eventNames(originalEvents),
+        originalEvents.toString());
+    assertEquals("stopped reason=replaced", originalEvents.get(1));
+    List<String> replacementEvents = observedEngineLifecycle(logFolder, replacementId);
+    assertEquals(
+        List.of("started", "process-started", "process-stopped", "stopped"),
+        eventNames(replacementEvents),
+        replacementEvents.toString());
+  }
+
+  @Test
+  void benchmarkAlreadyActivePreservesCurrentDedicatedCarrier() throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Lizzie.leelaz = null;
+      try (LocalAnalysisSession session = LocalAnalysisSession.open()) {
+        AnalysisEngine engine = session.engine;
+        String engineId = EngineObservation.identityFor(engine);
+        EngineStartupDiagnostics.Attempt attempt = engine.startupDiagnosticAttempt();
+        try {
+          KataGoRuntimeHelper.BenchmarkPauseResult pause =
+              KataGoRuntimeHelper.pauseCurrentAnalysisForBenchmark();
+          assertTrue(pause.accepted());
+          assertFalse(pause.computeIsolated());
+
+          engine.startEngine(LocalAnalysisSession.command("immediate-exit"));
+
+          assertSame(session.process, engine.process);
+          assertSame(attempt, engine.startupDiagnosticAttempt());
+          assertEquals(engineId, EngineObservation.identityFor(engine));
+          assertTrue(engine.isRunning());
+        } finally {
+          KataGoRuntimeHelper.restoreAnalysisAfterBenchmark(false);
+          engine.shutdown();
+          session.assertStopped();
+        }
+      }
+    }
+  }
+
+  private static LoggingRuntime observeEngineStartup(Path logFolder) {
+    LoggingRuntime logging = LoggingRuntime.initialize(new WorkDirectoryResolution(logFolder, List.of()));
+    logging.applySettings(
+        LoggingSettings.defaults()
+            .withDiagnosticsEnabled(true)
+            .withDiagnosticModules(EnumSet.of(DiagnosticModule.ENGINE)));
+    return logging;
+  }
+
+  private static List<String> observedEngineLifecycle(Path logFolder, String engineId)
+      throws IOException {
+    String log = Files.readString(logFolder.resolve("logs/app.log"));
+    return log.lines()
+        .filter(line -> line.contains("engine=" + engineId + " ") && line.contains("engine event="))
+        .map(line -> line.substring(line.indexOf("engine event=") + "engine event=".length()))
+        .filter(event -> event.matches("(?:started|failed|stopped|process-started|process-stopped) .*"))
+        .toList();
+  }
+
+  private static List<String> eventNames(List<String> events) {
+    return events.stream().map(event -> event.substring(0, event.indexOf(' '))).toList();
   }
 
   @Test
@@ -758,6 +927,8 @@ class AnalysisEngineRequestTest {
   @ValueSource(booleans = {false, true})
   void manualAndPersistentPreloadKeepTheConfiguredExecutableFailure(
       boolean preload, @TempDir Path folder) throws Exception {
+    LoggingRuntime logging = observeEngineStartup(folder);
+    String engineId;
     try (TestEnvironment env = TestEnvironment.open()) {
       Lizzie.leelaz = reusableForegroundEngine(true);
       Lizzie.config.leelazConfig = new JSONObject();
@@ -785,15 +956,22 @@ class AnalysisEngineRequestTest {
       assertFalse(engine.isLoaded());
       assertFalse(engine.usesSharedForegroundEngine());
       assertFalse(engine.usesMissingAnalysisEngineFallback());
-      assertEquals(
-          "process-create", engine.startupDiagnosticAttempt().snapshot().toJson().getString("phase"));
+      JSONObject diagnostic = engine.startupDiagnosticAttempt().snapshot().toJson();
+      engineId = diagnostic.getString("engineId");
+      assertEquals("process-create", diagnostic.getString("phase"));
+      assertNull(EngineObservation.identityFor(engine));
       if (preload) assertNull(engine.message);
       else
         assertTrue(
             engine.message.contains("missing-katago"), "manual failure must reach its diagnostic");
       assertEquals(command, Lizzie.config.analysisEngineCommand);
       engine.shutdown();
+    } finally {
+      logging.shutdown();
     }
+    List<String> events = observedEngineLifecycle(folder, engineId);
+    assertEquals(List.of("started", "failed"), eventNames(events), events.toString());
+    assertTrue(events.get(1).startsWith("failed reason=process-create failed="), events.toString());
   }
 
   @Test

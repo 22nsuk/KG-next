@@ -184,12 +184,22 @@ public final class EngineObservation {
   }
 
   public static void recordFailed(String engineId, String reason) {
+    recordFailed(engineId, reason, engineId == null ? null : STARTUPS.get(engineId));
+  }
+
+  public static void recordFailedIfCurrent(Object owner, String engineId, String reason) {
+    if (engineId == null) return;
+    StartupState startup = STARTUPS.get(engineId);
+    if (discardIdentityIfCurrent(owner, engineId)) recordFailed(engineId, reason, startup);
+  }
+
+  private static void recordFailed(String engineId, String reason, StartupState startup) {
     try {
       if (!runtimeActive() || !ENGINE.isWarnEnabled()) {
         return;
       }
-      markStartupStage(engineId, STAGE_FAILED);
-      String stages = formatKnownStages(engineId);
+      if (startup != null) startup.mark(STAGE_FAILED);
+      String stages = startup == null ? "" : startup.formatStages();
       inContext(
           engineId,
           null,

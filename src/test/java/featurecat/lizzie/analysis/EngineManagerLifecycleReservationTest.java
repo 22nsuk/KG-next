@@ -598,6 +598,90 @@ class EngineManagerLifecycleReservationTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void settingsWithoutAnEditPreservesAnalysisAcrossDialogFailure(boolean wasPondering)
+      throws Exception {
+    UpdateEnginesState state = new UpdateEnginesState(19, 19);
+    try {
+      state.install();
+      Leelaz original = state.previousForegroundEngine;
+      Lizzie.setPrimaryEngine(original);
+      rebindReader(original);
+      if (wasPondering) original.Pondering();
+      var failure = new IllegalStateException("dialog failed");
+      SwingUtilities.invokeAndWait(() -> {
+        assertSame(failure, assertThrows(IllegalStateException.class, () ->
+            EngineManager.withAnalysisPausedForSettings(() -> {
+              assertFalse(original.isPondering());
+              throw failure;
+            })));
+        assertEquals(wasPondering, original.isPondering());
+      });
+    } finally {
+      state.restore();
+    }
+  }
+
+  private enum SettingsClose { BEFORE_READY, AFTER_READY, AFTER_RESELECTION }
+
+  @ParameterizedTest
+  @EnumSource(SettingsClose.class)
+  void settingsEditResumesSameEntryOnlyAfterDialogCloseAndReplacementReady(SettingsClose close)
+      throws Exception {
+    UpdateEnginesState state = new UpdateEnginesState(19, 19);
+    var modal = java.awt.Toolkit.getDefaultToolkit().getSystemEventQueue().createSecondaryLoop();
+    var replaced = new CountDownLatch(1);
+    try {
+      state.install();
+      var original = state.previousForegroundEngine;
+      original.savedEntryId = "edited-engine";
+      Lizzie.config.leelazConfig.getJSONArray("engine-settings-list").getJSONObject(0)
+          .put("id", original.savedEntryId);
+      state.manager.engineList = new ArrayList<>(List.of(original));
+      rebindReader(original);
+      original.Pondering();
+      var dialog = new java.util.concurrent.FutureTask<Void>(() -> {
+        EngineManager.withAnalysisPausedForSettings(() -> {
+          assertFalse(original.isPondering());
+          assertDoesNotThrow(state.manager::refreshEngineCatalog);
+          replaced.countDown();
+          modal.enter();
+        });
+        return null;
+      });
+      SwingUtilities.invokeLater(dialog);
+      assertTrue(replaced.await(5, TimeUnit.SECONDS));
+      Leelaz replacement = Lizzie.leelaz;
+      assertNotSame(original, replacement);
+      if (close == SettingsClose.BEFORE_READY) {
+        SwingUtilities.invokeLater(modal::exit);
+        dialog.get(5, TimeUnit.SECONDS);
+        assertFalse(replacement.isPondering());
+      }
+      state.releaseStartup();
+      state.releaseBoardFence();
+      awaitEngineStartupReady();
+      if (close != SettingsClose.BEFORE_READY) {
+        SwingUtilities.invokeAndWait(() -> {
+          assertFalse(replacement.isPondering());
+          if (close == SettingsClose.AFTER_RESELECTION) Lizzie.setPrimaryEngine(replacement);
+        });
+        SwingUtilities.invokeLater(modal::exit);
+        dialog.get(5, TimeUnit.SECONDS);
+      }
+      if (close == SettingsClose.AFTER_RESELECTION) {
+        SwingUtilities.invokeAndWait(() -> assertFalse(replacement.isPondering()));
+        assertFalse(readLog(state.commandLog).contains("-analyze "));
+      } else {
+        waitForLog(state.commandLog, "-analyze ", 5000);
+      }
+    } finally {
+      SwingUtilities.invokeLater(modal::exit);
+      state.restore();
+    }
+  }
+
   @Test
   void updateEnginesSameSizeFreezesExactRestoreBeforeReplacementStarts() throws Exception {
     UpdateEnginesState state = new UpdateEnginesState(19, 19);
@@ -9063,6 +9147,9 @@ class EngineManagerLifecycleReservationTest {
 
   private static final class SilentSwitchFrame extends LizzieFrame {
     private int reSetLocCount;
+
+    @Override
+    public void clearSelectImage() {}
 
     @Override
     public void reSetLoc() {
