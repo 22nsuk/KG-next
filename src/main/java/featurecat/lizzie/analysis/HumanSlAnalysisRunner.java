@@ -196,7 +196,8 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
           this,
           AnalysisResourceCoordinator.Purpose.OTHER,
           String.join(" ", launchCommands),
-          launchedProcess);
+          launchedProcess,
+          EngineCommandVisibility.VISIBLE);
       return true;
     } catch (IOException e) {
       unavailableReason = withStartupDiagnostics(e.getLocalizedMessage());

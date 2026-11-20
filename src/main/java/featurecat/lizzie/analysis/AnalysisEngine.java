@@ -417,7 +417,8 @@ public class AnalysisEngine {
         EngineObservation.restartInstance(
             this,
             launchPurpose,
-            EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+            EngineStartupBootstrap.factsFor(
+                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
@@ -540,7 +541,12 @@ public class AnalysisEngine {
     }
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
+        this,
+        purpose,
+        engineCommand,
+        process,
+        startupDiagnosticAttempt != null,
+        EngineCommandVisibility.VISIBLE);
     readerResources.start();
   }
 

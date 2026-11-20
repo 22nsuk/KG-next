@@ -1,6 +1,8 @@
 package featurecat.lizzie.analysis.gtpconfig;
 
 import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.util.CommandLaunchHelper;
@@ -14,6 +16,8 @@ import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -267,6 +271,36 @@ public final class GtpConfigurationProbe {
     }
   }
 
+  /**
+   * Probe text that can echo a user-hidden command: the launch failure MoreEngines shows in its
+   * error dialog and the stderr tail written to the engine log. Visible commands pass unchanged.
+   */
+  static final class HiddenCommandText {
+    private final EngineCommandVisibility visibility;
+    private final List<String> fragments = new ArrayList<>();
+
+    HiddenCommandText(EngineCommandVisibility visibility, String command, ProcessBuilder builder) {
+      this.visibility = visibility;
+      if (!visibility.isHidden()) return;
+      fragments.addAll(EngineStartupDiagnostic.commandFragments(builder.command(), command));
+      if (builder.directory() != null) fragments.add(builder.directory().toString());
+    }
+
+    String scrub(String text) {
+      return visibility.scrub(text, fragments);
+    }
+
+    /**
+     * The JDK's "Cannot run program" text names the executable and working directory. A hidden
+     * command's failure keeps only the scrubbed message: the original exception is not chained,
+     * since its message would come back through any printed cause.
+     */
+    IOException launchFailure(IOException error) {
+      if (!visibility.isHidden()) return error;
+      return new IOException(scrub(error.getMessage()));
+    }
+  }
+
   interface SessionFactory {
     Session open(String engineCommand, Duration timeout) throws IOException;
   }
@@ -349,11 +383,13 @@ public final class GtpConfigurationProbe {
     private final ProbeStderrTail stderrTail = new ProbeStderrTail();
     private final AtomicReference<String> pendingFailureStage = new AtomicReference<>();
     private final Thread stderrDrainer;
+    private final HiddenCommandText hiddenCommandText;
     private int nextCommandId = 1;
 
-    private ProcessSession(Process process, Duration timeout) {
+    private ProcessSession(Process process, Duration timeout, HiddenCommandText hiddenCommandText) {
       this.process = process;
       this.timeout = timeout;
+      this.hiddenCommandText = hiddenCommandText;
       this.reader =
           new BufferedReader(
               new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
@@ -384,7 +420,12 @@ public final class GtpConfigurationProbe {
       if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
         throw new IOException("KataGo tuning is using the local compute device");
       }
-      if (engineCommand.startsWith("encryption||")) {
+      // This probe decodes the saved command itself, so it decides visibility at that point.
+      EngineCommandVisibility visibility =
+          engineCommand.startsWith("encryption||")
+              ? EngineCommandVisibility.HIDDEN
+              : EngineCommandVisibility.VISIBLE;
+      if (visibility.isHidden()) {
         engineCommand = Utils.doDecrypt2(engineCommand.substring("encryption||".length()));
       }
       CommandLaunchHelper.LaunchSpec launchSpec =
@@ -394,9 +435,21 @@ public final class GtpConfigurationProbe {
       }
       ProcessBuilder builder = new ProcessBuilder(launchSpec.getCommandParts());
       CommandLaunchHelper.configureProcessBuilder(builder, launchSpec);
-      ProcessSession session = new ProcessSession(builder.start(), timeout);
+      HiddenCommandText hiddenCommandText =
+          new HiddenCommandText(visibility, engineCommand, builder);
+      Process process;
+      try {
+        process = builder.start();
+      } catch (IOException error) {
+        throw hiddenCommandText.launchFailure(error);
+      }
+      ProcessSession session = new ProcessSession(process, timeout, hiddenCommandText);
       AnalysisResourceCoordinator.processStarted(
-          session, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, session.process);
+          session,
+          AnalysisResourceCoordinator.Purpose.OTHER,
+          engineCommand,
+          session.process,
+          visibility);
       session.recordStartedQuietly();
       return session;
     }
@@ -505,7 +558,7 @@ public final class GtpConfigurationProbe {
         }
         String id = EngineObservation.identityFor(this);
         EngineObservation.recordProbeFailed(id, stage);
-        String facts = stderrTail.snapshot();
+        String facts = hiddenCommandText.scrub(stderrTail.snapshot());
         if (!facts.isEmpty()) {
           EngineObservation.recordProbeStderr(id, facts);
         }

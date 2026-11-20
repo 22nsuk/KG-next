@@ -11,6 +11,25 @@ import java.util.Locale;
 final class EngineStartupBootstrap {
   private EngineStartupBootstrap() {}
 
+  /**
+   * A hidden command's model and config names are part of what the user hid, so the bootstrap line
+   * keeps only the classification facts (engine type, source, backend) and a marker for those two.
+   */
+  static EngineBootstrapFacts factsFor(
+      String command, String purpose, EngineCommandVisibility visibility) {
+    EngineBootstrapFacts facts = factsFor(command, purpose);
+    if (!visibility.isHidden()) return facts;
+    return EngineBootstrapFacts.of(
+        facts.engineType(),
+        facts.version(),
+        facts.purpose(),
+        facts.source(),
+        facts.backend(),
+        facts.onnxProvider(),
+        EngineBootstrapFacts.HIDDEN,
+        EngineBootstrapFacts.HIDDEN);
+  }
+
   static EngineBootstrapFacts factsFor(String command, String purpose) {
     EngineBootstrapFacts parsed = EngineBootstrapFacts.fromCommand(command, purpose);
     try {

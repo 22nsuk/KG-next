@@ -22,6 +22,8 @@ import java.util.regex.Pattern;
  */
 public final class EngineBootstrapFacts {
   public static final String UNKNOWN = "unknown";
+  /** Stands in for a model or config name that belongs to a user-hidden engine command. */
+  public static final String HIDDEN = "hidden-command";
   public static final String SOURCE_BUNDLED = "bundled";
   public static final String SOURCE_USER_CONFIGURED = "user-configured";
 
