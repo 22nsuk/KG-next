@@ -20,18 +20,22 @@ import featurecat.lizzie.rules.BoardNodeKind;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.util.Utils;
+import java.awt.AWTEvent;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dialog;
 import java.awt.FileDialog;
+import java.awt.KeyboardFocusManager;
 import java.awt.Point;
 import java.awt.Rectangle;
 import java.awt.Robot;
 import java.awt.Toolkit;
 import java.awt.Window;
 import java.awt.datatransfer.StringSelection;
+import java.awt.event.AWTEventListener;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.awt.event.MouseEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.io.BufferedReader;
@@ -50,6 +54,7 @@ import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -60,6 +65,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
@@ -877,33 +883,132 @@ public final class SgfUiAcceptanceIT {
     Duration spacing = chooserClickSpacing();
     Deadline deadline = Deadline.after(Duration.ofSeconds(20));
     AtomicReference<Point> pointRef = new AtomicReference<>();
-    boolean clicked = false;
-    while (true) {
-      pointRef.set(null);
-      await(
-          () -> {
-            pointRef.set(edt(() -> chooserFileRowPoint(chooser, fileName)));
-            return pointRef.get() != null;
-          },
-          deadline,
-          "chooser row selection (row not visible in the chooser file list)");
-      if (clicked && selected.test()) {
-        return;
-      }
-      Point point = pointRef.get();
-      click(robot, point.x, point.y);
-      clicked = true;
-      Deadline settle = Deadline.after(spacing);
-      do {
-        if (selected.test()) {
+    List<Point> clicks = new ArrayList<>();
+    // Retries alone did not fix this flake: no click in the 20 s budget selected the row. Record
+    // where the presses went so the next failure shows lost input versus a reverted selection.
+    Deque<String> presses = new ConcurrentLinkedDeque<>();
+    AWTEventListener pressRecorder =
+        event -> {
+          if (event.getID() == MouseEvent.MOUSE_PRESSED && event instanceof MouseEvent mouse) {
+            presses.add(
+                describe(mouse.getComponent())
+                    + "@"
+                    + mouse.getXOnScreen()
+                    + ","
+                    + mouse.getYOnScreen());
+            while (presses.size() > 8) {
+              presses.poll();
+            }
+          }
+        };
+    Toolkit.getDefaultToolkit().addAWTEventListener(pressRecorder, AWTEvent.MOUSE_EVENT_MASK);
+    try {
+      boolean clicked = false;
+      while (true) {
+        pointRef.set(null);
+        await(
+            () -> {
+              pointRef.set(edt(() -> chooserFileRowPoint(chooser, fileName)));
+              return pointRef.get() != null;
+            },
+            deadline,
+            "chooser row selection (row not visible in the chooser file list)");
+        if (clicked && selected.test()) {
           return;
         }
-        TimeUnit.MILLISECONDS.sleep(25);
-      } while (settle.hasTime());
-      if (!deadline.hasTime()) {
-        throw new AssertionError("Timed out awaiting chooser row selection of " + fileName);
+        Point point = pointRef.get();
+        click(robot, point.x, point.y);
+        clicks.add(point);
+        clicked = true;
+        Deadline settle = Deadline.after(spacing);
+        do {
+          if (selected.test()) {
+            return;
+          }
+          TimeUnit.MILLISECONDS.sleep(25);
+        } while (settle.hasTime());
+        if (!deadline.hasTime()) {
+          throw new AssertionError(
+              "Timed out awaiting chooser row selection of "
+                  + fileName
+                  + "; "
+                  + chooserClickDiagnostics(chooser, clicks, presses));
+        }
       }
+    } finally {
+      Toolkit.getDefaultToolkit().removeAWTEventListener(pressRecorder);
     }
+  }
+
+  private static String chooserClickDiagnostics(
+      JFileChooser chooser, List<Point> clicks, Deque<String> presses) throws Exception {
+    return edt(
+        () -> {
+          Point last = clicks.get(clicks.size() - 1);
+          List<String> underLastClick = new ArrayList<>();
+          for (Window window : Window.getWindows()) {
+            if (window.isShowing() && screenBounds(window).contains(last)) {
+              Point origin = window.getLocationOnScreen();
+              underLastClick.add(
+                  describe(
+                      SwingUtilities.getDeepestComponentAt(
+                          window, last.x - origin.x, last.y - origin.y)));
+            }
+          }
+          JList<?> list =
+              descendants(chooser).stream()
+                  .filter(component -> component instanceof JList<?> && component.isShowing())
+                  .map(component -> (JList<?>) component)
+                  .findFirst()
+                  .orElse(null);
+          Window chooserWindow = SwingUtilities.getWindowAncestor(chooser);
+          return "clicks="
+              + clicks.size()
+              + " last="
+              + last.x
+              + ","
+              + last.y
+              + ", awtPresses="
+              + (presses.isEmpty() ? "none" : presses)
+              + ", componentsUnderLastClick="
+              + underLastClick
+              + ", list="
+              + (list == null
+                  ? "none"
+                  : screenBounds(list) + " selectedIndex=" + list.getSelectedIndex())
+              + ", chooserWindow="
+              + (chooserWindow == null
+                  ? "none"
+                  : screenBounds(chooserWindow)
+                      + " focused="
+                      + chooserWindow.isFocused()
+                      + " active="
+                      + chooserWindow.isActive())
+              + ", focusOwner="
+              + describe(KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner())
+              + ", windows="
+              + visibleWindowState();
+        });
+  }
+
+  private static Rectangle screenBounds(Component component) {
+    return new Rectangle(component.getLocationOnScreen(), component.getSize());
+  }
+
+  private static String describe(Component component) {
+    if (component == null) {
+      return "null";
+    }
+    Window window =
+        component instanceof Window self ? self : SwingUtilities.getWindowAncestor(component);
+    return className(component)
+        + (window == null || window == component ? "" : " in " + className(window));
+  }
+
+  // The chooser's file list is an anonymous JList subclass with an empty simple name.
+  private static String className(Object value) {
+    String simple = value.getClass().getSimpleName();
+    return simple.isEmpty() ? value.getClass().getName() : simple;
   }
 
   private static Duration chooserClickSpacing() {
