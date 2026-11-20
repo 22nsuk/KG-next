@@ -37,6 +37,7 @@ public final class BenchmarkExecution {
   private final boolean main;
   private final List<String> tokens;
   private final String engineCommand;
+  private final EngineCommandVisibility visibility;
   private final String consolePrefix;
   private final CompletableFuture<Snapshot> completion = new CompletableFuture<>();
   private final CountDownLatch reaped = new CountDownLatch(1);
@@ -48,11 +49,21 @@ public final class BenchmarkExecution {
   private boolean cancelled;
   private String failureDetail;
 
-  BenchmarkExecution(Leelaz owner, int engineIndex, boolean main, String engineCommand) {
+  /**
+   * @param visibility whether the user hid {@code engineCommand}, as the owner decided when it
+   *     decoded the saved command; the failure detail is composed by it
+   */
+  BenchmarkExecution(
+      Leelaz owner,
+      int engineIndex,
+      boolean main,
+      String engineCommand,
+      EngineCommandVisibility visibility) {
     this.owner = owner;
     this.engineIndex = engineIndex;
     this.main = main;
     this.engineCommand = engineCommand;
+    this.visibility = visibility;
     this.tokens = List.copyOf(Utils.splitCommand(engineCommand));
     this.consolePrefix =
         "benchmark["
@@ -112,7 +123,8 @@ public final class BenchmarkExecution {
       }
       if (CommandLaunchHelper.classifyCommand(tokens)
           != CommandLaunchHelper.EngineCommandPurpose.BENCHMARK) {
-        throw new IOException("Command is not a local KataGo benchmark");
+        recordFailureDetail("Command is not a local KataGo benchmark");
+        return;
       }
       CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(tokens);
       List<String> argv = launch.getCommandParts();
@@ -217,16 +229,29 @@ public final class BenchmarkExecution {
   }
 
   private void recordFailure(Throwable failure) {
+    recordFailureDetail(failureText(failure));
+  }
+
+  /** {@code detail} is text this class composed; the first failure of an invocation is kept. */
+  private void recordFailureDetail(String detail) {
     Process running;
     synchronized (lock) {
-      if (!cancelled && failureDetail == null) {
-        String message = failure.getLocalizedMessage();
-        failureDetail = message == null || message.isBlank() ? failure.toString() : message;
-      }
+      if (!cancelled && failureDetail == null) failureDetail = detail;
       running = process;
     }
     // A failed reader cannot leave a writer blocked on its full pipe.
     if (running != null && running.isAlive()) running.destroyForcibly();
+  }
+
+  /**
+   * An exception raised while preparing, starting or reading the benchmark. Its message can be the
+   * command itself (the JDK's process-start failure names the program and its directory), so for
+   * a hidden command it is composed by {@link EngineCommandVisibility#errorMessage}.
+   */
+  private String failureText(Throwable failure) {
+    String message = failure.getLocalizedMessage();
+    if (message == null || message.isBlank()) return failure.getClass().getName();
+    return visibility.isHidden() ? visibility.errorMessage(failure) : message;
   }
 
   private int awaitExit(Process running) {

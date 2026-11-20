@@ -1938,7 +1938,8 @@ public class Leelaz {
 
   public BenchmarkExecution startBenchmark(int index, boolean main) {
     BenchmarkExecution previous;
-    BenchmarkExecution next = new BenchmarkExecution(this, index, main, engineCommand);
+    BenchmarkExecution next =
+        new BenchmarkExecution(this, index, main, engineCommand, engineCommandVisibility);
     synchronized (engineArbitrationLock()) {
       previous = currentBenchmarkExecution;
       currentBenchmarkExecution = next;
@@ -6616,7 +6617,9 @@ public class Leelaz {
             int patch = ver.length > 2 ? Integer.parseInt(ver[2].split("[^0-9]", 2)[0]) : 0;
             supportRootInfo = major > 1 || (major == 1 && (minor > 16 || (minor == 16 && patch >= 4)));
           } catch (Exception ex) {
-            ex.printStackTrace();
+            // The reply is the engine's output: a hidden command's engine can echo any of it.
+            EngineObservation.recordVersionUnparsed(
+                currentObservationIdentity(), engineCommandVisibility.errorText(ex));
             supportMovesOwnership = false;
             supportRootInfo = false;
           }
@@ -7984,7 +7987,8 @@ public class Leelaz {
     long startupPrimaryGenerationAtParse =
         captureStartupPrimaryGeneration(sourceEngineIncarnation);
     if (line.startsWith("info")) {
-        EngineObservation.traceRawStream(loggingEngineId, null, line);
+        EngineObservation.traceRawStream(
+            loggingEngineId, null, engineCommandVisibility.engineOutput(line));
         boolean upToDate = isAnalysisResponseUpToDateSnapshot(analysisOutputRouteAtParse);
         afterAnalysisInfoAdmissionSnapshotCapturedForTest();
         treatCurrentInfoAsPrimary = this == primaryAtParse && primaryGenerationAtParse >= 0L;
@@ -15150,7 +15154,7 @@ public class Leelaz {
             EngineObservation.traceRawResponse(
                 matchedPendingHandler.loggingEngineId,
                 matchedPendingHandler.loggingCommandId,
-                line);
+                engineCommandVisibility.engineOutput(line));
             matchedPendingHandler.queuedCommand.finishPositionResponse();
             recordAnalysisConditionResponse(matchedPendingHandler, line);
             matchedPendingHandler.run();

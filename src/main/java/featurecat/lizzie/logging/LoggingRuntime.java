@@ -627,8 +627,6 @@ public final class LoggingRuntime {
       configureProjectLoggers();
       CorrelationContext.installAppSession(applicationLogSessionId);
       Files.createDirectories(logsDirectory.resolve("archive"));
-      // Before the first record, so every record this build writes is on or after the epoch.
-      EngineCommandDisclosureEpoch.ensure(logsDirectory);
       startFileStream(LogStream.APP, "app.log", true);
       startFileStream(LogStream.CRASH, "crash.log", true);
       attachCrashLogger();
@@ -767,6 +765,7 @@ public final class LoggingRuntime {
     encoder.setPattern(PATTERN);
     encoder.setSanitizer(sanitizer);
     encoder.setLogStream(stream);
+    encoder.setWriterSession(applicationLogSessionId);
     encoder.start();
     encoders.add(encoder);
     file.setEncoder(encoder);

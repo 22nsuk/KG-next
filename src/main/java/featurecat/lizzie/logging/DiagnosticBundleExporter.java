@@ -348,9 +348,9 @@ public final class DiagnosticBundleExporter {
     String processSession = processSession(request);
     String processAlias =
         processSession == null ? null : sanitizer.alias("session", processSession);
-    EngineCommandDisclosureEpoch.Filter appPreEpoch =
-        new EngineCommandDisclosureEpoch.Filter(
-            EngineCommandDisclosureEpoch.read(hostLogs), hostSession);
+    // Engine, captured-stderr and crash records are shared only from the running session.
+    RunningSessionRecords appRecords = new RunningSessionRecords(hostSession);
+    RunningSessionRecords crashRecords = new RunningSessionRecords(hostSession);
     String stage = "collection";
     long stageStarted = System.nanoTime();
     // Pin each source before emitting progress events: the first log after midnight can roll it.
@@ -379,7 +379,7 @@ public final class DiagnosticBundleExporter {
               true,
               hostSession,
               "no-active-session",
-              appPreEpoch,
+              appRecords,
               cancel);
           throwIfCancelled(cancel);
           copyLogSource(
@@ -402,7 +402,7 @@ public final class DiagnosticBundleExporter {
               true,
               hostSession,
               "no-active-session",
-              null,
+              crashRecords,
               cancel);
           throwIfCancelled(cancel);
           copyRawTraces(out, request, trace, sanitizer, sources, captureTime, cancel);
@@ -1330,7 +1330,7 @@ public final class DiagnosticBundleExporter {
       boolean requested,
       String sessionForManifest,
       String emptyReason,
-      EngineCommandDisclosureEpoch.Filter preEpoch,
+      RunningSessionRecords sessionRecords,
       BooleanSupplier cancel)
       throws IOException {
     JSONObject source =
@@ -1426,7 +1426,7 @@ public final class DiagnosticBundleExporter {
                       captureTime,
                       requiredSession,
                       sanitizer,
-                      preEpoch,
+                      sessionRecords,
                       cancel);
           malformedRecords += result.malformedRecords();
           truncated |= result.truncated();
@@ -1456,9 +1456,9 @@ public final class DiagnosticBundleExporter {
       }
 
       source.put("readFilterSanitizeNanos", System.nanoTime() - readingStarted);
-      if (preEpoch != null && preEpoch.omitted() > 0) {
-        // Engine records from builds that logged user-hidden engine commands as they were.
-        source.put("preDisclosureEngineRecordsOmitted", preEpoch.omitted());
+      if (sessionRecords != null) {
+        // Records whose writer is not known to have kept a user-hidden engine command out.
+        source.put("sensitiveRecordsExcluded", sessionRecords.excluded());
       }
       source.put("sanitizerNanos", budget.sanitizerNanos);
       LOG.info(
@@ -1516,7 +1516,7 @@ public final class DiagnosticBundleExporter {
       Instant captureTime,
       String requiredSession,
       ExportSanitizer sanitizer,
-      EngineCommandDisclosureEpoch.Filter preEpoch,
+      RunningSessionRecords sessionRecords,
       BooleanSupplier cancel)
       throws IOException {
     RecordTail records = new RecordTail(capBytes);
@@ -1543,7 +1543,7 @@ public final class DiagnosticBundleExporter {
               timestamp != null
                   && (cutoff == null || !timestamp.isBefore(cutoff))
                   && (captureTime == null || !timestamp.isAfter(captureTime))
-                  && (preEpoch == null || !preEpoch.omits(line.text(), timestamp));
+                  && (sessionRecords == null || !sessionRecords.omits(line.text()));
           current = new RecordAccumulator(eligible);
           current.append(line);
         } else if (current != null) {
