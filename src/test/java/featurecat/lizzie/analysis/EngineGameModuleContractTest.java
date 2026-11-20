@@ -102,6 +102,8 @@ class EngineGameModuleContractTest {
   private boolean previousEmpty;
   private int previousEngineNo;
   private boolean previousSavingRaw;
+  private Field analysisShutdownField;
+  private boolean previousAnalysisShutdown;
   private boolean fixtureInstalled;
 
   private OccupancyLeelaz black;
@@ -125,6 +127,9 @@ class EngineGameModuleContractTest {
     previousEmpty = EngineManager.isEmpty;
     previousEngineNo = EngineManager.currentEngineNo;
     previousSavingRaw = LizzieFrame.isSavingRaw;
+    analysisShutdownField = AnalysisEngine.class.getDeclaredField("resourcesShuttingDown");
+    analysisShutdownField.setAccessible(true);
+    previousAnalysisShutdown = analysisShutdownField.getBoolean(null);
     fixtureInstalled = true;
 
     EngineManager.resetEngineGameTransactionStateForTest();
@@ -221,6 +226,8 @@ class EngineGameModuleContractTest {
       LizzieFrame.winrateGraph = previousWinrateGraph;
       LizzieFrame.isSavingRaw = previousSavingRaw;
       Lizzie.gtpConsole = previousGtpConsole;
+      // The injected exit callback retains this JVM for later engine-start tests.
+      analysisShutdownField.setBoolean(null, previousAnalysisShutdown);
       fixtureInstalled = false;
       if (interrupted) Thread.currentThread().interrupt();
     }
