@@ -403,11 +403,19 @@ public class AnalysisEngine {
   }
 
   @FunctionalInterface
-  interface ProcessStarter {
+  interface StartupFactory {
     Process start(ProcessBuilder builder) throws IOException;
+
+    default EngineTransport createTransport(String command) throws IOException {
+      return RemoteComputeConfig.createTransportForCommand(command);
+    }
+
+    default AnalysisEngineSSHController createSsh(AnalysisEngine owner) {
+      return new AnalysisEngineSSHController(owner, owner.ip, owner.port, owner.isPreLoad);
+    }
   }
 
-  void startEngine(String engineCommand, ProcessStarter processStarter) {
+  void startEngine(String engineCommand, StartupFactory factory) {
     Startup startup;
     synchronized (ACTIVE_READER_RESOURCES) {
       if (resourcesShuttingDown || shutdownRequested) {
@@ -421,14 +429,14 @@ public class AnalysisEngine {
     }
     boolean completed = false;
     try {
-      startEngineInternal(engineCommand, processStarter);
+      startEngineInternal(engineCommand, factory, startup);
       completed = true;
     } finally {
       startup.finish(completed);
     }
   }
 
-  private void startEngineInternal(String engineCommand, ProcessStarter processStarter) {
+  private void startEngineInternal(String engineCommand, StartupFactory factory, Startup startup) {
     this.engineCommand = engineCommand;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
@@ -461,8 +469,10 @@ public class AnalysisEngine {
       this.useJavaSSH = false;
       process = null;
       try {
-        remoteTransport = RemoteComputeConfig.createTransportForCommand(engineCommand);
+        remoteTransport = factory.createTransport(engineCommand);
+        if (!startup.connecting(remoteTransport::close)) return;
         remoteTransport.start();
+        if (shutdownRequested) return;
         initializeStreams(
             remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
         if (remoteTransport instanceof ZhiziGtpTransport zhizi) {
@@ -470,6 +480,7 @@ public class AnalysisEngine {
         }
         isLoaded = true;
       } catch (IOException e) {
+        if (shutdownRequested) return;
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.fail("remote-connect", e.toString());
         }
@@ -481,7 +492,8 @@ public class AnalysisEngine {
         return;
       }
     } else if (this.useJavaSSH) {
-      this.javaSSH = new AnalysisEngineSSHController(this, this.ip, this.port, this.isPreLoad);
+      this.javaSSH = factory.createSsh(this);
+      if (!startup.connecting(javaSSH::close)) return;
       boolean loginStatus = false;
       if (this.useKeyGen) {
         loginStatus =
@@ -492,6 +504,7 @@ public class AnalysisEngine {
         loginStatus =
             this.javaSSH.login(this.engineCommand, this.userName, this.password).booleanValue();
       }
+      if (shutdownRequested) return;
       if (loginStatus) {
         initializeStreams(
             this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
@@ -549,7 +562,7 @@ public class AnalysisEngine {
         startupDiagnosticAttempt.capture(processBuilder);
       }
       try {
-        process = processStarter.start(processBuilder);
+        process = factory.start(processBuilder);
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.attachProcess(process);
         }
@@ -695,11 +708,46 @@ public class AnalysisEngine {
   /** Reserves exit waiting before launch work, then hands ownership to the existing readers. */
   private final class Startup {
     private final CompletableFuture<Void> finished = new CompletableFuture<>();
+    private Runnable closeConnection;
+    private CompletableFuture<Void> connectionClosed;
+
+    /** Register the exact backend before its blocking start, including a late creation after exit. */
+    private synchronized boolean connecting(Runnable close) {
+      closeConnection = close;
+      if (!shutdownRequested) return true;
+      closeConnectionAsync();
+      return false;
+    }
 
     private void cancel() {
       requestShutdown();
       isNormalEnd = true;
       isLoaded = false;
+      closeConnectionAsync();
+    }
+
+    /** A duplicate backend close can return before the first one has finished releasing resources. */
+    private synchronized CompletableFuture<Void> closeConnectionAsync() {
+      if (closeConnection == null) return CompletableFuture.completedFuture(null);
+      if (connectionClosed != null) return connectionClosed;
+      CompletableFuture<Void> closed = new CompletableFuture<>();
+      connectionClosed = closed;
+      Runnable close = closeConnection;
+      try {
+        Thread cleanup = new Thread(() -> {
+          try {
+            close.run();
+            closed.complete(null);
+          } catch (RuntimeException | Error failure) {
+            closed.completeExceptionally(failure);
+          }
+        }, "analysis-engine-startup-cleanup");
+        cleanup.setDaemon(true);
+        cleanup.start();
+      } catch (RuntimeException | Error failure) {
+        closed.completeExceptionally(failure);
+      }
+      return closed;
     }
 
     private void finish(boolean completed) {
@@ -717,6 +765,7 @@ public class AnalysisEngine {
       }
       if (applicationExit) cancel();
       isLoaded = false;
+      CompletableFuture<Void> connectionCleanup = closeConnectionAsync();
       ReaderResources resources = readerResources;
       if (resources == null) {
         // An unchecked startup failure can leave a backend without installed streams.
@@ -732,7 +781,7 @@ public class AnalysisEngine {
         readerResources = resources;
       }
       resources.close(false);
-      resources.closed.whenComplete(
+      CompletableFuture.allOf(connectionCleanup, resources.closed).whenComplete(
           (ignored, failure) -> {
             if (failure == null) {
               synchronized (ACTIVE_READER_RESOURCES) {

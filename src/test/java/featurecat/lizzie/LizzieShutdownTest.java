@@ -10,8 +10,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisEngineSSHController;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.remote.EngineTransport;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.Acceptance;
 import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameParsedStart;
@@ -32,6 +35,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -45,6 +49,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
@@ -62,6 +67,134 @@ class LizzieShutdownTest {
       new EngineParticipantIdentity("shutdown-first", "");
   private static final EngineParticipantIdentity SECOND =
       new EngineParticipantIdentity("shutdown-second", "");
+
+  @ParameterizedTest
+  @CsvSource({"remote,false", "remote,true", "ssh,false", "ssh,true"})
+  void exitCancelsConnectingAnalysisAndWaitsForItsFirstClose(
+      String backend, boolean beforeCreation) throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      analysis.useJavaSSH = backend.equals("ssh");
+      GatedAnalysisConnection connection = new GatedAnalysisConnection();
+      CountDownLatch creating = new CountDownLatch(1);
+      CountDownLatch releaseCreation = new CountDownLatch(beforeCreation ? 1 : 0);
+      String command = analysis.useJavaSSH ? "test-analysis" : RemoteComputeConfig.COMMAND_ZHIZI;
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, command, (proxy, method, arguments) -> {
+          creating.countDown();
+          awaitGate(releaseCreation);
+          return switch (method.getName()) {
+            case "createTransport" -> connection;
+            case "createSsh" -> new AnalysisEngineSSHController(analysis, "127.0.0.1", "22", true) {
+              @Override
+              public Boolean login(String ignoredCommand, String user, String password) {
+                try {
+                  connection.start();
+                  return Boolean.TRUE;
+                } catch (IOException cancelled) {
+                  return Boolean.FALSE;
+                }
+              }
+
+              @Override
+              public void close() {
+                connection.close();
+                super.close();
+              }
+            };
+            default -> throw new AssertionError("unexpected local process launch");
+          };
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-connection-test-starter");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      FutureTask<Void> shutdown = new FutureTask<>(() -> {
+        Lizzie.shutdown(exited::complete);
+        return null;
+      });
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        assertTrue((beforeCreation ? creating : connection.startEntered).await(5, TimeUnit.SECONDS));
+        assertNull(harness.frame.analysisEngine, "startup must not depend on frame registration");
+        SwingUtilities.invokeLater(shutdown);
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "connection close blocked the EDT");
+        shutdown.get(5, TimeUnit.SECONDS);
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        assertFalse(exited.isDone(), "exit ignored an in-flight startup");
+
+        releaseCreation.countDown();
+        assertTrue(connection.closeEntered.await(5, TimeUnit.SECONDS), "exit did not cancel connect");
+        assertFalse(connection.closedOnEdt, "network cleanup must run off the EDT");
+        startup.get(5, TimeUnit.SECONDS);
+        assertTrue(connection.duplicateCloseReturned.await(5, TimeUnit.SECONDS));
+        assertEquals(beforeCreation ? 0 : 1, connection.starts.get());
+        assertFalse(cleanup.isDone(), "a duplicate close returned before the first close finished");
+        assertFalse(exited.isDone(), "JVM exit ran while connection cleanup was blocked");
+
+        connection.allowClose.countDown();
+        cleanup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertTrue(connection.closeReturned);
+        assertFalse(analysis.isLoaded(), "cancelled startup published a loaded engine");
+      } finally {
+        releaseCreation.countDown();
+        connection.allowClose.countDown();
+        connection.close();
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive(), "cancelled startup did not finish");
+        analysis.shutdown();
+        awaitAnalysisCleanup(analysis);
+        exited.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  /** Mirrors the transports' idempotent close: it wakes start before physical cleanup returns. */
+  private static final class GatedAnalysisConnection implements EngineTransport {
+    private final AtomicInteger starts = new AtomicInteger();
+    private final AtomicBoolean closing = new AtomicBoolean();
+    private final CountDownLatch startEntered = new CountDownLatch(1);
+    private final CountDownLatch closeEntered = new CountDownLatch(1);
+    private final CountDownLatch duplicateCloseReturned = new CountDownLatch(1);
+    private final CountDownLatch allowClose = new CountDownLatch(1);
+    private volatile boolean closedOnEdt;
+    private volatile boolean closeReturned;
+
+    @Override
+    public void start() throws IOException {
+      starts.incrementAndGet();
+      startEntered.countDown();
+      try {
+        assertTrue(closeEntered.await(15, TimeUnit.SECONDS), "connection was not cancelled");
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(failure);
+      }
+      throw new IOException("connection cancelled");
+    }
+
+    @Override
+    public void close() {
+      if (!closing.compareAndSet(false, true)) {
+        duplicateCloseReturned.countDown();
+        return;
+      }
+      closedOnEdt = SwingUtilities.isEventDispatchThread();
+      closeEntered.countDown();
+      awaitGate(allowClose);
+      closeReturned = true;
+    }
+
+    @Override public InputStream stdout() { throw new AssertionError("cancelled connection"); }
+    @Override public OutputStream stdin() { throw new AssertionError("cancelled connection"); }
+    @Override public InputStream stderr() { throw new AssertionError("cancelled connection"); }
+    @Override public boolean isOpen() { return false; }
+    @Override public String description() { return "controlled connection"; }
+    @Override public void abort() { close(); }
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {"attached", "detached", "starting", "initializing", "initialize-failure"})
@@ -250,15 +383,20 @@ class LizzieShutdownTest {
 
   private static void startAnalysis(AnalysisEngine engine, Callable<Process> processStarter)
       throws Exception {
-    Class<?> factory = Class.forName(AnalysisEngine.class.getName() + "$ProcessStarter");
-    Object starter = Proxy.newProxyInstance(
-        factory.getClassLoader(), new Class<?>[] {factory},
+    startAnalysis(
+        engine, "\"" + Path.of(System.getProperty("java.home"), "bin", "java") + "\"",
         (proxy, method, arguments) -> processStarter.call());
+  }
+
+  private static void startAnalysis(
+      AnalysisEngine engine, String command, InvocationHandler factoryMethods) throws Exception {
+    Class<?> factory = Class.forName(AnalysisEngine.class.getName() + "$StartupFactory");
+    Object starter = Proxy.newProxyInstance(
+        factory.getClassLoader(), new Class<?>[] {factory}, factoryMethods);
     Method start = AnalysisEngine.class.getDeclaredMethod("startEngine", String.class, factory);
     start.setAccessible(true);
     try {
-      start.invoke(
-          engine, "\"" + Path.of(System.getProperty("java.home"), "bin", "java") + "\"", starter);
+      start.invoke(engine, command, starter);
     } catch (InvocationTargetException failure) {
       if (failure.getCause() instanceof Exception exception) throw exception;
       if (failure.getCause() instanceof Error error) throw error;
