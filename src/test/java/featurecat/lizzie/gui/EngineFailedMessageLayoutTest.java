@@ -739,19 +739,19 @@ class EngineFailedMessageLayoutTest {
   void hiddenCommandNeverReachesVisibleTextSummaryExportOrBatchLine() {
     List<String> argv = HiddenCommandFixture.ARGV;
     String command = HiddenCommandFixture.COMMAND;
-    String failure = HiddenCommandFixture.PROCESS_CREATE_FAILURE;
     EngineCommandVisibility hidden = EngineCommandVisibility.HIDDEN;
+    java.io.IOException launchFailure = HiddenCommandFixture.processCreateFailure();
+    // Composed the way the engine owner composes it for the dialog.
+    String failure = engineFailedText(hidden.errorMessage(launchFailure));
 
     String commandPane =
         textOf(
             EngineFailedMessage.createScrollableText(
                 EngineFailedMessage.displayedCommand(command, hidden), null));
-    String messagePane =
-        textOf(
-            EngineFailedMessage.createScrollableText(
-                EngineFailedMessage.displayedMessage(failure, argv, command, hidden), null));
+    String messagePane = textOf(EngineFailedMessage.createScrollableText(failure, null));
     assertEquals(Lizzie.resourceBundle.getString("Leelaz.encryption"), commandPane);
-    assertTrue(messagePane.contains("CreateProcess error=2"), messagePane);
+    // The OS reason stays: "error=2, ..." or "Exec failed, error: 2 (...)" depending on the JDK.
+    assertTrue(messagePane.matches("(?s).*error(?:=|: )\\d+.*"), messagePane);
 
     try (EngineStartupDiagnostics diagnostics =
         new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
@@ -761,7 +761,7 @@ class EngineFailedMessageLayoutTest {
           new ProcessBuilder(argv)
               .directory(new java.io.File(HiddenCommandFixture.WORKING_DIRECTORY)));
       attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
-      attempt.fail("process-create", failure);
+      attempt.fail("process-create", launchFailure);
       EngineStartupDiagnostic bound = attempt.snapshot();
       EngineStartupDiagnostic basic = EngineStartupDiagnostic.basic(argv, command, failure, hidden);
 
@@ -793,10 +793,10 @@ class EngineFailedMessageLayoutTest {
             argv, command, EngineCommandVisibility.VISIBLE, false));
     assertEquals(
         command, EngineFailedMessage.displayedCommand(command, EngineCommandVisibility.VISIBLE));
-    assertEquals(
-        failure,
-        EngineFailedMessage.displayedMessage(
-            failure, argv, command, EngineCommandVisibility.VISIBLE));
+  }
+
+  private static String engineFailedText(String error) {
+    return Lizzie.resourceBundle.getString("Leelaz.engineFailed") + ": " + error;
   }
 
   @Test
@@ -809,7 +809,8 @@ class EngineFailedMessageLayoutTest {
       EngineStartupDiagnostics.Attempt attempt =
           diagnostics.begin("eng-hidden", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
       attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
-      attempt.fail("process-create", HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+      java.io.IOException launchFailure = HiddenCommandFixture.processCreateFailure();
+      attempt.fail("process-create", launchFailure);
       AtomicReference<Throwable> failure = new AtomicReference<>();
       SwingUtilities.invokeAndWait(
           () -> {
@@ -821,7 +822,7 @@ class EngineFailedMessageLayoutTest {
                       argv,
                       HiddenCommandFixture.COMMAND,
                       EngineCommandVisibility.HIDDEN,
-                      HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+                      engineFailedText(EngineCommandVisibility.HIDDEN.errorMessage(launchFailure)),
                       true,
                       true,
                       false,
@@ -842,7 +843,7 @@ class EngineFailedMessageLayoutTest {
                       argv,
                       HiddenCommandFixture.COMMAND,
                       EngineCommandVisibility.VISIBLE,
-                      HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+                      engineFailedText(launchFailure.getLocalizedMessage()),
                       true,
                       true,
                       false,
