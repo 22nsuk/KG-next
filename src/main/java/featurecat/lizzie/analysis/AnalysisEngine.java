@@ -84,6 +84,8 @@ public class AnalysisEngine {
   private static final long REMOTE_GTP_SETUP_ACK_TIMEOUT_MILLIS = 8000L;
   private static final String CURRENT_FOREGROUND_RULES = "__current_foreground_rules__";
   private static final Set<ReaderResources> ACTIVE_READER_RESOURCES = new LinkedHashSet<>();
+  private static final Set<Startup> STARTING_ENGINES = new LinkedHashSet<>();
+  private static boolean resourcesShuttingDown;
   public Process process;
   public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
@@ -397,6 +399,36 @@ public class AnalysisEngine {
   }
 
   public void startEngine(String engineCommand) {
+    startEngine(engineCommand, ProcessBuilder::start);
+  }
+
+  @FunctionalInterface
+  interface ProcessStarter {
+    Process start(ProcessBuilder builder) throws IOException;
+  }
+
+  void startEngine(String engineCommand, ProcessStarter processStarter) {
+    Startup startup;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      if (resourcesShuttingDown || shutdownRequested) {
+        requestShutdown();
+        isNormalEnd = true;
+        isLoaded = false;
+        return;
+      }
+      startup = new Startup();
+      STARTING_ENGINES.add(startup);
+    }
+    boolean completed = false;
+    try {
+      startEngineInternal(engineCommand, processStarter);
+      completed = true;
+    } finally {
+      startup.finish(completed);
+    }
+  }
+
+  private void startEngineInternal(String engineCommand, ProcessStarter processStarter) {
     this.engineCommand = engineCommand;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
@@ -517,7 +549,7 @@ public class AnalysisEngine {
         startupDiagnosticAttempt.capture(processBuilder);
       }
       try {
-        process = processBuilder.start();
+        process = processStarter.start(processBuilder);
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.attachProcess(process);
         }
@@ -538,6 +570,7 @@ public class AnalysisEngine {
               launchCommands,
               processBuilder.directory() == null ? Path.of("") : processBuilder.directory().toPath());
     }
+    if (shutdownRequested) return;
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
         this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
@@ -636,17 +669,82 @@ public class AnalysisEngine {
   }
 
   /**
-   * Stops owned readers after application task cancellation and waits asynchronously for cleanup,
-   * including workers already detached from the frame by cancellation or replacement.
+   * Closes launch admission and waits asynchronously for owned startup and cleanup, including
+   * workers not yet attached to the frame or already detached by cancellation or replacement.
    */
   public static CompletableFuture<Void> shutdownAllResources() {
     List<ReaderResources> resources;
+    List<Startup> startups;
     synchronized (ACTIVE_READER_RESOURCES) {
+      resourcesShuttingDown = true;
       resources = new ArrayList<>(ACTIVE_READER_RESOURCES);
+      startups = new ArrayList<>(STARTING_ENGINES);
     }
-    for (ReaderResources pending : resources) pending.closeForExit();
-    return CompletableFuture.allOf(
-        resources.stream().map(pending -> pending.closed).toArray(CompletableFuture<?>[]::new));
+    List<CompletableFuture<?>> pendingCleanup = new ArrayList<>();
+    for (Startup pending : startups) {
+      pending.cancel();
+      pendingCleanup.add(pending.finished);
+    }
+    for (ReaderResources pending : resources) {
+      pending.closeForExit();
+      pendingCleanup.add(pending.closed);
+    }
+    return CompletableFuture.allOf(pendingCleanup.toArray(CompletableFuture<?>[]::new));
+  }
+
+  /** Reserves exit waiting before launch work, then hands ownership to the existing readers. */
+  private final class Startup {
+    private final CompletableFuture<Void> finished = new CompletableFuture<>();
+
+    private void cancel() {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
+    }
+
+    private void finish(boolean completed) {
+      boolean applicationExit;
+      boolean cleanupRequired;
+      synchronized (ACTIVE_READER_RESOURCES) {
+        applicationExit = resourcesShuttingDown;
+        cleanupRequired = !completed || shutdownRequested || applicationExit;
+        if (!cleanupRequired) STARTING_ENGINES.remove(this);
+      }
+      if (!cleanupRequired) {
+        // Reader registration precedes this handoff; failed connection attempts own no readers.
+        finished.complete(null);
+        return;
+      }
+      if (applicationExit) cancel();
+      isLoaded = false;
+      ReaderResources resources = readerResources;
+      if (resources == null) {
+        // An unchecked startup failure can leave a backend without installed streams.
+        resources =
+            new ReaderResources(
+                process,
+                useJavaSSH ? javaSSH : null,
+                useRemoteCompute ? remoteTransport : null,
+                startupDiagnosticAttempt,
+                null,
+                null,
+                null);
+        readerResources = resources;
+      }
+      resources.close(false);
+      resources.closed.whenComplete(
+          (ignored, failure) -> {
+            if (failure == null) {
+              synchronized (ACTIVE_READER_RESOURCES) {
+                STARTING_ENGINES.remove(this);
+              }
+              finished.complete(null);
+            } else {
+              // Preserve failed cleanup for later exit attempts, just like ReaderResources.
+              finished.completeExceptionally(failure);
+            }
+          });
+    }
   }
 
   /** Owns the pipes and readers of one launch, including cleanup after a stale reader exits. */
@@ -676,9 +774,9 @@ public class AnalysisEngine {
       this.ssh = ssh;
       this.transport = transport;
       this.attempt = attempt;
-      this.stdout = new BufferedReader(new InputStreamReader(stdout));
-      this.stdin = new BufferedOutputStream(stdin);
-      this.stderr = new BufferedReader(new InputStreamReader(stderr));
+      this.stdout = stdout == null ? null : new BufferedReader(new InputStreamReader(stdout));
+      this.stdin = stdin == null ? null : new BufferedOutputStream(stdin);
+      this.stderr = stderr == null ? null : new BufferedReader(new InputStreamReader(stderr));
     }
 
     private synchronized void start() {
@@ -772,6 +870,7 @@ public class AnalysisEngine {
   }
 
   private static void closeStream(Closeable stream) {
+    if (stream == null) return;
     try {
       stream.close();
     } catch (IOException failure) {
