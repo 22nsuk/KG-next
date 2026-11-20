@@ -26,8 +26,8 @@ import org.junit.jupiter.api.Test;
 /**
  * A catalog refresh can reorder [A, B, C] to [A, C, B] or drop an entry while B's remote session is
  * being recovered. The recovery must restart B at the slot B holds when it starts, under B's name.
- * A refresh that drops B must cancel the recovery, or rebuild only after the recovery has released
- * B's lifecycle lease, instead of restarting a removed entry.
+ * A refresh that drops B must cancel the recovery instead of restarting a removed entry, and rebuild
+ * only after the recovery has released B's lifecycle lease.
  */
 class EngineManagerCatalogSlotTest {
   private final Leelaz previousPrimary = Lizzie.leelaz;
@@ -106,15 +106,16 @@ class EngineManagerCatalogSlotTest {
 
     replaceSavedCatalog(a, c);
     SwingUtilities.invokeAndWait(() -> refresh(manager));
+    // The refresh claimed the recovery; the recovery itself closes the attempt holding B's lease.
+    assertEquals(0, manager.rebuilds, "the rebuild waits for the recovery to let go of B");
+    engineB.secondDeadCheck.release();
 
-    assertEquals(1, manager.rebuilds, "removing the primary rebuilds the catalog");
+    awaitCondition(() -> manager.rebuilds == 1);
     assertTrue(
         manager.foregroundLeaseAvailableAtRebuild,
         "the cancelled recovery must not hold the removed primary's lease during the rebuild");
-    engineB.secondDeadCheck.release();
-
-    awaitCondition(() -> engineB.canCheckAlive);
     assertEquals(List.of(), engineB.startedSlots, "a removed entry is never restarted");
+    awaitCondition(() -> engineB.canCheckAlive);
     assertReservationsReleased(engineB);
   }
 
@@ -136,6 +137,32 @@ class EngineManagerCatalogSlotTest {
     assertTrue(
         manager.foregroundLeaseAvailableAtRebuild,
         "the rebuild runs once the abandoned recovery has released B's lease");
+    assertEquals(List.of(), engineB.startedSlots, "a removed entry is never restarted");
+    assertReservationsReleased(engineB);
+  }
+
+  @Test
+  void removingTheEntryWhileItsRecoveryClosesItsAttemptRebuildsOnlyAfterTheRelease()
+      throws Exception {
+    CatalogManager manager = selectDisconnectedRemoteB(List.of(a, b, c));
+    engineB.secondDeadCheck.arm();
+    manager.restartUnresponsiveRemoteEngine(engineB);
+    engineB.secondDeadCheck.awaitEntered();
+    // B answers again, so its recovery gives up and is held while it releases B's lease.
+    engineB.processDead = false;
+    engineB.abandoning.arm();
+    engineB.secondDeadCheck.release();
+    engineB.abandoning.awaitEntered();
+
+    replaceSavedCatalog(a, c);
+    SwingUtilities.invokeAndWait(() -> refresh(manager));
+    assertEquals(0, manager.rebuilds, "the recovery is still releasing B's lease; rebuild waits");
+    engineB.abandoning.release();
+
+    awaitCondition(() -> manager.rebuilds == 1);
+    assertTrue(
+        manager.foregroundLeaseAvailableAtRebuild,
+        "the rebuild runs once the recovery has finished releasing B's lease");
     assertEquals(List.of(), engineB.startedSlots, "a removed entry is never restarted");
     assertReservationsReleased(engineB);
   }
@@ -314,7 +341,7 @@ class EngineManagerCatalogSlotTest {
     }
   }
 
-  /** A remote endpoint whose recovery can be held at its lease, liveness probe and start. */
+  /** A remote endpoint whose recovery can be held at its lease, probe, release or start. */
   private static final class SlotEngine extends Leelaz {
     private final List<EngineData> savedCatalog;
     private final List<Integer> startedSlots = new CopyOnWriteArrayList<>();
@@ -322,6 +349,7 @@ class EngineManagerCatalogSlotTest {
     private final Gate attemptTaken = new Gate();
     private final Gate secondDeadCheck = new Gate();
     private final Gate start = new Gate();
+    private final Gate abandoning = new Gate();
     private volatile boolean processDead;
     private int deadChecks;
 
@@ -334,6 +362,7 @@ class EngineManagerCatalogSlotTest {
       attemptTaken.release();
       secondDeadCheck.release();
       start.release();
+      abandoning.release();
     }
 
     /** Production resolves the saved entry this way, then reads its name. */
@@ -350,6 +379,13 @@ class EngineManagerCatalogSlotTest {
       AutomaticRestartAttempt attempt = super.beginAutomaticEngineRestartAttempt();
       attemptTaken.pass();
       return attempt;
+    }
+
+    /** An abandoned attempt ends its board synchronization while it releases the lease. */
+    @Override
+    public void endInitialBoardSynchronization() {
+      abandoning.pass();
+      super.endInitialBoardSynchronization();
     }
 
     @Override

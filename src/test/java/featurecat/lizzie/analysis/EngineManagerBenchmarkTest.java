@@ -8,6 +8,7 @@ import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.GtpConsolePane;
+import featurecat.lizzie.gui.JFontMenu;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.rules.Board;
@@ -502,6 +503,10 @@ class EngineManagerBenchmarkTest {
               failure);
         }
         startedPid = Files.readString(a.path.resolve("pid"));
+        // A is analysing. The quit for the tool clears that state on the engine itself.
+        a.engine.Pondering();
+        previous.analysisResumed = false;
+        previous.startedOnEventThread = false;
         previous.quit.arm();
       }
 
@@ -531,6 +536,10 @@ class EngineManagerBenchmarkTest {
               }
             });
         assertTrue(a.engine.isLoaded(), "the quit GTP engine is restarted and synchronized");
+        await(() -> previous.analysisResumed);
+        assertFalse(
+            previous.startedOnEventThread,
+            "starting the engine again blocks, so it must not hold the event thread");
       }
       assertSame(a.engine, Lizzie.leelaz);
       assertEquals(0, EngineManager.currentEngineNo);
@@ -609,6 +618,125 @@ class EngineManagerBenchmarkTest {
       assertEquals(-1, shown.targetIndex());
       assertEquals("B", shown.targetName());
       assertEquals(-1, EngineManager.currentEngineNo2);
+    }
+  }
+
+  @Test
+  void anOlderCatalogReadFinishingLateDoesNotStopAToolTheNewerCatalogKeeps() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(1, false));
+      b.awaitReady();
+      BenchmarkExecution running = b.engine.benchmarkExecution();
+
+      // The first refresh reads a catalog without B and is held while it names A.
+      ((NamedEngine) a.engine).name.arm();
+      env.saveCatalog("A", "C");
+      Thread older = background(() -> refresh(manager));
+      ((NamedEngine) a.engine).name.awaitEntered();
+      // B is saved back, and the refresh that reads that catalog publishes first.
+      env.saveCatalog("A", "B", "C");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      ((NamedEngine) a.engine).name.release();
+      older.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(older.isAlive());
+      SwingUtilities.invokeAndWait(() -> {});
+
+      assertEquals(3, manager.engineList.size(), "the newer catalog stays published");
+      assertSame(b.engine, manager.engineList.get(1));
+      assertSame(b.engine, Lizzie.leelaz2);
+      assertEquals(1, EngineManager.currentEngineNo2);
+      assertFalse(running.completion().isDone(), "the newer catalog keeps B, so B keeps running");
+      assertTrue(b.alive());
+      assertEquals(
+          Lizzie.resourceBundle.getString("Benchmark.running"),
+          manager.engineSwitchUiSnapshot(false).failureDetail());
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void cancellingAToolSwitchBeforeItStopsTheRunningToolKeepsThatToolsReports(boolean removeTarget)
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(2, false));
+      c.awaitReady();
+      BenchmarkExecution running = c.engine.benchmarkExecution();
+
+      // The selection worker starts after this EDT turn, so C is untouched when B is cancelled,
+      // by removing B or by stopping the pending selection.
+      SwingUtilities.invokeAndWait(
+          () -> {
+            assertTrue(manager.switchEngineIfAvailable(1, false));
+            if (removeTarget) {
+              env.saveCatalog("A", "C");
+              refresh(manager);
+            } else {
+              manager.killThisEngines2();
+            }
+          });
+      SwingUtilities.invokeAndWait(() -> {});
+      SwingUtilities.invokeAndWait(() -> {});
+      int slot = removeTarget ? 1 : 2;
+      var shown = manager.engineSwitchUiSnapshot(false);
+      assertEquals(EngineManager.EngineSwitchUiPhase.TOOL, shown.phase());
+      assertEquals("C", shown.targetName(), "C is still the selection and still running");
+      assertEquals(slot, shown.targetIndex());
+      assertEquals(Lizzie.resourceBundle.getString("Benchmark.running"), shown.failureDetail());
+      assertSame(c.engine, Lizzie.leelaz2);
+      assertTrue(c.alive());
+      assertFalse(Files.exists(b.path.resolve("pid")), "the cancelled target never starts");
+
+      c.command("exit 0");
+      assertEquals(
+          BenchmarkExecution.State.SUCCEEDED,
+          running.completion().get(5, TimeUnit.SECONDS).state());
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(false).failureDetail()));
+      assertEquals("C", manager.engineSwitchUiSnapshot(false).targetName());
+      assertEquals(slot, manager.engineSwitchUiSnapshot(false).targetIndex());
+    }
+  }
+
+  @Test
+  void reorderingAfterAToolFinishesKeepsItsResultInTheEngineMenu() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      SwingUtilities.invokeAndWait(() -> Menu.engineMenu = new JFontMenu());
+      assertTrue(manager.switchEngineIfAvailable(1, true));
+      b.awaitReady();
+      BenchmarkExecution execution = b.engine.benchmarkExecution();
+      b.command("exit 0");
+      assertEquals(
+          BenchmarkExecution.State.SUCCEEDED,
+          execution.completion().get(5, TimeUnit.SECONDS).state());
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(true).failureDetail()));
+      SwingUtilities.invokeAndWait(() -> {});
+      assertEquals("2:B:" + succeeded, Menu.engineMenu.getText());
+
+      // The finished run sends no further report, so the refresh alone must keep its result.
+      env.saveCatalog("A", "C", "B");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      SwingUtilities.invokeAndWait(() -> {});
+      assertEquals(2, EngineManager.currentEngineNo);
+      assertEquals("3:B:" + succeeded, Menu.engineMenu.getText());
     }
   }
 
@@ -823,6 +951,22 @@ class EngineManagerBenchmarkTest {
       quit.release();
     }
 
+    /** Set when a start runs on the event thread, and when analysis is asked to resume. */
+    volatile boolean startedOnEventThread;
+    volatile boolean analysisResumed;
+
+    @Override
+    public void startEngine(int index) throws java.io.IOException {
+      if (SwingUtilities.isEventDispatchThread()) startedOnEventThread = true;
+      super.startEngine(index);
+    }
+
+    @Override
+    public boolean ponderIfAnalysisControlAllows() {
+      analysisResumed = true;
+      return super.ponderIfAnalysisControlAllows();
+    }
+
     @Override
     long engineStartupSynchronizationTimeoutMillis() {
       return isBenchmark() ? 1 : 3000;
@@ -865,6 +1009,7 @@ class EngineManagerBenchmarkTest {
     final Board oldBoard = Lizzie.board;
     final LizzieFrame oldFrame = Lizzie.frame;
     final Menu oldMenu = LizzieFrame.menu;
+    final JFontMenu oldEngineMenu = Menu.engineMenu;
     final GtpConsolePane oldConsole = Lizzie.gtpConsole;
     final int oldWidth = Board.boardWidth, oldHeight = Board.boardHeight;
     final int oldIndex = EngineManager.currentEngineNo, oldIndex2 = EngineManager.currentEngineNo2;
@@ -885,6 +1030,7 @@ class EngineManagerBenchmarkTest {
       Lizzie.leelaz2 = null;
       Lizzie.frame = null;
       LizzieFrame.menu = null;
+      Menu.engineMenu = null;
       Board.boardWidth = Board.boardHeight = 19;
       Zobrist.init();
       Board board = allocate(Board.class);
@@ -939,6 +1085,20 @@ class EngineManagerBenchmarkTest {
             protected ArrayList<EngineData> loadEngineCatalogSnapshot() {
               return new ArrayList<>(savedCatalog);
             }
+
+            /** Stands in for the engine menu, which labels the shown slot, name and status. */
+            @Override
+            protected void renderEngineSwitchUiState(EngineSwitchUiSnapshot snapshot) {
+              super.renderEngineSwitchUiState(snapshot);
+              if (snapshot.isMain() && Menu.engineMenu != null) {
+                Menu.engineMenu.setText(
+                    (snapshot.targetIndex() + 1)
+                        + ":"
+                        + snapshot.targetName()
+                        + ":"
+                        + snapshot.failureDetail());
+              }
+            }
           };
       Lizzie.setEngineManager(manager);
       return manager;
@@ -978,6 +1138,7 @@ class EngineManagerBenchmarkTest {
         Lizzie.board = oldBoard;
         Lizzie.frame = oldFrame;
         LizzieFrame.menu = oldMenu;
+        Menu.engineMenu = oldEngineMenu;
         Lizzie.gtpConsole = oldConsole;
         Board.boardWidth = oldWidth;
         Board.boardHeight = oldHeight;

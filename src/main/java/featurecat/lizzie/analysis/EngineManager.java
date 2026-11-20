@@ -261,6 +261,14 @@ public class EngineManager {
    * rebuild. Guarded by ENGINE_SELECTION_STATE_LOCK; the next published list clears it.
    */
   private volatile List<Leelaz> retiredCatalogEngines = List.of();
+
+  /**
+   * Numbers each catalog refresh's read; guarded by ENGINE_SELECTION_STATE_LOCK. Every save is
+   * followed by a refresh, so the refresh holding the latest number read the latest catalog, and
+   * only that refresh may publish.
+   */
+  private long catalogRefreshTicket;
+
   public static volatile int currentEngineNo;
   private int engineNo = 1;
   public static volatile int currentEngineNo2 = -1;
@@ -4202,13 +4210,13 @@ public class EngineManager {
    * One remote recovery of the selected primary. It is registered before its attempt takes the
    * engine's lifecycle lease and released only once that lease is gone. The restart thread claims
    * it for the slot the engine holds at that moment, or a catalog refresh that removed the engine
-   * claims it first and abandons it. A refresh that cannot abandon it, because the attempt is still
-   * being taken or the restart has already been claimed, rebuilds only after the release.
+   * claims it first, so that it never restarts. Either way the recovery closes its own attempt:
+   * {@link Leelaz.AutomaticRestartAttempt#close()} returns at once to a second caller while the
+   * first is still releasing. A refresh that needs the lease therefore rebuilds after the release.
    */
   private static final class PendingRemoteRecovery {
     private final AtomicBoolean claimed = new AtomicBoolean();
     // Guarded by ENGINE_SELECTION_STATE_LOCK.
-    private Leelaz.AutomaticRestartAttempt attempt;
     private boolean released;
     private Runnable afterRelease;
 
@@ -4232,12 +4240,8 @@ public class EngineManager {
       releaseRemoteRecovery(engine, recovery);
       throw failure;
     }
-    if (!adoptRemoteRecoveryAttempt(recovery, attempt)) {
-      try {
-        if (attempt != null) attempt.close();
-      } finally {
-        releaseRemoteRecovery(engine, recovery);
-      }
+    if (attempt == null) {
+      releaseRemoteRecovery(engine, recovery);
       return;
     }
     engine.canCheckAlive = false;
@@ -4295,16 +4299,6 @@ public class EngineManager {
               && REMOTE_ENGINE_RECOVERIES.putIfAbsent(engine, recovery) == null
           ? recovery
           : null;
-    }
-  }
-
-  /** False when a refresh that removed the engine claimed the recovery while it took the lease. */
-  private boolean adoptRemoteRecoveryAttempt(
-      PendingRemoteRecovery recovery, Leelaz.AutomaticRestartAttempt attempt) {
-    synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      if (attempt == null || recovery.claimed.get()) return false;
-      recovery.attempt = attempt;
-      return true;
     }
   }
 
@@ -4419,8 +4413,14 @@ public class EngineManager {
       updateEngines();
       return;
     }
+    long ticket;
+    List<Leelaz> baseEngines;
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      ticket = ++catalogRefreshTicket;
+      baseEngines = engineList;
+    }
     ArrayList<EngineData> engineData = loadEngineCatalogSnapshot();
-    List<Leelaz> previousEngines = new ArrayList<Leelaz>(engineList);
+    List<Leelaz> previousEngines = new ArrayList<Leelaz>(baseEngines);
     boolean[] matched = new boolean[previousEngines.size()];
     List<Leelaz> refreshedEngines = new ArrayList<Leelaz>();
 
@@ -4438,47 +4438,61 @@ public class EngineManager {
       if (!matched[i]) retiredEngines.add(previousEngines.get(i));
     }
 
-    boolean primaryRetired;
-    CatalogRetirement retirement;
+    boolean rematch;
+    boolean primaryRetired = false;
+    CatalogRetirement retirement = null;
     List<EngineSwitchUiSnapshot> rebasedPresentations = new ArrayList<>();
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      // Read the selection here, not while the catalog loads: a tool commit may change it between.
-      Leelaz primary = Lizzie.leelaz;
-      int primarySlot = identityIndexOf(refreshedEngines, primary);
-      int secondarySlot = identityIndexOf(refreshedEngines, Lizzie.leelaz2);
-      primaryRetired = !isEmpty && primary != null && primarySlot < 0;
-      if (primaryRetired) {
-        // The removed primary stays published until the rebuild. Nothing may start it meanwhile,
-        // and a recovery still holding its lease makes the rebuild wait for that release.
-        retiredCatalogEngines = List.copyOf(retiredEngines);
-        retirement = cancelRetiredCatalogWork(retiredEngines, this::rerunEngineCatalogRefresh);
-      } else {
-        retiredCatalogEngines = List.of();
-        Lizzie.runWithEngineAuthorityMutation(
-            () -> {
-              engineList = refreshedEngines;
-              // Same lock as a pending tool commit, so no start can land between list and slots.
-              for (int i = 0; i < refreshedEngines.size(); i++) {
-                refreshedEngines.get(i).rebindCatalogSlot(i);
-              }
-              if (primarySlot >= 0) {
-                currentEngineNo = primarySlot;
-                engineNo = primarySlot;
-              }
-              currentEngineNo2 = secondarySlot;
-              return null;
-            });
-        retirement = cancelRetiredCatalogWork(retiredEngines, null);
-        for (boolean main : new boolean[] {true, false}) {
-          engineSwitchUiTracker
-              .rebaseCatalogSlots(
-                  main,
-                  previousEngines,
-                  refreshedEngines,
-                  this::engineDisplayNameWithoutCatalogLookup)
-              .ifPresent(rebasedPresentations::add);
+      if (ticket != catalogRefreshTicket) {
+        // A later refresh read the catalog after this one did and publishes in its place. Going on
+        // would undo that newer catalog and stop the entries it kept.
+        return;
+      }
+      rematch = engineList != baseEngines;
+      if (!rematch) {
+        // Read the selection here, not while the catalog loads: a tool commit may change it then.
+        Leelaz primary = Lizzie.leelaz;
+        int primarySlot = identityIndexOf(refreshedEngines, primary);
+        int secondarySlot = identityIndexOf(refreshedEngines, Lizzie.leelaz2);
+        primaryRetired = !isEmpty && primary != null && primarySlot < 0;
+        if (primaryRetired) {
+          // The removed primary stays published until the rebuild. Nothing may start it meanwhile,
+          // and a recovery still holding its lease makes the rebuild wait for that release.
+          retiredCatalogEngines = List.copyOf(retiredEngines);
+          retirement = cancelRetiredCatalogWork(retiredEngines, this::rerunEngineCatalogRefresh);
+        } else {
+          retiredCatalogEngines = List.of();
+          Lizzie.runWithEngineAuthorityMutation(
+              () -> {
+                engineList = refreshedEngines;
+                // Same lock as a pending tool commit, so no start can land between list and slots.
+                for (int i = 0; i < refreshedEngines.size(); i++) {
+                  refreshedEngines.get(i).rebindCatalogSlot(i);
+                }
+                if (primarySlot >= 0) {
+                  currentEngineNo = primarySlot;
+                  engineNo = primarySlot;
+                }
+                currentEngineNo2 = secondarySlot;
+                return null;
+              });
+          retirement = cancelRetiredCatalogWork(retiredEngines, null);
+          for (boolean main : new boolean[] {true, false}) {
+            engineSwitchUiTracker
+                .rebaseCatalogSlots(
+                    main,
+                    previousEngines,
+                    refreshedEngines,
+                    this::engineDisplayNameWithoutCatalogLookup)
+                .ifPresent(rebasedPresentations::add);
+          }
         }
       }
+    }
+    if (rematch) {
+      // A rebuild replaced the list this read was matched against; match the current one.
+      refreshEngineCatalog();
+      return;
     }
     retirement.finish().run();
     if (primaryRetired) {
@@ -4489,19 +4503,9 @@ public class EngineManager {
     runEngineSwitchUiUpdate(
         () -> {
           refreshEngineSelectionControls(engineData);
+          // The rebuilt menu ends by drawing each side's presentation, so a tool keeps its state.
           if (LizzieFrame.menu != null) {
             LizzieFrame.menu.updateEngineMenu();
-          }
-          List<Leelaz> displayedEngines = engineList;
-          if (Menu.engineMenu != null
-              && !isEmpty
-              && currentEngineNo >= 0
-              && currentEngineNo < displayedEngines.size()) {
-            Menu.engineMenu.setText(
-                "["
-                    + (currentEngineNo + 1)
-                    + "]: "
-                    + displayedEngines.get(currentEngineNo).oriEnginename);
           }
         });
   }
@@ -4685,22 +4689,48 @@ public class EngineManager {
     return true;
   }
 
-  /** Called under the selection lock. The label names the slot the target holds now, if any. */
+  /**
+   * Called under the selection lock; the target never started. Until its worker begins releasing
+   * the previous engine, that engine still runs as the side's selection. A tool it runs takes the
+   * presentation back with its current state, and its later reports follow. Otherwise the
+   * presentation reports the cancelled target, under the slot {@code slot} it holds now, if any.
+   */
   private EngineSwitchUiSnapshot cancelPendingBenchmarkSelection(
       EngineSwitchTransaction pending, int slot) {
     pending.targetEngine.cancelBenchmark();
-    EngineSwitchUiSnapshot cancelled =
-        engineSwitchUiTracker
-            .tool(
-                pending.uiToken,
-                pending.main,
-                slot,
-                engineDisplayNameWithoutCatalogLookup(pending.targetEngine, slot),
-                pending.targetEngine,
-                resourceBundle.getString("Benchmark.cancelled"))
+    boolean main = pending.main;
+    Leelaz previous = pending.previousEngine;
+    BenchmarkExecution previousRun =
+        pending.previousReleaseClaimed ? null : selectedToolRun(main, previous);
+    int previousSlot = main ? currentEngineNo : currentEngineNo2;
+    EngineSwitchUiSnapshot shown =
+        (previousRun != null
+                ? engineSwitchUiTracker.tool(
+                    pending.uiToken,
+                    main,
+                    previousSlot,
+                    engineDisplayNameWithoutCatalogLookup(previous, previousSlot),
+                    previous,
+                    benchmarkStatusText(previousRun.snapshot()))
+                : engineSwitchUiTracker.tool(
+                    pending.uiToken,
+                    main,
+                    slot,
+                    engineDisplayNameWithoutCatalogLookup(pending.targetEngine, slot),
+                    pending.targetEngine,
+                    resourceBundle.getString("Benchmark.cancelled")))
             .orElse(null);
     finishEngineSwitchTransaction(pending);
-    return cancelled;
+    return shown;
+  }
+
+  /** Under the selection lock: the run of a tool still selected on that side at its slot. */
+  private BenchmarkExecution selectedToolRun(boolean main, Leelaz engine) {
+    if (engine == null || !engine.isBenchmark()) return null;
+    int slot = main ? currentEngineNo : currentEngineNo2;
+    return isCommittedEngineSelection(main, engine, slot) && catalogSlotOf(engine) == slot
+        ? engine.benchmarkExecution()
+        : null;
   }
 
   /** What a refresh does after its lock, and whether its rebuild waits for a recovery's release. */
@@ -4714,8 +4744,9 @@ public class EngineManager {
    *   <li>Its pending tool selection is cancelled, unless the selection worker already began
    *       releasing the previous engine. That worker then restores the previous selection itself.
    *   <li>Its running tool is cancelled and later reports its own final result, without a slot.
-   *   <li>Its remote recovery is abandoned. A recovery that can no longer be abandoned receives
-   *       {@code afterRelease}, if given, and the caller's rebuild waits for that release.
+   *   <li>Its remote recovery is claimed, so that it never restarts the entry, and is left to close
+   *       its own attempt. With {@code afterRelease} given, the caller's rebuild needs the lease
+   *       and waits for that recovery's release.
    * </ul>
    *
    * The returned step runs after the lock is released.
@@ -4723,7 +4754,6 @@ public class EngineManager {
   private CatalogRetirement cancelRetiredCatalogWork(
       List<Leelaz> retiredEngines, Runnable afterRelease) {
     List<EngineSwitchUiSnapshot> presentations = new ArrayList<>();
-    List<Leelaz.AutomaticRestartAttempt> abandoned = new ArrayList<>();
     boolean awaitsRelease = false;
     EngineSwitchTransaction pending = engineSwitchTransaction.get();
     if (pending != null
@@ -4741,24 +4771,15 @@ public class EngineManager {
       }
       PendingRemoteRecovery recovery = REMOTE_ENGINE_RECOVERIES.get(engine);
       if (recovery == null || recovery.released) continue;
-      if (recovery.claim() && recovery.attempt != null) {
-        abandoned.add(recovery.attempt);
-      } else if (afterRelease != null) {
-        // Still taking its lease, or already restarting: only its release frees the lease.
+      // Taking its lease, closing it or restarting, the recovery frees the lease only on release.
+      recovery.claim();
+      if (afterRelease != null) {
         recovery.afterRelease = afterRelease;
         awaitsRelease = true;
       }
     }
-    Runnable finish =
-        () -> {
-          Throwable failure = null;
-          for (Leelaz.AutomaticRestartAttempt attempt : abandoned) {
-            failure = runLifecycleCleanupStep(failure, attempt::close);
-          }
-          presentations.forEach(this::publishEngineSwitchUiState);
-          rethrowLifecycleCleanupFailure(failure);
-        };
-    return new CatalogRetirement(finish, awaitsRelease);
+    return new CatalogRetirement(
+        () -> presentations.forEach(this::publishEngineSwitchUiState), awaitsRelease);
   }
 
   /** The removed primary's recovery released its lease; the refresh that waited for it resumes. */
@@ -4806,14 +4827,48 @@ public class EngineManager {
       switchEngine(currentEngineNo, true);
       return;
     }
-    Leelaz currentForegroundEngine = Lizzie.leelaz;
-    boolean restartPonderIntent = currentForegroundEngine.isPondering();
     int restartEngineIndex = currentEngineNo;
     if (rejectSameEngineSelection(restartEngineIndex, true)) return;
-    Leelaz restartTarget = engineList.get(restartEngineIndex);
+    restartSelectedEngine(restartEngineIndex, true, Lizzie.leelaz.isPondering());
+  }
+
+  public void reStartEngine(int index) {
+    // currentEngineNo = -1;
+    if (rejectForegroundEngineStartDuringSetup(true)) return;
+    if (isEmpty || Lizzie.leelaz == null) return;
+    if (isBenchmarkParticipant(index)) {
+      switchEngine(index, true);
+      return;
+    }
+    if (rejectSameEngineSelection(index, true)) return;
+    restartSelectedEngine(index, true, Lizzie.leelaz.isPondering());
+  }
+
+  public void reStartEngine2() {
+    // currentEngineNo = -1;
+    if (Lizzie.leelaz2 == null || currentEngineNo2 < 0 || currentEngineNo2 >= engineList.size())
+      return;
+    if (Lizzie.leelaz2.isBenchmark()) {
+      switchEngine(currentEngineNo2, false);
+      return;
+    }
+    int restartEngineIndex = currentEngineNo2;
+    if (rejectSameEngineSelection(restartEngineIndex, false)) return;
+    restartSelectedEngine(
+        restartEngineIndex, false, Lizzie.leelaz != null && Lizzie.leelaz.isPondering());
+  }
+
+  /**
+   * Restarts the GTP engine at {@code index} on one side and synchronizes it with the board. The
+   * caller says whether analysis resumes, since a quit may already have cleared that engine's own
+   * state. It blocks while the engine stops and starts.
+   */
+  private void restartSelectedEngine(int index, boolean main, boolean restartPonderIntent) {
+    Leelaz currentForegroundEngine = Lizzie.leelaz;
+    Leelaz restartTarget = engineList.get(index);
     PreparedEngineSwitch preparedSwitch;
     try {
-      preparedSwitch = prepareEngineSwitch(restartEngineIndex, true, true);
+      preparedSwitch = prepareEngineSwitch(index, main, true);
     } catch (Leelaz.ExactSnapshotRestoreAdmissionException
         | InitialStartupReservationException conflict) {
       showForegroundEngineLeaseInUse();
@@ -4827,21 +4882,21 @@ public class EngineManager {
       restartTarget = preparedSwitch.targetEngine;
     }
     if (preparedSwitch == null) {
-    EngineLifecycleReservations reservations =
+      EngineLifecycleReservations reservations =
           reservePreparedEngineSwitch(currentForegroundEngine, restartTarget, null);
-    if (reservations == null) {
-      showForegroundEngineLeaseInUse();
-      return;
-    }
+      if (reservations == null) {
+        showForegroundEngineLeaseInUse();
+        return;
+      }
       shutdownEngineForRestart(restartTarget);
       switchEngineInternal(
-          restartEngineIndex,
-          true,
+          index,
+          main,
           null,
           releaseEngineLifecycleAfterBoardSync(
               currentForegroundEngine,
               restartTarget,
-              true,
+              main,
               true,
               restartPonderIntent,
               reservations,
@@ -4860,162 +4915,13 @@ public class EngineManager {
     lifecycleSynchronization.installReservations(reservations);
     shutdownEngineForRestart(restartTarget);
     switchEngineInternal(
-        restartEngineIndex,
-        true,
+        index,
+        main,
         preparedSwitch,
         releaseEngineLifecycleAfterBoardSync(
             currentForegroundEngine,
             restartTarget,
-            true,
-            true,
-            restartPonderIntent,
-            lifecycleSynchronization::close,
-            preparedSwitch.lifecycleRestore));
-  }
-
-  public void reStartEngine(int index) {
-    // currentEngineNo = -1;
-    if (rejectForegroundEngineStartDuringSetup(true)) return;
-    if (isEmpty || Lizzie.leelaz == null) return;
-    if (isBenchmarkParticipant(index)) {
-      switchEngine(index, true);
-      return;
-    }
-    if (rejectSameEngineSelection(index, true)) return;
-    Leelaz currentForegroundEngine = Lizzie.leelaz;
-    boolean restartPonderIntent = currentForegroundEngine.isPondering();
-    Leelaz targetEngine = engineList.get(index);
-    PreparedEngineSwitch preparedSwitch;
-    try {
-      preparedSwitch = prepareEngineSwitch(index, true, true);
-    } catch (Leelaz.ExactSnapshotRestoreAdmissionException
-        | InitialStartupReservationException conflict) {
-      showForegroundEngineLeaseInUse();
-      return;
-    } catch (RuntimeException failure) {
-      targetEngine.isLoaded = false;
-      showEngineSynchronizationFailure(targetEngine, failure);
-      return;
-    }
-    if (preparedSwitch != null) {
-      targetEngine = preparedSwitch.targetEngine;
-    }
-    if (preparedSwitch == null) {
-    EngineLifecycleReservations reservations =
-          reservePreparedEngineSwitch(currentForegroundEngine, targetEngine, null);
-    if (reservations == null) {
-        showForegroundEngineLeaseInUse();
-        return;
-      }
-      shutdownEngineForRestart(targetEngine);
-      switchEngineInternal(
-          index,
-          true,
-          null,
-          releaseEngineLifecycleAfterBoardSync(
-              currentForegroundEngine,
-              targetEngine,
-              true,
-              true,
-              restartPonderIntent,
-              reservations,
-              null));
-      return;
-    }
-    InitialEngineStartupSynchronization lifecycleSynchronization =
-        preparedSwitch.initialStartupSynchronization;
-    EngineLifecycleReservations reservations =
-        reservePreparedEngineSwitch(currentForegroundEngine, targetEngine, preparedSwitch);
-    if (reservations == null) {
-      lifecycleSynchronization.close();
-      showForegroundEngineLeaseInUse();
-      return;
-    }
-    lifecycleSynchronization.installReservations(reservations);
-    shutdownEngineForRestart(targetEngine);
-    switchEngineInternal(
-        index,
-        true,
-        preparedSwitch,
-        releaseEngineLifecycleAfterBoardSync(
-            currentForegroundEngine,
-            targetEngine,
-            true,
-            true,
-            restartPonderIntent,
-            lifecycleSynchronization::close,
-            preparedSwitch.lifecycleRestore));
-  }
-
-  public void reStartEngine2() {
-    // currentEngineNo = -1;
-    if (Lizzie.leelaz2 == null || currentEngineNo2 < 0 || currentEngineNo2 >= engineList.size())
-      return;
-    if (Lizzie.leelaz2.isBenchmark()) {
-      switchEngine(currentEngineNo2, false);
-      return;
-    }
-    int restartEngineIndex = currentEngineNo2;
-    if (rejectSameEngineSelection(restartEngineIndex, false)) return;
-    boolean restartPonderIntent =
-        Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-    Leelaz secondaryTarget = engineList.get(restartEngineIndex);
-    PreparedEngineSwitch preparedSwitch;
-    try {
-      preparedSwitch = prepareEngineSwitch(restartEngineIndex, false, true);
-    } catch (Leelaz.ExactSnapshotRestoreAdmissionException
-        | InitialStartupReservationException conflict) {
-      showForegroundEngineLeaseInUse();
-      return;
-    } catch (RuntimeException failure) {
-      secondaryTarget.isLoaded = false;
-      showEngineSynchronizationFailure(secondaryTarget, failure);
-      return;
-    }
-    if (preparedSwitch != null) {
-      secondaryTarget = preparedSwitch.targetEngine;
-    }
-    if (preparedSwitch == null) {
-      EngineLifecycleReservations reservations =
-          reservePreparedEngineSwitch(Lizzie.leelaz, secondaryTarget, null);
-      if (reservations == null) {
-        showForegroundEngineLeaseInUse();
-        return;
-      }
-      shutdownEngineForRestart(secondaryTarget);
-      switchEngineInternal(
-          restartEngineIndex,
-          false,
-          null,
-          releaseEngineLifecycleAfterBoardSync(
-              Lizzie.leelaz,
-              secondaryTarget,
-              false,
-              true,
-              restartPonderIntent,
-              reservations,
-              null));
-      return;
-    }
-    InitialEngineStartupSynchronization lifecycleSynchronization =
-        preparedSwitch.initialStartupSynchronization;
-    EngineLifecycleReservations reservations =
-        reservePreparedEngineSwitch(Lizzie.leelaz, secondaryTarget, preparedSwitch);
-    if (reservations == null) {
-      lifecycleSynchronization.close();
-      showForegroundEngineLeaseInUse();
-      return;
-    }
-    lifecycleSynchronization.installReservations(reservations);
-    shutdownEngineForRestart(secondaryTarget);
-    switchEngineInternal(
-        restartEngineIndex,
-        false,
-        preparedSwitch,
-        releaseEngineLifecycleAfterBoardSync(
-            Lizzie.leelaz,
-            secondaryTarget,
-            false,
+            main,
             true,
             restartPonderIntent,
             lifecycleSynchronization::close,
@@ -11970,6 +11876,8 @@ public class EngineManager {
         transaction.previousReleaseClaimed = true;
       }
       boolean previousQuit = false;
+      // Read before stopping it: a quit clears the engine's own analysis state.
+      boolean previousPondering = previous != null && previous.isPondering();
       if (previous != null) {
         if (previous.isBenchmark()) {
           cancelAndReapBenchmark(previous);
@@ -11987,7 +11895,8 @@ public class EngineManager {
         int slot = catalogSlotOf(target);
         if (slot < 0) {
           // Removed while the previous engine was being stopped for it.
-          restoreAfterRelease = restoreSelectionAfterRemovedTool(transaction, previousQuit);
+          restoreAfterRelease =
+              restoreSelectionAfterRemovedTool(transaction, previousQuit, previousPondering);
           return;
         }
         if (!installProvisionalEngineSelection(
@@ -12022,19 +11931,23 @@ public class EngineManager {
   /**
    * Called under the selection lock when a refresh removed a tool target after its worker began
    * stopping the previous engine. That engine is still the committed selection, so it is shown
-   * again. A GTP engine quit for the tool restarts, and one that only paused its analysis resumes.
-   * A previous tool stays selected and shows the result of its stopped run.
+   * again. A GTP engine quit for the tool restarts, and one that only paused its analysis resumes,
+   * each as it was analysing before it was stopped. A previous tool stays selected and shows the
+   * result of its stopped run.
+   *
+   * <p>The returned step runs on the selection worker after it released the switch. A restart
+   * quits, waits for and starts a process, possibly a remote one, so it stays off the event thread.
    */
   private Runnable restoreSelectionAfterRemovedTool(
-      EngineSwitchTransaction transaction, boolean previousQuit) {
+      EngineSwitchTransaction transaction, boolean previousQuit, boolean previousPondering) {
     Leelaz previous = transaction.previousEngine;
     boolean main = transaction.main;
     int slot = main ? currentEngineNo : currentEngineNo2;
     boolean selected =
         isCommittedEngineSelection(main, previous, slot) && catalogSlotOf(previous) == slot;
-    BenchmarkExecution previousRun = selected ? previous.benchmarkExecution() : null;
+    BenchmarkExecution previousRun = selectedToolRun(main, previous);
     EngineSwitchUiSnapshot shown =
-        (selected && previous.isBenchmark() && previousRun != null
+        (previousRun != null
                 ? engineSwitchUiTracker.tool(
                     transaction.uiToken,
                     main,
@@ -12045,26 +11958,48 @@ public class EngineManager {
                 : engineSwitchUiTracker.abandonPending(transaction.uiToken, main))
             .orElse(null);
     boolean restart = selected && previousQuit;
-    boolean resume =
-        selected && !previousQuit && !previous.isBenchmark() && previous.isPondering();
+    boolean resume = selected && !previousQuit && !previous.isBenchmark() && previousPondering;
     return () -> {
       publishEngineSwitchUiState(shown);
-      if (restart || resume) {
-        runEngineSwitchUiUpdate(() -> resumeRestoredSelection(previous, main, restart));
+      if (restart) {
+        restartRestoredSelection(previous, main, previousPondering);
+      } else if (resume) {
+        runEngineSwitchUiUpdate(() -> resumeRestoredAnalysis(previous, main));
       }
     };
   }
 
-  private void resumeRestoredSelection(Leelaz previous, boolean main, boolean restart) {
-    if (Lizzie.engineManager != this || (main ? Lizzie.leelaz : Lizzie.leelaz2) != previous) {
+  /** Restarts the previous engine a removed tool target quit, if it is still the selection. */
+  private void restartRestoredSelection(Leelaz previous, boolean main, boolean previousPondering) {
+    int slot;
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      slot = main ? currentEngineNo : currentEngineNo2;
+      if (Lizzie.engineManager != this
+          || !isCommittedEngineSelection(main, previous, slot)
+          || catalogSlotOf(previous) != slot) {
+        return;
+      }
+    }
+    if (main && isSetupModeActive()) {
+      runEngineSwitchUiUpdate(this::showSetupModeEngineUnavailable);
       return;
     }
-    if (!restart) {
+    try {
+      // As in reStartEngine2, a secondary analyses while the primary does.
+      restartSelectedEngine(
+          slot,
+          main,
+          main ? previousPondering : Lizzie.leelaz != null && Lizzie.leelaz.isPondering());
+    } catch (RuntimeException failure) {
+      // The selection worker would otherwise report this as a failure of the removed target.
+      previous.isLoaded = false;
+      showEngineSynchronizationFailure(previous, failure);
+    }
+  }
+
+  private void resumeRestoredAnalysis(Leelaz previous, boolean main) {
+    if (Lizzie.engineManager == this && (main ? Lizzie.leelaz : Lizzie.leelaz2) == previous) {
       previous.ponder();
-    } else if (main) {
-      reStartEngine();
-    } else {
-      reStartEngine2();
     }
   }
 
@@ -12102,7 +12037,7 @@ public class EngineManager {
       presentation =
           engineSwitchUiTracker
               .tool(
-                  transaction.uiToken,
+                  toolPresentationToken(transaction),
                   transaction.main,
                   shownSlot,
                   engineDisplayNameWithoutCatalogLookup(target, shownSlot),
@@ -12113,6 +12048,19 @@ public class EngineManager {
     if (presentation != null) {
       publishEngineSwitchUiState(presentation);
     }
+  }
+
+  /**
+   * Under the selection lock: a run reports under its own switch's token, or under the token now
+   * presenting its engine as a tool. A later switch cancelled before it touched this engine hands
+   * the presentation back that way.
+   */
+  private long toolPresentationToken(EngineSwitchTransaction transaction) {
+    EngineSwitchUiSnapshot shown = engineSwitchUiTracker.current(transaction.main);
+    return shown.phase == EngineSwitchUiPhase.TOOL
+            && shown.targetEngineIdentity == transaction.targetEngine
+        ? shown.token
+        : transaction.uiToken;
   }
 
   private String benchmarkStatusText(BenchmarkExecution.Snapshot state) {
