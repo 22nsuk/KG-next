@@ -255,6 +255,12 @@ public class EngineManager {
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
   public static boolean isUpdating = false;
   public volatile List<Leelaz> engineList;
+
+  /**
+   * Entries a refresh removed while the removed primary keeps the old list published until the
+   * rebuild. Guarded by ENGINE_SELECTION_STATE_LOCK; the next published list clears it.
+   */
+  private volatile List<Leelaz> retiredCatalogEngines = List.of();
   public static volatile int currentEngineNo;
   private int engineNo = 1;
   public static volatile int currentEngineNo2 = -1;
@@ -4193,17 +4199,18 @@ public class EngineManager {
   }
 
   /**
-   * One remote restart between its admission and its start. Either the restart thread claims it
-   * for the slot the engine holds at that moment, or a catalog refresh that removed the engine
-   * claims it and abandons the attempt. Closing an attempt is idempotent.
+   * One remote recovery of the selected primary. It is registered before its attempt takes the
+   * engine's lifecycle lease and released only once that lease is gone. The restart thread claims
+   * it for the slot the engine holds at that moment, or a catalog refresh that removed the engine
+   * claims it first and abandons it. A refresh that cannot abandon it, because the attempt is still
+   * being taken or the restart has already been claimed, rebuilds only after the release.
    */
   private static final class PendingRemoteRecovery {
-    private final Leelaz.AutomaticRestartAttempt attempt;
     private final AtomicBoolean claimed = new AtomicBoolean();
-
-    private PendingRemoteRecovery(Leelaz.AutomaticRestartAttempt attempt) {
-      this.attempt = attempt;
-    }
+    // Guarded by ENGINE_SELECTION_STATE_LOCK.
+    private Leelaz.AutomaticRestartAttempt attempt;
+    private boolean released;
+    private Runnable afterRelease;
 
     private boolean claim() {
       return claimed.compareAndSet(false, true);
@@ -4214,13 +4221,23 @@ public class EngineManager {
     if (engine == null || isSetupModeActive()) {
       return;
     }
-    Leelaz.AutomaticRestartAttempt attempt = engine.beginAutomaticEngineRestartAttempt();
-    if (attempt == null) {
+    PendingRemoteRecovery recovery = registerRemoteRecovery(engine);
+    if (recovery == null) {
       return;
     }
-    PendingRemoteRecovery recovery = new PendingRemoteRecovery(attempt);
-    if (REMOTE_ENGINE_RECOVERIES.putIfAbsent(engine, recovery) != null) {
-      attempt.close();
+    Leelaz.AutomaticRestartAttempt attempt;
+    try {
+      attempt = engine.beginAutomaticEngineRestartAttempt();
+    } catch (RuntimeException | Error failure) {
+      releaseRemoteRecovery(engine, recovery);
+      throw failure;
+    }
+    if (!adoptRemoteRecoveryAttempt(recovery, attempt)) {
+      try {
+        if (attempt != null) attempt.close();
+      } finally {
+        releaseRemoteRecovery(engine, recovery);
+      }
       return;
     }
     engine.canCheckAlive = false;
@@ -4239,16 +4256,20 @@ public class EngineManager {
                   engine.canCheckAlive = true;
                   return;
                 }
-                attempt.restartClosedEngine(slot);
+                // The restart reports settlement after its lease is released, never before.
+                attempt.restartClosedEngine(slot, () -> releaseRemoteRecovery(engine, recovery));
                 restartStarted = true;
                 reconcileRestartedCatalogSlot(engine, slot);
               } catch (IOException | RuntimeException failure) {
                 failure.printStackTrace();
               } finally {
                 if (!restartStarted) {
-                  attempt.close();
+                  try {
+                    attempt.close();
+                  } finally {
+                    releaseRemoteRecovery(engine, recovery);
+                  }
                 }
-                REMOTE_ENGINE_RECOVERIES.remove(engine, recovery);
               }
             },
             "lizzie-remote-engine-restart");
@@ -4256,11 +4277,48 @@ public class EngineManager {
     try {
       restartThread.start();
     } catch (RuntimeException failure) {
-      attempt.close();
-      REMOTE_ENGINE_RECOVERIES.remove(engine, recovery);
-      engine.canCheckAlive = true;
+      try {
+        attempt.close();
+      } finally {
+        releaseRemoteRecovery(engine, recovery);
+        engine.canCheckAlive = true;
+      }
       throw failure;
     }
+  }
+
+  /** Registration and a refresh's removal share the lock, so one always sees the other. */
+  private PendingRemoteRecovery registerRemoteRecovery(Leelaz engine) {
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      PendingRemoteRecovery recovery = new PendingRemoteRecovery();
+      return selectedPrimaryCatalogSlot(engine) >= 0
+              && REMOTE_ENGINE_RECOVERIES.putIfAbsent(engine, recovery) == null
+          ? recovery
+          : null;
+    }
+  }
+
+  /** False when a refresh that removed the engine claimed the recovery while it took the lease. */
+  private boolean adoptRemoteRecoveryAttempt(
+      PendingRemoteRecovery recovery, Leelaz.AutomaticRestartAttempt attempt) {
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      if (attempt == null || recovery.claimed.get()) return false;
+      recovery.attempt = attempt;
+      return true;
+    }
+  }
+
+  /** Runs once the recovery holds no lease; a refresh that waited for it continues from here. */
+  private void releaseRemoteRecovery(Leelaz engine, PendingRemoteRecovery recovery) {
+    Runnable afterRelease;
+    synchronized (ENGINE_SELECTION_STATE_LOCK) {
+      if (recovery.released) return;
+      recovery.released = true;
+      REMOTE_ENGINE_RECOVERIES.remove(engine, recovery);
+      afterRelease = recovery.afterRelease;
+      recovery.afterRelease = null;
+    }
+    if (afterRelease != null) afterRelease.run();
   }
 
   /** The restart uses the slot the engine holds now, not the one it was started from. */
@@ -4278,6 +4336,7 @@ public class EngineManager {
               && engine == Lizzie.leelaz
               && !isEmpty
               && isExactCatalogSlot(this, slot, engine)
+              && catalogSlotOf(engine) == slot
           ? slot
           : -1;
     }
@@ -4364,10 +4423,6 @@ public class EngineManager {
     List<Leelaz> previousEngines = new ArrayList<Leelaz>(engineList);
     boolean[] matched = new boolean[previousEngines.size()];
     List<Leelaz> refreshedEngines = new ArrayList<Leelaz>();
-    Leelaz currentMainEngine = Lizzie.leelaz;
-    Leelaz currentSecondaryEngine = Lizzie.leelaz2;
-    int refreshedCurrentEngineNo = -1;
-    int refreshedCurrentEngineNo2 = -1;
 
     for (int i = 0; i < engineData.size(); i++) {
       EngineData engineDt = engineData.get(i);
@@ -4376,8 +4431,6 @@ public class EngineManager {
           matchIndex >= 0 ? previousEngines.get(matchIndex) : createUnstartedEngine(engineDt);
       applySavedEngineMetadata(engine, engineDt, i);
       refreshedEngines.add(engine);
-      if (engine == currentMainEngine) refreshedCurrentEngineNo = i;
-      if (engine == currentSecondaryEngine) refreshedCurrentEngineNo2 = i;
     }
 
     List<Leelaz> retiredEngines = new ArrayList<Leelaz>();
@@ -4385,48 +4438,53 @@ public class EngineManager {
       if (!matched[i]) retiredEngines.add(previousEngines.get(i));
     }
 
-    if (!isEmpty && currentMainEngine != null && refreshedCurrentEngineNo < 0) {
-      // A recovery still holding the removed primary would make the rebuild wait or restart it.
-      Runnable finishRetirement;
-      synchronized (ENGINE_SELECTION_STATE_LOCK) {
-        finishRetirement = cancelRetiredCatalogWork(retiredEngines);
-      }
-      finishRetirement.run();
-      updateEngines();
-      return;
-    }
-
-    int frozenCurrentEngineNo = refreshedCurrentEngineNo;
-    int frozenCurrentEngineNo2 = refreshedCurrentEngineNo2;
-    Runnable finishRetirement;
+    boolean primaryRetired;
+    CatalogRetirement retirement;
     List<EngineSwitchUiSnapshot> rebasedPresentations = new ArrayList<>();
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      Lizzie.runWithEngineAuthorityMutation(
-          () -> {
-            engineList = refreshedEngines;
-            // Same lock as a pending tool commit, so no start can land between list and slots.
-            for (int i = 0; i < refreshedEngines.size(); i++) {
-              refreshedEngines.get(i).rebindCatalogSlot(i);
-            }
-            if (frozenCurrentEngineNo >= 0) {
-              currentEngineNo = frozenCurrentEngineNo;
-              engineNo = frozenCurrentEngineNo;
-            }
-            currentEngineNo2 = frozenCurrentEngineNo2;
-            return null;
-          });
-      finishRetirement = cancelRetiredCatalogWork(retiredEngines);
-      for (boolean main : new boolean[] {true, false}) {
-        engineSwitchUiTracker
-            .rebaseCatalogSlots(
-                main,
-                previousEngines,
-                refreshedEngines,
-                this::engineDisplayNameWithoutCatalogLookup)
-            .ifPresent(rebasedPresentations::add);
+      // Read the selection here, not while the catalog loads: a tool commit may change it between.
+      Leelaz primary = Lizzie.leelaz;
+      int primarySlot = identityIndexOf(refreshedEngines, primary);
+      int secondarySlot = identityIndexOf(refreshedEngines, Lizzie.leelaz2);
+      primaryRetired = !isEmpty && primary != null && primarySlot < 0;
+      if (primaryRetired) {
+        // The removed primary stays published until the rebuild. Nothing may start it meanwhile,
+        // and a recovery still holding its lease makes the rebuild wait for that release.
+        retiredCatalogEngines = List.copyOf(retiredEngines);
+        retirement = cancelRetiredCatalogWork(retiredEngines, this::rerunEngineCatalogRefresh);
+      } else {
+        retiredCatalogEngines = List.of();
+        Lizzie.runWithEngineAuthorityMutation(
+            () -> {
+              engineList = refreshedEngines;
+              // Same lock as a pending tool commit, so no start can land between list and slots.
+              for (int i = 0; i < refreshedEngines.size(); i++) {
+                refreshedEngines.get(i).rebindCatalogSlot(i);
+              }
+              if (primarySlot >= 0) {
+                currentEngineNo = primarySlot;
+                engineNo = primarySlot;
+              }
+              currentEngineNo2 = secondarySlot;
+              return null;
+            });
+        retirement = cancelRetiredCatalogWork(retiredEngines, null);
+        for (boolean main : new boolean[] {true, false}) {
+          engineSwitchUiTracker
+              .rebaseCatalogSlots(
+                  main,
+                  previousEngines,
+                  refreshedEngines,
+                  this::engineDisplayNameWithoutCatalogLookup)
+              .ifPresent(rebasedPresentations::add);
+        }
       }
     }
-    finishRetirement.run();
+    retirement.finish().run();
+    if (primaryRetired) {
+      if (!retirement.awaitsRecoveryRelease()) updateEngines();
+      return;
+    }
     rebasedPresentations.forEach(this::publishEngineSwitchUiState);
     runEngineSwitchUiUpdate(
         () -> {
@@ -4645,46 +4703,75 @@ public class EngineManager {
     return cancelled;
   }
 
+  /** What a refresh does after its lock, and whether its rebuild waits for a recovery's release. */
+  private record CatalogRetirement(Runnable finish, boolean awaitsRecoveryRelease) {}
+
   /**
-   * Called under the selection lock with the engines a catalog refresh dropped. A removed entry
-   * has no slot to run, report or recover into, so its pending tool selection, its running tool and
-   * its unclaimed remote recovery are cancelled. The returned step runs after the lock is released.
+   * Called under the selection lock with the engines a catalog refresh dropped. A removed entry has
+   * no slot to run, report or recover into.
+   *
+   * <ul>
+   *   <li>Its pending tool selection is cancelled, unless the selection worker already began
+   *       releasing the previous engine. That worker then restores the previous selection itself.
+   *   <li>Its running tool is cancelled and later reports its own final result, without a slot.
+   *   <li>Its remote recovery is abandoned. A recovery that can no longer be abandoned receives
+   *       {@code afterRelease}, if given, and the caller's rebuild waits for that release.
+   * </ul>
+   *
+   * The returned step runs after the lock is released.
    */
-  private Runnable cancelRetiredCatalogWork(List<Leelaz> retiredEngines) {
+  private CatalogRetirement cancelRetiredCatalogWork(
+      List<Leelaz> retiredEngines, Runnable afterRelease) {
     List<EngineSwitchUiSnapshot> presentations = new ArrayList<>();
-    List<PendingRemoteRecovery> recoveries = new ArrayList<>();
-    String cancelledStatus = resourceBundle.getString("Benchmark.cancelled");
+    List<Leelaz.AutomaticRestartAttempt> abandoned = new ArrayList<>();
+    boolean awaitsRelease = false;
     EngineSwitchTransaction pending = engineSwitchTransaction.get();
     if (pending != null
+        && !pending.previousReleaseClaimed
         && identityIndexOf(retiredEngines, pending.targetEngine) >= 0
         && pending.targetEngine.isBenchmark()) {
       presentations.add(cancelPendingBenchmarkSelection(pending, -1));
     }
     for (Leelaz engine : retiredEngines) {
       BenchmarkExecution execution = engine.benchmarkExecution();
-      if (execution != null && !execution.completion().isDone()) {
+      if (execution != null) {
+        // Its old slot may belong to another entry now; it keeps reporting under no slot.
+        execution.rebindSlot(-1);
         execution.cancel();
-        // Its completion can no longer publish through a slot; present the cancellation here.
-        for (boolean main : new boolean[] {true, false}) {
-          EngineSwitchUiSnapshot shown = engineSwitchUiTracker.current(main);
-          if (shown.phase == EngineSwitchUiPhase.TOOL && shown.activeEngineIdentity == engine) {
-            engineSwitchUiTracker
-                .tool(shown.token, main, -1, shown.activeName, engine, cancelledStatus)
-                .ifPresent(presentations::add);
-          }
-        }
       }
       PendingRemoteRecovery recovery = REMOTE_ENGINE_RECOVERIES.get(engine);
-      if (recovery != null && recovery.claim()) recoveries.add(recovery);
-    }
-    return () -> {
-      Throwable failure = null;
-      for (PendingRemoteRecovery recovery : recoveries) {
-        failure = runLifecycleCleanupStep(failure, recovery.attempt::close);
+      if (recovery == null || recovery.released) continue;
+      if (recovery.claim() && recovery.attempt != null) {
+        abandoned.add(recovery.attempt);
+      } else if (afterRelease != null) {
+        // Still taking its lease, or already restarting: only its release frees the lease.
+        recovery.afterRelease = afterRelease;
+        awaitsRelease = true;
       }
-      presentations.forEach(this::publishEngineSwitchUiState);
-      rethrowLifecycleCleanupFailure(failure);
-    };
+    }
+    Runnable finish =
+        () -> {
+          Throwable failure = null;
+          for (Leelaz.AutomaticRestartAttempt attempt : abandoned) {
+            failure = runLifecycleCleanupStep(failure, attempt::close);
+          }
+          presentations.forEach(this::publishEngineSwitchUiState);
+          rethrowLifecycleCleanupFailure(failure);
+        };
+    return new CatalogRetirement(finish, awaitsRelease);
+  }
+
+  /** The removed primary's recovery released its lease; the refresh that waited for it resumes. */
+  private void rerunEngineCatalogRefresh() {
+    SwingUtilities.invokeLater(
+        () -> {
+          if (Lizzie.engineManager != this) return;
+          try {
+            refreshEngineCatalog();
+          } catch (JSONException | IOException failure) {
+            failure.printStackTrace();
+          }
+        });
   }
 
   /** Captures the exact tool lifetimes that must finish before application exit. */
@@ -6173,6 +6260,9 @@ public class EngineManager {
     private volatile boolean rollbackMirrorEngineIncarnationCaptured;
     private volatile long rollbackMirrorUiToken = -1L;
     private volatile boolean targetInstalled;
+    // Set under ENGINE_SELECTION_STATE_LOCK once a tool selection begins stopping the previous
+    // engine. From then on its worker, not a catalog refresh, settles the selection.
+    private boolean previousReleaseClaimed;
     private volatile boolean targetStartFailureCleanupClaimed;
     private volatile boolean synchronizationFailureSuperseded;
 
@@ -7063,9 +7153,14 @@ public class EngineManager {
         && manager.engineList.get(index) == expectedEngine;
   }
 
-  /** The slot this exact engine object holds in the current catalog, or -1. */
+  /**
+   * The slot this exact engine object holds in the current catalog, or -1. A removed entry has no
+   * slot, even while the rebuild that drops it is still pending.
+   */
   private int catalogSlotOf(Leelaz engine) {
-    return identityIndexOf(engineList, engine);
+    return identityIndexOf(retiredCatalogEngines, engine) >= 0
+        ? -1
+        : identityIndexOf(engineList, engine);
   }
 
   private static int identityIndexOf(List<Leelaz> engines, Leelaz engine) {
@@ -11864,16 +11959,23 @@ public class EngineManager {
       throw new InitialStartupReservationException("Engine lifecycle reservation was rejected");
     }
     BenchmarkExecution execution = null;
+    Runnable restoreAfterRelease = null;
     try {
-      if (!isCurrentEngineSwitchTransaction(transaction)
-          || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) {
-        return;
+      synchronized (ENGINE_SELECTION_STATE_LOCK) {
+        if (!isCurrentEngineSwitchTransaction(transaction)
+            || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) {
+          return;
+        }
+        // A refresh that removes the target from here on leaves this selection to this worker.
+        transaction.previousReleaseClaimed = true;
       }
+      boolean previousQuit = false;
       if (previous != null) {
         if (previous.isBenchmark()) {
           cancelAndReapBenchmark(previous);
         } else if (!Lizzie.config.fastChange) {
           previous.normalQuit();
+          previousQuit = true;
         } else {
           previous.nameCmdfornoponder();
         }
@@ -11881,11 +11983,12 @@ public class EngineManager {
       synchronized (ENGINE_SELECTION_STATE_LOCK) {
         if (!isCurrentEngineSwitchTransaction(transaction)
             || !engineSwitchUiTracker.isSwitching(transaction.uiToken, transaction.main)) return;
-        // A catalog refresh may have moved the target since submission. It keeps its identity,
-        // and a refresh that removed it has already cancelled this transaction.
+        // A catalog refresh may have moved the target since submission; it keeps its identity.
         int slot = catalogSlotOf(target);
         if (slot < 0) {
-          throw new IllegalStateException("Benchmark target left the engine catalog");
+          // Removed while the previous engine was being stopped for it.
+          restoreAfterRelease = restoreSelectionAfterRemovedTool(transaction, previousQuit);
+          return;
         }
         if (!installProvisionalEngineSelection(
             transaction.main, previous, target, transaction)) {
@@ -11911,7 +12014,57 @@ public class EngineManager {
         reservations.close();
       } finally {
         finishEngineSwitchTransaction(transaction);
+        if (restoreAfterRelease != null) restoreAfterRelease.run();
       }
+    }
+  }
+
+  /**
+   * Called under the selection lock when a refresh removed a tool target after its worker began
+   * stopping the previous engine. That engine is still the committed selection, so it is shown
+   * again. A GTP engine quit for the tool restarts, and one that only paused its analysis resumes.
+   * A previous tool stays selected and shows the result of its stopped run.
+   */
+  private Runnable restoreSelectionAfterRemovedTool(
+      EngineSwitchTransaction transaction, boolean previousQuit) {
+    Leelaz previous = transaction.previousEngine;
+    boolean main = transaction.main;
+    int slot = main ? currentEngineNo : currentEngineNo2;
+    boolean selected =
+        isCommittedEngineSelection(main, previous, slot) && catalogSlotOf(previous) == slot;
+    BenchmarkExecution previousRun = selected ? previous.benchmarkExecution() : null;
+    EngineSwitchUiSnapshot shown =
+        (selected && previous.isBenchmark() && previousRun != null
+                ? engineSwitchUiTracker.tool(
+                    transaction.uiToken,
+                    main,
+                    slot,
+                    engineDisplayNameWithoutCatalogLookup(previous, slot),
+                    previous,
+                    benchmarkStatusText(previousRun.snapshot()))
+                : engineSwitchUiTracker.abandonPending(transaction.uiToken, main))
+            .orElse(null);
+    boolean restart = selected && previousQuit;
+    boolean resume =
+        selected && !previousQuit && !previous.isBenchmark() && previous.isPondering();
+    return () -> {
+      publishEngineSwitchUiState(shown);
+      if (restart || resume) {
+        runEngineSwitchUiUpdate(() -> resumeRestoredSelection(previous, main, restart));
+      }
+    };
+  }
+
+  private void resumeRestoredSelection(Leelaz previous, boolean main, boolean restart) {
+    if (Lizzie.engineManager != this || (main ? Lizzie.leelaz : Lizzie.leelaz2) != previous) {
+      return;
+    }
+    if (!restart) {
+      previous.ponder();
+    } else if (main) {
+      reStartEngine();
+    } else {
+      reStartEngine2();
     }
   }
 
@@ -11931,18 +12084,31 @@ public class EngineManager {
     }
     EngineSwitchUiSnapshot presentation;
     synchronized (ENGINE_SELECTION_STATE_LOCK) {
-      // Check the selection at the slot the tool holds now; a catalog reorder keeps it selected.
-      int slot = transaction.main ? currentEngineNo : currentEngineNo2;
-      if (Lizzie.engineManager != this
-          || transaction.targetEngine.benchmarkExecution() != execution
-          || !isCommittedEngineSelection(transaction.main, transaction.targetEngine, slot)
-          || !isExactCatalogSlot(this, slot, transaction.targetEngine)) {
+      Leelaz target = transaction.targetEngine;
+      if (Lizzie.engineManager != this || target.benchmarkExecution() != execution) {
         return;
       }
-      presentation = engineSwitchUiTracker.tool(
-          transaction.uiToken, transaction.main, slot,
-          engineDisplayNameWithoutCatalogLookup(transaction.targetEngine, slot),
-          transaction.targetEngine, status).orElse(null);
+      // Check the selection at the slot the tool holds now; a catalog reorder keeps it selected.
+      int slot = transaction.main ? currentEngineNo : currentEngineNo2;
+      boolean selected =
+          isCommittedEngineSelection(transaction.main, target, slot)
+              && isExactCatalogSlot(this, slot, target)
+              && catalogSlotOf(target) == slot;
+      if (!selected && catalogSlotOf(target) >= 0) {
+        return;
+      }
+      // A removed entry still reports its own result, under its presentation token and no slot.
+      int shownSlot = selected ? slot : -1;
+      presentation =
+          engineSwitchUiTracker
+              .tool(
+                  transaction.uiToken,
+                  transaction.main,
+                  shownSlot,
+                  engineDisplayNameWithoutCatalogLookup(target, shownSlot),
+                  target,
+                  status)
+              .orElse(null);
     }
     if (presentation != null) {
       publishEngineSwitchUiState(presentation);

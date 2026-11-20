@@ -408,9 +408,9 @@ class EngineManagerBenchmarkTest {
             running.completion().get(5, TimeUnit.SECONDS).state());
         assertFalse(b.alive());
         assertEquals(-1, EngineManager.currentEngineNo2);
-        SwingUtilities.invokeAndWait(() -> {});
+        // The cancelled run reports its own result once it is reaped.
+        await(() -> cancelled.equals(manager.engineSwitchUiSnapshot(false).failureDetail()));
         var shown = manager.engineSwitchUiSnapshot(false);
-        assertEquals(cancelled, shown.failureDetail());
         assertEquals(-1, shown.targetIndex());
         assertEquals("B", shown.targetName());
         assertTrue(a.alive(), "the retained primary tool keeps running");
@@ -419,6 +419,219 @@ class EngineManagerBenchmarkTest {
       }
       assertFalse(Files.exists(c.path.resolve("pid")));
     }
+  }
+
+  @Test
+  void toolSelectedWhileTheCatalogLoadsKeepsItsSelectionAcrossTheReorder() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+
+      // The refresh loads [A, C, B] and is held while it names A, after it could read A selected.
+      ((NamedEngine) a.engine).name.arm();
+      env.saveCatalog("A", "C", "B");
+      Thread refresh = background(() -> refresh(manager));
+      ((NamedEngine) a.engine).name.awaitEntered();
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
+      b.awaitReady();
+      await(() -> Lizzie.leelaz == b.engine);
+      ((NamedEngine) a.engine).name.release();
+      refresh.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(refresh.isAlive());
+
+      BenchmarkExecution execution = b.engine.benchmarkExecution();
+      assertSame(b.engine, manager.engineList.get(2));
+      assertSame(b.engine, Lizzie.leelaz);
+      assertEquals(2, EngineManager.currentEngineNo, "the selection is B's slot, not A's");
+      assertEquals(2, b.engine.currentEngineN());
+      assertEquals(2, execution.engineIndex());
+      var shown = manager.engineSwitchUiSnapshot(true);
+      assertEquals(EngineManager.EngineSwitchUiPhase.TOOL, shown.phase());
+      assertEquals(2, shown.targetIndex());
+      assertEquals("B", shown.targetName());
+
+      b.command("exit 0");
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(true).failureDetail()));
+      assertEquals(2, manager.engineSwitchUiSnapshot(true).targetIndex());
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void removingTheToolTargetWhileThePreviousEngineStopsRestoresThePreviousSelection(
+      boolean previousIsTool) throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = previousIsTool ? env.fixture("A") : new Fixture(directory.resolve("A"), false);
+      if (!previousIsTool) env.engines.add(a.engine);
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      NamedEngine previous = (NamedEngine) a.engine;
+      String startedPid = null;
+      if (previousIsTool) {
+        assertTrue(manager.switchEngineIfAvailable(0, true));
+        a.awaitReady();
+        previous.terminal.arm();
+      } else {
+        // A GTP engine is quit for a tool when fast switching is off. Its start looks up its saved
+        // thread policy by id, so give that lookup an empty saved list.
+        Lizzie.config.fastChange = false;
+        Lizzie.config.leelazConfig =
+            new org.json.JSONObject().put("engine-settings-list", new org.json.JSONArray());
+        // This frame has no board renderer for a first activation; arrive from a tool instead.
+        assertTrue(manager.switchEngineIfAvailable(2, true));
+        c.awaitReady();
+        assertTrue(manager.switchEngineIfAvailable(0, true));
+        try {
+          await(() -> manager.isEngineSwitchActive(0, true));
+        } catch (AssertionError failure) {
+          var shown = manager.engineSwitchUiSnapshot(true);
+          throw new AssertionError(
+              shown.phase()
+                  + " failure="
+                  + shown.failureDetail()
+                  + " stdin="
+                  + (Files.exists(a.path.resolve("stdin"))
+                      ? Files.readString(a.path.resolve("stdin"))
+                      : "<none>"),
+              failure);
+        }
+        startedPid = Files.readString(a.path.resolve("pid"));
+        previous.quit.arm();
+      }
+
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
+      (previousIsTool ? previous.terminal : previous.quit).awaitEntered();
+      env.saveCatalog("A", "C");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      (previousIsTool ? previous.terminal : previous.quit).release();
+
+      if (previousIsTool) {
+        String cancelled = Lizzie.resourceBundle.getString("Benchmark.cancelled");
+        await(() -> "A".equals(manager.engineSwitchUiSnapshot(true).targetName()));
+        var shown = manager.engineSwitchUiSnapshot(true);
+        assertEquals(EngineManager.EngineSwitchUiPhase.TOOL, shown.phase());
+        assertEquals(0, shown.targetIndex(), "A is shown at the slot it still holds");
+        assertEquals(cancelled, shown.failureDetail(), "with the result of its stopped run");
+      } else {
+        String firstPid = startedPid;
+        await(
+            () -> {
+              try {
+                return aliveQuietly(a)
+                    && !firstPid.equals(Files.readString(a.path.resolve("pid")))
+                    && a.engine.isLoaded();
+              } catch (java.io.IOException failure) {
+                return false;
+              }
+            });
+        assertTrue(a.engine.isLoaded(), "the quit GTP engine is restarted and synchronized");
+      }
+      assertSame(a.engine, Lizzie.leelaz);
+      assertEquals(0, EngineManager.currentEngineNo);
+      assertFalse(Files.exists(b.path.resolve("pid")), "the removed target never starts");
+      assertNull(b.engine.benchmarkExecution());
+    }
+  }
+
+  @Test
+  void removedToolReportsItsOwnFinalResultWithoutAReusedSlotNumber() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(1, false));
+      b.awaitReady();
+      BenchmarkExecution running = b.engine.benchmarkExecution();
+
+      // B's process has exited, but a child still holds its output: cancel cannot change it now.
+      b.command("detach");
+      await(() -> !aliveQuietly(b));
+      assertFalse(running.completion().isDone());
+      env.saveCatalog("A", "C");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      String runningText = Lizzie.resourceBundle.getString("Benchmark.running");
+      assertEquals(runningText, manager.engineSwitchUiSnapshot(false).failureDetail());
+      Files.writeString(b.path.resolve("release"), "");
+
+      assertEquals(
+          BenchmarkExecution.State.SUCCEEDED,
+          running.completion().get(5, TimeUnit.SECONDS).state());
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(false).failureDetail()));
+      var shown = manager.engineSwitchUiSnapshot(false);
+      assertEquals(-1, shown.targetIndex());
+      assertEquals("B", shown.targetName());
+      // Slot 2 belongs to C now; B's remaining output and result name no slot.
+      String prefix = "benchmark[secondary#" + running.invocationId() + "] ";
+      await(() -> env.console.output.toString().contains(prefix + succeeded));
+      String console = env.console.output.toString();
+      assertTrue(console.contains(prefix + "detached stdout"));
+      assertFalse(console.contains("benchmark[secondary:2#" + running.invocationId() + "] detached"));
+      assertTrue(a.alive());
+    }
+  }
+
+  @Test
+  void removingAToolWhileItsResultWaitsToBePublishedKeepsThatResult() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(1, false));
+      b.awaitReady();
+      BenchmarkExecution running = b.engine.benchmarkExecution();
+
+      // Hold the selection lock so B's settled result waits to publish while B is removed.
+      synchronized (engineSelectionStateLock()) {
+        b.command("exit 0");
+        await(() -> running.completion().isDone());
+        env.saveCatalog("A", "C");
+        refresh(manager);
+      }
+
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(false).failureDetail()));
+      var shown = manager.engineSwitchUiSnapshot(false);
+      assertEquals(-1, shown.targetIndex());
+      assertEquals("B", shown.targetName());
+      assertEquals(-1, EngineManager.currentEngineNo2);
+    }
+  }
+
+  private static Object engineSelectionStateLock() throws Exception {
+    Field field = EngineManager.class.getDeclaredField("ENGINE_SELECTION_STATE_LOCK");
+    field.setAccessible(true);
+    return field.get(null);
+  }
+
+  private static boolean aliveQuietly(Fixture fixture) {
+    try {
+      return fixture.alive();
+    } catch (Exception failure) {
+      return true;
+    }
+  }
+
+  /** Runs off the event thread; a failure is rethrown by the caller's join assertions. */
+  private static Thread background(Runnable body) {
+    Thread thread = new Thread(body, "benchmark-test-refresh");
+    thread.setDaemon(true);
+    thread.start();
+    return thread;
   }
 
   private static void refresh(EngineManager manager) {
@@ -469,6 +682,13 @@ class EngineManagerBenchmarkTest {
               os.close(2)
               eof = True
               (p/'eof').touch()
+          if command == 'detach':
+              # The process exits while a child keeps its output open until 'release' appears.
+              if os.fork() == 0:
+                  while not (p/'release').exists(): time.sleep(0.01)
+                  print('detached stdout', flush=True)
+                  os._exit(0)
+              os._exit(0)
           if command.startswith('exit '):
               if not eof:
                   print('final stdout', flush=True)
@@ -519,7 +739,7 @@ class EngineManagerBenchmarkTest {
     }
 
     void reset() throws Exception {
-      for (String name : List.of("ready", "pid", "eof", "control", "checkpoint"))
+      for (String name : List.of("ready", "pid", "eof", "control", "checkpoint", "release"))
         Files.deleteIfExists(path.resolve(name));
     }
   }
@@ -530,9 +750,45 @@ class EngineManagerBenchmarkTest {
     assertTrue(condition.getAsBoolean(), "controlled process did not reach the requested boundary");
   }
 
+  /** Holds one thread at a test boundary once; it never blocks longer than five seconds. */
+  private static final class Gate {
+    private final java.util.concurrent.atomic.AtomicBoolean armed =
+        new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.CountDownLatch entered =
+        new java.util.concurrent.CountDownLatch(1);
+    private final java.util.concurrent.CountDownLatch released =
+        new java.util.concurrent.CountDownLatch(1);
+
+    void arm() {
+      armed.set(true);
+    }
+
+    void pass() {
+      if (!armed.compareAndSet(true, false)) return;
+      entered.countDown();
+      try {
+        released.await(5, TimeUnit.SECONDS);
+      } catch (InterruptedException interrupted) {
+        Thread.currentThread().interrupt();
+      }
+    }
+
+    void awaitEntered() throws InterruptedException {
+      assertTrue(entered.await(5, TimeUnit.SECONDS), "the thread did not reach the gate");
+    }
+
+    void release() {
+      released.countDown();
+    }
+  }
+
   private static final class NamedEngine extends Leelaz {
-    /** When set, names come from the saved catalog at the index, as in production. */
+    /** When set, names come from the saved catalog as production resolves them. */
     private volatile List<EngineData> savedCatalog;
+    /** Holds the next catalog-name lookup, the tool's terminal callback, or a GTP quit. */
+    final Gate name = new Gate();
+    final Gate terminal = new Gate();
+    final Gate quit = new Gate();
 
     NamedEngine(String command) throws java.io.IOException {
       super(command);
@@ -540,12 +796,31 @@ class EngineManagerBenchmarkTest {
 
     @Override
     public String getEngineName(int index) {
+      this.name.pass();
       List<EngineData> catalog = savedCatalog;
       if (catalog == null) return "Controlled KataGo";
-      String name = index < 0 || index >= catalog.size() ? "" : catalog.get(index).name;
+      String name = index < 0 ? "" : savedCatalogEntry(catalog, index, savedEntryId).name;
       oriEnginename = name;
       currentEnginename = name;
       return name;
+    }
+
+    @Override
+    void onBenchmarkTerminal(BenchmarkExecution execution) {
+      terminal.pass();
+      super.onBenchmarkTerminal(execution);
+    }
+
+    @Override
+    public void normalQuit() {
+      quit.pass();
+      super.normalQuit();
+    }
+
+    void releaseGates() {
+      name.release();
+      terminal.release();
+      quit.release();
     }
 
     @Override
@@ -680,6 +955,15 @@ class EngineManagerBenchmarkTest {
     public void close() throws Exception {
       try {
         for (Leelaz engine : engines) {
+          if (engine instanceof NamedEngine named) named.releaseGates();
+        }
+        // A detached child of a failed test must not keep a tool's output open.
+        try (var files = Files.walk(root)) {
+          files
+              .filter(path -> path.getFileName().toString().equals("katago"))
+              .forEach(path -> touch(path.resolveSibling("release")));
+        }
+        for (Leelaz engine : engines) {
           engine.cancelBenchmark();
           if (engine.benchmarkExecution() != null)
             engine.benchmarkExecution().completion().get(5, TimeUnit.SECONDS);
@@ -702,6 +986,14 @@ class EngineManagerBenchmarkTest {
         EngineManager.currentEngineNo2 = oldIndex2;
         EngineManager.isEmpty = oldEmpty;
       }
+    }
+  }
+
+  private static void touch(Path path) {
+    try {
+      if (Files.isDirectory(path.getParent())) Files.writeString(path, "");
+    } catch (java.io.IOException failure) {
+      throw new java.io.UncheckedIOException(failure);
     }
   }
 

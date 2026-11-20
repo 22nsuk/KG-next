@@ -1192,8 +1192,7 @@ public class Leelaz {
 
   public String getEngineName(int index) {
     if (index < 0) return Lizzie.resourceBundle.getString("Menu.noEngine");
-    ArrayList<EngineData> engineData = Utils.getEngineData();
-    EngineData data = engineData.get(index);
+    EngineData data = savedCatalogEntry(Utils.getEngineData(), index, savedEntryId);
     String rawName = data.name;
     currentEnginename = deriveDisplayName(rawName, data.commands);
     oriEnginename = currentEnginename;
@@ -1206,6 +1205,20 @@ public class Leelaz {
         RemoteComputeConfig.compactDisplayNameForCommand(data.commands, currentEnginename)
             .replaceAll(" ", "");
     return currentEnginename;
+  }
+
+  /**
+   * The saved entry that names this engine. A start captures its slot before it reads the saved
+   * catalog, and a refresh in between may move or shorten the list, so the entry's id wins over the
+   * slot. Without a saved id the slot alone selects the entry.
+   */
+  static EngineData savedCatalogEntry(List<EngineData> catalog, int index, String entryId) {
+    if (entryId != null && !entryId.isBlank()) {
+      for (EngineData data : catalog) {
+        if (entryId.equals(data.id)) return data;
+      }
+    }
+    return catalog.get(index);
   }
 
   /**

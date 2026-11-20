@@ -33,7 +33,7 @@ public final class BenchmarkExecution {
   private static final AtomicLong SEQUENCE = new AtomicLong();
   private final Leelaz owner;
   private final long invocationId = SEQUENCE.incrementAndGet();
-  // The catalog slot follows the owning entry when the catalog is reordered.
+  // The catalog slot follows the owning entry when the catalog is reordered; -1 once removed.
   private volatile int engineIndex;
   private final boolean main;
   private final List<String> tokens;
@@ -92,11 +92,12 @@ public final class BenchmarkExecution {
     engineIndex = index;
   }
 
+  /** A removed entry's number may already name another entry, so its output carries none. */
   String consolePrefix() {
+    int index = engineIndex;
     return "benchmark["
         + (main ? "main" : "secondary")
-        + ":"
-        + (engineIndex + 1)
+        + (index < 0 ? "" : ":" + (index + 1))
         + "#"
         + invocationId
         + "] ";
