@@ -506,10 +506,14 @@ public class AnalysisEngine {
       }
       if (shutdownRequested) return;
       if (loginStatus) {
-        initializeStreams(
-            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
-        javaSSHClosed = false;
-        isLoaded = true;
+        // close() clears the session under this monitor. Hand off all streams before it can do so.
+        synchronized (javaSSH) {
+          if (shutdownRequested) return;
+          initializeStreams(
+              this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+          javaSSHClosed = false;
+          isLoaded = true;
+        }
       } else {
         javaSSHClosed = true;
         isLoaded = false;

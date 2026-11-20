@@ -6,26 +6,37 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisEngineSSHController;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.ForegroundRestoreResult;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.ssh.TestSshServer;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.NodeInfo;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.Utils;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.lang.management.ManagementFactory;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import javax.swing.JCheckBox;
 import javax.swing.JOptionPane;
@@ -54,6 +65,175 @@ class QuickBatchFlowTest {
   private int previousHeight;
   private RecordingFrame frame;
   private Path sourceDirectory;
+
+  @ParameterizedTest
+  @ValueSource(strings = {"stdout", "stdin", "stderr"})
+  void sshExitDuringStreamHandoffClosesManualLoadingWindow(String pausedStream) throws Exception {
+    Field stopping = analysisField("resourcesShuttingDown");
+    boolean previousStopping = stopping.getBoolean(null);
+    Lizzie.config.analysisReuseCurrentEngine = false;
+    try (TestSshServer server = TestSshServer.builder().password("handoff-test").start()) {
+      AnalysisEngine analysis = allocate(AnalysisEngine.class);
+      analysisField("analyzeMap").set(analysis, new ConcurrentHashMap<>());
+      analysisField("resourceBundle").set(analysis, Lizzie.resourceBundle);
+      analysisField("isPreLoad").setBoolean(analysis, true);
+      analysis.useJavaSSH = true;
+      analysis.userName = "player";
+      analysis.password = Utils.doEncrypt("handoff-test");
+      GatedSshController ssh = new GatedSshController(analysis, server.port(), pausedStream);
+      frame.startingEngine = analysis;
+      frame.startingSsh = ssh;
+      frame.startupFailure = new AtomicReference<>();
+      frame.startupWait = allocate(RecordingWait.class);
+      AtomicReference<CompletableFuture<Void>> shutdown = new AtomicReference<>();
+      try {
+        invokeFrame("startFlashAnalyzeGameWithNewEngine",
+            new Class<?>[] {boolean.class, boolean.class}, true, false);
+        assertTrue(ssh.readEntered.await(5, TimeUnit.SECONDS), "SSH login did not reach handoff");
+        assertEquals(List.of("katago analysis"), server.commands);
+        assertTrue(frame.startupWait.visible);
+        assertNull(frame.analysisEngine, "the caller has not received the new engine yet");
+
+        SwingUtilities.invokeAndWait(() -> shutdown.set(AnalysisEngine.shutdownAllResources()));
+        assertTrue(ssh.closeEntered.await(5, TimeUnit.SECONDS));
+        awaitCloseBlockedOrSessionReleased(ssh, frame.engineStarter);
+        assertFalse(shutdown.get().isDone(), "exit must still wait for the startup and close");
+        SwingUtilities.invokeAndWait(() -> {}); // Network cleanup must leave the EDT responsive.
+        ssh.releaseRead.countDown();
+        frame.engineStarter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(frame.engineStarter.isAlive());
+        SwingUtilities.invokeAndWait(() -> {}); // Drain the real manual-start caller's callback.
+
+        assertAll(
+            () -> assertNull(frame.startupFailure.get(), "cancelled handoff escaped the caller"),
+            () -> assertFalse(frame.startupWait.visible, "manual loading window remained visible"),
+            () -> assertTrue(frame.startupWait.hiddenOnEdt),
+            () -> assertSame(analysis, frame.analysisEngine),
+            () -> assertFalse(analysis.isLoaded()));
+        assertFalse(shutdown.get().isDone(), "hiding the window must not end connection cleanup");
+        ssh.releaseClose.countDown();
+        shutdown.get().get(5, TimeUnit.SECONDS);
+      } finally {
+        ssh.releaseRead.countDown();
+        ssh.releaseClose.countDown();
+        try {
+          CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+          ssh.close();
+          if (frame.engineStarter != null) {
+            frame.engineStarter.join(TimeUnit.SECONDS.toMillis(5));
+          }
+          cleanup.get(5, TimeUnit.SECONDS);
+          assertTrue(frame.engineStarter == null || !frame.engineStarter.isAlive());
+          SwingUtilities.invokeAndWait(() -> frame.startupWait.setVisible(false));
+        } finally {
+          stopping.setBoolean(null, previousStopping);
+        }
+      }
+    }
+  }
+
+  private static Field analysisField(String name) throws NoSuchFieldException {
+    Field field = AnalysisEngine.class.getDeclaredField(name);
+    field.setAccessible(true);
+    return field;
+  }
+
+  private static void startSshAnalysis(AnalysisEngine engine, AnalysisEngineSSHController ssh)
+      throws IOException {
+    try {
+      Class<?> factory = Class.forName(AnalysisEngine.class.getName() + "$StartupFactory");
+      Object starter = Proxy.newProxyInstance(
+          factory.getClassLoader(), new Class<?>[] {factory}, (proxy, method, args) -> {
+            if (method.getName().equals("createSsh")) return ssh;
+            throw new AssertionError("unexpected non-SSH startup");
+          });
+      Method start = AnalysisEngine.class.getDeclaredMethod("startEngine", String.class, factory);
+      start.setAccessible(true);
+      start.invoke(engine, "katago analysis", starter);
+    } catch (InvocationTargetException failure) {
+      if (failure.getCause() instanceof RuntimeException runtime) throw runtime;
+      if (failure.getCause() instanceof Error error) throw error;
+      if (failure.getCause() instanceof IOException io) throw io;
+      throw new AssertionError(failure.getCause());
+    } catch (ReflectiveOperationException failure) {
+      throw new AssertionError(failure);
+    }
+  }
+
+  private static void awaitCloseBlockedOrSessionReleased(GatedSshController ssh, Thread starter)
+      throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < deadline) {
+      if (ssh.sessionReleased.getCount() == 0) return;
+      var info = ManagementFactory.getThreadMXBean().getThreadInfo(ssh.closing.get().getId());
+      if (info != null && info.getThreadState() == Thread.State.BLOCKED
+          && info.getLockOwnerId() == starter.getId()
+          && info.getLockInfo() != null
+          && info.getLockInfo().getIdentityHashCode() == System.identityHashCode(ssh)) return;
+      Thread.sleep(5);
+    }
+    fail("close neither reached the handoff lock nor released the SSH session");
+  }
+
+  private static void awaitGate(CountDownLatch gate) {
+    try {
+      assertTrue(gate.await(10, TimeUnit.SECONDS), "SSH handoff gate was not released");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(interrupted);
+    }
+  }
+
+  private static final class GatedSshController extends AnalysisEngineSSHController {
+    private final String pausedStream;
+    private final CountDownLatch readEntered = new CountDownLatch(1);
+    private final CountDownLatch releaseRead = new CountDownLatch(1);
+    private final CountDownLatch closeEntered = new CountDownLatch(1);
+    private final CountDownLatch sessionReleased = new CountDownLatch(1);
+    private final CountDownLatch releaseClose = new CountDownLatch(1);
+    private final AtomicReference<Thread> closing = new AtomicReference<>();
+
+    private GatedSshController(AnalysisEngine owner, int port, String pausedStream) {
+      super(owner, "127.0.0.1", String.valueOf(port), true);
+      this.pausedStream = pausedStream;
+    }
+
+    private void beforeStream(String stream) {
+      if (!pausedStream.equals(stream)) return;
+      readEntered.countDown();
+      awaitGate(releaseRead);
+    }
+
+    @Override
+    public InputStream getStdout() {
+      beforeStream("stdout");
+      return super.getStdout();
+    }
+
+    @Override
+    public OutputStream getStdin() {
+      beforeStream("stdin");
+      return super.getStdin();
+    }
+
+    @Override
+    public InputStream getSterr() {
+      beforeStream("stderr");
+      return super.getSterr();
+    }
+
+    @Override
+    public void close() {
+      if (!closing.compareAndSet(null, Thread.currentThread())) {
+        super.close();
+        return;
+      }
+      closeEntered.countDown();
+      super.close();
+      sessionReleased.countDown();
+      awaitGate(releaseClose);
+    }
+  }
 
   @BeforeEach
   void prepare() throws Exception {
@@ -530,6 +710,25 @@ class QuickBatchFlowTest {
     private CountDownLatch rulesFailurePrompt;
     private boolean holdResume;
     private Runnable scheduledResume;
+    private AnalysisEngine startingEngine;
+    private AnalysisEngineSSHController startingSsh;
+    private RecordingWait startupWait;
+    private volatile Thread engineStarter;
+    private AtomicReference<Throwable> startupFailure;
+
+    @Override
+    AnalysisEngine createFlashAnalysisEngine() throws IOException {
+      if (startingEngine == null) return super.createFlashAnalysisEngine();
+      engineStarter = Thread.currentThread();
+      engineStarter.setUncaughtExceptionHandler((thread, failure) -> startupFailure.set(failure));
+      startSshAnalysis(startingEngine, startingSsh);
+      return startingEngine;
+    }
+
+    @Override
+    WaitForAnalysis createFlashAnalysisLoadingFrame() {
+      return startupWait == null ? super.createFlashAnalysisLoadingFrame() : startupWait;
+    }
 
     @Override
     boolean loadFile(File file, boolean fromTemp, boolean showHint,
@@ -584,11 +783,13 @@ class QuickBatchFlowTest {
   }
 
   private static final class RecordingWait extends WaitForAnalysis {
-    private boolean visible;
+    private volatile boolean visible;
+    private boolean hiddenOnEdt;
 
     @Override
     public void setVisible(boolean visible) {
       this.visible = visible;
+      if (!visible) hiddenOnEdt = SwingUtilities.isEventDispatchThread();
     }
   }
 
