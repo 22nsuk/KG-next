@@ -95,6 +95,44 @@ class EngineBootstrapFactsTest {
   }
 
   @Test
+  void hiddenCommandFactsKeepOnlyKgNextNamesInKgNextSpelling() {
+    EngineBootstrapFacts named =
+        EngineBootstrapFacts.of(
+                "KataGo",
+                "unknown",
+                "MAIN_BOARD",
+                "user-configured",
+                "NVIDIA-TensorRT",
+                "DirectML",
+                "b18c384nbt.bin.gz",
+                "gtp.cfg")
+            .forHiddenCommand();
+    // A backend marker kept as written and an onnxProvider= override are the hidden command's text.
+    EngineBootstrapFacts unnamed =
+        EngineBootstrapFacts.of(
+                "PrivateEngine-4",
+                "1.16-PrivateBuild",
+                "MAIN_BOARD",
+                "PrivateSource",
+                "nvidia-privatevault7",
+                "PrivateProvider-88",
+                "b18c384nbt.bin.gz",
+                "gtp.cfg")
+            .forHiddenCommand();
+
+    assertEquals(
+        "engine event=bootstrap engineType=katago version=unknown purpose=MAIN_BOARD"
+            + " source=user-configured backend=nvidia-tensorrt onnxProvider=directml"
+            + " model=hidden-command config=hidden-command",
+        named.formatLogLine(""));
+    assertEquals(
+        "engine event=bootstrap engineType=hidden-command version=hidden-command"
+            + " purpose=MAIN_BOARD source=hidden-command backend=hidden-command"
+            + " onnxProvider=hidden-command model=hidden-command config=hidden-command",
+        unnamed.formatLogLine(""));
+  }
+
+  @Test
   void missingBackendAndProviderStayExplicitlyUnknown() {
     EngineBootstrapFacts facts =
         EngineBootstrapFacts.fromCommand("katago gtp -model model.bin.gz", "MAIN_BOARD");

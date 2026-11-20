@@ -12,22 +12,13 @@ final class EngineStartupBootstrap {
   private EngineStartupBootstrap() {}
 
   /**
-   * A hidden command's model and config names are part of what the user hid, so the bootstrap line
-   * keeps only the classification facts (engine type, source, backend) and a marker for those two.
+   * A hidden command shares only {@link EngineBootstrapFacts#forHiddenCommand}: KG-next's own names
+   * for the engine type, source, backend and ONNX provider, and a marker for everything else.
    */
   static EngineBootstrapFacts factsFor(
       String command, String purpose, EngineCommandVisibility visibility) {
     EngineBootstrapFacts facts = factsFor(command, purpose);
-    if (!visibility.isHidden()) return facts;
-    return EngineBootstrapFacts.of(
-        facts.engineType(),
-        facts.version(),
-        facts.purpose(),
-        facts.source(),
-        facts.backend(),
-        facts.onnxProvider(),
-        EngineBootstrapFacts.HIDDEN,
-        EngineBootstrapFacts.HIDDEN);
+    return visibility.isHidden() ? facts.forHiddenCommand() : facts;
   }
 
   static EngineBootstrapFacts factsFor(String command, String purpose) {

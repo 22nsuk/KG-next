@@ -54,7 +54,17 @@ class HiddenEngineCommandLogTest {
   private static final String SHORT_EXECUTABLE = "u7x";
 
   private static final List<String> LAUNCH_FRAGMENTS =
-      List.of(SHORT_EXECUTABLE, "PrivateVault-31", "secret-net-b40", "host-token-q9", "Q9pass");
+      List.of(
+          SHORT_EXECUTABLE,
+          "PrivateVault-31",
+          "secret-net-b40",
+          "host-token-q9",
+          "Q9pass",
+          "PrivateProvider",
+          "privatemarker");
+
+  /** A backend marker in the engine's directory, which the bootstrap line reads as written. */
+  private static final String BACKEND_MARKER = "privatemarker-62";
 
   /** Arguments spelled like app.log vocabulary, which a text scrub would rewrite. */
   private static final List<String> VOCABULARY_ARGUMENTS =
@@ -126,7 +136,11 @@ class HiddenEngineCommandLogTest {
         app);
     assertTrue(app.contains("engine event=bootstrap"), app);
     assertTrue(app.contains("purpose=MAIN_BOARD"), app);
-    assertTrue(app.contains("model=hidden-command config=hidden-command"), app);
+    assertTrue(
+        app.contains(
+            "backend=hidden-command onnxProvider=hidden-command"
+                + " model=hidden-command config=hidden-command"),
+        app);
     assertTrue(detail.contains("Cannot run program <hidden-command>"), detail);
   }
 
@@ -138,7 +152,13 @@ class HiddenEngineCommandLogTest {
     String app = awaitApp();
 
     assertTrue(app.contains(SHORT_EXECUTABLE + "\""), app);
-    assertTrue(app.contains("model=secret-net-b40.bin.gz config=host-token-q9.cfg"), app);
+    assertTrue(
+        app.contains(
+            "backend="
+                + BACKEND_MARKER
+                + " onnxProvider=PrivateProvider-88"
+                + " model=secret-net-b40.bin.gz config=host-token-q9.cfg"),
+        app);
     assertTrue(Lizzie.engineStartupStatus.snapshot().detail.contains("PrivateVault-31"));
   }
 
@@ -226,6 +246,8 @@ class HiddenEngineCommandLogTest {
   private String missingEngineCommand() throws IOException {
     Path vault = Files.createDirectories(tempDir.resolve("PrivateVault-31").resolve("engines"));
     Path models = Files.createDirectories(tempDir.resolve("models"));
+    Files.writeString(
+        vault.resolve("lizzieyzy-next-engine-backend.txt"), BACKEND_MARKER, StandardCharsets.UTF_8);
     return "\""
         + vault.resolve(SHORT_EXECUTABLE)
         + "\" gtp -model \""
@@ -234,7 +256,7 @@ class HiddenEngineCommandLogTest {
         + tempDir.resolve("PrivateVault-31").resolve("host-token-q9.cfg")
         + "\" "
         + String.join(" ", VOCABULARY_ARGUMENTS)
-        + " -override-config numSearchThreads=8,serverPass=Q9pass";
+        + " -override-config numSearchThreads=8,serverPass=Q9pass,onnxProvider=PrivateProvider-88";
   }
 
   private Leelaz engineFor(boolean hidden, String command) throws Exception {
