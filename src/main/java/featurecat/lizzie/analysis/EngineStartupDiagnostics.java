@@ -434,7 +434,7 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
 
     /**
      * A finding's outcome and evidence are the parser's vocabulary. Its detail is an engine line,
-     * and its library name is kept for a hidden command only when it is a known runtime library.
+     * and its library name is kept for a hidden command only as a runtime library KG-next requires.
      */
     private List<Finding> outputFindings(List<Finding> findings) {
       if (!visibility.isHidden()) return findings;

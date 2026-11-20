@@ -1,7 +1,11 @@
 package featurecat.lizzie.analysis;
 
 import featurecat.lizzie.logging.ObservationText;
+import java.util.Locale;
+import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 /**
  * Whether an engine's launch command may be shown to the user.
@@ -15,7 +19,8 @@ import java.util.regex.Pattern;
  * ordinary words, and bounded text can end inside a value. So text that came from the command or
  * the engine is never shared for a hidden command. What is shared is what the owner can state from
  * structure: the exception type, the operating system's reason for a failed process start, and
- * library names from the runtime vocabulary. Text the application wrote itself stays as it is.
+ * the names of runtime libraries KG-next itself requires, in its own spelling. Text the
+ * application wrote itself stays as it is.
  */
 public enum EngineCommandVisibility {
   VISIBLE,
@@ -42,26 +47,43 @@ public enum EngineCommandVisibility {
   private static final int MAX_SYSTEM_ERROR_BYTES = 512;
 
   /**
-   * Runtime libraries KG-next checks for or that GPU and C runtimes are made of. A library name in
-   * engine output outside this vocabulary may be the engine's own and is shared only when visible.
+   * The runtime libraries KG-next's own runtime profiles require by exact name
+   * ({@code KataGoRuntimeHelper}), keyed case-insensitively and valued in the application's
+   * spelling. Profile entries written as patterns ({@code nvJitLink*.dll}) are not here: a pattern
+   * admits names nobody confirmed, and so does any family rule such as {@code api-ms-win-*}.
    */
-  private static final Pattern RUNTIME_LIBRARY =
-      Pattern.compile(
-          "(?i)(?:"
-              + "cudart(?:32|64)?(?:_\\d+)*"
-              + "|cublas(?:lt)?(?:32|64)?(?:_\\d+)*"
-              + "|cudnn(?:_(?:ops|cnn|adv|graph|heuristic|engines_precompiled"
-              + "|engines_runtime_compiled)(?:_(?:infer|train))?)?(?:32|64)?(?:_\\d+)*"
-              + "|(?:cufft|curand|cusolver|cusparse|nvjitlink|nvrtc(?:-builtins)?)(?:64)?(?:_\\d+)*"
-              + "|nvinfer(?:_plugin|_lean|_dispatch|_builder_resource(?:_win)?)?(?:_\\d+)*"
-              + "|nvonnxparser(?:_\\d+)*"
-              + "|nvcuda|nvml|opencl|zlibwapi|zlib1|libz|z"
-              + "|vcruntime\\d+(?:_\\d+)?|msvcp\\d+(?:_(?:\\d+|atomic_wait|codecvt_ids))?"
-              + "|concrt\\d+|vcomp\\d+|vccorlib\\d+|ucrtbase|api-ms-win-[a-z0-9-]+"
-              + "|onnxruntime(?:_providers_(?:shared|cuda|tensorrt|dml|openvino))?"
-              + "|directml|d3d12|dxgi|dxcore"
-              + "|libopenblas|openblas|libgcc_s_seh-1|libstdc\\+\\+-6|libwinpthread-1|libgomp-1"
-              + ")\\.dll");
+  private static final Map<String, String> RUNTIME_LIBRARIES =
+      Stream.of(
+              "cudart64_12.dll",
+              "cudart64_13.dll",
+              "cublas64_12.dll",
+              "cublas64_13.dll",
+              "cublasLt64_12.dll",
+              "cublasLt64_13.dll",
+              "cudnn64_8.dll",
+              "cudnn64_9.dll",
+              "cudnn_adv64_9.dll",
+              "cudnn_cnn64_9.dll",
+              "cudnn_engines_precompiled64_9.dll",
+              "cudnn_engines_runtime_compiled64_9.dll",
+              "cudnn_engines_tensor_ir64_9.dll",
+              "cudnn_ext64_9.dll",
+              "cudnn_graph64_9.dll",
+              "cudnn_heuristic64_9.dll",
+              "cudnn_ops64_9.dll",
+              "nvJitLink_130_0.dll",
+              "nvrtc64_120_0.dll",
+              "nvrtc64_130_0.dll",
+              "nvrtc-builtins64_128.dll",
+              "nvrtc-builtins64_132.dll",
+              "nvinfer_10.dll",
+              "nvinfer_plugin_10.dll",
+              "nvonnxparser_10.dll",
+              "zlibwapi.dll",
+              "libz.dll",
+              "z.dll")
+          .collect(
+              Collectors.toUnmodifiableMap(name -> name.toLowerCase(Locale.ROOT), name -> name));
 
   public boolean isHidden() {
     return this == HIDDEN;
@@ -91,10 +113,14 @@ public enum EngineCommandVisibility {
     return HIDDEN_VALUE;
   }
 
-  /** A library name parsed from engine output. */
+  /**
+   * A library name parsed from engine output. For a hidden command the result is one of KG-next's
+   * required runtime library names, written by the application, or the marker; never the engine's
+   * text.
+   */
   public String libraryName(String name) {
     if (!isHidden() || name == null) return name;
-    return RUNTIME_LIBRARY.matcher(name).matches() ? name : HIDDEN_VALUE;
+    return RUNTIME_LIBRARIES.getOrDefault(name.toLowerCase(Locale.ROOT), HIDDEN_VALUE);
   }
 
   /**

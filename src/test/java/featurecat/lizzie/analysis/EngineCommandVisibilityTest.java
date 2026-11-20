@@ -115,27 +115,44 @@ class EngineCommandVisibilityTest {
   }
 
   @Test
-  void onlyRuntimeLibrariesKeepTheirNameForAHiddenCommand() {
-    for (String runtime :
+  void onlyLibrariesKgNextRequiresKeepTheirNameForAHiddenCommand() {
+    for (String required :
         List.of(
             "cudnn64_9.dll",
             "cudnn_ops64_9.dll",
-            "cudnn_cnn_infer64_8.dll",
             "cublasLt64_12.dll",
             "nvrtc-builtins64_128.dll",
             "nvJitLink_130_0.dll",
             "nvinfer_plugin_10.dll",
+            "nvonnxparser_10.dll",
             "zlibwapi.dll",
+            "z.dll")) {
+      assertEquals(required, HIDDEN.libraryName(required));
+    }
+    // The shared value is the application's spelling, not the engine's.
+    assertEquals("cublasLt64_12.dll", HIDDEN.libraryName("CUBLASLT64_12.DLL"));
+    assertEquals("nvJitLink_130_0.dll", HIDDEN.libraryName("nvjitlink_130_0.dll"));
+    for (String unconfirmed :
+        List.of(
+            // Spelled like a runtime family, but no rule decides which suffixes are public.
+            "api-ms-win-crt-runtime-l1-1-0.dll",
+            "api-ms-win-PrivateRun57-l1-1-0.dll",
+            "cudart64_93179.dll",
+            "nvrtc64_93179_0.dll",
+            "cudnn_cnn_infer64_8.dll",
             "VCRUNTIME140_1.dll",
             "msvcp140_atomic_wait.dll",
-            "api-ms-win-crt-runtime-l1-1-0.dll",
-            "OpenCL.dll")) {
-      assertEquals(runtime, HIDDEN.libraryName(runtime));
-    }
-    for (String engineOwn :
-        List.of("PrivateEngineCore.dll", "zPrivate.dll", "cudnn_private.dll", "u7x.dll")) {
-      assertEquals(HIDDEN_VALUE, HIDDEN.libraryName(engineOwn));
-      assertEquals(engineOwn, VISIBLE.libraryName(engineOwn));
+            "OpenCL.dll",
+            // The engine's own libraries.
+            "PrivateEngineCore.dll",
+            "zPrivate.dll",
+            "cudnn_private.dll",
+            "u7x.dll",
+            // A required name inside a longer token is not that name.
+            "cudnn64_9.dll.PrivateRun57.dll",
+            " cudnn64_9.dll")) {
+      assertEquals(HIDDEN_VALUE, HIDDEN.libraryName(unconfirmed), unconfirmed);
+      assertEquals(unconfirmed, VISIBLE.libraryName(unconfirmed));
     }
     assertNull(HIDDEN.libraryName(null));
   }

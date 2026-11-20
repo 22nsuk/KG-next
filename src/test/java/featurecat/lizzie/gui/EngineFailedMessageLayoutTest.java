@@ -809,6 +809,8 @@ class EngineFailedMessageLayoutTest {
       EngineStartupDiagnostics.Attempt attempt =
           diagnostics.begin("eng-hidden", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
       attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
+      for (String line : HiddenCommandFixture.UNCONFIRMED_LIBRARY_LINES)
+        attempt.output("stderr", line);
       java.io.IOException launchFailure = HiddenCommandFixture.processCreateFailure();
       attempt.fail("process-create", launchFailure);
       AtomicReference<Throwable> failure = new AtomicReference<>();
@@ -834,6 +836,8 @@ class EngineFailedMessageLayoutTest {
               StringBuilder rendered = new StringBuilder();
               collectText(hidden, rendered);
               HiddenCommandFixture.assertNoCanary(rendered.toString());
+              HiddenCommandFixture.assertNoFragment(
+                  rendered.toString(), HiddenCommandFixture.UNCONFIRMED_LIBRARY_FRAGMENTS);
               assertTrue(rendered.toString().contains("cudnn64_9.dll"));
               String runInCmd = Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd");
               assertFalse(rendered.toString().contains(runInCmd));
