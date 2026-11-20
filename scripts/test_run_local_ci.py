@@ -252,7 +252,8 @@ class RunLocalCiTest(unittest.TestCase):
         )
         self.assertEqual(
             ["AutomaticSaveSafetyTest#closingOverwriteDialogPreservesSavedGame+"
-             "decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame"],
+             "decliningOverwritePreservesSavedGame+confirmingOverwriteReplacesSavedGame",
+             "EngineFailedMessageLayoutTest#cmdDiagnosticButtonRejectsSshCommandsAtDialogBoundary"],
             [item for item in selected if "#" in item],
         )
         # These whole classes include cases outside the required-success list.

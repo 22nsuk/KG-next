@@ -8,6 +8,7 @@ import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.logging.PersistenceSanitizer;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -32,6 +33,7 @@ import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -248,6 +250,8 @@ public class EngineFailedMessage extends JDialog {
       boolean isGtpEngine,
       boolean restartContribute,
       TensorRtRepairContext repairContext) {
+    String cmdDiagnosticCommand =
+        prepareCmdDiagnosticCommand(commands, command, canUseCmdDignostic);
     // this.setModal(true);
     // setType(Type.POPUP);
     this.basicDiagnostic = EngineStartupDiagnostic.basic(commands, command, message);
@@ -341,7 +345,7 @@ public class EngineFailedMessage extends JDialog {
       legacyRow.add(btnRestart, BorderLayout.EAST);
     }
 
-    if (canUseCmdDignostic) {
+    if (cmdDiagnosticCommand != null) {
       JButton btnRunInCmd =
           new JFontButton(Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd"));
       btnRunInCmd.setForeground(Color.RED);
@@ -359,11 +363,7 @@ public class EngineFailedMessage extends JDialog {
                       "@echo " + Lizzie.resourceBundle.getString("EngineFailedMessage.batTips"));
                   bw.newLine();
                 }
-                if (commands != null && !commands.isEmpty()) {
-                  bw.write(buildDiagnosticCommand(commands, command));
-                } else {
-                  bw.write(buildDiagnosticCommand(null, command));
-                }
+                bw.write(cmdDiagnosticCommand);
                 if (isGtpEngine) {
                   bw.write(" < test_commands.txt");
                   BufferedWriter bw2 = new BufferedWriter(new FileWriter("test_commands.txt"));
@@ -471,7 +471,7 @@ public class EngineFailedMessage extends JDialog {
         (Lizzie.config != null && Lizzie.config.isFrameFontSmall())
             ? 580
             : ((Lizzie.config != null && Lizzie.config.isFrameFontMiddle()) ? 660 : 730);
-    int preferredHeight = canUseCmdDignostic ? 360 : restartContribute ? 340 : 320;
+    int preferredHeight = cmdDiagnosticCommand != null ? 360 : restartContribute ? 340 : 320;
     Rectangle usableScreenBounds = usableScreenBounds();
     Dimension dialogSize =
         calculateDialogSize(
@@ -910,6 +910,18 @@ public class EngineFailedMessage extends JDialog {
     // fragment or quote-comma/newline injection. Preserve the useful command prefix and key, then
     // deliberately over-redact the entire remainder.
     return text.substring(0, valueStart) + REDACTED_VALUE + closingQuote;
+  }
+
+  static String prepareCmdDiagnosticCommand(
+      List<String> commands, String fallbackCommand, boolean allowedByCaller) {
+    if (!allowedByCaller) return null;
+    // Bind the permission check and batch contents to the same failed command.
+    List<String> arguments = commands == null ? List.of() : new ArrayList<>(commands);
+    if (EngineThreadPolicy.isRemoteManaged(arguments)
+        || EngineThreadPolicy.isRemoteManaged(fallbackCommand, false)) {
+      return null;
+    }
+    return buildDiagnosticCommand(arguments, fallbackCommand);
   }
 
   static String buildDiagnosticCommand(List<String> commands, String fallbackCommand) {

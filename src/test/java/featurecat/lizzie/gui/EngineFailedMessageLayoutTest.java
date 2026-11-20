@@ -22,8 +22,10 @@ import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
 import java.awt.Rectangle;
+import java.awt.Robot;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.PropertyResourceBundle;
@@ -32,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -41,6 +44,85 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 class EngineFailedMessageLayoutTest {
+  private record CommandCase(
+      List<String> arguments, String command, boolean requested, String expected) {}
+
+  private static List<CommandCase> cmdDiagnosticCases() {
+    return List.of(
+        new CommandCase(
+            List.of("ssh", "host.invalid", "OPAQUE_SSH_ARGUMENT"), "katago gtp", true, null),
+        new CommandCase(
+            List.of("C:\\Program Files\\PuTTY\\PLINK.EXE", "host.invalid", "OPAQUE_PLINK_ARGUMENT"),
+            "katago gtp", true, null),
+        new CommandCase(
+            null, "\"C:\\Program Files\\OpenSSH\\SSH.EXE\" host.invalid OPAQUE_SSH_ARGUMENT",
+            true, null),
+        new CommandCase(
+            List.of(), "/usr/bin/plink host.invalid OPAQUE_PLINK_ARGUMENT", true, null),
+        new CommandCase(
+            List.of("katago", "gtp"), "ssh host.invalid OPAQUE_SSH_ARGUMENT", true, null),
+        new CommandCase(
+            null, "katago gtp -model ssh-model.bin.gz", true, "katago gtp -model ssh-model.bin.gz"),
+        new CommandCase(
+            List.of("C:\\Program Files\\KataGo\\katago.exe", "gtp"),
+            "\"C:\\Program Files\\KataGo\\katago.exe\" gtp", true,
+            "\"C:\\Program Files\\KataGo\\katago.exe\" gtp"),
+        new CommandCase(List.of("katago", "gtp"), "katago gtp", false, null));
+  }
+
+  @Test
+  void cmdDiagnosticCommandsExcludeSshTransports() {
+    for (CommandCase example : cmdDiagnosticCases()) {
+      assertEquals(
+          example.expected(),
+          EngineFailedMessage.prepareCmdDiagnosticCommand(
+              example.arguments(), example.command(), example.requested()),
+          example.toString());
+    }
+  }
+
+  @Test
+  void cmdDiagnosticButtonRejectsSshCommandsAtDialogBoundary() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path screenshots = Path.of("target", "desktop-smoke", "probes", "ssh-cmd-diagnostic");
+    Files.createDirectories(screenshots);
+    int index = 0;
+    for (CommandCase example : cmdDiagnosticCases()) {
+      AtomicReference<EngineFailedMessage> created = new AtomicReference<>();
+      try {
+        EngineFailedMessage.showDialog(
+            example.arguments(), example.command(), "Controlled startup failure",
+            example.requested(), true, false, false,
+            dialog -> {
+              created.set(dialog);
+              JButton button = findButtonByText(
+                  dialog, Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd"));
+              assertEquals(example.expected() != null, button != null, example.toString());
+            });
+        Robot robot = new Robot();
+        robot.waitForIdle();
+        ImageIO.write(
+            robot.createScreenCapture(created.get().getBounds()), "png",
+            screenshots.resolve("case-" + index++ + ".png").toFile());
+      } finally {
+        SwingUtilities.invokeAndWait(() -> {
+          if (created.get() != null) created.get().dispose();
+        });
+      }
+    }
+  }
+
+  private static JButton findButtonByText(Container parent, String text) {
+    for (Component component : parent.getComponents()) {
+      if (component instanceof JButton button && text.equals(button.getText())) return button;
+      if (component instanceof Container child) {
+        JButton button = findButtonByText(child, text);
+        if (button != null) return button;
+      }
+    }
+    return null;
+  }
+
   @Test
   void pathErrorActionIsRenderedFromEveryMaintainedBundleWithoutLosingEvidence() throws Exception {
     String key = "EngineFailedMessage.outcome.path-too-long";
