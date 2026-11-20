@@ -143,6 +143,8 @@ public class EngineFailedMessage extends JDialog {
   /**
    * @param commandVisibility stated by the engine owner that decoded {@code command}; a hidden
    *     command is never shown, copied, exported or written to {@code dignostic.bat}
+   * @param message failure text composed by that owner, which for a hidden command takes exception
+   *     and engine text only through {@link EngineCommandVisibility}
    */
   public static void showDialog(
       List<String> commands,
@@ -209,7 +211,7 @@ public class EngineFailedMessage extends JDialog {
       List<String> commands,
       String command,
       EngineCommandVisibility commandVisibility,
-      String rawMessage,
+      String message,
       boolean canUseCmdDignostic,
       boolean isGtpEngine,
       boolean restartContribute,
@@ -218,10 +220,9 @@ public class EngineFailedMessage extends JDialog {
     // setType(Type.POPUP);
     String cmdDiagnosticCommand =
         cmdDiagnosticBatchLine(commands, command, commandVisibility, canUseCmdDignostic);
-    String message = displayedMessage(rawMessage, commands, command, commandVisibility);
     String displayedCommand = displayedCommand(command, commandVisibility);
     this.basicDiagnostic =
-        EngineStartupDiagnostic.basic(commands, command, rawMessage, commandVisibility);
+        EngineStartupDiagnostic.basic(commands, command, message, commandVisibility);
     setTitle(Lizzie.resourceBundle.getString("Leelaz.engineFailed")); // "消息提醒");
     setAlwaysOnTop(true);
     try {
@@ -883,12 +884,6 @@ public class EngineFailedMessage extends JDialog {
   /** The command pane shows the same placeholder as every other view of a hidden command. */
   static String displayedCommand(String command, EngineCommandVisibility visibility) {
     return visibility.isHidden() ? Lizzie.resourceBundle.getString("Leelaz.encryption") : command;
-  }
-
-  /** Failure text such as "Cannot run program ..." echoes the executable and working directory. */
-  static String displayedMessage(
-      String message, List<String> commands, String command, EngineCommandVisibility visibility) {
-    return visibility.scrub(message, EngineStartupDiagnostic.commandFragments(commands, command));
   }
 
   /**

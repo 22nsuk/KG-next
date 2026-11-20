@@ -1416,15 +1416,15 @@ public class Leelaz {
         bindCurrentEngineGameStartupIncarnation(engineGameStartupTransaction);
       } catch (IOException e) {
         isDownWithError = true;
-        if (startupDiagnosticAttempt != null)
-          startupDiagnosticAttempt.fail("remote-connect", e.toString());
-        rememberRecentLine(recentStderrLines, e.getLocalizedMessage());
-        noteEngineFailed(e.getLocalizedMessage());
+        String err = engineCommandVisibility.errorMessage(e);
+        if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("remote-connect", e);
+        rememberRecentLine(recentStderrLines, err);
+        noteEngineFailed(err);
         try {
           tryToDignostic(
               Lizzie.resourceBundle.getString("Leelaz.engineFailed")
                   + ": "
-                  + (e.getLocalizedMessage() == null ? "远程算力连接失败" : e.getLocalizedMessage()),
+                  + (err == null ? "远程算力连接失败" : err),
               true);
         } catch (JSONException diagnosticError) {
           diagnosticError.printStackTrace();
@@ -1490,14 +1490,14 @@ public class Leelaz {
               startupDiagnosticAttempt == null ? null : startupDiagnosticAttempt::runtimePreflight);
         } catch (IOException e) {
           if (startupDiagnosticAttempt != null)
-            startupDiagnosticAttempt.fail("runtime-preflight", e.toString());
+            startupDiagnosticAttempt.fail("runtime-preflight", e);
           TensorRtRepairContext repairContext =
               e instanceof TensorRtRuntimeException
                   ? ((TensorRtRuntimeException) e).context
                   : null;
           storePendingTensorRtRepairContext(repairContext);
           closeBundledStartupDialog();
-          String err = e.getLocalizedMessage();
+          String err = engineCommandVisibility.errorMessage(e);
           boolean modalDiagnostic = startupFailureDiagnosticIsModal(repairContext);
           try {
             tryToDignostic(
@@ -1515,7 +1515,7 @@ public class Leelaz {
             isDownWithError = true;
           }
           isDownWithError = true;
-          noteEngineFailed(e.getLocalizedMessage());
+          noteEngineFailed(err);
           return;
         }
       }
@@ -1558,10 +1558,10 @@ public class Leelaz {
             this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process,
             startupDiagnosticAttempt != null);
       } catch (IOException e) {
-        if (startupDiagnosticAttempt != null)
-          startupDiagnosticAttempt.fail("process-create", e.toString());
+        // The JDK names the executable and working directory; a hidden command keeps neither.
+        if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("process-create", e);
         closeBundledStartupDialog();
-        String err = e.getLocalizedMessage();
+        String err = engineCommandVisibility.errorMessage(e);
         try {
           tryToDignostic(
               Lizzie.resourceBundle.getString("Leelaz.engineFailed")
@@ -10420,10 +10420,11 @@ public class Leelaz {
                 : terminalFailure instanceof IOException ? "io-error" : "reader-error",
             terminalFailure);
         if (!isLoaded) {
-          if (binding.startupDiagnostic != null)
-            binding.startupDiagnostic.fail(
-                "startup-exit",
-                terminalFailure == null ? "stdout EOF before ready" : terminalFailure.toString());
+          if (binding.startupDiagnostic != null) {
+            if (terminalFailure == null)
+              binding.startupDiagnostic.fail("startup-exit", "stdout EOF before ready");
+            else binding.startupDiagnostic.fail("startup-exit", terminalFailure);
+          }
           noteEngineFailed("exit-before-ready");
         }
       }
@@ -20045,7 +20046,8 @@ public class Leelaz {
     if (builder == null || recentLines == null) {
       return;
     }
-    String tail = snapshotRecentLines(recentLines);
+    // Recent lines are engine output mixed with notes that quote it.
+    String tail = engineCommandVisibility.engineOutput(snapshotRecentLines(recentLines));
     if (tail.isEmpty()) {
       return;
     }
@@ -24160,16 +24162,12 @@ public class Leelaz {
         Lizzie.resourceBundle != null
             ? Lizzie.resourceBundle.getString("Leelaz.engineFailed")
             : "";
-    String message;
-    if (hasSnapshot) {
-      String originalError = attempt.snapshot().toJson().optString("originalError");
-      message =
-          originalError != null && !originalError.isBlank()
-              ? originalError
-              : (detail != null && !detail.isBlank() ? detail : fallbackMessage);
-    } else {
-      message = detail != null && !detail.isBlank() ? detail : fallbackMessage;
-    }
+    String message =
+        startupFailureMessage(
+            engineCommandVisibility,
+            hasSnapshot ? attempt.snapshot() : null,
+            detail,
+            fallbackMessage);
     boolean canUseCmdDiagnostic =
         OsPlatform.isWindows() && !useJavaSSH && !isSSH && !useRemoteCompute;
     EngineFailedMessage.showDialog(
@@ -24190,6 +24188,28 @@ public class Leelaz {
           }
         });
     return true;
+  }
+
+  /**
+   * The failure dialog's text for an engine-switch failure. {@code detail} is the message of
+   * whatever exception ended the switch, so for a hidden command only the attempt's own record or
+   * the application's fallback text is shown.
+   */
+  static String startupFailureMessage(
+      EngineCommandVisibility visibility,
+      EngineStartupDiagnostic snapshot,
+      String detail,
+      String fallbackMessage) {
+    String originalError = snapshot == null ? null : snapshot.toJson().optString("originalError");
+    if (originalError != null && !originalError.isBlank()) return originalError;
+    if (!visibility.isHidden() && detail != null && !detail.isBlank()) return detail;
+    return fallbackMessage;
+  }
+
+  /** The exit text the failure dialog shows after {@code stderrLines}, with no record bound. */
+  String engineExitDiagnosticForTest(String baseMessage, List<String> stderrLines) {
+    for (String line : stderrLines) rememberRecentLine(recentStderrLines, line);
+    return buildEngineExitDiagnostic(baseMessage);
   }
 
   public void tryToDignostic(String message, boolean isModal) {

@@ -1,8 +1,10 @@
 package featurecat.lizzie.analysis;
 
+import java.io.File;
+import java.io.IOException;
 import java.util.List;
 
-/** One user-hidden engine command and the failure text a launch of it produces. */
+/** One user-hidden engine command and the failures a launch of it produces. */
 public final class HiddenCommandFixture {
   private HiddenCommandFixture() {}
 
@@ -25,17 +27,36 @@ public final class HiddenCommandFixture {
 
   public static final String WORKING_DIRECTORY = "C:\\HiddenVault7";
 
-  public static final String PROCESS_CREATE_FAILURE =
-      "java.io.IOException: Cannot run program \"C:\\HiddenVault7\\engines\\katago.exe\""
-          + " (in directory \"C:\\HiddenVault7\"): CreateProcess error=2, file not found";
-
+  /** Engine output that names a runtime library under the hidden engine's directory. */
   public static final String DLL_FAILURE_LINE =
       "Could not find C:\\HiddenVault7\\engines\\cudnn64_9.dll";
 
+  /** The JDK's own failure for starting {@link #ARGV} in {@link #WORKING_DIRECTORY}. */
+  public static IOException processCreateFailure() {
+    return launchFailure(ARGV, WORKING_DIRECTORY);
+  }
+
+  /** Starts a program that cannot exist and returns the exception the JDK raised for it. */
+  public static IOException launchFailure(List<String> argv, String directory) {
+    ProcessBuilder builder = new ProcessBuilder(argv);
+    if (directory != null) builder.directory(new File(directory));
+    try {
+      Process process = builder.start();
+      process.destroyForcibly();
+      throw new AssertionError("Fixture program unexpectedly started: " + argv.get(0));
+    } catch (IOException expected) {
+      return expected;
+    }
+  }
+
   public static void assertNoCanary(String text) {
-    for (String canary : CANARIES) {
-      if (text != null && text.contains(canary)) {
-        throw new AssertionError("Hidden command fragment '" + canary + "' leaked into: " + text);
+    assertNoFragment(text, CANARIES);
+  }
+
+  public static void assertNoFragment(String text, List<String> fragments) {
+    for (String fragment : fragments) {
+      if (text != null && text.contains(fragment)) {
+        throw new AssertionError("Hidden command fragment '" + fragment + "' leaked into: " + text);
       }
     }
   }

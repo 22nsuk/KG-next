@@ -257,47 +257,247 @@ class EngineStartupDiagnosticsTest {
               .directory(new java.io.File(HiddenCommandFixture.WORKING_DIRECTORY));
       attempt.capture(builder);
       attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
-      var failure = attempt.fail("process-create", HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+      var failure = attempt.fail("process-create", HiddenCommandFixture.processCreateFailure());
 
-      var launch = failure.toJson().getJSONObject("launch");
+      var json = failure.toJson();
+      var launch = json.getJSONObject("launch");
       assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("configuredCommand"));
       assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("executable"));
       assertEquals(0, launch.getJSONArray("arguments").length());
       assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("cwd"));
       assertTrue(launch.getBoolean("commandHidden"));
       assertFalse(published.isEmpty());
-      HiddenCommandFixture.assertNoCanary(failure.toJson().toString());
+      HiddenCommandFixture.assertNoCanary(json.toString());
       HiddenCommandFixture.assertNoCanary(failure.shareText());
       for (var record : published) HiddenCommandFixture.assertNoCanary(record.toJson().toString());
-      assertTrue(failure.toJson().getString("originalError").contains("CreateProcess error=2"));
-      assertTrue(failure.toJson().getString("stderr").contains("cudnn64_9.dll"));
-      assertEquals("process-create", failure.toJson().getString("phase"));
+      String originalError = json.getString("originalError");
+      assertTrue(
+          EngineCommandVisibilityTest.namesSystemError(originalError, 2)
+              // Windows reports the missing working directory itself.
+              || EngineCommandVisibilityTest.namesSystemError(originalError, 267),
+          originalError);
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, json.getString("stderr"));
+      var finding = json.getJSONArray("findings").getJSONObject(0);
+      assertEquals("dll-not-found", finding.getString("outcome"));
+      assertEquals("cudnn64_9.dll", finding.getString("dll"));
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, finding.getString("detail"));
+      assertEquals("process-create", json.getString("phase"));
       assertEquals(HiddenCommandFixture.ARGV, builder.command());
+    }
+  }
+
+  /** A shell reports a word it split off an argument, never the argument as it was saved. */
+  @Test
+  void hiddenShellCommandKeepsNoWordTheShellEchoed() {
+    List<String> argv = List.of("sh", "-c", "exec PrivateEngineCanary");
+    try (var service =
+        new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var attempt =
+          service.begin("eng-shell", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
+      attempt.capture(new ProcessBuilder(argv));
+      attempt.output("stderr", "sh: 1: exec: PrivateEngineCanary: not found");
+      attempt.output("stdout", "PrivateEngineCanary starting");
+      var failure = attempt.fail("startup-exit", "stdout EOF before ready");
+
+      String text = failure.toJson().toString() + failure.shareText();
+      HiddenCommandFixture.assertNoFragment(text, List.of("PrivateEngineCanary", "exec:"));
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, failure.toJson().getString("stderr"));
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, failure.toJson().getString("stdout"));
+      assertEquals("stdout EOF before ready", failure.toJson().getString("originalError"));
+    }
+  }
+
+  @org.junit.jupiter.api.condition.EnabledOnOs(org.junit.jupiter.api.condition.OS.LINUX)
+  @Test
+  void realShellOutputOfAHiddenCommandStaysOutOfTheRecord() throws Exception {
+    List<String> argv = List.of("/bin/sh", "-c", "exec PrivateEngineCanary");
+    for (var visibility : EngineCommandVisibility.values()) {
+      try (var service =
+          new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+        var attempt = service.begin("eng-shell", "MAIN_BOARD", argv, true, visibility);
+        ProcessBuilder builder = new ProcessBuilder(argv);
+        attempt.capture(builder);
+        Process process = builder.start();
+        attempt.attach(process, 1);
+        try (var stderr =
+            new java.io.BufferedReader(new java.io.InputStreamReader(process.getErrorStream()))) {
+          for (String line = stderr.readLine(); line != null; line = stderr.readLine())
+            attempt.output("stderr", line);
+        }
+        process.getInputStream().close();
+        assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+        attempt.streamEnded("stdout", null);
+        attempt.streamEnded("stderr", null);
+        attempt.fail("startup-exit", "stdout EOF before ready");
+        var record = awaitTerminal(attempt).toJson();
+
+        assertEquals(127, record.getInt("exitCode"));
+        if (visibility.isHidden()) {
+          HiddenCommandFixture.assertNoFragment(
+              record.toString(), List.of("PrivateEngineCanary", "/bin/sh"));
+        } else {
+          // The shell's own report names the word, so the hidden case above is a real check.
+          assertTrue(record.getString("stderr").contains("PrivateEngineCanary"), record.toString());
+        }
+      }
+    }
+  }
+
+  @Test
+  void hiddenExecutableIsAbsentFromAProcessCreateFailureWhateverItsLength() throws Exception {
+    List<String> argv = List.of("u7x");
+    try (var service =
+        new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var attempt =
+          service.begin("eng-short", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
+      ProcessBuilder builder = new ProcessBuilder(argv);
+      attempt.capture(builder);
+      var failure =
+          attempt.fail("process-create", HiddenCommandFixture.launchFailure(argv, null));
+
+      String text = failure.toJson().toString() + failure.shareText();
+      HiddenCommandFixture.assertNoFragment(text, List.of("u7x"));
+      assertTrue(
+          EngineCommandVisibilityTest.namesSystemError(
+              failure.toJson().getString("originalError"), 2),
+          text);
+    }
+  }
+
+  /** Bounding first used to keep the start of a value that the reduction then failed to find. */
+  @Test
+  void hiddenValuesCutByALengthLimitLeaveNoPrefixBehind() {
+    String secret = "PrivateRunProfile-57B";
+    String prefix = "PrivateRunProfile-57";
+    var policy = new EngineStartupDiagnostics.Policy(4, 1000, 40, 1024, 256 * 1024);
+    List<String> argv = List.of("x".repeat(16378) + secret, "gtp");
+    try (var service = new EngineStartupDiagnostics(policy, null)) {
+      var attempt =
+          service.begin("eng-long", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
+      attempt.capture(new ProcessBuilder(argv));
+      attempt.output("stderr", "y".repeat(1010) + " " + secret + " loaded");
+      attempt.output(
+          "stderr", "Could not find " + "z".repeat(480) + "\\" + secret + "\\cudnn64_9.dll");
+      var failure = attempt.fail("process-create", HiddenCommandFixture.launchFailure(argv, null));
+
+      String text = failure.toJson().toString() + failure.shareText();
+      HiddenCommandFixture.assertNoFragment(text, List.of(prefix, "PrivateRun"));
+      assertTrue(failure.toJson().getString("originalError").startsWith("java.io.IOException"));
+    }
+
+    String composed =
+        "Engine failed: "
+            + EngineCommandVisibility.HIDDEN.errorMessage(
+                HiddenCommandFixture.launchFailure(argv, null));
+    var basic =
+        EngineStartupDiagnostic.basic(
+            argv, String.join(" ", argv), composed, EngineCommandVisibility.HIDDEN);
+    HiddenCommandFixture.assertNoFragment(
+        basic.toJson().toString() + basic.shareText(), List.of(prefix));
+  }
+
+  /**
+   * Only values that came from the command or the engine are withheld. A hidden argument spelled
+   * like a stage, a state or the platform leaves the application's own fields as they are.
+   */
+  @Test
+  void hiddenArgumentsSpelledLikeRecordVocabularyLeaveTheRecordIntact() {
+    List<String> argv =
+        List.of(
+            "katago",
+            "gtp",
+            "-config",
+            "windows",
+            "non-windows",
+            "final",
+            "completed",
+            "process-create",
+            "unavailable",
+            "MAIN_BOARD",
+            "eng-vocab",
+            "dll-not-found",
+            "engine-stderr");
+    var visible = vocabularyFailure(argv, EngineCommandVisibility.VISIBLE).toJson();
+    var hidden = vocabularyFailure(argv, EngineCommandVisibility.HIDDEN).toJson();
+
+    for (String field :
+        List.of(
+            "engineId",
+            "launchPurpose",
+            "phase",
+            "statusName",
+            "errorDomain",
+            "exitObservation",
+            "stdoutOrigin",
+            "collectionState",
+            "outcome")) {
+      assertEquals(visible.get(field), hidden.get(field), field);
+    }
+    for (String field :
+        List.of(
+            "engineId", "launchPurpose", "environmentState", "local", "platform", "cwdSource")) {
+      assertEquals(
+          visible.getJSONObject("launch").get(field),
+          hidden.getJSONObject("launch").get(field),
+          "launch." + field);
+    }
+    assertEquals(
+        visible.getJSONObject("sources").toString(), hidden.getJSONObject("sources").toString());
+    var visibleFinding = visible.getJSONArray("findings").getJSONObject(0);
+    var hiddenFinding = hidden.getJSONArray("findings").getJSONObject(0);
+    assertEquals(visibleFinding.get("outcome"), hiddenFinding.get("outcome"));
+    assertEquals(visibleFinding.get("evidence"), hiddenFinding.get("evidence"));
+    assertEquals(visibleFinding.get("dll"), hiddenFinding.get("dll"));
+
+    var basic =
+        EngineStartupDiagnostic.basic(
+            argv, String.join(" ", argv), "Engine failed", EngineCommandVisibility.HIDDEN);
+    var basicVisible =
+        EngineStartupDiagnostic.basic(argv, String.join(" ", argv), "Engine failed");
+    for (String field : List.of("platform", "environmentState", "engineId")) {
+      assertEquals(
+          basicVisible.toJson().getJSONObject("launch").get(field),
+          basic.toJson().getJSONObject("launch").get(field),
+          "basic launch." + field);
+    }
+    assertEquals("Engine failed", basic.toJson().getString("originalError"));
+  }
+
+  private static EngineStartupDiagnostic vocabularyFailure(
+      List<String> argv, EngineCommandVisibility visibility) {
+    try (var service =
+        new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var attempt = service.begin("eng-vocab", "MAIN_BOARD", argv, true, visibility);
+      attempt.capture(new ProcessBuilder(argv));
+      attempt.output("stderr", "Could not find cudnn64_9.dll");
+      return attempt.fail("process-create", "Engine failed");
     }
   }
 
   @Test
   void hiddenBasicFailureKeepsOnlyTheCommandMarker() {
+    String composed =
+        "Engine failed: "
+            + EngineCommandVisibility.HIDDEN.errorMessage(
+                HiddenCommandFixture.processCreateFailure());
     var basic =
         EngineStartupDiagnostic.basic(
             HiddenCommandFixture.ARGV,
             HiddenCommandFixture.COMMAND,
-            HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+            composed,
             EngineCommandVisibility.HIDDEN);
     var json = basic.toJson();
     assertEquals(
         EngineCommandVisibility.HIDDEN_VALUE,
         json.getJSONObject("launch").getString("configuredCommand"));
     assertTrue(json.getJSONObject("launch").getBoolean("commandHidden"));
-    assertTrue(json.getString("originalError").contains("CreateProcess error=2"));
+    assertEquals(composed, json.getString("originalError"));
     HiddenCommandFixture.assertNoCanary(json.toString());
     HiddenCommandFixture.assertNoCanary(basic.shareText());
 
     var visible =
         EngineStartupDiagnostic.basic(
-            HiddenCommandFixture.ARGV,
-            HiddenCommandFixture.COMMAND,
-            HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+            HiddenCommandFixture.ARGV, HiddenCommandFixture.COMMAND, "Engine failed");
     assertEquals(
         HiddenCommandFixture.COMMAND,
         visible.toJson().getJSONObject("launch").getString("configuredCommand"));

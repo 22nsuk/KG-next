@@ -4,8 +4,6 @@ import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.ObservationText;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
@@ -23,7 +21,11 @@ public final class EngineStartupDiagnostic {
     return basic(commands, command, detail, EngineCommandVisibility.VISIBLE);
   }
 
-  /** A hidden command keeps only a marker, and the detail loses every fragment of it. */
+  /**
+   * A hidden command keeps only a marker. {@code detail} is the failure text its owner composed,
+   * which for a hidden command carries exception and engine text only through {@link
+   * EngineCommandVisibility}; every other field is the application's own vocabulary.
+   */
   public static EngineStartupDiagnostic basic(
       List<String> commands, String command, String detail, EngineCommandVisibility visibility) {
     String resolvedCommand = "";
@@ -81,44 +83,7 @@ public final class EngineStartupDiagnostic {
             .put("outcome", "unavailable")
             .put("truncated", false);
 
-    return new EngineStartupDiagnostic(
-        withoutHiddenCommand(value, visibility, commandFragments(commands, command)),
-        DEFAULT_MAX_BYTES);
-  }
-
-  /** Every form in which a launch command can reappear in free text. */
-  public static List<String> commandFragments(List<String> commands, String command) {
-    List<String> fragments = new ArrayList<>();
-    if (command != null) fragments.add(command);
-    if (commands != null) {
-      fragments.addAll(commands);
-      fragments.add(String.join(" ", commands));
-    }
-    return fragments;
-  }
-
-  /**
-   * A copy of a failure record whose text carries no fragment of a hidden command. Exception text,
-   * engine output and findings are all free text that can echo the executable or a path.
-   */
-  static JSONObject withoutHiddenCommand(
-      JSONObject value, EngineCommandVisibility visibility, Collection<String> fragments) {
-    if (!visibility.isHidden()) return value;
-    return (JSONObject) scrubJson(new JSONObject(value.toString()), visibility, fragments);
-  }
-
-  private static Object scrubJson(
-      Object value, EngineCommandVisibility visibility, Collection<String> fragments) {
-    if (value instanceof JSONObject object) {
-      for (String key : List.copyOf(object.keySet()))
-        object.put(key, scrubJson(object.get(key), visibility, fragments));
-    } else if (value instanceof JSONArray array) {
-      for (int index = 0; index < array.length(); index++)
-        array.put(index, scrubJson(array.get(index), visibility, fragments));
-    } else if (value instanceof String text) {
-      return visibility.scrub(text, fragments);
-    }
-    return value;
+    return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES);
   }
 
   static String renderCommand(List<String> command) {
