@@ -681,6 +681,7 @@ class DiagnosticBundleExporterTest {
             .put(
                 new JSONObject()
                     .put("name", "Local KataGo")
+                    .put("useJavaSSH", false)
                     .put(
                         "command",
                         "C:\\Users\\profile-owner\\katago.exe gtp --token CANARY_ENGINE_TOKEN")
@@ -707,7 +708,19 @@ class DiagnosticBundleExporterTest {
             .put(
                 new JSONObject()
                     .put("name", "Malformed executable")
-                    .put("command", "{\"opaque\":\"ENGINE_COMMAND_STRING_CANARY\"}")));
+                    .put("command", "{\"opaque\":\"ENGINE_COMMAND_STRING_CANARY\"}"))
+            .put(
+                new JSONObject()
+                    .put("name", "Remote KataGo")
+                    .put("useJavaSSH", true)
+                    .put(
+                        "command",
+                        "MODEL_URL=https://models.example.invalid/OPAQUE_SSH_MODEL_82c1 katago gtp"))
+            .put(
+                new JSONObject()
+                    .put("name", "Remote engine")
+                    .put("useJavaSSH", true)
+                    .put("command", "/srv/remote/OPAQUE_SSH_EXECUTABLE_7f92 gtp")));
     config.put("leelaz", leelaz);
 
     Path diagnostics = DiagnosticBundleExporter.defaultOutputDirectory(tempDir);
@@ -732,7 +745,7 @@ class DiagnosticBundleExporterTest {
     assertEquals("katago.exe", projected.getString("executable"));
 
     JSONArray engines = projected.getJSONArray("engine-settings-list");
-    assertEquals(4, engines.length());
+    assertEquals(6, engines.length());
     JSONObject first = engines.getJSONObject(0);
     JSONObject second = engines.getJSONObject(1);
     JSONObject wrongTypes = engines.getJSONObject(2);
@@ -752,6 +765,17 @@ class DiagnosticBundleExporterTest {
     assertEquals("Malformed executable", malformedCommand.getString("name"));
     assertEquals("other", malformedCommand.getString("kind"));
     assertEquals("unknown", malformedCommand.getString("executable"));
+
+    JSONObject remoteKataGo = engines.getJSONObject(4);
+    JSONObject remoteEngine = engines.getJSONObject(5);
+    assertEquals(Set.of("name", "kind", "executable"), remoteKataGo.keySet());
+    assertEquals(Set.of("name", "kind", "executable"), remoteEngine.keySet());
+    assertEquals("Remote KataGo", remoteKataGo.getString("name"));
+    assertEquals("katago", remoteKataGo.getString("kind"));
+    assertEquals("unknown", remoteKataGo.getString("executable"));
+    assertEquals("Remote engine", remoteEngine.getString("name"));
+    assertEquals("other", remoteEngine.getString("kind"));
+    assertEquals("unknown", remoteEngine.getString("executable"));
 
     for (JSONObject engine : new JSONObject[] {first, second}) {
       for (String forbidden :
@@ -777,7 +801,9 @@ class DiagnosticBundleExporterTest {
         "UI_PROXY_OBJECT_CANARY",
         "ENGINE_NAME_OBJECT_CANARY",
         "ENGINE_COMMAND_ARRAY_CANARY",
-        "ENGINE_COMMAND_STRING_CANARY");
+        "ENGINE_COMMAND_STRING_CANARY",
+        "OPAQUE_SSH_MODEL_82c1",
+        "OPAQUE_SSH_EXECUTABLE_7f92");
   }
 
   @Test
