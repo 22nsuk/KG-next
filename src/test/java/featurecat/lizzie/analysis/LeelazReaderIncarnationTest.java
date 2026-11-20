@@ -994,7 +994,7 @@ class LeelazReaderIncarnationTest {
     }
 
     @Override
-    void restartUnresponsiveRemoteEngine(Leelaz engine, int index) {
+    void restartUnresponsiveRemoteEngine(Leelaz engine) {
       restartCount++;
     }
   }

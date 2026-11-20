@@ -33,11 +33,11 @@ public final class BenchmarkExecution {
   private static final AtomicLong SEQUENCE = new AtomicLong();
   private final Leelaz owner;
   private final long invocationId = SEQUENCE.incrementAndGet();
-  private final int engineIndex;
+  // The catalog slot follows the owning entry when the catalog is reordered.
+  private volatile int engineIndex;
   private final boolean main;
   private final List<String> tokens;
   private final String engineCommand;
-  private final String consolePrefix;
   private final CompletableFuture<Snapshot> completion = new CompletableFuture<>();
   private final CountDownLatch reaped = new CountDownLatch(1);
   private final StringBuilder tail = new StringBuilder();
@@ -54,14 +54,6 @@ public final class BenchmarkExecution {
     this.main = main;
     this.engineCommand = engineCommand;
     this.tokens = List.copyOf(Utils.splitCommand(engineCommand));
-    this.consolePrefix =
-        "benchmark["
-            + (main ? "main" : "secondary")
-            + ":"
-            + (engineIndex + 1)
-            + "#"
-            + invocationId
-            + "] ";
   }
 
   public Snapshot snapshot() {
@@ -93,6 +85,21 @@ public final class BenchmarkExecution {
 
   int engineIndex() {
     return engineIndex;
+  }
+
+  /** Moves this invocation to its entry's new catalog slot; the process itself is unaffected. */
+  void rebindSlot(int index) {
+    engineIndex = index;
+  }
+
+  String consolePrefix() {
+    return "benchmark["
+        + (main ? "main" : "secondary")
+        + ":"
+        + (engineIndex + 1)
+        + "#"
+        + invocationId
+        + "] ";
   }
 
   boolean main() {
@@ -213,7 +220,7 @@ public final class BenchmarkExecution {
       if (excess > 0) tail.delete(0, Math.min(excess, tail.length()));
       tail.append(output);
     }
-    if (Lizzie.gtpConsole != null) Lizzie.gtpConsole.addLine(consolePrefix + output);
+    if (Lizzie.gtpConsole != null) Lizzie.gtpConsole.addLine(consolePrefix() + output);
   }
 
   private void recordFailure(Throwable failure) {

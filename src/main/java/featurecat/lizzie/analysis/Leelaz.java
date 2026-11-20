@@ -450,7 +450,8 @@ public class Leelaz {
   //	private String currentWeightFile = "";
   //	private String currentWeight = "";
   // public boolean switching = false;
-  private int currentEngineN = -1;
+  // Catalog refresh rebinds this from the selection thread while workers read it.
+  private volatile int currentEngineN = -1;
   private ScheduledExecutorService executor;
   private ScheduledExecutorService executorErr;
   ArrayList<Double> tempcount = new ArrayList<Double>();
@@ -10498,7 +10499,7 @@ public class Leelaz {
           recentStderrLines,
           "Remote session retired; rebuilding with a fresh token and full board replay");
       if (Lizzie.engineManager != null) {
-        Lizzie.engineManager.restartUnresponsiveRemoteEngine(this, currentEngineN);
+        Lizzie.engineManager.restartUnresponsiveRemoteEngine(this);
       }
       return null;
     }
@@ -24336,6 +24337,16 @@ public class Leelaz {
 
   public int currentEngineN() {
     return currentEngineN;
+  }
+
+  /**
+   * A catalog refresh kept this entry at a new index. Slot-bearing runtime state follows it so
+   * labels, recovery and tool output keep naming the same entry; an unassigned slot stays unset.
+   */
+  void rebindCatalogSlot(int index) {
+    if (currentEngineN >= 0) currentEngineN = index;
+    BenchmarkExecution execution = currentBenchmarkExecution;
+    if (execution != null) execution.rebindSlot(index);
   }
 
   private long beginBundledStartup(Path engineExecutable) {

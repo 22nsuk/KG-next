@@ -315,6 +315,120 @@ class EngineManagerBenchmarkTest {
     }
   }
 
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void reorderedToolRunsReportsAndCompletesAtTheSlotItHoldsNow(boolean reorderWhilePending)
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      if (reorderWhilePending) {
+        // The selection worker starts after this EDT turn, so the refresh lands before it.
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertTrue(manager.switchEngineIfAvailable(1, true));
+              env.saveCatalog("A", "C", "B");
+              refresh(manager);
+            });
+        b.awaitReady();
+      } else {
+        assertTrue(manager.switchEngineIfAvailable(1, true));
+        b.awaitReady();
+        env.saveCatalog("A", "C", "B");
+        SwingUtilities.invokeAndWait(() -> refresh(manager));
+      }
+
+      BenchmarkExecution execution = b.engine.benchmarkExecution();
+      assertSame(b.engine, manager.engineList.get(2));
+      assertSame(b.engine, Lizzie.leelaz);
+      assertEquals(2, EngineManager.currentEngineNo, "the selection names B's current slot");
+      assertEquals(2, b.engine.currentEngineN());
+      assertEquals(2, execution.engineIndex(), "the running tool follows its entry");
+      assertEquals("B", b.engine.oriEnginename);
+      var shown = manager.engineSwitchUiSnapshot(true);
+      assertEquals(EngineManager.EngineSwitchUiPhase.TOOL, shown.phase());
+      assertEquals(2, shown.targetIndex());
+      assertEquals("B", shown.targetName());
+
+      b.command("exit 0");
+      assertEquals(
+          BenchmarkExecution.State.SUCCEEDED,
+          execution.completion().get(5, TimeUnit.SECONDS).state());
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(true).failureDetail()));
+      assertEquals(2, manager.engineSwitchUiSnapshot(true).targetIndex());
+      String prefix = "benchmark[main:3#" + execution.invocationId() + "] ";
+      await(() -> env.console.output.toString().contains(prefix + "final stdout"));
+      assertTrue(env.console.output.toString().contains(prefix + succeeded));
+      assertFalse(Files.exists(a.path.resolve("pid")));
+      assertFalse(Files.exists(c.path.resolve("pid")));
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void removingToolEntryCancelsItsSelectionOrRunningExecution(boolean removeWhilePending)
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      String cancelled = Lizzie.resourceBundle.getString("Benchmark.cancelled");
+      if (removeWhilePending) {
+        SwingUtilities.invokeAndWait(
+            () -> {
+              assertTrue(manager.switchEngineIfAvailable(1, true));
+              env.saveCatalog("A", "C");
+              refresh(manager);
+            });
+        SwingUtilities.invokeAndWait(() -> {});
+        SwingUtilities.invokeAndWait(() -> {});
+        assertFalse(Files.exists(b.path.resolve("pid")), "a removed entry never starts");
+        assertNull(b.engine.benchmarkExecution());
+        assertNull(Lizzie.leelaz);
+        assertEquals(-1, EngineManager.currentEngineNo);
+        var shown = manager.engineSwitchUiSnapshot(true);
+        assertEquals(cancelled, shown.failureDetail());
+        assertEquals(-1, shown.targetIndex(), "a removed entry has no slot to show");
+        assertEquals("B", shown.targetName());
+      } else {
+        Lizzie.config.extraMode = ExtraMode.Double_Engine;
+        assertTrue(manager.switchEngineIfAvailable(0, true));
+        a.awaitReady();
+        assertTrue(manager.switchEngineIfAvailable(1, false));
+        b.awaitReady();
+        BenchmarkExecution running = b.engine.benchmarkExecution();
+        env.saveCatalog("A", "C");
+        SwingUtilities.invokeAndWait(() -> refresh(manager));
+        assertEquals(
+            BenchmarkExecution.State.CANCELLED,
+            running.completion().get(5, TimeUnit.SECONDS).state());
+        assertFalse(b.alive());
+        assertEquals(-1, EngineManager.currentEngineNo2);
+        SwingUtilities.invokeAndWait(() -> {});
+        var shown = manager.engineSwitchUiSnapshot(false);
+        assertEquals(cancelled, shown.failureDetail());
+        assertEquals(-1, shown.targetIndex());
+        assertEquals("B", shown.targetName());
+        assertTrue(a.alive(), "the retained primary tool keeps running");
+        assertSame(a.engine, Lizzie.leelaz);
+        assertEquals(0, EngineManager.currentEngineNo);
+      }
+      assertFalse(Files.exists(c.path.resolve("pid")));
+    }
+  }
+
+  private static void refresh(EngineManager manager) {
+    try {
+      manager.refreshEngineCatalog();
+    } catch (java.io.IOException failure) {
+      throw new AssertionError(failure);
+    }
+  }
+
   private static final String CHILD =
       """
       #!/usr/bin/python3
@@ -417,13 +531,21 @@ class EngineManagerBenchmarkTest {
   }
 
   private static final class NamedEngine extends Leelaz {
+    /** When set, names come from the saved catalog at the index, as in production. */
+    private volatile List<EngineData> savedCatalog;
+
     NamedEngine(String command) throws java.io.IOException {
       super(command);
     }
 
     @Override
     public String getEngineName(int index) {
-      return "Controlled KataGo";
+      List<EngineData> catalog = savedCatalog;
+      if (catalog == null) return "Controlled KataGo";
+      String name = index < 0 || index >= catalog.size() ? "" : catalog.get(index).name;
+      oriEnginename = name;
+      currentEnginename = name;
+      return name;
     }
 
     @Override
@@ -475,6 +597,8 @@ class EngineManagerBenchmarkTest {
     final Path root;
     final RecordingConsole console;
     final List<Leelaz> engines = new ArrayList<>();
+    final List<EngineData> savedCatalog = new java.util.concurrent.CopyOnWriteArrayList<>();
+    final java.util.Map<String, EngineData> savedEntries = new java.util.HashMap<>();
 
     Environment(Path root) throws Exception {
       this.root = root;
@@ -511,6 +635,45 @@ class EngineManagerBenchmarkTest {
       EngineManager manager = new EngineManager(new ArrayList<>(List.of(catalog)));
       Lizzie.setEngineManager(manager);
       return manager;
+    }
+
+    /** A manager whose refresh reads saved entries named after each fixture directory. */
+    EngineManager catalogManager(Fixture... fixtures) {
+      List<Leelaz> catalog = new ArrayList<>();
+      for (Fixture fixture : fixtures) {
+        NamedEngine engine = (NamedEngine) fixture.engine;
+        EngineData data = new EngineData();
+        data.id = data.name = fixture.path.getFileName().toString();
+        data.commands = engine.oriEngineCommand;
+        data.width = engine.oriWidth;
+        data.height = engine.oriHeight;
+        data.ip = engine.ip;
+        data.port = engine.port;
+        data.userName = engine.userName;
+        engine.savedEntryId = data.id;
+        engine.savedCatalog = savedCatalog;
+        savedEntries.put(data.id, data);
+        savedCatalog.add(data);
+        catalog.add(engine);
+        // Catalog creation names each entry from its saved slot.
+        engine.getEngineName(catalog.size() - 1);
+      }
+      EngineManager manager =
+          new EngineManager(catalog) {
+            @Override
+            protected ArrayList<EngineData> loadEngineCatalogSnapshot() {
+              return new ArrayList<>(savedCatalog);
+            }
+          };
+      Lizzie.setEngineManager(manager);
+      return manager;
+    }
+
+    void saveCatalog(String... ids) {
+      List<EngineData> next = new ArrayList<>();
+      for (String id : ids) next.add(savedEntries.get(id));
+      savedCatalog.clear();
+      savedCatalog.addAll(next);
     }
 
     @Override
