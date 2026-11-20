@@ -1401,6 +1401,8 @@ public class ContributeEngine {
     EngineFailedMessage.showDialog(
         commands != null ? commands : Utils.splitCommand(engineCommand),
         sanitizer.sanitize(engineCommand),
+        // Contribution commands come from contribution settings, which never decode one.
+        EngineCommandVisibility.VISIBLE,
         sanitizer.sanitize(message),
         !useJavaSSH && OsPlatform.isWindows(),
         false,

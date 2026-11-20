@@ -596,6 +596,8 @@ public class AnalysisEngine {
     EngineFailedMessage.showDialog(
         commands,
         engineCommand,
+        // Analysis commands come from analysis settings, which never decode a hidden command.
+        EngineCommandVisibility.VISIBLE,
         message,
         !useJavaSSH && !useRemoteCompute && OsPlatform.isWindows(),
         false,

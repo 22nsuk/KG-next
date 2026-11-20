@@ -240,6 +240,70 @@ class EngineStartupDiagnosticsTest {
     }
   }
 
+  @Test
+  void hiddenAttemptKeepsNoCommandFragmentInSnapshotShareOrPublishedRecord() {
+    List<EngineStartupDiagnostic> published = new java.util.ArrayList<>();
+    var policy = EngineStartupDiagnostics.Policy.production();
+    try (var service = new EngineStartupDiagnostics(policy, published::add)) {
+      var attempt =
+          service.begin(
+              "eng-hidden",
+              "MAIN_BOARD",
+              HiddenCommandFixture.ARGV,
+              true,
+              EngineCommandVisibility.HIDDEN);
+      var builder =
+          new ProcessBuilder(HiddenCommandFixture.ARGV)
+              .directory(new java.io.File(HiddenCommandFixture.WORKING_DIRECTORY));
+      attempt.capture(builder);
+      attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
+      var failure = attempt.fail("process-create", HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+
+      var launch = failure.toJson().getJSONObject("launch");
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("configuredCommand"));
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("executable"));
+      assertEquals(0, launch.getJSONArray("arguments").length());
+      assertEquals(EngineCommandVisibility.HIDDEN_VALUE, launch.getString("cwd"));
+      assertTrue(launch.getBoolean("commandHidden"));
+      assertFalse(published.isEmpty());
+      HiddenCommandFixture.assertNoCanary(failure.toJson().toString());
+      HiddenCommandFixture.assertNoCanary(failure.shareText());
+      for (var record : published) HiddenCommandFixture.assertNoCanary(record.toJson().toString());
+      assertTrue(failure.toJson().getString("originalError").contains("CreateProcess error=2"));
+      assertTrue(failure.toJson().getString("stderr").contains("cudnn64_9.dll"));
+      assertEquals("process-create", failure.toJson().getString("phase"));
+      assertEquals(HiddenCommandFixture.ARGV, builder.command());
+    }
+  }
+
+  @Test
+  void hiddenBasicFailureKeepsOnlyTheCommandMarker() {
+    var basic =
+        EngineStartupDiagnostic.basic(
+            HiddenCommandFixture.ARGV,
+            HiddenCommandFixture.COMMAND,
+            HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+            EngineCommandVisibility.HIDDEN);
+    var json = basic.toJson();
+    assertEquals(
+        EngineCommandVisibility.HIDDEN_VALUE,
+        json.getJSONObject("launch").getString("configuredCommand"));
+    assertTrue(json.getJSONObject("launch").getBoolean("commandHidden"));
+    assertTrue(json.getString("originalError").contains("CreateProcess error=2"));
+    HiddenCommandFixture.assertNoCanary(json.toString());
+    HiddenCommandFixture.assertNoCanary(basic.shareText());
+
+    var visible =
+        EngineStartupDiagnostic.basic(
+            HiddenCommandFixture.ARGV,
+            HiddenCommandFixture.COMMAND,
+            HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+    assertEquals(
+        HiddenCommandFixture.COMMAND,
+        visible.toJson().getJSONObject("launch").getString("configuredCommand"));
+    assertFalse(visible.toJson().getJSONObject("launch").has("commandHidden"));
+  }
+
   private static String reason(EngineStartupDiagnostics.Attempt attempt, String source) {
     return attempt
         .snapshot()

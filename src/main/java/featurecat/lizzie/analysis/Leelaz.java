@@ -445,6 +445,8 @@ public class Leelaz {
   // for Multiple Engine
   public String oriEngineCommand = "";
   public String engineCommand;
+  /** Decided where {@link #setEngineCommand} decodes a user-hidden command. */
+  private EngineCommandVisibility engineCommandVisibility = EngineCommandVisibility.VISIBLE;
   private List<String> commands;
   private boolean directLocalSnapshotFileAccessForTest;
   //	private String currentWeightFile = "";
@@ -1159,14 +1161,22 @@ public class Leelaz {
   }
 
   public String getEngineCommand() {
-    if (oriEngineCommand.startsWith("encryption||"))
+    if (engineCommandVisibility.isHidden())
       return Lizzie.resourceBundle.getString("Leelaz.encryption");
     return engineCommand;
   }
 
+  EngineCommandVisibility engineCommandVisibility() {
+    return engineCommandVisibility;
+  }
+
   public void setEngineCommand(String commandString) {
     oriEngineCommand = commandString;
-    if (commandString.startsWith("encryption||")) {
+    engineCommandVisibility =
+        commandString.startsWith("encryption||")
+            ? EngineCommandVisibility.HIDDEN
+            : EngineCommandVisibility.VISIBLE;
+    if (engineCommandVisibility.isHidden()) {
       commandString = commandString.substring(12);
       commandString = Utils.doDecrypt2(commandString);
     }
@@ -1363,7 +1373,8 @@ public class Leelaz {
                   loggingEngineId,
                   launchPurpose,
                   commands,
-                  !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand));
+                  !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand),
+                  engineCommandVisibility);
     }
     rememberKataGoThreadLaunchOverride(commands);
     threadPolicyAtStart = EngineThreadPolicy.findSavedEntry(savedEntryId);
@@ -24164,6 +24175,7 @@ public class Leelaz {
     EngineFailedMessage.showDialog(
         commands,
         engineCommand != null ? engineCommand : "",
+        engineCommandVisibility,
         message,
         canUseCmdDiagnostic,
         true,
@@ -24266,6 +24278,7 @@ public class Leelaz {
     EngineFailedMessage.showDialog(
         commands,
         engineCommand,
+        engineCommandVisibility,
         message,
         !useJavaSSH && OsPlatform.isWindows(),
         true,

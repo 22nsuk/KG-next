@@ -80,12 +80,24 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
   }
 
   public Attempt begin(String engineId, String purpose, List<String> command, boolean local) {
-    return new Attempt(engineId, purpose, command, local);
+    return begin(engineId, purpose, command, local, EngineCommandVisibility.VISIBLE);
+  }
+
+  /** The owner that decoded the command states whether its launch may appear in the record. */
+  public Attempt begin(
+      String engineId,
+      String purpose,
+      List<String> command,
+      boolean local,
+      EngineCommandVisibility visibility) {
+    return new Attempt(engineId, purpose, command, local, visibility);
   }
 
   public final class Attempt {
     private final String id = UUID.randomUUID().toString();
     private final boolean windows = System.getProperty("os.name", "").startsWith("Windows");
+    private final EngineCommandVisibility visibility;
+    private final List<String> hiddenFragments = new ArrayList<>();
     private final JSONObject launch = new JSONObject();
     private final JSONObject sources = new JSONObject();
     private final List<Finding> preflight = new ArrayList<>();
@@ -108,15 +120,29 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private ScheduledFuture<?> tailTask;
     private EngineStartupDiagnostic published;
 
-    private Attempt(String engineId, String purpose, List<String> command, boolean local) {
+    private Attempt(
+        String engineId,
+        String purpose,
+        List<String> command,
+        boolean local,
+        EngineCommandVisibility visibility) {
+      this.visibility = visibility;
       launch
           .put("engineId", limited(engineId, 128))
           .put("launchPurpose", limited(purpose, 128))
           .put("startedAt", Instant.now().toString())
           .put("environmentState", "not-formed")
           .put("local", local)
-          .put("platform", windows ? "windows" : "non-windows")
-          .put("configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+          .put("platform", windows ? "windows" : "non-windows");
+      if (visibility.isHidden()) {
+        hiddenFragments.addAll(EngineStartupDiagnostic.commandFragments(command, null));
+        launch
+            .put("configuredCommand", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("commandHidden", true);
+      } else {
+        launch.put(
+            "configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+      }
     }
 
     public String id() {
@@ -138,6 +164,18 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
               ? Path.of("").toAbsolutePath()
               : builder.directory().toPath().toAbsolutePath();
       List<String> command = builder.command();
+      if (visibility.isHidden()) {
+        // The final argv and its working directory are the hidden command after launch policy.
+        hiddenFragments.addAll(EngineStartupDiagnostic.commandFragments(command, null));
+        if (builder.directory() != null) hiddenFragments.add(builder.directory().toString());
+        launch
+            .put("environmentState", "final")
+            .put("executable", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("arguments", new JSONArray())
+            .put("cwd", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("cwdSource", builder.directory() == null ? "inherited" : "explicit");
+        return;
+      }
       JSONArray arguments = new JSONArray();
       int remaining = 32768;
       for (String argument : command.subList(1, command.size())) {
@@ -368,7 +406,10 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
                       ? "collecting"
                       : identified ? "evidence-available" : "no-specific-dll-identified")
               .put("truncated", truncated);
-      published = new EngineStartupDiagnostic(value, policy.diagnosticBytes());
+      published =
+          new EngineStartupDiagnostic(
+              EngineStartupDiagnostic.withoutHiddenCommand(value, visibility, hiddenFragments),
+              policy.diagnosticBytes());
       if (publisher != null) {
         try {
           publisher.accept(published);

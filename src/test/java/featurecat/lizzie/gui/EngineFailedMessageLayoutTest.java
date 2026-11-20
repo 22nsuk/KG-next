@@ -3,12 +3,15 @@ package featurecat.lizzie.gui;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.analysis.HiddenCommandFixture;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
@@ -730,6 +733,154 @@ class EngineFailedMessageLayoutTest {
     JSONObject parsedShare = new JSONObject(shareText);
     assertTrue(parsedShare.isNull("exitCode"));
     assertTrue(parsedShare.getString("attemptId").startsWith("failure-"));
+  }
+
+  @Test
+  void hiddenCommandNeverReachesVisibleTextSummaryExportOrBatchLine() {
+    List<String> argv = HiddenCommandFixture.ARGV;
+    String command = HiddenCommandFixture.COMMAND;
+    String failure = HiddenCommandFixture.PROCESS_CREATE_FAILURE;
+    EngineCommandVisibility hidden = EngineCommandVisibility.HIDDEN;
+
+    String commandPane =
+        textOf(
+            EngineFailedMessage.createScrollableText(
+                EngineFailedMessage.displayedCommand(command, hidden), null));
+    String messagePane =
+        textOf(
+            EngineFailedMessage.createScrollableText(
+                EngineFailedMessage.displayedMessage(failure, argv, command, hidden), null));
+    assertEquals(Lizzie.resourceBundle.getString("Leelaz.encryption"), commandPane);
+    assertTrue(messagePane.contains("CreateProcess error=2"), messagePane);
+
+    try (EngineStartupDiagnostics diagnostics =
+        new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      EngineStartupDiagnostics.Attempt attempt =
+          diagnostics.begin("eng-hidden", "MAIN_BOARD", argv, true, hidden);
+      attempt.capture(
+          new ProcessBuilder(argv)
+              .directory(new java.io.File(HiddenCommandFixture.WORKING_DIRECTORY)));
+      attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
+      attempt.fail("process-create", failure);
+      EngineStartupDiagnostic bound = attempt.snapshot();
+      EngineStartupDiagnostic basic = EngineStartupDiagnostic.basic(argv, command, failure, hidden);
+
+      String boundSummary = EngineFailedMessage.formatSummaryText(bound);
+      assertTrue(boundSummary.contains("cudnn64_9.dll"), boundSummary);
+      for (String text :
+          List.of(
+              commandPane,
+              messagePane,
+              boundSummary,
+              EngineFailedMessage.formatSummaryText(basic),
+              // Details pane, copy button and diagnostics export all render these records.
+              bound.shareText(),
+              basic.shareText(),
+              bound.toJson().toString(),
+              basic.toJson().toString())) {
+        HiddenCommandFixture.assertNoCanary(text);
+      }
+    }
+
+    assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(argv, command, hidden, true));
+    String visibleBatchLine =
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            argv, command, EngineCommandVisibility.VISIBLE, true);
+    assertNotNull(visibleBatchLine);
+    assertTrue(visibleBatchLine.contains("katago.exe"), visibleBatchLine);
+    assertNull(
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            argv, command, EngineCommandVisibility.VISIBLE, false));
+    assertEquals(
+        command, EngineFailedMessage.displayedCommand(command, EngineCommandVisibility.VISIBLE));
+    assertEquals(
+        failure,
+        EngineFailedMessage.displayedMessage(
+            failure, argv, command, EngineCommandVisibility.VISIBLE));
+  }
+
+  @Test
+  void hiddenCommandDialogRendersNoFragmentAndOffersNoCmdDiagnostic() throws Exception {
+    // The dialog reads Lizzie.config only behind null checks, so a display is enough here.
+    assumeTrue(!GraphicsEnvironment.isHeadless());
+    List<String> argv = HiddenCommandFixture.ARGV;
+    try (EngineStartupDiagnostics diagnostics =
+        new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      EngineStartupDiagnostics.Attempt attempt =
+          diagnostics.begin("eng-hidden", "MAIN_BOARD", argv, true, EngineCommandVisibility.HIDDEN);
+      attempt.output("stderr", HiddenCommandFixture.DLL_FAILURE_LINE);
+      attempt.fail("process-create", HiddenCommandFixture.PROCESS_CREATE_FAILURE);
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      SwingUtilities.invokeAndWait(
+          () -> {
+            EngineFailedMessage hidden = null;
+            EngineFailedMessage visible = null;
+            try {
+              hidden =
+                  new EngineFailedMessage(
+                      argv,
+                      HiddenCommandFixture.COMMAND,
+                      EngineCommandVisibility.HIDDEN,
+                      HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+                      true,
+                      true,
+                      false,
+                      null);
+              StringBuilder unbound = new StringBuilder();
+              collectText(hidden, unbound);
+              HiddenCommandFixture.assertNoCanary(unbound.toString());
+              hidden.bindStartupDiagnostic(attempt);
+              StringBuilder rendered = new StringBuilder();
+              collectText(hidden, rendered);
+              HiddenCommandFixture.assertNoCanary(rendered.toString());
+              assertTrue(rendered.toString().contains("cudnn64_9.dll"));
+              String runInCmd = Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd");
+              assertFalse(rendered.toString().contains(runInCmd));
+
+              visible =
+                  new EngineFailedMessage(
+                      argv,
+                      HiddenCommandFixture.COMMAND,
+                      EngineCommandVisibility.VISIBLE,
+                      HiddenCommandFixture.PROCESS_CREATE_FAILURE,
+                      true,
+                      true,
+                      false,
+                      null);
+              StringBuilder control = new StringBuilder();
+              collectText(visible, control);
+              assertTrue(control.toString().contains(runInCmd));
+              assertTrue(control.toString().contains("HiddenVault7"));
+            } catch (Throwable t) {
+              failure.set(t);
+            } finally {
+              if (hidden != null) hidden.dispose();
+              if (visible != null) visible.dispose();
+            }
+          });
+      if (failure.get() instanceof AssertionError assertion) throw assertion;
+      if (failure.get() != null) throw new RuntimeException(failure.get());
+    }
+  }
+
+  private static String textOf(JScrollPane pane) {
+    return ((JTextArea) pane.getViewport().getView()).getText();
+  }
+
+  private static void collectText(Container root, StringBuilder text) {
+    for (Component child : root.getComponents()) {
+      if (child instanceof javax.swing.text.JTextComponent field) {
+        text.append(field.getText()).append('\n');
+      } else if (child instanceof javax.swing.AbstractButton button) {
+        text.append(button.getText()).append('\n');
+      } else if (child instanceof javax.swing.JLabel label) {
+        text.append(label.getText()).append('\n');
+      }
+      if (child instanceof Container container) collectText(container, text);
+    }
+    if (root instanceof java.awt.Window window) {
+      for (java.awt.Window owned : window.getOwnedWindows()) collectText(owned, text);
+    }
   }
 
   @SuppressWarnings("unchecked")
