@@ -435,14 +435,13 @@ class EngineManagerBenchmarkTest {
       // The refresh loads [A, C, B] and is held while it names A, after it could read A selected.
       ((NamedEngine) a.engine).name.arm();
       env.saveCatalog("A", "C", "B");
-      Thread refresh = background(() -> refresh(manager));
+      Background refresh = background(() -> refresh(manager));
       ((NamedEngine) a.engine).name.awaitEntered();
       SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
       b.awaitReady();
       await(() -> Lizzie.leelaz == b.engine);
       ((NamedEngine) a.engine).name.release();
-      refresh.join(TimeUnit.SECONDS.toMillis(5));
-      assertFalse(refresh.isAlive());
+      refresh.finish();
 
       BenchmarkExecution execution = b.engine.benchmarkExecution();
       assertSame(b.engine, manager.engineList.get(2));
@@ -622,7 +621,8 @@ class EngineManagerBenchmarkTest {
   }
 
   @Test
-  void anOlderCatalogReadFinishingLateDoesNotStopAToolTheNewerCatalogKeeps() throws Exception {
+  void aRefreshOnTheEventThreadDuringAnotherRefreshReturnsAndIsPublishedAfterIt()
+      throws Exception {
     try (Environment env = new Environment(directory)) {
       Fixture a = env.fixture("A");
       Fixture b = env.fixture("B");
@@ -634,29 +634,172 @@ class EngineManagerBenchmarkTest {
       assertTrue(manager.switchEngineIfAvailable(1, false));
       b.awaitReady();
       BenchmarkExecution running = b.engine.benchmarkExecution();
+      List<Leelaz> published = manager.engineList;
 
-      // The first refresh reads a catalog without B and is held while it names A.
+      // The first refresh reads [A, C, B] and is held while it names A.
       ((NamedEngine) a.engine).name.arm();
-      env.saveCatalog("A", "C");
-      Thread older = background(() -> refresh(manager));
+      env.saveCatalog("A", "C", "B");
+      Background older = background(() -> refresh(manager));
       ((NamedEngine) a.engine).name.awaitEntered();
-      // B is saved back, and the refresh that reads that catalog publishes first.
-      env.saveCatalog("A", "B", "C");
+      // The settings screen saves [C, A, B]. Its refresh must neither wait on the event thread nor
+      // publish before the first one has.
+      env.saveCatalog("C", "A", "B");
       SwingUtilities.invokeAndWait(() -> refresh(manager));
+      assertTrue(older.isAlive(), "the event thread returned while the first refresh is held");
+      assertSame(published, manager.engineList, "nothing is published in the middle of a refresh");
       ((NamedEngine) a.engine).name.release();
-      older.join(TimeUnit.SECONDS.toMillis(5));
-      assertFalse(older.isAlive());
+      older.finish();
       SwingUtilities.invokeAndWait(() -> {});
 
-      assertEquals(3, manager.engineList.size(), "the newer catalog stays published");
-      assertSame(b.engine, manager.engineList.get(1));
-      assertSame(b.engine, Lizzie.leelaz2);
-      assertEquals(1, EngineManager.currentEngineNo2);
-      assertFalse(running.completion().isDone(), "the newer catalog keeps B, so B keeps running");
+      assertSame(c.engine, manager.engineList.get(0), "the catalog saved last is published last");
+      assertSame(a.engine, manager.engineList.get(1));
+      assertSame(b.engine, manager.engineList.get(2));
+      assertEquals(1, EngineManager.currentEngineNo);
+      assertEquals(2, EngineManager.currentEngineNo2);
+      assertFalse(running.completion().isDone(), "both catalogs keep B, so B keeps running");
       assertTrue(b.alive());
+      var shown = manager.engineSwitchUiSnapshot(false);
+      assertEquals(2, shown.targetIndex());
+      assertEquals(Lizzie.resourceBundle.getString("Benchmark.running"), shown.failureDetail());
+    }
+  }
+
+  @Test
+  void aReorderJustBeforeTheRestoredEngineRestartsRestartsThatEngineAtItsNewSlot()
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = new Fixture(directory.resolve("A"), false);
+      env.engines.add(a.engine);
+      Fixture b = env.fixture("B");
+      Fixture c = new Fixture(directory.resolve("C"), false);
+      env.engines.add(c.engine);
+      Fixture d = env.fixture("D");
+      EngineManager manager = env.catalogManager(a, b, c, d);
+      NamedEngine previous = (NamedEngine) a.engine;
+      Lizzie.config.fastChange = false;
+      Lizzie.config.leelazConfig =
+          new org.json.JSONObject().put("engine-settings-list", new org.json.JSONArray());
+      // This frame has no board renderer for a first activation; arrive from a tool instead.
+      assertTrue(manager.switchEngineIfAvailable(3, true));
+      d.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      await(() -> manager.isEngineSwitchActive(0, true));
+      String firstPid = Files.readString(a.path.resolve("pid"));
+      a.engine.Pondering();
+      previous.analysisResumed = false;
+      previous.quit.arm();
+
+      // B is removed while A is quit for it, so A is restored and restarted.
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(1, true)));
+      previous.quit.awaitEntered();
+      env.saveCatalog("A", "C", "D");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      // The restore has found A selected at slot 0; C takes that slot before A restarts.
+      env.board.setupCheck.arm();
+      previous.quit.release();
+      env.board.setupCheck.awaitEntered();
+      env.saveCatalog("C", "A", "D");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      assertEquals(1, EngineManager.currentEngineNo);
+      env.board.setupCheck.release();
+
+      await(
+          () ->
+              aliveQuietly(a)
+                  && !firstPid.equals(readQuietly(a.path.resolve("pid")))
+                  && a.engine.isLoaded());
+      await(() -> previous.analysisResumed);
+      assertSame(a.engine, Lizzie.leelaz, "the restore restarts the engine it found selected");
+      assertEquals(1, EngineManager.currentEngineNo);
+      assertFalse(Files.exists(c.path.resolve("pid")), "the entry now in A's old slot stays off");
+    }
+  }
+
+  @org.junit.jupiter.params.ParameterizedTest
+  @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+  void removingTheSecondaryAndItsToolTargetTogetherRestoresNothing(boolean fastChange)
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture p = env.fixture("P");
+      Fixture a = new Fixture(directory.resolve("A"), false);
+      env.engines.add(a.engine);
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(p, a, b, c);
+      NamedEngine previous = (NamedEngine) a.engine;
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      Lizzie.config.fastChange = fastChange;
+      Lizzie.config.leelazConfig =
+          new org.json.JSONObject().put("engine-settings-list", new org.json.JSONArray());
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      p.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(1, false));
+      await(() -> manager.isEngineSwitchActive(1, false));
+      a.engine.Pondering();
+      previous.ponderRequested = false;
+      Gate stop = fastChange ? previous.pause : previous.quit;
+      stop.arm();
+
+      SwingUtilities.invokeAndWait(() -> assertTrue(manager.switchEngineIfAvailable(2, false)));
+      stop.awaitEntered();
+      // A and its target B are removed together while A is stopped for B.
+      env.saveCatalog("P", "C");
+      SwingUtilities.invokeAndWait(() -> refresh(manager));
+      assertEquals(-1, EngineManager.currentEngineNo2);
+      stop.release();
+
+      await(() -> !selectionWorkerRunning(false));
+      SwingUtilities.invokeAndWait(() -> {});
+      SwingUtilities.invokeAndWait(() -> {});
+      assertFalse(previous.ponderRequested, "a removed engine is not asked to analyse again");
+      assertEquals(List.of(), env.synchronizationFailures, "nor restarted, which would fail");
+      assertFalse(Files.exists(b.path.resolve("pid")), "the removed target never starts");
+    }
+  }
+
+  @Test
+  void aToolTargetRemovedWhileItsSwitchIsFirstShownHandsTheSideBackToTheRunningTool()
+      throws Exception {
+    try (Environment env = new Environment(directory)) {
+      Fixture a = env.fixture("A");
+      Fixture b = env.fixture("B");
+      Fixture c = env.fixture("C");
+      EngineManager manager = env.catalogManager(a, b, c);
+      Lizzie.config.extraMode = ExtraMode.Double_Engine;
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      a.awaitReady();
+      assertTrue(manager.switchEngineIfAvailable(2, false));
+      c.awaitReady();
+      BenchmarkExecution running = c.engine.benchmarkExecution();
+
+      // The switch to B is registered, and is held while its SWITCHING state is first drawn.
+      env.switchingShown.arm();
+      SwingUtilities.invokeLater(() -> manager.switchEngineIfAvailable(1, false));
+      env.switchingShown.awaitEntered();
+      env.saveCatalog("A", "C");
+      refresh(manager);
+      env.switchingShown.release();
+
+      String runningText = Lizzie.resourceBundle.getString("Benchmark.running");
+      await(
+          () -> {
+            var shown = manager.engineSwitchUiSnapshot(false);
+            return shown.phase() == EngineManager.EngineSwitchUiPhase.TOOL
+                && "C".equals(shown.targetName())
+                && runningText.equals(shown.failureDetail());
+          });
+      assertEquals(1, manager.engineSwitchUiSnapshot(false).targetIndex());
+      assertSame(c.engine, Lizzie.leelaz2);
+      assertTrue(c.alive(), "C was never stopped for the removed target");
+
+      c.command("exit 0");
       assertEquals(
-          Lizzie.resourceBundle.getString("Benchmark.running"),
-          manager.engineSwitchUiSnapshot(false).failureDetail());
+          BenchmarkExecution.State.SUCCEEDED,
+          running.completion().get(5, TimeUnit.SECONDS).state());
+      String succeeded = Lizzie.resourceBundle.getString("Benchmark.succeeded");
+      await(() -> succeeded.equals(manager.engineSwitchUiSnapshot(false).failureDetail()));
+      assertEquals("C", manager.engineSwitchUiSnapshot(false).targetName());
+      assertFalse(Files.exists(b.path.resolve("pid")), "the removed target never starts");
     }
   }
 
@@ -754,12 +897,54 @@ class EngineManagerBenchmarkTest {
     }
   }
 
-  /** Runs off the event thread; a failure is rethrown by the caller's join assertions. */
-  private static Thread background(Runnable body) {
-    Thread thread = new Thread(body, "benchmark-test-refresh");
-    thread.setDaemon(true);
-    thread.start();
-    return thread;
+  private static Background background(Runnable body) {
+    return new Background(body);
+  }
+
+  /** Runs off the event thread; {@link #finish} fails the test unless it returned normally. */
+  private static final class Background {
+    private final Thread thread;
+    private final java.util.concurrent.atomic.AtomicReference<Throwable> failure =
+        new java.util.concurrent.atomic.AtomicReference<>();
+
+    private Background(Runnable body) {
+      thread =
+          new Thread(
+              () -> {
+                try {
+                  body.run();
+                } catch (Throwable thrown) {
+                  failure.set(thrown);
+                }
+              },
+              "benchmark-test-refresh");
+      thread.setDaemon(true);
+      thread.start();
+    }
+
+    boolean isAlive() {
+      return thread.isAlive();
+    }
+
+    void finish() throws InterruptedException {
+      thread.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(thread.isAlive(), "the refresh did not return");
+      if (failure.get() != null) throw new AssertionError("the refresh failed", failure.get());
+    }
+  }
+
+  private static String readQuietly(Path file) {
+    try {
+      return Files.exists(file) ? Files.readString(file) : "";
+    } catch (java.io.IOException failure) {
+      return "";
+    }
+  }
+
+  private static boolean selectionWorkerRunning(boolean main) {
+    String prefix = "lizzie-engine-switch-" + (main ? "primary-" : "secondary-");
+    return Thread.getAllStackTraces().keySet().stream()
+        .anyMatch(thread -> thread.getName().startsWith(prefix));
   }
 
   private static void refresh(EngineManager manager) {
@@ -913,10 +1098,11 @@ class EngineManagerBenchmarkTest {
   private static final class NamedEngine extends Leelaz {
     /** When set, names come from the saved catalog as production resolves them. */
     private volatile List<EngineData> savedCatalog;
-    /** Holds the next catalog-name lookup, the tool's terminal callback, or a GTP quit. */
+    /** Holds the next catalog-name lookup, the tool's terminal callback, a GTP quit or pause. */
     final Gate name = new Gate();
     final Gate terminal = new Gate();
     final Gate quit = new Gate();
+    final Gate pause = new Gate();
 
     NamedEngine(String command) throws java.io.IOException {
       super(command);
@@ -945,10 +1131,26 @@ class EngineManagerBenchmarkTest {
       super.normalQuit();
     }
 
+    @Override
+    public void nameCmdfornoponder() {
+      pause.pass();
+      super.nameCmdfornoponder();
+    }
+
+    /** Set when analysis is asked to start by a direct request. */
+    volatile boolean ponderRequested;
+
+    @Override
+    public void ponder() {
+      ponderRequested = true;
+      super.ponder();
+    }
+
     void releaseGates() {
       name.release();
       terminal.release();
       quit.release();
+      pause.release();
     }
 
     /** Set when a start runs on the event thread, and when analysis is asked to resume. */
@@ -1019,6 +1221,10 @@ class EngineManagerBenchmarkTest {
     final List<Leelaz> engines = new ArrayList<>();
     final List<EngineData> savedCatalog = new java.util.concurrent.CopyOnWriteArrayList<>();
     final java.util.Map<String, EngineData> savedEntries = new java.util.HashMap<>();
+    final GatedBoard board;
+    /** Holds the event thread while it first draws a secondary SWITCHING state. */
+    final Gate switchingShown = new Gate();
+    final List<Leelaz> synchronizationFailures = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     Environment(Path root) throws Exception {
       this.root = root;
@@ -1033,7 +1239,8 @@ class EngineManagerBenchmarkTest {
       Menu.engineMenu = null;
       Board.boardWidth = Board.boardHeight = 19;
       Zobrist.init();
-      Board board = allocate(Board.class);
+      board = allocate(GatedBoard.class);
+      board.setupCheck = new Gate();
       board.startStonelist = new ArrayList<>();
       board.setHistory(new BoardHistoryList(BoardData.empty(19, 19)));
       Lizzie.board = board;
@@ -1086,9 +1293,18 @@ class EngineManagerBenchmarkTest {
               return new ArrayList<>(savedCatalog);
             }
 
+            @Override
+            protected void showEngineSynchronizationFailure(Leelaz engine, Throwable failure) {
+              synchronizationFailures.add(engine);
+              super.showEngineSynchronizationFailure(engine, failure);
+            }
+
             /** Stands in for the engine menu, which labels the shown slot, name and status. */
             @Override
             protected void renderEngineSwitchUiState(EngineSwitchUiSnapshot snapshot) {
+              if (!snapshot.isMain() && snapshot.phase() == EngineSwitchUiPhase.SWITCHING) {
+                switchingShown.pass();
+              }
               super.renderEngineSwitchUiState(snapshot);
               if (snapshot.isMain() && Menu.engineMenu != null) {
                 Menu.engineMenu.setText(
@@ -1117,6 +1333,8 @@ class EngineManagerBenchmarkTest {
         for (Leelaz engine : engines) {
           if (engine instanceof NamedEngine named) named.releaseGates();
         }
+        board.setupCheck.release();
+        switchingShown.release();
         // A detached child of a failed test must not keep a tool's output open.
         try (var files = Files.walk(root)) {
           files
@@ -1147,6 +1365,20 @@ class EngineManagerBenchmarkTest {
         EngineManager.currentEngineNo2 = oldIndex2;
         EngineManager.isEmpty = oldEmpty;
       }
+    }
+  }
+
+  /** Holds the selection worker once at its next setup-mode check, which the restore makes. */
+  private static final class GatedBoard extends Board {
+    volatile Gate setupCheck;
+
+    @Override
+    public boolean isSetupMode() {
+      Gate gate = setupCheck;
+      if (gate != null && Thread.currentThread().getName().startsWith("lizzie-engine-switch-")) {
+        gate.pass();
+      }
+      return super.isSetupMode();
     }
   }
 
