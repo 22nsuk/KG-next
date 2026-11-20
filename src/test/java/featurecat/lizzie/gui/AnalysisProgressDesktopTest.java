@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static featurecat.lizzie.gui.ContributeStartupDesktopTest.quote;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
@@ -7,6 +8,7 @@ import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.SGFParser;
+import featurecat.lizzie.util.Utils;
 import java.awt.Robot;
 import java.awt.Rectangle;
 import java.awt.Window;
@@ -70,6 +72,7 @@ class AnalysisProgressDesktopTest {
                 assertEquals(17, worker.startRequestMissingMainline(true));
                 return worker;
               });
+      awaitEdt(() -> Files.isRegularFile(work.resolve("analysis-child.ready")));
       awaitEdt(() -> engine.waitFrame.isShowing() && progressText(engine).endsWith("0/17"));
       assertEquals(17, engine.requests.size());
       DesktopProbeProcess.phase(result, "progress-window-ready");
@@ -153,11 +156,20 @@ class AnalysisProgressDesktopTest {
     } catch (Throwable failure) {
       failure.printStackTrace();
     } finally {
+      try {
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      } catch (Throwable cleanupFailure) {
+        cleanupFailure.printStackTrace();
+        exit = 1;
+      }
       System.exit(exit);
     }
   }
 
   private static void prepareApplication(Path work, boolean delayedMetadata) throws Exception {
+    String command = quote(Utils.resolveJavaCommand()) + " -cp "
+        + quote(System.getProperty("java.class.path")) + " " + WaitingAnalysisChild.class.getName()
+        + " " + quote(work.resolve("analysis-child.ready").toString());
     JSONObject ui =
         new JSONObject()
             .put("autoload-empty", true)
@@ -166,7 +178,7 @@ class AnalysisProgressDesktopTest {
             .put("auto-quick-analyze-on-load", false)
             .put("analysis-engine-preload", false)
             .put("analysis-reuse-current-engine", false)
-            .put("analysis-engine-command", "progress-test analysis")
+            .put("analysis-engine-command", command)
             .put("analysis-engine-command-customized", true)
             .put("analysis-auto-quit", false)
             .put("play-sound", false)
@@ -317,18 +329,14 @@ class AnalysisProgressDesktopTest {
 
     private ControlledAnalysisEngine() throws Exception {
       super(false);
-      Field loaded = AnalysisEngine.class.getDeclaredField("isLoaded");
-      loaded.setAccessible(true);
-      loaded.setBoolean(this, true);
-    }
-
-    @Override
-    public void startEngine(String command) {
-      // Only engine I/O is replaced; request planning, result handling, and Swing remain real.
+      assertTrue(isLoaded(), "the waiting analysis child must start normally");
+      assertNotNull(process);
+      assertTrue(process.isAlive());
     }
 
     @Override
     public boolean sendCommand(String command) {
+      // Capture requests for controlled responses; startup, cleanup, and Swing remain real.
       requests.add(new JSONObject(command));
       return true;
     }
@@ -350,6 +358,13 @@ class AnalysisProgressDesktopTest {
               .put("id", requests.get(index).getString("id"))
               .put("moveInfos", new JSONArray().put(move))
               .toString());
+    }
+  }
+
+  public static final class WaitingAnalysisChild {
+    public static void main(String[] args) throws Exception {
+      Files.writeString(Path.of(args[0]), "ready");
+      while (System.in.read() != -1) {}
     }
   }
 }
