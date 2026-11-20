@@ -23,7 +23,9 @@ import java.nio.file.attribute.FileTime;
 import java.nio.file.attribute.PosixFilePermission;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -307,11 +309,12 @@ class DiagnosticBundleExporterTest {
     runtime.shutdown();
     Path active = runtime.logsDirectory().resolve("app.log");
     String timestamp = LocalDateTime.now().minusSeconds(1).format(LOG_TIMESTAMP);
-    Files.writeString(active, timestamp + " WARN [lizzie.engine] before-capture\n");
+    // An application record: a session-less engine record this old would predate the epoch.
+    Files.writeString(active, timestamp + " WARN [lizzie.app] before-capture\n");
     var exporter = new DiagnosticBundleExporter(tempDir.resolve("capture-length-export"));
     exporter.setLogSourceObserverForTests((source, inputs) -> {
       if (source.equals("lizzie-app")) {
-        Files.writeString(active, timestamp + " WARN [lizzie.engine] after-capture\n",
+        Files.writeString(active, timestamp + " WARN [lizzie.app] after-capture\n",
             StandardOpenOption.APPEND);
       }
     });
@@ -319,6 +322,57 @@ class DiagnosticBundleExporterTest {
         "logs/lizzie/app.log");
     assertTrue(log.contains("before-capture"));
     assertFalse(log.contains("after-capture"));
+  }
+
+  @Test
+  void engineRecordsWrittenBeforeTheDisclosureEpochAreLeftOut() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    String runningSession = runtime.applicationLogSessionId();
+    runtime.shutdown();
+    Path logs = runtime.logsDirectory();
+    Instant epoch =
+        Instant.parse(
+            Files.readString(logs.resolve(EngineCommandDisclosureEpoch.FILE_NAME)).strip());
+    String before =
+        LocalDateTime.ofInstant(epoch.minusSeconds(600), ZoneId.systemDefault())
+            .format(LOG_TIMESTAMP);
+    String onEpoch =
+        LocalDateTime.ofInstant(
+                epoch.truncatedTo(ChronoUnit.MILLIS).plusMillis(1), ZoneId.systemDefault())
+            .format(LOG_TIMESTAMP);
+    // What earlier builds wrote for a hidden command, beside records the rule must keep.
+    Files.writeString(
+        logs.resolve("app.log"),
+        before
+            + " WARN  [lizzie.engine] session=old engine event=failed reason=Cannot run program"
+            + " \"PreEpochEngineCanary\"\n"
+            + before
+            + " ERROR [lizzie.app.stderr] session=old java.io.IOException: PreEpochStackCanary\n"
+            + "\tat featurecat.lizzie.analysis.Leelaz.startEngine(Leelaz.java:1)\n"
+            + before
+            + " INFO  [lizzie.app] session=old pre-epoch-application-evidence\n"
+            + before
+            + " INFO  [lizzie.gtp] session=old gtp command=name outcome=ok\n"
+            + before
+            + " WARN  [lizzie.engine] session="
+            + runningSession
+            + " running-session-engine-evidence\n"
+            + onEpoch
+            + " WARN  [lizzie.engine] session=later post-epoch-engine-evidence\n");
+
+    Map<String, byte[]> entries = unzipEntries(exportDefault(runtime));
+    String log = text(entries, "logs/lizzie/app.log");
+
+    assertFalse(log.contains("PreEpochEngineCanary"), log);
+    assertFalse(log.contains("PreEpochStackCanary"), log);
+    assertFalse(log.contains("Leelaz.startEngine"), log);
+    assertTrue(log.contains("pre-epoch-application-evidence"), log);
+    assertTrue(log.contains("gtp command=name outcome=ok"), log);
+    assertTrue(log.contains("running-session-engine-evidence"), log);
+    assertTrue(log.contains("post-epoch-engine-evidence"), log);
+    assertEquals(
+        2, source(manifest(entries), "lizzie-app").getInt("preDisclosureEngineRecordsOmitted"));
   }
 
   @Test

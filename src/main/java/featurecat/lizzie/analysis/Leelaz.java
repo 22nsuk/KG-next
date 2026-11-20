@@ -447,8 +447,6 @@ public class Leelaz {
   public String engineCommand;
   /** Decided where {@link #setEngineCommand} decodes a user-hidden command. */
   private EngineCommandVisibility engineCommandVisibility = EngineCommandVisibility.VISIBLE;
-  /** Final argv and working directory of the current launch, which exceptions and stderr echo. */
-  private volatile List<String> launchedCommandFragments = List.of();
   private List<String> commands;
   private boolean directLocalSnapshotFileAccessForTest;
   //	private String currentWeightFile = "";
@@ -1172,29 +1170,6 @@ public class Leelaz {
     return engineCommandVisibility;
   }
 
-  /**
-   * Text bound for the engine log or the startup status with every launch value of a hidden
-   * command removed: a process-create exception names the executable and working directory, and
-   * engine stderr echoes model and config paths. A visible command's text is returned unchanged.
-   */
-  String withoutHiddenCommand(String text) {
-    if (!engineCommandVisibility.isHidden()) return text;
-    List<String> fragments =
-        new ArrayList<>(EngineStartupDiagnostic.commandFragments(commands, engineCommand));
-    // The saved command's own tokens, for failures logged before launch prepares commands.
-    if (engineCommand != null) fragments.addAll(Utils.splitCommand(engineCommand));
-    fragments.addAll(launchedCommandFragments);
-    return engineCommandVisibility.scrub(text, fragments);
-  }
-
-  /** Launch policy may rewrite argv and pick a working directory the saved command never names. */
-  private static List<String> launchedCommandFragments(ProcessBuilder builder) {
-    List<String> fragments =
-        new ArrayList<>(EngineStartupDiagnostic.commandFragments(builder.command(), null));
-    if (builder.directory() != null) fragments.add(builder.directory().toString());
-    return fragments;
-  }
-
   public void setEngineCommand(String commandString) {
     oriEngineCommand = commandString;
     engineCommandVisibility =
@@ -1342,10 +1317,23 @@ public class Leelaz {
       startEngineOwned(index);
     } catch (IOException | RuntimeException failure) {
       EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
-      if (attempt != null && attempt != previous)
-        attempt.fail("startup-handshake", failure.toString());
+      if (attempt != null && attempt != previous) attempt.fail("startup-handshake", failure);
+      if (failure instanceof IOException ioFailure) throw disclosedStartupFailure(ioFailure);
       throw failure;
     }
+  }
+
+  /**
+   * The I/O failure a launch hands to its caller. The engine manager shows its message in the
+   * engine-switch menu, the remote-compute dialog and the startup status, and may print it. For a
+   * hidden command only the disclosed message leaves this owner, and the original exception is not
+   * chained, so a printed cause cannot bring the command back. Callers distinguish I/O from runtime
+   * failures only, so the replacement keeps that distinction. Runtime failures leaving a launch are
+   * the application's own state and ownership checks and keep their type and text.
+   */
+  IOException disclosedStartupFailure(IOException failure) {
+    if (!engineCommandVisibility.isHidden()) return failure;
+    return new IOException(engineCommandVisibility.errorMessage(failure));
   }
 
   private void startEngineOwned(int index) throws IOException {
@@ -1382,7 +1370,6 @@ public class Leelaz {
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
-    launchedCommandFragments = List.of();
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       String launchPurpose =
           engineGameStartupTransaction != null
@@ -1579,7 +1566,6 @@ public class Leelaz {
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
       processBuilder.redirectErrorStream(false);
       if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(processBuilder);
-      launchedCommandFragments = launchedCommandFragments(processBuilder);
       try {
         process = processBuilder.start();
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
@@ -3593,7 +3579,7 @@ public class Leelaz {
         if (EngineObservation.engineDiagnosticsEnabled()) {
           EngineObservation.recordRecentStderr(
               stoppedObservation.engineId,
-              withoutHiddenCommand(snapshotRecentLines(recentStderrLines)));
+              engineCommandVisibility.engineOutput(snapshotRecentLines(recentStderrLines)));
         }
         EngineObservation.recordStopped(stoppedObservation.engineId, "stopped");
       } catch (RuntimeException | Error observationFailure) {
@@ -4820,7 +4806,8 @@ public class Leelaz {
     try {
       if (EngineObservation.engineDiagnosticsEnabled()) {
         EngineObservation.recordRecentStderr(
-            loggingEngineId, withoutHiddenCommand(snapshotRecentLines(recentStderrLines)));
+            loggingEngineId,
+            engineCommandVisibility.engineOutput(snapshotRecentLines(recentStderrLines)));
       }
       EngineObservation.ensureStopped(this, "stopped");
     } catch (RuntimeException ignored) {
@@ -4828,6 +4815,10 @@ public class Leelaz {
     loggingEngineId = null;
   }
 
+  /**
+   * @param reason text this application wrote, or an exception's message composed with {@link
+   *     EngineCommandVisibility#errorMessage}; it is logged as it is
+   */
   private void noteEngineFailed(String reason) {
     try {
       String id = EngineObservation.identityFor(this);
@@ -4841,9 +4832,10 @@ public class Leelaz {
       try {
         if (EngineObservation.engineDiagnosticsEnabled()) {
           EngineObservation.recordRecentStderr(
-              loggingEngineId, withoutHiddenCommand(snapshotRecentLines(recentStderrLines)));
+              loggingEngineId,
+              engineCommandVisibility.engineOutput(snapshotRecentLines(recentStderrLines)));
         }
-        EngineObservation.recordFailed(loggingEngineId, withoutHiddenCommand(reason));
+        EngineObservation.recordFailed(loggingEngineId, reason);
       } finally {
         EngineObservation.discardIdentity(this);
         loggingEngineId = null;
@@ -24305,18 +24297,16 @@ public class Leelaz {
     if (diagnosticAttempt != null && diagnosticAttempt != startupDiagnosticAttempt) return;
     closeBundledStartupDialog(primaryGeneration, expectedEngineIncarnation);
     if (primaryEngine) {
-      // The status button shows this detail as its tooltip.
-      String statusDetail = withoutHiddenCommand(message);
       boolean currentPrimary = Lizzie.runIfPrimaryEngine(
           this,
           primaryGeneration,
           () -> {
             if (hasMissingLocalStartupAsset(commands, useRemoteCompute, useJavaSSH)) {
               Lizzie.engineStartupStatus.needsRepair(
-                  "EngineStartup.needsRepair", "AI is not ready - click to repair", statusDetail);
+                  "EngineStartup.needsRepair", "AI is not ready - click to repair", message);
             } else {
               Lizzie.engineStartupStatus.failed(
-                  "EngineStartup.failed", "AI failed to start - click to repair", statusDetail);
+                  "EngineStartup.failed", "AI failed to start - click to repair", message);
             }
           });
       if (!currentPrimary) {
