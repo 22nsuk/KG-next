@@ -90,7 +90,10 @@ class QuickBatchFlowTest {
         invokeFrame("startFlashAnalyzeGameWithNewEngine",
             new Class<?>[] {boolean.class, boolean.class}, true, false);
         assertTrue(ssh.readEntered.await(5, TimeUnit.SECONDS), "SSH login did not reach handoff");
-        assertEquals(List.of("katago analysis"), server.commands);
+        // Client channel open can finish before the server dispatches the exec request.
+        long commandDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (server.commands.isEmpty() && System.nanoTime() < commandDeadline) Thread.sleep(5);
+        assertEquals(List.of("katago analysis"), List.copyOf(server.commands));
         assertTrue(frame.startupWait.visible);
         assertNull(frame.analysisEngine, "the caller has not received the new engine yet");
 

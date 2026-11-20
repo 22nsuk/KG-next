@@ -72,6 +72,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -335,7 +337,7 @@ public final class KataGoRuntimeHelper {
   private static volatile boolean appleAutoOptimizeRunning = false;
   private static volatile AppleSiliconHardwareProbe.HardwareProfile cachedAppleHardwareProfile;
   private static final Object NVIDIA_DRIVER_DETECTION_LOCK = new Object();
-  private static final Object CUDA_COMPATIBILITY_PROBE_LOCK = new Object();
+  private static final ReentrantLock CUDA_COMPATIBILITY_PROBE_LOCK = new ReentrantLock();
   private static final Object OPENCL_TUNING_CACHE_LOCK = new Object();
   private static volatile boolean nvidiaDriverDetectionComplete = false;
   private static volatile String detectedNvidiaDriverVersion = "";
@@ -1170,6 +1172,19 @@ public final class KataGoRuntimeHelper {
       Window owner,
       java.util.function.Consumer<NvidiaRuntimeStatus> observation)
       throws IOException {
+    ensureBundledRuntimeReady(
+        enginePath, launchCommand, originalCommand, owner, observation, () -> false);
+  }
+
+  public static void ensureBundledRuntimeReady(
+      Path enginePath,
+      List<String> launchCommand,
+      String originalCommand,
+      Window owner,
+      java.util.function.Consumer<NvidiaRuntimeStatus> observation,
+      BooleanSupplier cancelled)
+      throws IOException {
+    throwIfCompatibilityProbeCancelled(cancelled);
     NvidiaRuntimeStatus status = inspectNvidiaRuntime(enginePath);
     if (observation != null) observation.accept(status);
     TensorRtRepairContext context =
@@ -1183,7 +1198,7 @@ public final class KataGoRuntimeHelper {
     if (!status.ready) {
       throw new IOException(buildMissingRuntimeMessage(status));
     }
-    ensureCudaDriverCompatibility(enginePath, launchCommand);
+    ensureCudaDriverCompatibility(enginePath, launchCommand, cancelled);
   }
 
   public static boolean offersTensorRtRepairAction(Throwable error) {
@@ -1432,7 +1447,8 @@ public final class KataGoRuntimeHelper {
     }
   }
 
-  private static void ensureCudaDriverCompatibility(Path enginePath, List<String> launchCommand)
+  private static void ensureCudaDriverCompatibility(
+      Path enginePath, List<String> launchCommand, BooleanSupplier cancelled)
       throws IOException {
     String backend = resolveNvidiaBackend(enginePath);
     CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, backend);
@@ -1466,12 +1482,24 @@ public final class KataGoRuntimeHelper {
     String signature =
         buildCudaCompatibilityProbeSignature(
             enginePath, inputs.modelPath, inputs.configPath, driverVersion);
-    synchronized (CUDA_COMPATIBILITY_PROBE_LOCK) {
+    try {
+      do {
+        throwIfCompatibilityProbeCancelled(cancelled);
+      } while (!CUDA_COMPATIBILITY_PROBE_LOCK.tryLock(100, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    }
+    try {
+      throwIfCompatibilityProbeCancelled(cancelled);
       if (hasMatchingCudaCompatibilityProbe(marker, signature)) {
         return;
       }
-      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion, profile);
+      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion, profile, cancelled);
+      throwIfCompatibilityProbeCancelled(cancelled);
       rememberCudaCompatibilityProbe(marker, signature);
+    } finally {
+      CUDA_COMPATIBILITY_PROBE_LOCK.unlock();
     }
   }
 
@@ -1607,27 +1635,39 @@ public final class KataGoRuntimeHelper {
       Path enginePath,
       CudaCompatibilityProbeInputs inputs,
       String driverVersion,
-      CudaRuntimeProfile profile)
+      CudaRuntimeProfile profile,
+      BooleanSupplier cancelled)
       throws IOException {
     List<String> command = buildCudaCompatibilityProbeCommand(enginePath, inputs);
     ProcessBuilder processBuilder = new ProcessBuilder(command);
     processBuilder.redirectErrorStream(true);
     configureBundledProcessBuilder(processBuilder, enginePath);
+    throwIfCompatibilityProbeCancelled(cancelled);
     Process process = processBuilder.start();
     StringBuilder output = new StringBuilder();
-    Thread outputReader = startCompatibilityProbeOutputReader(process, output);
-    boolean finished;
+    boolean finished = false;
     try {
-      finished = process.waitFor(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-      if (!finished) {
-        process.destroyForcibly();
+      Thread outputReader = startCompatibilityProbeOutputReader(process, output);
+      long deadline =
+          System.nanoTime() + TimeUnit.SECONDS.toNanos(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS);
+      while (!finished) {
+        throwIfCompatibilityProbeCancelled(cancelled);
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) break;
+        finished =
+            process.waitFor(
+                Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
       }
+      if (!finished) process.destroyForcibly();
       outputReader.join(2000L);
     } catch (InterruptedException e) {
-      process.destroyForcibly();
       Thread.currentThread().interrupt();
       throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    } finally {
+      // Startup must not return (and release application exit) before its probe has exited.
+      stopCompatibilityProbe(process);
     }
+    throwIfCompatibilityProbeCancelled(cancelled);
 
     KataGoBenchmarkObservation observation = KataGoBenchmarkParser.parse(output.toString(), 1);
     boolean successfulInference =
@@ -1657,6 +1697,30 @@ public final class KataGoRuntimeHelper {
                       ? resource("AutoSetup.cudaDriverUnknown", "unknown")
                       : driverVersion.trim())
               + (detail.isEmpty() ? "" : " " + detail));
+    }
+  }
+
+  private static void throwIfCompatibilityProbeCancelled(BooleanSupplier cancelled)
+      throws InterruptedIOException {
+    if (cancelled.getAsBoolean()) {
+      throw new InterruptedIOException("CUDA compatibility probe cancelled");
+    }
+  }
+
+  private static void stopCompatibilityProbe(Process process) {
+    boolean interrupted = Thread.interrupted();
+    try {
+      if (process.isAlive()) process.destroyForcibly();
+      while (true) {
+        try {
+          process.waitFor();
+          return;
+        } catch (InterruptedException e) {
+          interrupted = true;
+        }
+      }
+    } finally {
+      if (interrupted) Thread.currentThread().interrupt();
     }
   }
 

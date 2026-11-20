@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import featurecat.lizzie.analysis.AnalysisEngine;
 import featurecat.lizzie.analysis.AnalysisEngineSSHController;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.analysis.remote.EngineTransport;
 import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
@@ -33,6 +34,7 @@ import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.Board;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
@@ -67,6 +69,61 @@ class LizzieShutdownTest {
       new EngineParticipantIdentity("shutdown-first", "");
   private static final EngineParticipantIdentity SECOND =
       new EngineParticipantIdentity("shutdown-second", "");
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void exitDuringRuntimePreflightSkipsMainProcessAndFailureDiagnostic(
+      boolean cancelledProbe, @TempDir Path directory) throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      Path executable = directory.resolve("engines/katago/windows-x64-nvidia/katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      CountDownLatch preflightEntered = new CountDownLatch(1);
+      CountDownLatch releasePreflight = new CountDownLatch(1);
+      AtomicInteger mainStarts = new AtomicInteger();
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, "\"" + executable + "\" analysis", (proxy, method, arguments) -> {
+          if (method.getName().equals("prepareRuntime")) {
+            preflightEntered.countDown();
+            awaitGate(releasePreflight);
+            if (cancelledProbe)
+              throw new InterruptedIOException("CUDA compatibility probe cancelled");
+            return null;
+          }
+          mainStarts.incrementAndGet();
+          throw new AssertionError("exit allowed the main engine to launch after preflight");
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-preflight-test-starter");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        assertTrue(preflightEntered.await(5, TimeUnit.SECONDS));
+        assertNull(harness.frame.analysisEngine);
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(exited::complete));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "preflight cancellation blocked the EDT");
+        assertFalse(exited.isDone(), "exit did not wait for preflight cleanup");
+        releasePreflight.countDown();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertEquals(0, mainStarts.get());
+        assertFalse(analysis.isLoaded());
+        EngineStartupDiagnostics.Attempt diagnostic =
+            (EngineStartupDiagnostics.Attempt) analysisField("startupDiagnosticAttempt").get(analysis);
+        assertNull(diagnostic.snapshot(), "shutdown must not publish a runtime-preflight failure");
+      } finally {
+        releasePreflight.countDown();
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive());
+        cleanup.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
 
   @ParameterizedTest
   @CsvSource({"remote,false", "remote,true", "ssh,false", "ssh,true"})

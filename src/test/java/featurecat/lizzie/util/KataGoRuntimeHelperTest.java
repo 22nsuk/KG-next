@@ -2,6 +2,7 @@ package featurecat.lizzie.util;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -26,6 +27,7 @@ import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupResult;
 import featurecat.lizzie.util.KataGoAutoSetupHelper.SetupSnapshot;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.lang.reflect.Constructor;
 import java.net.InetSocketAddress;
@@ -40,11 +42,16 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 import org.json.JSONArray;
@@ -3145,6 +3152,187 @@ public class KataGoRuntimeHelperTest {
 
           assertTrue(command.contains("analysisPVLen=28"));
         });
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void cancelledCudaPreflightStopsItsProcessBeforeReturning(boolean beforeStart) throws Exception {
+    withLiveCudaProbe(probe -> {
+      AtomicBoolean cancelled = new AtomicBoolean(beforeStart);
+      FutureTask<Void> result = new FutureTask<>(() -> {
+        probe.prepare(cancelled::get);
+        return null;
+      });
+      Thread worker = new Thread(result, "cancelled-cuda-preflight-test");
+      try {
+        worker.start();
+        ProcessHandle process = beforeStart ? null : probe.awaitProcess();
+        cancelled.set(true);
+        ExecutionException failure =
+            assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(InterruptedIOException.class, failure.getCause());
+        if (process != null)
+          assertFalse(process.isAlive(), "preflight returned before its child exited");
+        else assertFalse(Files.exists(probe.started));
+        assertFalse(Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(probe.engine)));
+      } finally {
+        cancelled.set(true);
+        worker.interrupt();
+        worker.join(5000);
+        assertFalse(worker.isAlive());
+      }
+    });
+  }
+
+  @Test
+  void cancelledCudaPreflightLockWaitLeavesTheActiveProbeAndItsCacheIntact() throws Exception {
+    withLiveCudaProbe(probe -> {
+      AtomicBoolean cancelled = new AtomicBoolean();
+      FutureTask<Void> first = new FutureTask<>(() -> {
+        probe.prepare(() -> false);
+        return null;
+      });
+      FutureTask<Void> second = new FutureTask<>(() -> {
+        probe.prepare(cancelled::get);
+        return null;
+      });
+      Thread active = new Thread(first, "active-cuda-preflight-test");
+      Thread waiting = new Thread(second, "waiting-cuda-preflight-test");
+      try {
+        active.start();
+        ProcessHandle process = probe.awaitProcess();
+        var field = KataGoRuntimeHelper.class.getDeclaredField("CUDA_COMPATIBILITY_PROBE_LOCK");
+        field.setAccessible(true);
+        ReentrantLock lock = (ReentrantLock) field.get(null);
+        waiting.start();
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        boolean queued = false;
+        while (waiting.isAlive() && System.nanoTime() < deadline) {
+          if (lock.hasQueuedThread(waiting)) {
+            queued = true;
+            break;
+          }
+          Thread.sleep(10);
+        }
+        assertTrue(queued, "second preflight did not reach the shared probe lock");
+        cancelled.set(true);
+        ExecutionException failure =
+            assertThrows(ExecutionException.class, () -> second.get(5, TimeUnit.SECONDS));
+        assertInstanceOf(InterruptedIOException.class, failure.getCause());
+        assertTrue(process.isAlive(), "cancelling the waiter stopped another caller's probe");
+        Files.writeString(probe.release, "complete inference");
+        first.get(5, TimeUnit.SECONDS);
+        assertFalse(process.isAlive());
+        assertTrue(Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(probe.engine)));
+        Files.delete(probe.started);
+        probe.prepare(() -> false);
+        assertFalse(
+            Files.exists(probe.started), "matching successful inference should reuse the cache");
+      } finally {
+        cancelled.set(true);
+        active.interrupt();
+        waiting.interrupt();
+        active.join(5000);
+        waiting.join(5000);
+        assertFalse(active.isAlive());
+        assertFalse(waiting.isAlive());
+      }
+    });
+  }
+
+  private static void withLiveCudaProbe(LiveCudaProbeTest action) throws Exception {
+    org.junit.jupiter.api.Assumptions.assumeTrue(
+        Files.isExecutable(Path.of("/bin/sh")),
+        "The synthetic executable uses a POSIX launcher; it does not require a GPU.");
+    // Initialize process support on the real host before exercising Windows bundle selection.
+    assertEquals(0, new ProcessBuilder("/bin/true").start().waitFor());
+    Path root = Files.createTempDirectory("katago-cuda-preflight");
+    Path engine = touch(root.resolve("engines/katago/windows-x64-nvidia/katago.exe"));
+    touchRequiredCuda12_8Dlls(engine.getParent());
+    LiveCudaProbe probe =
+        new LiveCudaProbe(root, engine,
+            touch(root.resolve("model.bin.gz")), touch(root.resolve("gtp.cfg")));
+    Files.writeString(
+        engine,
+        "#!/bin/sh\nexec "
+            + shellQuote(Path.of(System.getProperty("java.home"), "bin", "java").toString())
+            + " -cp " + shellQuote(System.getProperty("java.class.path")) + " "
+            + shellQuote(CudaProbeChild.class.getName()) + " " + shellQuote(root.toString()) + "\n");
+    assertTrue(engine.toFile().setExecutable(true));
+    String driverKey = "lizzie.opencl.nvidiaDriverVersion";
+    String previousDriver = System.getProperty(driverKey);
+    try {
+      System.setProperty(driverKey, "560.76");
+      withOsName(
+          WINDOWS_OS_NAME,
+          () -> withConfig(
+              Files.createDirectories(root.resolve("runtime-root")),
+              () -> {
+                assertTrue(KataGoRuntimeHelper.inspectNvidiaRuntime(engine).ready);
+                assertEquals(NvidiaGpuDetector.CudaCompatibility.PROBE_REQUIRED,
+                    KataGoRuntimeHelper.cudaDriverCompatibility(engine, "560.76"));
+                action.run(probe);
+              }));
+    } finally {
+      restoreProperty(driverKey, previousDriver);
+      Files.writeString(probe.release, "cleanup");
+      if (Files.isRegularFile(probe.started) && Files.size(probe.started) > 0) {
+        var process = ProcessHandle.of(Long.parseLong(Files.readString(probe.started)));
+        if (process.isPresent() && process.get().isAlive()) {
+          process.get().destroyForcibly();
+          process.get().onExit().get(5, TimeUnit.SECONDS);
+        }
+      }
+    }
+  }
+
+  private static String shellQuote(String value) {
+    return "'" + value.replace("'", "'\"'\"'") + "'";
+  }
+
+  @FunctionalInterface
+  private interface LiveCudaProbeTest {
+    void run(LiveCudaProbe probe) throws Exception;
+  }
+
+  private static final class LiveCudaProbe {
+    final Path engine, started, release;
+    final List<String> command;
+
+    LiveCudaProbe(Path root, Path engine, Path model, Path config) {
+      this.engine = engine;
+      started = root.resolve("probe.pid");
+      release = root.resolve("probe.release");
+      command =
+          List.of(engine.toString(), "analysis", "-model", model.toString(), "-config", config.toString());
+    }
+
+    void prepare(BooleanSupplier cancelled) throws IOException {
+      KataGoRuntimeHelper.ensureBundledRuntimeReady(engine, command, null, null, null, cancelled);
+    }
+
+    ProcessHandle awaitProcess() throws Exception {
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+      while ((!Files.isRegularFile(started) || Files.size(started) == 0)
+          && System.nanoTime() < deadline) Thread.sleep(10);
+      assertTrue(Files.isRegularFile(started), "preflight did not actually launch its inference child");
+      return ProcessHandle.of(Long.parseLong(Files.readString(started))).orElseThrow();
+    }
+  }
+
+  public static final class CudaProbeChild {
+    public static void main(String[] arguments) throws Exception {
+      Path root = Path.of(arguments[0]);
+      Files.writeString(root.resolve("probe.pid"), Long.toString(ProcessHandle.current().pid()));
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+      while (!Files.exists(root.resolve("probe.release"))) {
+        if (System.nanoTime() >= deadline) throw new IOException("test probe was not released");
+        Thread.sleep(10);
+      }
+      System.out.println(
+          "numSearchThreads = 1: 1 / 1 positions, visits/s = 10.0 nnEvals/s = 10.0"
+              + " nnBatches/s = 10.0 avgBatchSize = 1.0 (1.0 secs)");
+    }
   }
 
   @Test

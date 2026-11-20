@@ -406,6 +406,17 @@ public class AnalysisEngine {
   interface StartupFactory {
     Process start(ProcessBuilder builder) throws IOException;
 
+    default void prepareRuntime(AnalysisEngine owner, Path executable) throws IOException {
+      KataGoRuntimeHelper.ensureBundledRuntimeReady(
+          executable,
+          owner.commands,
+          owner.engineCommand,
+          Lizzie.frame,
+          owner.startupDiagnosticAttempt == null
+              ? null : owner.startupDiagnosticAttempt::runtimePreflight,
+          () -> owner.shutdownRequested);
+    }
+
     default EngineTransport createTransport(String command) throws IOException {
       return RemoteComputeConfig.createTransportForCommand(command);
     }
@@ -531,13 +542,9 @@ public class AnalysisEngine {
       Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       if (Config.isBundledKataGoCommand(engineCommand)) {
         try {
-          KataGoRuntimeHelper.ensureBundledRuntimeReady(
-              engineExecutable,
-              commands,
-              engineCommand,
-              Lizzie.frame,
-              startupDiagnosticAttempt == null ? null : startupDiagnosticAttempt::runtimePreflight);
+          factory.prepareRuntime(this, engineExecutable);
         } catch (IOException e) {
+          if (shutdownRequested) return;
           if (startupDiagnosticAttempt != null) {
             startupDiagnosticAttempt.fail("runtime-preflight", e.toString());
           }
@@ -553,6 +560,7 @@ public class AnalysisEngine {
           return;
         }
       }
+      if (shutdownRequested) return;
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
@@ -566,6 +574,7 @@ public class AnalysisEngine {
         startupDiagnosticAttempt.capture(processBuilder);
       }
       try {
+        if (shutdownRequested) return;
         process = factory.start(processBuilder);
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.attachProcess(process);
