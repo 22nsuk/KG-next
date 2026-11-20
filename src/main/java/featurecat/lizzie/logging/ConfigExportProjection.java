@@ -124,7 +124,7 @@ public final class ConfigExportProjection {
     JSONObject projected = new JSONObject();
     Object legacyCommand = leelaz.opt("command");
     if (legacyCommand instanceof String) {
-      putEngineSummary(projected, (String) legacyCommand);
+      putEngineSummary(projected, (String) legacyCommand, false);
     }
     JSONArray settings = leelaz.optJSONArray("engine-settings-list");
     if (settings != null) {
@@ -141,9 +141,9 @@ public final class ConfigExportProjection {
         }
         Object command = engine.opt("command");
         if (command instanceof String) {
-          putEngineSummary(summary, (String) command);
+          putEngineSummary(summary, (String) command, engine.optBoolean("useJavaSSH", false));
         } else {
-          putEngineSummary(summary, "");
+          putEngineSummary(summary, "", false);
         }
         engines.put(summary);
       }
@@ -152,9 +152,10 @@ public final class ConfigExportProjection {
     return projected;
   }
 
-  private static void putEngineSummary(JSONObject target, String command) {
+  private static void putEngineSummary(JSONObject target, String command, boolean useJavaSsh) {
     target.put("kind", engineKind(command));
-    target.put("executable", executableBasename(command));
+    // A remote shell command may start with a secret-bearing assignment instead of an executable.
+    target.put("executable", useJavaSsh ? "unknown" : executableBasename(command));
   }
 
   static String engineKind(String command) {
