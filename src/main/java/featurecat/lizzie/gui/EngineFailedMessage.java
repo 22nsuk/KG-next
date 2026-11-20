@@ -2,6 +2,7 @@ package featurecat.lizzie.gui;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.logging.ExportSanitizer;
@@ -139,71 +140,16 @@ public class EngineFailedMessage extends JDialog {
     }
   }
 
+  /**
+   * @param commandVisibility stated by the engine owner that decoded {@code command}; a hidden
+   *     command is never shown, copied, exported or written to {@code dignostic.bat}
+   * @param message failure text composed by that owner, which for a hidden command takes exception
+   *     and engine text only through {@link EngineCommandVisibility}
+   */
   public static void showDialog(
       List<String> commands,
       String command,
-      String message,
-      boolean canUseCmdDignostic,
-      boolean isGtpEngine,
-      boolean restartContribute,
-      boolean modal) {
-    showDialog(
-        commands,
-        command,
-        message,
-        canUseCmdDignostic,
-        isGtpEngine,
-        restartContribute,
-        modal,
-        (TensorRtRepairContext) null,
-        null);
-  }
-
-  public static void showDialog(
-      List<String> commands,
-      String command,
-      String message,
-      boolean canUseCmdDignostic,
-      boolean isGtpEngine,
-      boolean restartContribute,
-      boolean modal,
-      Consumer<EngineFailedMessage> onCreated) {
-    showDialog(
-        commands,
-        command,
-        message,
-        canUseCmdDignostic,
-        isGtpEngine,
-        restartContribute,
-        modal,
-        null,
-        onCreated);
-  }
-
-  public static void showDialog(
-      List<String> commands,
-      String command,
-      String message,
-      boolean canUseCmdDignostic,
-      boolean isGtpEngine,
-      boolean restartContribute,
-      boolean modal,
-      TensorRtRepairContext repairContext) {
-    showDialog(
-        commands,
-        command,
-        message,
-        canUseCmdDignostic,
-        isGtpEngine,
-        restartContribute,
-        modal,
-        repairContext,
-        null);
-  }
-
-  public static void showDialog(
-      List<String> commands,
-      String command,
+      EngineCommandVisibility commandVisibility,
       String message,
       boolean canUseCmdDignostic,
       boolean isGtpEngine,
@@ -217,6 +163,7 @@ public class EngineFailedMessage extends JDialog {
               new EngineFailedMessage(
                   commands,
                   command,
+                  commandVisibility,
                   message,
                   canUseCmdDignostic,
                   isGtpEngine,
@@ -240,6 +187,7 @@ public class EngineFailedMessage extends JDialog {
     this(commands, command, message, canUseCmdDignostic, isGtpEngine, restartContribute, null);
   }
 
+  /** For a command that was never hidden by the user. */
   public EngineFailedMessage(
       List<String> commands,
       String command,
@@ -248,9 +196,33 @@ public class EngineFailedMessage extends JDialog {
       boolean isGtpEngine,
       boolean restartContribute,
       TensorRtRepairContext repairContext) {
+    this(
+        commands,
+        command,
+        EngineCommandVisibility.VISIBLE,
+        message,
+        canUseCmdDignostic,
+        isGtpEngine,
+        restartContribute,
+        repairContext);
+  }
+
+  public EngineFailedMessage(
+      List<String> commands,
+      String command,
+      EngineCommandVisibility commandVisibility,
+      String message,
+      boolean canUseCmdDignostic,
+      boolean isGtpEngine,
+      boolean restartContribute,
+      TensorRtRepairContext repairContext) {
     // this.setModal(true);
     // setType(Type.POPUP);
-    this.basicDiagnostic = EngineStartupDiagnostic.basic(commands, command, message);
+    String cmdDiagnosticCommand =
+        cmdDiagnosticBatchLine(commands, command, commandVisibility, canUseCmdDignostic);
+    String displayedCommand = displayedCommand(command, commandVisibility);
+    this.basicDiagnostic =
+        EngineStartupDiagnostic.basic(commands, command, message, commandVisibility);
     setTitle(Lizzie.resourceBundle.getString("Leelaz.engineFailed")); // "消息提醒");
     setAlwaysOnTop(true);
     try {
@@ -273,7 +245,8 @@ public class EngineFailedMessage extends JDialog {
     JLabel lblEngineCmd =
         new JFontLabel(Lizzie.resourceBundle.getString("EngineFailedMessage.engineCmd"));
     commandPanel.add(lblEngineCmd, BorderLayout.WEST);
-    JScrollPane commandPane = createScrollableText(command, textFont);
+    JScrollPane commandPane = createScrollableText(displayedCommand, textFont);
+    commandPane.setName("EngineFailedMessage.commandPane");
     commandPane.setPreferredSize(new Dimension(1, 112));
     commandPane.getAccessibleContext().setAccessibleName(lblEngineCmd.getText());
     commandPanel.add(commandPane, BorderLayout.CENTER);
@@ -341,7 +314,7 @@ public class EngineFailedMessage extends JDialog {
       legacyRow.add(btnRestart, BorderLayout.EAST);
     }
 
-    if (canUseCmdDignostic) {
+    if (cmdDiagnosticCommand != null) {
       JButton btnRunInCmd =
           new JFontButton(Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd"));
       btnRunInCmd.setForeground(Color.RED);
@@ -359,11 +332,7 @@ public class EngineFailedMessage extends JDialog {
                       "@echo " + Lizzie.resourceBundle.getString("EngineFailedMessage.batTips"));
                   bw.newLine();
                 }
-                if (commands != null && !commands.isEmpty()) {
-                  bw.write(buildDiagnosticCommand(commands, command));
-                } else {
-                  bw.write(buildDiagnosticCommand(null, command));
-                }
+                bw.write(cmdDiagnosticCommand);
                 if (isGtpEngine) {
                   bw.write(" < test_commands.txt");
                   BufferedWriter bw2 = new BufferedWriter(new FileWriter("test_commands.txt"));
@@ -471,12 +440,12 @@ public class EngineFailedMessage extends JDialog {
         (Lizzie.config != null && Lizzie.config.isFrameFontSmall())
             ? 580
             : ((Lizzie.config != null && Lizzie.config.isFrameFontMiddle()) ? 660 : 730);
-    int preferredHeight = canUseCmdDignostic ? 360 : restartContribute ? 340 : 320;
+    int preferredHeight = cmdDiagnosticCommand != null ? 360 : restartContribute ? 340 : 320;
     Rectangle usableScreenBounds = usableScreenBounds();
     Dimension dialogSize =
         calculateDialogSize(
             message,
-            command,
+            displayedCommand,
             Config.frameFontSize,
             minimumWidth,
             preferredHeight,
@@ -910,6 +879,24 @@ public class EngineFailedMessage extends JDialog {
     // fragment or quote-comma/newline injection. Preserve the useful command prefix and key, then
     // deliberately over-redact the entire remainder.
     return text.substring(0, valueStart) + REDACTED_VALUE + closingQuote;
+  }
+
+  /** The command pane shows the same placeholder as every other view of a hidden command. */
+  static String displayedCommand(String command, EngineCommandVisibility visibility) {
+    return visibility.isHidden() ? Lizzie.resourceBundle.getString("Leelaz.encryption") : command;
+  }
+
+  /**
+   * The line written to {@code dignostic.bat}, or null when the CMD diagnostic is not offered. The
+   * batch file is plain text left in the working directory, so a hidden command never qualifies.
+   */
+  static String cmdDiagnosticBatchLine(
+      List<String> commands,
+      String fallbackCommand,
+      EngineCommandVisibility visibility,
+      boolean allowedByCaller) {
+    if (!allowedByCaller || visibility.isHidden()) return null;
+    return buildDiagnosticCommand(commands, fallbackCommand);
   }
 
   static String buildDiagnosticCommand(List<String> commands, String fallbackCommand) {

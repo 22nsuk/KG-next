@@ -80,12 +80,27 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
   }
 
   public Attempt begin(String engineId, String purpose, List<String> command, boolean local) {
-    return new Attempt(engineId, purpose, command, local);
+    return begin(engineId, purpose, command, local, EngineCommandVisibility.VISIBLE);
+  }
+
+  /** The owner that decoded the command states whether its launch may appear in the record. */
+  public Attempt begin(
+      String engineId,
+      String purpose,
+      List<String> command,
+      boolean local,
+      EngineCommandVisibility visibility) {
+    return new Attempt(engineId, purpose, command, local, visibility);
   }
 
   public final class Attempt {
     private final String id = UUID.randomUUID().toString();
     private final boolean windows = System.getProperty("os.name", "").startsWith("Windows");
+    /**
+     * For a hidden command the record is composed field by field: the application's own values are
+     * kept as they are, and nothing that came from the command or the engine's output is copied.
+     */
+    private final EngineCommandVisibility visibility;
     private final JSONObject launch = new JSONObject();
     private final JSONObject sources = new JSONObject();
     private final List<Finding> preflight = new ArrayList<>();
@@ -108,15 +123,28 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
     private ScheduledFuture<?> tailTask;
     private EngineStartupDiagnostic published;
 
-    private Attempt(String engineId, String purpose, List<String> command, boolean local) {
+    private Attempt(
+        String engineId,
+        String purpose,
+        List<String> command,
+        boolean local,
+        EngineCommandVisibility visibility) {
+      this.visibility = visibility;
       launch
           .put("engineId", limited(engineId, 128))
           .put("launchPurpose", limited(purpose, 128))
           .put("startedAt", Instant.now().toString())
           .put("environmentState", "not-formed")
           .put("local", local)
-          .put("platform", windows ? "windows" : "non-windows")
-          .put("configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+          .put("platform", windows ? "windows" : "non-windows");
+      if (visibility.isHidden()) {
+        launch
+            .put("configuredCommand", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("commandHidden", true);
+      } else {
+        launch.put(
+            "configuredCommand", launchText(EngineStartupDiagnostic.renderCommand(command), 16384));
+      }
     }
 
     public String id() {
@@ -138,6 +166,16 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
               ? Path.of("").toAbsolutePath()
               : builder.directory().toPath().toAbsolutePath();
       List<String> command = builder.command();
+      if (visibility.isHidden()) {
+        // The final argv and its working directory are the hidden command after launch policy.
+        launch
+            .put("environmentState", "final")
+            .put("executable", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("arguments", new JSONArray())
+            .put("cwd", EngineCommandVisibility.HIDDEN_VALUE)
+            .put("cwdSource", builder.directory() == null ? "inherited" : "explicit");
+        return;
+      }
       JSONArray arguments = new JSONArray();
       int remaining = 32768;
       for (String argument : command.subList(1, command.size())) {
@@ -168,21 +206,23 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       if (failedAt != null || !"not-formed".equals(launch.getString("environmentState")))
         throw new IllegalStateException("Preflight observation must precede final environment");
       preflight.clear();
+      // The checked scope and the ready detail name the directories searched next to the engine.
       sources.put(
           "runtime-preflight",
           state(
               status.readError ? "partial" : "completed",
               status.readError ? "read-error" : "",
-              status.checkedScope));
+              visibility.isHidden() ? EngineCommandVisibility.HIDDEN_VALUE : status.checkedScope));
       if (!status.applicable || status.ready) {
         preflight.add(
             new Finding(
                 status.applicable ? "runtime-requirements-satisfied" : "runtime-not-applicable",
                 null,
                 "runtime-preflight",
-                status.detailText,
+                visibility.isHidden() ? EngineCommandVisibility.HIDDEN_VALUE : status.detailText,
                 status.checkedAt));
       } else {
+        // Each missing entry describes one of KG-next's own runtime requirement groups.
         for (String missing : status.missingDlls) {
           boolean manifest = missing.contains("manifest");
           String dll = !manifest && missing.matches("(?i)[a-z0-9_.-]+\\.dll") ? missing : null;
@@ -240,6 +280,18 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       if (naturalExit == null) terminatedByOwner = true;
     }
 
+    /**
+     * An exception that ended the startup. For a hidden command its text is reduced before it is
+     * bounded, so a limit can never leave the beginning of a hidden value behind.
+     */
+    public EngineStartupDiagnostic fail(String stage, Throwable error) {
+      return fail(stage, visibility.errorText(error));
+    }
+
+    /**
+     * @param error text this application wrote; an exception goes through {@link #fail(String,
+     *     Throwable)} and engine output through {@link #output(String, String)}
+     */
     public synchronized EngineStartupDiagnostic fail(String stage, String error) {
       if (ready || failedAt != null) return published;
       phase = limited(stage, 128);
@@ -311,8 +363,11 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       Instant checked = Instant.now();
       List<Finding> evidence = new ArrayList<>(preflight);
       evidence.addAll(
-          EngineOutputDiagnostic.parse(stdoutMerged ? "merged" : "stdout", stdout.text(), checked));
-      evidence.addAll(EngineOutputDiagnostic.parse("stderr", stderr.text(), checked));
+          outputFindings(
+              EngineOutputDiagnostic.parse(
+                  stdoutMerged ? "merged" : "stdout", stdout.text(), checked)));
+      evidence.addAll(
+          outputFindings(EngineOutputDiagnostic.parse("stderr", stderr.text(), checked)));
       JSONArray findings = new JSONArray();
       int bytes = 2;
       boolean truncated = launchTruncated || stdout.truncated || stderr.truncated;
@@ -354,9 +409,9 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
                   "errorDomain",
                   naturalExit == null ? "unavailable" : windows ? "NTSTATUS" : "process-exit")
               .put("exitObservation", naturalExit == null ? "unavailable" : "natural")
-              .put("stdout", stdout.text())
+              .put("stdout", visibility.engineOutput(stdout.text()))
               .put("stdoutOrigin", stdoutMerged ? "merged" : "stdout")
-              .put("stderr", stderr.text())
+              .put("stderr", visibility.engineOutput(stderr.text()))
               .put("stdoutTruncated", stdout.truncated)
               .put("stderrTruncated", stderr.truncated)
               .put("sources", sources)
@@ -375,6 +430,25 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
         } catch (RuntimeException ignored) {
         }
       }
+    }
+
+    /**
+     * A finding's outcome and evidence are the parser's vocabulary. Its detail is an engine line,
+     * and its library name is kept for a hidden command only as a runtime library KG-next requires.
+     */
+    private List<Finding> outputFindings(List<Finding> findings) {
+      if (!visibility.isHidden()) return findings;
+      List<Finding> shared = new ArrayList<>(findings.size());
+      for (Finding finding : findings) {
+        shared.add(
+            new Finding(
+                finding.outcome(),
+                visibility.libraryName(finding.dll()),
+                finding.evidence(),
+                EngineCommandVisibility.HIDDEN_VALUE,
+                finding.checkedAt()));
+      }
+      return shared;
     }
   }
 
