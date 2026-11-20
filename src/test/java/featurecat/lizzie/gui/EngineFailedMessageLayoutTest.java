@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -59,7 +60,21 @@ class EngineFailedMessageLayoutTest {
   private static List<CommandCase> cmdDiagnosticCases() {
     String splitPlink = "C:\\Program Files\\PuTTY\\PLINK.EXE host.invalid OPAQUE_ARGUMENT";
     String wslSsh = "wsl.exe --exec ssh host.invalid OPAQUE_ARGUMENT";
+    String wslWorkingDirectory = "wsl.exe --cd /home/ssh --exec katago gtp";
     return List.of(
+        // A shell splits at the tab that Utils.splitCommand keeps inside one word.
+        CommandCase.configured("wsl.exe --exec sh -c \"ssh\thost.invalid OPAQUE_ARGUMENT\"", null),
+        new CommandCase(
+            List.of("wsl.exe", "sh", "-c", "ssh\thost.invalid OPAQUE_ARGUMENT"),
+            "katago gtp", true, null),
+        // The WSL working directory is data; the program position holds katago.
+        new CommandCase(null, wslWorkingDirectory, true, wslWorkingDirectory),
+        CommandCase.configured(wslWorkingDirectory, wslWorkingDirectory),
+        // cmd.exe must not read an engine argument as an operator that starts another command.
+        new CommandCase(
+            null, "katago gtp & echo OPAQUE_ARGUMENT", true,
+            "katago gtp \"&\" echo OPAQUE_ARGUMENT"),
+        new CommandCase(List.of("start", "katago", "gtp"), "katago gtp", true, null),
         CommandCase.configured(splitPlink, null),
         CommandCase.configured(wslSsh, null),
         new CommandCase(Utils.splitCommand(splitPlink), "katago gtp", true, null),
@@ -282,13 +297,14 @@ class EngineFailedMessageLayoutTest {
       List<String> arguments = List.of("plink", "-pw", value, "-P", "22");
       for (String safe : List.of(
           ((JTextArea) pane.getViewport().getView()).getText(),
-          EngineFailedMessage.redactSensitiveText(command),
-          EngineFailedMessage.buildDiagnosticCommand(arguments, command),
-          EngineFailedMessage.buildDiagnosticCommand(List.of(), command))) {
+          EngineFailedMessage.redactSensitiveText(command))) {
         assertFalse(safe.contains("CANARY_PLINK"));
         assertFalse(safe.contains("suffix"));
         assertTrue(safe.contains("<redacted>"));
       }
+      // A redacted batch would not reproduce the launch, so a credential writes no batch line.
+      assertNull(EngineFailedMessage.buildDiagnosticCommand(arguments, command));
+      assertNull(EngineFailedMessage.buildDiagnosticCommand(List.of(), command));
       assertEquals(value, arguments.get(2));
     }
   }
@@ -331,11 +347,11 @@ class EngineFailedMessageLayoutTest {
     for (String sensitiveValue : List.of(password, passwd, token, apiKey, secret)) {
       assertFalse(visibleMessage.contains(sensitiveValue));
       assertFalse(visibleCommand.contains(sensitiveValue));
-      assertFalse(diagnosticCommand.contains(sensitiveValue));
     }
     assertTrue(visibleMessage.contains(EngineFailedMessage.REDACTED_VALUE));
     assertTrue(visibleCommand.contains(EngineFailedMessage.REDACTED_VALUE));
-    assertTrue(diagnosticCommand.contains(EngineFailedMessage.REDACTED_VALUE));
+    assertNull(diagnosticCommand);
+    assertNull(EngineFailedMessage.buildDiagnosticCommand(null, command));
   }
 
   @Test
@@ -408,12 +424,12 @@ class EngineFailedMessageLayoutTest {
           EngineFailedMessage.buildDiagnosticCommand(
               sensitiveCase.commandTokens, sensitiveCase.text);
 
-      for (String output : List.of(visibleText, fallbackDiagnostic, tokenizedDiagnostic)) {
-        assertTrue(output.contains(EngineFailedMessage.REDACTED_VALUE), output);
-        for (String secretOrFragment : sensitiveCase.secretAndFragments) {
-          assertFalse(output.contains(secretOrFragment), output);
-        }
+      assertTrue(visibleText.contains(EngineFailedMessage.REDACTED_VALUE), visibleText);
+      for (String secretOrFragment : sensitiveCase.secretAndFragments) {
+        assertFalse(visibleText.contains(secretOrFragment), visibleText);
       }
+      assertNull(fallbackDiagnostic, sensitiveCase.text);
+      assertNull(tokenizedDiagnostic, sensitiveCase.text);
     }
   }
 

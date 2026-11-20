@@ -4,13 +4,13 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
-import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.logging.PersistenceSanitizer;
-import featurecat.lizzie.util.CommandLaunchHelper;
+import featurecat.lizzie.util.CmdBatchArguments;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
+import featurecat.lizzie.util.LaunchTargetResolver;
 import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
 import java.awt.Color;
@@ -37,7 +37,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -915,61 +914,44 @@ public class EngineFailedMessage extends JDialog {
     return text.substring(0, valueStart) + REDACTED_VALUE + closingQuote;
   }
 
+  /**
+   * The line written to {@code dignostic.bat}, or null when no file may be written.
+   *
+   * <p>One argument vector decides both: the launched arguments (or, without them, the configured
+   * command as the engine splits it) and the configured command must each resolve to a local
+   * program at the position where it runs, and that vector must be reproducible by cmd.exe
+   * without credentials. An encrypted command was hidden by the user and is never written.
+   */
   static String prepareCmdDiagnosticCommand(
       List<String> commands, String fallbackCommand, boolean allowedByCaller) {
-    if (!allowedByCaller) return null;
-    // Bind the permission check and batch contents to the same failed command.
-    List<String> arguments = commands == null ? List.of() : new ArrayList<>(commands);
-    List<String> configured =
-        Utils.splitCommand(CommandLaunchHelper.decodeSavedCommand(fallbackCommand));
-    if ((arguments.isEmpty() && configured.isEmpty())
-        || unsafeForDiagnosticBatch(arguments)
-        || unsafeForDiagnosticBatch(configured)) {
+    if (!allowedByCaller
+        || (fallbackCommand != null && fallbackCommand.startsWith("encryption||"))) {
       return null;
     }
-    return buildDiagnosticCommand(arguments, fallbackCommand);
+    List<String> configured = Utils.splitCommand(fallbackCommand);
+    List<String> launched =
+        commands == null || commands.isEmpty() ? configured : new ArrayList<>(commands);
+    if (!runsLocally(launched) || (!configured.isEmpty() && !runsLocally(configured))) {
+      return null;
+    }
+    return buildDiagnosticCommand(launched, null);
   }
 
-  private static boolean unsafeForDiagnosticBatch(List<String> arguments) {
-    if (arguments.isEmpty()) return false;
-    String program = arguments.get(0);
-    if (program == null
-        || program.isBlank()
-        || RemoteComputeConfig.isRemoteComputeEngineCommand(program)
-        || CommandLaunchHelper.isExternalSshExecutable(program)) {
-      return true;
-    }
-    // A launcher can take a program as an argument (wsl --exec) or as command text (sh -c).
-    if (CommandLaunchHelper.isIndirectLauncher(program)) {
-      for (int i = 1; i < arguments.size(); i++) {
-        String argument = arguments.get(i);
-        if (CommandLaunchHelper.isExternalSshExecutable(argument)
-            || Utils.splitCommand(argument).stream()
-                .anyMatch(CommandLaunchHelper::isExternalSshExecutable)) {
-          return true;
-        }
-      }
-      return false;
-    }
-    // A missing pair of quotes can split the executable path itself. Inspect path fragments
-    // only in the command prefix, before an explicit executable suffix or the engine's options.
-    for (String token : arguments) {
-      if (token == null || token.startsWith("-")) break;
-      if ((token.contains("\\") || token.contains("/"))
-          && CommandLaunchHelper.isExternalSshExecutable(token)) {
-        return true;
-      }
-      if (token.toLowerCase(Locale.ROOT).endsWith(".exe")) break;
-    }
-    return false;
+  private static boolean runsLocally(List<String> arguments) {
+    return LaunchTargetResolver.resolveWindowsLaunch(arguments)
+        == LaunchTargetResolver.Target.LOCAL;
   }
 
+  /**
+   * Encodes the arguments (or the split fallback command) as a batch line, or returns null when
+   * cmd.exe cannot reproduce them or the line contains a credential. A redacted line would no
+   * longer reproduce the failure, and cmd.exe would parse its marker as redirection.
+   */
   static String buildDiagnosticCommand(List<String> commands, String fallbackCommand) {
-    String commandLine =
-        commands == null || commands.isEmpty()
-            ? (fallbackCommand == null ? "" : fallbackCommand.trim())
-            : buildCommandLine(commands);
-    return redactSensitiveText(commandLine);
+    List<String> arguments =
+        commands == null || commands.isEmpty() ? Utils.splitCommand(fallbackCommand) : commands;
+    String line = CmdBatchArguments.encode(arguments);
+    return line != null && line.equals(redactSensitiveText(line)) ? line : null;
   }
 
   static Rectangle calculateUsableBounds(Rectangle screenBounds, Insets insets) {
@@ -1022,30 +1004,5 @@ public class EngineFailedMessage extends JDialog {
     Rectangle bounds = configuration.getBounds();
     Insets insets = Toolkit.getDefaultToolkit().getScreenInsets(configuration);
     return calculateUsableBounds(bounds, insets);
-  }
-
-  private static String buildCommandLine(List<String> commands) {
-    StringBuilder builder = new StringBuilder();
-    for (int i = 0; i < commands.size(); i++) {
-      if (i > 0) {
-        builder.append(' ');
-      }
-      builder.append(quoteForCmd(commands.get(i)));
-    }
-    return builder.toString();
-  }
-
-  private static String quoteForCmd(String token) {
-    if (token == null) {
-      return "\"\"";
-    }
-    String trimmed = token.trim();
-    if (trimmed.isEmpty()) {
-      return "\"\"";
-    }
-    if (trimmed.indexOf(' ') >= 0 || trimmed.indexOf('\t') >= 0 || trimmed.indexOf('"') >= 0) {
-      return "\"" + trimmed.replace("\"", "\\\"") + "\"";
-    }
-    return trimmed;
   }
 }

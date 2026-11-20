@@ -136,7 +136,7 @@ public final class CommandLaunchHelper {
         || hasNumericVersionSuffix(executable, "php");
   }
 
-  private static boolean hasNumericVersionSuffix(String executable, String baseName) {
+  static boolean hasNumericVersionSuffix(String executable, String baseName) {
     if (!executable.startsWith(baseName)) {
       return false;
     }
