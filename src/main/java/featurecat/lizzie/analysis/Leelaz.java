@@ -37,7 +37,6 @@ import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRuntimeException;
 import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
-import featurecat.lizzie.util.YikeSyncDebugLog;
 import java.awt.Component;
 import java.awt.GraphicsEnvironment;
 import java.io.BufferedOutputStream;
@@ -7704,9 +7703,6 @@ public class Leelaz {
                   outcome.remoteProgressTransport = remoteTransport;
                   outcome.acceptedRemotePlayouts = parsedInfo.totalPlayouts;
                 }
-                if (treatCurrentInfoAsPrimary) {
-                  YikeSyncDebugLog.log("Leelaz parseLine bestMoves size=" + this.bestMoves.size());
-                }
                 if (!this.bestMoves.isEmpty()) {
                   outcome.notifyAutoPk = route.acceptsExactEngineGameOutput();
                   outcome.notifyAutoPlay = route.acceptsOrdinaryOutput();
@@ -7954,18 +7950,6 @@ public class Leelaz {
         boolean upToDate = isAnalysisResponseUpToDateSnapshot(analysisOutputRouteAtParse);
         afterAnalysisInfoAdmissionSnapshotCapturedForTest();
         treatCurrentInfoAsPrimary = this == primaryAtParse && primaryGenerationAtParse >= 0L;
-        if (this == Lizzie.leelaz) {
-          int[] responseWatermark = commandWatermarkSnapshot();
-          YikeSyncDebugLog.log(
-              "Leelaz parseLine info upToDate="
-                  + upToDate
-                  + " currentCmd="
-                  + responseWatermark[1]
-                  + " cmd="
-                  + responseWatermark[0]
-                  + " isPondering="
-                  + isPondering);
-        }
         if ((upToDate)) {
           if (engineGameContextAtParse != null
               && engineManagerAtParse != null
@@ -8120,21 +8104,6 @@ public class Leelaz {
         String[] params = line.trim().split(" ");
         boolean shouldStopPonder =
             !isInputCommand && params.length == 2 && shouldStopPonderAfterEnginePlayLine();
-        YikeSyncDebugLog.log(
-            "Leelaz parse play line="
-                + line
-                + " isInputCommand="
-                + isInputCommand
-                + " isPonderingBefore="
-                + isPondering
-                + " shouldStopPonder="
-                + shouldStopPonder
-                + " playingAgainst="
-                + (Lizzie.frame != null && Lizzie.frame.isPlayingAgainstLeelaz)
-                + " autoPlaying="
-                + (Lizzie.frame != null && Lizzie.frame.isAnaPlayingAgainstLeelaz)
-                + " engineGame="
-                + EngineManager.occupiesEngineGameAdmission());
         ReadBoardGmaResponseBinding readBoardGmaBinding = currentReadBoardGmaResponseBinding();
         ReadBoard readBoardGmaOwner =
             readBoardGmaBinding == null ? null : readBoardGmaBinding.owner;
@@ -8152,7 +8121,6 @@ public class Leelaz {
           isCommandLine = false;
           if (shouldStopPonder && !retainReadBoardNativePonder) {
             isPondering = false;
-            YikeSyncDebugLog.log("Leelaz marked isPondering=false after ReadBoard GMA play line");
           }
           isThinking = false;
           return;
@@ -8207,7 +8175,6 @@ public class Leelaz {
         }
         if (shouldStopPonder) {
           isPondering = false;
-          YikeSyncDebugLog.log("Leelaz marked isPondering=false after engine play line");
         }
         isThinking = false;
         if (isInputCommand && manualGenmoveRequestOwner == null) {
@@ -9346,23 +9313,11 @@ public class Leelaz {
   }
 
   public void nameCmdfornoponder() {
-    YikeSyncDebugLog.log(
-        "Leelaz nameCmdfornoponder isKatago="
-            + isKatago
-            + " isPondering="
-            + isPondering
-            + " caller="
-            + buildPonderCallerTrace());
     if (isKatago) sendCommand("stop");
     else sendCommand("name");
   }
 
   boolean nameCmdfornoponder(EngineManager.EngineGamePostMoveToken turn) {
-    YikeSyncDebugLog.log(
-        "Leelaz exact engine-game nameCmdfornoponder isKatago="
-            + isKatago
-            + " isPondering="
-            + isPondering);
     return sendEngineGameCommand(isKatago ? "stop" : "name", turn);
   }
 
@@ -10856,26 +10811,6 @@ public class Leelaz {
     if (this == Lizzie.leelaz) {
       AnalysisResourceCoordinator.commandSent(
           this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, command);
-    }
-    if (command != null
-        && (command.startsWith("clear_board") || command.startsWith("kata-analyze"))) {
-      StringBuilder sb = new StringBuilder();
-      StackTraceElement[] st = Thread.currentThread().getStackTrace();
-      int taken = 0;
-      for (StackTraceElement e : st) {
-        if (!e.getClassName().startsWith("featurecat.lizzie")) continue;
-        if (e.getClassName().equals(Leelaz.class.getName())
-            && (e.getMethodName().equals("sendCommand")
-                || e.getMethodName().equals("getStackTrace"))) continue;
-        if (sb.length() > 0) sb.append(" <- ");
-        sb.append(e.getClassName().substring("featurecat.lizzie.".length()))
-            .append("#")
-            .append(e.getMethodName())
-            .append(":")
-            .append(e.getLineNumber());
-        if (++taken >= 6) break;
-      }
-      YikeSyncDebugLog.log("Leelaz sendCommand TRACE command=" + command + " caller=" + sb);
     }
     if (TrialDiag.ENABLED) {
       System.out.println("[katago-cmd] " + command);
@@ -13684,7 +13619,6 @@ public class Leelaz {
       return null;
     }
     Runnable deferredResponse = null;
-    logInterestingCommand(command, "sendCommandToLeelaz");
     if (command.startsWith("fixed_handicap")
         || (isKatago && command.startsWith("place_free_handicap"))) isSettingHandicap = true;
     if (command.startsWith("benchmark")) {
@@ -20123,13 +20057,6 @@ public class Leelaz {
     return builder.toString();
   }
 
-  /** Check whether leelaz is responding to the last command */
-  private int[] commandWatermarkSnapshot() {
-    synchronized (commandQueue()) {
-      return new int[] {cmdNumber, currentCmdNum};
-    }
-  }
-
   int commandNumberSnapshot() {
     synchronized (commandQueue()) {
       return cmdNumber;
@@ -23412,7 +23339,6 @@ public class Leelaz {
 
   public void clear() {
     synchronized (this) {
-      YikeSyncDebugLog.log("Leelaz clear() entered isPondering=" + isPondering);
       sendStatefulOrdinaryCommands(
           List.of("clear_board"), StatefulOrdinaryMutationKind.NONE);
       afterClearStateCommandForTest();
@@ -23526,25 +23452,12 @@ public class Leelaz {
       focus.paused = false;
     }
     if (shouldRejectCommandDuringLifecycleCompletion()) {
-      YikeSyncDebugLog.log("Leelaz ponder deferred: lifecycle completion pending");
       return;
     }
     if (noAnalyze) return;
     if (isInitialBoardSynchronizationActive()) {
-      YikeSyncDebugLog.log("Leelaz ponder deferred: initial board synchronization active");
       return;
     }
-    YikeSyncDebugLog.log(
-        "Leelaz ponder request addPlayer="
-            + addPlayer
-            + " blackToPlay="
-            + blackToPlay
-            + " isPonderingBefore="
-            + isPondering
-            + " started="
-            + started
-            + " loaded="
-            + isLoaded);
     isPondering = true;
     underPonder = false;
     if (stopByPlayouts) outOfPlayoutsLimit = true;
@@ -23655,13 +23568,6 @@ public class Leelaz {
       }
       return;
     }
-    YikeSyncDebugLog.log(
-        "Leelaz togglePonder before isPondering="
-            + isPondering
-            + " underPonder="
-            + underPonder
-            + " caller="
-            + buildPonderCallerTrace());
     if (underPonder) {
       ponder();
       return;
@@ -23677,7 +23583,6 @@ public class Leelaz {
     } else {
       nameCmd();
     }
-    YikeSyncDebugLog.log("Leelaz togglePonder after isPondering=" + isPondering);
   }
 
 
@@ -23771,39 +23676,6 @@ public class Leelaz {
     }
   }
 
-  private String buildPonderCallerTrace() {
-    StackTraceElement[] stack = Thread.currentThread().getStackTrace();
-    StringBuilder builder = new StringBuilder();
-    int collected = 0;
-    for (StackTraceElement element : stack) {
-      String className = element.getClassName();
-      String methodName = element.getMethodName();
-      if (!className.startsWith("featurecat.lizzie")) {
-        continue;
-      }
-      if (className.equals(Leelaz.class.getName())
-          && (methodName.equals("togglePonder")
-              || methodName.equals("nameCmdfornoponder")
-              || methodName.equals("buildPonderCallerTrace"))) {
-        continue;
-      }
-      if (builder.length() > 0) {
-        builder.append(" <- ");
-      }
-      builder
-          .append(className)
-          .append("#")
-          .append(methodName)
-          .append(":")
-          .append(element.getLineNumber());
-      collected++;
-      if (collected >= 6) {
-        break;
-      }
-    }
-    return builder.length() == 0 ? "unknown" : builder.toString();
-  }
-
   public void clearPonderLimit() {
     outOfPlayoutsLimit = false;
     stopByPlayouts = false;
@@ -23872,30 +23744,10 @@ public class Leelaz {
 
   public void Pondering() {
     isPondering = true;
-    YikeSyncDebugLog.log("Leelaz Pondering() set true");
   }
 
   public void notPondering() {
     isPondering = false;
-    YikeSyncDebugLog.log("Leelaz notPondering() set false");
-  }
-
-  private void logInterestingCommand(String command, String source) {
-    if (command == null) {
-      return;
-    }
-    if (command.startsWith("play ")
-        || command.equals("clear_board")
-        || command.startsWith("loadsgf ")
-        || command.startsWith("kata-analyze")
-        || command.startsWith("lz-analyze")
-        || command.startsWith("analyze ")
-        || command.equals("name")
-        || command.equals("stop")
-        || command.equals("stop-ponder")) {
-      YikeSyncDebugLog.log(
-          "Leelaz " + source + " command=" + command + " isPondering=" + isPondering);
-    }
   }
 
   public class WinrateStats {
