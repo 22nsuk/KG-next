@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import org.json.JSONObject;
 
 public class ContributeGameInfo {
+  boolean fromSsh;
   public String gameId;
   public String blackPlayer;
   public String whitePlayer;

@@ -37,6 +37,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ExactSnapshotEngineRestoreContractTest {
   private static final int BOARD_SIZE = 3;
@@ -520,15 +522,17 @@ class ExactSnapshotEngineRestoreContractTest {
     assertRemoteEmptyTailBlackToPlayRestore();
   }
 
-  @Test
-  void remoteComputeTailGtpErrorFailsRestoreInsteadOfReportingSuccess() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void inBandTailGtpErrorKeepsTheSourceTransportPolicy(boolean ssh) throws Exception {
     try (TestHarness harness = TestHarness.open(false)) {
       BoardHistoryList history = new BoardHistoryList(snapshotRoot());
       history.add(moveNode(2, 2, Stone.BLACK, true, 4));
       String tailCommand = "play B " + Board.convertCoordinatesToName(2, 2);
 
       Leelaz engine = new Leelaz("");
-      engine.useRemoteCompute = true;
+      engine.useJavaSSH = ssh;
+      engine.useRemoteCompute = !ssh;
       ExactSnapshotRestoreProtocolFixture.Transport transport =
           ExactSnapshotRestoreProtocolFixture.install(
               engine,
@@ -538,14 +542,16 @@ class ExactSnapshotEngineRestoreContractTest {
                           "controlled tail failure")
                       : ExactSnapshotRestoreProtocolFixture.Response.success());
 
+      if (ssh) engine.advertiseCommandsForTest(List.of("set_position"));
+
       ExactSnapshotEngineRestore.Failure thrown =
           assertThrows(
               ExactSnapshotEngineRestore.Failure.class,
               () -> executeHistoryRestore(engine, history.getCurrentHistoryNode()));
 
       assertEquals(ExactSnapshotEngineRestore.FailureCategory.GTP_ERROR, thrown.category());
-      assertTrue(thrown.getMessage().contains(tailCommand));
-      assertTrue(thrown.getMessage().contains("controlled tail failure"));
+      assertEquals(!ssh, thrown.getMessage().contains(tailCommand), thrown.getMessage());
+      assertEquals(!ssh, thrown.getMessage().contains("controlled tail failure"), thrown.getMessage());
       assertEquals(List.of(tailCommand), collectPlayCommands(transport.commands()));
     }
   }

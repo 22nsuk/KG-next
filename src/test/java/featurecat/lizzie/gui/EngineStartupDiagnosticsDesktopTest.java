@@ -674,10 +674,19 @@ public class EngineStartupDiagnosticsDesktopTest {
       assertTrue(visible.contains("oversized-line"));
       assertFalse(visible.contains("discarded-line-suffix"), "Bound individual stderr lines");
       assertFalse(visible.contains("local-secret-fixture"), "Preserve the window's credential masking");
-      verifySharedOutput(dialog, work, List.of(SSH_ERROR, SSH_STDOUT, "local-secret-fixture"));
+      JSONObject shared =
+          verifySharedOutput(dialog, work, List.of(SSH_ERROR, SSH_STDOUT, "local-secret-fixture"));
+      assertEquals(boundAttempt(dialog).id(), shared.getString("attemptId"));
+      assertTrue(shared.getString("engineId").startsWith("eng-"));
+      if (phase.equals("after-ready")) {
+        assertEquals("MAIN_BOARD", shared.getString("launchPurpose"));
+        assertTrue(shared.getJSONObject("launch").getLong("readerIncarnation") > 0);
+        assertEquals("unavailable", shared.getString("collectionState"));
+      }
       runtime.shutdown();
       String log = Files.readString(work.resolve("logs/app.log"));
-      assertTrue(log.contains("engine event=process-stopped"), log);
+      assertTrue(
+          log.contains("engine=" + shared.getString("engineId") + " engine event=process-stopped"), log);
       assertFalse(log.contains(SSH_ERROR));
       assertFalse(log.contains(SSH_STDOUT));
       assertFalse(log.contains("local-secret-fixture"));
@@ -685,12 +694,13 @@ public class EngineStartupDiagnosticsDesktopTest {
     }
   }
 
-  static void verifySharedOutput(EngineFailedMessage dialog, Path work, List<String> privateMarkers)
+  static JSONObject verifySharedOutput(EngineFailedMessage dialog, Path work, List<String> privateMarkers)
       throws Exception {
     SwingUtilities.invokeAndWait(() -> button(dialog, "EngineFailedMessage.copyError").doClick());
     String copied =
         (String) Toolkit.getDefaultToolkit().getSystemClipboard().getData(DataFlavor.stringFlavor);
     assertEquals(displayedDiagnostic(dialog).shareText(), copied);
+    JSONObject shared = new JSONObject(copied);
     for (String marker : privateMarkers) assertFalse(copied.contains(marker));
 
     SwingUtilities.invokeAndWait(
@@ -706,12 +716,18 @@ public class EngineStartupDiagnosticsDesktopTest {
     assertNotNull(request.get());
     Path zip = new DiagnosticBundleExporter(work.resolve("export")).export(request.get());
     try (ZipFile archive = new ZipFile(zip.toFile())) {
-      assertNotNull(archive.getEntry("snapshots/engine-startup-failure.json"));
+      var entry = archive.getEntry("snapshots/engine-startup-failure.json");
+      assertNotNull(entry);
+      JSONObject exported =
+          new JSONObject(new String(archive.getInputStream(entry).readAllBytes(), StandardCharsets.UTF_8))
+              .getJSONObject("failure");
+      assertTrue(shared.similar(exported), "Copy and export must identify the same failure");
       for (var file : java.util.Collections.list(archive.entries())) {
         String text = new String(archive.getInputStream(file).readAllBytes(), StandardCharsets.UTF_8);
         for (String marker : privateMarkers) assertFalse(text.contains(marker), file.getName());
       }
     }
+    return shared;
   }
 
   private static void assertOutputEvidence(JSONObject diagnostic) {

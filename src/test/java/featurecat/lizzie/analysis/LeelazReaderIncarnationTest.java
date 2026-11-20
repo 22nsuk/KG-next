@@ -32,12 +32,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.SequenceInputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.ArrayDeque;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -261,7 +261,7 @@ class LeelazReaderIncarnationTest {
       assertTrue(engine.hasExclusiveGtpLease());
       assertEquals("new-stdout", currentReader(engine, "inputStream").readLine());
       assertEquals("new-stderr", currentReader(engine, "errorStream").readLine());
-      assertFalse(recentLines(engine, "recentStdoutLines").contains(""));
+      assertFalse(exitDiagnostic(engine).contains("Recent stdout"));
       assertEquals(0, leaseReady.get(), "an old reader's stop frame cannot activate the new lease");
       dispatchExclusiveLine(engine, "=800000000");
       assertEquals(0, leaseReady.get(), "the current stop header still needs its boundary");
@@ -587,6 +587,52 @@ class LeelazReaderIncarnationTest {
   }
 
   @Test
+  void readyReplacementExitDiagnosticContainsOnlyItsOwnOutput() throws Exception {
+    try (GlobalState ignored = GlobalState.install()) {
+      Leelaz engine = new Leelaz("");
+      Lizzie.leelaz = engine;
+      setField(engine, "process", new RecordingProcess());
+      BlockingInputStream delayed = new BlockingInputStream("retired-late-stdout\n");
+      initializeStreams(
+          engine, new SequenceInputStream(bytes("retired-stdout\n"), delayed), bytes(""));
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Thread reader = invokeInThread(engine, "read", failure);
+      try {
+        assertTrue(delayed.awaitRead());
+        assertTrue(exitDiagnostic(engine).contains("retired-stdout"));
+
+        setField(engine, "process", new RecordingProcess());
+        setField(
+            engine,
+            "startupDiagnosticAttempt",
+            EngineStartupDiagnostics.getDefault()
+                .begin("restarted-engine", "PRIMARY", List.of("katago"), true));
+        initializeStreams(engine, bytes("replacement-stdout\n"), bytes("replacement-stderr\n"));
+        Method loaded = Leelaz.class.getDeclaredMethod("markEngineLoaded");
+        loaded.setAccessible(true);
+        loaded.invoke(engine);
+      } finally {
+        delayed.release();
+        reader.join(1000L);
+      }
+      assertFalse(reader.isAlive());
+      assertNull(failure.get());
+
+      for (String methodName : List.of("readError", "read")) {
+        Method read = Leelaz.class.getDeclaredMethod(methodName);
+        read.setAccessible(true);
+        read.invoke(engine);
+      }
+      String diagnostic = exitDiagnostic(engine);
+      assertTrue(engine.isDownWithError);
+      assertTrue(diagnostic.contains("replacement-stdout"), diagnostic);
+      assertTrue(diagnostic.contains("replacement-stderr"), diagnostic);
+      assertFalse(diagnostic.contains("retired-stdout"), diagnostic);
+      assertFalse(diagnostic.contains("retired-late-stdout"), diagnostic);
+    }
+  }
+
+  @Test
   void currentStderrEofDoesNotDiscardAlreadyArrivedStdoutTail() throws Exception {
     try (GlobalState ignored = GlobalState.install()) {
       Leelaz engine = new Leelaz("");
@@ -609,7 +655,7 @@ class LeelazReaderIncarnationTest {
       read.setAccessible(true);
       read.invoke(engine);
 
-      assertTrue(recentLines(engine, "recentStdoutLines").contains("tail-frame"));
+      assertTrue(exitDiagnostic(engine).contains("Recent stdout:\ntail-frame"));
       assertEquals(1, process.destroyCount);
       assertFalse(engine.isStarted());
     }
@@ -749,9 +795,10 @@ class LeelazReaderIncarnationTest {
     return (boolean) method.invoke(engine, line);
   }
 
-  @SuppressWarnings("unchecked")
-  private static ArrayDeque<String> recentLines(Leelaz engine, String name) throws Exception {
-    return (ArrayDeque<String>) getField(engine, name);
+  private static String exitDiagnostic(Leelaz engine) throws Exception {
+    Method diagnostic = Leelaz.class.getDeclaredMethod("buildEngineExitDiagnostic", String.class);
+    diagnostic.setAccessible(true);
+    return (String) diagnostic.invoke(engine, "engine exited");
   }
 
   private static Object getField(Leelaz engine, String name) throws Exception {

@@ -596,8 +596,10 @@ public class EngineFailedMessage extends JDialog {
     this.boundAttempt = attempt;
     stopRefreshTimer();
     if (attempt != null) {
-      setDisplayedDiagnostic(attempt.snapshot());
-      if (attempt.collectingOutput()) {
+      // A terminal publication may occur between reads. Decide whether to poll before reading it.
+      boolean collecting = attempt.collectingOutput();
+      setDisplayedDiagnostic(attempt.snapshotOrFallback(basicDiagnostic));
+      if (collecting) {
         refreshTimer = new Timer(150, e -> refreshFromBoundAttempt());
         refreshTimer.start();
       }
@@ -611,11 +613,11 @@ public class EngineFailedMessage extends JDialog {
       stopRefreshTimer();
       return;
     }
+    if (!boundAttempt.collectingOutput()) stopRefreshTimer();
     EngineStartupDiagnostic latest = boundAttempt.snapshot();
     if (latest != null && latest != displayedDiagnostic) {
       setDisplayedDiagnostic(latest);
     }
-    if (!boundAttempt.collectingOutput()) stopRefreshTimer();
   }
 
   private void setDisplayedDiagnostic(EngineStartupDiagnostic diagnostic) {

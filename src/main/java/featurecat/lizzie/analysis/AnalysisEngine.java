@@ -104,9 +104,6 @@ public class AnalysisEngine {
   // private BoardHistoryNode startAnalyzeNode;
   public WaitForAnalysis waitFrame;
   private volatile EngineStartupDiagnostics.Attempt startupDiagnosticAttempt;
-  // parseResult is also a public, overridable entry point. The reader that supplied a response
-  // determines its log policy even if another connection replaces it during parsing.
-  private static final ThreadLocal<EngineReaderOutput> PARSING_OUTPUT = new ThreadLocal<>();
   private EngineStartupDiagnostics.Attempt presentedStartupDiagnosticAttempt;
   private EngineFailedMessage engineFailedMessage;
 
@@ -730,7 +727,7 @@ public class AnalysisEngine {
     private void runReader(CountDownLatch started, Runnable reader) {
       try {
         started.await();
-        reader.run();
+        readerOutput.withParsingSource(reader);
       } catch (InterruptedException interrupted) {
         Thread.currentThread().interrupt();
         close(false);
@@ -820,7 +817,7 @@ public class AnalysisEngine {
     try {
       stream.close();
     } catch (IOException failure) {
-      EngineReaderOutput.reportReaderException(ssh, failure);
+      EngineReaderOutput.reportException(ssh, "close", failure);
     }
   }
 
@@ -874,14 +871,13 @@ public class AnalysisEngine {
 
   private void read(ReaderResources resources) {
     Throwable error = null;
-    PARSING_OUTPUT.set(resources.readerOutput);
     try {
       String line = "";
       while ((line = resources.stdout.readLine()) != null) {
         resources.readerOutput.line(false, line);
         if (resources.readerOutput.attempt != startupDiagnosticAttempt) continue;
         try {
-          parseLine(line.toString());
+          parseLine(line);
         } catch (Exception ex) {
           EngineReaderOutput.reportReaderException(resources.readerOutput.isSsh(), ex);
         }
@@ -891,7 +887,6 @@ public class AnalysisEngine {
       error = e;
     } finally {
       try {
-        PARSING_OUTPUT.remove();
         resources.readerOutput.ended(false, error == null ? null : error.toString());
         readerEnded(resources, error);
       } finally {
@@ -1025,7 +1020,7 @@ public class AnalysisEngine {
   }
 
   private boolean parsingSshOutput() {
-    EngineReaderOutput source = PARSING_OUTPUT.get();
+    EngineReaderOutput source = EngineReaderOutput.parsingSource();
     if (source != null) return source.isSsh();
     EngineStartupDiagnostics.Attempt attempt = startupDiagnosticAttempt;
     return attempt != null && attempt.isSsh();
@@ -3114,10 +3109,11 @@ public class AnalysisEngine {
       resources.stdin.write((command + "\n").getBytes());
       resources.stdin.flush();
     } catch (Exception e) {
-      e.printStackTrace();
+      EngineReaderOutput.reportException(resources.readerOutput.isSsh(), "command write", e);
       return false;
     }
-    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(resources.engineId, purpose, command);
+    AnalysisResourceCoordinator.recordAuxiliaryCommandSent(
+        resources.engineId, purpose, command, resources.readerOutput.isSsh());
     return true;
   }
 

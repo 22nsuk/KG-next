@@ -7,10 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.logging.WorkDirectoryResolution;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,6 +22,7 @@ import java.security.KeyPair;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 import org.apache.sshd.client.SshClient;
 import org.apache.sshd.client.session.ClientSession;
@@ -53,6 +58,27 @@ class SshCommandSessionTest {
       assertTrue(
           recorded.contains(PublicKeyEntry.toString(server.hostKey().getPublic())), recorded);
     }
+  }
+
+  @Test
+  void sshLibraryHandshakeWarningOmitsPeerTextFromAppLog() throws Exception {
+    String banner = "SSH-1.5-fixture-legacy-engine";
+    LoggingRuntime runtime = LoggingRuntime.initialize(new WorkDirectoryResolution(temp, List.of()));
+    try (ServerSocket peer = new ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))) {
+      peer.setSoTimeout(10000);
+      var failure = CompletableFuture.supplyAsync(() -> assertThrows(IOException.class,
+          () -> SshCommandSession.open(new SshTarget("127.0.0.1", peer.getLocalPort(), "player"),
+              SshCredential.password("fixture"), "gtp", new SshKnownHosts(temp.resolve("known_hosts")))));
+      try (var connection = peer.accept()) {
+        connection.getOutputStream().write((banner + "\r\n").getBytes(StandardCharsets.US_ASCII));
+        failure.get(10, TimeUnit.SECONDS);
+      }
+    } finally {
+      runtime.shutdown();
+    }
+    String log = Files.readString(temp.resolve("logs/app.log"));
+    assertTrue(log.contains("org.apache.sshd.client.session.ClientSessionImpl"), log);
+    assertFalse(log.contains(banner), log);
   }
 
   @Test

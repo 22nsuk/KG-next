@@ -83,6 +83,26 @@ public final class EngineStartupDiagnostic {
     return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES, ssh);
   }
 
+  /** Attach only the known connection identity to a report with no startup failure evidence. */
+  EngineStartupDiagnostic forAttempt(String id, JSONObject launch, boolean ssh) {
+    JSONObject value = toJson();
+    boolean privateLaunch = ssh || "ssh".equals(value.getJSONObject("launch").optString("transport"));
+    JSONObject context = launchMetadata(launch);
+    if (!privateLaunch && launch.has("configuredCommand")) {
+      context.put("configuredCommand", launch.getString("configuredCommand"));
+    }
+    value.put("launch", context)
+        .put("attemptId", id)
+        .put("engineId", context.getString("engineId"))
+        .put("launchPurpose", context.getString("launchPurpose"));
+    return new EngineStartupDiagnostic(value, DEFAULT_MAX_BYTES, privateLaunch);
+  }
+
+  private static JSONObject launchMetadata(JSONObject launch) {
+    return new JSONObject(launch, "engineId", "launchPurpose", "startedAt", "environmentState",
+        "local", "platform", "pid", "readerIncarnation");
+  }
+
   static String renderCommand(List<String> command) {
     // Preserve argv boundaries so redaction cannot expose the suffix of a quoted secret.
     StringBuilder text = new StringBuilder();
@@ -110,8 +130,7 @@ public final class EngineStartupDiagnostic {
           "startup-handshake", "startup-output", "startup-timeout" -> phase;
       default -> "unknown";
     });
-    JSONObject launch = new JSONObject(value.getJSONObject("launch"), "engineId", "launchPurpose",
-        "startedAt", "environmentState", "local", "platform", "pid", "readerIncarnation");
+    JSONObject launch = launchMetadata(value.getJSONObject("launch"));
     result.put("launch", launch.put("transport", "ssh"));
     JSONObject sources = new JSONObject();
     for (String name : List.of("basic", "process-tail")) {

@@ -69,6 +69,28 @@ class EngineStartupDiagnosticsTest {
   }
 
   @Test
+  void runtimeFailureFallbackUsesTheBoundLaunchAndPreservesSshPrivacy() {
+    try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
+      var attempt = service.begin("eng-original", "PRELOAD", List.of("original-engine"), true);
+      attempt.attach(null, 7);
+      attempt.ready();
+      for (boolean ssh : List.of(true, false)) {
+        var basic = EngineStartupDiagnostic.basic(List.of(), "different-engine", "exit detail", ssh);
+        var report = attempt.snapshotOrFallback(basic).toJson();
+        assertEquals(attempt.id(), report.getString("attemptId"));
+        assertEquals("eng-original", report.getString("engineId"));
+        var launch = report.getJSONObject("launch");
+        assertEquals("PRELOAD", launch.getString("launchPurpose"));
+        assertEquals(7, launch.getLong("readerIncarnation"));
+        assertFalse(report.toString().contains("different-engine"));
+        assertEquals(!ssh, launch.optString("configuredCommand").contains("original-engine"));
+        assertEquals(ssh ? "" : "exit detail", report.getString("originalError"));
+      }
+      assertNull(attempt.snapshot(), "Inspecting a runtime failure must not publish a startup failure");
+    }
+  }
+
+  @Test
   void finalSshExecutableRestrictsEvidenceCollectedBeforeProcessCreation() {
     try (var service = new EngineStartupDiagnostics(EngineStartupDiagnostics.Policy.production(), null)) {
       var attempt = service.begin("eng-final", "PRELOAD", List.of("wrapper", "fixture-configured"), true);

@@ -2,6 +2,7 @@ package featurecat.lizzie.logging;
 
 import ch.qos.logback.classic.PatternLayout;
 import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.LoggingEvent;
 import ch.qos.logback.core.encoder.EncoderBase;
 import java.nio.charset.StandardCharsets;
 
@@ -60,6 +61,17 @@ final class SanitizingEncoder extends EncoderBase<ILoggingEvent> {
   @Override
   public byte[] encode(ILoggingEvent event) {
     try {
+      // MINA can log peer-supplied protocol text and exec commands, including in throwables.
+      // Keep the transport warning and its correlation without persisting its free-form payload.
+      if (stream == LogStream.APP && event.getLoggerName().startsWith("org.apache.sshd.")) {
+        LoggingEvent metadata = new LoggingEvent();
+        metadata.setTimeStamp(event.getTimeStamp());
+        metadata.setLoggerName(event.getLoggerName());
+        metadata.setLevel(event.getLevel());
+        metadata.setMDCPropertyMap(event.getMDCPropertyMap());
+        metadata.setMessage("[SSH transport detail omitted]");
+        event = metadata;
+      }
       String formatted = layout.doLayout(event);
       byte[] encoded = sanitizer.sanitize(formatted).getBytes(StandardCharsets.UTF_8);
       if (encoded.length <= LoggingLimits.MAX_PERSISTED_EVENT_BYTES) {

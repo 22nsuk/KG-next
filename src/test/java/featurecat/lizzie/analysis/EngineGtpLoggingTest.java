@@ -36,6 +36,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.util.concurrent.atomic.AtomicReference;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -835,6 +836,51 @@ class EngineGtpLoggingTest {
       assertEquals(0L, eventCount(app, "stderr"), app);
     } finally {
       closeRemoteReaders(engine);
+    }
+  }
+
+  @Test
+  void sharedSshReaderProtectsAnalysisWarningsAndDynamicParameterEvents() throws Exception {
+    LoggingRuntime runtime = startEngineDiagnostics();
+    runtime.captureStandardError();
+    Leelaz foreground = prepareEngine();
+    foreground.useJavaSSH = true;
+    ByteArrayOutputStream output = new ByteArrayOutputStream();
+    foreground.installFreshCommandOutputForTest(output);
+    foreground.commandLists.addAll(
+        List.of("stop", "boardsize", "rectangular_boardsize", "komi", "clear_board", "play",
+            "set_position", "kata-get-rules", "kata-set-rules", "kata-analyze"));
+    setField(foreground, "endGetCommandList", true);
+    foreground.useJavaSSH = false;
+    AnalysisEngine analysis = allocate(AnalysisEngine.class);
+    String sentinel = "private-shared-parameter";
+    AtomicReference<String> localWarning = new AtomicReference<>();
+    SilentGtpConsole console = allocate(SilentGtpConsole.class);
+    console.onErrorLine = localWarning::set;
+    Lizzie.gtpConsole = console;
+    try {
+      assertEquals(Leelaz.ExclusiveGtpLeaseAvailability.AVAILABLE,
+          foreground.beginExclusiveGtpSession(line -> analysis.parseResult(line), () -> {}, () -> {}));
+      Method dispatch = Leelaz.class.getDeclaredMethod("dispatchExclusiveGtpLine", String.class);
+      dispatch.setAccessible(true);
+      String stop = output.toString(StandardCharsets.UTF_8);
+      dispatch.invoke(foreground, "=" + stop.substring(0, stop.indexOf(' ')));
+      dispatch.invoke(foreground, "");
+      assertTrue(foreground.sendExclusiveGtpCommand("kata-set-param arbitrary " + sentinel,
+          AnalysisResourceCoordinator.Purpose.AUTO_QUICK_ANALYSIS));
+      // A warning needs no dispatch-failure cleanup on this synthetic consumer.
+      var nodes = new java.util.HashMap<Integer, featurecat.lizzie.rules.BoardHistoryNode>();
+      nodes.put(1, new Board().getHistory().getCurrentHistoryNode());
+      setField(AnalysisEngine.class, analysis, "analyzeMap", nodes);
+      dispatch.invoke(foreground, new JSONObject().put("id", "1").put("warning", sentinel).toString());
+      assertTrue(localWarning.get().contains(sentinel));
+      awaitLogs(runtime);
+      String app = readApp();
+      assertTrue(app.contains("KataGo SSH response: WARNING"), app);
+      assertTrue(app.contains("engine event=dynamic-parameter"), app);
+      assertFalse(app.contains(sentinel), app);
+    } finally {
+      foreground.endExclusiveGtpSession();
     }
   }
 

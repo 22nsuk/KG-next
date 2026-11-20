@@ -743,7 +743,11 @@ public class ContributeView extends JFrame {
     //	            + "还棋头:否\r\n"
     //	            + "让子贴还(让N子): 贴还N目\r\n"
     //	            + "收后贴还0.5目: 否");
-    txtRules.setText(Utils.getRuleString(jsonRules));
+    setRuleText(Utils.getRuleString(jsonRules));
+  }
+
+  public void setRuleText(String rules) {
+    txtRules.setText(rules);
     pack();
   }
 

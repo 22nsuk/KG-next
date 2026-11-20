@@ -26,8 +26,9 @@ final class EngineGameCommandFailure {
   }
 
   /** As {@link #notSent(String)}, keeping the send failure itself in the log. */
-  static String notSent(String command, RuntimeException cause) {
-    LOG.warn("Engine-game command {} could not be sent", command == null ? FENCE : command, cause);
+  static String notSent(String command, RuntimeException cause, boolean ssh) {
+    if (ssh) LOG.warn("SSH engine-game command could not be sent ({})", cause.getClass().getSimpleName());
+    else LOG.warn("Engine-game command {} could not be sent", command == null ? FENCE : command, cause);
     return notSent(command);
   }
 

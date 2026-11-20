@@ -25,6 +25,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class LeelazBoardSynchronizationConfirmationTest {
 
@@ -121,6 +123,34 @@ class LeelazBoardSynchronizationConfirmationTest {
       engine.processCommandResponseLineForTest("=" + commandId(output) + " late");
       assertEquals(0, successes.get());
       assertEquals(1, failures.get());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void authorityCanRecordMirrorRejectionWithoutCopyingPrivateSshOutput(boolean ssh) throws Exception {
+    try (TestEnvironment ignored = new TestEnvironment()) {
+      Leelaz authority = new Leelaz("");
+      Leelaz mirror = new Leelaz("");
+      Lizzie.leelaz = authority;
+      mirror.useJavaSSH = ssh;
+      setOutput(authority, new ByteArrayOutputStream());
+      ByteArrayOutputStream mirrorOutput = new ByteArrayOutputStream();
+      setOutput(mirror, mirrorOutput);
+      AtomicReference<String> failure = new AtomicReference<>();
+      authority.confirmBoardSynchronization(mirror, () -> {}, detail -> {
+        failure.set(detail);
+        authority.markLifecycleBoardSynchronizationFailed(detail, false);
+      });
+      mirror.useJavaSSH = !ssh;
+      String payload = "private-mirror-rejection";
+      mirror.processCommandResponseLineForTest("?" + commandId(mirrorOutput) + " " + payload);
+      assertTrue(failure.get().contains("board synchronization failed"));
+      Method diagnostic = Leelaz.class.getDeclaredMethod("buildEngineExitDiagnostic", String.class);
+      diagnostic.setAccessible(true);
+      String localTail = (String) diagnostic.invoke(authority, "");
+      assertTrue(localTail.contains("board synchronization failed"), localTail);
+      assertEquals(!ssh, localTail.contains(payload), localTail);
     }
   }
 

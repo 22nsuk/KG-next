@@ -8,6 +8,8 @@ import featurecat.lizzie.analysis.ContributeGameInfo;
 import featurecat.lizzie.analysis.ContributeMoveInfo;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.SgfSaveTestSupport;
+import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.logging.WorkDirectoryResolution;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
@@ -126,17 +128,30 @@ class ContributeSaveTest {
     assertFalse(sgf.contains("later board"));
   }
 
-  @Test
-  void failedBatchWriteDoesNotMarkTheGameSavedAndCanRetry() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedBatchWriteDoesNotMarkTheGameSavedAndCanRetry(boolean ssh) throws Exception {
     ContributeGameInfo game = game(0, true);
+    game.gameId = "private-save-game-id";
+    Field source = ContributeGameInfo.class.getDeclaredField("fromSsh");
+    source.setAccessible(true);
+    source.setBoolean(game, ssh);
     games.add(game);
     watch(game);
     Files.createDirectories(outputDirectory.getParent());
     Files.writeString(outputDirectory, "unrelated file");
 
-    SwingUtilities.invokeAndWait(engine::saveAllGames);
-    assertThrows(ExecutionException.class, () -> batchCompletion().get(5, TimeUnit.SECONDS));
-    SgfSaveTestSupport.awaitPending();
+    LoggingRuntime runtime = LoggingRuntime.initialize(new WorkDirectoryResolution(directory, List.of()));
+    try {
+      SwingUtilities.invokeAndWait(engine::saveAllGames);
+      assertThrows(ExecutionException.class, () -> batchCompletion().get(5, TimeUnit.SECONDS));
+      SgfSaveTestSupport.awaitPending();
+    } finally {
+      runtime.shutdown();
+    }
+    String app = Files.readString(directory.resolve("logs/app.log"));
+    assertTrue(app.contains(ssh ? "Could not save SSH contribution SGF" : "Could not save contribution SGF"));
+    assertEquals(!ssh, app.contains(game.gameId), app);
     assertFalse(game.saved);
     assertEquals("unrelated file", Files.readString(outputDirectory));
 
@@ -144,7 +159,7 @@ class ContributeSaveTest {
     SwingUtilities.invokeAndWait(engine::saveAllGames);
     batchCompletion().get(5, TimeUnit.SECONDS);
     assertTrue(game.saved);
-    assertTrue(Files.readString(target(game)).contains("C[game-0]"));
+    assertTrue(Files.readString(target(game)).contains("C[" + game.gameId + "]"));
   }
 
   @Test

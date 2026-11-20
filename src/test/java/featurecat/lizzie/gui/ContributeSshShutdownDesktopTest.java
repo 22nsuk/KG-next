@@ -43,6 +43,8 @@ public class ContributeSshShutdownDesktopTest {
   private static final String REMOTE_VERSION = "remote-version-canary";
   private static final String REMOTE_DETAIL = "GPU device unavailable on launch ";
   private static final String REMOTE_ERROR = "ssh-error-canary";
+  private static final String REMOTE_OWNERSHIP = "opaque-contribution-ownership";
+  private static final String REMOTE_RULE = "opaque-contribution-rule";
 
   @Test
   void stopsRemoteChildrenOnUserStopFatalErrorAndRetry() throws Exception {
@@ -117,6 +119,8 @@ public class ContributeSshShutdownDesktopTest {
       assertTrue(log.stream().anyMatch(line -> line.contains("engine event=startup-failed")));
       assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_ARGUMENT) || line.contains(REMOTE_ERROR)));
       assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_DETAIL) || line.contains(REMOTE_VERSION)));
+      assertFalse(log.stream().anyMatch(line -> line.contains(REMOTE_OWNERSHIP) || line.contains(REMOTE_RULE)));
+      assertTrue(log.stream().anyMatch(line -> line.contains("SSH engine reader failure: JSONException")));
       List<String> launches = contributionIds(log, "started");
       assertEquals(server.children.size(), launches.size());
       assertEquals(launches.size(), launches.stream().distinct().count());
@@ -201,6 +205,13 @@ public class ContributeSshShutdownDesktopTest {
   private static void remoteChild(Path work, String mode) throws Exception {
     Files.writeString(work.resolve("ready"), "ready");
     if (mode.equals("clean")) {
+      // Valid game envelope with invalid optional fields reaches the real EDT formatters.
+      var json = new JSONObject().put("gameId", "fixture").put("blackPlayer", "black")
+          .put("whitePlayer", "white").put("boardXSize", 19).put("boardYSize", 19)
+          .put("rules", new JSONObject().put("komi", 7.5).put("suicide", REMOTE_RULE))
+          .put("initialStones", List.of()).put("moves", List.of()).put("move", List.of("B", "D4"))
+          .put("moveInfos", List.of()).put("ownership", List.of(REMOTE_OWNERSHIP));
+      System.out.println(json);
       System.out.println("All cleaned up, quitting");
       System.exit(0);
     }

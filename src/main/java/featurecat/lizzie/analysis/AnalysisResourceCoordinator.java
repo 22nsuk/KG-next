@@ -289,20 +289,21 @@ public final class AnalysisResourceCoordinator {
     if (!EngineObservation.engineDiagnosticsEnabled()) {
       return;
     }
-    commandSentForInstance(EngineObservation.identityFor(owner), purpose, command);
+    commandSentForInstance(EngineObservation.identityFor(owner), purpose, command,
+        owner instanceof Leelaz engine && Leelaz.isSshIncarnation(engine.captureEngineIncarnationFence()));
   }
 
-  static void recordAuxiliaryCommandSent(String engineId, Purpose purpose, String command) {
+  static void recordAuxiliaryCommandSent(String engineId, Purpose purpose, String command, boolean ssh) {
     try {
-      commandSentForInstance(engineId, purpose, command);
+      commandSentForInstance(engineId, purpose, command, ssh);
     } catch (RuntimeException observationFailure) {
       // A diagnostic failure cannot undo a successful transport write.
-      observationFailure.printStackTrace();
+      EngineReaderOutput.reportException(ssh, "command observation", observationFailure);
     }
   }
 
   /** Records delivery using the identity captured for the physical write. */
-  static void commandSentForInstance(String engineId, Purpose purpose, String command) {
+  static void commandSentForInstance(String engineId, Purpose purpose, String command, boolean ssh) {
     if (!EngineObservation.engineDiagnosticsEnabled() || command == null) {
       return;
     }
@@ -315,7 +316,7 @@ public final class AnalysisResourceCoordinator {
           "dynamic-parameter",
           purposeName,
           -1L,
-          matcher.group(1) + "=" + redactCommand(matcher.group(2)));
+          ssh ? null : matcher.group(1) + "=" + redactCommand(matcher.group(2)));
       return;
     }
     String verb = parsed.verb();

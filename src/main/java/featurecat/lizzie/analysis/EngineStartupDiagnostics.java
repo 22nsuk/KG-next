@@ -145,6 +145,10 @@ public final class EngineStartupDiagnostics implements AutoCloseable {
       return id;
     }
 
+    public synchronized EngineStartupDiagnostic snapshotOrFallback(EngineStartupDiagnostic fallback) {
+      return published != null ? published : fallback.forAttempt(id, launch, ssh);
+    }
+
     public synchronized EngineStartupDiagnostic snapshot() {
       return published;
     }

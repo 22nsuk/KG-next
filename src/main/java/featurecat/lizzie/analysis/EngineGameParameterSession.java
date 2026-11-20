@@ -562,7 +562,9 @@ public final class EngineGameParameterSession {
       current.failure = detail == null ? text("EngineGameParameters.updateFailedDetail") : detail;
       current.refreshBlocked();
     }
-    LOG.warn("Engine-game parameter update failed: {}", current.failure);
+    boolean ssh = Leelaz.isSshIncarnation(owner.blackIncarnation)
+        || Leelaz.isSshIncarnation(owner.whiteIncarnation);
+    LOG.warn("Engine-game parameter update failed: {}", ssh ? "SSH participant" : current.failure);
     if (EngineManager.isCurrentEngineGameTransaction(owner)) {
       EngineManager.pauseEngineGame(owner);
     }
@@ -695,7 +697,8 @@ public final class EngineGameParameterSession {
   private void failRestore(Original original, String detail, List<String> failures) {
     // An unconfirmed process cannot be handed back with game parameters. Never stop a replacement.
     failures.add(detail);
-    LOG.warn("Engine-game parameter restore failed: {}", detail);
+    LOG.warn("Engine-game parameter restore failed: {}",
+        Leelaz.isSshIncarnation(original.incarnation()) ? original.label() : detail);
     original.engine().forceQuitIfCurrentIncarnation(original.incarnation());
   }
 

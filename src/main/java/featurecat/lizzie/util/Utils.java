@@ -431,6 +431,10 @@ public class Utils {
   }
 
   public static String getRuleString(JSONObject jsonRules) {
+    return getRuleString(jsonRules, Throwable::printStackTrace);
+  }
+
+  public static String getRuleString(JSONObject jsonRules, Consumer<Exception> onError) {
     String rules = "";
     try {
       if (jsonRules.has("scoring")) {
@@ -480,7 +484,7 @@ public class Utils {
         else rules += Lizzie.resourceBundle.getString("ContributeView.rules.no");
       }
     } catch (JSONException e) {
-      e.printStackTrace();
+      onError.accept(e);
     }
     return rules;
   }
@@ -1384,7 +1388,11 @@ public class Utils {
 
   public static ArrayList<Double> getOwnershipArrayFromJsonArray(
       JSONArray ownerShipInfos, boolean isBlack) {
-    // TODO Auto-generated method stub
+    return getOwnershipArrayFromJsonArray(ownerShipInfos, isBlack, Throwable::printStackTrace);
+  }
+
+  public static ArrayList<Double> getOwnershipArrayFromJsonArray(
+      JSONArray ownerShipInfos, boolean isBlack, Consumer<Exception> onError) {
     try {
       List<Object> objectArray = ownerShipInfos.toList();
       ArrayList<Double> ownershipArray = new ArrayList<Double>();
@@ -1394,7 +1402,7 @@ public class Utils {
       }
       return ownershipArray;
     } catch (Exception e) {
-      e.printStackTrace();
+      onError.accept(e);
       return null;
     }
   }

@@ -13,6 +13,9 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.remote.KataGoAnalysisWebSocketTransportTest;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
+import featurecat.lizzie.logging.LoggingRuntime;
+import featurecat.lizzie.logging.LoggingSettings;
+import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -39,6 +42,9 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class LeelazExclusiveRemoteGtpSessionTest {
   @Test
@@ -1299,6 +1305,43 @@ class LeelazExclusiveRemoteGtpSessionTest {
         assertFalse(context.matchesCurrentEngine(), "a subsequent ordinary edit retires the run");
       }
     }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, true", "true, false", "false, false"})
+  void restoreRejectionKeepsRemoteTextOutOfCapturedStderrAndTheEngineTail(
+      boolean ssh, boolean finalStop, @TempDir Path work) throws Exception {
+    LoggingRuntime runtime = LoggingRuntime.initialize(new WorkDirectoryResolution(work, List.of()));
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
+    runtime.captureStandardError();
+    String payload = "private-restore-fixture";
+    try (ProductionForegroundRestoreHarness harness =
+        ProductionForegroundRestoreHarness.open(true, null, ssh)) {
+      // A configuration edit must not change the policy of an existing reader.
+      if (finalStop) {
+        harness.engine.useJavaSSH = !ssh;
+        assertTrue(harness.lease.release(() -> {}, harness.failures::incrementAndGet));
+        assertTrue(dispatch(harness.engine, "?800000001 " + payload));
+      } else {
+        // Use an ordinary empty root. SSH cannot load a local snapshot SGF.
+        Lizzie.board.setHistory(new BoardHistoryList(BoardData.empty(19, 19)));
+        harness.releaseThroughNameCommand();
+        harness.engine.useJavaSSH = !ssh;
+        processCommandResponse(harness.engine, "? " + payload);
+      }
+      assertFalse(harness.engine.isLoaded());
+      Method diagnostic = Leelaz.class.getDeclaredMethod("buildEngineExitDiagnostic", String.class);
+      diagnostic.setAccessible(true);
+      String tail = (String) diagnostic.invoke(harness.engine, "");
+      assertEquals(!ssh, tail.contains(payload), tail);
+      if (ssh) assertFalse(tail.contains("Recent stderr"), tail);
+    } finally {
+      runtime.shutdown();
+    }
+    String app = Files.readString(work.resolve("logs/app.log"));
+    assertTrue(app.contains(finalStop ? "Failed to stop foreground engine before restore"
+        : "Failed to restore foreground engine after flash analysis"), app);
+    assertEquals(!ssh, app.contains(payload), app);
   }
 
   @Test
@@ -2837,7 +2880,13 @@ class LeelazExclusiveRemoteGtpSessionTest {
 
     private static ProductionForegroundRestoreHarness open(
         boolean automatic, String rejectedCommand) throws Exception {
+      return open(automatic, rejectedCommand, false);
+    }
+
+    private static ProductionForegroundRestoreHarness open(
+        boolean automatic, String rejectedCommand, boolean ssh) throws Exception {
       ProductionBoundaryRestoreLeelaz engine = new ProductionBoundaryRestoreLeelaz();
+      engine.useJavaSSH = ssh;
       ForegroundLeaseGlobalState globalState = ForegroundLeaseGlobalState.install(engine);
       int previousBoardWidth = Board.boardWidth;
       int previousBoardHeight = Board.boardHeight;

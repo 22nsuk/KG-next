@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 
 /** Routes output from one physical connection to its startup diagnostic and local failure window. */
 final class EngineReaderOutput {
+  private static final ThreadLocal<EngineReaderOutput> PARSING_SOURCE = new ThreadLocal<>();
   private static final Logger LOG = LoggerFactory.getLogger(LogCategories.ENGINE);
   final EngineStartupDiagnostics.Attempt attempt;
   private final LocalTail stdout;
@@ -36,9 +37,29 @@ final class EngineReaderOutput {
     if (isSsh()) (errorStream ? stderr : stdout).ended.complete(null);
   }
 
-  static void reportReaderException(boolean ssh, Exception failure) {
-    // Parse and transport exceptions may include the text supplied by the remote process.
-    if (ssh) LOG.warn("SSH engine reader failure: {}", failure.getClass().getSimpleName());
+  static EngineReaderOutput parsingSource() {
+    return PARSING_SOURCE.get();
+  }
+
+  // Public analysis parsers can run on a dedicated reader or through a foreground lease.
+  void withParsingSource(Runnable action) {
+    EngineReaderOutput previous = PARSING_SOURCE.get();
+    PARSING_SOURCE.set(this);
+    try {
+      action.run();
+    } finally {
+      if (previous == null) PARSING_SOURCE.remove();
+      else PARSING_SOURCE.set(previous);
+    }
+  }
+
+  static void reportReaderException(boolean ssh, Throwable failure) {
+    reportException(ssh, "reader", failure);
+  }
+
+  static void reportException(boolean ssh, String operation, Throwable failure) {
+    // Both protocol and transport exceptions can contain text supplied by the remote process.
+    if (ssh) LOG.warn("SSH engine {} failure: {}", operation, failure.getClass().getSimpleName());
     else failure.printStackTrace();
   }
 

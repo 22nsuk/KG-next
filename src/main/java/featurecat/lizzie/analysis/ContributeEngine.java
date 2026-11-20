@@ -360,6 +360,9 @@ public class ContributeEngine {
               // to this launch until stop/replacement or a permanent failure invalidates it.
               if (ownsOutput(launch) && !launch.permanent())
                 notification = consumeUiOutput(launch, line, stderr, outputJson);
+            } catch (RuntimeException failure) {
+              if (!launch.readerOutput.isSsh()) throw failure;
+              EngineReaderOutput.reportReaderException(true, failure);
             } finally {
               launch.pendingUi--;
             }
@@ -592,7 +595,7 @@ public class ContributeEngine {
             if (game.gameId.equals(gameId)) {
               game.complete = true;
               if (game == currentWatchGame) maybePlayLastMove(game);
-              if (!useJavaSSH) {
+              if (!launch.readerOutput.isSsh()) {
                 game.gameResult = SGFParser.getResult(courseFile + File.separator + sgfPath);
                 if (game == currentWatchGame) setReultToView(game.gameResult);
               }
@@ -724,12 +727,6 @@ public class ContributeEngine {
     if (Lizzie.frame.contributeView != null) Lizzie.frame.contributeView.setResult(result);
   }
 
-  private void setRulesToView(JSONObject rules) {
-    if (Lizzie.frame.contributeView != null) {
-      Lizzie.frame.contributeView.setRules(rules);
-    }
-  }
-
   private void setTypeAndKomiToView(boolean isRatingGame, double komi) {
     if (Lizzie.frame.contributeView != null) {
       Lizzie.frame.contributeView.setKomi(komi);
@@ -745,16 +742,19 @@ public class ContributeEngine {
   }
 
   public void slowQuit() {
-    // TODO Auto-generated method stub
-    // if (useProcessHandler) {
     if (!isSlowQuiting) {
+      BufferedOutputStream output;
+      boolean ssh;
+      synchronized (this) {
+        output = outputStream;
+        ssh = active != null && active.diagnostic.isSsh();
+      }
       try {
-        outputStream.write(("quit" + "\n").getBytes());
-        outputStream.flush();
+        output.write(("quit" + "\n").getBytes());
+        output.flush();
         isSlowQuiting = true;
       } catch (IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
+        EngineReaderOutput.reportException(ssh, "quit command write", e);
       }
     } else {
       Utils.showMsg(Lizzie.resourceBundle.getString("Contribute.slowQuit.repeatedly"));
@@ -842,6 +842,7 @@ public class ContributeEngine {
         }
       }
       if (isExistGame) {
+        currentGame.fromSsh |= active != null && active.diagnostic.isSsh();
         if (tryToParseJsonGame(currentGame, false, jsonInfo, unParseInfos, false)) {
           tryToUseUnParseGameInfos(currentGame, unParseInfos);
           if (currentGame == currentWatchGame) {
@@ -859,6 +860,7 @@ public class ContributeEngine {
         } else return false;
       } else {
         currentGame = new ContributeGameInfo();
+        currentGame.fromSsh = active != null && active.diagnostic.isSsh();
         if (!tryToParseJsonGame(currentGame, true, jsonInfo, unParseInfos, false)) return false;
         games.add(currentGame);
       }
@@ -952,7 +954,8 @@ public class ContributeEngine {
       if (jsonInfo.has("ownership")) {
         JSONArray ownershipInfos = jsonInfo.getJSONArray("ownership");
         ArrayList<Double> ownershipArray =
-            Utils.getOwnershipArrayFromJsonArray(ownershipInfos, move.isBlack);
+            Utils.getOwnershipArrayFromJsonArray(ownershipInfos, move.isBlack,
+                failure -> EngineReaderOutput.reportReaderException(currentGame.fromSsh, failure));
         if (ownershipArray != null) {
           move.hasOwnership = true;
           move.ownershipArray = ownershipArray;
@@ -1037,13 +1040,15 @@ public class ContributeEngine {
           .getGameInfo()
           .setPlayerWhite(currentWatchGame.whitePlayer.replaceAll(" ", ""));
       Lizzie.board.getHistory().getGameInfo().setKomi(currentWatchGame.komi);
+      String rules = Utils.getRuleString(currentWatchGame.rules,
+          failure -> EngineReaderOutput.reportReaderException(game.fromSsh, failure));
       Lizzie.board.getHistory().getStart().getData().comment =
-          Utils.getRuleString(currentWatchGame.rules)
+          rules
               + "\r\n"
               + Lizzie.resourceBundle.getString("ContributeView.lblKomi")
               + currentWatchGame.komi;
       setTypeAndKomiToView(currentWatchGame.isRatingGame, currentWatchGame.komi);
-      setRulesToView(currentWatchGame.rules);
+      if (Lizzie.frame.contributeView != null) Lizzie.frame.contributeView.setRuleText(rules);
       if (currentWatchGame.complete) {
         Lizzie.board.getHistory().getGameInfo().setResult(currentWatchGame.gameResult);
         setReultToView(currentWatchGame.gameResult);
@@ -1118,7 +1123,7 @@ public class ContributeEngine {
       }
     } catch (IOException | RuntimeException caught) {
       failure = caught;
-      logSaveFailure(directory, caught);
+      logSaveFailure(directory, caught, contributeGames.stream().anyMatch(game -> game.fromSsh));
     } finally {
       restoreWatchedGame(watched, watchedIndex, moveNumber);
     }
@@ -1145,7 +1150,7 @@ public class ContributeEngine {
     try {
       submitCapturedGame(captureGameSave(game, index), owner);
     } catch (IOException | RuntimeException failure) {
-      logSaveFailure(contributionSaveDirectory(), failure);
+      logSaveFailure(contributionSaveDirectory(), failure, game.fromSsh);
     } finally {
       restoreWatchedGame(watched, watchedIndex, moveNumber);
     }
@@ -1192,7 +1197,7 @@ public class ContributeEngine {
           if (save.version().complete() && save.version().matches(save.game())) {
             save.game().saved = true;
           }
-        }, failure -> logSaveFailure(save.target(), failure));
+        }, failure -> logSaveFailure(save.target(), failure, save.game().fromSsh));
     PendingGameSave pending = new PendingGameSave(save, completion);
     pendingGameSaves.put(save.game(), pending);
     completion.whenComplete((ignored, failure) -> {
@@ -1221,9 +1226,11 @@ public class ContributeEngine {
             failure == null ? writeFailure : failure));
   }
 
-  private static void logSaveFailure(Path target, Throwable failure) {
-    org.slf4j.LoggerFactory.getLogger(ContributeEngine.class)
-        .warn("Could not save contribution SGF: {}", target, failure);
+  private static void logSaveFailure(Path target, Throwable failure, boolean ssh) {
+    var log = org.slf4j.LoggerFactory.getLogger(ContributeEngine.class);
+    // The filename includes the game ID and player names supplied by the engine.
+    if (ssh) log.warn("Could not save SSH contribution SGF ({})", failure.getClass().getSimpleName());
+    else log.warn("Could not save contribution SGF: {}", target, failure);
   }
 
   private String getShortName(String name) {

@@ -363,7 +363,6 @@ public class Leelaz {
   private int engineIncarnationLeaseDepth;
   private final IdentityHashMap<Thread, Integer> engineIncarnationLeaseOwners =
       new IdentityHashMap<>();
-  private final ArrayDeque<String> recentStdoutLines = new ArrayDeque<String>();
   private final ArrayDeque<String> unboundStderrLines = new ArrayDeque<>();
   private volatile EngineStartupDiagnostics.Attempt startupDiagnosticAttempt;
   private EngineStartupDiagnostics.Attempt presentedStartupDiagnosticAttempt;
@@ -2656,7 +2655,7 @@ public class Leelaz {
     synchronized (readBoardGmaLock()) {
       engineStateUnrestored = true;
     }
-    rememberStderr(
+    rememberLocalFailureDetail(
         readerStreamBinding, "ReadBoard GMA recovery confirmation failed: " + detail);
     resetGtpCommandStateAfterRestoreFailure(detail);
   }
@@ -2671,7 +2670,7 @@ public class Leelaz {
       failRestartBootstrapReceipt(receipt, detail, false);
       return;
     }
-    rememberStderr(readerStreamBinding, "Restart board synchronization failed: " + detail);
+    rememberLocalFailureDetail(readerStreamBinding, "Restart board synchronization failed: " + detail);
   }
 
   public void normalQuit() {
@@ -3648,8 +3647,8 @@ public class Leelaz {
       if (detail == null || detail.trim().isEmpty()) {
         detail = failure.getClass().getSimpleName();
       }
-      rememberStderr(binding, "Failed to send GTP command 'quit': " + detail);
-      System.err.println("Failed to send GTP command 'quit': " + detail);
+      reportGtpFailure(binding, "Failed to send SSH GTP command 'quit'",
+          "Failed to send GTP command 'quit': " + detail);
     }
   }
 
@@ -5111,7 +5110,7 @@ public class Leelaz {
       endExclusiveGtpLifecycleTransition(receipt.lifecycleOwner);
     }
     if (reset != null) {
-      rememberStderr(
+      rememberLocalFailureDetail(
           receipt.binding,
           (quarantineEngineState
                   ? "Restart bootstrap failed: "
@@ -5288,6 +5287,7 @@ public class Leelaz {
   private static final class ReaderStreamBinding {
     private final BufferedReader stdout;
     private final BufferedReader stderr;
+    private final ArrayDeque<String> stdoutLines = new ArrayDeque<>();
     private final ArrayDeque<String> stderrLines = new ArrayDeque<>();
     private final EngineReaderOutput readerOutput;
     private volatile OutputStream rawOutput;
@@ -5844,7 +5844,7 @@ public class Leelaz {
       beforeAnalysisDisplayPublicationForTest();
       publication.run();
     } catch (RuntimeException displayFailure) {
-      rememberStderr(
+      rememberLocalFailureDetail(
           readerStreamBinding,
           "Ignored analysis display publication failure: "
               + String.valueOf(displayFailure.getMessage()));
@@ -6663,7 +6663,7 @@ public class Leelaz {
             int patch = ver.length > 2 ? Integer.parseInt(ver[2].split("[^0-9]", 2)[0]) : 0;
             supportRootInfo = major > 1 || (major == 1 && (minor > 16 || (minor == 16 && patch >= 4)));
           } catch (Exception ex) {
-            ex.printStackTrace();
+            EngineReaderOutput.reportReaderException(binding.readerOutput.isSsh(), ex);
             supportMovesOwnership = false;
             supportRootInfo = false;
           }
@@ -7027,7 +7027,7 @@ public class Leelaz {
     isCheckingPda = false;
     cancelParameterRead();
     try {
-      rememberStderr(
+      rememberLocalFailureDetail(
           binding,
           safeFailureDetail(failure, "engine startup post-action failed"));
     } catch (RuntimeException | Error diagnosticFailure) {
@@ -9432,7 +9432,7 @@ public class Leelaz {
           if (TrialDiag.ENABLED && !line.isEmpty()) {
             System.out.println("[katago-stderr] " + diagnosticLine);
           }
-          rememberStderr(binding, diagnosticLine);
+          rememberRecentLine(binding.stderrLines, diagnosticLine);
           String engineId = observationIdentity(binding.launch);
           if (binding.launch != null || readerStreamBinding == binding) {
             EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_FIRST_STDERR);
@@ -10344,7 +10344,7 @@ public class Leelaz {
           return;
         }
         lineInProgress = true;
-        if (!binding.readerOutput.isSsh()) rememberRecentLine(recentStdoutLines, line);
+        if (!binding.readerOutput.isSsh()) rememberRecentLine(binding.stdoutLines, line);
         if (dispatchMoveFocusLine(binding, line)) {
           lineInProgress = false;
           endReaderLine(binding);
@@ -10574,9 +10574,9 @@ public class Leelaz {
       if (disposition == EngineManager.EngineGameRecoveryDisposition.HANDLED) {
         isDownWithError = true;
         if (binding.unsupportedEngineReason != null)
-          return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
+          return buildEngineExitDiagnostic(binding, binding.unsupportedEngineReason);
         if (binding.remoteTransport != null) {
-          rememberStderr(
+          rememberLocalFailureDetail(
               binding,
               "Remote engine-game participant retired; recovery deferred until transaction retirement");
         }
@@ -10585,11 +10585,11 @@ public class Leelaz {
     }
     if (binding.unsupportedEngineReason != null) {
       isDownWithError = true;
-      return buildEngineExitDiagnostic(binding.unsupportedEngineReason);
+      return buildEngineExitDiagnostic(binding, binding.unsupportedEngineReason);
     }
     if (binding.remoteTransport != null && binding.remoteTransport.isRecoveryRequested()) {
       isDownWithError = true;
-      rememberStderr(
+      rememberLocalFailureDetail(
           binding,
           "Remote session retired; rebuilding with a fresh token and full board replay");
       if (Lizzie.engineManager != null) {
@@ -10600,7 +10600,7 @@ public class Leelaz {
     if (!binding.normalExitRequested && !tryRecoverBundledOpenClNativeExit(binding.process)) {
       isDownWithError = true;
       return buildEngineExitDiagnostic(
-          Lizzie.resourceBundle.getString("Leelaz.engineEndUnormalHint"));
+          binding, Lizzie.resourceBundle.getString("Leelaz.engineEndUnormalHint"));
     }
     return null;
   }
@@ -11553,7 +11553,7 @@ public class Leelaz {
         result.complete(admitted >= 0);
       } catch (RuntimeException | Error failure) {
         if (!result.completeExceptionally(failure)) {
-          rememberStderr(readerStreamBinding, "Console PDA output failed: " + failure.getMessage());
+          rememberLocalFailureDetail(readerStreamBinding, "Console PDA output failed: " + failure.getMessage());
         }
         if (failure instanceof Error error) throw error;
       } finally {
@@ -13144,6 +13144,11 @@ public class Leelaz {
 
   private RuntimeException buildSnapshotRestoreResponseFailure(
       String command, Path sgfFile, String responseLine) {
+    if (parsingSshResponse()) {
+      return new ExactSnapshotEngineRestore.Failure(
+          ExactSnapshotEngineRestore.FailureCategory.GTP_ERROR,
+          "SSH engine rejected the snapshot restore command");
+    }
     String line = responseLine == null ? "" : responseLine.trim();
     String detail = line.isEmpty() ? "? snapshot restore failed" : line;
     if (sgfFile != null) {
@@ -13461,6 +13466,11 @@ public class Leelaz {
     }
   }
 
+  // The queue can advance onto another connection; only the physical write owns its error detail.
+  private static void reportCommandDispatchFailure(Throwable failure) {
+    System.err.println("GTP command dispatch failed: " + failure.getClass().getSimpleName());
+  }
+
   private void requestCommandDispatchOffEventThread() {
     eventDispatchCommandRequests.incrementAndGet();
     scheduleCommandDispatchOffEventThread();
@@ -13476,11 +13486,7 @@ public class Leelaz {
           try {
             trySendCommandFromQueueNow();
           } catch (RuntimeException | Error failure) {
-            String detail =
-                "Asynchronous GTP command dispatch failed: "
-                    + safeFailureDetail(failure, failure.getClass().getSimpleName());
-            rememberStderr(readerStreamBinding, detail);
-            System.err.println(detail);
+            reportCommandDispatchFailure(failure);
             if (failure instanceof Error) {
               throw (Error) failure;
             }
@@ -13996,12 +14002,9 @@ public class Leelaz {
           cleanupFailure =
               retireOutstandingResponseCountOnSendFailure(pendingHandler, cleanupFailure);
         }
-        String diagnostic = "Failed to send GTP command '" + commandLine + "': " + detail;
         cleanupFailure =
-            runEngineCleanupStep(
-                cleanupFailure, () -> rememberStderr(outputBinding, diagnostic));
-        cleanupFailure =
-            runEngineCleanupStep(cleanupFailure, () -> System.err.println(diagnostic));
+            runEngineCleanupStep(cleanupFailure,
+                () -> reportGtpFailure(outputBinding, "Failed to send SSH GTP command", commandFailure.getMessage()));
         if (e instanceof Error) {
           // Settlement must wake an exact startup waiter, but broadening this boundary must not
           // downgrade JVM Errors for ordinary command callers that historically observed them.
@@ -14037,11 +14040,11 @@ public class Leelaz {
             AnalysisResourceCoordinator.commandSentForInstance(
                 pendingHandler.loggingEngineId,
                 Purpose.MAIN_BOARD,
-                command);
+                command, outputBinding.readerOutput.isSsh());
           }
         } catch (RuntimeException observationFailure) {
           // Diagnostics are downstream of a completed protocol write and cannot redefine delivery.
-          rememberStderr(
+          rememberLocalFailureDetail(
               outputBinding,
               "Command observation failed after GTP delivery: "
                   + safeFailureDetail(observationFailure, "observation failure"));
@@ -14066,10 +14069,8 @@ public class Leelaz {
       // No physical successor can publish ownership on this unavailable stream.
       applyAnalysisStateMutation(stateMutation);
       String detail = "outputStream unavailable";
-      rememberStderr(
-          outputBinding, "Failed to send GTP command '" + commandLine + "': " + detail);
-      System.err.println("Failed to send GTP command '" + commandLine + "': " + detail);
       RuntimeException commandFailure = buildCommandSendFailure(commandLine, detail, null);
+      reportGtpFailure(outputBinding, "Failed to send SSH GTP command", commandFailure.getMessage());
       Throwable cleanupFailure = commandFailure;
       if (queuedCommand.cancelBeforeOutputWrite(commandFailure)) {
         cleanupFailure =
@@ -14271,10 +14272,10 @@ public class Leelaz {
       }
     }
     String diagnostic =
-        "Invalidated polluted GTP output stream after partial write failure on command '"
-            + commandLine
-            + "'";
-    rememberStderr(binding, diagnostic);
+        isSshIncarnation(binding)
+            ? "Invalidated SSH GTP output stream after partial write failure"
+            : "Invalidated polluted GTP output stream after partial write failure on command '" + commandLine + "'";
+    rememberLocalFailureDetail(binding, diagnostic);
     System.err.println(diagnostic);
   }
 
@@ -15068,7 +15069,7 @@ public class Leelaz {
       }
       try {
         recordAnalysisConditionResponse(handler, line);
-        handler.run();
+        currentReaderStreamBinding().readerOutput.withParsingSource(handler::run);
       } finally {
         handler.queuedCommand.settleAnalysisStateResponse(!currentCommandResponseError);
       }
@@ -15199,7 +15200,7 @@ public class Leelaz {
                 line);
             matchedPendingHandler.queuedCommand.finishPositionResponse();
             recordAnalysisConditionResponse(matchedPendingHandler, line);
-            matchedPendingHandler.run();
+            responseBinding.readerOutput.withParsingSource(matchedPendingHandler::run);
             handlerSettled = true;
           }
         } finally {
@@ -15224,7 +15225,7 @@ public class Leelaz {
     try {
       trySendCommandFromQueue();
     } catch (Exception ex) {
-      ex.printStackTrace();
+      reportCommandDispatchFailure(ex);
     }
   }
 
@@ -15508,7 +15509,8 @@ public class Leelaz {
       return false;
     }
     if (analysisPurpose != null) {
-      AnalysisResourceCoordinator.recordAuxiliaryCommandSent(engineId, analysisPurpose, command);
+      AnalysisResourceCoordinator.recordAuxiliaryCommandSent(
+          engineId, analysisPurpose, command, isSshIncarnation(session.readerBinding));
     }
     return true;
   }
@@ -15542,7 +15544,7 @@ public class Leelaz {
       try {
         trySendCommandFromQueue();
       } catch (RuntimeException ex) {
-        ex.printStackTrace();
+        reportCommandDispatchFailure(ex);
       }
     }
     return true;
@@ -16267,9 +16269,8 @@ public class Leelaz {
       session.restoreFailed = true;
       session.closing = true;
     }
-    String message = "Failed to prepare foreground engine restore: " + detail;
-    rememberStderr(session.readerBinding, message);
-    System.err.println(message);
+    String context = "Failed to prepare foreground engine restore";
+    reportGtpFailure(session.readerBinding, context, context + ": " + detail);
     restoreAfterClosedForegroundLease(session);
     return true;
   }
@@ -16334,9 +16335,8 @@ public class Leelaz {
         session, true, ForegroundAnalysisLeaseFailure.INITIAL_STOP_TIMEOUT)) {
       return;
     }
-    String message = "Failed to stop foreground engine before flash analysis: " + detail;
-    rememberStderr(session.readerBinding, message);
-    System.err.println(message);
+    String context = "Failed to stop foreground engine before flash analysis";
+    reportGtpFailure(session.readerBinding, context, context + ": " + detail);
   }
 
 
@@ -16396,9 +16396,8 @@ public class Leelaz {
       session.restoreFailed = true;
       session.closing = true;
     }
-    String message = "Failed to stop foreground engine before restore: " + detail;
-    rememberStderr(session.readerBinding, message);
-    System.err.println(message);
+    String context = "Failed to stop foreground engine before restore";
+    reportGtpFailure(session.readerBinding, context, context + ": " + detail);
     restoreAfterClosedForegroundLease(session);
   }
 
@@ -16510,9 +16509,8 @@ public class Leelaz {
       recordForegroundAnalysisLeaseFailure(session, ForegroundAnalysisLeaseFailure.RESTORE_FAILED);
       session.restoreFailed = true;
     }
-    String message = "Failed to restore foreground engine after flash analysis: " + detail;
-    rememberStderr(session.readerBinding, message);
-    System.err.println(message);
+    String context = "Failed to restore foreground engine after flash analysis";
+    reportGtpFailure(session.readerBinding, context, context + ": " + detail);
     if (shouldReportForegroundRestoreFailure(session.owner)
         && Lizzie.frame != null
         && Lizzie.resourceBundle != null) {
@@ -16705,7 +16703,7 @@ public class Leelaz {
       try {
         trySendCommandFromQueue();
       } catch (RuntimeException ex) {
-        ex.printStackTrace();
+        reportCommandDispatchFailure(ex);
       }
     } finally {
       finishForegroundRestoreLifecycle();
@@ -17063,7 +17061,7 @@ public class Leelaz {
       return ExclusiveGtpWriteResult.SENT;
     } catch (IOException ex) {
       clearBufferedCommandBytesAfterSendFailure(currentOutputStream);
-      rememberStderr(
+      rememberLocalFailureDetail(
           expectedSession.readerBinding,
           "Failed to send exclusive remote GTP command '" + command + "': " + ex.getMessage());
       return ExclusiveGtpWriteResult.SEND_FAILED;
@@ -17171,7 +17169,7 @@ public class Leelaz {
       }
       return true;
     }
-    session.lineConsumer.accept(line == null ? "" : line);
+    binding.readerOutput.withParsingSource(() -> session.lineConsumer.accept(line == null ? "" : line));
     return true;
   }
 
@@ -17264,6 +17262,17 @@ public class Leelaz {
 
   private boolean isCurrentCommandResponseError() {
     return currentCommandResponseError;
+  }
+
+  private static boolean parsingSshResponse() {
+    EngineReaderOutput source = EngineReaderOutput.parsingSource();
+    return source != null && source.isSsh();
+  }
+
+  private String shareableResponseFailure(String phase) {
+    return parsingSshResponse()
+        ? phase + " (SSH engine rejection)"
+        : phase + ": " + currentCommandResponseLine();
   }
 
   private String currentCommandResponseLine() {
@@ -18637,9 +18646,9 @@ public class Leelaz {
         return;
       }
       String detail = safeFailureDetail(failure, failure.getClass().getSimpleName());
-      String message = context + ": " + detail;
+      String message = isSshIncarnation(restartedBinding) ? context : context + ": " + detail;
       try {
-        rememberStderr(restartedBinding, message);
+        rememberLocalFailureDetail(restartedBinding, message);
       } catch (RuntimeException | Error ignored) {
         // Diagnostics must not reopen an already settled lifecycle owner.
       }
@@ -20097,29 +20106,46 @@ public class Leelaz {
     }
   }
 
-  private void rememberStderr(ReaderStreamBinding binding, String line) {
+  static boolean isSshIncarnation(Object incarnation) {
+    return incarnation instanceof ReaderStreamBinding binding && binding.readerOutput.isSsh();
+  }
+
+  private void reportGtpFailure(ReaderStreamBinding binding, String context, String detail) {
+    String message = isSshIncarnation(binding) ? context : detail;
+    rememberLocalFailureDetail(binding, message);
+    System.err.println(message);
+  }
+
+  private void rememberLocalFailureDetail(ReaderStreamBinding binding, String line) {
+    // Local engines historically include application failures in their diagnostic tail.
+    // For SSH only the stderr reader may record that the peer actually emitted stderr.
+    if (binding == null ? useJavaSSH || EngineThreadPolicy.isExternalSshCommand(engineCommand)
+        : binding.readerOutput.isSsh()) return;
     rememberRecentLine(binding == null ? unboundStderrLines : binding.stderrLines, line);
   }
 
   private String buildEngineExitDiagnostic(String baseMessage) {
+    return buildEngineExitDiagnostic(readerStreamBinding, baseMessage);
+  }
+
+  private String buildEngineExitDiagnostic(ReaderStreamBinding binding, String baseMessage) {
     StringBuilder builder = new StringBuilder(baseMessage == null ? "" : baseMessage);
-    ReaderStreamBinding binding = readerStreamBinding;
     EngineStartupDiagnostic diagnostic =
         binding == null || binding.readerOutput.attempt == null
             ? null
             : binding.readerOutput.attempt.snapshot();
     if (diagnostic != null) return builder.append('\n').append(diagnostic.shareText()).toString();
-    appendExitCode(builder);
+    appendExitCode(builder, binding == null ? process : binding.process);
     appendRecentLines(
         builder, "Recent stderr", binding == null ? unboundStderrLines : binding.stderrLines);
-    if (binding == null || !binding.readerOutput.isSsh()) {
-      appendRecentLines(builder, "Recent stdout", recentStdoutLines);
+    if (binding != null && !binding.readerOutput.isSsh()) {
+      appendRecentLines(builder, "Recent stdout", binding.stdoutLines);
     }
     return builder.toString();
   }
 
-  private void appendExitCode(StringBuilder builder) {
-    if (builder == null || process == null) {
+  private static void appendExitCode(StringBuilder builder, Process process) {
+    if (process == null) {
       return;
     }
     try {
@@ -21019,7 +21045,7 @@ public class Leelaz {
       }
       cancelTimeout();
       if (isCurrentCommandResponseError()) {
-        preparation.fail("parameter command failed: " + currentCommandResponseLine());
+        preparation.fail(shareableResponseFailure("parameter command failed"));
         return;
       }
       success.accept(currentCommandResponseLine());
@@ -22120,7 +22146,7 @@ public class Leelaz {
     if (timeout != null) {
       timeout.cancel();
     }
-    rememberStderr(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
+    rememberLocalFailureDetail(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
     resetGtpCommandStateAfterRestoreFailure(detail);
     invalidateReadBoardTrackingEligibility(
         ReadBoardTrackingEligibilityAdapter.Reason.ENGINE_UNRESTORED);
@@ -22177,7 +22203,7 @@ public class Leelaz {
     if (timeout != null) {
       timeout.cancel();
     }
-    rememberStderr(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
+    rememberLocalFailureDetail(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
     resetGtpCommandStateAfterRestoreFailure(detail);
     invalidateReadBoardTrackingEligibility(
         ReadBoardTrackingEligibilityAdapter.Reason.ENGINE_UNRESTORED);
@@ -22214,7 +22240,7 @@ public class Leelaz {
           barrier, ReadBoardGmaSession.FailureCategory.SEND_FAILED, detail);
       return;
     }
-    rememberStderr(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
+    rememberLocalFailureDetail(readerStreamBinding, "ReadBoard GMA engine restore failed: " + detail);
     resetGtpCommandStateAfterRestoreFailure(detail);
     invalidateReadBoardTrackingEligibility(
         ReadBoardTrackingEligibilityAdapter.Reason.ENGINE_UNRESTORED);
@@ -22595,7 +22621,7 @@ public class Leelaz {
             false,
             authority.binding);
       } catch (RuntimeException ex) {
-        settleFailure(ex.getMessage());
+        onSendFailure(ex);
         return;
       }
       if (mirror != null && !settled.get()) {
@@ -22611,7 +22637,7 @@ public class Leelaz {
               false,
               mirror.binding);
         } catch (RuntimeException ex) {
-          settleFailure(ex.getMessage());
+          onMirrorSendFailure(ex);
           return;
         }
       }
@@ -22629,8 +22655,7 @@ public class Leelaz {
         return;
       }
       if (authority.engine.isCurrentCommandResponseError()) {
-        settleFailure(
-            "board synchronization failed: " + authority.engine.currentCommandResponseLine());
+        settleFailure(rejectedResponse(authority));
         return;
       }
       authorityLegConfirmed.set(true);
@@ -22642,8 +22667,7 @@ public class Leelaz {
         return;
       }
       if (mirror.engine.isCurrentCommandResponseError()) {
-        settleFailure(
-            "board synchronization failed: " + mirror.engine.currentCommandResponseLine());
+        settleFailure(rejectedResponse(mirror));
         return;
       }
       mirrorLegConfirmed.set(true);
@@ -22694,13 +22718,21 @@ public class Leelaz {
       return null;
     }
 
+    // Either endpoint can forward this failure to both engines' diagnostics.
+    private String rejectedResponse(RestoreEndpointDependency source) {
+      return isSshIncarnation(source.binding)
+          ? "board synchronization failed: SSH engine rejected the confirmation"
+          : "board synchronization failed: " + source.engine.currentCommandResponseLine();
+    }
+
     private void onSendFailure(RuntimeException failure) {
-      settleFailure(failure == null ? "board synchronization send failed" : failure.getMessage());
+      settleFailure(failure == null || isSshIncarnation(authority.binding)
+          ? "board synchronization send failed" : failure.getMessage());
     }
 
     private void onMirrorSendFailure(RuntimeException failure) {
-      settleFailure(
-          failure == null ? "board synchronization mirror send failed" : failure.getMessage());
+      settleFailure(failure == null || isSshIncarnation(mirror.binding)
+          ? "board synchronization mirror send failed" : failure.getMessage());
     }
 
     private void settleFailure(String detail) {
@@ -22921,7 +22953,7 @@ public class Leelaz {
           settleFailure(EngineGameCommandFailure.notSent(command));
         }
       } catch (RuntimeException ex) {
-        settleFailure(EngineGameCommandFailure.notSent(command, ex));
+        settleFailure(EngineGameCommandFailure.notSent(command, ex, isSshIncarnation(binding)));
       }
     }
 
@@ -22949,7 +22981,7 @@ public class Leelaz {
     }
 
     private void onCommandSendFailure(RuntimeException failure) {
-      settleFailure(EngineGameCommandFailure.notSent(command, failure));
+      settleFailure(EngineGameCommandFailure.notSent(command, failure, isSshIncarnation(binding)));
     }
 
     private void dispatchFence() {
@@ -22967,7 +22999,7 @@ public class Leelaz {
           settleFailure(EngineGameCommandFailure.notSent(null));
         }
       } catch (RuntimeException ex) {
-        settleFailure(EngineGameCommandFailure.notSent(null, ex));
+        settleFailure(EngineGameCommandFailure.notSent(null, ex, isSshIncarnation(binding)));
       }
     }
 
@@ -22985,7 +23017,7 @@ public class Leelaz {
     }
 
     private void onFenceSendFailure(RuntimeException failure) {
-      settleFailure(EngineGameCommandFailure.notSent(null, failure));
+      settleFailure(EngineGameCommandFailure.notSent(null, failure, isSshIncarnation(binding)));
     }
 
     private void tryComplete() {
@@ -23009,7 +23041,7 @@ public class Leelaz {
       try {
         engine.runWithRestartBootstrapReceipt(restartReceipt, onSuccess);
       } catch (RuntimeException | Error ex) {
-        ex.printStackTrace();
+        EngineReaderOutput.reportException(isSshIncarnation(binding), "command completion callback", ex);
       }
     }
 
@@ -23037,7 +23069,7 @@ public class Leelaz {
         try {
           engine.runWithRestartBootstrapReceipt(restartReceipt, () -> onFailure.accept(detail));
         } catch (RuntimeException | Error ex) {
-          ex.printStackTrace();
+          EngineReaderOutput.reportException(isSshIncarnation(binding), "command failure callback", ex);
         }
       }
     }
@@ -23139,7 +23171,7 @@ public class Leelaz {
       cancelTimeout();
       if (isCurrentCommandResponseError()) {
         failRestore(
-            "restore command failed: " + currentCommandResponseLine(),
+            shareableResponseFailure("restore command failed"),
             ReadBoardGmaSession.FailureCategory.GTP_ERROR);
         return;
       }
