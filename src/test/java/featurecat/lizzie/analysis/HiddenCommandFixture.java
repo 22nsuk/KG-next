@@ -31,6 +31,22 @@ public final class HiddenCommandFixture {
   public static final String DLL_FAILURE_LINE =
       "Could not find C:\\HiddenVault7\\engines\\cudnn64_9.dll";
 
+  /**
+   * Engine output naming libraries KG-next does not require, spelled like runtime families: an API
+   * set carrying a hidden word, and a CUDA runtime of a version no runtime profile names.
+   */
+  public static final List<String> UNCONFIRMED_LIBRARY_LINES =
+      List.of(
+          "Could not find api-ms-win-HiddenVault7-l1-1-0.dll", "cudart64_93179.dll was not found");
+
+  /** The names in {@link #UNCONFIRMED_LIBRARY_LINES}, as the output parser reports them. */
+  public static final List<String> UNCONFIRMED_LIBRARIES =
+      List.of("api-ms-win-HiddenVault7-l1-1-0.dll", "cudart64_93179.dll");
+
+  /** Parts of {@link #UNCONFIRMED_LIBRARIES} no shared hidden-command record may contain. */
+  public static final List<String> UNCONFIRMED_LIBRARY_FRAGMENTS =
+      List.of("api-ms-win", "cudart64_");
+
   /** The JDK's own failure for starting {@link #ARGV} in {@link #WORKING_DIRECTORY}. */
   public static IOException processCreateFailure() {
     return launchFailure(ARGV, WORKING_DIRECTORY);
