@@ -4,12 +4,14 @@ import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.logging.PersistenceSanitizer;
-import featurecat.lizzie.util.EngineThreadPolicy;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
+import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -35,6 +37,7 @@ import java.lang.reflect.InvocationTargetException;
 import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -917,11 +920,48 @@ public class EngineFailedMessage extends JDialog {
     if (!allowedByCaller) return null;
     // Bind the permission check and batch contents to the same failed command.
     List<String> arguments = commands == null ? List.of() : new ArrayList<>(commands);
-    if (EngineThreadPolicy.isRemoteManaged(arguments)
-        || EngineThreadPolicy.isRemoteManaged(fallbackCommand, false)) {
+    List<String> configured =
+        Utils.splitCommand(CommandLaunchHelper.decodeSavedCommand(fallbackCommand));
+    if ((arguments.isEmpty() && configured.isEmpty())
+        || unsafeForDiagnosticBatch(arguments)
+        || unsafeForDiagnosticBatch(configured)) {
       return null;
     }
     return buildDiagnosticCommand(arguments, fallbackCommand);
+  }
+
+  private static boolean unsafeForDiagnosticBatch(List<String> arguments) {
+    if (arguments.isEmpty()) return false;
+    String program = arguments.get(0);
+    if (program == null
+        || program.isBlank()
+        || RemoteComputeConfig.isRemoteComputeEngineCommand(program)
+        || CommandLaunchHelper.isExternalSshExecutable(program)) {
+      return true;
+    }
+    // A launcher can take a program as an argument (wsl --exec) or as command text (sh -c).
+    if (CommandLaunchHelper.isIndirectLauncher(program)) {
+      for (int i = 1; i < arguments.size(); i++) {
+        String argument = arguments.get(i);
+        if (CommandLaunchHelper.isExternalSshExecutable(argument)
+            || Utils.splitCommand(argument).stream()
+                .anyMatch(CommandLaunchHelper::isExternalSshExecutable)) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // A missing pair of quotes can split the executable path itself. Inspect path fragments
+    // only in the command prefix, before an explicit executable suffix or the engine's options.
+    for (String token : arguments) {
+      if (token == null || token.startsWith("-")) break;
+      if ((token.contains("\\") || token.contains("/"))
+          && CommandLaunchHelper.isExternalSshExecutable(token)) {
+        return true;
+      }
+      if (token.toLowerCase(Locale.ROOT).endsWith(".exe")) break;
+    }
+    return false;
   }
 
   static String buildDiagnosticCommand(List<String> commands, String fallbackCommand) {

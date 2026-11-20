@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -12,9 +13,11 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtFailureKind;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtInstallStatus;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
+import featurecat.lizzie.util.Utils;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
@@ -45,10 +48,32 @@ import org.junit.jupiter.api.Test;
 
 class EngineFailedMessageLayoutTest {
   private record CommandCase(
-      List<String> arguments, String command, boolean requested, String expected) {}
+      List<String> arguments, String command, boolean requested, String expected) {
+    static CommandCase configured(String command, String expected) {
+      return new CommandCase(
+          CommandLaunchHelper.prepare(Utils.splitCommand(command)).getCommandParts(),
+          command, true, expected);
+    }
+  }
 
   private static List<CommandCase> cmdDiagnosticCases() {
+    String splitPlink = "C:\\Program Files\\PuTTY\\PLINK.EXE host.invalid OPAQUE_ARGUMENT";
+    String wslSsh = "wsl.exe --exec ssh host.invalid OPAQUE_ARGUMENT";
     return List.of(
+        CommandCase.configured(splitPlink, null),
+        CommandCase.configured(wslSsh, null),
+        new CommandCase(Utils.splitCommand(splitPlink), "katago gtp", true, null),
+        new CommandCase(null, wslSsh, true, null),
+        new CommandCase(List.of("katago", "gtp"), splitPlink, true, null),
+        new CommandCase(
+            List.of("katago", "gtp"), "encryption||" + Utils.doEncrypt2(wslSsh), true, null),
+        new CommandCase(null, "remote-compute://custom-websocket", true, null),
+        new CommandCase(
+            List.of("wsl.exe", "-d", "Ubuntu", "-e", "/usr/bin/ssh", "host.invalid"),
+            "katago gtp", true, null),
+        new CommandCase(null, "wsl.exe --exec katago gtp", true, "wsl.exe --exec katago gtp"),
+        CommandCase.configured("wsl.exe sh -c 'ssh host.invalid OPAQUE_ARGUMENT'", null),
+        new CommandCase(null, "katago gtp -model models/ssh", true, "katago gtp -model models/ssh"),
         new CommandCase(
             List.of("ssh", "host.invalid", "OPAQUE_SSH_ARGUMENT"), "katago gtp", true, null),
         new CommandCase(
@@ -72,13 +97,13 @@ class EngineFailedMessageLayoutTest {
 
   @Test
   void cmdDiagnosticCommandsExcludeSshTransports() {
-    for (CommandCase example : cmdDiagnosticCases()) {
-      assertEquals(
-          example.expected(),
-          EngineFailedMessage.prepareCmdDiagnosticCommand(
-              example.arguments(), example.command(), example.requested()),
-          example.toString());
-    }
+    assertAll(
+        cmdDiagnosticCases().stream()
+            .map(example -> () -> assertEquals(
+                example.expected(),
+                EngineFailedMessage.prepareCmdDiagnosticCommand(
+                    example.arguments(), example.command(), example.requested()),
+                example.toString())));
   }
 
   @Test
