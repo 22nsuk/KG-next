@@ -68,6 +68,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -336,7 +337,7 @@ public final class KataGoRuntimeHelper {
   private static volatile boolean benchmarkEngineSyncSuppressed = false;
   private static volatile boolean appleAutoOptimizeRunning = false;
   private static volatile AppleSiliconHardwareProbe.HardwareProfile cachedAppleHardwareProfile;
-  private static final Object NVIDIA_DRIVER_DETECTION_LOCK = new Object();
+  private static final ReentrantLock NVIDIA_DRIVER_DETECTION_LOCK = new ReentrantLock();
   private static final ReentrantLock CUDA_COMPATIBILITY_PROBE_LOCK = new ReentrantLock();
   private static final Object OPENCL_TUNING_CACHE_LOCK = new Object();
   private static volatile boolean nvidiaDriverDetectionComplete = false;
@@ -1456,7 +1457,14 @@ public final class KataGoRuntimeHelper {
       return;
     }
 
-    String driverVersion = resolveNvidiaDriverVersion();
+    String driverVersion;
+    try {
+      driverVersion = resolveNvidiaDriverVersion(cancelled);
+    } catch (CancellationException cancellation) {
+      InterruptedIOException failure = new InterruptedIOException(cancellation.getMessage());
+      failure.initCause(cancellation);
+      throw failure;
+    }
     NvidiaGpuDetector.CudaCompatibility compatibility =
         cudaDriverCompatibility(enginePath, driverVersion);
     if (compatibility == NvidiaGpuDetector.CudaCompatibility.SUPPORTED) {
@@ -1870,6 +1878,13 @@ public final class KataGoRuntimeHelper {
 
   public static List<String> prepareBundledLaunchCommand(
       List<String> originalCommand, Path enginePath, LaunchPurpose purpose) {
+    return prepareBundledLaunchCommand(originalCommand, enginePath, purpose, () -> false);
+  }
+
+  public static List<String> prepareBundledLaunchCommand(
+      List<String> originalCommand, Path enginePath, LaunchPurpose purpose,
+      BooleanSupplier cancelled) {
+    throwIfLaunchPreparationCancelled(cancelled);
     if (originalCommand == null) {
       return null;
     }
@@ -1899,7 +1914,8 @@ public final class KataGoRuntimeHelper {
       }
     }
 
-    boolean openClFp32Compatibility = shouldUseOpenClFp32Compatibility(launchCommand, enginePath);
+    boolean openClFp32Compatibility =
+        shouldUseOpenClFp32Compatibility(launchCommand, enginePath, cancelled);
     Path homeDataDir =
         openClFp32Compatibility ? getOpenClFp32HomeDataDir() : getBundledHomeDataDir();
     if (homeDataDir == null) {
@@ -5320,6 +5336,17 @@ public final class KataGoRuntimeHelper {
       int maxVisits,
       boolean isBatchAnalysisMode,
       boolean wholeGameThroughput) {
+    return optimizeAnalysisEngineCommand(
+        engineCommand, maxVisits, isBatchAnalysisMode, wholeGameThroughput, () -> false);
+  }
+
+  public static String optimizeAnalysisEngineCommand(
+      String engineCommand,
+      int maxVisits,
+      boolean isBatchAnalysisMode,
+      boolean wholeGameThroughput,
+      BooleanSupplier cancelled) {
+    throwIfLaunchPreparationCancelled(cancelled);
     if (engineCommand == null || engineCommand.trim().isEmpty()) {
       return engineCommand;
     }
@@ -5339,7 +5366,8 @@ public final class KataGoRuntimeHelper {
     }
 
     if (wholeGameThroughput && looksLikeKataGoCommand(engineCommand)) {
-      List<String> measured = MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand);
+      List<String> measured =
+          MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand, cancelled);
       if (measured != commandParts) return buildCommandLine(measured);
       AnalysisThreadProfile profile = resolveWholeGameAnalysisProfile();
       if (!hasAnalysisThreadOverride) {
@@ -5665,14 +5693,15 @@ public final class KataGoRuntimeHelper {
     }
   }
 
-  private static boolean shouldUseOpenClFp32Compatibility(List<String> command, Path enginePath) {
+  private static boolean shouldUseOpenClFp32Compatibility(
+      List<String> command, Path enginePath, BooleanSupplier cancelled) {
     if (!isBundledOpenClPath(enginePath)) {
       return false;
     }
     if ("false".equalsIgnoreCase(findOverrideConfigValue(command, "openclUseFP16"))) {
       return true;
     }
-    String driverVersion = resolveNvidiaDriverVersion();
+    String driverVersion = resolveNvidiaDriverVersion(cancelled);
     Path marker = getOpenClFp32CompatibilityMarker();
     if (marker == null || !Files.isRegularFile(marker)) {
       return false;
@@ -5689,6 +5718,11 @@ public final class KataGoRuntimeHelper {
   }
 
   private static String resolveNvidiaDriverVersion() {
+    return resolveNvidiaDriverVersion(() -> false);
+  }
+
+  private static String resolveNvidiaDriverVersion(BooleanSupplier cancelled) {
+    throwIfLaunchPreparationCancelled(cancelled);
     String configured = System.getProperty(OPENCL_NVIDIA_DRIVER_VERSION_PROPERTY, "").trim();
     if (!configured.isEmpty()) {
       return "none".equalsIgnoreCase(configured) ? "" : normalizeDriverVersion(configured);
@@ -5696,9 +5730,19 @@ public final class KataGoRuntimeHelper {
     if (nvidiaDriverDetectionComplete) {
       return detectedNvidiaDriverVersion;
     }
-    synchronized (NVIDIA_DRIVER_DETECTION_LOCK) {
+    try {
+      do {
+        throwIfLaunchPreparationCancelled(cancelled);
+      } while (!NVIDIA_DRIVER_DETECTION_LOCK.tryLock(100, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancellationException("NVIDIA driver detection interrupted");
+    }
+    try {
+      throwIfLaunchPreparationCancelled(cancelled);
       if (!nvidiaDriverDetectionComplete) {
-        NvidiaGpuDetector.DetectionResult detection = NvidiaGpuDetector.detectBestGpu();
+        NvidiaGpuDetector.DetectionResult detection = NvidiaGpuDetector.detectBestGpu(cancelled);
+        throwIfLaunchPreparationCancelled(cancelled);
         detectedNvidiaDriverVersion =
             detection != null && detection.bestGpu != null
                 ? normalizeDriverVersion(detection.bestGpu.driverVersion)
@@ -5706,7 +5750,14 @@ public final class KataGoRuntimeHelper {
         nvidiaDriverDetectionComplete = true;
       }
       return detectedNvidiaDriverVersion;
+    } finally {
+      NVIDIA_DRIVER_DETECTION_LOCK.unlock();
     }
+  }
+
+  private static void throwIfLaunchPreparationCancelled(BooleanSupplier cancelled) {
+    if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())
+      throw new CancellationException("Engine launch preparation cancelled");
   }
 
   private static String normalizeDriverVersion(String driverVersion) {

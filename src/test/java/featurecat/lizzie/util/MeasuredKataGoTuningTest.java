@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.SwingUtilities;
 import org.json.JSONArray;
@@ -144,6 +145,29 @@ class MeasuredKataGoTuningTest {
       MeasuredKataGoTuning.restore(env.entry.id);
       assertTrue(
           EngineThreadPolicy.findSavedEntry(env.entry.id).commands.endsWith("numSearchThreads=32"));
+    }
+  }
+
+  @Test
+  void cancelledVerificationDoesNotFallBackOrChangeTheSavedProfile() throws Exception {
+    try (Environment env = new Environment()) {
+      MeasuredKataGoTuning.apply(
+          MeasuredKataGoTuning.review(env.entry.id, env.report(Scene.WHOLE_GAME), VERIFIED),
+          VERIFIED);
+      EngineData entry = EngineThreadPolicy.findSavedEntry(env.entry.id);
+      String saved = entry.threadPolicy.toString();
+      List<String> original = List.of("katago", "analysis");
+      assertThrows(
+          CancellationException.class,
+          () -> MeasuredKataGoTuning.applyOverlay(
+              original, entry, env.analysis, Scene.WHOLE_GAME,
+              (target, command, report) -> { throw new CancellationException("shutdown"); }));
+      assertEquals(saved, EngineThreadPolicy.findSavedEntry(env.entry.id).threadPolicy.toString());
+      assertSame(
+          original,
+          MeasuredKataGoTuning.applyOverlay(
+              original, entry, env.analysis, Scene.WHOLE_GAME,
+              (target, command, report) -> { throw new IOException("stale fingerprint"); }));
     }
   }
 

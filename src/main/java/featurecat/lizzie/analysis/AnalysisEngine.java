@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -54,6 +55,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -318,12 +320,6 @@ public class AnalysisEngine {
             : (Lizzie.frame.isBatchAnalysisMode
                 ? Math.max(2, Lizzie.config.batchAnalysisPlayouts)
                 : Lizzie.config.analysisMaxVisits + 1);
-    engineCommand =
-        KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
-            resolveConfiguredAnalysisEngineCommand(commandOverride),
-            maxVisits,
-            Lizzie.frame.isBatchAnalysisMode,
-            this.workload == Workload.WHOLE_GAME);
     RemoteEngineData remoteData = Utils.getAnalysisEngineRemoteEngineData();
     this.useJavaSSH = remoteData.useJavaSSH;
     this.ip = remoteData.ip;
@@ -332,12 +328,16 @@ public class AnalysisEngine {
     this.password = remoteData.password;
     this.useKeyGen = remoteData.useKeyGen;
     this.keyGenPath = remoteData.keyGenPath;
-    if (RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand)) {
-      this.useJavaSSH = false;
-      this.useRemoteCompute = true;
-    }
-
-    startEngine(engineCommand);
+    // Measured-profile validation can launch nvidia-smi while preparing the command.
+    // Reserve startup ownership before that work, not just before the engine itself.
+    startEngine(
+        () -> KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
+            resolveConfiguredAnalysisEngineCommand(commandOverride),
+            maxVisits,
+            Lizzie.frame.isBatchAnalysisMode,
+            this.workload == Workload.WHOLE_GAME,
+            () -> shutdownRequested),
+        ProcessBuilder::start);
   }
 
   private static String resolveConfiguredAnalysisEngineCommand(String commandOverride) {
@@ -427,6 +427,10 @@ public class AnalysisEngine {
   }
 
   void startEngine(String engineCommand, StartupFactory factory) {
+    startEngine(() -> engineCommand, factory);
+  }
+
+  private void startEngine(Supplier<String> prepareCommand, StartupFactory factory) {
     Startup startup;
     synchronized (ACTIVE_READER_RESOURCES) {
       if (resourcesShuttingDown || shutdownRequested) {
@@ -440,8 +444,14 @@ public class AnalysisEngine {
     }
     boolean completed = false;
     try {
-      startEngineInternal(engineCommand, factory, startup);
+      String command = prepareCommand.get();
+      if (shutdownRequested) return;
+      startEngineInternal(command, factory, startup);
       completed = true;
+    } catch (CancellationException cancelled) {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
     } finally {
       startup.finish(completed);
     }
@@ -563,7 +573,8 @@ public class AnalysisEngine {
       if (shutdownRequested) return;
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
-              commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
+              commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS,
+              () -> shutdownRequested);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);

@@ -3185,6 +3185,45 @@ public class KataGoRuntimeHelperTest {
   }
 
   @Test
+  void cudaProbeCleanupKeepsTheOriginalChildIdentityAfterItsExit() throws Exception {
+    Path otherRoot = Files.createTempDirectory("katago-unrelated-test-child");
+    Process other = new ProcessBuilder(
+        Path.of(System.getProperty("java.home"), "bin", "java").toString(),
+        "-cp", System.getProperty("java.class.path"),
+        CudaProbeChild.class.getName(), otherRoot.toString()).start();
+    try {
+      withLiveCudaProbe(probe -> {
+        AtomicBoolean cancelled = new AtomicBoolean();
+        FutureTask<Void> result = new FutureTask<>(() -> {
+          probe.prepare(cancelled::get);
+          return null;
+        });
+        Thread worker = new Thread(result, "cuda-cleanup-identity-test");
+        try {
+          worker.start();
+          ProcessHandle original = probe.awaitProcess();
+          cancelled.set(true);
+          ExecutionException failure =
+              assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
+          assertInstanceOf(InterruptedIOException.class, failure.getCause());
+          assertFalse(original.isAlive());
+          // Model a stale/reused PID with a second child owned by this test, never an external job.
+          Files.writeString(probe.started, Long.toString(other.pid()));
+        } finally {
+          cancelled.set(true);
+          worker.interrupt();
+          worker.join(5000);
+          assertFalse(worker.isAlive());
+        }
+      });
+      assertTrue(other.isAlive(), "fixture cleanup resolved a stale PID instead of its own handle");
+    } finally {
+      other.destroyForcibly();
+      assertTrue(other.waitFor(5, TimeUnit.SECONDS));
+    }
+  }
+
+  @Test
   void cancelledCudaPreflightLockWaitLeavesTheActiveProbeAndItsCacheIntact() throws Exception {
     withLiveCudaProbe(probe -> {
       AtomicBoolean cancelled = new AtomicBoolean();
@@ -3276,12 +3315,10 @@ public class KataGoRuntimeHelperTest {
     } finally {
       restoreProperty(driverKey, previousDriver);
       Files.writeString(probe.release, "cleanup");
-      if (Files.isRegularFile(probe.started) && Files.size(probe.started) > 0) {
-        var process = ProcessHandle.of(Long.parseLong(Files.readString(probe.started)));
-        if (process.isPresent() && process.get().isAlive()) {
-          process.get().destroyForcibly();
-          process.get().onExit().get(5, TimeUnit.SECONDS);
-        }
+      // Retain the child's identity from while it was alive; its PID may now belong to another job.
+      if (probe.process != null && probe.process.isAlive()) {
+        probe.process.destroyForcibly();
+        probe.process.onExit().get(5, TimeUnit.SECONDS);
       }
     }
   }
@@ -3298,6 +3335,7 @@ public class KataGoRuntimeHelperTest {
   private static final class LiveCudaProbe {
     final Path engine, started, release;
     final List<String> command;
+    ProcessHandle process;
 
     LiveCudaProbe(Path root, Path engine, Path model, Path config) {
       this.engine = engine;
@@ -3316,7 +3354,9 @@ public class KataGoRuntimeHelperTest {
       while ((!Files.isRegularFile(started) || Files.size(started) == 0)
           && System.nanoTime() < deadline) Thread.sleep(10);
       assertTrue(Files.isRegularFile(started), "preflight did not actually launch its inference child");
-      return ProcessHandle.of(Long.parseLong(Files.readString(started))).orElseThrow();
+      process = ProcessHandle.of(Long.parseLong(Files.readString(started))).orElseThrow();
+      assertTrue(process.isAlive(), "inference child exited before its test release");
+      return process;
     }
   }
 
@@ -3864,7 +3904,7 @@ public class KataGoRuntimeHelperTest {
             + "\n");
   }
 
-  private static void touchRequiredCuda12_8Dlls(Path directory) throws IOException {
+  static void touchRequiredCuda12_8Dlls(Path directory) throws IOException {
     touchCommonCuda12Dlls(directory);
     touch(directory.resolve("cudnn64_9.dll"));
     touch(directory.resolve("z.dll"));

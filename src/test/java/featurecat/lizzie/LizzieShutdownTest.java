@@ -28,10 +28,18 @@ import featurecat.lizzie.enginegame.LifecycleBinding;
 import featurecat.lizzie.enginegame.ParticipantBinding;
 import featurecat.lizzie.enginegame.StartFailure;
 import featurecat.lizzie.enginegame.StartObserver;
+import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.MeasuredKataGoTuning;
+import featurecat.lizzie.util.NvidiaGpuDiscoveryFixture;
+import featurecat.lizzie.util.Utils;
+import featurecat.lizzie.util.katago.tuning.KataGoMeasuredFingerprint;
+import featurecat.lizzie.util.katago.tuning.KataGoMeasuredReport;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InterruptedIOException;
@@ -44,6 +52,7 @@ import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -57,6 +66,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -69,6 +79,102 @@ class LizzieShutdownTest {
       new EngineParticipantIdentity("shutdown-first", "");
   private static final EngineParticipantIdentity SECOND =
       new EngineParticipantIdentity("shutdown-second", "");
+
+  @Test
+  void exitDuringWholeGameProfileGpuDetectionWaitsForTheUnattachedConstructor(@TempDir Path root)
+      throws Exception {
+    NvidiaGpuDiscoveryFixture.runFork(getClass(), "whole-game-profile", root);
+  }
+
+  static void runGpuScenario(String scenario, Path root) throws Exception {
+    assertEquals("whole-game-profile", scenario);
+    try (Harness harness = Harness.open();
+        NvidiaGpuDiscoveryFixture fixture = new NvidiaGpuDiscoveryFixture(root)) {
+      Path executable = Files.writeString(root.resolve("katago"),
+          "#!/bin/sh\n: > \"$(dirname \"$0\")/main.started\"\n");
+      assertTrue(executable.toFile().setExecutable(true));
+      Path model = Files.writeString(root.resolve("model.bin.gz"), "measured model");
+      Path config = Files.writeString(root.resolve("analysis.cfg"), "numAnalysisThreads = 8\n");
+      String command = "\"" + executable + "\" analysis -model \"" + model + "\" -config \"" + config + "\"";
+      harness.config.config = new JSONObject();
+      harness.config.leelazConfig = new JSONObject();
+      harness.config.analysisReuseCurrentEngine = false;
+      harness.config.analysisEngineCommand = command;
+      EngineData entry = new EngineData();
+      entry.id = "whole-game-gpu-shutdown";
+      entry.name = "Measured local engine";
+      entry.commands = command;
+      JSONObject report = wholeGameReport(entry);
+      assertTrue(KataGoMeasuredReport.parse(report).assess().eligible());
+      entry.threadPolicy = new JSONObject().put(MeasuredKataGoTuning.KEY,
+          new JSONObject().put("whole-game", new JSONObject().put("schemaVersion", 1)
+              .put("command", command).put("report", report)));
+      harness.config.leelazConfig.put("engine-settings-list",
+          new JSONArray().put(new JSONObject().put("id", entry.id).put("name", entry.name)
+              .put("command", entry.commands).put("threadPolicy", entry.threadPolicy)));
+      JSONObject savedProfile = new JSONObject(entry.threadPolicy.toString());
+      FutureTask<AnalysisEngine> startup = new FutureTask<>(
+          () -> new AnalysisEngine(false, AnalysisEngine.Workload.WHOLE_GAME, 5000));
+      Thread starter = new Thread(startup, "whole-game-profile-constructor");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      AtomicBoolean queryAliveAtExit = new AtomicBoolean(true);
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        ProcessHandle query = fixture.awaitQuery();
+        assertNull(harness.frame.analysisEngine, "constructor was already attached to the frame");
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(code -> {
+          queryAliveAtExit.set(query.isAlive());
+          exited.complete(code);
+        }));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "GPU cancellation blocked the EDT");
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertFalse(queryAliveAtExit.get(), "app exit completed before the GPU query child exited");
+        AnalysisEngine analysis = startup.get(5, TimeUnit.SECONDS);
+        assertFalse(analysis.isLoaded());
+        assertNull(analysis.process);
+        assertNull(analysis.startupDiagnosticAttempt());
+        assertFalse(Files.exists(root.resolve("main.started")));
+        assertEquals(1, fixture.queryCount(), "shutdown started another GPU query");
+        assertTrue(savedProfile.similar(Utils.getEngineData().get(0).threadPolicy));
+      } finally {
+        fixture.release();
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        starter.interrupt();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        cleanup.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  private static JSONObject wholeGameReport(EngineData entry) throws Exception {
+    JSONObject fingerprint = KataGoMeasuredFingerprint.capture(
+        KataGoAutoSetupHelper.inspectSavedEngine(entry), NvidiaGpuDiscoveryFixture.gpu(),
+        Utils.splitCommand(KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
+            entry.commands, 5000, false, false)));
+    JSONArray runs = new JSONArray();
+    for (int round = 1; round <= 3; round++) {
+      for (int member = 0; member < 2; member++) {
+        boolean baseline = (round + member) % 2 == 1;
+        runs.put(new JSONObject().put("profile", baseline ? "baseline" : "candidate")
+            .put("round", round).put("phase", "warm").put("seconds", baseline ? 10 : 8)
+            .put("responseSeconds", .05).put("edtP95Seconds", .01)
+            .put("maxMemoryMiB", 2000).put("maxEngineProcesses", 1)
+            .put("rootVisitsByTurn", new JSONArray(List.of(5000, 5000))));
+      }
+    }
+    return new JSONObject().put("schemaVersion", 1).put("scene", "whole-game")
+        .put("measurementMode", "application").put("fingerprint", fingerprint)
+        .put("fixtureSha256", "d".repeat(64)).put("budget", 5000).put("positions", 2)
+        .put("metricScope", "totalGpu")
+        .put("baselineParameters", new JSONObject().put("numAnalysisThreads", 8)
+            .put("numSearchThreadsPerAnalysisThread", 2).put("nnMaxBatchSize", 16))
+        .put("candidateParameters", new JSONObject().put("numAnalysisThreads", 12)
+            .put("numSearchThreadsPerAnalysisThread", 2).put("nnMaxBatchSize", 32))
+        .put("runs", runs);
+  }
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
