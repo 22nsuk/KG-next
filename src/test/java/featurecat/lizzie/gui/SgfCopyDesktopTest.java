@@ -394,7 +394,6 @@ class SgfCopyDesktopTest {
           blocked.awaitStarted();
           edt(() -> { Lizzie.frame.copySgf(); return null; });
           writeNative(input, output, text);
-          assertEquals(text, clipboard());
           blocked.release();
           queue.pending().get(20, TimeUnit.SECONDS);
           assertEquals(text, clipboard(), "a native copy outside this JVM must win");
@@ -408,6 +407,9 @@ class SgfCopyDesktopTest {
     }
   }
 
+  // Returns once this JVM reads the other process's text. X11 tells the previous owner about a
+  // new clipboard owner asynchronously; until AWT handles that SelectionClear it still serves
+  // its own old contents, so an immediate read can see the previous SGF copy.
   private static void writeNative(PrintWriter input, BufferedReader output, String text)
       throws Exception {
     input.println(text);
@@ -415,6 +417,13 @@ class SgfCopyDesktopTest {
       try { return output.readLine(); }
       catch (java.io.IOException failure) { throw new java.io.UncheckedIOException(failure); }
     }).get(10, TimeUnit.SECONDS));
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    String observed = clipboard();
+    while (!text.equals(observed) && System.nanoTime() < deadline) {
+      Thread.sleep(20);
+      observed = clipboard();
+    }
+    assertEquals(text, observed, "this JVM did not observe the native clipboard owner");
   }
 
   private static JMenuItem findMenuItem(Component[] components, String label) {
