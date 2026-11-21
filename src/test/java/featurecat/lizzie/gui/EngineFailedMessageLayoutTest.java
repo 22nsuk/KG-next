@@ -146,8 +146,8 @@ class EngineFailedMessageLayoutTest {
       AtomicReference<EngineFailedMessage> created = new AtomicReference<>();
       try {
         EngineFailedMessage.showDialog(
-            example.arguments(), example.command(), "Controlled startup failure",
-            example.requested(), true, false, false,
+            example.arguments(), example.command(), EngineCommandVisibility.VISIBLE,
+            "Controlled startup failure", example.requested(), true, false, false, null,
             dialog -> {
               created.set(dialog);
               JButton button = findButtonByText(dialog,
