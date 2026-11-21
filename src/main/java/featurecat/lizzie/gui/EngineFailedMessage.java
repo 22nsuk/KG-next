@@ -9,7 +9,10 @@ import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.logging.PersistenceSanitizer;
+import featurecat.lizzie.util.CommandLaunchHelper;
+import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
+import featurecat.lizzie.util.Utils;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Dimension;
@@ -26,15 +29,17 @@ import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
-import java.io.BufferedWriter;
-import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.OutputStreamWriter;
 import java.lang.reflect.InvocationTargetException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.text.MessageFormat;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.imageio.ImageIO;
@@ -69,6 +74,35 @@ public class EngineFailedMessage extends JDialog {
   private static final int MAX_SUMMARY_FINDINGS = 16;
   private static final int MAX_SUMMARY_FIELD_BYTES = 1024;
   private static final Pattern CONTROL_CHARACTERS = Pattern.compile("[\\p{Cc}\\p{Cf}]+");
+  // CMD diagnostics support a direct native engine, not a second command interpreter. Reuse the
+  // application's launcher classification, and reject these additional command forwarders without
+  // interpreting their options. This does not inspect what an arbitrary native program does.
+  private static final Set<String> CMD_DIAGNOSTIC_FORWARDERS =
+      Set.of(
+          "slogin", "autossh", "mosh", "dbclient", "sshpass", "rsh", "rlogin",
+          "dash", "ash", "ksh", "mksh", "oksh", "yash", "csh", "tcsh",
+          "wslg", "wt", "conhost", "runas", "psexec", "psexec64", "winpty", "mintty",
+          "cygstart", "busybox", "nerdctl", "kubectl", "oc", "lxc", "firejail", "bwrap",
+          "proot", "chroot", "nsenter", "unshare", "systemd-run", "toolbox", "distrobox",
+          "gcloud", "az", "aws", "nix", "nix-shell", "conda", "mamba", "micromamba", "pixi",
+          "poetry", "pipenv", "pipx", "uv", "uvx", "npx", "bunx", "pnpm", "yarn", "npm",
+          "sudo", "doas", "su", "runuser", "pkexec", "sg", "gosu", "su-exec", "setpriv",
+          "timeout", "nice", "ionice", "stdbuf", "setsid", "taskset", "chrt", "numactl",
+          "cpulimit", "xargs", "watch", "script", "unbuffer", "expect", "rlwrap", "tmux",
+          "screen", "dtach", "flock", "caffeinate", "faketime", "strace", "ltrace", "gdb",
+          "valgrind", "torsocks", "proxychains", "proxychains4", "tsocks", "ssh-agent", "arch",
+          "builtin", "eval", "exec", "command");
+  private static final Set<String> CMD_INTERNAL_COMMANDS =
+      Set.of(
+          "assoc", "break", "call", "cd", "chdir", "cls", "color", "copy", "date", "del", "dir",
+          "dpath", "echo", "endlocal", "erase", "exit", "for", "ftype", "goto", "if", "keys",
+          "md", "mkdir", "mklink", "move", "path", "pause", "popd", "prompt", "pushd", "rd",
+          "rem", "ren", "rename", "rmdir", "set", "setlocal", "shift", "start", "time", "title",
+          "type", "ver", "verify", "vol");
+  private static final Pattern WSL_DISTRIBUTION_LAUNCHER =
+      Pattern.compile(
+          "(?:ubuntu|debian|kali|opensuse|sles|suse|alpine|fedoraremix|oraclelinux|almalinux|rockylinux|archlinux).*",
+          Pattern.CASE_INSENSITIVE);
 
   private final TensorRtRepairContext repairContext;
   private final JButton tensorRtRepairButton;
@@ -157,18 +191,31 @@ public class EngineFailedMessage extends JDialog {
       boolean modal,
       TensorRtRepairContext repairContext,
       Consumer<EngineFailedMessage> onCreated) {
+    showDialog(
+        () -> new EngineFailedMessage(commands, command, commandVisibility, message,
+            canUseCmdDignostic, isGtpEngine, restartContribute, repairContext),
+        modal, onCreated);
+  }
+
+  public static void showContributionFailure(
+      List<String> commands, String configuredCommand, String message, ExportSanitizer sanitizer,
+      boolean allowCmd, Consumer<EngineFailedMessage> onCreated) {
+    // Contribution settings never decode a hidden command. Keep the export-sanitized presentation
+    // separate from the configured executable used to decide whether CMD replay is supported.
+    showDialog(
+        () -> new EngineFailedMessage(
+            commands, sanitizer.sanitize(configuredCommand), EngineCommandVisibility.VISIBLE,
+            sanitizer.sanitize(message),
+            cmdDiagnosticBatchLine(commands, configuredCommand, EngineCommandVisibility.VISIBLE, allowCmd),
+            false, true, null),
+        true, onCreated);
+  }
+
+  private static void showDialog(
+      Supplier<EngineFailedMessage> create, boolean modal, Consumer<EngineFailedMessage> onCreated) {
     runOnEventDispatchThreadAndWait(
         () -> {
-          EngineFailedMessage dialog =
-              new EngineFailedMessage(
-                  commands,
-                  command,
-                  commandVisibility,
-                  message,
-                  canUseCmdDignostic,
-                  isGtpEngine,
-                  restartContribute,
-                  repairContext);
+          EngineFailedMessage dialog = create.get();
           if (onCreated != null) {
             onCreated.accept(dialog);
           }
@@ -216,10 +263,15 @@ public class EngineFailedMessage extends JDialog {
       boolean isGtpEngine,
       boolean restartContribute,
       TensorRtRepairContext repairContext) {
-    // this.setModal(true);
-    // setType(Type.POPUP);
-    String cmdDiagnosticCommand =
-        cmdDiagnosticBatchLine(commands, command, commandVisibility, canUseCmdDignostic);
+    this(commands, command, commandVisibility, message,
+        cmdDiagnosticBatchLine(commands, command, commandVisibility, canUseCmdDignostic),
+        isGtpEngine, restartContribute, repairContext);
+  }
+
+  private EngineFailedMessage(
+      List<String> commands, String command, EngineCommandVisibility commandVisibility,
+      String message, String cmdDiagnosticCommand, boolean isGtpEngine, boolean restartContribute,
+      TensorRtRepairContext repairContext) {
     String displayedCommand = displayedCommand(command, commandVisibility);
     this.basicDiagnostic =
         EngineStartupDiagnostic.basic(commands, command, message, commandVisibility);
@@ -322,38 +374,7 @@ public class EngineFailedMessage extends JDialog {
           new ActionListener() {
             public void actionPerformed(ActionEvent e) {
               try {
-                BufferedWriter bw =
-                    new BufferedWriter(
-                        new OutputStreamWriter(new FileOutputStream("dignostic.bat"), "UTF-8"));
-                if (isGtpEngine) {
-                  bw.write("CHCP 65001");
-                  bw.newLine();
-                  bw.write(
-                      "@echo " + Lizzie.resourceBundle.getString("EngineFailedMessage.batTips"));
-                  bw.newLine();
-                }
-                bw.write(cmdDiagnosticCommand);
-                if (isGtpEngine) {
-                  bw.write(" < test_commands.txt");
-                  BufferedWriter bw2 = new BufferedWriter(new FileWriter("test_commands.txt"));
-                  bw2.write("name");
-                  bw2.newLine();
-                  bw2.write("version");
-                  bw2.newLine();
-                  bw2.write("time_settings 0 2 1");
-                  bw2.newLine();
-                  bw2.write("genmove b");
-                  bw2.newLine();
-                  bw2.write("lz-genmove_analyze w 100");
-                  bw2.newLine();
-                  bw2.write("showboard");
-                  bw2.newLine();
-                  bw2.close();
-                }
-                bw.newLine();
-                bw.write("pause");
-                bw.newLine();
-                bw.close();
+                writeCmdDiagnosticFiles(Path.of("."), cmdDiagnosticCommand, isGtpEngine);
                 new ProcessBuilder("powershell", "/c", "start", "dignostic.bat").start();
               } catch (IOException s) {
                 // TODO Auto-generated catch block
@@ -886,25 +907,114 @@ public class EngineFailedMessage extends JDialog {
     return visibility.isHidden() ? Lizzie.resourceBundle.getString("Leelaz.encryption") : command;
   }
 
+  static void writeCmdDiagnosticFiles(Path directory, String approvedCommand, boolean isGtpEngine)
+      throws IOException {
+    List<String> lines = new ArrayList<>();
+    // Files.write uses UTF-8. Select it before CMD reads any localized text or engine arguments.
+    lines.add("CHCP 65001");
+    if (isGtpEngine) {
+      Files.write(directory.resolve("test_commands.txt"), List.of(
+          "name", "version", "time_settings 0 2 1", "genmove b", "lz-genmove_analyze w 100", "showboard"));
+      lines.add("@echo " + Lizzie.resourceBundle.getString("EngineFailedMessage.batTips"));
+      lines.add(approvedCommand + " < test_commands.txt");
+    } else {
+      lines.add(approvedCommand);
+    }
+    lines.add("pause");
+    Files.write(directory.resolve("dignostic.bat"), lines);
+  }
+
   /**
-   * The line written to {@code dignostic.bat}, or null when the CMD diagnostic is not offered. The
-   * batch file is plain text left in the working directory, so a hidden command never qualifies.
+   * The line written to {@code dignostic.bat}, or null when no diagnostic file may be written.
+   * Both the configured command and the prepared argv supplied by the caller must use the
+   * supported native launch form. This is not a snapshot of runtime-added engine options.
+   * Known SSH and indirect launchers are not decoded recursively for this optional diagnostic.
+   * The caller's refusal and the owner's hidden-command policy always take precedence.
    */
   static String cmdDiagnosticBatchLine(
       List<String> commands,
       String fallbackCommand,
       EngineCommandVisibility visibility,
       boolean allowedByCaller) {
-    if (!allowedByCaller || visibility.isHidden()) return null;
-    return buildDiagnosticCommand(commands, fallbackCommand);
+    if (!allowedByCaller
+        || visibility.isHidden()
+        || (fallbackCommand != null && fallbackCommand.startsWith("encryption||"))) {
+      return null;
+    }
+    List<String> configured = Utils.splitCommand(fallbackCommand);
+    List<String> launched =
+        commands == null || commands.isEmpty() ? configured : new ArrayList<>(commands);
+    if (!isDirectCmdDiagnostic(launched)
+        || (!configured.isEmpty() && !isDirectCmdDiagnostic(configured))) {
+      return null;
+    }
+    return buildDiagnosticCommand(launched);
   }
 
-  static String buildDiagnosticCommand(List<String> commands, String fallbackCommand) {
-    String commandLine =
-        commands == null || commands.isEmpty()
-            ? (fallbackCommand == null ? "" : fallbackCommand.trim())
-            : buildCommandLine(commands);
-    return redactSensitiveText(commandLine);
+  private static boolean isDirectCmdDiagnostic(List<String> arguments) {
+    if (arguments == null || arguments.isEmpty() || arguments.get(0) == null) return false;
+    String executable = arguments.get(0).replace('\\', '/');
+    // A drive prefix without a root depends on CMD's per-drive working directory.
+    if (executable.length() >= 2 && executable.charAt(1) == ':' && !executable.startsWith("/", 2)) {
+      return false;
+    }
+    String name = executable.substring(executable.lastIndexOf('/') + 1).toLowerCase(Locale.ROOT);
+    // A qualified path must include its extension: "C:\\Program Files\\ssh.exe" split at the
+    // first space must not be mistaken for a local executable named "C:\\Program".
+    if (name.endsWith(".exe")) name = name.substring(0, name.length() - 4);
+    else if (!executable.matches("[\\p{L}\\p{N}_-]+")) return false;
+    return !name.isEmpty()
+        && !EngineThreadPolicy.isRemoteManaged(arguments)
+        && !CommandLaunchHelper.isIndirectLauncher(arguments.get(0))
+        && !CMD_DIAGNOSTIC_FORWARDERS.contains(name)
+        && !CMD_INTERNAL_COMMANDS.contains(name)
+        && !WSL_DISTRIBUTION_LAUNCHER.matcher(name).matches();
+  }
+
+  /** A redacted command would not reproduce the failure, so it is never executed in a batch. */
+  private static String buildDiagnosticCommand(List<String> arguments) {
+    StringBuilder line = new StringBuilder();
+    for (int index = 0; index < arguments.size(); index++) {
+      String argument = arguments.get(index);
+      if (argument == null) return null;
+      // Quotes require additional CMD parsing beyond this supported form. Delayed expansion and
+      // control characters can change the program or start another command.
+      for (int i = 0; i < argument.length(); i++) {
+        char value = argument.charAt(i);
+        if (value == '"' || value == '!' || (value != '\t' && Character.isISOControl(value))) {
+          return null;
+        }
+      }
+      if (index > 0) line.append(' ');
+      // ProcessBuilder's native Windows launch appends .exe to a bare program name; CMD also
+      // searches scripts. Spell the extension out so the diagnostic cannot select a .cmd/.bat.
+      if (index == 0 && argument.matches("[\\p{L}\\p{N}_-]+")) argument += ".exe";
+      String text = argument.replace("%", "%%");
+      String triggers = index == 0 ? " \t&|<>^(),;=/@" : " \t&|<>^(),;=";
+      boolean quote = text.isEmpty();
+      for (int i = 0; i < text.length(); i++) quote |= triggers.indexOf(text.charAt(i)) >= 0;
+      if (quote) {
+        line.append('"').append(text);
+        for (int i = text.length() - 1; i >= 0 && text.charAt(i) == '\\'; i--) line.append('\\');
+        line.append('"');
+      } else {
+        line.append(text);
+      }
+    }
+    String commandLine = line.toString();
+    String original = String.join(" ", arguments);
+    return isSafeCmdDiagnosticText(original) && isSafeCmdDiagnosticText(commandLine)
+        ? commandLine
+        : null;
+  }
+
+  private static boolean isSafeCmdDiagnosticText(String text) {
+    String inspected = redactSensitiveText(text);
+    // The sanitizer also canonicalizes harmless path backslashes and encoded syntax. Only an
+    // actual redaction or an inconclusive inspection vetoes the original command. Never execute
+    // the canonicalized/partly redacted view instead of the encoded original arguments.
+    return !inspected.contains(REDACTED_VALUE)
+        && !inspected.contains(PersistenceSanitizer.FAILURE_MARKER);
   }
 
   static Rectangle calculateUsableBounds(Rectangle screenBounds, Insets insets) {
@@ -959,28 +1069,4 @@ public class EngineFailedMessage extends JDialog {
     return calculateUsableBounds(bounds, insets);
   }
 
-  private static String buildCommandLine(List<String> commands) {
-    StringBuilder builder = new StringBuilder();
-    for (int i = 0; i < commands.size(); i++) {
-      if (i > 0) {
-        builder.append(' ');
-      }
-      builder.append(quoteForCmd(commands.get(i)));
-    }
-    return builder.toString();
-  }
-
-  private static String quoteForCmd(String token) {
-    if (token == null) {
-      return "\"\"";
-    }
-    String trimmed = token.trim();
-    if (trimmed.isEmpty()) {
-      return "\"\"";
-    }
-    if (trimmed.indexOf(' ') >= 0 || trimmed.indexOf('\t') >= 0 || trimmed.indexOf('"') >= 0) {
-      return "\"" + trimmed.replace("\"", "\\\"") + "\"";
-    }
-    return trimmed;
-  }
 }

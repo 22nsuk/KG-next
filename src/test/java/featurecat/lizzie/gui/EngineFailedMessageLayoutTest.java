@@ -1,5 +1,6 @@
 package featurecat.lizzie.gui;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -11,13 +12,16 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
-import featurecat.lizzie.analysis.HiddenCommandFixture;
-import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.EngineStartupDiagnostic;
+import featurecat.lizzie.analysis.EngineStartupDiagnostics;
+import featurecat.lizzie.analysis.HiddenCommandFixture;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
+import featurecat.lizzie.logging.ExportSanitizer;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtFailureKind;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtInstallStatus;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtRepairContext;
+import featurecat.lizzie.util.Utils;
 import java.awt.Component;
 import java.awt.Container;
 import java.awt.Dimension;
@@ -25,8 +29,10 @@ import java.awt.Font;
 import java.awt.GraphicsEnvironment;
 import java.awt.Insets;
 import java.awt.Rectangle;
+import java.awt.Robot;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.PropertyResourceBundle;
@@ -35,6 +41,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.imageio.ImageIO;
 import javax.swing.JButton;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
@@ -44,6 +51,171 @@ import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
 class EngineFailedMessageLayoutTest {
+  private record CommandCase(
+      List<String> arguments, String command, boolean requested, String expected) {
+    static CommandCase configured(String command, String expected) {
+      return new CommandCase(
+          CommandLaunchHelper.prepare(Utils.splitCommand(command)).getCommandParts(),
+          command, true, expected);
+    }
+  }
+
+  private static List<CommandCase> cmdDiagnosticCases() {
+    String splitPlink = "C:\\Program Files\\PuTTY\\PLINK.EXE host.invalid OPAQUE_ARGUMENT";
+    String wslSsh = "wsl.exe --exec ssh host.invalid OPAQUE_ARGUMENT";
+    return List.of(
+        // Opaque SSH positional arguments are not recognizable by credential-name redaction.
+        CommandCase.configured("ssh host.invalid OPAQUE_SSH_ARGUMENT", null),
+        CommandCase.configured("plink host.invalid OPAQUE_PLINK_ARGUMENT", null),
+        CommandCase.configured(splitPlink, null),
+        CommandCase.configured(wslSsh, null),
+        new CommandCase(null, wslSsh, true, null),
+        new CommandCase(Utils.splitCommand(splitPlink), "katago gtp", true, null),
+        new CommandCase(List.of("katago", "gtp"), splitPlink, true, null),
+        new CommandCase(List.of("ssh", "host.invalid", "OPAQUE_ARGUMENT"), "katago gtp", true, null),
+        new CommandCase(List.of("katago", "gtp"), "ssh host.invalid OPAQUE_ARGUMENT", true, null),
+        new CommandCase(null, "\"C:\\Program Files\\OpenSSH\\SSH.EXE\" host.invalid OPAQUE", true, null),
+        new CommandCase(List.of(), "/usr/bin/plink host.invalid OPAQUE_ARGUMENT", true, null),
+        new CommandCase(null, "ssh\thost.invalid OPAQUE_ARGUMENT", true, null),
+        // Indirect launchers are unsupported even when their inner command appears local.
+        CommandCase.configured("wsl.exe --exec sh -c \"ssh\thost.invalid OPAQUE_ARGUMENT\"", null),
+        CommandCase.configured("wsl.exe --cd /home/ssh --exec katago gtp", null),
+        CommandCase.configured("cmd.exe /c ssh host.invalid OPAQUE_ARGUMENT", null),
+        CommandCase.configured("powershell.exe -Command ssh host.invalid OPAQUE_ARGUMENT", null),
+        CommandCase.configured("python.exe engine.py", null),
+        CommandCase.configured("java.exe -jar engine.jar", null),
+        CommandCase.configured("run-engine.cmd", null),
+        CommandCase.configured("timeout.exe 30 ssh host.invalid OPAQUE_ARGUMENT", null),
+        CommandCase.configured("runas.exe /user:account ssh.exe", null),
+        CommandCase.configured("ubuntu2204.exe run ssh host.invalid OPAQUE_ARGUMENT", null),
+        new CommandCase(List.of("start", "katago", "gtp"), "katago gtp", true, null),
+        new CommandCase(null, "remote-compute://custom-websocket", true, null),
+        new CommandCase(List.of("katago", "gtp"), "encryption||" + Utils.doEncrypt2(wslSsh), true, null),
+        // Names in data positions do not make a native engine an SSH launcher.
+        CommandCase.configured("katago gtp -model models/ssh", "katago.exe gtp -model models/ssh"),
+        new CommandCase(null, "leelaz --gtp -w ssh-model.gz", true, "leelaz.exe --gtp -w ssh-model.gz"),
+        new CommandCase(List.of("C:\\ssh\\katago.exe", "gtp"), "C:\\ssh\\katago.exe gtp", true,
+            "C:\\ssh\\katago.exe gtp"),
+        new CommandCase(List.of("C:\\Program Files\\Engine\\engine.exe", "gtp"),
+            "\"C:\\Program Files\\Engine\\engine.exe\" gtp", true,
+            "\"C:\\Program Files\\Engine\\engine.exe\" gtp"),
+        new CommandCase(null, "katago gtp & echo OPAQUE_ARGUMENT", true,
+            "katago.exe gtp \"&\" echo OPAQUE_ARGUMENT"),
+        new CommandCase(List.of("katago", "gtp"), "katago gtp", false, null),
+        new CommandCase(null, "", true, null));
+  }
+
+  @Test
+  void cmdDiagnosticCommandsExcludeSshTransports() {
+    assertAll(cmdDiagnosticCases().stream().map(example -> () -> assertEquals(
+        example.expected(),
+        EngineFailedMessage.cmdDiagnosticBatchLine(example.arguments(), example.command(),
+            EngineCommandVisibility.VISIBLE, example.requested()), example.toString())));
+  }
+
+  @Test
+  void cmdDiagnosticRejectsArgumentsThatCannotBeReproducedByCmd() {
+    for (String argument : List.of(
+        "a\"b", "a!b", "a\nb", "a\rb", "a\u0000b", "<redacted>", "[redaction-failed]")) {
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of("katago.exe", argument), "katago.exe", EngineCommandVisibility.VISIBLE, true));
+    }
+    assertEquals("katago.exe \"\" \" leading and trailing \" \"C:\\model path\\\\\"",
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            List.of("katago.exe", "", " leading and trailing ", "C:\\model path\\"),
+            "katago.exe", EngineCommandVisibility.VISIBLE, true));
+    String windowsPath = "C:\\runner\\new\\test\\katago.exe";
+    assertEquals(windowsPath + " gtp",
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            List.of(windowsPath, "gtp"), windowsPath + " gtp", EngineCommandVisibility.VISIBLE, true));
+    // A drive-relative name depends on the drive's current directory, even with an .exe suffix.
+    for (String relative : List.of("C:engine.exe", "d:engines\\engine.exe")) {
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of(relative, "gtp"), "engine.exe gtp", EngineCommandVisibility.VISIBLE, true));
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of("engine.exe", "gtp"), relative + " gtp", EngineCommandVisibility.VISIBLE, true));
+    }
+  }
+
+  @Test
+  void cmdDiagnosticChecksCredentialsBeforePercentEscaping() {
+    String url = "--url=https://example.invalid/?to%6Ben=CANARY_VALUE";
+    assertFalse(EngineFailedMessage.redactSensitiveText(url).contains("CANARY_VALUE"));
+    assertNull(
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            List.of("katago.exe", url), "katago.exe", EngineCommandVisibility.VISIBLE, true));
+    assertNull(
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            null, "katago.exe " + url, EngineCommandVisibility.VISIBLE, true));
+  }
+
+  @Test
+  void cmdDiagnosticButtonRejectsSshCommandsAtDialogBoundary() throws Exception {
+    DesktopProbeProcess.requireDisplay();
+    Path screenshots = Path.of("target", "desktop-smoke", "probes", "ssh-cmd-diagnostic");
+    Files.createDirectories(screenshots);
+    int index = 0;
+    for (CommandCase example : cmdDiagnosticCases()) {
+      AtomicReference<EngineFailedMessage> created = new AtomicReference<>();
+      try {
+        EngineFailedMessage.showDialog(
+            example.arguments(), example.command(), EngineCommandVisibility.VISIBLE,
+            "Controlled startup failure", example.requested(), true, false, false, null,
+            dialog -> {
+              created.set(dialog);
+              JButton button = findButtonByText(dialog,
+                  Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd"));
+              assertEquals(example.expected() != null, button != null, example.toString());
+            });
+        Robot robot = new Robot();
+        robot.waitForIdle();
+        ImageIO.write(robot.createScreenCapture(created.get().getBounds()), "png",
+            screenshots.resolve("case-" + index++ + ".png").toFile());
+      } finally {
+        SwingUtilities.invokeAndWait(() -> {
+          if (created.get() != null) created.get().dispose();
+        });
+      }
+    }
+  }
+
+  private static JButton findButtonByText(Container parent, String text) {
+    for (Component component : parent.getComponents()) {
+      if (component instanceof JButton button && text.equals(button.getText())) return button;
+      if (component instanceof Container child) {
+        JButton button = findButtonByText(child, text);
+        if (button != null) return button;
+      }
+    }
+    return null;
+  }
+
+  @Test
+  void contributionDialogKeepsLocalCmdWithoutDisplayingTheExecutablePath() {
+    DesktopProbeProcess.requireDisplay();
+    String executable = "C:\\Private Engines\\engine.exe";
+    String configured = "\"" + executable + "\" contribute";
+    EngineFailedMessage.showContributionFailure(
+        List.of(executable, "contribute"), configured, "Missing file: C:\\PrivateModels\\model.bin",
+        new ExportSanitizer(),
+        true, dialog -> {
+          try {
+            String displayed = textOf(findComponentByName(
+                dialog, "EngineFailedMessage.commandPane", JScrollPane.class));
+            assertTrue(displayed.contains("<redacted-path>"), displayed);
+            assertFalse(displayed.contains("Private Engines"), displayed);
+            StringBuilder rendered = new StringBuilder();
+            collectText(dialog, rendered);
+            assertTrue(rendered.toString().contains("Missing file: <redacted-path>"));
+            assertFalse(rendered.toString().contains("PrivateModels"));
+            assertNotNull(findButtonByText(dialog,
+                Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd")));
+          } finally {
+            SwingUtilities.invokeLater(dialog::dispose);
+          }
+        });
+  }
+
   @Test
   void pathErrorActionIsRenderedFromEveryMaintainedBundleWithoutLosingEvidence() throws Exception {
     String key = "EngineFailedMessage.outcome.path-too-long";
@@ -178,13 +350,15 @@ class EngineFailedMessageLayoutTest {
       List<String> arguments = List.of("plink", "-pw", value, "-P", "22");
       for (String safe : List.of(
           ((JTextArea) pane.getViewport().getView()).getText(),
-          EngineFailedMessage.redactSensitiveText(command),
-          EngineFailedMessage.buildDiagnosticCommand(arguments, command),
-          EngineFailedMessage.buildDiagnosticCommand(List.of(), command))) {
+          EngineFailedMessage.redactSensitiveText(command))) {
         assertFalse(safe.contains("CANARY_PLINK"));
         assertFalse(safe.contains("suffix"));
         assertTrue(safe.contains("<redacted>"));
       }
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          arguments, command, EngineCommandVisibility.VISIBLE, true));
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of(), command, EngineCommandVisibility.VISIBLE, true));
       assertEquals(value, arguments.get(2));
     }
   }
@@ -212,7 +386,7 @@ class EngineFailedMessageLayoutTest {
     String visibleCommand =
         EngineFailedMessage.redactSensitiveText(command + "\n" + contributeCommand);
     String diagnosticCommand =
-        EngineFailedMessage.buildDiagnosticCommand(
+        EngineFailedMessage.cmdDiagnosticBatchLine(
             List.of(
                 "engine.exe",
                 "--password",
@@ -222,16 +396,15 @@ class EngineFailedMessageLayoutTest {
                 "--token=" + token,
                 "api-key=" + apiKey,
                 "secret=" + secret),
-            command);
+            command, EngineCommandVisibility.VISIBLE, true);
 
     for (String sensitiveValue : List.of(password, passwd, token, apiKey, secret)) {
       assertFalse(visibleMessage.contains(sensitiveValue));
       assertFalse(visibleCommand.contains(sensitiveValue));
-      assertFalse(diagnosticCommand.contains(sensitiveValue));
     }
     assertTrue(visibleMessage.contains(EngineFailedMessage.REDACTED_VALUE));
     assertTrue(visibleCommand.contains(EngineFailedMessage.REDACTED_VALUE));
-    assertTrue(diagnosticCommand.contains(EngineFailedMessage.REDACTED_VALUE));
+    assertNull(diagnosticCommand, "a masked credential must never become an executable batch");
   }
 
   @Test
@@ -299,16 +472,17 @@ class EngineFailedMessageLayoutTest {
               sensitiveCase.text, new Font(Font.MONOSPACED, Font.PLAIN, 14));
       String visibleText = ((JTextArea) pane.getViewport().getView()).getText();
       String fallbackDiagnostic =
-          EngineFailedMessage.buildDiagnosticCommand(null, sensitiveCase.text);
+          EngineFailedMessage.cmdDiagnosticBatchLine(
+              null, sensitiveCase.text, EngineCommandVisibility.VISIBLE, true);
       String tokenizedDiagnostic =
-          EngineFailedMessage.buildDiagnosticCommand(
-              sensitiveCase.commandTokens, sensitiveCase.text);
+          EngineFailedMessage.cmdDiagnosticBatchLine(
+              sensitiveCase.commandTokens, sensitiveCase.text, EngineCommandVisibility.VISIBLE, true);
 
-      for (String output : List.of(visibleText, fallbackDiagnostic, tokenizedDiagnostic)) {
-        assertTrue(output.contains(EngineFailedMessage.REDACTED_VALUE), output);
-        for (String secretOrFragment : sensitiveCase.secretAndFragments) {
-          assertFalse(output.contains(secretOrFragment), output);
-        }
+      assertNull(fallbackDiagnostic);
+      assertNull(tokenizedDiagnostic);
+      assertTrue(visibleText.contains(EngineFailedMessage.REDACTED_VALUE), visibleText);
+      for (String secretOrFragment : sensitiveCase.secretAndFragments) {
+        assertFalse(visibleText.contains(secretOrFragment), visibleText);
       }
     }
   }
