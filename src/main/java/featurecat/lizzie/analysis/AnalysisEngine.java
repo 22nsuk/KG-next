@@ -493,7 +493,7 @@ public class AnalysisEngine {
       try {
         remoteTransport = factory.createTransport(engineCommand);
         if (!startup.connecting(remoteTransport::abort)) return;
-        remoteTransport.start();
+        remoteTransport.start(startup::trackCompletion);
         if (shutdownRequested) return;
         initializeStreams(
             remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
@@ -735,13 +735,18 @@ public class AnalysisEngine {
   /** Reserves exit waiting before launch work, then hands ownership to the existing readers. */
   private final class Startup {
     private final CompletableFuture<Void> finished = new CompletableFuture<>();
-    private final List<CompletableFuture<Process>> preparationProcesses = new ArrayList<>();
+    private final List<CompletableFuture<?>> pendingWork = new ArrayList<>();
     private Runnable closeConnection;
     private CompletableFuture<Void> connectionClosed;
 
     /** The caller may time out before the OS has finished terminating its exact child. */
     private void trackProcess(Process process) {
-      preparationProcesses.add(process.onExit());
+      trackCompletion(process.onExit());
+    }
+
+    /** Result timeouts do not release ownership of an unfinished child or connection attempt. */
+    private void trackCompletion(CompletableFuture<?> completion) {
+      pendingWork.add(completion);
     }
 
     /** Register the exact backend before its blocking start, including a late creation after exit. */
@@ -785,7 +790,7 @@ public class AnalysisEngine {
 
     private void finish(boolean completed) {
       CompletableFuture<Void> cleanup =
-          CompletableFuture.allOf(preparationProcesses.toArray(CompletableFuture<?>[]::new));
+          CompletableFuture.allOf(pendingWork.toArray(CompletableFuture<?>[]::new));
       boolean applicationExit;
       boolean cleanupRequired;
       synchronized (ACTIVE_READER_RESOURCES) {
@@ -813,7 +818,7 @@ public class AnalysisEngine {
         resources.close(false);
         cleanup = CompletableFuture.allOf(cleanup, connectionCleanup, resources.closed);
       }
-      // Even a successful handoff can leave a timed-out preparation child awaiting physical exit.
+      // A result can return while a preparation child or asynchronous connection is still owned.
       cleanup.thenCompose(ignored -> {
         synchronized (ACTIVE_READER_RESOURCES) {
           // Exit may have captured this reservation after finish chose a normal handoff. In that

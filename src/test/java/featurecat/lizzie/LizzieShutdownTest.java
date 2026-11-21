@@ -54,6 +54,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -393,8 +394,81 @@ class LizzieShutdownTest {
     }
   }
 
+  @Test
+  void exitWaitsForPendingConnectionCleanupAfterStartAndAbortReturn() throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      CompletableFuture<Void> pendingConnection = new CompletableFuture<>();
+      GatedAnalysisConnection connection = new GatedAnalysisConnection(pendingConnection);
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, RemoteComputeConfig.COMMAND_ZHIZI, (proxy, method, arguments) -> {
+          assertEquals("createTransport", method.getName());
+          return connection;
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "timed-out-analysis-connection");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      Object registryLock = analysisField("ACTIVE_READER_RESOURCES").get(null);
+      Set<?> pendingStartups = (Set<?>) analysisField("STARTING_ENGINES").get(null);
+      try {
+        starter.start();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(1, connection.starts.get());
+        assertFalse(analysis.isLoaded());
+        assertNull(harness.frame.analysisEngine, "startup was never attached to the frame");
+        Object reservation;
+        synchronized (registryLock) {
+          assertEquals(1, pendingStartups.size(), "timed-out connect lost its cleanup reservation");
+          reservation = pendingStartups.iterator().next();
+        }
+
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(exited::complete));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "pending connect blocked the EDT");
+        assertTrue(connection.closeEntered.await(5, TimeUnit.SECONDS));
+        assertFalse(connection.closedOnEdt);
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        connection.close();
+        assertTrue(connection.duplicateCloseReturned.await(5, TimeUnit.SECONDS));
+        assertFalse(cleanup.isDone(), "a duplicate close released asynchronous connect cleanup");
+
+        Field connectionClosed = reservation.getClass().getDeclaredField("connectionClosed");
+        connectionClosed.setAccessible(true);
+        CompletableFuture<?> firstAbort = (CompletableFuture<?>) connectionClosed.get(reservation);
+        connection.allowClose.countDown();
+        firstAbort.get(5, TimeUnit.SECONDS);
+        assertTrue(connection.closeReturned);
+        assertEquals(1, connection.aborts.get());
+        assertFalse(pendingConnection.isDone());
+        assertFalse(cleanup.isDone(), "abort return was mistaken for late connect cleanup");
+        assertFalse(exited.isDone(), "exit ran while the transport still owned pending cleanup");
+        synchronized (registryLock) {
+          assertTrue(pendingStartups.contains(reservation));
+        }
+
+        pendingConnection.complete(null);
+        cleanup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        synchronized (registryLock) {
+          assertTrue(pendingStartups.isEmpty(), "completed cleanup retained its startup reservation");
+        }
+      } finally {
+        pendingConnection.complete(null);
+        connection.allowClose.countDown();
+        connection.close();
+        starter.interrupt();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
   /** Mirrors the transports' idempotent close: it wakes start before physical cleanup returns. */
   private static final class GatedAnalysisConnection implements EngineTransport {
+    private final CompletableFuture<Void> pendingStartup;
     private final AtomicInteger starts = new AtomicInteger();
     private final AtomicInteger aborts = new AtomicInteger();
     private final AtomicBoolean closing = new AtomicBoolean();
@@ -404,6 +478,26 @@ class LizzieShutdownTest {
     private final CountDownLatch allowClose = new CountDownLatch(1);
     private volatile boolean closedOnEdt;
     private volatile boolean closeReturned;
+
+    private GatedAnalysisConnection() {
+      this(null);
+    }
+
+    private GatedAnalysisConnection(CompletableFuture<Void> pendingStartup) {
+      this.pendingStartup = pendingStartup;
+    }
+
+    @Override
+    public void start(Consumer<CompletableFuture<Void>> pendingCompletion) throws IOException {
+      if (pendingStartup == null) {
+        EngineTransport.super.start(pendingCompletion);
+        return;
+      }
+      pendingCompletion.accept(pendingStartup);
+      starts.incrementAndGet();
+      startEntered.countDown();
+      throw new IOException("connect result deadline elapsed before connection cleanup");
+    }
 
     @Override
     public void start() throws IOException {

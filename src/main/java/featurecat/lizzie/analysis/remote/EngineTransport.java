@@ -3,9 +3,21 @@ package featurecat.lizzie.analysis.remote;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 public interface EngineTransport extends AutoCloseable {
   void start() throws IOException;
+
+  /**
+   * Starts with an owner for work that can outlive this call's result deadline. An asynchronous
+   * implementation synchronously registers completion before launching that work, and completes it
+   * only after transferring or disposing of its resources. Synchronous transports need no extra
+   * registration.
+   */
+  default void start(Consumer<CompletableFuture<Void>> pendingStartup) throws IOException {
+    start();
+  }
 
   InputStream stdout();
 

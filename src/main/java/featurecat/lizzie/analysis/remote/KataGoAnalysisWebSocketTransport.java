@@ -24,10 +24,13 @@ import java.util.Locale;
 import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.json.JSONArray;
@@ -65,8 +68,11 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
   private final GtpCommandOutputStream stdin = new GtpCommandOutputStream();
   private final AtomicLong queryCounter = new AtomicLong();
   private final AtomicBoolean open = new AtomicBoolean(false);
-  private final AtomicBoolean gracefulCloseStarted = new AtomicBoolean(false);
-  private final AtomicBoolean abortStarted = new AtomicBoolean(false);
+  // Only socket ownership and terminal state use this lock. Never hold it for commands,
+  // observers or socket I/O: abort must remain independent of a blocked command/close callback.
+  private final Object socketLifecycle = new Object();
+  private boolean gracefulCloseStarted;
+  private boolean abortStarted;
   private final StringBuilder incomingText = new StringBuilder();
   private final List<Move> initialStones = new ArrayList<>();
   private final List<Move> moves = new ArrayList<>();
@@ -102,44 +108,88 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
 
   @Override
   public void start() throws IOException {
+    start(ignored -> {});
+  }
+
+  @Override
+  public void start(Consumer<CompletableFuture<Void>> pendingStartup) throws IOException {
     long started = System.nanoTime();
     boolean recorded = false;
+    CompletableFuture<Void> connectionSettled = new CompletableFuture<>();
+    CompletableFuture<Void> waiterSettled = new CompletableFuture<>();
+    CompletableFuture<Void> settled = CompletableFuture.allOf(connectionSettled, waiterSettled);
+    CompletableFuture<Void> connected = null;
     try {
-      WebSocket connected =
+      // The caller owns this completion before connecting can create any resource. A timed-out
+      // or interrupted waiter must not retire that ownership while buildAsync can still succeed.
+      pendingStartup.accept(settled);
+      connected =
           httpClient
               .newWebSocketBuilder()
               .connectTimeout(CONNECT_TIMEOUT)
               .buildAsync(remoteUri, new Listener())
-              .get(CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
-      synchronized (this) {
-        if (gracefulCloseStarted.get() || abortStarted.get()) {
-          try {
-            // This socket was never handed to the transport owner. A close handshake alone
-            // would leave it unreachable if the peer does not reply before startup finishes.
-            connected.abort();
-          } catch (Exception ignored) {
-          }
-          recordConnect("failed", started);
-          recorded = true;
-          throw new IOException("自建算力在连接完成前已断开。");
-        }
-        webSocket = connected;
-        open.set(true);
-        recordConnect("ok", started);
-        recorded = true;
-        writeStderrLine(
-            java.text.MessageFormat.format(
-                RemoteComputeConfig.localizedText(
-                    "RemoteCompute.status.customConnected", "Custom compute connected: {0}"),
-                RemoteComputeConfig.displayNameForCustomWebSocketUrl(remoteUri.toString())));
-      }
+              .handle((socket, failure) -> {
+                if (failure != null) {
+                  connectionSettled.complete(null);
+                  throw new CompletionException(failure);
+                }
+                boolean accepted;
+                try {
+                  accepted = publishConnectedSocket(socket);
+                } catch (RuntimeException | Error cleanupFailure) {
+                  connectionSettled.completeExceptionally(cleanupFailure);
+                  throw cleanupFailure;
+                }
+                connectionSettled.complete(null);
+                if (!accepted) {
+                  throw new CompletionException(new IOException("自建算力在连接完成前已断开。"));
+                }
+                return null;
+              });
+      connected.get(CONNECT_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+      recordConnect("ok", started);
+      recorded = true;
+      writeStderrLine(
+          java.text.MessageFormat.format(
+              RemoteComputeConfig.localizedText(
+                  "RemoteCompute.status.customConnected", "Custom compute connected: {0}"),
+              RemoteComputeConfig.displayNameForCustomWebSocketUrl(remoteUri.toString())));
     } catch (Exception e) {
-      open.set(false);
+      if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+      try {
+        abort();
+      } catch (RuntimeException cleanupFailure) {
+        waiterSettled.completeExceptionally(cleanupFailure);
+        e.addSuppressed(cleanupFailure);
+      } catch (Error cleanupFailure) {
+        waiterSettled.completeExceptionally(cleanupFailure);
+        throw cleanupFailure;
+      }
+      if (connected == null) connectionSettled.complete(null);
       if (!recorded) {
         recordConnect("failed", started);
       }
       throw new IOException("连接自建算力失败，请检查 ws/wss 链接是否可用。", e);
+    } finally {
+      waiterSettled.complete(null);
     }
+  }
+
+  private boolean publishConnectedSocket(WebSocket connected) {
+    boolean accepted;
+    synchronized (socketLifecycle) {
+      accepted = !gracefulCloseStarted && !abortStarted;
+      if (accepted) {
+        webSocket = connected;
+        open.set(true);
+      }
+    }
+    if (!accepted) {
+      // The completion callback still owns this rejected socket, even if start() has returned.
+      // Only finish its startup completion after the physical channel has been aborted.
+      connected.abort();
+    }
+    return accepted;
   }
 
   @Override
@@ -169,28 +219,39 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
 
   @Override
   public void close() {
-    if (abortStarted.get() || !gracefulCloseStarted.compareAndSet(false, true)) {
-      return;
+    WebSocket current;
+    synchronized (socketLifecycle) {
+      if (abortStarted || gracefulCloseStarted) {
+        return;
+      }
+      gracefulCloseStarted = true;
+      open.set(false);
+      // Keep the exact socket reachable while a graceful handshake is pending, so abort
+      // can take ownership even if command completion or sendClose is blocked.
+      current = webSocket;
     }
-    terminateTransport(true);
+    terminateTransport(current, true);
   }
 
   @Override
   public void abort() {
-    if (!abortStarted.compareAndSet(false, true)) {
-      return;
+    WebSocket current;
+    synchronized (socketLifecycle) {
+      if (abortStarted) {
+        return;
+      }
+      abortStarted = true;
+      open.set(false);
+      current = webSocket;
+      webSocket = null;
     }
-    terminateTransport(false);
+    terminateTransport(current, false);
   }
 
-  private void terminateTransport(boolean sendClose) {
-    open.set(false);
+  private void terminateTransport(WebSocket current, boolean sendClose) {
     if (!sendClose) {
       // The hard-abort path must not wait for a synchronized command/close callback that may itself
-      // be stalled in sendClose. This transport is terminal, so detach its exact socket and query
-      // first, then tear down the physical channel without entering the command monitor.
-      WebSocket current = webSocket;
-      webSocket = null;
+      // be stalled in sendClose. Socket ownership was already detached under socketLifecycle.
       ActiveQuery query = activeQuery;
       if (query != null) {
         cancelStopTimeout(query);
@@ -199,26 +260,21 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
           activeQuery = null;
         }
       }
-      if (current != null) {
-        try {
+      try {
+        if (current != null) {
           current.abort();
-        } catch (Exception ignored) {
         }
+      } finally {
+        stdout.finish();
+        stderr.finish();
       }
-      stdout.finish();
-      stderr.finish();
       return;
     }
-    WebSocket current;
     synchronized (this) {
       ActiveQuery query = activeQuery;
       if (query != null) {
         completeActiveQuery(query);
       }
-      current = webSocket;
-      // Keep a graceful close's socket reachable until the peer confirms closure or a force
-      // escalation captures it. sendClose only queues a handshake and must not make abort lose the
-      // exact physical socket while that handshake is still pending.
     }
     if (current != null) {
       try {
