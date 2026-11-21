@@ -179,7 +179,7 @@ class LeelazAutomaticRestartConvergenceTest {
       engine.processDead = true;
       engine.Pondering();
       EngineManager manager = new EngineManager(List.of(engine));
-      manager.restartUnresponsiveRemoteEngine(engine, 0);
+      manager.restartUnresponsiveRemoteEngine(engine);
 
       assertTrue(
           engine.startCompleted.await(2, TimeUnit.SECONDS),
@@ -274,7 +274,7 @@ class LeelazAutomaticRestartConvergenceTest {
       engine.Pondering();
 
       EngineManager manager = new EngineManager(List.of(engine));
-      manager.restartUnresponsiveRemoteEngine(engine, 0);
+      manager.restartUnresponsiveRemoteEngine(engine);
       assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
       assertTrue(board.previousMove(false));
       engine.publishReady();
