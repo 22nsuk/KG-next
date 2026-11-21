@@ -13,12 +13,15 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -64,18 +67,25 @@ class NvidiaGpuStartupCancellationTest {
 
   private static void prepare(Path engine, List<String> command, boolean cuda,
       BooleanSupplier cancelled) throws Exception {
+    prepare(engine, command, cuda, cancelled, process -> {});
+  }
+
+  private static void prepare(Path engine, List<String> command, boolean cuda,
+      BooleanSupplier cancelled, Consumer<Process> started) throws Exception {
     if (cuda)
-      KataGoRuntimeHelper.ensureBundledRuntimeReady(engine, command, null, null, null, cancelled);
+      KataGoRuntimeHelper.ensureBundledRuntimeReady(
+          engine, command, null, null, null, cancelled, started);
     else
       KataGoRuntimeHelper.prepareBundledLaunchCommand(command, engine,
-          KataGoRuntimeHelper.LaunchPurpose.ANALYSIS, cancelled);
+          KataGoRuntimeHelper.LaunchPurpose.ANALYSIS, cancelled, started);
   }
 
   private static void cancelsQuery(NvidiaGpuDiscoveryFixture fixture, Path engine,
       List<String> command, boolean cuda) throws Exception {
     AtomicBoolean cancelled = new AtomicBoolean();
+    AtomicReference<CompletableFuture<Process>> queryExit = new AtomicReference<>();
     FutureTask<Void> result = new FutureTask<>(() -> {
-      prepare(engine, command, cuda, cancelled::get);
+      prepare(engine, command, cuda, cancelled::get, process -> queryExit.set(process.onExit()));
       return null;
     });
     Thread worker = new Thread(result, "uncached-driver-query");
@@ -87,7 +97,8 @@ class NvidiaGpuStartupCancellationTest {
           assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
       if (cuda) assertInstanceOf(InterruptedIOException.class, failure.getCause());
       else assertInstanceOf(CancellationException.class, failure.getCause());
-      assertFalse(query.isAlive(), "cancelled lookup returned before its query exited");
+      queryExit.get().get(5, TimeUnit.SECONDS);
+      assertFalse(query.isAlive(), "the retained completion did not wait for the exact query");
       assertEquals(1, fixture.queryCount(), "cancelled discovery started another query");
       if (cuda) assertFalse(Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(engine)));
 

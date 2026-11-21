@@ -3156,7 +3156,7 @@ public class KataGoRuntimeHelperTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
-  void cancelledCudaPreflightStopsItsProcessBeforeReturning(boolean beforeStart) throws Exception {
+  void cancelledCudaPreflightExposesItsProcessExitSeparately(boolean beforeStart) throws Exception {
     withLiveCudaProbe(probe -> {
       AtomicBoolean cancelled = new AtomicBoolean(beforeStart);
       FutureTask<Void> result = new FutureTask<>(() -> {
@@ -3171,9 +3171,10 @@ public class KataGoRuntimeHelperTest {
         ExecutionException failure =
             assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
         assertInstanceOf(InterruptedIOException.class, failure.getCause());
-        if (process != null)
-          assertFalse(process.isAlive(), "preflight returned before its child exited");
-        else assertFalse(Files.exists(probe.started));
+        if (process != null) {
+          probe.processExit.get(5, TimeUnit.SECONDS);
+          assertFalse(process.isAlive(), "the retained completion did not wait for the exact probe");
+        } else assertFalse(Files.exists(probe.started));
         assertFalse(Files.exists(KataGoRuntimeHelper.cudaCompatibilityProbeMarker(probe.engine)));
       } finally {
         cancelled.set(true);
@@ -3206,6 +3207,7 @@ public class KataGoRuntimeHelperTest {
           ExecutionException failure =
               assertThrows(ExecutionException.class, () -> result.get(5, TimeUnit.SECONDS));
           assertInstanceOf(InterruptedIOException.class, failure.getCause());
+          probe.processExit.get(5, TimeUnit.SECONDS);
           assertFalse(original.isAlive());
           // Model a stale/reused PID with a second child owned by this test, never an external job.
           Files.writeString(probe.started, Long.toString(other.pid()));
@@ -3336,6 +3338,7 @@ public class KataGoRuntimeHelperTest {
     final Path engine, started, release;
     final List<String> command;
     ProcessHandle process;
+    java.util.concurrent.CompletableFuture<Process> processExit;
 
     LiveCudaProbe(Path root, Path engine, Path model, Path config) {
       this.engine = engine;
@@ -3346,7 +3349,8 @@ public class KataGoRuntimeHelperTest {
     }
 
     void prepare(BooleanSupplier cancelled) throws IOException {
-      KataGoRuntimeHelper.ensureBundledRuntimeReady(engine, command, null, null, null, cancelled);
+      KataGoRuntimeHelper.ensureBundledRuntimeReady(
+          engine, command, null, null, null, cancelled, child -> processExit = child.onExit());
     }
 
     ProcessHandle awaitProcess() throws Exception {

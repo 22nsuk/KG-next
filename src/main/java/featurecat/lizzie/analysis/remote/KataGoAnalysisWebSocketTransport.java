@@ -114,11 +114,9 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
       synchronized (this) {
         if (gracefulCloseStarted.get() || abortStarted.get()) {
           try {
-            if (abortStarted.get()) {
-              connected.abort();
-            } else {
-              connected.sendClose(WebSocket.NORMAL_CLOSURE, "closed during connect");
-            }
+            // This socket was never handed to the transport owner. A close handshake alone
+            // would leave it unreachable if the peer does not reply before startup finishes.
+            connected.abort();
           } catch (Exception ignored) {
           }
           recordConnect("failed", started);

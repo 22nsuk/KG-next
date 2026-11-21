@@ -2,6 +2,7 @@ package featurecat.lizzie.analysis.remote;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -26,6 +27,7 @@ import java.net.InetSocketAddress;
 import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -725,6 +727,114 @@ public class KataGoAnalysisWebSocketTransportTest {
       graceful.join(2_000L);
       assertFalse(graceful.isAlive());
       assertNull(gracefulFailure.get());
+    }
+  }
+
+  @Test
+  void closeDuringConnectAbortsTheLateSocketWithoutWaitingForThePeer() throws Exception {
+    CountDownLatch requestReceived = new CountDownLatch(1);
+    CountDownLatch allowHandshake = new CountDownLatch(1);
+    CountDownLatch disconnected = new CountDownLatch(1);
+    AtomicReference<Socket> acceptedSocket = new AtomicReference<>();
+    AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+    AtomicReference<Throwable> startupFailure = new AtomicReference<>();
+    try (ServerSocket server = new ServerSocket()) {
+      server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+      server.setSoTimeout(5_000);
+      Thread peer =
+          new Thread(
+              () -> {
+                try (Socket socket = server.accept()) {
+                  acceptedSocket.set(socket);
+                  socket.setSoTimeout(5_000);
+                  BufferedReader headers =
+                      new BufferedReader(
+                          new InputStreamReader(
+                              socket.getInputStream(), StandardCharsets.ISO_8859_1));
+                  String key = null;
+                  for (String line; (line = headers.readLine()) != null && !line.isEmpty(); ) {
+                    if (line.toLowerCase(Locale.ROOT).startsWith("sec-websocket-key:")) {
+                      key = line.substring(line.indexOf(':') + 1).trim();
+                    }
+                  }
+                  assertNotNull(key, "client did not send a WebSocket handshake");
+                  requestReceived.countDown();
+                  assertTrue(allowHandshake.await(5, TimeUnit.SECONDS));
+                  String accept =
+                      Base64.getEncoder()
+                          .encodeToString(
+                              MessageDigest.getInstance("SHA-1")
+                                  .digest(
+                                      (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                                          .getBytes(StandardCharsets.ISO_8859_1)));
+                  socket
+                      .getOutputStream()
+                      .write(
+                          ("HTTP/1.1 101 Switching Protocols\r\n"
+                                  + "Upgrade: websocket\r\n"
+                                  + "Connection: Upgrade\r\n"
+                                  + "Sec-WebSocket-Accept: "
+                                  + accept
+                                  + "\r\n\r\n")
+                              .getBytes(StandardCharsets.ISO_8859_1));
+                  socket.getOutputStream().flush();
+                  // Deliberately never answer a close frame. Only actual EOF or reset proves
+                  // that the late connection has been released by the client.
+                  try {
+                    while (socket.getInputStream().read() != -1) {}
+                  } catch (SocketException reset) {
+                    // A hard abort may reset the TCP connection instead of sending FIN.
+                  }
+                  disconnected.countDown();
+                } catch (Throwable failure) {
+                  serverFailure.set(failure);
+                }
+              },
+              "late-websocket-peer");
+      peer.setDaemon(true);
+      KataGoAnalysisWebSocketTransport transport =
+          new KataGoAnalysisWebSocketTransport(
+              new URI(
+                      "ws", null, server.getInetAddress().getHostAddress(),
+                      server.getLocalPort(), "/", null, null)
+                  .toString());
+      Thread startup =
+          new Thread(
+              () -> {
+                try {
+                  transport.start();
+                } catch (Throwable failure) {
+                  startupFailure.set(failure);
+                }
+              },
+              "late-websocket-startup");
+      startup.setDaemon(true);
+      try {
+        peer.start();
+        startup.start();
+        assertTrue(requestReceived.await(5, TimeUnit.SECONDS));
+        transport.close();
+        assertTrue(startup.isAlive(), "handshake must still be pending when close is requested");
+        allowHandshake.countDown();
+        startup.join(5_000);
+        assertFalse(startup.isAlive(), "cancelled startup did not finish");
+        assertInstanceOf(IOException.class, startupFailure.get());
+        assertTrue(
+            disconnected.await(2, TimeUnit.SECONDS),
+            "startup finished while its uncooperative late-connected peer remained connected");
+        assertNull(serverFailure.get());
+        assertFalse(transport.isOpen());
+        assertEof(transport.stdout());
+        assertEof(transport.stderr());
+      } finally {
+        allowHandshake.countDown();
+        transport.abort();
+        server.close();
+        Socket socket = acceptedSocket.get();
+        if (socket != null) socket.close();
+        startup.join(5_000);
+        peer.join(5_000);
+      }
     }
   }
 

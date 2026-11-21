@@ -55,7 +55,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
-import java.util.function.Supplier;
+import java.util.function.Function;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -331,12 +331,12 @@ public class AnalysisEngine {
     // Measured-profile validation can launch nvidia-smi while preparing the command.
     // Reserve startup ownership before that work, not just before the engine itself.
     startEngine(
-        () -> KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
+        startup -> KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
             resolveConfiguredAnalysisEngineCommand(commandOverride),
             maxVisits,
             Lizzie.frame.isBatchAnalysisMode,
             this.workload == Workload.WHOLE_GAME,
-            () -> shutdownRequested),
+            () -> shutdownRequested, startup::trackProcess),
         ProcessBuilder::start);
   }
 
@@ -406,7 +406,8 @@ public class AnalysisEngine {
   interface StartupFactory {
     Process start(ProcessBuilder builder) throws IOException;
 
-    default void prepareRuntime(AnalysisEngine owner, Path executable) throws IOException {
+    default void prepareRuntime(
+        AnalysisEngine owner, Path executable, Consumer<Process> started) throws IOException {
       KataGoRuntimeHelper.ensureBundledRuntimeReady(
           executable,
           owner.commands,
@@ -414,7 +415,7 @@ public class AnalysisEngine {
           Lizzie.frame,
           owner.startupDiagnosticAttempt == null
               ? null : owner.startupDiagnosticAttempt::runtimePreflight,
-          () -> owner.shutdownRequested);
+          () -> owner.shutdownRequested, started);
     }
 
     default EngineTransport createTransport(String command) throws IOException {
@@ -427,10 +428,10 @@ public class AnalysisEngine {
   }
 
   void startEngine(String engineCommand, StartupFactory factory) {
-    startEngine(() -> engineCommand, factory);
+    startEngine(startup -> engineCommand, factory);
   }
 
-  private void startEngine(Supplier<String> prepareCommand, StartupFactory factory) {
+  private void startEngine(Function<Startup, String> prepareCommand, StartupFactory factory) {
     Startup startup;
     synchronized (ACTIVE_READER_RESOURCES) {
       if (resourcesShuttingDown || shutdownRequested) {
@@ -444,7 +445,7 @@ public class AnalysisEngine {
     }
     boolean completed = false;
     try {
-      String command = prepareCommand.get();
+      String command = prepareCommand.apply(startup);
       if (shutdownRequested) return;
       startEngineInternal(command, factory, startup);
       completed = true;
@@ -491,7 +492,7 @@ public class AnalysisEngine {
       process = null;
       try {
         remoteTransport = factory.createTransport(engineCommand);
-        if (!startup.connecting(remoteTransport::close)) return;
+        if (!startup.connecting(remoteTransport::abort)) return;
         remoteTransport.start();
         if (shutdownRequested) return;
         initializeStreams(
@@ -552,7 +553,7 @@ public class AnalysisEngine {
       Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       if (Config.isBundledKataGoCommand(engineCommand)) {
         try {
-          factory.prepareRuntime(this, engineExecutable);
+          factory.prepareRuntime(this, engineExecutable, startup::trackProcess);
         } catch (IOException e) {
           if (shutdownRequested) return;
           if (startupDiagnosticAttempt != null) {
@@ -574,7 +575,7 @@ public class AnalysisEngine {
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS,
-              () -> shutdownRequested);
+              () -> shutdownRequested, startup::trackProcess);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
@@ -734,8 +735,14 @@ public class AnalysisEngine {
   /** Reserves exit waiting before launch work, then hands ownership to the existing readers. */
   private final class Startup {
     private final CompletableFuture<Void> finished = new CompletableFuture<>();
+    private final List<CompletableFuture<Process>> preparationProcesses = new ArrayList<>();
     private Runnable closeConnection;
     private CompletableFuture<Void> connectionClosed;
+
+    /** The caller may time out before the OS has finished terminating its exact child. */
+    private void trackProcess(Process process) {
+      preparationProcesses.add(process.onExit());
+    }
 
     /** Register the exact backend before its blocking start, including a late creation after exit. */
     private synchronized boolean connecting(Runnable close) {
@@ -777,37 +784,45 @@ public class AnalysisEngine {
     }
 
     private void finish(boolean completed) {
+      CompletableFuture<Void> cleanup =
+          CompletableFuture.allOf(preparationProcesses.toArray(CompletableFuture<?>[]::new));
       boolean applicationExit;
       boolean cleanupRequired;
       synchronized (ACTIVE_READER_RESOURCES) {
         applicationExit = resourcesShuttingDown;
         cleanupRequired = !completed || shutdownRequested || applicationExit;
-        if (!cleanupRequired) STARTING_ENGINES.remove(this);
       }
-      if (!cleanupRequired) {
-        // Reader registration precedes this handoff; failed connection attempts own no readers.
-        finished.complete(null);
-        return;
+      if (cleanupRequired) {
+        if (applicationExit) cancel();
+        isLoaded = false;
+        CompletableFuture<Void> connectionCleanup = closeConnectionAsync();
+        ReaderResources resources = readerResources;
+        if (resources == null) {
+          // An unchecked startup failure can leave a backend without installed streams.
+          resources =
+              new ReaderResources(
+                  process,
+                  useJavaSSH ? javaSSH : null,
+                  useRemoteCompute ? remoteTransport : null,
+                  startupDiagnosticAttempt,
+                  null,
+                  null,
+                  null);
+          readerResources = resources;
+        }
+        resources.close(false);
+        cleanup = CompletableFuture.allOf(cleanup, connectionCleanup, resources.closed);
       }
-      if (applicationExit) cancel();
-      isLoaded = false;
-      CompletableFuture<Void> connectionCleanup = closeConnectionAsync();
-      ReaderResources resources = readerResources;
-      if (resources == null) {
-        // An unchecked startup failure can leave a backend without installed streams.
-        resources =
-            new ReaderResources(
-                process,
-                useJavaSSH ? javaSSH : null,
-                useRemoteCompute ? remoteTransport : null,
-                startupDiagnosticAttempt,
-                null,
-                null,
-                null);
-        readerResources = resources;
-      }
-      resources.close(false);
-      CompletableFuture.allOf(connectionCleanup, resources.closed).whenComplete(
+      // Even a successful handoff can leave a timed-out preparation child awaiting physical exit.
+      cleanup.thenCompose(ignored -> {
+        synchronized (ACTIVE_READER_RESOURCES) {
+          // Exit may have captured this reservation after finish chose a normal handoff. In that
+          // case wait for the first asynchronous abort, even if a duplicate reader close returned.
+          if (resourcesShuttingDown || shutdownRequested) return closeConnectionAsync();
+          STARTING_ENGINES.remove(this);
+          return CompletableFuture.<Void>completedFuture(null);
+        }
+      }).whenComplete(
           (ignored, failure) -> {
             if (failure == null) {
               synchronized (ACTIVE_READER_RESOURCES) {

@@ -1185,6 +1185,19 @@ public final class KataGoRuntimeHelper {
       java.util.function.Consumer<NvidiaRuntimeStatus> observation,
       BooleanSupplier cancelled)
       throws IOException {
+    ensureBundledRuntimeReady(
+        enginePath, launchCommand, originalCommand, owner, observation, cancelled, process -> {});
+  }
+
+  public static void ensureBundledRuntimeReady(
+      Path enginePath,
+      List<String> launchCommand,
+      String originalCommand,
+      Window owner,
+      java.util.function.Consumer<NvidiaRuntimeStatus> observation,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
+      throws IOException {
     throwIfCompatibilityProbeCancelled(cancelled);
     NvidiaRuntimeStatus status = inspectNvidiaRuntime(enginePath);
     if (observation != null) observation.accept(status);
@@ -1199,7 +1212,7 @@ public final class KataGoRuntimeHelper {
     if (!status.ready) {
       throw new IOException(buildMissingRuntimeMessage(status));
     }
-    ensureCudaDriverCompatibility(enginePath, launchCommand, cancelled);
+    ensureCudaDriverCompatibility(enginePath, launchCommand, cancelled, started);
   }
 
   public static boolean offersTensorRtRepairAction(Throwable error) {
@@ -1449,7 +1462,8 @@ public final class KataGoRuntimeHelper {
   }
 
   private static void ensureCudaDriverCompatibility(
-      Path enginePath, List<String> launchCommand, BooleanSupplier cancelled)
+      Path enginePath, List<String> launchCommand, BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
       throws IOException {
     String backend = resolveNvidiaBackend(enginePath);
     CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, backend);
@@ -1459,7 +1473,7 @@ public final class KataGoRuntimeHelper {
 
     String driverVersion;
     try {
-      driverVersion = resolveNvidiaDriverVersion(cancelled);
+      driverVersion = resolveNvidiaDriverVersion(cancelled, started);
     } catch (CancellationException cancellation) {
       InterruptedIOException failure = new InterruptedIOException(cancellation.getMessage());
       failure.initCause(cancellation);
@@ -1503,7 +1517,8 @@ public final class KataGoRuntimeHelper {
       if (hasMatchingCudaCompatibilityProbe(marker, signature)) {
         return;
       }
-      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion, profile, cancelled);
+      runCudaCompatibilityInferenceProbe(
+          enginePath, inputs, driverVersion, profile, cancelled, started);
       throwIfCompatibilityProbeCancelled(cancelled);
       rememberCudaCompatibilityProbe(marker, signature);
     } finally {
@@ -1644,7 +1659,8 @@ public final class KataGoRuntimeHelper {
       CudaCompatibilityProbeInputs inputs,
       String driverVersion,
       CudaRuntimeProfile profile,
-      BooleanSupplier cancelled)
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
       throws IOException {
     List<String> command = buildCudaCompatibilityProbeCommand(enginePath, inputs);
     ProcessBuilder processBuilder = new ProcessBuilder(command);
@@ -1653,31 +1669,17 @@ public final class KataGoRuntimeHelper {
     throwIfCompatibilityProbeCancelled(cancelled);
     Process process = processBuilder.start();
     StringBuilder output = new StringBuilder();
-    boolean finished = false;
-    try {
-      Thread outputReader = startCompatibilityProbeOutputReader(process, output);
-      long deadline =
-          System.nanoTime() + TimeUnit.SECONDS.toNanos(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS);
-      while (!finished) {
-        throwIfCompatibilityProbeCancelled(cancelled);
-        long remaining = deadline - System.nanoTime();
-        if (remaining <= 0) break;
-        finished =
-            process.waitFor(
-                Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
-      }
-      if (!finished) process.destroyForcibly();
-      outputReader.join(2000L);
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new InterruptedIOException("CUDA compatibility probe interrupted");
-    } finally {
-      // Startup must not return (and release application exit) before its probe has exited.
-      stopCompatibilityProbe(process);
-    }
+    boolean finished =
+        awaitCompatibilityProbe(
+            process, output, cancelled, started,
+            TimeUnit.SECONDS.toMillis(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS));
     throwIfCompatibilityProbeCancelled(cancelled);
+    String capturedOutput;
+    synchronized (output) {
+      capturedOutput = output.toString();
+    }
 
-    KataGoBenchmarkObservation observation = KataGoBenchmarkParser.parse(output.toString(), 1);
+    KataGoBenchmarkObservation observation = KataGoBenchmarkParser.parse(capturedOutput, 1);
     boolean successfulInference =
         finished
             && process.exitValue() == 0
@@ -1687,7 +1689,7 @@ public final class KataGoRuntimeHelper {
                 .filter(KataGoBenchmarkObservation.ThreadMetrics::validForThroughputSelection)
                 .isPresent();
     if (!successfulInference) {
-      String detail = summarizeCompatibilityProbeOutput(output.toString());
+      String detail = summarizeCompatibilityProbeOutput(capturedOutput);
       String message =
           profile == CudaRuntimeProfile.CUDA_13_2
               ? resource(
@@ -1708,27 +1710,42 @@ public final class KataGoRuntimeHelper {
     }
   }
 
+  private static boolean awaitCompatibilityProbe(
+      Process process,
+      StringBuilder output,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started,
+      long timeoutMillis)
+      throws IOException {
+    try {
+      started.accept(process);
+      Thread outputReader = startCompatibilityProbeOutputReader(process, output);
+      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+      boolean finished = false;
+      while (!finished) {
+        throwIfCompatibilityProbeCancelled(cancelled);
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) break;
+        finished =
+            process.waitFor(
+                Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
+      }
+      if (!finished) process.destroyForcibly();
+      outputReader.join(2000L);
+      return finished;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    } finally {
+      // A caller's result deadline and the OS process exit are distinct completion boundaries.
+      if (process.isAlive()) process.destroyForcibly();
+    }
+  }
+
   private static void throwIfCompatibilityProbeCancelled(BooleanSupplier cancelled)
       throws InterruptedIOException {
     if (cancelled.getAsBoolean()) {
       throw new InterruptedIOException("CUDA compatibility probe cancelled");
-    }
-  }
-
-  private static void stopCompatibilityProbe(Process process) {
-    boolean interrupted = Thread.interrupted();
-    try {
-      if (process.isAlive()) process.destroyForcibly();
-      while (true) {
-        try {
-          process.waitFor();
-          return;
-        } catch (InterruptedException e) {
-          interrupted = true;
-        }
-      }
-    } finally {
-      if (interrupted) Thread.currentThread().interrupt();
     }
   }
 
@@ -1884,6 +1901,13 @@ public final class KataGoRuntimeHelper {
   public static List<String> prepareBundledLaunchCommand(
       List<String> originalCommand, Path enginePath, LaunchPurpose purpose,
       BooleanSupplier cancelled) {
+    return prepareBundledLaunchCommand(
+        originalCommand, enginePath, purpose, cancelled, process -> {});
+  }
+
+  public static List<String> prepareBundledLaunchCommand(
+      List<String> originalCommand, Path enginePath, LaunchPurpose purpose,
+      BooleanSupplier cancelled, java.util.function.Consumer<Process> started) {
     throwIfLaunchPreparationCancelled(cancelled);
     if (originalCommand == null) {
       return null;
@@ -1915,7 +1939,7 @@ public final class KataGoRuntimeHelper {
     }
 
     boolean openClFp32Compatibility =
-        shouldUseOpenClFp32Compatibility(launchCommand, enginePath, cancelled);
+        shouldUseOpenClFp32Compatibility(launchCommand, enginePath, cancelled, started);
     Path homeDataDir =
         openClFp32Compatibility ? getOpenClFp32HomeDataDir() : getBundledHomeDataDir();
     if (homeDataDir == null) {
@@ -5346,6 +5370,17 @@ public final class KataGoRuntimeHelper {
       boolean isBatchAnalysisMode,
       boolean wholeGameThroughput,
       BooleanSupplier cancelled) {
+    return optimizeAnalysisEngineCommand(
+        engineCommand, maxVisits, isBatchAnalysisMode, wholeGameThroughput, cancelled, process -> {});
+  }
+
+  public static String optimizeAnalysisEngineCommand(
+      String engineCommand,
+      int maxVisits,
+      boolean isBatchAnalysisMode,
+      boolean wholeGameThroughput,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started) {
     throwIfLaunchPreparationCancelled(cancelled);
     if (engineCommand == null || engineCommand.trim().isEmpty()) {
       return engineCommand;
@@ -5367,7 +5402,7 @@ public final class KataGoRuntimeHelper {
 
     if (wholeGameThroughput && looksLikeKataGoCommand(engineCommand)) {
       List<String> measured =
-          MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand, cancelled);
+          MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand, cancelled, started);
       if (measured != commandParts) return buildCommandLine(measured);
       AnalysisThreadProfile profile = resolveWholeGameAnalysisProfile();
       if (!hasAnalysisThreadOverride) {
@@ -5694,14 +5729,15 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean shouldUseOpenClFp32Compatibility(
-      List<String> command, Path enginePath, BooleanSupplier cancelled) {
+      List<String> command, Path enginePath, BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started) {
     if (!isBundledOpenClPath(enginePath)) {
       return false;
     }
     if ("false".equalsIgnoreCase(findOverrideConfigValue(command, "openclUseFP16"))) {
       return true;
     }
-    String driverVersion = resolveNvidiaDriverVersion(cancelled);
+    String driverVersion = resolveNvidiaDriverVersion(cancelled, started);
     Path marker = getOpenClFp32CompatibilityMarker();
     if (marker == null || !Files.isRegularFile(marker)) {
       return false;
@@ -5718,10 +5754,11 @@ public final class KataGoRuntimeHelper {
   }
 
   private static String resolveNvidiaDriverVersion() {
-    return resolveNvidiaDriverVersion(() -> false);
+    return resolveNvidiaDriverVersion(() -> false, process -> {});
   }
 
-  private static String resolveNvidiaDriverVersion(BooleanSupplier cancelled) {
+  private static String resolveNvidiaDriverVersion(
+      BooleanSupplier cancelled, java.util.function.Consumer<Process> started) {
     throwIfLaunchPreparationCancelled(cancelled);
     String configured = System.getProperty(OPENCL_NVIDIA_DRIVER_VERSION_PROPERTY, "").trim();
     if (!configured.isEmpty()) {
@@ -5741,7 +5778,8 @@ public final class KataGoRuntimeHelper {
     try {
       throwIfLaunchPreparationCancelled(cancelled);
       if (!nvidiaDriverDetectionComplete) {
-        NvidiaGpuDetector.DetectionResult detection = NvidiaGpuDetector.detectBestGpu(cancelled);
+        NvidiaGpuDetector.DetectionResult detection =
+            NvidiaGpuDetector.detectBestGpu(cancelled, started);
         throwIfLaunchPreparationCancelled(cancelled);
         detectedNvidiaDriverVersion =
             detection != null && detection.bestGpu != null

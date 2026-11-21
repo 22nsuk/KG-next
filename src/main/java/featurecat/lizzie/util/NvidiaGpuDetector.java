@@ -16,6 +16,7 @@ import java.util.Locale;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -116,10 +117,14 @@ public final class NvidiaGpuDetector {
     }
   }
 
-  /** Cancellation stops only this caller's queries and waits for their actual process exit. */
   static DetectionResult detectBestGpu(BooleanSupplier cancelled) {
+    return detectBestGpu(cancelled, process -> {});
+  }
+
+  /** The caller can retain each query's exit signal without extending the detection deadline. */
+  static DetectionResult detectBestGpu(BooleanSupplier cancelled, Consumer<Process> started) {
     checkCancelled(cancelled);
-    List<GpuInfo> gpus = detectViaNvidiaSmi(cancelled);
+    List<GpuInfo> gpus = detectViaNvidiaSmi(cancelled, started);
     checkCancelled(cancelled);
     return describeDetection(gpus);
   }
@@ -146,23 +151,26 @@ public final class NvidiaGpuDetector {
     return new DetectionResult(true, gpus, best, recommendation, summary, recommendationText);
   }
 
-  private static List<GpuInfo> detectViaNvidiaSmi(BooleanSupplier cancelled) {
+  private static List<GpuInfo> detectViaNvidiaSmi(
+      BooleanSupplier cancelled, Consumer<Process> started) {
     List<GpuInfo> withCompute =
         queryNvidiaSmi(
-            Arrays.asList("name", "compute_cap", "driver_version", "memory.total"), true, cancelled);
+            Arrays.asList("name", "compute_cap", "driver_version", "memory.total"),
+            true, cancelled, started);
     if (!withCompute.isEmpty()) {
       return withCompute;
     }
     return queryNvidiaSmi(
-        Arrays.asList("name", "driver_version", "memory.total"), false, cancelled);
+        Arrays.asList("name", "driver_version", "memory.total"), false, cancelled, started);
   }
 
   private static List<GpuInfo> queryNvidiaSmi(
-      List<String> fields, boolean includesCompute, BooleanSupplier cancelled) {
+      List<String> fields, boolean includesCompute, BooleanSupplier cancelled,
+      Consumer<Process> started) {
     List<String> args =
         Arrays.asList("--query-gpu=" + join(fields, ","), "--format=csv,noheader,nounits");
     for (List<String> command : nvidiaSmiCommandCandidates(args)) {
-      CommandResult result = runCommand(command, cancelled);
+      CommandResult result = runCommand(command, cancelled, started);
       if (!result.success || result.output.trim().isEmpty()) {
         continue;
       }
@@ -197,17 +205,27 @@ public final class NvidiaGpuDetector {
     return commands;
   }
 
-  private static CommandResult runCommand(List<String> command, BooleanSupplier cancelled) {
-    Process process = null;
-    Thread reader = null;
+  private static CommandResult runCommand(
+      List<String> command, BooleanSupplier cancelled, Consumer<Process> started) {
     try {
       ProcessBuilder builder = new ProcessBuilder(command);
       builder.redirectErrorStream(true);
       checkCancelled(cancelled);
-      process = builder.start();
+      return readCommand(
+          builder.start(), cancelled, started, TimeUnit.SECONDS.toMillis(DETECTION_TIMEOUT_SECONDS));
+    } catch (IOException e) {
+      return new CommandResult(false, "");
+    }
+  }
+
+  private static CommandResult readCommand(
+      Process process, BooleanSupplier cancelled, Consumer<Process> started, long timeoutMillis) {
+    Thread reader = null;
+    try {
+      started.accept(process);
       ByteArrayOutputStream output = new ByteArrayOutputStream();
       reader = startStreamReader(process.getInputStream(), output);
-      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(DETECTION_TIMEOUT_SECONDS);
+      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
       while (true) {
         checkCancelled(cancelled);
         long remaining = deadline - System.nanoTime();
@@ -225,7 +243,8 @@ public final class NvidiaGpuDetector {
     } catch (IOException e) {
       return new CommandResult(false, "");
     } finally {
-      if (process != null) stopAndWait(process);
+      // Termination can outlast the query deadline. An auxiliary startup retains onExit separately.
+      if (process.isAlive()) process.destroyForcibly();
       joinQuietly(reader, 500L);
     }
   }
@@ -233,23 +252,6 @@ public final class NvidiaGpuDetector {
   private static void checkCancelled(BooleanSupplier cancelled) {
     if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())
       throw new CancellationException("NVIDIA GPU detection cancelled");
-  }
-
-  private static void stopAndWait(Process process) {
-    boolean interrupted = Thread.interrupted();
-    try {
-      if (process.isAlive()) process.destroyForcibly();
-      while (true) {
-        try {
-          process.waitFor();
-          return;
-        } catch (InterruptedException e) {
-          interrupted = true;
-        }
-      }
-    } finally {
-      if (interrupted) Thread.currentThread().interrupt();
-    }
   }
 
   private static Thread startStreamReader(InputStream inputStream, ByteArrayOutputStream output) {

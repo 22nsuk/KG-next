@@ -7,14 +7,17 @@ import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
+import featurecat.lizzie.util.katago.tuning.KataGoMeasuredFingerprint;
 import featurecat.lizzie.util.katago.tuning.KataGoMeasuredReport.Scene;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BooleanSupplier;
 import javax.swing.SwingUtilities;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -168,6 +171,41 @@ class MeasuredKataGoTuningTest {
           MeasuredKataGoTuning.applyOverlay(
               original, entry, env.analysis, Scene.WHOLE_GAME,
               (target, command, report) -> { throw new IOException("stale fingerprint"); }));
+    }
+  }
+
+  @Test
+  void additionalWholeGameArtifactHashHonorsCancellation() throws Exception {
+    Path live = Files.writeString(directory.resolve("live-model"), "model");
+    Path analysis = Files.copy(live, directory.resolve("analysis-model"));
+    AtomicInteger smallFileChecks = new AtomicInteger();
+    assertTrue(
+        sameArtifact(
+            live, analysis, KataGoMeasuredFingerprint.sha256(analysis),
+            () -> { smallFileChecks.incrementAndGet(); return false; }));
+    Files.writeString(live, "model".repeat(256 * 1024));
+    Files.writeString(analysis, Files.readString(live));
+    String digest = KataGoMeasuredFingerprint.sha256(analysis);
+    AtomicInteger checks = new AtomicInteger();
+    assertThrows(
+        CancellationException.class,
+        () -> sameArtifact(
+            live, analysis, digest, () -> checks.incrementAndGet() > smallFileChecks.get()));
+    assertFalse(Thread.currentThread().isInterrupted());
+    assertTrue(sameArtifact(live, analysis, digest, () -> false));
+    assertFalse(sameArtifact(live, analysis, "0".repeat(64), () -> false));
+  }
+
+  private static boolean sameArtifact(
+      Path first, Path second, String digest, BooleanSupplier cancelled) throws Exception {
+    var comparison = MeasuredKataGoTuning.class.getDeclaredMethod(
+        "sameArtifact", Path.class, Path.class, String.class, BooleanSupplier.class);
+    comparison.setAccessible(true);
+    try {
+      return (boolean) comparison.invoke(null, first, second, digest, cancelled);
+    } catch (InvocationTargetException failure) {
+      if (failure.getCause() instanceof Exception cause) throw cause;
+      throw failure;
     }
   }
 

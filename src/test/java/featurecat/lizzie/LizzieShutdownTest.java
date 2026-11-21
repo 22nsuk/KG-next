@@ -34,6 +34,7 @@ import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.util.DelayedTerminationProcess;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
 import featurecat.lizzie.util.MeasuredKataGoTuning;
 import featurecat.lizzie.util.NvidiaGpuDiscoveryFixture;
@@ -232,6 +233,81 @@ class LizzieShutdownTest {
   }
 
   @ParameterizedTest
+  @ValueSource(strings = {"handoff", "failed", "cancelled"})
+  void exitWaitsForPreparationChildAfterTheStartupCallReturns(
+      String outcome, @TempDir Path directory) throws Exception {
+    try (Harness harness = Harness.open();
+        DelayedTerminationProcess probe = new DelayedTerminationProcess(directory);
+        GatedAnalysisProcess main = new GatedAnalysisProcess()) {
+      AnalysisEngine analysis = analysisEngine();
+      Path executable = directory.resolve("engines/katago/windows-x64-nvidia/katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      CountDownLatch prepared = new CountDownLatch(1);
+      CountDownLatch releasePreparation = new CountDownLatch(outcome.equals("cancelled") ? 1 : 0);
+      AtomicInteger mainStarts = new AtomicInteger();
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, "\"" + executable + "\" analysis", (proxy, method, arguments) -> {
+          if (method.getName().equals("prepareRuntime")) {
+            @SuppressWarnings("unchecked")
+            Consumer<Process> started = (Consumer<Process>) arguments[2];
+            Method waitForProbe = KataGoRuntimeHelper.class.getDeclaredMethod(
+                "awaitCompatibilityProbe", Process.class, StringBuilder.class,
+                BooleanSupplier.class, Consumer.class, long.class);
+            waitForProbe.setAccessible(true);
+            // Exercise the production timeout/registration boundary with a short time budget.
+            assertFalse((boolean) waitForProbe.invoke(
+                null, probe, new StringBuilder(), (BooleanSupplier) () -> false, started, 25L));
+            prepared.countDown();
+            awaitGate(releasePreparation);
+            if (!outcome.equals("handoff")) throw new IOException("probe timed out");
+            return null;
+          }
+          assertEquals("start", method.getName());
+          mainStarts.incrementAndGet();
+          return main;
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "delayed-preparation-exit");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      AtomicBoolean childAliveAtExit = new AtomicBoolean(true);
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        main.allowDestroy.countDown();
+        starter.start();
+        assertTrue(prepared.await(5, TimeUnit.SECONDS));
+        assertTrue(probe.awaitTerminationRequest(5, TimeUnit.SECONDS));
+        assertTrue(probe.isAlive(), "the OS child must still be awaiting termination");
+        if (!outcome.equals("cancelled")) startup.get(5, TimeUnit.SECONDS);
+        assertNull(harness.frame.analysisEngine, "exit must not depend on frame attachment");
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(code -> {
+          childAliveAtExit.set(probe.isAlive());
+          exited.complete(code);
+        }));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "probe cleanup blocked the EDT");
+        releasePreparation.countDown();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(outcome.equals("handoff") ? 1 : 0, mainStarts.get());
+        assertFalse(exited.isDone(), "exit released a timed-out preparation child");
+
+        probe.finishTermination();
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertFalse(childAliveAtExit.get(), "exit callback ran before physical process exit");
+        assertFalse(analysis.isLoaded());
+      } finally {
+        releasePreparation.countDown();
+        probe.finishTermination();
+        main.allowDestroy.countDown();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest
   @CsvSource({"remote,false", "remote,true", "ssh,false", "ssh,true"})
   void exitCancelsConnectingAnalysisAndWaitsForItsFirstClose(
       String backend, boolean beforeCreation) throws Exception {
@@ -294,6 +370,8 @@ class LizzieShutdownTest {
         startup.get(5, TimeUnit.SECONDS);
         assertTrue(connection.duplicateCloseReturned.await(5, TimeUnit.SECONDS));
         assertEquals(beforeCreation ? 0 : 1, connection.starts.get());
+        assertEquals(backend.equals("remote") ? 1 : 0, connection.aborts.get(),
+            "unfinished transports must use physical abort, not a close handshake");
         assertFalse(cleanup.isDone(), "a duplicate close returned before the first close finished");
         assertFalse(exited.isDone(), "JVM exit ran while connection cleanup was blocked");
 
@@ -318,6 +396,7 @@ class LizzieShutdownTest {
   /** Mirrors the transports' idempotent close: it wakes start before physical cleanup returns. */
   private static final class GatedAnalysisConnection implements EngineTransport {
     private final AtomicInteger starts = new AtomicInteger();
+    private final AtomicInteger aborts = new AtomicInteger();
     private final AtomicBoolean closing = new AtomicBoolean();
     private final CountDownLatch startEntered = new CountDownLatch(1);
     private final CountDownLatch closeEntered = new CountDownLatch(1);
@@ -356,7 +435,7 @@ class LizzieShutdownTest {
     @Override public InputStream stderr() { throw new AssertionError("cancelled connection"); }
     @Override public boolean isOpen() { return false; }
     @Override public String description() { return "controlled connection"; }
-    @Override public void abort() { close(); }
+    @Override public void abort() { aborts.incrementAndGet(); close(); }
   }
 
   @ParameterizedTest
