@@ -80,11 +80,26 @@ public final class AnalysisResourceCoordinator {
 
   public static void processStarted(
       Object owner, Purpose purpose, String command, Process process) {
-    processStarted(owner, purpose, command, process, false);
+    processStarted(owner, purpose, command, process, EngineCommandVisibility.VISIBLE);
+  }
+
+  /** The owner that decoded {@code command} states whether its launch may appear in the log. */
+  public static void processStarted(
+      Object owner,
+      Purpose purpose,
+      String command,
+      Process process,
+      EngineCommandVisibility visibility) {
+    processStarted(owner, purpose, command, process, false, visibility);
   }
 
   static void processStarted(
-      Object owner, Purpose purpose, String command, Process process, boolean startupObserved) {
+      Object owner,
+      Purpose purpose,
+      String command,
+      Process process,
+      boolean startupObserved,
+      EngineCommandVisibility visibility) {
     if (process != null) {
       synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
@@ -93,7 +108,8 @@ public final class AnalysisResourceCoordinator {
     String purposeName = normalizedPurpose(purpose).name();
     if (process == null) {
       try {
-        EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
+        EngineBootstrapFacts facts =
+            EngineStartupBootstrap.factsFor(command, purposeName, visibility);
         EngineObservation.ensureStarted(owner, purposeName, facts);
         if (EngineObservation.engineDiagnosticsEnabled()) {
           EngineObservation.recordProcessDetails(
@@ -101,7 +117,7 @@ public final class AnalysisResourceCoordinator {
               "process-started",
               purposeName,
               -1L,
-              diagnosticCommand(command));
+              diagnosticCommand(command, visibility));
         }
       } catch (RuntimeException ignored) {
       }
@@ -116,7 +132,7 @@ public final class AnalysisResourceCoordinator {
       REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
     }
     try {
-      EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName);
+      EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName, visibility);
       String engineId =
           startupObserved
               ? EngineObservation.ensureStarted(owner, purposeName, facts)
@@ -124,7 +140,7 @@ public final class AnalysisResourceCoordinator {
       EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
       if (EngineObservation.engineDiagnosticsEnabled()) {
         EngineObservation.recordProcessDetails(
-            engineId, "process-started", purposeName, pid, diagnosticCommand(command));
+            engineId, "process-started", purposeName, pid, diagnosticCommand(command, visibility));
       }
     } catch (RuntimeException ignored) {
     }
@@ -375,6 +391,11 @@ public final class AnalysisResourceCoordinator {
     String redacted = new PersistenceSanitizer().sanitize(command);
     redacted = SENSITIVE_ARGUMENT.matcher(redacted).replaceAll("$1$2<redacted>");
     return URL_SECRET.matcher(redacted).replaceAll("$1<redacted>");
+  }
+
+  /** Basenames and option values are still the command the user hid, so none of it is logged. */
+  static String diagnosticCommand(String command, EngineCommandVisibility visibility) {
+    return visibility.isHidden() ? EngineCommandVisibility.HIDDEN_VALUE : diagnosticCommand(command);
   }
 
   static String diagnosticCommand(String command) {

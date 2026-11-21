@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -139,6 +140,42 @@ class EngineBootstrapFactsTest {
     EngineBootstrapFacts missing = EngineBootstrapFacts.fromCommand(null, "MAIN_BOARD");
     assertEquals("unknown", missing.engineType());
     assertEquals("unknown", missing.backend());
+  }
+
+  @Test
+  void hiddenFactsKeepOnlyApplicationNamedClassifications() {
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.forHiddenCommand(
+            "KaTaGo", "PrivateVersion", "MAIN_BOARD", "BUNDLED", "NVIDIA", "DirectML");
+
+    assertEquals("katago", facts.engineType());
+    assertEquals("bundled", facts.source());
+    assertEquals("nvidia", facts.backend());
+    assertEquals("directml", facts.onnxProvider());
+    assertEquals("MAIN_BOARD", facts.purpose());
+    assertEquals("hidden-command", facts.version());
+    assertEquals("hidden-command", facts.model());
+    assertEquals("hidden-command", facts.config());
+    assertFalse(facts.formatLogLine("").contains("Private"));
+  }
+
+  @Test
+  void hiddenFactsRejectCustomClassificationsAndKeepUnknownExplicit() {
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.forHiddenCommand(
+            "_katago_", "unknown", "MAIN_BOARD", "_bundled_", "nvidia-private", "PrivateProvider");
+
+    assertEquals("hidden-command", facts.engineType());
+    assertEquals("hidden-command", facts.source());
+    assertEquals("hidden-command", facts.backend());
+    assertEquals("hidden-command", facts.onnxProvider());
+    assertEquals("unknown", facts.version());
+    assertEquals("MAIN_BOARD", facts.purpose());
+    assertFalse(facts.formatLogLine("").contains("Private"));
+    EngineBootstrapFacts unknown =
+        EngineBootstrapFacts.fromCommand("", "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+    assertEquals("unknown", unknown.backend());
+    assertEquals("unknown", unknown.onnxProvider());
   }
 
   private static Path touch(Path path) throws Exception {

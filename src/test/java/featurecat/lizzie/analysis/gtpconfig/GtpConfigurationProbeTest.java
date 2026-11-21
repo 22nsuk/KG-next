@@ -17,6 +17,7 @@ import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.LoggingSettings;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
+import featurecat.lizzie.util.Utils;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -52,6 +53,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.slf4j.LoggerFactory;
 
 class GtpConfigurationProbeTest {
@@ -194,6 +197,69 @@ class GtpConfigurationProbeTest {
       assertFalse(logs.contains("probe event=failed"), logs);
       assertFalse(logs.contains("probe event=stderr"), logs);
       awaitLogs(runtime);
+    } finally {
+      runtime.shutdown();
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void realProbeStartupLogsRespectSavedCommandVisibility(boolean hidden) throws Exception {
+    LoggingRuntime runtime = startProbeDiagnostics();
+    try {
+      runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
+      String model = "ProbePrivateModel67.bin.gz";
+      String config = "ProbePrivateConfig67.cfg";
+      String provider = "ProbePrivateProvider67";
+      String command =
+          fakeEngineCommand(
+              "-model", model, "-config", config, "-override-config", "onnxProvider=" + provider);
+      String savedCommand = hidden ? "encryption||" + Utils.doEncrypt2(command) : command;
+
+      GtpConfigurationProbe.Inspection inspection =
+          new GtpConfigurationProbe()
+              .inspect(savedCommand, Duration.ofSeconds(REAL_PROCESS_HANDSHAKE_TIMEOUT_SECONDS));
+
+      assertTrue(inspection.supported());
+      assertEquals("zengtp-config", inspection.schema().protocol());
+      awaitLogs(runtime);
+      List<String> startupLines =
+          Files.readString(tempDir.resolve("logs/app.log"), StandardCharsets.UTF_8).lines()
+              .filter(
+                  line ->
+                      line.contains("engine event=bootstrap")
+                          || line.contains("engine event=process-started"))
+              .toList();
+      assertEquals(2, startupLines.size(), startupLines.toString());
+      String bootstrap =
+          startupLines.stream()
+              .filter(line -> line.contains("engine event=bootstrap"))
+              .findFirst()
+              .orElseThrow();
+      String processStarted =
+          startupLines.stream()
+              .filter(line -> line.contains("engine event=process-started"))
+              .findFirst()
+              .orElseThrow();
+      assertTrue(bootstrap.contains("purpose=OTHER"), bootstrap);
+      assertTrue(processStarted.contains("purpose=OTHER"), processStarted);
+      if (hidden) {
+        assertTrue(bootstrap.contains("model=hidden-command"), bootstrap);
+        assertTrue(bootstrap.contains("config=hidden-command"), bootstrap);
+        assertTrue(bootstrap.contains("onnxProvider=hidden-command"), bootstrap);
+        assertTrue(processStarted.contains("command=<hidden-command>"), processStarted);
+        for (String canary : List.of(model, config, provider)) {
+          assertFalse(bootstrap.contains(canary), bootstrap);
+          assertFalse(processStarted.contains(canary), processStarted);
+        }
+      } else {
+        assertTrue(bootstrap.contains("model=" + model), bootstrap);
+        assertTrue(bootstrap.contains("config=" + config), bootstrap);
+        assertTrue(bootstrap.contains("onnxProvider=" + provider), bootstrap);
+        for (String canary : List.of(model, config, provider)) {
+          assertTrue(processStarted.contains(canary), processStarted);
+        }
+      }
     } finally {
       runtime.shutdown();
     }
