@@ -1398,17 +1398,12 @@ public class ContributeEngine {
     if (launch.presented) return;
     launch.presented = true;
     if (attempt.snapshot() == null) attempt.fail("startup-exit", message);
-    EngineFailedMessage.showDialog(
+    EngineFailedMessage.showContributionFailure(
         commands != null ? commands : Utils.splitCommand(engineCommand),
-        sanitizer.sanitize(engineCommand),
-        // Contribution commands come from contribution settings, which never decode one.
-        EngineCommandVisibility.VISIBLE,
-        sanitizer.sanitize(message),
+        engineCommand,
+        message,
+        sanitizer,
         !useJavaSSH && OsPlatform.isWindows(),
-        false,
-        true,
-        true,
-        null,
         dialog -> {
           if (attempt != null && attempt == this.currentAttempt) {
             dialog.bindStartupDiagnostic(attempt);

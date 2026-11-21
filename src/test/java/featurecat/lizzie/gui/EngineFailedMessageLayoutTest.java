@@ -16,6 +16,7 @@ import featurecat.lizzie.analysis.EngineStartupDiagnostic;
 import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.HiddenCommandFixture;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
+import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtFailureKind;
 import featurecat.lizzie.util.KataGoRuntimeHelper.TensorRtInstallStatus;
@@ -127,6 +128,13 @@ class EngineFailedMessageLayoutTest {
     assertEquals(windowsPath + " gtp",
         EngineFailedMessage.cmdDiagnosticBatchLine(
             List.of(windowsPath, "gtp"), windowsPath + " gtp", EngineCommandVisibility.VISIBLE, true));
+    // A drive-relative name depends on the drive's current directory, even with an .exe suffix.
+    for (String relative : List.of("C:engine.exe", "d:engines\\engine.exe")) {
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of(relative, "gtp"), "engine.exe gtp", EngineCommandVisibility.VISIBLE, true));
+      assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
+          List.of("engine.exe", "gtp"), relative + " gtp", EngineCommandVisibility.VISIBLE, true));
+    }
   }
 
   @Test
@@ -180,6 +188,32 @@ class EngineFailedMessageLayoutTest {
       }
     }
     return null;
+  }
+
+  @Test
+  void contributionDialogKeepsLocalCmdWithoutDisplayingTheExecutablePath() {
+    DesktopProbeProcess.requireDisplay();
+    String executable = "C:\\Private Engines\\engine.exe";
+    String configured = "\"" + executable + "\" contribute";
+    EngineFailedMessage.showContributionFailure(
+        List.of(executable, "contribute"), configured, "Missing file: C:\\PrivateModels\\model.bin",
+        new ExportSanitizer(),
+        true, dialog -> {
+          try {
+            String displayed = textOf(findComponentByName(
+                dialog, "EngineFailedMessage.commandPane", JScrollPane.class));
+            assertTrue(displayed.contains("<redacted-path>"), displayed);
+            assertFalse(displayed.contains("Private Engines"), displayed);
+            StringBuilder rendered = new StringBuilder();
+            collectText(dialog, rendered);
+            assertTrue(rendered.toString().contains("Missing file: <redacted-path>"));
+            assertFalse(rendered.toString().contains("PrivateModels"));
+            assertNotNull(findButtonByText(dialog,
+                Lizzie.resourceBundle.getString("EngineFailedMessage.btnRunInCmd")));
+          } finally {
+            SwingUtilities.invokeLater(dialog::dispose);
+          }
+        });
   }
 
   @Test

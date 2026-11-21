@@ -177,6 +177,7 @@ DESKTOP_TESTS = {
     )),
     "featurecat.lizzie.gui.EngineFailedMessageLayoutTest": TestSelection((
         "cmdDiagnosticButtonRejectsSshCommandsAtDialogBoundary",
+        "contributionDialogKeepsLocalCmdWithoutDisplayingTheExecutablePath",
     ), whole_class=False),
     "featurecat.lizzie.gui.VariationPreviewVisibilityTest": TestSelection((
         "candidateMarkersRemainUntilCompletePreviewAndCancellationRejectsOldImages",

@@ -25,6 +25,7 @@ class EngineCmdDiagnosticWindowsTest {
     Path executable = directory.resolve("engine space 中文").resolve("CmdProbe.exe");
     compileProbe(executable, directory.resolve("compile.log"));
     Path shadowMarker = directory.resolve("shadow-command.txt");
+    Path emptyInput = Files.createFile(directory.resolve("empty-input.txt"));
     Files.writeString(
         executable.resolveSibling("CmdProbe.cmd"),
         "@echo shadowed > \"%KG_CMD_SHADOW_OUTPUT%\"\r\n");
@@ -56,16 +57,17 @@ class EngineCmdDiagnosticWindowsTest {
           EngineFailedMessage.cmdDiagnosticBatchLine(
               command, "", EngineCommandVisibility.VISIBLE, true);
       assertNotNull(line, "a visible directly launched native executable must support CMD diagnosis");
-      Path batch = directory.resolve("diagnostic-" + launch + ".bat");
-      // Match the diagnostic's UTF-8 batch encoding and GTP code-page prelude. No CALL or extra
-      // parser is involved: the native child reports the arguments received from cmd.exe.
-      Files.writeString(batch, "@echo off\r\nchcp 65001 > nul\r\n" + line + "\r\n");
+      boolean gtp = program.equals("CmdProbe");
+      EngineFailedMessage.writeCmdDiagnosticFiles(directory, line, gtp);
+      // Start in a legacy code page even on UTF-8 hosts. The production batch must select UTF-8.
+      String runBatch = "chcp 437 > nul && dignostic.bat";
       for (String expansion : List.of("off", "on")) {
         String scenario = launch + "-" + expansion;
         Path captured = directory.resolve("argv-" + scenario + ".txt");
         ProcessBuilder builder =
-            new ProcessBuilder("cmd.exe", "/d", "/v:" + expansion, "/c", batch.getFileName().toString())
-                .directory(directory.toFile());
+            new ProcessBuilder("cmd.exe", "/d", "/v:" + expansion, "/c", runBatch)
+                .directory(directory.toFile())
+                .redirectInput(emptyInput.toFile()); // EOF for the batch's final pause
         builder.environment().put("KG_CMD_PROBE_OUTPUT", captured.toString());
         builder.environment().put("KG_CMD_SHADOW_OUTPUT", shadowMarker.toString());
         builder.environment().put("KG_CMD_EXPAND", "must-not-expand");
@@ -81,7 +83,7 @@ class EngineCmdDiagnosticWindowsTest {
           run(builder, directory.resolve("shadow-control.log"), 30);
           assertTrue(Files.isRegularFile(shadowMarker), "the fixture must expose CMD script lookup");
           Files.delete(shadowMarker);
-          builder.command("cmd.exe", "/d", "/v:off", "/c", batch.getFileName().toString());
+          builder.command("cmd.exe", "/d", "/v:off", "/c", runBatch);
         }
         run(builder, directory.resolve("cmd-" + scenario + ".log"), 30);
         assertFalse(Files.exists(shadowMarker), "CMD selected the script sibling: " + scenario);
