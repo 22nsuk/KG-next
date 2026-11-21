@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis.gtpconfig;
 
 import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.util.CommandLaunchHelper;
@@ -63,7 +64,7 @@ public final class GtpConfigurationProbe {
         Response schemaResponse = session.request(ZENGTP_SCHEMA_COMMAND);
         if (!schemaResponse.success()) {
           noteProbeFailed(session, "schema");
-          throw protocolError(schemaResponse);
+          throw protocolError(session, schemaResponse);
         }
         GtpConfigurationSchema schema =
             GtpConfigurationSchema.parse(new JSONObject(schemaResponse.payload()));
@@ -71,14 +72,14 @@ public final class GtpConfigurationProbe {
           noteProbeFailed(session, "schema");
           throw new IOException(
               "Unsupported GTP configuration protocol: "
-                  + schema.protocol()
+                  + session.visibility().engineOutput(schema.protocol())
                   + " v"
                   + schema.version());
         }
         return Inspection.supported(schema);
       } catch (IllegalArgumentException | JSONException error) {
         noteProbeFailed(session, "schema");
-        throw new IOException("Invalid GTP configuration schema: " + error.getMessage(), error);
+        throw invalidReply(session, "Invalid GTP configuration schema: ", error);
       }
     }
   }
@@ -105,7 +106,7 @@ public final class GtpConfigurationProbe {
         Response schemaResponse = session.request(ZENGTP_SCHEMA_COMMAND);
         if (!schemaResponse.success()) {
           noteProbeFailed(session, "schema");
-          throw protocolError(schemaResponse);
+          throw protocolError(session, schemaResponse);
         }
         GtpConfigurationSchema schema =
             GtpConfigurationSchema.parse(new JSONObject(schemaResponse.payload()));
@@ -113,7 +114,7 @@ public final class GtpConfigurationProbe {
           noteProbeFailed(session, "schema");
           throw new IOException(
               "Unsupported GTP configuration protocol: "
-                  + schema.protocol()
+                  + session.visibility().engineOutput(schema.protocol())
                   + " v"
                   + schema.version());
         }
@@ -127,19 +128,19 @@ public final class GtpConfigurationProbe {
         Response setResponse = session.request(ZENGTP_SET_COMMAND + " " + profile.toString());
         if (!setResponse.success()) {
           noteProbeFailed(session, "apply");
-          throw protocolError(setResponse);
+          throw protocolError(session, setResponse);
         }
         Response saveResponse = session.request(ZENGTP_SAVE_COMMAND);
         if (!saveResponse.success()) {
           noteProbeFailed(session, "apply");
-          throw protocolError(saveResponse);
+          throw protocolError(session, saveResponse);
         }
         JSONObject payload;
         try {
           payload = new JSONObject(saveResponse.payload());
         } catch (JSONException error) {
           noteProbeFailed(session, "apply");
-          throw new IOException("Invalid GTP configuration response: " + error.getMessage(), error);
+          throw invalidReply(session, "Invalid GTP configuration response: ", error);
         }
         JSONObject savedProfile = payload.optJSONObject("profile");
         JSONObject state = payload.optJSONObject("state");
@@ -152,13 +153,21 @@ public final class GtpConfigurationProbe {
             state == null ? new JSONObject() : new JSONObject(state.toString()));
       } catch (IllegalArgumentException | JSONException error) {
         noteProbeFailed(session, "schema");
-        throw new IOException(
-            "Invalid engine configuration response: " + error.getMessage(), error);
+        throw invalidReply(session, "Invalid engine configuration response: ", error);
       }
     }
   }
 
-  private static IOException protocolError(Response response) {
+  /**
+   * The engine editor shows these failures. Their text quotes the engine's reply, which for a
+   * hidden command is engine output that may echo the command, so it is shared only as present.
+   */
+  private static IOException protocolError(Session session, Response response) {
+    EngineCommandVisibility visibility = session.visibility();
+    if (visibility.isHidden()) {
+      return new IOException(
+          "Engine rejected the configuration: " + visibility.engineOutput(response.payload()));
+    }
     try {
       JSONObject payload = new JSONObject(response.payload());
       JSONObject error = payload.optJSONObject("error");
@@ -173,6 +182,12 @@ public final class GtpConfigurationProbe {
       // Fall through to the raw GTP payload when the engine did not return structured JSON.
     }
     return new IOException("Engine rejected the configuration: " + response.payload());
+  }
+
+  private static IOException invalidReply(Session session, String prefix, Exception error) {
+    EngineCommandVisibility visibility = session.visibility();
+    if (!visibility.isHidden()) return new IOException(prefix + error.getMessage(), error);
+    return new IOException(prefix + visibility.engineOutput(error.getMessage()));
   }
 
   private static void noteCapabilityCheck(Session session, boolean success) {
@@ -267,12 +282,28 @@ public final class GtpConfigurationProbe {
     }
   }
 
+  /**
+   * The failure the engine editor shows when the probe cannot start the engine. The JDK's {@code
+   * Cannot run program} text names the executable and working directory, so a hidden command's
+   * failure carries only the disclosed message; the original exception is not chained, since a
+   * printed cause would bring that text back.
+   */
+  static IOException launchFailure(EngineCommandVisibility visibility, IOException error) {
+    if (!visibility.isHidden()) return error;
+    return new IOException(visibility.errorMessage(error));
+  }
+
   interface SessionFactory {
     Session open(String engineCommand, Duration timeout) throws IOException;
   }
 
   interface Session extends AutoCloseable {
     Response request(String command) throws IOException;
+
+    /** Whether the command this session runs is one the user hid. */
+    default EngineCommandVisibility visibility() {
+      return EngineCommandVisibility.VISIBLE;
+    }
 
     @Override
     void close();
@@ -349,11 +380,13 @@ public final class GtpConfigurationProbe {
     private final ProbeStderrTail stderrTail = new ProbeStderrTail();
     private final AtomicReference<String> pendingFailureStage = new AtomicReference<>();
     private final Thread stderrDrainer;
+    private final EngineCommandVisibility visibility;
     private int nextCommandId = 1;
 
-    private ProcessSession(Process process, Duration timeout) {
+    private ProcessSession(Process process, Duration timeout, EngineCommandVisibility visibility) {
       this.process = process;
       this.timeout = timeout;
+      this.visibility = visibility;
       this.reader =
           new BufferedReader(
               new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
@@ -384,7 +417,12 @@ public final class GtpConfigurationProbe {
       if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
         throw new IOException("KataGo tuning is using the local compute device");
       }
-      if (engineCommand.startsWith("encryption||")) {
+      // This probe decodes the saved command itself, so it decides visibility at that point.
+      EngineCommandVisibility visibility =
+          engineCommand.startsWith("encryption||")
+              ? EngineCommandVisibility.HIDDEN
+              : EngineCommandVisibility.VISIBLE;
+      if (visibility.isHidden()) {
         engineCommand = Utils.doDecrypt2(engineCommand.substring("encryption||".length()));
       }
       CommandLaunchHelper.LaunchSpec launchSpec =
@@ -394,11 +432,26 @@ public final class GtpConfigurationProbe {
       }
       ProcessBuilder builder = new ProcessBuilder(launchSpec.getCommandParts());
       CommandLaunchHelper.configureProcessBuilder(builder, launchSpec);
-      ProcessSession session = new ProcessSession(builder.start(), timeout);
+      Process process;
+      try {
+        process = builder.start();
+      } catch (IOException error) {
+        throw launchFailure(visibility, error);
+      }
+      ProcessSession session = new ProcessSession(process, timeout, visibility);
       AnalysisResourceCoordinator.processStarted(
-          session, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, session.process);
+          session,
+          AnalysisResourceCoordinator.Purpose.OTHER,
+          engineCommand,
+          session.process,
+          visibility);
       session.recordStartedQuietly();
       return session;
+    }
+
+    @Override
+    public EngineCommandVisibility visibility() {
+      return visibility;
     }
 
     @Override
@@ -505,7 +558,8 @@ public final class GtpConfigurationProbe {
         }
         String id = EngineObservation.identityFor(this);
         EngineObservation.recordProbeFailed(id, stage);
-        String facts = stderrTail.snapshot();
+        // A hidden command's engine can echo any part of it; its stderr is reported only as present.
+        String facts = visibility.engineOutput(stderrTail.snapshot());
         if (!facts.isEmpty()) {
           EngineObservation.recordProbeStderr(id, facts);
         }

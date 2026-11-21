@@ -307,11 +307,12 @@ class DiagnosticBundleExporterTest {
     runtime.shutdown();
     Path active = runtime.logsDirectory().resolve("app.log");
     String timestamp = LocalDateTime.now().minusSeconds(1).format(LOG_TIMESTAMP);
-    Files.writeString(active, timestamp + " WARN [lizzie.engine] before-capture\n");
+    // An application record: a session-less engine record this old would predate the epoch.
+    Files.writeString(active, timestamp + " WARN [lizzie.app] before-capture\n");
     var exporter = new DiagnosticBundleExporter(tempDir.resolve("capture-length-export"));
     exporter.setLogSourceObserverForTests((source, inputs) -> {
       if (source.equals("lizzie-app")) {
-        Files.writeString(active, timestamp + " WARN [lizzie.engine] after-capture\n",
+        Files.writeString(active, timestamp + " WARN [lizzie.app] after-capture\n",
             StandardOpenOption.APPEND);
       }
     });
@@ -319,6 +320,112 @@ class DiagnosticBundleExporterTest {
         "logs/lizzie/app.log");
     assertTrue(log.contains("before-capture"));
     assertFalse(log.contains("after-capture"));
+  }
+
+  @Test
+  void engineStderrAndCrashRecordsAreSharedOnlyFromTheRunningSession() throws Exception {
+    LoggingRuntime runtime = start();
+    runtime.awaitIdle();
+    String running = runtime.applicationLogSessionId();
+    runtime.shutdown();
+    Path logs = runtime.logsDirectory();
+    String at = LocalDateTime.now().minusSeconds(30).format(LOG_TIMESTAMP);
+    // What an earlier build or another process wrote, beside records every rule keeps.
+    Files.writeString(
+        logs.resolve("app.log"),
+        at
+            + " WARN  [lizzie.engine] session=earlier engine event=failed reason=Cannot run program"
+            + " \"OtherSessionEngineCanary\"\n"
+            + at
+            + " ERROR [lizzie.app.stderr]  java.io.IOException: NoSessionStackCanary\n"
+            + "\tat featurecat.lizzie.analysis.Leelaz.startEngine(Leelaz.java:1)\n"
+            + at
+            + " INFO  UnnamedLoggerCanary without a logger\n"
+            + at
+            + " DEBUG [lizzie.engine.startup] session=earlier ChildLoggerCanary\n"
+            + at
+            + " INFO  [lizzie.app] session=earlier earlier-application-evidence\n"
+            + at
+            + " INFO  [lizzie.gtp] gtp command=name outcome=ok\n"
+            + at
+            + " WARN  [lizzie.engine] session="
+            + running
+            + " running-session-engine-evidence\n"
+            + at
+            + " ERROR [lizzie.app.stderr] session="
+            + running
+            + " running-session-stderr-evidence\n"
+            // A message that names the running session does not attribute the record to it.
+            + at
+            + " WARN  [lizzie.engine]  quoted session="
+            + running
+            + " QuotedSessionCanary\n");
+    Files.writeString(
+        logs.resolve("crash.log"),
+        at
+            + " ERROR [lizzie.crash] session=earlier uncaught exception thread=main\n"
+            + "java.lang.IllegalStateException: OtherSessionCrashCanary\n"
+            + at
+            + " ERROR [lizzie.crash] session="
+            + running
+            + " running-session-crash-evidence\n");
+
+    Map<String, byte[]> entries = unzipEntries(exportDefault(runtime));
+    String log = text(entries, "logs/lizzie/app.log");
+    String crash = text(entries, "logs/lizzie/crash.log");
+
+    for (String canary :
+        List.of(
+            "OtherSessionEngineCanary",
+            "NoSessionStackCanary",
+            "Leelaz.startEngine",
+            "UnnamedLoggerCanary",
+            "ChildLoggerCanary",
+            "QuotedSessionCanary")) {
+      assertFalse(log.contains(canary), canary + " in " + log);
+    }
+    assertFalse(crash.contains("OtherSessionCrashCanary"), crash);
+    assertTrue(log.contains("earlier-application-evidence"), log);
+    assertTrue(log.contains("gtp command=name outcome=ok"), log);
+    assertTrue(log.contains("running-session-engine-evidence"), log);
+    assertTrue(log.contains("running-session-stderr-evidence"), log);
+    assertTrue(crash.contains("running-session-crash-evidence"), crash);
+    JSONObject manifest = manifest(entries);
+    JSONObject app = source(manifest, "lizzie-app").getJSONObject("sensitiveRecordsExcluded");
+    assertEquals(2, app.getInt("otherSession"), app.toString());
+    assertEquals(3, app.getInt("noSession"), app.toString());
+    JSONObject crashExcluded =
+        source(manifest, "lizzie-crash").getJSONObject("sensitiveRecordsExcluded");
+    assertEquals(1, crashExcluded.getInt("otherSession"), crashExcluded.toString());
+    assertEquals(0, crashExcluded.getInt("noSession"), crashExcluded.toString());
+    assertFalse(source(manifest, "readboard-app").has("sensitiveRecordsExcluded"));
+  }
+
+  @Test
+  void recordsLoggedOffTheStartingThreadCarryTheRunningSession() throws Exception {
+    LoggingRuntime runtime = start();
+    String running = runtime.applicationLogSessionId();
+    // Logback's MDC is per thread: only the thread that started logging installed the session.
+    Thread reader =
+        new Thread(
+            () -> {
+              org.slf4j.MDC.clear();
+              LoggerFactory.getLogger(LogCategories.ENGINE).warn("reader-thread-engine-evidence");
+              LoggerFactory.getLogger(LogCategories.CRASH).error("reader-thread-crash-evidence");
+            });
+    reader.start();
+    reader.join();
+    runtime.awaitIdle();
+
+    for (String file : List.of("app.log", "crash.log")) {
+      String persisted = Files.readString(runtime.logsDirectory().resolve(file));
+      String line =
+          persisted.lines().filter(text -> text.contains("reader-thread-")).findFirst().orElse("");
+      assertTrue(line.contains("] session=" + running + " "), file + ": " + persisted);
+    }
+    Map<String, byte[]> entries = unzipEntries(exportDefault(runtime));
+    assertTrue(text(entries, "logs/lizzie/app.log").contains("reader-thread-engine-evidence"));
+    assertTrue(text(entries, "logs/lizzie/crash.log").contains("reader-thread-crash-evidence"));
   }
 
   @Test
@@ -720,7 +827,13 @@ class DiagnosticBundleExporterTest {
                 new JSONObject()
                     .put("name", "Remote engine")
                     .put("useJavaSSH", true)
-                    .put("command", "/srv/remote/OPAQUE_SSH_EXECUTABLE_7f92 gtp")));
+                    .put("command", "/srv/remote/OPAQUE_SSH_EXECUTABLE_7f92 gtp"))
+            .put(
+                new JSONObject()
+                    .put("name", "Hidden engine")
+                    // The saved form of a hidden command. Read as a command line, the blob's tail
+                    // after a slash would pass as an executable name and "katago" as its kind.
+                    .put("command", "encryption||KataGoBlob/HiddenBlobTail9")));
     config.put("leelaz", leelaz);
 
     Path diagnostics = DiagnosticBundleExporter.defaultOutputDirectory(tempDir);
@@ -745,7 +858,7 @@ class DiagnosticBundleExporterTest {
     assertEquals("katago.exe", projected.getString("executable"));
 
     JSONArray engines = projected.getJSONArray("engine-settings-list");
-    assertEquals(6, engines.length());
+    assertEquals(7, engines.length());
     JSONObject first = engines.getJSONObject(0);
     JSONObject second = engines.getJSONObject(1);
     JSONObject wrongTypes = engines.getJSONObject(2);
@@ -776,6 +889,11 @@ class DiagnosticBundleExporterTest {
     assertEquals("Remote engine", remoteEngine.getString("name"));
     assertEquals("other", remoteEngine.getString("kind"));
     assertEquals("unknown", remoteEngine.getString("executable"));
+    JSONObject hidden = engines.getJSONObject(6);
+    assertEquals(Set.of("name", "kind", "executable"), hidden.keySet());
+    assertEquals("hidden-command", hidden.getString("kind"));
+    assertEquals("hidden-command", hidden.getString("executable"));
+    assertFalse(text(entries, "snapshots/config.json").contains("HiddenBlobTail9"));
 
     for (JSONObject engine : new JSONObject[] {first, second}) {
       for (String forbidden :
@@ -1515,6 +1633,8 @@ class DiagnosticBundleExporterTest {
   void exportedLogsPreserveRecordBoundariesAndStackTraceWhitespace() throws Exception {
     LoggingRuntime runtime = start();
     runtime.awaitIdle();
+    // Crash records are shared from the running session only; its writer stamps the session.
+    String session = "session=" + runtime.applicationLogSessionId() + " ";
     runtime.shutdown();
     String timestamp = LocalDateTime.now().minusSeconds(1).format(LOG_TIMESTAMP);
     Files.writeString(
@@ -1527,10 +1647,14 @@ class DiagnosticBundleExporterTest {
     Files.writeString(
         tempDir.resolve("logs/crash.log"),
         timestamp
-            + " ERROR [lizzie.crash] java.lang.IllegalStateException: failed\n"
+            + " ERROR [lizzie.crash] "
+            + session
+            + "java.lang.IllegalStateException: failed\n"
             + "\tat Example.run(Example.java:1)\n\n"
             + timestamp
-            + " ERROR [lizzie.crash] next failure",
+            + " ERROR [lizzie.crash] "
+            + session
+            + "next failure",
         StandardCharsets.UTF_8);
 
     Map<String, String> entries = unzipTextEntries(exportDefault(runtime));
@@ -1543,10 +1667,14 @@ class DiagnosticBundleExporterTest {
         entries.get("logs/lizzie/app.log"));
     assertEquals(
         timestamp
-            + " ERROR [lizzie.crash] java.lang.IllegalStateException: failed\n"
+            + " ERROR [lizzie.crash] "
+            + session
+            + "java.lang.IllegalStateException: failed\n"
             + "\tat Example.run(Example.java:1)\n\n"
             + timestamp
-            + " ERROR [lizzie.crash] next failure\n",
+            + " ERROR [lizzie.crash] "
+            + session
+            + "next failure\n",
         entries.get("logs/lizzie/crash.log"));
   }
 

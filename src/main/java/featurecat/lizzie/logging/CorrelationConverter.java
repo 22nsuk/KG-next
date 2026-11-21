@@ -4,15 +4,33 @@ import ch.qos.logback.classic.pattern.ClassicConverter;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import java.util.Map;
 
+/**
+ * Renders a record's correlation fields. The session comes first, so a reader finds it right after
+ * the logger. When the writer's session is known it is the record's session: the writer is the
+ * session that wrote the record, whichever thread logged it.
+ */
 public final class CorrelationConverter extends ClassicConverter {
+  private final String writerSession;
+
+  public CorrelationConverter() {
+    this(null);
+  }
+
+  CorrelationConverter(String writerSession) {
+    this.writerSession = writerSession;
+  }
+
   @Override
   public String convert(ILoggingEvent event) {
     Map<String, String> mdc = event.getMDCPropertyMap();
-    if (mdc == null || mdc.isEmpty()) {
-      return "";
+    if (mdc == null) {
+      mdc = Map.of();
     }
     StringBuilder rendered = new StringBuilder();
-    append(rendered, "session", mdc.get(CorrelationContext.APP_SESSION));
+    append(
+        rendered,
+        "session",
+        writerSession != null ? writerSession : mdc.get(CorrelationContext.APP_SESSION));
     append(rendered, "engine", mdc.get(CorrelationContext.ENGINE_ID));
     append(rendered, "command", mdc.get(CorrelationContext.COMMAND_ID));
     append(rendered, "request", mdc.get(CorrelationContext.REQUEST_ID));

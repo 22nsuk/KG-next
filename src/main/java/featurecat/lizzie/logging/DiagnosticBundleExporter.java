@@ -348,6 +348,9 @@ public final class DiagnosticBundleExporter {
     String processSession = processSession(request);
     String processAlias =
         processSession == null ? null : sanitizer.alias("session", processSession);
+    // Engine, captured-stderr and crash records are shared only from the running session.
+    RunningSessionRecords appRecords = new RunningSessionRecords(hostSession);
+    RunningSessionRecords crashRecords = new RunningSessionRecords(hostSession);
     String stage = "collection";
     long stageStarted = System.nanoTime();
     // Pin each source before emitting progress events: the first log after midnight can roll it.
@@ -376,6 +379,7 @@ public final class DiagnosticBundleExporter {
               true,
               hostSession,
               "no-active-session",
+              appRecords,
               cancel);
           throwIfCancelled(cancel);
           copyLogSource(
@@ -398,6 +402,7 @@ public final class DiagnosticBundleExporter {
               true,
               hostSession,
               "no-active-session",
+              crashRecords,
               cancel);
           throwIfCancelled(cancel);
           copyRawTraces(out, request, trace, sanitizer, sources, captureTime, cancel);
@@ -422,6 +427,7 @@ public final class DiagnosticBundleExporter {
               true,
               processAlias,
               "no-current-session",
+              null,
               cancel);
           throwIfCancelled(cancel);
           copyLogSource(
@@ -444,6 +450,7 @@ public final class DiagnosticBundleExporter {
               true,
               processAlias,
               "no-current-session",
+              null,
               cancel);
           throwIfCancelled(cancel);
           copyReadBoardTrace(
@@ -581,6 +588,7 @@ public final class DiagnosticBundleExporter {
           true,
           request.applicationLogSessionId(),
           "no-active-session",
+          null,
           cancel);
     }
   }
@@ -646,6 +654,7 @@ public final class DiagnosticBundleExporter {
         true,
         processAlias,
         "no-current-session",
+        null,
         cancel);
   }
 
@@ -1321,6 +1330,7 @@ public final class DiagnosticBundleExporter {
       boolean requested,
       String sessionForManifest,
       String emptyReason,
+      RunningSessionRecords sessionRecords,
       BooleanSupplier cancel)
       throws IOException {
     JSONObject source =
@@ -1416,6 +1426,7 @@ public final class DiagnosticBundleExporter {
                       captureTime,
                       requiredSession,
                       sanitizer,
+                      sessionRecords,
                       cancel);
           malformedRecords += result.malformedRecords();
           truncated |= result.truncated();
@@ -1445,6 +1456,10 @@ public final class DiagnosticBundleExporter {
       }
 
       source.put("readFilterSanitizeNanos", System.nanoTime() - readingStarted);
+      if (sessionRecords != null) {
+        // Records whose writer is not known to have kept a user-hidden engine command out.
+        source.put("sensitiveRecordsExcluded", sessionRecords.excluded());
+      }
       source.put("sanitizerNanos", budget.sanitizerNanos);
       LOG.info(
           "diagnostic source={} stage=read-filter-sanitize state=completed elapsedNanos={}",
@@ -1501,6 +1516,7 @@ public final class DiagnosticBundleExporter {
       Instant captureTime,
       String requiredSession,
       ExportSanitizer sanitizer,
+      RunningSessionRecords sessionRecords,
       BooleanSupplier cancel)
       throws IOException {
     RecordTail records = new RecordTail(capBytes);
@@ -1526,7 +1542,8 @@ public final class DiagnosticBundleExporter {
           boolean eligible =
               timestamp != null
                   && (cutoff == null || !timestamp.isBefore(cutoff))
-                  && (captureTime == null || !timestamp.isAfter(captureTime));
+                  && (captureTime == null || !timestamp.isAfter(captureTime))
+                  && (sessionRecords == null || !sessionRecords.omits(line.text()));
           current = new RecordAccumulator(eligible);
           current.append(line);
         } else if (current != null) {

@@ -282,6 +282,29 @@ public final class EngineObservation {
         () -> ENGINE.debug("engine event=queue depth={} inFlight={}", depth, inFlight));
   }
 
+  /**
+   * The engine's {@code version} reply could not be read as a version, so version-gated features
+   * stay off.
+   *
+   * @param error the parse failure, composed by the owner's {@code EngineCommandVisibility}: for a
+   *     user-hidden command only its exception type remains, since its message quotes the reply
+   */
+  public static void recordVersionUnparsed(String engineId, String error) {
+    try {
+      if (!runtimeActive() || !ENGINE.isInfoEnabled()) {
+        return;
+      }
+      inContext(
+          engineId,
+          null,
+          () ->
+              ENGINE.info(
+                  "engine event=version-unparsed error={}",
+                  ObservationText.boundedRawEvent(error == null ? "unknown" : error)));
+    } catch (RuntimeException ignored) {
+    }
+  }
+
   public static void recordRecentStderr(String engineId, String facts) {
     if (!engineDiagnosticsEnabled() || facts == null || facts.isEmpty()) {
       return;

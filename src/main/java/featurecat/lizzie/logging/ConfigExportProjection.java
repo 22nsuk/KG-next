@@ -23,6 +23,12 @@ public final class ConfigExportProjection {
   private static final int MAX_UI_TEXT_LENGTH = 255;
   private static final int MAX_ENGINE_NAME_LENGTH = 255;
   private static final int MAX_EXECUTABLE_BASENAME_LENGTH = 255;
+  /**
+   * The engine editor saves a command the user chose to hide as {@code encryption||<blob>}. The
+   * blob is the command under a key every copy of the application holds, so neither it nor any
+   * part of it is a summary of the command.
+   */
+  private static final String HIDDEN_COMMAND_PREFIX = "encryption||";
 
   private ConfigExportProjection() {}
 
@@ -153,6 +159,11 @@ public final class ConfigExportProjection {
   }
 
   private static void putEngineSummary(JSONObject target, String command, boolean useJavaSsh) {
+    if (command.startsWith(HIDDEN_COMMAND_PREFIX)) {
+      target.put("kind", EngineBootstrapFacts.HIDDEN);
+      target.put("executable", EngineBootstrapFacts.HIDDEN);
+      return;
+    }
     target.put("kind", engineKind(command));
     // A remote shell command may start with a secret-bearing assignment instead of an executable.
     target.put("executable", useJavaSsh ? "unknown" : executableBasename(command));

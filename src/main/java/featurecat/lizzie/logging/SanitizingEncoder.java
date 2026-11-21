@@ -13,6 +13,7 @@ final class SanitizingEncoder extends EncoderBase<ILoggingEvent> {
   private final PatternLayout layout = new PatternLayout();
   private PersistenceSanitizer sanitizer = new PersistenceSanitizer();
   private LogStream stream = LogStream.APP;
+  private String writerSession;
   private String pattern =
       "%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%logger] %corr %msg%n%ex";
 
@@ -32,10 +33,20 @@ final class SanitizingEncoder extends EncoderBase<ILoggingEvent> {
     return stream;
   }
 
+  /**
+   * The application log session of the runtime this encoder writes for. Every record it writes is
+   * attributed to that session, whichever thread logged it: the MDC that otherwise carries the
+   * session is per thread, and only the thread that started logging installs it.
+   */
+  void setWriterSession(String session) {
+    this.writerSession = session == null || session.isEmpty() ? null : session;
+  }
+
   @Override
   public void start() {
     layout.setContext(context);
-    layout.getInstanceConverterMap().put("corr", CorrelationConverter::new);
+    String session = writerSession;
+    layout.getInstanceConverterMap().put("corr", () -> new CorrelationConverter(session));
     layout.setPattern(pattern);
     layout.start();
     super.start();

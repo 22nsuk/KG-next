@@ -222,7 +222,10 @@ public class ContributeEngine {
     }
     String engineId =
         EngineObservation.restartInstance(
-            this, "CONTRIBUTE", EngineStartupBootstrap.factsFor(engineCommand, "CONTRIBUTE"));
+            this,
+            "CONTRIBUTE",
+            EngineStartupBootstrap.factsFor(
+                engineCommand, "CONTRIBUTE", EngineCommandVisibility.VISIBLE));
     EngineStartupDiagnostics.Attempt attempt =
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
@@ -264,7 +267,12 @@ public class ContributeEngine {
         launch.process = process;
         attempt.attachProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, true);
+            this,
+            AnalysisResourceCoordinator.Purpose.OTHER,
+            engineCommand,
+            process,
+            true,
+            EngineCommandVisibility.VISIBLE);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);

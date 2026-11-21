@@ -14,6 +14,7 @@ import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.Zobrist;
+import featurecat.lizzie.util.Utils;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -200,6 +201,32 @@ class EngineManagerBenchmarkTest {
       assertEquals(BenchmarkExecution.State.FAILED, notStarted.state());
       assertTrue(notStarted.detail().contains("katago"));
       assertNull(notStarted.exitCode());
+    }
+  }
+
+  @Test
+  void hiddenCreationFailureShowsOnlyTheSystemReason() throws Exception {
+    try (Environment env = new Environment(directory)) {
+      String command =
+          "\""
+              + directory.resolve("PrivateVault-31").resolve("katago")
+              + "\" benchmark -model PrivateModel-12.bin.gz";
+      Leelaz hidden = new NamedEngine("encryption||" + Utils.doEncrypt2(command));
+      EngineManager manager = env.manager(hidden);
+      assertTrue(manager.switchEngineIfAvailable(0, true));
+      var notStarted = hidden.benchmarkExecution().completion().get(5, TimeUnit.SECONDS);
+      SwingUtilities.invokeAndWait(() -> {});
+      List<String> fragments = List.of("PrivateVault-31", "PrivateModel-12", "katago\"");
+
+      assertEquals(BenchmarkExecution.State.FAILED, notStarted.state());
+      HiddenCommandFixture.assertNoFragment(notStarted.detail(), fragments);
+      assertTrue(
+          notStarted.detail().matches("Cannot run program <hidden-command>.*: (?!<hidden).+"),
+          notStarted.detail());
+      // The engine manager shows the detail in the GTP console and the engine-switch status.
+      String console = env.console.output.toString();
+      HiddenCommandFixture.assertNoFragment(console, fragments);
+      assertTrue(console.contains("Cannot run program <hidden-command>"), console);
     }
   }
 

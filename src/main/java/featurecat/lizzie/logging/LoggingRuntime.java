@@ -765,6 +765,7 @@ public final class LoggingRuntime {
     encoder.setPattern(PATTERN);
     encoder.setSanitizer(sanitizer);
     encoder.setLogStream(stream);
+    encoder.setWriterSession(applicationLogSessionId);
     encoder.start();
     encoders.add(encoder);
     file.setEncoder(encoder);
