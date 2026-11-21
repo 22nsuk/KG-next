@@ -18,8 +18,20 @@ public final class EngineStartupDiagnostic {
   private final int sizeBytes;
   private static final int DEFAULT_MAX_BYTES = 256 * 1024;
   public static EngineStartupDiagnostic basic(List<String> commands, String command, String detail) {
+    return basic(commands, command, detail, EngineCommandVisibility.VISIBLE);
+  }
+
+  /**
+   * A hidden command keeps only a marker. {@code detail} is the failure text its owner composed,
+   * which for a hidden command carries exception and engine text only through {@link
+   * EngineCommandVisibility}; every other field is the application's own vocabulary.
+   */
+  public static EngineStartupDiagnostic basic(
+      List<String> commands, String command, String detail, EngineCommandVisibility visibility) {
     String resolvedCommand = "";
-    if (command != null && !command.isBlank()) {
+    if (visibility.isHidden()) {
+      resolvedCommand = EngineCommandVisibility.HIDDEN_VALUE;
+    } else if (command != null && !command.isBlank()) {
       resolvedCommand = command.trim();
     } else if (commands != null && !commands.isEmpty()) {
       resolvedCommand = renderCommand(commands);
@@ -35,6 +47,7 @@ public final class EngineStartupDiagnostic {
     launch.put("environmentState", "unavailable");
     launch.put("platform", windows ? "windows" : "non-windows");
     launch.put("configuredCommand", bounded(resolvedCommand, 16384));
+    if (visibility.isHidden()) launch.put("commandHidden", true);
 
     JSONObject sources = new JSONObject();
     sources.put(

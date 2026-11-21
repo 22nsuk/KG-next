@@ -60,30 +60,12 @@ public final class CommandLaunchHelper {
 
   private CommandLaunchHelper() {}
 
-  public static String decodeSavedCommand(String command) {
-    if (command == null) return "";
-    return command.startsWith("encryption||") ? Utils.doDecrypt2(command.substring(12)) : command;
-  }
-
-  private static String executableName(String command) {
-    return command
-        .substring(Math.max(command.lastIndexOf('/'), command.lastIndexOf('\\')) + 1)
-        .toLowerCase(Locale.ROOT);
-  }
-
-  private static boolean isSshClientName(String name) {
-    return name.equals("ssh") || name.equals("ssh.exe")
-        || name.equals("plink") || name.equals("plink.exe");
-  }
-
-  public static boolean isExternalSshExecutable(String token) {
-    return token != null && isSshClientName(executableName(token));
-  }
-
   /** Whether model and snapshot paths may belong to a launcher rather than the host filesystem. */
   public static boolean isIndirectLauncher(String command) {
-    String executable = executableName(command);
-    if (isSshClientName(executable)) return true;
+    String executable =
+        command
+            .substring(Math.max(command.lastIndexOf('/'), command.lastIndexOf('\\')) + 1)
+            .toLowerCase(Locale.ROOT);
     if (executable.endsWith(".exe")) {
       executable = executable.substring(0, executable.length() - 4);
     } else if (executable.endsWith(".bat")
@@ -96,7 +78,9 @@ public final class CommandLaunchHelper {
       return true;
     }
     return switch (executable) {
-      case "wsl",
+      case "ssh",
+          "plink",
+          "wsl",
           "wslhost",
           "docker",
           "podman",
@@ -136,7 +120,7 @@ public final class CommandLaunchHelper {
         || hasNumericVersionSuffix(executable, "php");
   }
 
-  static boolean hasNumericVersionSuffix(String executable, String baseName) {
+  private static boolean hasNumericVersionSuffix(String executable, String baseName) {
     if (!executable.startsWith(baseName)) {
       return false;
     }
