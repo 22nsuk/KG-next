@@ -1366,7 +1366,10 @@ public class Leelaz {
                   : this == Lizzie.leelaz2 ? "COMPARE" : preload ? "PRELOAD" : "MAIN_BOARD";
       loggingEngineId =
           EngineObservation.restartInstance(
-              this, launchPurpose, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+              this,
+              launchPurpose,
+              EngineStartupBootstrap.factsFor(
+                  engineCommand, launchPurpose, engineCommandVisibility));
       startupDiagnosticAttempt =
           EngineStartupDiagnostics.getDefault()
               .begin(
@@ -1555,8 +1558,12 @@ public class Leelaz {
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
         recordUpdateEngineStartProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process,
-            startupDiagnosticAttempt != null);
+            this,
+            AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+            engineCommand,
+            process,
+            startupDiagnosticAttempt != null,
+            engineCommandVisibility);
       } catch (IOException e) {
         // The JDK names the executable and working directory; a hidden command keeps neither.
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("process-create", e);
@@ -4775,7 +4782,10 @@ public class Leelaz {
       if (id == null) {
         id =
             EngineObservation.ensureStarted(
-                this, "MAIN_BOARD", EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+                this,
+                "MAIN_BOARD",
+                EngineStartupBootstrap.factsFor(
+                    engineCommand, "MAIN_BOARD", engineCommandVisibility));
       }
       loggingEngineId = id;
     } catch (RuntimeException ignored) {
@@ -4800,7 +4810,8 @@ public class Leelaz {
       if (id == null) {
         id = EngineObservation.mintIdentity(this);
         EngineObservation.recordBootstrap(
-            id, EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+            id,
+            EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD", engineCommandVisibility));
       }
       loggingEngineId = id;
       try {
@@ -23488,7 +23499,11 @@ public class Leelaz {
     }
     if (this == Lizzie.leelaz && Lizzie.frame != null) {
       AnalysisResourceCoordinator.processStarted(
-          this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process);
+          this,
+          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+          engineCommand,
+          process,
+          engineCommandVisibility);
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {

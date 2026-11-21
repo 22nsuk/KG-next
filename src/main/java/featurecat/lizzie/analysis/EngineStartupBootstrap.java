@@ -11,6 +11,16 @@ import java.util.Locale;
 final class EngineStartupBootstrap {
   private EngineStartupBootstrap() {}
 
+  /**
+   * A hidden command shares only {@link EngineBootstrapFacts#forHiddenCommand}: KG-next's own names
+   * for the engine type, source, backend and ONNX provider, and a marker for everything else.
+   */
+  static EngineBootstrapFacts factsFor(
+      String command, String purpose, EngineCommandVisibility visibility) {
+    EngineBootstrapFacts facts = factsFor(command, purpose);
+    return visibility.isHidden() ? facts.forHiddenCommand() : facts;
+  }
+
   static EngineBootstrapFacts factsFor(String command, String purpose) {
     EngineBootstrapFacts parsed = EngineBootstrapFacts.fromCommand(command, purpose);
     try {

@@ -540,7 +540,12 @@ public class AnalysisEngine {
     }
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
+        this,
+        purpose,
+        engineCommand,
+        process,
+        startupDiagnosticAttempt != null,
+        EngineCommandVisibility.VISIBLE);
     readerResources.start();
   }
 

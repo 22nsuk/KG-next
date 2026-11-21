@@ -141,6 +141,57 @@ class EngineBootstrapFactsTest {
     assertEquals("unknown", missing.backend());
   }
 
+  @Test
+  void hiddenFactsKeepOnlyApplicationNamedClassifications() {
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.of(
+                "KaTaGo",
+                "PrivateVersion",
+                "MAIN_BOARD",
+                "BUNDLED",
+                "NVIDIA",
+                "DirectML",
+                "PrivateModel.bin.gz",
+                "PrivateConfig.cfg")
+            .forHiddenCommand();
+
+    assertEquals("katago", facts.engineType());
+    assertEquals("bundled", facts.source());
+    assertEquals("nvidia", facts.backend());
+    assertEquals("directml", facts.onnxProvider());
+    assertEquals("MAIN_BOARD", facts.purpose());
+    assertEquals("hidden-command", facts.version());
+    assertEquals("hidden-command", facts.model());
+    assertEquals("hidden-command", facts.config());
+    assertFalse(facts.formatLogLine("").contains("Private"));
+  }
+
+  @Test
+  void hiddenFactsRejectCustomClassificationsAndKeepUnknownExplicit() {
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.of(
+                "PrivateEngine",
+                "unknown",
+                "MAIN_BOARD",
+                "PrivateSource",
+                "nvidia-private",
+                "PrivateProvider",
+                "PrivateModel.bin.gz",
+                "PrivateConfig.cfg")
+            .forHiddenCommand();
+
+    assertEquals("hidden-command", facts.engineType());
+    assertEquals("hidden-command", facts.source());
+    assertEquals("hidden-command", facts.backend());
+    assertEquals("hidden-command", facts.onnxProvider());
+    assertEquals("unknown", facts.version());
+    assertEquals("MAIN_BOARD", facts.purpose());
+    assertFalse(facts.formatLogLine("").contains("Private"));
+    EngineBootstrapFacts unknown = EngineBootstrapFacts.unknown("MAIN_BOARD").forHiddenCommand();
+    assertEquals("unknown", unknown.backend());
+    assertEquals("unknown", unknown.onnxProvider());
+  }
+
   private static Path touch(Path path) throws Exception {
     Files.createDirectories(path.getParent());
     if (!Files.exists(path)) {

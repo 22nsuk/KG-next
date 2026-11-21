@@ -3,11 +3,13 @@ package featurecat.lizzie.analysis;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.DiagnosticModule;
@@ -20,23 +22,33 @@ import featurecat.lizzie.logging.TraceScope;
 import featurecat.lizzie.logging.WorkDirectoryResolution;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.Utils;
 import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
   private static final String INFO_CANARY = "T03_INFO_CANARY";
+  private static final String PRIVATE_MODEL = "PrivateModel-71.bin.gz";
+  private static final String PRIVATE_CONFIG = "PrivateConfig-82.cfg";
+  private static final String PRIVATE_PROVIDER = "PrivateProvider-93";
+  private static final String PRIVATE_BACKEND = "privatemarker-64";
 
   @TempDir Path tempDir;
   private Config previousConfig;
@@ -211,6 +223,141 @@ class EngineGtpLoggingTest {
     assertTrue(app.contains("engine event=started"), app);
     String successId = EngineObservation.identityFor(engine);
     assertTrue(successId != null && ids.contains(successId), app);
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void realStartFailureBootstrapHonorsCommandVisibilityWithDiagnosticsOff(boolean hidden)
+      throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
+    Lizzie.config.uiConfig = new JSONObject();
+    Lizzie.config.leelazConfig = new JSONObject();
+    Lizzie.config.config = new JSONObject();
+    String command = privateLaunchCommand();
+    String saved = savedCommand(command, hidden);
+    EngineData data = new EngineData();
+    data.name = "Startup logging test";
+    data.commands = saved;
+    data.width = data.height = 19;
+    Utils.saveEngineSettings(new ArrayList<>(List.of(data)));
+    Leelaz engine = new Leelaz(saved);
+    Lizzie.leelaz = engine;
+    Lizzie.gtpConsole = allocate(SilentGtpConsole.class);
+    Lizzie.frame = allocate(QuietFrame.class);
+    assertEquals(command, engine.engineCommand);
+    assertEquals(hidden, engine.engineCommandVisibility().isHidden());
+    Field firstLaunch = Lizzie.class.getDeclaredField("firstLaunchSession");
+    firstLaunch.setAccessible(true);
+    boolean previousFirstLaunch = firstLaunch.getBoolean(null);
+    firstLaunch.setBoolean(null, true);
+    try {
+      engine.startEngine(0);
+      Field attemptField = Leelaz.class.getDeclaredField("startupDiagnosticAttempt");
+      attemptField.setAccessible(true);
+      EngineStartupDiagnostics.Attempt attempt =
+          (EngineStartupDiagnostics.Attempt) attemptField.get(engine);
+      assertNotNull(attempt);
+      assertEquals("process-create", attempt.snapshot().toJson().getString("phase"));
+      awaitLogs(runtime);
+      String app = readApp();
+      assertLaunchBootstrap(app, hidden);
+      assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
+      assertFalse(app.contains("event=process-started"), app);
+    } finally {
+      firstLaunch.setBoolean(null, previousFirstLaunch);
+      Lizzie.engineStartupStatus.ready();
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true, noteEngineStarted",
+    "false, noteEngineStarted",
+    "true, noteEngineFailed",
+    "false, noteEngineFailed"
+  })
+  void fallbackBootstrapHonorsCommandVisibility(boolean hidden, String entry) throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    Leelaz engine = prepareEngine();
+    engine.setEngineCommand(savedCommand(privateLaunchCommand(), hidden));
+    if (entry.equals("noteEngineFailed")) {
+      Method fail = Leelaz.class.getDeclaredMethod(entry, String.class);
+      fail.setAccessible(true);
+      fail.invoke(engine, "startup failed");
+    } else {
+      Method started = Leelaz.class.getDeclaredMethod(entry);
+      started.setAccessible(true);
+      started.invoke(engine);
+    }
+    awaitLogs(runtime);
+    String app = readApp();
+    assertLaunchBootstrap(app, hidden);
+    assertSameEngineIdentity(
+        app, "event=bootstrap", entry.equals("noteEngineFailed") ? "event=failed" : "event=started");
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, true", "false, true", "true, false", "false, false"})
+  void processStartObservationHonorsCommandVisibility(boolean hidden, boolean local)
+      throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    runtime.applySettings(LoggingSettings.defaults());
+    String command = privateLaunchCommand();
+    Object owner = new Object();
+    Process process =
+        local
+            ? new ProcessBuilder(
+                    Path.of(
+                            System.getProperty("java.home"),
+                            "bin",
+                            System.getProperty("os.name").startsWith("Windows")
+                                ? "java.exe"
+                                : "java")
+                        .toString(),
+                    "-version")
+                .redirectErrorStream(true)
+                .redirectOutput(tempDir.resolve("java-version.log").toFile())
+                .start()
+            : null;
+    try {
+      AnalysisResourceCoordinator.processStarted(
+          owner,
+          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+          command,
+          process,
+          hidden ? EngineCommandVisibility.HIDDEN : EngineCommandVisibility.VISIBLE);
+      String identity = EngineObservation.identityFor(owner);
+      assertNotNull(identity);
+      awaitLogs(runtime);
+      String app = readApp();
+      assertLaunchBootstrap(app, hidden);
+      assertSameEngineIdentity(app, "event=bootstrap", "event=process-started");
+      String processLine = eventLine(app, "event=process-started");
+      assertNotNull(processLine, app);
+      assertTrue(processLine.contains("engine=" + identity), processLine);
+      assertTrue(processLine.contains("purpose=MAIN_BOARD"), processLine);
+      assertTrue(processLine.contains("pid=" + (local ? process.pid() : -1)), processLine);
+      if (hidden) {
+        assertTrue(processLine.contains("command=<hidden-command>"), processLine);
+        assertNoPrivateLaunchValue(processLine);
+      } else {
+        assertTrue(processLine.contains("command=u7x gtp"), processLine);
+        assertTrue(processLine.contains(PRIVATE_MODEL), processLine);
+        assertTrue(processLine.contains(PRIVATE_CONFIG), processLine);
+        assertTrue(processLine.contains(PRIVATE_PROVIDER), processLine);
+      }
+    } finally {
+      try {
+        if (process != null && process.isAlive()) {
+          process.destroyForcibly();
+          assertTrue(process.waitFor(10, TimeUnit.SECONDS), "java -version child did not terminate");
+        }
+      } finally {
+        AnalysisResourceCoordinator.processStopped(
+            owner, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, process);
+      }
+    }
   }
 
   @Test
@@ -400,6 +547,60 @@ class EngineGtpLoggingTest {
     return Files.isRegularFile(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
   }
 
+  private String privateLaunchCommand() throws Exception {
+    Path executable = tempDir.resolve("PrivateLaunch-35").resolve("u7x");
+    Files.createDirectories(executable.getParent());
+    Files.writeString(
+        executable.getParent().resolve("lizzieyzy-next-engine-backend.txt"),
+        PRIVATE_BACKEND + "\n",
+        StandardCharsets.UTF_8);
+    return "\""
+        + executable.toAbsolutePath()
+        + "\" gtp -model "
+        + PRIVATE_MODEL
+        + " -config "
+        + PRIVATE_CONFIG
+        + " -override-config onnxProvider="
+        + PRIVATE_PROVIDER;
+  }
+
+  private static String savedCommand(String command, boolean hidden) {
+    return hidden ? "encryption||" + Utils.doEncrypt2(command) : command;
+  }
+
+  private static void assertLaunchBootstrap(String app, boolean hidden) {
+    String line = eventLine(app, "event=bootstrap");
+    assertNotNull(line, app);
+    assertNotNull(engineIdOnEventLine(app, "event=bootstrap"), app);
+    assertTrue(line.contains("purpose=MAIN_BOARD"), line);
+    assertTrue(line.contains("source=user-configured"), line);
+    assertTrue(line.contains("engineType=unknown"), line);
+    if (hidden) {
+      assertNoPrivateLaunchValue(line);
+      assertTrue(line.contains("backend=hidden-command"), line);
+      assertTrue(line.contains("onnxProvider=hidden-command"), line);
+      assertTrue(line.contains("model=hidden-command config=hidden-command"), line);
+    } else {
+      assertTrue(line.contains("backend=" + PRIVATE_BACKEND), line);
+      assertTrue(line.contains("onnxProvider=" + PRIVATE_PROVIDER), line);
+      assertTrue(line.contains("model=" + PRIVATE_MODEL), line);
+      assertTrue(line.contains("config=" + PRIVATE_CONFIG), line);
+    }
+  }
+
+  private static void assertNoPrivateLaunchValue(String line) {
+    for (String value :
+        List.of(
+            "u7x",
+            "PrivateLaunch-35",
+            PRIVATE_MODEL,
+            PRIVATE_CONFIG,
+            PRIVATE_PROVIDER,
+            PRIVATE_BACKEND)) {
+      assertFalse(line.contains(value), line);
+    }
+  }
+
   private static void assertSameEngineIdentity(String app, String firstEvent, String secondEvent) {
     String first = engineIdOnEventLine(app, firstEvent);
     String second = engineIdOnEventLine(app, secondEvent);
@@ -464,5 +665,13 @@ class EngineGtpLoggingTest {
 
     @Override
     public void addErrorLine(String line) {}
+  }
+
+  private static final class QuietFrame extends LizzieFrame {
+    @Override
+    public void refresh() {}
+
+    @Override
+    public void resetTitle() {}
   }
 }
