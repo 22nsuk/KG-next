@@ -6,6 +6,9 @@ import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.util.katago.tuning.KataGoMeasuredFingerprint;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.atomic.AtomicInteger;
 import javax.swing.SwingUtilities;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -91,6 +94,58 @@ class KataGoMeasuredFingerprintTest {
     assertEquals("2", semantics.getString("numNNServerThreadsPerModel"));
     assertFalse(semantics.has("homeDataDir"));
     assertFalse(fingerprint.similar(KataGoMeasuredFingerprint.capture(snapshot, gpu())));
+  }
+
+  @Test
+  void captureChecksCancellationBetweenChunksOfEveryArtifact() throws Exception {
+    var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(entry());
+    Path config = directory.resolve("gtp.cfg");
+    Path included = Files.writeString(directory.resolve("child.cfg"), "rules=chinese");
+    Files.writeString(config, "@include child.cfg\nnumSearchThreads=8");
+    for (Path artifact :
+        List.of(snapshot.enginePath, snapshot.activeWeightPath, config, included)) {
+      AtomicInteger smallFileChecks = new AtomicInteger();
+      var expected = KataGoMeasuredFingerprint.capture(snapshot, gpu());
+      var actual =
+          KataGoMeasuredFingerprint.capture(
+              snapshot, gpu(), snapshot.sourceArguments,
+              () -> { smallFileChecks.incrementAndGet(); return false; });
+      assertTrue(expected.similar(actual));
+      byte[] original = Files.readAllBytes(artifact);
+      try {
+        // More chunks must introduce cancellation checks even after all checks needed by the
+        // original small-file capture. This does not depend on an exact number of boundary polls.
+        Files.writeString(artifact, "x".repeat(2 * 1024 * 1024));
+        AtomicInteger checks = new AtomicInteger();
+        assertThrows(
+            CancellationException.class,
+            () -> KataGoMeasuredFingerprint.capture(
+                snapshot, gpu(), snapshot.sourceArguments,
+                () -> checks.incrementAndGet() > smallFileChecks.get()),
+            artifact.toString());
+        assertFalse(Thread.currentThread().isInterrupted());
+        // This also requires the active hash stream to have been closed on Windows.
+        Files.delete(artifact);
+      } finally {
+        Files.write(artifact, original);
+      }
+    }
+  }
+
+  @Test
+  void interruptedHashKeepsItsCheckedFailureAndInterruptFlag() throws Exception {
+    Path model = directory.resolve("interrupted-model");
+    Files.writeString(model, "model");
+    try {
+      Thread.currentThread().interrupt();
+      assertThrows(java.io.IOException.class, () -> KataGoMeasuredFingerprint.sha256(model));
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+    assertEquals(
+        KataGoMeasuredFingerprint.sha256(model),
+        KataGoMeasuredFingerprint.sha256(model, () -> false));
   }
 
   @Test

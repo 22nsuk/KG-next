@@ -17,6 +17,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 import javax.swing.SwingUtilities;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -41,8 +43,17 @@ public final class KataGoMeasuredFingerprint {
 
   public static JSONObject capture(
       SetupSnapshot snapshot, GpuInfo gpu, List<String> effectiveCommand) throws IOException {
+    return capture(snapshot, gpu, effectiveCommand, () -> false);
+  }
+
+  public static JSONObject capture(
+      SetupSnapshot snapshot,
+      GpuInfo gpu,
+      List<String> effectiveCommand,
+      BooleanSupplier cancelled) throws IOException {
     if (SwingUtilities.isEventDispatchThread())
       throw new IOException("Fingerprint requires a worker thread");
+    checkCancelled(cancelled);
     if (snapshot == null
         || gpu == null
         || gpu.name.isBlank()
@@ -53,7 +64,7 @@ public final class KataGoMeasuredFingerprint {
     List<String> included = new ArrayList<>();
     Set<Path> visited = new HashSet<>();
     for (int index = 0; index < configs.size(); index++) {
-      appendIncludes(configs.get(index), visited, included, index > 0);
+      appendIncludes(configs.get(index), visited, included, index > 0, cancelled);
     }
     Map<String, String> semantics = new TreeMap<>();
     KataGoCommandSpec.parse(effectiveCommand)
@@ -65,9 +76,9 @@ public final class KataGoMeasuredFingerprint {
             });
     validateArguments(effectiveCommand);
     return new JSONObject()
-        .put("engineSha256", sha256(snapshot.enginePath))
-        .put("modelSha256", sha256(snapshot.activeWeightPath))
-        .put("configSha256", sha256(configs.get(0)))
+        .put("engineSha256", sha256(snapshot.enginePath, cancelled))
+        .put("modelSha256", sha256(snapshot.activeWeightPath, cancelled))
+        .put("configSha256", sha256(configs.get(0), cancelled))
         .put("configIncludes", new JSONArray(included))
         .put("gpuName", gpu.name)
         .put("driverVersion", gpu.driverVersion)
@@ -114,13 +125,19 @@ public final class KataGoMeasuredFingerprint {
   }
 
   private static void appendIncludes(
-      Path path, Set<Path> visited, List<String> hashes, boolean includeSelf) throws IOException {
+      Path path,
+      Set<Path> visited,
+      List<String> hashes,
+      boolean includeSelf,
+      BooleanSupplier cancelled) throws IOException {
+    checkCancelled(cancelled);
     Path real = path.toRealPath();
     if (visited.size() >= 64 || !visited.add(real))
       throw new IOException("Repeated or excessive config includes");
-    if (includeSelf) hashes.add(sha256(real));
+    if (includeSelf) hashes.add(sha256(real, cancelled));
     if (Files.size(real) > 4 * 1024 * 1024) throw new IOException("Configuration file too large");
     for (String raw : Files.readAllLines(real)) {
+      checkCancelled(cancelled);
       String line = raw.split("#", 2)[0].trim();
       if (!line.startsWith("@")) continue;
       String[] directive = line.split("[\\s=]+", 2);
@@ -135,12 +152,17 @@ public final class KataGoMeasuredFingerprint {
       Path child = Path.of(value);
       if (value.isBlank() || child.isAbsolute())
         throw new IOException("Unsupported config include path");
-      appendIncludes(real.getParent().resolve(child), visited, hashes, true);
+      appendIncludes(real.getParent().resolve(child), visited, hashes, true, cancelled);
     }
   }
 
   /** Intentionally fresh: same-length replacements with preserved timestamps must invalidate. */
   public static String sha256(Path path) throws IOException {
+    return sha256(path, () -> false);
+  }
+
+  public static String sha256(Path path, BooleanSupplier cancelled) throws IOException {
+    checkCancelled(cancelled);
     if (path == null) throw new IOException("Missing fingerprint input");
     BasicFileAttributes before = Files.readAttributes(path, BasicFileAttributes.class);
     if (!before.isRegularFile()) throw new IOException("Fingerprint input is not a regular file");
@@ -152,17 +174,24 @@ public final class KataGoMeasuredFingerprint {
     }
     try (InputStream input = Files.newInputStream(path)) {
       byte[] buffer = new byte[64 * 1024];
-      int count;
-      while ((count = input.read(buffer)) >= 0) {
-        if (Thread.currentThread().isInterrupted()) throw new IOException("Fingerprint cancelled");
+      while (true) {
+        checkCancelled(cancelled);
+        int count = input.read(buffer);
+        if (count < 0) break;
         hash.update(buffer, 0, count);
       }
     }
+    checkCancelled(cancelled);
     BasicFileAttributes after = Files.readAttributes(path, BasicFileAttributes.class);
     if (before.size() != after.size()
         || !before.lastModifiedTime().equals(after.lastModifiedTime())
         || !Objects.equals(before.fileKey(), after.fileKey()))
       throw new IOException("Fingerprint input changed while reading");
     return HexFormat.of().formatHex(hash.digest());
+  }
+
+  private static void checkCancelled(BooleanSupplier cancelled) throws IOException {
+    if (cancelled.getAsBoolean()) throw new CancellationException("Fingerprint cancelled");
+    if (Thread.currentThread().isInterrupted()) throw new IOException("Fingerprint cancelled");
   }
 }

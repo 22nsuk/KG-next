@@ -13,6 +13,9 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
+import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
 import org.json.JSONObject;
 
@@ -113,6 +116,19 @@ public final class MeasuredKataGoTuning {
   }
 
   public static List<String> applyWholeGame(List<String> command, String configuredCommand) {
+    return applyWholeGame(command, configuredCommand, () -> false);
+  }
+
+  static List<String> applyWholeGame(
+      List<String> command, String configuredCommand, BooleanSupplier cancelled) {
+    return applyWholeGame(command, configuredCommand, cancelled, process -> {});
+  }
+
+  static List<String> applyWholeGame(
+      List<String> command,
+      String configuredCommand,
+      BooleanSupplier cancelled,
+      Consumer<Process> started) {
     if (SwingUtilities.isEventDispatchThread() || Lizzie.config == null) return command;
     EngineData match = null;
     for (EngineData entry : Utils.getEngineData()) {
@@ -124,7 +140,10 @@ public final class MeasuredKataGoTuning {
     }
     return match == null
         ? command
-        : applyOverlay(command, match, configuredCommand, Scene.WHOLE_GAME);
+        : applyOverlay(
+            command, match, configuredCommand, Scene.WHOLE_GAME,
+            (entry, configured, report) ->
+                verifyFingerprint(entry, configured, report, cancelled, started));
   }
 
   private static List<String> applyOverlay(
@@ -151,6 +170,9 @@ public final class MeasuredKataGoTuning {
       Map<String, String> overrides = new LinkedHashMap<>(report.candidateOverrides());
       if (scene == Scene.WHOLE_GAME) overrides.put("numSearchThreads", "");
       return KataGoCommandSpec.parse(command).withForcedOverrides(overrides);
+    } catch (CancellationException cancelled) {
+      // Cancellation is not a stale profile: do not continue preparing a fallback launch.
+      throw cancelled;
     } catch (IOException | RuntimeException invalidated) {
       return command;
     }
@@ -179,6 +201,16 @@ public final class MeasuredKataGoTuning {
 
   private static void verifyFingerprint(
       EngineData entry, String command, KataGoMeasuredReport report) throws IOException {
+    verifyFingerprint(entry, command, report, () -> false, process -> {});
+  }
+
+  private static void verifyFingerprint(
+      EngineData entry,
+      String command,
+      KataGoMeasuredReport report,
+      BooleanSupplier cancelled,
+      Consumer<Process> started)
+      throws IOException {
     requireWorker();
     if (entry.useJavaSSH || !EngineThreadPolicy.isLocalKataGoCommand(command, false)) {
       throw new IOException("Measured profiles require a local KataGo engine");
@@ -188,12 +220,13 @@ public final class MeasuredKataGoTuning {
     inspected.name = entry.name;
     inspected.commands = command;
     var snapshot = KataGoAutoSetupHelper.inspectSavedEngine(inspected);
-    var hardware = NvidiaGpuDetector.detectBestGpu();
+    var hardware = NvidiaGpuDetector.detectBestGpu(cancelled, started);
     if (!hardware.detected || hardware.gpus.size() != 1)
       throw new IOException("A single measured NVIDIA GPU is required");
     List<String> effectiveCommand =
         KataGoRuntimeHelper.prepareBundledLaunchCommand(
-            snapshot.sourceArguments, snapshot.enginePath);
+            snapshot.sourceArguments, snapshot.enginePath,
+            KataGoRuntimeHelper.LaunchPurpose.MAIN_GTP, cancelled, started);
     if (report.scene() == Scene.LIVE) {
       EngineData withoutMeasured =
           Utils.engineDataFromJson(Utils.engineDataToJson(entry), entry.index);
@@ -205,31 +238,36 @@ public final class MeasuredKataGoTuning {
       effectiveCommand =
           Utils.splitCommand(
               KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
-                  command, report.budget(), false, false));
+                  command, report.budget(), false, false, cancelled, started));
       effectiveCommand =
-          KataGoRuntimeHelper.prepareBundledLaunchCommand(effectiveCommand, snapshot.enginePath);
+          KataGoRuntimeHelper.prepareBundledLaunchCommand(
+              effectiveCommand, snapshot.enginePath,
+              KataGoRuntimeHelper.LaunchPurpose.MAIN_GTP, cancelled, started);
     }
     JSONObject current =
-        KataGoMeasuredFingerprint.capture(snapshot, hardware.bestGpu, effectiveCommand);
+        KataGoMeasuredFingerprint.capture(snapshot, hardware.bestGpu, effectiveCommand, cancelled);
     if (!current.similar(report.fingerprint()))
       throw new IOException(
           "Engine, weights, config, GPU, driver or command no longer matches this report");
     if (report.scene() == Scene.WHOLE_GAME) {
       var live = KataGoAutoSetupHelper.inspectSavedEngine(entry);
       if (live == null
-          || !sameArtifact(live.enginePath, snapshot.enginePath, current.getString("engineSha256"))
           || !sameArtifact(
-              live.activeWeightPath, snapshot.activeWeightPath, current.getString("modelSha256"))) {
+              live.enginePath, snapshot.enginePath, current.getString("engineSha256"), cancelled)
+          || !sameArtifact(
+              live.activeWeightPath, snapshot.activeWeightPath,
+              current.getString("modelSha256"), cancelled)) {
         throw new IOException("Whole-game analysis must use the selected engine and weights");
       }
     }
   }
 
-  private static boolean sameArtifact(Path first, Path second, String digest) throws IOException {
+  private static boolean sameArtifact(
+      Path first, Path second, String digest, BooleanSupplier cancelled) throws IOException {
     return first != null
         && second != null
         && (first.toRealPath().equals(second.toRealPath())
-            || KataGoMeasuredFingerprint.sha256(first).equals(digest));
+            || KataGoMeasuredFingerprint.sha256(first, cancelled).equals(digest));
   }
 
   private static String commandFor(EngineData entry, Scene scene) throws IOException {

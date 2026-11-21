@@ -68,10 +68,13 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -334,8 +337,8 @@ public final class KataGoRuntimeHelper {
   private static volatile boolean benchmarkEngineSyncSuppressed = false;
   private static volatile boolean appleAutoOptimizeRunning = false;
   private static volatile AppleSiliconHardwareProbe.HardwareProfile cachedAppleHardwareProfile;
-  private static final Object NVIDIA_DRIVER_DETECTION_LOCK = new Object();
-  private static final Object CUDA_COMPATIBILITY_PROBE_LOCK = new Object();
+  private static final ReentrantLock NVIDIA_DRIVER_DETECTION_LOCK = new ReentrantLock();
+  private static final ReentrantLock CUDA_COMPATIBILITY_PROBE_LOCK = new ReentrantLock();
   private static final Object OPENCL_TUNING_CACHE_LOCK = new Object();
   private static volatile boolean nvidiaDriverDetectionComplete = false;
   private static volatile String detectedNvidiaDriverVersion = "";
@@ -1170,20 +1173,57 @@ public final class KataGoRuntimeHelper {
       Window owner,
       java.util.function.Consumer<NvidiaRuntimeStatus> observation)
       throws IOException {
-    NvidiaRuntimeStatus status = inspectNvidiaRuntime(enginePath);
-    if (observation != null) observation.accept(status);
-    TensorRtRepairContext context =
-        inspectTensorRtStartupFailure(enginePath, launchCommand, originalCommand);
-    if (context != null) {
-      throw new TensorRtRuntimeException(context);
+    ensureBundledRuntimeReady(
+        enginePath, launchCommand, originalCommand, owner, observation, () -> false);
+  }
+
+  public static void ensureBundledRuntimeReady(
+      Path enginePath,
+      List<String> launchCommand,
+      String originalCommand,
+      Window owner,
+      java.util.function.Consumer<NvidiaRuntimeStatus> observation,
+      BooleanSupplier cancelled)
+      throws IOException {
+    ensureBundledRuntimeReady(
+        enginePath, launchCommand, originalCommand, owner, observation, cancelled, process -> {});
+  }
+
+  public static void ensureBundledRuntimeReady(
+      Path enginePath,
+      List<String> launchCommand,
+      String originalCommand,
+      Window owner,
+      java.util.function.Consumer<NvidiaRuntimeStatus> observation,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
+      throws IOException {
+    throwIfCompatibilityProbeCancelled(cancelled);
+    try {
+      NvidiaRuntimeStatus status = inspectNvidiaRuntime(enginePath, cancelled);
+      throwIfRuntimeInspectionCancelled(cancelled);
+      if (observation != null) observation.accept(status);
+      TensorRtRepairContext context =
+          inspectTensorRtStartupFailure(
+              enginePath, launchCommand, originalCommand, false, false, cancelled);
+      throwIfRuntimeInspectionCancelled(cancelled);
+      if (context != null) {
+        throw new TensorRtRuntimeException(context);
+      }
+      if (!status.applicable) {
+        return;
+      }
+      if (!status.ready) {
+        throw new IOException(buildMissingRuntimeMessage(status));
+      }
+      ensureCudaDriverCompatibility(enginePath, launchCommand, cancelled, started);
+    } catch (CancellationException cancellation) {
+      // Provenance helpers treat IO failures as missing files. Cancellation must bypass that
+      // fallback, then retain this launch API's checked cancellation result.
+      InterruptedIOException failure = new InterruptedIOException(cancellation.getMessage());
+      failure.initCause(cancellation);
+      throw failure;
     }
-    if (!status.applicable) {
-      return;
-    }
-    if (!status.ready) {
-      throw new IOException(buildMissingRuntimeMessage(status));
-    }
-    ensureCudaDriverCompatibility(enginePath, launchCommand);
   }
 
   public static boolean offersTensorRtRepairAction(Throwable error) {
@@ -1222,6 +1262,19 @@ public final class KataGoRuntimeHelper {
       String originalCommand,
       boolean includeEngineCompleteness,
       boolean packagedCompanionOnly) {
+    return inspectTensorRtStartupFailure(
+        enginePath, launchCommand, originalCommand, includeEngineCompleteness,
+        packagedCompanionOnly, () -> false);
+  }
+
+  private static TensorRtRepairContext inspectTensorRtStartupFailure(
+      Path enginePath,
+      List<String> launchCommand,
+      String originalCommand,
+      boolean includeEngineCompleteness,
+      boolean packagedCompanionOnly,
+      BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (!isWindowsPlatform() || enginePath == null) {
       return null;
     }
@@ -1232,12 +1285,12 @@ public final class KataGoRuntimeHelper {
     // AI Coach launches the packaged companion, so its runtime gaps are runtime repairs too.
     NvidiaRuntimeStatus runtime =
         packagedCompanionOnly
-            ? inspectTensorRtLaunchRuntime(enginePath)
-            : inspectNvidiaRuntime(enginePath);
+            ? inspectTensorRtLaunchRuntime(enginePath, cancelled)
+            : inspectNvidiaRuntime(enginePath, cancelled);
     boolean companionReady =
         packagedCompanionOnly
-            ? hasUsablePackagedHumanSlCompanion(enginePath)
-            : hasUsableTensorRtHumanSlCompanion(enginePath);
+            ? hasUsablePackagedHumanSlCompanion(enginePath, cancelled)
+            : hasUsableTensorRtHumanSlCompanion(enginePath, cancelled);
     List<String> missingItems = new ArrayList<String>();
     if (!runtime.ready) {
       missingItems.add(TensorRtInstallStatus.MISSING_RUNTIME);
@@ -1248,7 +1301,7 @@ public final class KataGoRuntimeHelper {
     if (includeEngineCompleteness) {
       if (!Files.isRegularFile(enginePath)) {
         missingItems.add(TensorRtInstallStatus.MISSING_ENGINE);
-      } else if (!isCurrentTensorRtEngineBinary(enginePath)) {
+      } else if (!isCurrentTensorRtEngineBinary(enginePath, cancelled)) {
         missingItems.add(TensorRtInstallStatus.MISSING_ENGINE_STALE);
       }
     }
@@ -1432,7 +1485,9 @@ public final class KataGoRuntimeHelper {
     }
   }
 
-  private static void ensureCudaDriverCompatibility(Path enginePath, List<String> launchCommand)
+  private static void ensureCudaDriverCompatibility(
+      Path enginePath, List<String> launchCommand, BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
       throws IOException {
     String backend = resolveNvidiaBackend(enginePath);
     CudaRuntimeProfile profile = cudaRuntimeProfile(enginePath, backend);
@@ -1440,7 +1495,14 @@ public final class KataGoRuntimeHelper {
       return;
     }
 
-    String driverVersion = resolveNvidiaDriverVersion();
+    String driverVersion;
+    try {
+      driverVersion = resolveNvidiaDriverVersion(cancelled, started);
+    } catch (CancellationException cancellation) {
+      InterruptedIOException failure = new InterruptedIOException(cancellation.getMessage());
+      failure.initCause(cancellation);
+      throw failure;
+    }
     NvidiaGpuDetector.CudaCompatibility compatibility =
         cudaDriverCompatibility(enginePath, driverVersion);
     if (compatibility == NvidiaGpuDetector.CudaCompatibility.SUPPORTED) {
@@ -1466,12 +1528,25 @@ public final class KataGoRuntimeHelper {
     String signature =
         buildCudaCompatibilityProbeSignature(
             enginePath, inputs.modelPath, inputs.configPath, driverVersion);
-    synchronized (CUDA_COMPATIBILITY_PROBE_LOCK) {
+    try {
+      do {
+        throwIfCompatibilityProbeCancelled(cancelled);
+      } while (!CUDA_COMPATIBILITY_PROBE_LOCK.tryLock(100, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    }
+    try {
+      throwIfCompatibilityProbeCancelled(cancelled);
       if (hasMatchingCudaCompatibilityProbe(marker, signature)) {
         return;
       }
-      runCudaCompatibilityInferenceProbe(enginePath, inputs, driverVersion, profile);
+      runCudaCompatibilityInferenceProbe(
+          enginePath, inputs, driverVersion, profile, cancelled, started);
+      throwIfCompatibilityProbeCancelled(cancelled);
       rememberCudaCompatibilityProbe(marker, signature);
+    } finally {
+      CUDA_COMPATIBILITY_PROBE_LOCK.unlock();
     }
   }
 
@@ -1607,29 +1682,28 @@ public final class KataGoRuntimeHelper {
       Path enginePath,
       CudaCompatibilityProbeInputs inputs,
       String driverVersion,
-      CudaRuntimeProfile profile)
+      CudaRuntimeProfile profile,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started)
       throws IOException {
     List<String> command = buildCudaCompatibilityProbeCommand(enginePath, inputs);
     ProcessBuilder processBuilder = new ProcessBuilder(command);
     processBuilder.redirectErrorStream(true);
     configureBundledProcessBuilder(processBuilder, enginePath);
+    throwIfCompatibilityProbeCancelled(cancelled);
     Process process = processBuilder.start();
     StringBuilder output = new StringBuilder();
-    Thread outputReader = startCompatibilityProbeOutputReader(process, output);
-    boolean finished;
-    try {
-      finished = process.waitFor(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-      if (!finished) {
-        process.destroyForcibly();
-      }
-      outputReader.join(2000L);
-    } catch (InterruptedException e) {
-      process.destroyForcibly();
-      Thread.currentThread().interrupt();
-      throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    boolean finished =
+        awaitCompatibilityProbe(
+            process, output, cancelled, started,
+            TimeUnit.SECONDS.toMillis(CUDA_COMPATIBILITY_PROBE_TIMEOUT_SECONDS));
+    throwIfCompatibilityProbeCancelled(cancelled);
+    String capturedOutput;
+    synchronized (output) {
+      capturedOutput = output.toString();
     }
 
-    KataGoBenchmarkObservation observation = KataGoBenchmarkParser.parse(output.toString(), 1);
+    KataGoBenchmarkObservation observation = KataGoBenchmarkParser.parse(capturedOutput, 1);
     boolean successfulInference =
         finished
             && process.exitValue() == 0
@@ -1639,7 +1713,7 @@ public final class KataGoRuntimeHelper {
                 .filter(KataGoBenchmarkObservation.ThreadMetrics::validForThroughputSelection)
                 .isPresent();
     if (!successfulInference) {
-      String detail = summarizeCompatibilityProbeOutput(output.toString());
+      String detail = summarizeCompatibilityProbeOutput(capturedOutput);
       String message =
           profile == CudaRuntimeProfile.CUDA_13_2
               ? resource(
@@ -1657,6 +1731,45 @@ public final class KataGoRuntimeHelper {
                       ? resource("AutoSetup.cudaDriverUnknown", "unknown")
                       : driverVersion.trim())
               + (detail.isEmpty() ? "" : " " + detail));
+    }
+  }
+
+  private static boolean awaitCompatibilityProbe(
+      Process process,
+      StringBuilder output,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started,
+      long timeoutMillis)
+      throws IOException {
+    try {
+      started.accept(process);
+      Thread outputReader = startCompatibilityProbeOutputReader(process, output);
+      long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+      boolean finished = false;
+      while (!finished) {
+        throwIfCompatibilityProbeCancelled(cancelled);
+        long remaining = deadline - System.nanoTime();
+        if (remaining <= 0) break;
+        finished =
+            process.waitFor(
+                Math.min(remaining, TimeUnit.MILLISECONDS.toNanos(100)), TimeUnit.NANOSECONDS);
+      }
+      if (!finished) process.destroyForcibly();
+      outputReader.join(2000L);
+      return finished;
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new InterruptedIOException("CUDA compatibility probe interrupted");
+    } finally {
+      // A caller's result deadline and the OS process exit are distinct completion boundaries.
+      if (process.isAlive()) process.destroyForcibly();
+    }
+  }
+
+  private static void throwIfCompatibilityProbeCancelled(BooleanSupplier cancelled)
+      throws InterruptedIOException {
+    if (cancelled.getAsBoolean()) {
+      throw new InterruptedIOException("CUDA compatibility probe cancelled");
     }
   }
 
@@ -1806,6 +1919,20 @@ public final class KataGoRuntimeHelper {
 
   public static List<String> prepareBundledLaunchCommand(
       List<String> originalCommand, Path enginePath, LaunchPurpose purpose) {
+    return prepareBundledLaunchCommand(originalCommand, enginePath, purpose, () -> false);
+  }
+
+  public static List<String> prepareBundledLaunchCommand(
+      List<String> originalCommand, Path enginePath, LaunchPurpose purpose,
+      BooleanSupplier cancelled) {
+    return prepareBundledLaunchCommand(
+        originalCommand, enginePath, purpose, cancelled, process -> {});
+  }
+
+  public static List<String> prepareBundledLaunchCommand(
+      List<String> originalCommand, Path enginePath, LaunchPurpose purpose,
+      BooleanSupplier cancelled, java.util.function.Consumer<Process> started) {
+    throwIfLaunchPreparationCancelled(cancelled);
     if (originalCommand == null) {
       return null;
     }
@@ -1821,7 +1948,7 @@ public final class KataGoRuntimeHelper {
     }
 
     if (purpose == LaunchPurpose.HUMAN_SL && isBundledTensorRtPath(enginePath)) {
-      Path companion = resolveHumanSlCudaCompanion(enginePath);
+      Path companion = resolveHumanSlCudaCompanion(enginePath, cancelled);
       if (companion == null) {
         throw new IllegalStateException(
             resource(
@@ -1835,7 +1962,8 @@ public final class KataGoRuntimeHelper {
       }
     }
 
-    boolean openClFp32Compatibility = shouldUseOpenClFp32Compatibility(launchCommand, enginePath);
+    boolean openClFp32Compatibility =
+        shouldUseOpenClFp32Compatibility(launchCommand, enginePath, cancelled, started);
     Path homeDataDir =
         openClFp32Compatibility ? getOpenClFp32HomeDataDir() : getBundledHomeDataDir();
     if (homeDataDir == null) {
@@ -1915,16 +2043,28 @@ public final class KataGoRuntimeHelper {
   }
 
   static Path resolveHumanSlCudaCompanion(Path tensorRtEnginePath) {
+    return resolveHumanSlCudaCompanion(tensorRtEnginePath, () -> false);
+  }
+
+  private static Path resolveHumanSlCudaCompanion(
+      Path tensorRtEnginePath, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (tensorRtEnginePath == null || !isBundledTensorRtPath(tensorRtEnginePath)) {
       return null;
     }
-    if (hasUsablePackagedHumanSlCompanion(tensorRtEnginePath)) {
+    if (hasUsablePackagedHumanSlCompanion(tensorRtEnginePath, cancelled)) {
       return packagedHumanSlCompanionPath(tensorRtEnginePath);
     }
-    return resolveConfiguredHumanSlCudaFallback(tensorRtEnginePath);
+    return resolveConfiguredHumanSlCudaFallback(tensorRtEnginePath, cancelled);
   }
 
   private static Path resolveConfiguredHumanSlCudaFallback(Path tensorRtEnginePath) {
+    return resolveConfiguredHumanSlCudaFallback(tensorRtEnginePath, () -> false);
+  }
+
+  private static Path resolveConfiguredHumanSlCudaFallback(
+      Path tensorRtEnginePath, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (Lizzie.config == null || Lizzie.config.leelazConfig == null) {
       return null;
     }
@@ -1933,6 +2073,7 @@ public final class KataGoRuntimeHelper {
       return null;
     }
     for (int index = 0; index < engines.length(); index++) {
+      throwIfRuntimeInspectionCancelled(cancelled);
       JSONObject engine = engines.optJSONObject(index);
       String command = engine == null ? "" : engine.optString("command", "").trim();
       if (command.isEmpty()) {
@@ -1954,15 +2095,16 @@ public final class KataGoRuntimeHelper {
         continue;
       }
       String backend = resolveNvidiaBackend(candidate);
-      if (NVIDIA_BACKEND.equalsIgnoreCase(backend) && inspectNvidiaRuntime(candidate).ready) {
+      if (NVIDIA_BACKEND.equalsIgnoreCase(backend)
+          && inspectNvidiaRuntime(candidate, cancelled).ready) {
         // A legacy CUDA engine remains in its own directory and uses its own cuDNN 8 runtime. It
         // is a safe fallback, but is deliberately never copied into or relabelled as an NVIDIA 50
         // companion.
         return candidate.toAbsolutePath().normalize();
       }
       if (NVIDIA50_CUDA_BACKEND.equalsIgnoreCase(backend)
-          && isPinnedHumanSlCudaExecutable(candidate)
-          && inspectNvidiaRuntime(candidate).ready) {
+          && isPinnedHumanSlCudaExecutable(candidate, cancelled)
+          && inspectNvidiaRuntime(candidate, cancelled).ready) {
         return candidate.toAbsolutePath().normalize();
       }
     }
@@ -1970,13 +2112,19 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean hasUsablePackagedHumanSlCompanion(Path tensorRtEnginePath) {
+    return hasUsablePackagedHumanSlCompanion(tensorRtEnginePath, () -> false);
+  }
+
+  private static boolean hasUsablePackagedHumanSlCompanion(
+      Path tensorRtEnginePath, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (tensorRtEnginePath == null || tensorRtEnginePath.getParent() == null) {
       return false;
     }
     Path engineDir = tensorRtEnginePath.toAbsolutePath().normalize().getParent();
     Path companion = engineDir.resolve(HUMAN_SL_CUDA_COMPANION_NAME);
     Path manifest = engineDir.resolve(TENSORRT_ENGINE_MANIFEST_NAME);
-    if (!isPinnedHumanSlCudaExecutable(companion) || !Files.isRegularFile(manifest)) {
+    if (!isPinnedHumanSlCudaExecutable(companion, cancelled) || !Files.isRegularFile(manifest)) {
       return false;
     }
     try {
@@ -2002,19 +2150,30 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean isPinnedHumanSlCudaExecutable(Path executable) {
+    return isPinnedHumanSlCudaExecutable(executable, () -> false);
+  }
+
+  private static boolean isPinnedHumanSlCudaExecutable(
+      Path executable, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (executable == null || !Files.isRegularFile(executable)) {
       return false;
     }
     try {
-      return expectedHumanSlCompanionSha256().equalsIgnoreCase(sha256(executable));
+      return expectedHumanSlCompanionSha256().equalsIgnoreCase(sha256(executable, cancelled));
     } catch (IOException e) {
       return false;
     }
   }
 
   private static boolean hasUsableTensorRtHumanSlCompanion(Path tensorRtEnginePath) {
-    return hasUsablePackagedHumanSlCompanion(tensorRtEnginePath)
-        || resolveConfiguredHumanSlCudaFallback(tensorRtEnginePath) != null;
+    return hasUsableTensorRtHumanSlCompanion(tensorRtEnginePath, () -> false);
+  }
+
+  private static boolean hasUsableTensorRtHumanSlCompanion(
+      Path tensorRtEnginePath, BooleanSupplier cancelled) {
+    return hasUsablePackagedHumanSlCompanion(tensorRtEnginePath, cancelled)
+        || resolveConfiguredHumanSlCudaFallback(tensorRtEnginePath, cancelled) != null;
   }
 
   private static Path packagedHumanSlCompanionPath(Path tensorRtEnginePath) {
@@ -2030,12 +2189,17 @@ public final class KataGoRuntimeHelper {
    * so component status and repair agree with the companion's own launch preflight.
    */
   private static NvidiaRuntimeStatus inspectTensorRtLaunchRuntime(Path tensorRtEnginePath) {
-    NvidiaRuntimeStatus engine = inspectNvidiaRuntime(tensorRtEnginePath);
-    if (!engine.ready || !hasUsablePackagedHumanSlCompanion(tensorRtEnginePath)) {
+    return inspectTensorRtLaunchRuntime(tensorRtEnginePath, () -> false);
+  }
+
+  private static NvidiaRuntimeStatus inspectTensorRtLaunchRuntime(
+      Path tensorRtEnginePath, BooleanSupplier cancelled) {
+    NvidiaRuntimeStatus engine = inspectNvidiaRuntime(tensorRtEnginePath, cancelled);
+    if (!engine.ready || !hasUsablePackagedHumanSlCompanion(tensorRtEnginePath, cancelled)) {
       return engine;
     }
     NvidiaRuntimeStatus companion =
-        inspectNvidiaRuntime(packagedHumanSlCompanionPath(tensorRtEnginePath));
+        inspectNvidiaRuntime(packagedHumanSlCompanionPath(tensorRtEnginePath), cancelled);
     return companion.ready ? engine : companion;
   }
 
@@ -2246,8 +2410,20 @@ public final class KataGoRuntimeHelper {
   }
 
   public static NvidiaRuntimeStatus inspectNvidiaRuntime(Path enginePath) {
+    return inspectNvidiaRuntime(enginePath, () -> false);
+  }
+
+  private static NvidiaRuntimeStatus inspectNvidiaRuntime(
+      Path enginePath, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     String override = System.getProperty(TENSORRT_RUNTIME_SEARCH_PATH_PROPERTY);
-    return inspectNvidiaRuntime(enginePath, override != null ? override : System.getenv("PATH"));
+    Path runtimeDir = getNvidiaRuntimeDir();
+    return inspectNvidiaRuntime(
+        enginePath,
+        runtimeDir,
+        collectRuntimeSearchDirs(
+            enginePath, runtimeDir, override != null ? override : System.getenv("PATH")),
+        cancelled);
   }
 
   static NvidiaRuntimeStatus inspectNvidiaRuntime(Path enginePath, String runtimeSearchPath) {
@@ -2260,6 +2436,12 @@ public final class KataGoRuntimeHelper {
 
   static NvidiaRuntimeStatus inspectNvidiaRuntime(
       Path enginePath, Path runtimeDir, List<Path> searchDirs) {
+    return inspectNvidiaRuntime(enginePath, runtimeDir, searchDirs, () -> false);
+  }
+
+  private static NvidiaRuntimeStatus inspectNvidiaRuntime(
+      Path enginePath, Path runtimeDir, List<Path> searchDirs, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     String backend = resolveNvidiaBackend(enginePath);
     String scope =
         "KataGo runtime file groups and pinned NVRTC manifest; backend="
@@ -2286,11 +2468,12 @@ public final class KataGoRuntimeHelper {
           false);
     }
 
-    boolean staticZlib = hasVerifiedStaticZlibProvenance(enginePath, backend);
+    boolean staticZlib = hasVerifiedStaticZlibProvenance(enginePath, backend, cancelled);
     List<List<String>> requiredDllGroups =
         requiredRuntimeDllGroups(enginePath, backend, staticZlib);
     List<String> missing = new ArrayList<>();
     for (List<String> group : requiredDllGroups) {
+      throwIfRuntimeInspectionCancelled(cancelled);
       if (!hasAnyFile(searchDirs, group)) {
         missing.add(describeRequirementGroup(group));
       }
@@ -5256,6 +5439,28 @@ public final class KataGoRuntimeHelper {
       int maxVisits,
       boolean isBatchAnalysisMode,
       boolean wholeGameThroughput) {
+    return optimizeAnalysisEngineCommand(
+        engineCommand, maxVisits, isBatchAnalysisMode, wholeGameThroughput, () -> false);
+  }
+
+  public static String optimizeAnalysisEngineCommand(
+      String engineCommand,
+      int maxVisits,
+      boolean isBatchAnalysisMode,
+      boolean wholeGameThroughput,
+      BooleanSupplier cancelled) {
+    return optimizeAnalysisEngineCommand(
+        engineCommand, maxVisits, isBatchAnalysisMode, wholeGameThroughput, cancelled, process -> {});
+  }
+
+  public static String optimizeAnalysisEngineCommand(
+      String engineCommand,
+      int maxVisits,
+      boolean isBatchAnalysisMode,
+      boolean wholeGameThroughput,
+      BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started) {
+    throwIfLaunchPreparationCancelled(cancelled);
     if (engineCommand == null || engineCommand.trim().isEmpty()) {
       return engineCommand;
     }
@@ -5275,7 +5480,8 @@ public final class KataGoRuntimeHelper {
     }
 
     if (wholeGameThroughput && looksLikeKataGoCommand(engineCommand)) {
-      List<String> measured = MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand);
+      List<String> measured =
+          MeasuredKataGoTuning.applyWholeGame(commandParts, engineCommand, cancelled, started);
       if (measured != commandParts) return buildCommandLine(measured);
       AnalysisThreadProfile profile = resolveWholeGameAnalysisProfile();
       if (!hasAnalysisThreadOverride) {
@@ -5601,14 +5807,16 @@ public final class KataGoRuntimeHelper {
     }
   }
 
-  private static boolean shouldUseOpenClFp32Compatibility(List<String> command, Path enginePath) {
+  private static boolean shouldUseOpenClFp32Compatibility(
+      List<String> command, Path enginePath, BooleanSupplier cancelled,
+      java.util.function.Consumer<Process> started) {
     if (!isBundledOpenClPath(enginePath)) {
       return false;
     }
     if ("false".equalsIgnoreCase(findOverrideConfigValue(command, "openclUseFP16"))) {
       return true;
     }
-    String driverVersion = resolveNvidiaDriverVersion();
+    String driverVersion = resolveNvidiaDriverVersion(cancelled, started);
     Path marker = getOpenClFp32CompatibilityMarker();
     if (marker == null || !Files.isRegularFile(marker)) {
       return false;
@@ -5625,6 +5833,12 @@ public final class KataGoRuntimeHelper {
   }
 
   private static String resolveNvidiaDriverVersion() {
+    return resolveNvidiaDriverVersion(() -> false, process -> {});
+  }
+
+  private static String resolveNvidiaDriverVersion(
+      BooleanSupplier cancelled, java.util.function.Consumer<Process> started) {
+    throwIfLaunchPreparationCancelled(cancelled);
     String configured = System.getProperty(OPENCL_NVIDIA_DRIVER_VERSION_PROPERTY, "").trim();
     if (!configured.isEmpty()) {
       return "none".equalsIgnoreCase(configured) ? "" : normalizeDriverVersion(configured);
@@ -5632,9 +5846,20 @@ public final class KataGoRuntimeHelper {
     if (nvidiaDriverDetectionComplete) {
       return detectedNvidiaDriverVersion;
     }
-    synchronized (NVIDIA_DRIVER_DETECTION_LOCK) {
+    try {
+      do {
+        throwIfLaunchPreparationCancelled(cancelled);
+      } while (!NVIDIA_DRIVER_DETECTION_LOCK.tryLock(100, TimeUnit.MILLISECONDS));
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new CancellationException("NVIDIA driver detection interrupted");
+    }
+    try {
+      throwIfLaunchPreparationCancelled(cancelled);
       if (!nvidiaDriverDetectionComplete) {
-        NvidiaGpuDetector.DetectionResult detection = NvidiaGpuDetector.detectBestGpu();
+        NvidiaGpuDetector.DetectionResult detection =
+            NvidiaGpuDetector.detectBestGpu(cancelled, started);
+        throwIfLaunchPreparationCancelled(cancelled);
         detectedNvidiaDriverVersion =
             detection != null && detection.bestGpu != null
                 ? normalizeDriverVersion(detection.bestGpu.driverVersion)
@@ -5642,7 +5867,14 @@ public final class KataGoRuntimeHelper {
         nvidiaDriverDetectionComplete = true;
       }
       return detectedNvidiaDriverVersion;
+    } finally {
+      NVIDIA_DRIVER_DETECTION_LOCK.unlock();
     }
+  }
+
+  private static void throwIfLaunchPreparationCancelled(BooleanSupplier cancelled) {
+    if (cancelled.getAsBoolean() || Thread.currentThread().isInterrupted())
+      throw new CancellationException("Engine launch preparation cancelled");
   }
 
   private static String normalizeDriverVersion(String driverVersion) {
@@ -7150,7 +7382,12 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean isCurrentTensorRtEngineBinary(Path enginePath) {
-    return hasVerifiedEngineProvenance(enginePath, TENSORRT_KATAGO_ASSET_INFO);
+    return isCurrentTensorRtEngineBinary(enginePath, () -> false);
+  }
+
+  private static boolean isCurrentTensorRtEngineBinary(
+      Path enginePath, BooleanSupplier cancelled) {
+    return hasVerifiedEngineProvenance(enginePath, TENSORRT_KATAGO_ASSET_INFO, cancelled);
   }
 
   private static void requirePinnedTensorRtEngineExecutable(Path enginePath) throws IOException {
@@ -7164,8 +7401,14 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean hasVerifiedStaticZlibProvenance(Path enginePath, String backend) {
+    return hasVerifiedStaticZlibProvenance(enginePath, backend, () -> false);
+  }
+
+  private static boolean hasVerifiedStaticZlibProvenance(
+      Path enginePath, String backend, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (NVIDIA50_CUDA_BACKEND.equalsIgnoreCase(backend)
-        && isVerifiedPackagedHumanSlCompanion(enginePath)) {
+        && isVerifiedPackagedHumanSlCompanion(enginePath, cancelled)) {
       return true;
     }
     KataGoAssetCatalog.Asset asset =
@@ -7181,7 +7424,7 @@ public final class KataGoRuntimeHelper {
           KataGoEngineManifest.readStrict(
               enginePath.getParent().resolve(TENSORRT_ENGINE_MANIFEST_NAME)),
           asset,
-          sha256(enginePath));
+          sha256(enginePath, cancelled));
     } catch (IOException e) {
       return false;
     }
@@ -7198,6 +7441,12 @@ public final class KataGoRuntimeHelper {
    * TensorRT engine beside it lists the companion in its strict engine manifest.
    */
   private static boolean isVerifiedPackagedHumanSlCompanion(Path companionPath) {
+    return isVerifiedPackagedHumanSlCompanion(companionPath, () -> false);
+  }
+
+  private static boolean isVerifiedPackagedHumanSlCompanion(
+      Path companionPath, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (companionPath == null
         || companionPath.getFileName() == null
         || !HUMAN_SL_CUDA_COMPANION_NAME.equalsIgnoreCase(companionPath.getFileName().toString())
@@ -7205,7 +7454,8 @@ public final class KataGoRuntimeHelper {
       return false;
     }
     Path engineDir = companionPath.toAbsolutePath().normalize().getParent();
-    if (engineDir == null || !isCurrentTensorRtEngineBinary(engineDir.resolve("katago.exe"))) {
+    if (engineDir == null
+        || !isCurrentTensorRtEngineBinary(engineDir.resolve("katago.exe"), cancelled)) {
       return false;
     }
     try {
@@ -7214,7 +7464,7 @@ public final class KataGoRuntimeHelper {
       // TensorRT provenance validates the companion entry only when present; require it here.
       return manifest != null
           && HUMAN_SL_CUDA_COMPANION_NAME.equals(manifest.get("HumanSL companion"))
-          && isPinnedHumanSlCudaExecutable(companionPath);
+          && isPinnedHumanSlCudaExecutable(companionPath, cancelled);
     } catch (IOException e) {
       return false;
     }
@@ -7231,7 +7481,8 @@ public final class KataGoRuntimeHelper {
   }
 
   private static boolean hasVerifiedEngineProvenance(
-      Path enginePath, KataGoAssetCatalog.Asset asset) {
+      Path enginePath, KataGoAssetCatalog.Asset asset, BooleanSupplier cancelled) {
+    throwIfRuntimeInspectionCancelled(cancelled);
     if (enginePath == null || enginePath.getParent() == null || !Files.isRegularFile(enginePath)) {
       return false;
     }
@@ -7255,7 +7506,7 @@ public final class KataGoRuntimeHelper {
           && hasValidSourceRepositoryManifest(manifest, asset)
           && asset.zlibLinkage().equals(manifest.get("Zlib linkage"))
           && hasValidOptionalCompanionManifest(manifest)
-          && expectedExecutableSha256.equalsIgnoreCase(sha256(enginePath));
+          && expectedExecutableSha256.equalsIgnoreCase(sha256(enginePath, cancelled));
     } catch (IOException e) {
       return false;
     }
@@ -8076,15 +8327,29 @@ public final class KataGoRuntimeHelper {
   }
 
   private static String sha256(Path file) throws IOException {
+    return sha256(file, () -> false);
+  }
+
+  private static String sha256(Path file, BooleanSupplier cancelled) throws IOException {
+    throwIfRuntimeInspectionCancelled(cancelled);
     MessageDigest digest = createSha256Digest();
     try (InputStream input = Files.newInputStream(file)) {
       byte[] buffer = new byte[8192];
-      int read;
-      while ((read = input.read(buffer)) >= 0) {
+      while (true) {
+        throwIfRuntimeInspectionCancelled(cancelled);
+        int read = input.read(buffer);
+        if (read < 0) break;
         digest.update(buffer, 0, read);
       }
     }
+    throwIfRuntimeInspectionCancelled(cancelled);
     return toHex(digest.digest());
+  }
+
+  private static void throwIfRuntimeInspectionCancelled(BooleanSupplier cancelled) {
+    if (cancelled.getAsBoolean()) {
+      throw new CancellationException("Engine runtime inspection cancelled");
+    }
   }
 
   private static String toHex(byte[] bytes) {

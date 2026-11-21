@@ -2,11 +2,24 @@ package featurecat.lizzie.analysis.remote;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.sun.jdi.Bootstrap;
+import com.sun.jdi.ThreadReference;
+import com.sun.jdi.VirtualMachine;
+import com.sun.jdi.event.ClassPrepareEvent;
+import com.sun.jdi.event.Event;
+import com.sun.jdi.event.EventSet;
+import com.sun.jdi.event.ModificationWatchpointEvent;
+import com.sun.jdi.event.VMDeathEvent;
+import com.sun.jdi.event.VMDisconnectEvent;
+import com.sun.jdi.request.EventRequest;
 import featurecat.lizzie.logging.DiagnosticModule;
 import featurecat.lizzie.logging.LoggingLimits;
 import featurecat.lizzie.logging.LoggingRuntime;
@@ -26,6 +39,7 @@ import java.net.InetSocketAddress;
 import java.net.ProxySelector;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -45,9 +59,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLParameters;
@@ -725,6 +742,364 @@ public class KataGoAnalysisWebSocketTransportTest {
       graceful.join(2_000L);
       assertFalse(graceful.isAlive());
       assertNull(gracefulFailure.get());
+    }
+  }
+
+  @Test
+  void abortCannotMissASocketBeingPublished(@TempDir Path directory) throws Exception {
+    // As in AutomaticSaveInterruptionTest, JDI controls an actual production instruction in
+    // a separate JVM. Suspend only startup, after its closed check and before putfield;
+    // a pre-handshake latch cannot reproduce this race.
+    var connector = Bootstrap.virtualMachineManager().defaultConnector();
+    var arguments = connector.defaultArguments();
+    String classpath =
+        System.getProperty("surefire.test.class.path", System.getProperty("java.class.path"));
+    arguments.get("options").setValue("-cp \"" + classpath + "\"");
+    Path abortFinished = directory.resolve("abort-finished");
+    arguments.get("main").setValue(
+        PublicationRace.class.getName() + " \"" + abortFinished + "\"");
+    VirtualMachine vm = connector.launch(arguments);
+    Process process = vm.process();
+    try {
+      assertTrue(vm.canWatchFieldModification(), "JVM must support the publication watchpoint");
+      var prepare = vm.eventRequestManager().createClassPrepareRequest();
+      prepare.addClassFilter(KataGoAnalysisWebSocketTransport.class.getName());
+      prepare.setSuspendPolicy(EventRequest.SUSPEND_ALL);
+      prepare.enable();
+      boolean reached = false;
+      long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30);
+      while (!reached && System.nanoTime() < deadline) {
+        EventSet events = vm.eventQueue().remove(1_000);
+        if (events == null) continue;
+        for (Event event : events) {
+          if (event instanceof ClassPrepareEvent prepared) {
+            var socket = prepared.referenceType().fieldByName("webSocket");
+            assertNotNull(socket);
+            var publication = vm.eventRequestManager().createModificationWatchpointRequest(socket);
+            publication.setSuspendPolicy(EventRequest.SUSPEND_EVENT_THREAD);
+            publication.enable();
+          }
+          if (event instanceof ModificationWatchpointEvent publication
+              && publication.valueToBe() != null) {
+            assertNull(publication.valueCurrent(), "socket must not have been published yet");
+            publication.request().disable();
+            process.getOutputStream().write(1);
+            process.getOutputStream().flush();
+            awaitAbortAttempt(vm, abortFinished);
+            reached = true;
+          }
+          assertFalse(event instanceof VMDeathEvent || event instanceof VMDisconnectEvent,
+              "startup exited before socket publication");
+        }
+        events.resume();
+      }
+      assertTrue(reached, "startup never reached socket publication");
+      assertTrue(process.waitFor(10, TimeUnit.SECONDS), "publication race did not finish");
+      assertEquals(0, process.exitValue(),
+          new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8));
+      assertTrue(Files.exists(abortFinished), "abort must complete after publication resumes");
+    } finally {
+      if (process.isAlive()) {
+        process.destroyForcibly();
+        assertTrue(process.waitFor(10, TimeUnit.SECONDS), "test JVM did not terminate");
+      }
+    }
+  }
+
+  private static void awaitAbortAttempt(VirtualMachine vm, Path finished) throws Exception {
+    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    while (System.nanoTime() < deadline) {
+      // Before the fix, abort completes against a null field. With shared ownership it waits
+      // for startup's publication lock. Resume only after one of those schedules is observed.
+      if (Files.exists(finished)) return;
+      for (ThreadReference thread : vm.allThreads()) {
+        if (thread.name().equals("publication-race-abort")
+            && thread.status() == ThreadReference.THREAD_STATUS_MONITOR) return;
+      }
+      Thread.sleep(10);
+    }
+    throw new AssertionError("abort neither completed nor waited for publication");
+  }
+
+  public static final class PublicationRace {
+    public static void main(String[] args) throws Exception {
+      FakeWebSocket socket = new FakeWebSocket();
+      KataGoAnalysisWebSocketTransport transport =
+          new KataGoAnalysisWebSocketTransport(
+              "ws://127.0.0.1:12345", new FakeHttpClient(socket));
+      AtomicReference<Throwable> failure = new AtomicReference<>();
+      Thread abort = new Thread(() -> {
+        try {
+          assertEquals(1, System.in.read());
+          transport.abort();
+          Files.writeString(Path.of(args[0]), "done");
+        } catch (Throwable problem) {
+          failure.set(problem);
+        }
+      }, "publication-race-abort");
+      abort.setDaemon(true);
+      abort.start();
+      try {
+        transport.start();
+        abort.join(5_000);
+        assertFalse(abort.isAlive(), "abort must complete once publication resumes");
+        assertNull(failure.get());
+        assertEquals(1, socket.abortCount, "abort lost the socket published after its closed check");
+        assertTrue(socket.isInputClosed());
+        assertTrue(socket.isOutputClosed());
+        assertFalse(transport.isOpen());
+        transport.abort();
+        transport.close();
+        assertEquals(1, socket.abortCount);
+        assertEquals(0, socket.closeCount);
+        assertEof(transport.stdout());
+        readAvailable(transport.stderr());
+        assertEof(transport.stderr());
+      } finally {
+        transport.abort();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void failedStartupWaitRetainsLateConnectionUntilAbortFinishes(boolean timeout) throws Exception {
+    FakeWebSocket socket = new FakeWebSocket();
+    socket.blockAbort = true;
+    ControlledConnection connection = new ControlledConnection(timeout);
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport(
+            "ws://127.0.0.1:12345", new FakeHttpClient(socket, connection));
+    AtomicReference<CompletableFuture<Void>> settled = new AtomicReference<>();
+    AtomicReference<Throwable> startupFailure = new AtomicReference<>();
+    AtomicReference<Boolean> interruptRestored = new AtomicReference<>();
+    Thread startup = new Thread(() -> {
+      try {
+        transport.start(settled::set);
+      } catch (Throwable failure) {
+        startupFailure.set(failure);
+        interruptRestored.set(Thread.currentThread().isInterrupted());
+      }
+    }, "abandoned-websocket-startup");
+    Thread completion = new Thread(() -> {
+      socket.listener.onOpen(socket);
+      connection.complete(socket);
+    }, "abandoned-websocket-completion");
+    startup.setDaemon(true);
+    completion.setDaemon(true);
+    try {
+      startup.start();
+      assertTrue(connection.waitEntered.await(2, TimeUnit.SECONDS));
+      if (!timeout) startup.interrupt();
+      startup.join(2_000);
+      assertFalse(startup.isAlive(), "the original startup wait must retain its failure boundary");
+      assertInstanceOf(IOException.class, startupFailure.get());
+      assertEquals(!timeout, interruptRestored.get());
+      assertFalse(connection.isDone(), "wait failure must not discard the raw connection result");
+      assertNotNull(settled.get());
+      assertFalse(settled.get().isDone(), "pending connection is still owned after start returns");
+
+      completion.start();
+      assertTrue(socket.abortEntered.await(2, TimeUnit.SECONDS));
+      assertFalse(settled.get().isDone(), "logical rejection is not physical cleanup completion");
+      assertFalse(transport.isOpen());
+      socket.allowAbort.countDown();
+      completion.join(2_000);
+      assertFalse(completion.isAlive());
+      settled.get().get(2, TimeUnit.SECONDS);
+      assertEquals(1, socket.abortCount);
+      assertTrue(socket.isInputClosed());
+      assertTrue(socket.isOutputClosed());
+      transport.abort();
+      transport.close();
+      assertEquals(1, socket.abortCount);
+      assertEof(transport.stdout());
+      assertEof(transport.stderr());
+    } finally {
+      socket.allowAbort.countDown();
+      transport.abort();
+      connection.complete(socket);
+      startup.interrupt();
+      startup.join(2_000);
+      completion.join(2_000);
+    }
+  }
+
+  @Test
+  void connectionFailureFinishesStartupOwnershipWithoutClaimingCleanupFailure() throws Exception {
+    FakeWebSocket socket = new FakeWebSocket();
+    CompletableFuture<WebSocket> connection =
+        CompletableFuture.failedFuture(new IOException("handshake failed"));
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport(
+            "ws://127.0.0.1:12345", new FakeHttpClient(socket, connection));
+    AtomicReference<CompletableFuture<Void>> settled = new AtomicReference<>();
+    assertThrows(IOException.class, () -> transport.start(settled::set));
+    settled.get().get(2, TimeUnit.SECONDS);
+    assertEquals(0, socket.abortCount, "no socket was returned by the failed connection");
+    assertFalse(transport.isOpen());
+    assertEof(transport.stdout());
+    assertEof(transport.stderr());
+  }
+
+  @Test
+  void lateSocketAbortFailureKeepsStartupOwnershipExceptional() throws Exception {
+    FakeWebSocket socket = new FakeWebSocket();
+    ControlledConnection connection = new ControlledConnection(true);
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport(
+            "ws://127.0.0.1:12345", new FakeHttpClient(socket, connection));
+    AtomicReference<CompletableFuture<Void>> settled = new AtomicReference<>();
+    assertThrows(IOException.class, () -> transport.start(settled::set));
+    assertFalse(settled.get().isDone());
+    socket.abortFailure = new IllegalStateException("abort failed");
+    connection.complete(socket);
+    CompletionException failure = assertThrows(CompletionException.class, settled.get()::join);
+    assertSame(socket.abortFailure, failure.getCause());
+    assertEquals(1, socket.abortCount);
+    assertFalse(socket.isInputClosed(), "cleanup failure must not claim physical closure");
+    assertFalse(transport.isOpen());
+  }
+
+  @Test
+  void timeoutAfterPublicationKeepsAbortFailureInStartupCompletion() throws Exception {
+    FakeWebSocket socket = new FakeWebSocket();
+    socket.abortFailure = new IllegalStateException("abort failed after publication");
+    ControlledConnection connection = new ControlledConnection(true);
+    // The get deadline has expired, but raw completion wins the race before its catch runs.
+    connection.beforeTimeout = () -> connection.complete(socket);
+    KataGoAnalysisWebSocketTransport transport =
+        new KataGoAnalysisWebSocketTransport(
+            "ws://127.0.0.1:12345", new FakeHttpClient(socket, connection));
+    AtomicReference<CompletableFuture<Void>> settled = new AtomicReference<>();
+    assertThrows(IOException.class, () -> transport.start(settled::set));
+    CompletionException failure = assertThrows(CompletionException.class, settled.get()::join);
+    assertSame(socket.abortFailure, failure.getCause());
+    assertEquals(1, socket.abortCount);
+    assertFalse(transport.isOpen());
+    assertEof(transport.stdout());
+    assertEof(transport.stderr());
+  }
+
+  @Test
+  void acceptedSocketAbortFailureReachesTheOwnerAndFinishesStreams() throws Exception {
+    try (TransportHarness harness = TransportHarness.open()) {
+      harness.webSocket.abortFailure = new IllegalStateException("abort failed");
+      assertSame(harness.webSocket.abortFailure,
+          assertThrows(IllegalStateException.class, harness.transport::abort));
+      assertFalse(harness.transport.isOpen());
+      assertEof(harness.transport.stdout());
+      assertEof(harness.transport.stderr());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void closeDuringConnectAbortsTheLateSocketWithoutWaitingForThePeer(boolean hardAbort)
+      throws Exception {
+    CountDownLatch requestReceived = new CountDownLatch(1);
+    CountDownLatch allowHandshake = new CountDownLatch(1);
+    CountDownLatch disconnected = new CountDownLatch(1);
+    AtomicReference<Socket> acceptedSocket = new AtomicReference<>();
+    AtomicReference<Throwable> serverFailure = new AtomicReference<>();
+    AtomicReference<Throwable> startupFailure = new AtomicReference<>();
+    try (ServerSocket server = new ServerSocket()) {
+      server.bind(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0));
+      server.setSoTimeout(5_000);
+      Thread peer =
+          new Thread(
+              () -> {
+                try (Socket socket = server.accept()) {
+                  acceptedSocket.set(socket);
+                  socket.setSoTimeout(5_000);
+                  BufferedReader headers =
+                      new BufferedReader(
+                          new InputStreamReader(
+                              socket.getInputStream(), StandardCharsets.ISO_8859_1));
+                  String key = null;
+                  for (String line; (line = headers.readLine()) != null && !line.isEmpty(); ) {
+                    if (line.toLowerCase(Locale.ROOT).startsWith("sec-websocket-key:")) {
+                      key = line.substring(line.indexOf(':') + 1).trim();
+                    }
+                  }
+                  assertNotNull(key, "client did not send a WebSocket handshake");
+                  requestReceived.countDown();
+                  assertTrue(allowHandshake.await(5, TimeUnit.SECONDS));
+                  String accept =
+                      Base64.getEncoder()
+                          .encodeToString(
+                              MessageDigest.getInstance("SHA-1")
+                                  .digest(
+                                      (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                                          .getBytes(StandardCharsets.ISO_8859_1)));
+                  socket
+                      .getOutputStream()
+                      .write(
+                          ("HTTP/1.1 101 Switching Protocols\r\n"
+                                  + "Upgrade: websocket\r\n"
+                                  + "Connection: Upgrade\r\n"
+                                  + "Sec-WebSocket-Accept: "
+                                  + accept
+                                  + "\r\n\r\n")
+                              .getBytes(StandardCharsets.ISO_8859_1));
+                  socket.getOutputStream().flush();
+                  // Deliberately never answer a close frame. Only actual EOF or reset proves
+                  // that the late connection has been released by the client.
+                  try {
+                    while (socket.getInputStream().read() != -1) {}
+                  } catch (SocketException reset) {
+                    // A hard abort may reset the TCP connection instead of sending FIN.
+                  }
+                  disconnected.countDown();
+                } catch (Throwable failure) {
+                  serverFailure.set(failure);
+                }
+              },
+              "late-websocket-peer");
+      peer.setDaemon(true);
+      KataGoAnalysisWebSocketTransport transport =
+          new KataGoAnalysisWebSocketTransport(
+              new URI(
+                      "ws", null, server.getInetAddress().getHostAddress(),
+                      server.getLocalPort(), "/", null, null)
+                  .toString());
+      Thread startup =
+          new Thread(
+              () -> {
+                try {
+                  transport.start();
+                } catch (Throwable failure) {
+                  startupFailure.set(failure);
+                }
+              },
+              "late-websocket-startup");
+      startup.setDaemon(true);
+      try {
+        peer.start();
+        startup.start();
+        assertTrue(requestReceived.await(5, TimeUnit.SECONDS));
+        if (hardAbort) transport.abort(); else transport.close();
+        assertTrue(startup.isAlive(), "handshake must still be pending when close is requested");
+        allowHandshake.countDown();
+        startup.join(5_000);
+        assertFalse(startup.isAlive(), "cancelled startup did not finish");
+        assertInstanceOf(IOException.class, startupFailure.get());
+        assertTrue(
+            disconnected.await(2, TimeUnit.SECONDS),
+            "startup finished while its uncooperative late-connected peer remained connected");
+        assertNull(serverFailure.get());
+        assertFalse(transport.isOpen());
+        assertEof(transport.stdout());
+        assertEof(transport.stderr());
+      } finally {
+        allowHandshake.countDown();
+        transport.abort();
+        server.close();
+        Socket socket = acceptedSocket.get();
+        if (socket != null) socket.close();
+        startup.join(5_000);
+        peer.join(5_000);
+      }
     }
   }
 
@@ -1564,14 +1939,20 @@ public class KataGoAnalysisWebSocketTransportTest {
   private static final class FakeHttpClient extends HttpClient {
     private final HttpClient delegate = HttpClient.newHttpClient();
     private final FakeWebSocket webSocket;
+    private final CompletableFuture<WebSocket> connection;
 
     private FakeHttpClient(FakeWebSocket webSocket) {
+      this(webSocket, null);
+    }
+
+    private FakeHttpClient(FakeWebSocket webSocket, CompletableFuture<WebSocket> connection) {
       this.webSocket = webSocket;
+      this.connection = connection;
     }
 
     @Override
     public WebSocket.Builder newWebSocketBuilder() {
-      return new FakeWebSocketBuilder(webSocket);
+      return new FakeWebSocketBuilder(webSocket, connection);
     }
 
     @Override
@@ -1641,9 +2022,12 @@ public class KataGoAnalysisWebSocketTransportTest {
 
   private static final class FakeWebSocketBuilder implements WebSocket.Builder {
     private final FakeWebSocket webSocket;
+    private final CompletableFuture<WebSocket> connection;
 
-    private FakeWebSocketBuilder(FakeWebSocket webSocket) {
+    private FakeWebSocketBuilder(
+        FakeWebSocket webSocket, CompletableFuture<WebSocket> connection) {
       this.webSocket = webSocket;
+      this.connection = connection;
     }
 
     @Override
@@ -1664,8 +2048,37 @@ public class KataGoAnalysisWebSocketTransportTest {
     @Override
     public CompletableFuture<WebSocket> buildAsync(URI uri, WebSocket.Listener listener) {
       webSocket.listener = listener;
+      if (connection != null) return connection;
       listener.onOpen(webSocket);
       return CompletableFuture.completedFuture(webSocket);
+    }
+  }
+
+  private static final class ControlledConnection extends CompletableFuture<WebSocket> {
+    private final boolean timeout;
+    private final CountDownLatch waitEntered = new CountDownLatch(1);
+    private Runnable beforeTimeout;
+
+    private ControlledConnection(boolean timeout) {
+      this.timeout = timeout;
+    }
+
+    @Override
+    public <U> CompletableFuture<U> newIncompleteFuture() {
+      // Drive the transport's handled-stage wait, while keeping the actual connection future
+      // independently pending. No real twenty-second delay is needed to test abandonment.
+      return new CompletableFuture<>() {
+        @Override
+        public U get(long duration, TimeUnit unit)
+            throws InterruptedException, ExecutionException, TimeoutException {
+          waitEntered.countDown();
+          if (timeout) {
+            if (beforeTimeout != null) beforeTimeout.run();
+            throw new TimeoutException("controlled startup wait timeout");
+          }
+          return super.get(duration, unit);
+        }
+      };
     }
   }
 
@@ -1680,6 +2093,10 @@ public class KataGoAnalysisWebSocketTransportTest {
     private volatile boolean blockClose;
     private final CountDownLatch closeEntered = new CountDownLatch(1);
     private final CountDownLatch allowClose = new CountDownLatch(1);
+    private volatile boolean blockAbort;
+    private RuntimeException abortFailure;
+    private final CountDownLatch abortEntered = new CountDownLatch(1);
+    private final CountDownLatch allowAbort = new CountDownLatch(1);
 
     private JSONObject sentJson(int index) {
       return new JSONObject(sentTexts.get(index));
@@ -1777,6 +2194,18 @@ public class KataGoAnalysisWebSocketTransportTest {
     @Override
     public void abort() {
       abortCount++;
+      abortEntered.countDown();
+      if (blockAbort) {
+        try {
+          if (!allowAbort.await(5, TimeUnit.SECONDS)) {
+            throw new AssertionError("timed out waiting to release WebSocket abort");
+          }
+        } catch (InterruptedException interrupted) {
+          Thread.currentThread().interrupt();
+          throw new AssertionError(interrupted);
+        }
+      }
+      if (abortFailure != null) throw abortFailure;
       outputClosed = true;
       inputClosed = true;
     }

@@ -44,6 +44,7 @@ import java.util.Map;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.Stack;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -54,6 +55,7 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
@@ -84,6 +86,8 @@ public class AnalysisEngine {
   private static final long REMOTE_GTP_SETUP_ACK_TIMEOUT_MILLIS = 8000L;
   private static final String CURRENT_FOREGROUND_RULES = "__current_foreground_rules__";
   private static final Set<ReaderResources> ACTIVE_READER_RESOURCES = new LinkedHashSet<>();
+  private static final Set<Startup> STARTING_ENGINES = new LinkedHashSet<>();
+  private static boolean resourcesShuttingDown;
   public Process process;
   public volatile boolean isNormalEnd = false;
   private final ResourceBundle resourceBundle = Lizzie.resourceBundle;
@@ -316,12 +320,6 @@ public class AnalysisEngine {
             : (Lizzie.frame.isBatchAnalysisMode
                 ? Math.max(2, Lizzie.config.batchAnalysisPlayouts)
                 : Lizzie.config.analysisMaxVisits + 1);
-    engineCommand =
-        KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
-            resolveConfiguredAnalysisEngineCommand(commandOverride),
-            maxVisits,
-            Lizzie.frame.isBatchAnalysisMode,
-            this.workload == Workload.WHOLE_GAME);
     RemoteEngineData remoteData = Utils.getAnalysisEngineRemoteEngineData();
     this.useJavaSSH = remoteData.useJavaSSH;
     this.ip = remoteData.ip;
@@ -330,12 +328,16 @@ public class AnalysisEngine {
     this.password = remoteData.password;
     this.useKeyGen = remoteData.useKeyGen;
     this.keyGenPath = remoteData.keyGenPath;
-    if (RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand)) {
-      this.useJavaSSH = false;
-      this.useRemoteCompute = true;
-    }
-
-    startEngine(engineCommand);
+    // Measured-profile validation can launch nvidia-smi while preparing the command.
+    // Reserve startup ownership before that work, not just before the engine itself.
+    startEngine(
+        startup -> KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
+            resolveConfiguredAnalysisEngineCommand(commandOverride),
+            maxVisits,
+            Lizzie.frame.isBatchAnalysisMode,
+            this.workload == Workload.WHOLE_GAME,
+            () -> shutdownRequested, startup::trackProcess),
+        ProcessBuilder::start);
   }
 
   private static String resolveConfiguredAnalysisEngineCommand(String commandOverride) {
@@ -397,6 +399,66 @@ public class AnalysisEngine {
   }
 
   public void startEngine(String engineCommand) {
+    startEngine(engineCommand, ProcessBuilder::start);
+  }
+
+  @FunctionalInterface
+  interface StartupFactory {
+    Process start(ProcessBuilder builder) throws IOException;
+
+    default void prepareRuntime(
+        AnalysisEngine owner, Path executable, Consumer<Process> started) throws IOException {
+      KataGoRuntimeHelper.ensureBundledRuntimeReady(
+          executable,
+          owner.commands,
+          owner.engineCommand,
+          Lizzie.frame,
+          owner.startupDiagnosticAttempt == null
+              ? null : owner.startupDiagnosticAttempt::runtimePreflight,
+          () -> owner.shutdownRequested, started);
+    }
+
+    default EngineTransport createTransport(String command) throws IOException {
+      return RemoteComputeConfig.createTransportForCommand(command);
+    }
+
+    default AnalysisEngineSSHController createSsh(AnalysisEngine owner) {
+      return new AnalysisEngineSSHController(owner, owner.ip, owner.port, owner.isPreLoad);
+    }
+  }
+
+  void startEngine(String engineCommand, StartupFactory factory) {
+    startEngine(startup -> engineCommand, factory);
+  }
+
+  private void startEngine(Function<Startup, String> prepareCommand, StartupFactory factory) {
+    Startup startup;
+    synchronized (ACTIVE_READER_RESOURCES) {
+      if (resourcesShuttingDown || shutdownRequested) {
+        requestShutdown();
+        isNormalEnd = true;
+        isLoaded = false;
+        return;
+      }
+      startup = new Startup();
+      STARTING_ENGINES.add(startup);
+    }
+    boolean completed = false;
+    try {
+      String command = prepareCommand.apply(startup);
+      if (shutdownRequested) return;
+      startEngineInternal(command, factory, startup);
+      completed = true;
+    } catch (CancellationException cancelled) {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
+    } finally {
+      startup.finish(completed);
+    }
+  }
+
+  private void startEngineInternal(String engineCommand, StartupFactory factory, Startup startup) {
     this.engineCommand = engineCommand;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
@@ -429,8 +491,10 @@ public class AnalysisEngine {
       this.useJavaSSH = false;
       process = null;
       try {
-        remoteTransport = RemoteComputeConfig.createTransportForCommand(engineCommand);
-        remoteTransport.start();
+        remoteTransport = factory.createTransport(engineCommand);
+        if (!startup.connecting(remoteTransport::abort)) return;
+        remoteTransport.start(startup::trackCompletion);
+        if (shutdownRequested) return;
         initializeStreams(
             remoteTransport.stdout(), remoteTransport.stdin(), remoteTransport.stderr());
         if (remoteTransport instanceof ZhiziGtpTransport zhizi) {
@@ -438,6 +502,7 @@ public class AnalysisEngine {
         }
         isLoaded = true;
       } catch (IOException e) {
+        if (shutdownRequested) return;
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.fail("remote-connect", e.toString());
         }
@@ -449,7 +514,8 @@ public class AnalysisEngine {
         return;
       }
     } else if (this.useJavaSSH) {
-      this.javaSSH = new AnalysisEngineSSHController(this, this.ip, this.port, this.isPreLoad);
+      this.javaSSH = factory.createSsh(this);
+      if (!startup.connecting(javaSSH::close)) return;
       boolean loginStatus = false;
       if (this.useKeyGen) {
         loginStatus =
@@ -460,11 +526,16 @@ public class AnalysisEngine {
         loginStatus =
             this.javaSSH.login(this.engineCommand, this.userName, this.password).booleanValue();
       }
+      if (shutdownRequested) return;
       if (loginStatus) {
-        initializeStreams(
-            this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
-        javaSSHClosed = false;
-        isLoaded = true;
+        // close() clears the session under this monitor. Hand off all streams before it can do so.
+        synchronized (javaSSH) {
+          if (shutdownRequested) return;
+          initializeStreams(
+              this.javaSSH.getStdout(), this.javaSSH.getStdin(), this.javaSSH.getSterr());
+          javaSSHClosed = false;
+          isLoaded = true;
+        }
       } else {
         javaSSHClosed = true;
         isLoaded = false;
@@ -482,13 +553,9 @@ public class AnalysisEngine {
       Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       if (Config.isBundledKataGoCommand(engineCommand)) {
         try {
-          KataGoRuntimeHelper.ensureBundledRuntimeReady(
-              engineExecutable,
-              commands,
-              engineCommand,
-              Lizzie.frame,
-              startupDiagnosticAttempt == null ? null : startupDiagnosticAttempt::runtimePreflight);
+          factory.prepareRuntime(this, engineExecutable, startup::trackProcess);
         } catch (IOException e) {
+          if (shutdownRequested) return;
           if (startupDiagnosticAttempt != null) {
             startupDiagnosticAttempt.fail("runtime-preflight", e.toString());
           }
@@ -504,9 +571,11 @@ public class AnalysisEngine {
           return;
         }
       }
+      if (shutdownRequested) return;
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
-              commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
+              commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS,
+              () -> shutdownRequested, startup::trackProcess);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
       CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
       KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
@@ -517,7 +586,8 @@ public class AnalysisEngine {
         startupDiagnosticAttempt.capture(processBuilder);
       }
       try {
-        process = processBuilder.start();
+        if (shutdownRequested) return;
+        process = factory.start(processBuilder);
         if (startupDiagnosticAttempt != null) {
           startupDiagnosticAttempt.attachProcess(process);
         }
@@ -538,6 +608,7 @@ public class AnalysisEngine {
               launchCommands,
               processBuilder.directory() == null ? Path.of("") : processBuilder.directory().toPath());
     }
+    if (shutdownRequested) return;
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
         this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
@@ -638,17 +709,137 @@ public class AnalysisEngine {
   }
 
   /**
-   * Stops owned readers after application task cancellation and waits asynchronously for cleanup,
-   * including workers already detached from the frame by cancellation or replacement.
+   * Closes launch admission and waits asynchronously for owned startup and cleanup, including
+   * workers not yet attached to the frame or already detached by cancellation or replacement.
    */
   public static CompletableFuture<Void> shutdownAllResources() {
     List<ReaderResources> resources;
+    List<Startup> startups;
     synchronized (ACTIVE_READER_RESOURCES) {
+      resourcesShuttingDown = true;
       resources = new ArrayList<>(ACTIVE_READER_RESOURCES);
+      startups = new ArrayList<>(STARTING_ENGINES);
     }
-    for (ReaderResources pending : resources) pending.closeForExit();
-    return CompletableFuture.allOf(
-        resources.stream().map(pending -> pending.closed).toArray(CompletableFuture<?>[]::new));
+    List<CompletableFuture<?>> pendingCleanup = new ArrayList<>();
+    for (Startup pending : startups) {
+      pending.cancel();
+      pendingCleanup.add(pending.finished);
+    }
+    for (ReaderResources pending : resources) {
+      pending.closeForExit();
+      pendingCleanup.add(pending.closed);
+    }
+    return CompletableFuture.allOf(pendingCleanup.toArray(CompletableFuture<?>[]::new));
+  }
+
+  /** Reserves exit waiting before launch work, then hands ownership to the existing readers. */
+  private final class Startup {
+    private final CompletableFuture<Void> finished = new CompletableFuture<>();
+    private final List<CompletableFuture<?>> pendingWork = new ArrayList<>();
+    private Runnable closeConnection;
+    private CompletableFuture<Void> connectionClosed;
+
+    /** The caller may time out before the OS has finished terminating its exact child. */
+    private void trackProcess(Process process) {
+      trackCompletion(process.onExit());
+    }
+
+    /** Result timeouts do not release ownership of an unfinished child or connection attempt. */
+    private void trackCompletion(CompletableFuture<?> completion) {
+      pendingWork.add(completion);
+    }
+
+    /** Register the exact backend before its blocking start, including a late creation after exit. */
+    private synchronized boolean connecting(Runnable close) {
+      closeConnection = close;
+      if (!shutdownRequested) return true;
+      closeConnectionAsync();
+      return false;
+    }
+
+    private void cancel() {
+      requestShutdown();
+      isNormalEnd = true;
+      isLoaded = false;
+      closeConnectionAsync();
+    }
+
+    /** A duplicate backend close can return before the first one has finished releasing resources. */
+    private synchronized CompletableFuture<Void> closeConnectionAsync() {
+      if (closeConnection == null) return CompletableFuture.completedFuture(null);
+      if (connectionClosed != null) return connectionClosed;
+      CompletableFuture<Void> closed = new CompletableFuture<>();
+      connectionClosed = closed;
+      Runnable close = closeConnection;
+      try {
+        Thread cleanup = new Thread(() -> {
+          try {
+            close.run();
+            closed.complete(null);
+          } catch (RuntimeException | Error failure) {
+            closed.completeExceptionally(failure);
+          }
+        }, "analysis-engine-startup-cleanup");
+        cleanup.setDaemon(true);
+        cleanup.start();
+      } catch (RuntimeException | Error failure) {
+        closed.completeExceptionally(failure);
+      }
+      return closed;
+    }
+
+    private void finish(boolean completed) {
+      CompletableFuture<Void> cleanup =
+          CompletableFuture.allOf(pendingWork.toArray(CompletableFuture<?>[]::new));
+      boolean applicationExit;
+      boolean cleanupRequired;
+      synchronized (ACTIVE_READER_RESOURCES) {
+        applicationExit = resourcesShuttingDown;
+        cleanupRequired = !completed || shutdownRequested || applicationExit;
+      }
+      if (cleanupRequired) {
+        if (applicationExit) cancel();
+        isLoaded = false;
+        CompletableFuture<Void> connectionCleanup = closeConnectionAsync();
+        ReaderResources resources = readerResources;
+        if (resources == null) {
+          // An unchecked startup failure can leave a backend without installed streams.
+          resources =
+              new ReaderResources(
+                  process,
+                  useJavaSSH ? javaSSH : null,
+                  useRemoteCompute ? remoteTransport : null,
+                  startupDiagnosticAttempt,
+                  null,
+                  null,
+                  null);
+          readerResources = resources;
+        }
+        resources.close(false);
+        cleanup = CompletableFuture.allOf(cleanup, connectionCleanup, resources.closed);
+      }
+      // A result can return while a preparation child or asynchronous connection is still owned.
+      cleanup.thenCompose(ignored -> {
+        synchronized (ACTIVE_READER_RESOURCES) {
+          // Exit may have captured this reservation after finish chose a normal handoff. In that
+          // case wait for the first asynchronous abort, even if a duplicate reader close returned.
+          if (resourcesShuttingDown || shutdownRequested) return closeConnectionAsync();
+          STARTING_ENGINES.remove(this);
+          return CompletableFuture.<Void>completedFuture(null);
+        }
+      }).whenComplete(
+          (ignored, failure) -> {
+            if (failure == null) {
+              synchronized (ACTIVE_READER_RESOURCES) {
+                STARTING_ENGINES.remove(this);
+              }
+              finished.complete(null);
+            } else {
+              // Preserve failed cleanup for later exit attempts, just like ReaderResources.
+              finished.completeExceptionally(failure);
+            }
+          });
+    }
   }
 
   /** Owns the pipes and readers of one launch, including cleanup after a stale reader exits. */
@@ -678,9 +869,9 @@ public class AnalysisEngine {
       this.ssh = ssh;
       this.transport = transport;
       this.attempt = attempt;
-      this.stdout = new BufferedReader(new InputStreamReader(stdout));
-      this.stdin = new BufferedOutputStream(stdin);
-      this.stderr = new BufferedReader(new InputStreamReader(stderr));
+      this.stdout = stdout == null ? null : new BufferedReader(new InputStreamReader(stdout));
+      this.stdin = stdin == null ? null : new BufferedOutputStream(stdin);
+      this.stderr = stderr == null ? null : new BufferedReader(new InputStreamReader(stderr));
     }
 
     private synchronized void start() {
@@ -774,6 +965,7 @@ public class AnalysisEngine {
   }
 
   private static void closeStream(Closeable stream) {
+    if (stream == null) return;
     try {
       stream.close();
     } catch (IOException failure) {

@@ -4,13 +4,18 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisEngineSSHController;
 import featurecat.lizzie.analysis.EngineManager;
+import featurecat.lizzie.analysis.EngineStartupDiagnostics;
 import featurecat.lizzie.analysis.Leelaz;
+import featurecat.lizzie.analysis.remote.EngineTransport;
+import featurecat.lizzie.analysis.remote.RemoteComputeConfig;
 import featurecat.lizzie.enginegame.Acceptance;
 import featurecat.lizzie.enginegame.EngineGameBatchSpecFactory;
 import featurecat.lizzie.enginegame.EngineGameParsedStart;
@@ -23,28 +28,47 @@ import featurecat.lizzie.enginegame.LifecycleBinding;
 import featurecat.lizzie.enginegame.ParticipantBinding;
 import featurecat.lizzie.enginegame.StartFailure;
 import featurecat.lizzie.enginegame.StartObserver;
+import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
 import featurecat.lizzie.gui.web.WebBoardManager;
 import featurecat.lizzie.rules.Board;
+import featurecat.lizzie.util.KataGoAutoSetupHelper;
+import featurecat.lizzie.util.DelayedTerminationProcess;
+import featurecat.lizzie.util.KataGoRuntimeHelper;
+import featurecat.lizzie.util.MeasuredKataGoTuning;
+import featurecat.lizzie.util.NvidiaGpuDiscoveryFixture;
+import featurecat.lizzie.util.Utils;
+import featurecat.lizzie.util.katago.tuning.KataGoMeasuredFingerprint;
+import featurecat.lizzie.util.katago.tuning.KataGoMeasuredReport;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InterruptedIOException;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import javax.swing.SwingUtilities;
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -58,23 +82,484 @@ class LizzieShutdownTest {
   private static final EngineParticipantIdentity SECOND =
       new EngineParticipantIdentity("shutdown-second", "");
 
+  @Test
+  void exitDuringWholeGameProfileGpuDetectionWaitsForTheUnattachedConstructor(@TempDir Path root)
+      throws Exception {
+    NvidiaGpuDiscoveryFixture.runFork(getClass(), "whole-game-profile", root);
+  }
+
+  static void runGpuScenario(String scenario, Path root) throws Exception {
+    assertEquals("whole-game-profile", scenario);
+    try (Harness harness = Harness.open();
+        NvidiaGpuDiscoveryFixture fixture = new NvidiaGpuDiscoveryFixture(root)) {
+      Path executable = Files.writeString(root.resolve("katago"),
+          "#!/bin/sh\n: > \"$(dirname \"$0\")/main.started\"\n");
+      assertTrue(executable.toFile().setExecutable(true));
+      Path model = Files.writeString(root.resolve("model.bin.gz"), "measured model");
+      Path config = Files.writeString(root.resolve("analysis.cfg"), "numAnalysisThreads = 8\n");
+      String command = "\"" + executable + "\" analysis -model \"" + model + "\" -config \"" + config + "\"";
+      harness.config.config = new JSONObject();
+      harness.config.leelazConfig = new JSONObject();
+      harness.config.analysisReuseCurrentEngine = false;
+      harness.config.analysisEngineCommand = command;
+      EngineData entry = new EngineData();
+      entry.id = "whole-game-gpu-shutdown";
+      entry.name = "Measured local engine";
+      entry.commands = command;
+      JSONObject report = wholeGameReport(entry);
+      assertTrue(KataGoMeasuredReport.parse(report).assess().eligible());
+      entry.threadPolicy = new JSONObject().put(MeasuredKataGoTuning.KEY,
+          new JSONObject().put("whole-game", new JSONObject().put("schemaVersion", 1)
+              .put("command", command).put("report", report)));
+      harness.config.leelazConfig.put("engine-settings-list",
+          new JSONArray().put(new JSONObject().put("id", entry.id).put("name", entry.name)
+              .put("command", entry.commands).put("threadPolicy", entry.threadPolicy)));
+      JSONObject savedProfile = new JSONObject(entry.threadPolicy.toString());
+      FutureTask<AnalysisEngine> startup = new FutureTask<>(
+          () -> new AnalysisEngine(false, AnalysisEngine.Workload.WHOLE_GAME, 5000));
+      Thread starter = new Thread(startup, "whole-game-profile-constructor");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      AtomicBoolean queryAliveAtExit = new AtomicBoolean(true);
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        ProcessHandle query = fixture.awaitQuery();
+        assertNull(harness.frame.analysisEngine, "constructor was already attached to the frame");
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(code -> {
+          queryAliveAtExit.set(query.isAlive());
+          exited.complete(code);
+        }));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "GPU cancellation blocked the EDT");
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertFalse(queryAliveAtExit.get(), "app exit completed before the GPU query child exited");
+        AnalysisEngine analysis = startup.get(5, TimeUnit.SECONDS);
+        assertFalse(analysis.isLoaded());
+        assertNull(analysis.process);
+        assertNull(analysis.startupDiagnosticAttempt());
+        assertFalse(Files.exists(root.resolve("main.started")));
+        assertEquals(1, fixture.queryCount(), "shutdown started another GPU query");
+        assertTrue(savedProfile.similar(Utils.getEngineData().get(0).threadPolicy));
+      } finally {
+        fixture.release();
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        starter.interrupt();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        cleanup.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  private static JSONObject wholeGameReport(EngineData entry) throws Exception {
+    JSONObject fingerprint = KataGoMeasuredFingerprint.capture(
+        KataGoAutoSetupHelper.inspectSavedEngine(entry), NvidiaGpuDiscoveryFixture.gpu(),
+        Utils.splitCommand(KataGoRuntimeHelper.optimizeAnalysisEngineCommand(
+            entry.commands, 5000, false, false)));
+    JSONArray runs = new JSONArray();
+    for (int round = 1; round <= 3; round++) {
+      for (int member = 0; member < 2; member++) {
+        boolean baseline = (round + member) % 2 == 1;
+        runs.put(new JSONObject().put("profile", baseline ? "baseline" : "candidate")
+            .put("round", round).put("phase", "warm").put("seconds", baseline ? 10 : 8)
+            .put("responseSeconds", .05).put("edtP95Seconds", .01)
+            .put("maxMemoryMiB", 2000).put("maxEngineProcesses", 1)
+            .put("rootVisitsByTurn", new JSONArray(List.of(5000, 5000))));
+      }
+    }
+    return new JSONObject().put("schemaVersion", 1).put("scene", "whole-game")
+        .put("measurementMode", "application").put("fingerprint", fingerprint)
+        .put("fixtureSha256", "d".repeat(64)).put("budget", 5000).put("positions", 2)
+        .put("metricScope", "totalGpu")
+        .put("baselineParameters", new JSONObject().put("numAnalysisThreads", 8)
+            .put("numSearchThreadsPerAnalysisThread", 2).put("nnMaxBatchSize", 16))
+        .put("candidateParameters", new JSONObject().put("numAnalysisThreads", 12)
+            .put("numSearchThreadsPerAnalysisThread", 2).put("nnMaxBatchSize", 32))
+        .put("runs", runs);
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
-  void exitWaitsForAnalysisCleanupWithoutBlockingEdt(boolean alreadyDetached) throws Exception {
+  void exitDuringRuntimePreflightSkipsMainProcessAndFailureDiagnostic(
+      boolean cancelledProbe, @TempDir Path directory) throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      Path executable = directory.resolve("engines/katago/windows-x64-nvidia/katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      CountDownLatch preflightEntered = new CountDownLatch(1);
+      CountDownLatch releasePreflight = new CountDownLatch(1);
+      AtomicInteger mainStarts = new AtomicInteger();
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, "\"" + executable + "\" analysis", (proxy, method, arguments) -> {
+          if (method.getName().equals("prepareRuntime")) {
+            preflightEntered.countDown();
+            awaitGate(releasePreflight);
+            if (cancelledProbe)
+              throw new InterruptedIOException("CUDA compatibility probe cancelled");
+            return null;
+          }
+          mainStarts.incrementAndGet();
+          throw new AssertionError("exit allowed the main engine to launch after preflight");
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-preflight-test-starter");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        assertTrue(preflightEntered.await(5, TimeUnit.SECONDS));
+        assertNull(harness.frame.analysisEngine);
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(exited::complete));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "preflight cancellation blocked the EDT");
+        assertFalse(exited.isDone(), "exit did not wait for preflight cleanup");
+        releasePreflight.countDown();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertEquals(0, mainStarts.get());
+        assertFalse(analysis.isLoaded());
+        EngineStartupDiagnostics.Attempt diagnostic =
+            (EngineStartupDiagnostics.Attempt) analysisField("startupDiagnosticAttempt").get(analysis);
+        assertNull(diagnostic.snapshot(), "shutdown must not publish a runtime-preflight failure");
+      } finally {
+        releasePreflight.countDown();
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive());
+        cleanup.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"handoff", "failed", "cancelled"})
+  void exitWaitsForPreparationChildAfterTheStartupCallReturns(
+      String outcome, @TempDir Path directory) throws Exception {
+    try (Harness harness = Harness.open();
+        DelayedTerminationProcess probe = new DelayedTerminationProcess(directory);
+        GatedAnalysisProcess main = new GatedAnalysisProcess()) {
+      AnalysisEngine analysis = analysisEngine();
+      Path executable = directory.resolve("engines/katago/windows-x64-nvidia/katago.exe");
+      Files.createDirectories(executable.getParent());
+      Files.createFile(executable);
+      CountDownLatch prepared = new CountDownLatch(1);
+      CountDownLatch releasePreparation = new CountDownLatch(outcome.equals("cancelled") ? 1 : 0);
+      AtomicInteger mainStarts = new AtomicInteger();
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, "\"" + executable + "\" analysis", (proxy, method, arguments) -> {
+          if (method.getName().equals("prepareRuntime")) {
+            @SuppressWarnings("unchecked")
+            Consumer<Process> started = (Consumer<Process>) arguments[2];
+            Method waitForProbe = KataGoRuntimeHelper.class.getDeclaredMethod(
+                "awaitCompatibilityProbe", Process.class, StringBuilder.class,
+                BooleanSupplier.class, Consumer.class, long.class);
+            waitForProbe.setAccessible(true);
+            // Exercise the production timeout/registration boundary with a short time budget.
+            assertFalse((boolean) waitForProbe.invoke(
+                null, probe, new StringBuilder(), (BooleanSupplier) () -> false, started, 25L));
+            prepared.countDown();
+            awaitGate(releasePreparation);
+            if (!outcome.equals("handoff")) throw new IOException("probe timed out");
+            return null;
+          }
+          assertEquals("start", method.getName());
+          mainStarts.incrementAndGet();
+          return main;
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "delayed-preparation-exit");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      AtomicBoolean childAliveAtExit = new AtomicBoolean(true);
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        main.allowDestroy.countDown();
+        starter.start();
+        assertTrue(prepared.await(5, TimeUnit.SECONDS));
+        assertTrue(probe.awaitTerminationRequest(5, TimeUnit.SECONDS));
+        assertTrue(probe.isAlive(), "the OS child must still be awaiting termination");
+        if (!outcome.equals("cancelled")) startup.get(5, TimeUnit.SECONDS);
+        assertNull(harness.frame.analysisEngine, "exit must not depend on frame attachment");
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(code -> {
+          childAliveAtExit.set(probe.isAlive());
+          exited.complete(code);
+        }));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "probe cleanup blocked the EDT");
+        releasePreparation.countDown();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(outcome.equals("handoff") ? 1 : 0, mainStarts.get());
+        assertFalse(exited.isDone(), "exit released a timed-out preparation child");
+
+        probe.finishTermination();
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertFalse(childAliveAtExit.get(), "exit callback ran before physical process exit");
+        assertFalse(analysis.isLoaded());
+      } finally {
+        releasePreparation.countDown();
+        probe.finishTermination();
+        main.allowDestroy.countDown();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"remote,false", "remote,true", "ssh,false", "ssh,true"})
+  void exitCancelsConnectingAnalysisAndWaitsForItsFirstClose(
+      String backend, boolean beforeCreation) throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      analysis.useJavaSSH = backend.equals("ssh");
+      GatedAnalysisConnection connection = new GatedAnalysisConnection();
+      CountDownLatch creating = new CountDownLatch(1);
+      CountDownLatch releaseCreation = new CountDownLatch(beforeCreation ? 1 : 0);
+      String command = analysis.useJavaSSH ? "test-analysis" : RemoteComputeConfig.COMMAND_ZHIZI;
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, command, (proxy, method, arguments) -> {
+          creating.countDown();
+          awaitGate(releaseCreation);
+          return switch (method.getName()) {
+            case "createTransport" -> connection;
+            case "createSsh" -> new AnalysisEngineSSHController(analysis, "127.0.0.1", "22", true) {
+              @Override
+              public Boolean login(String ignoredCommand, String user, String password) {
+                try {
+                  connection.start();
+                  return Boolean.TRUE;
+                } catch (IOException cancelled) {
+                  return Boolean.FALSE;
+                }
+              }
+
+              @Override
+              public void close() {
+                connection.close();
+                super.close();
+              }
+            };
+            default -> throw new AssertionError("unexpected local process launch");
+          };
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-connection-test-starter");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      FutureTask<Void> shutdown = new FutureTask<>(() -> {
+        Lizzie.shutdown(exited::complete);
+        return null;
+      });
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      try {
+        starter.start();
+        assertTrue((beforeCreation ? creating : connection.startEntered).await(5, TimeUnit.SECONDS));
+        assertNull(harness.frame.analysisEngine, "startup must not depend on frame registration");
+        SwingUtilities.invokeLater(shutdown);
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "connection close blocked the EDT");
+        shutdown.get(5, TimeUnit.SECONDS);
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        assertFalse(exited.isDone(), "exit ignored an in-flight startup");
+
+        releaseCreation.countDown();
+        assertTrue(connection.closeEntered.await(5, TimeUnit.SECONDS), "exit did not cancel connect");
+        assertFalse(connection.closedOnEdt, "network cleanup must run off the EDT");
+        startup.get(5, TimeUnit.SECONDS);
+        assertTrue(connection.duplicateCloseReturned.await(5, TimeUnit.SECONDS));
+        assertEquals(beforeCreation ? 0 : 1, connection.starts.get());
+        assertEquals(backend.equals("remote") ? 1 : 0, connection.aborts.get(),
+            "unfinished transports must use physical abort, not a close handshake");
+        assertFalse(cleanup.isDone(), "a duplicate close returned before the first close finished");
+        assertFalse(exited.isDone(), "JVM exit ran while connection cleanup was blocked");
+
+        connection.allowClose.countDown();
+        cleanup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        assertTrue(connection.closeReturned);
+        assertFalse(analysis.isLoaded(), "cancelled startup published a loaded engine");
+      } finally {
+        releaseCreation.countDown();
+        connection.allowClose.countDown();
+        connection.close();
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive(), "cancelled startup did not finish");
+        analysis.shutdown();
+        awaitAnalysisCleanup(analysis);
+        exited.get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  @Test
+  void exitWaitsForPendingConnectionCleanupAfterStartAndAbortReturn() throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine analysis = analysisEngine();
+      CompletableFuture<Void> pendingConnection = new CompletableFuture<>();
+      GatedAnalysisConnection connection = new GatedAnalysisConnection(pendingConnection);
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, RemoteComputeConfig.COMMAND_ZHIZI, (proxy, method, arguments) -> {
+          assertEquals("createTransport", method.getName());
+          return connection;
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "timed-out-analysis-connection");
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      CountDownLatch nextEdtEvent = new CountDownLatch(1);
+      Object registryLock = analysisField("ACTIVE_READER_RESOURCES").get(null);
+      Set<?> pendingStartups = (Set<?>) analysisField("STARTING_ENGINES").get(null);
+      try {
+        starter.start();
+        startup.get(5, TimeUnit.SECONDS);
+        assertEquals(1, connection.starts.get());
+        assertFalse(analysis.isLoaded());
+        assertNull(harness.frame.analysisEngine, "startup was never attached to the frame");
+        Object reservation;
+        synchronized (registryLock) {
+          assertEquals(1, pendingStartups.size(), "timed-out connect lost its cleanup reservation");
+          reservation = pendingStartups.iterator().next();
+        }
+
+        SwingUtilities.invokeLater(() -> Lizzie.shutdown(exited::complete));
+        SwingUtilities.invokeLater(nextEdtEvent::countDown);
+        assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "pending connect blocked the EDT");
+        assertTrue(connection.closeEntered.await(5, TimeUnit.SECONDS));
+        assertFalse(connection.closedOnEdt);
+        CompletableFuture<Void> cleanup = AnalysisEngine.shutdownAllResources();
+        connection.close();
+        assertTrue(connection.duplicateCloseReturned.await(5, TimeUnit.SECONDS));
+        assertFalse(cleanup.isDone(), "a duplicate close released asynchronous connect cleanup");
+
+        Field connectionClosed = reservation.getClass().getDeclaredField("connectionClosed");
+        connectionClosed.setAccessible(true);
+        CompletableFuture<?> firstAbort = (CompletableFuture<?>) connectionClosed.get(reservation);
+        connection.allowClose.countDown();
+        firstAbort.get(5, TimeUnit.SECONDS);
+        assertTrue(connection.closeReturned);
+        assertEquals(1, connection.aborts.get());
+        assertFalse(pendingConnection.isDone());
+        assertFalse(cleanup.isDone(), "abort return was mistaken for late connect cleanup");
+        assertFalse(exited.isDone(), "exit ran while the transport still owned pending cleanup");
+        synchronized (registryLock) {
+          assertTrue(pendingStartups.contains(reservation));
+        }
+
+        pendingConnection.complete(null);
+        cleanup.get(5, TimeUnit.SECONDS);
+        assertEquals(0, exited.get(5, TimeUnit.SECONDS));
+        synchronized (registryLock) {
+          assertTrue(pendingStartups.isEmpty(), "completed cleanup retained its startup reservation");
+        }
+      } finally {
+        pendingConnection.complete(null);
+        connection.allowClose.countDown();
+        connection.close();
+        starter.interrupt();
+        starter.join(5000);
+        assertFalse(starter.isAlive());
+        AnalysisEngine.shutdownAllResources().get(5, TimeUnit.SECONDS);
+      }
+    }
+  }
+
+  /** Mirrors the transports' idempotent close: it wakes start before physical cleanup returns. */
+  private static final class GatedAnalysisConnection implements EngineTransport {
+    private final CompletableFuture<Void> pendingStartup;
+    private final AtomicInteger starts = new AtomicInteger();
+    private final AtomicInteger aborts = new AtomicInteger();
+    private final AtomicBoolean closing = new AtomicBoolean();
+    private final CountDownLatch startEntered = new CountDownLatch(1);
+    private final CountDownLatch closeEntered = new CountDownLatch(1);
+    private final CountDownLatch duplicateCloseReturned = new CountDownLatch(1);
+    private final CountDownLatch allowClose = new CountDownLatch(1);
+    private volatile boolean closedOnEdt;
+    private volatile boolean closeReturned;
+
+    private GatedAnalysisConnection() {
+      this(null);
+    }
+
+    private GatedAnalysisConnection(CompletableFuture<Void> pendingStartup) {
+      this.pendingStartup = pendingStartup;
+    }
+
+    @Override
+    public void start(Consumer<CompletableFuture<Void>> pendingCompletion) throws IOException {
+      if (pendingStartup == null) {
+        EngineTransport.super.start(pendingCompletion);
+        return;
+      }
+      pendingCompletion.accept(pendingStartup);
+      starts.incrementAndGet();
+      startEntered.countDown();
+      throw new IOException("connect result deadline elapsed before connection cleanup");
+    }
+
+    @Override
+    public void start() throws IOException {
+      starts.incrementAndGet();
+      startEntered.countDown();
+      try {
+        assertTrue(closeEntered.await(15, TimeUnit.SECONDS), "connection was not cancelled");
+      } catch (InterruptedException failure) {
+        Thread.currentThread().interrupt();
+        throw new AssertionError(failure);
+      }
+      throw new IOException("connection cancelled");
+    }
+
+    @Override
+    public void close() {
+      if (!closing.compareAndSet(false, true)) {
+        duplicateCloseReturned.countDown();
+        return;
+      }
+      closedOnEdt = SwingUtilities.isEventDispatchThread();
+      closeEntered.countDown();
+      awaitGate(allowClose);
+      closeReturned = true;
+    }
+
+    @Override public InputStream stdout() { throw new AssertionError("cancelled connection"); }
+    @Override public OutputStream stdin() { throw new AssertionError("cancelled connection"); }
+    @Override public InputStream stderr() { throw new AssertionError("cancelled connection"); }
+    @Override public boolean isOpen() { return false; }
+    @Override public String description() { return "controlled connection"; }
+    @Override public void abort() { aborts.incrementAndGet(); close(); }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"attached", "detached", "starting", "initializing", "initialize-failure"})
+  void exitWaitsForAnalysisCleanupWithoutBlockingEdt(String phase) throws Exception {
     try (Harness harness = Harness.open();
         GatedAnalysisProcess process = new GatedAnalysisProcess()) {
-      AnalysisEngine analysis = allocate(AnalysisEngine.class);
-      analysis.process = process;
-      Method initialize = AnalysisEngine.class.getDeclaredMethod("initializeStreams");
-      initialize.setAccessible(true);
-      initialize.invoke(analysis);
-      harness.frame.analysisEngine = analysis;
-      if (alreadyDetached) {
-        analysis.normalQuit();
-        harness.frame.analysisEngine = null;
-        // Exercise the shutdown path without an EngineManager as well.
-        Lizzie.engineManager = null;
+      AnalysisEngine analysis = analysisEngine();
+      CountDownLatch startupEntered = new CountDownLatch(1);
+      CountDownLatch releaseStartup = new CountDownLatch(1);
+      Runnable pauseStartup = () -> {
+        startupEntered.countDown();
+        awaitGate(releaseStartup);
+      };
+      boolean paused = !phase.equals("attached") && !phase.equals("detached");
+      boolean failedInitialization = phase.equals("initialize-failure");
+      if (phase.equals("initializing") || failedInitialization) {
+        process.beforeStdout = () -> {
+          pauseStartup.run();
+          if (failedInitialization) throw new IllegalStateException("controlled stream failure");
+        };
       }
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, () -> {
+          if (phase.equals("starting")) pauseStartup.run();
+          return process;
+        });
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-shutdown-test-starter");
       CompletableFuture<Integer> exited = new CompletableFuture<>();
       FutureTask<Void> shutdown =
           new FutureTask<>(
@@ -84,11 +569,34 @@ class LizzieShutdownTest {
               });
       CountDownLatch nextEdtEvent = new CountDownLatch(1);
       try {
+        starter.start();
+        if (paused) {
+          assertTrue(startupEntered.await(5, TimeUnit.SECONDS), "startup did not reach its gate");
+          assertNull(harness.frame.analysisEngine, "the starting engine must not be in the frame");
+        } else {
+          startup.get(5, TimeUnit.SECONDS);
+          harness.frame.analysisEngine = analysis;
+          if (phase.equals("detached")) {
+            analysis.normalQuit();
+            harness.frame.analysisEngine = null;
+            // Exercise the shutdown path without an EngineManager as well.
+            Lizzie.engineManager = null;
+          }
+        }
         SwingUtilities.invokeLater(shutdown);
         SwingUtilities.invokeLater(nextEdtEvent::countDown);
 
         assertTrue(nextEdtEvent.await(5, TimeUnit.SECONDS), "shutdown blocked the EDT");
         shutdown.get(5, TimeUnit.SECONDS);
+        assertFalse(exited.isDone(), "JVM exit ran before the starting engine was accounted for");
+        releaseStartup.countDown();
+        if (failedInitialization) {
+          ExecutionException failure =
+              assertThrows(ExecutionException.class, () -> startup.get(5, TimeUnit.SECONDS));
+          assertInstanceOf(IllegalStateException.class, failure.getCause());
+        } else {
+          startup.get(5, TimeUnit.SECONDS);
+        }
         assertTrue(process.destroyEntered.await(5, TimeUnit.SECONDS));
         assertTrue(process.isAlive(), "the child must still be running behind the cleanup gate");
         assertFalse(exited.isDone(), "JVM exit ran before the analysis process was terminated");
@@ -96,19 +604,139 @@ class LizzieShutdownTest {
         process.allowDestroy.countDown();
         assertEquals(0, exited.get(5, TimeUnit.SECONDS));
         assertFalse(process.isAlive(), "JVM exit ran while the analysis child was alive");
+        assertFalse(analysis.isLoaded(), "cancelled startup published a loaded engine");
       } finally {
+        releaseStartup.countDown();
         process.allowDestroy.countDown();
-        Field resourcesField = AnalysisEngine.class.getDeclaredField("readerResources");
-        resourcesField.setAccessible(true);
-        Object resources = resourcesField.get(analysis);
-        Field cleanupField = resources.getClass().getDeclaredField("cleanup");
-        cleanupField.setAccessible(true);
-        Thread cleanup = (Thread) cleanupField.get(resources);
-        if (cleanup != null) {
-          cleanup.join(TimeUnit.SECONDS.toMillis(5));
-          assertFalse(cleanup.isAlive(), "cleanup did not finish after releasing the gate");
-        }
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive(), "startup did not finish after releasing the gate");
+        analysis.shutdown();
+        awaitAnalysisCleanup(analysis);
       }
+    }
+  }
+
+  @Test
+  void unexpectedEofBeforeStartupHandoffRemainsAnAbnormalEnd() throws Exception {
+    try (Harness harness = Harness.open();
+        GatedAnalysisProcess process = new GatedAnalysisProcess()) {
+      AnalysisEngine analysis = analysisEngine();
+      CountDownLatch beforeReaders = new CountDownLatch(1);
+      CountDownLatch releaseReaders = new CountDownLatch(1);
+      CountDownLatch failed = new CountDownLatch(1);
+      AtomicInteger pidReads = new AtomicInteger();
+      analysis.setFailureCallback(result -> failed.countDown());
+      process.stdoutEof = true;
+      process.beforePid = () -> {
+        // attachProcess reads the PID first; process accounting reads it after stream installation.
+        if (pidReads.incrementAndGet() == 2) {
+          beforeReaders.countDown();
+          awaitGate(releaseReaders);
+        }
+      };
+      FutureTask<Void> startup = new FutureTask<>(() -> {
+        startAnalysis(analysis, () -> process);
+        return null;
+      });
+      Thread starter = new Thread(startup, "analysis-eof-test-starter");
+      try {
+        starter.start();
+        assertTrue(beforeReaders.await(5, TimeUnit.SECONDS));
+        // Hold only the final ownership handoff; both production readers must remain runnable.
+        synchronized (analysisField("ACTIVE_READER_RESOURCES").get(null)) {
+          releaseReaders.countDown();
+          assertTrue(failed.await(5, TimeUnit.SECONDS), "the reader did not report the EOF");
+          assertFalse(startup.isDone(), "startup must still await its ownership handoff");
+        }
+        startup.get(5, TimeUnit.SECONDS);
+        assertFalse(analysis.isNormalEnd, "startup cleanup suppressed the unexpected-EOF failure");
+      } finally {
+        releaseReaders.countDown();
+        process.allowDestroy.countDown();
+        starter.join(TimeUnit.SECONDS.toMillis(5));
+        assertFalse(starter.isAlive());
+        analysis.shutdown();
+        awaitAnalysisCleanup(analysis);
+      }
+    }
+  }
+
+  @Test
+  void failedAnalysisStartReleasesExitWaitAndShutdownRejectsLaterStarts(@TempDir Path directory)
+      throws Exception {
+    try (Harness harness = Harness.open()) {
+      AnalysisEngine failed = analysisEngine();
+      failed.startEngine("\"" + directory.resolve("missing-analysis-engine") + "\"");
+      assertNull(failed.process);
+      assertFalse(failed.isLoaded());
+
+      CompletableFuture<Integer> exited = new CompletableFuture<>();
+      SwingUtilities.invokeAndWait(() -> Lizzie.shutdown(exited::complete));
+      assertEquals(0, exited.get(5, TimeUnit.SECONDS), "failed startup left an exit reservation");
+
+      AnalysisEngine late = analysisEngine();
+      startAnalysis(late, () -> {
+        throw new AssertionError("shutdown allowed a new process launch");
+      });
+      assertNull(late.process);
+      assertFalse(late.isLoaded());
+    }
+  }
+
+  private static AnalysisEngine analysisEngine() throws Exception {
+    AnalysisEngine engine = allocate(AnalysisEngine.class);
+    analysisField("analyzeMap").set(engine, new ConcurrentHashMap<>());
+    analysisField("resourceBundle").set(engine, Lizzie.resourceBundle);
+    analysisField("isPreLoad").setBoolean(engine, true);
+    return engine;
+  }
+
+  private static void awaitGate(CountDownLatch release) {
+    try {
+      assertTrue(release.await(5, TimeUnit.SECONDS), "startup gate was not released");
+    } catch (InterruptedException interrupted) {
+      Thread.currentThread().interrupt();
+      throw new AssertionError(interrupted);
+    }
+  }
+
+  private static void awaitAnalysisCleanup(AnalysisEngine analysis) throws Exception {
+    Object resources = analysisField("readerResources").get(analysis);
+    Field cleanupField = resources.getClass().getDeclaredField("cleanup");
+    cleanupField.setAccessible(true);
+    Thread cleanup = (Thread) cleanupField.get(resources);
+    if (cleanup != null) {
+      cleanup.join(TimeUnit.SECONDS.toMillis(5));
+      assertFalse(cleanup.isAlive(), "cleanup did not finish after releasing the gate");
+    }
+  }
+
+  private static Field analysisField(String name) throws NoSuchFieldException {
+    Field field = AnalysisEngine.class.getDeclaredField(name);
+    field.setAccessible(true);
+    return field;
+  }
+
+  private static void startAnalysis(AnalysisEngine engine, Callable<Process> processStarter)
+      throws Exception {
+    startAnalysis(
+        engine, "\"" + Path.of(System.getProperty("java.home"), "bin", "java") + "\"",
+        (proxy, method, arguments) -> processStarter.call());
+  }
+
+  private static void startAnalysis(
+      AnalysisEngine engine, String command, InvocationHandler factoryMethods) throws Exception {
+    Class<?> factory = Class.forName(AnalysisEngine.class.getName() + "$StartupFactory");
+    Object starter = Proxy.newProxyInstance(
+        factory.getClassLoader(), new Class<?>[] {factory}, factoryMethods);
+    Method start = AnalysisEngine.class.getDeclaredMethod("startEngine", String.class, factory);
+    start.setAccessible(true);
+    try {
+      start.invoke(engine, command, starter);
+    } catch (InvocationTargetException failure) {
+      if (failure.getCause() instanceof Exception exception) throw exception;
+      if (failure.getCause() instanceof Error error) throw error;
+      throw failure;
     }
   }
 
@@ -123,6 +751,9 @@ class LizzieShutdownTest {
     private final Process child;
     private final CountDownLatch destroyEntered = new CountDownLatch(1);
     private final CountDownLatch allowDestroy = new CountDownLatch(1);
+    private Runnable beforeStdout;
+    private Runnable beforePid;
+    private boolean stdoutEof;
 
     private GatedAnalysisProcess() throws IOException {
       child =
@@ -141,7 +772,14 @@ class LizzieShutdownTest {
 
     @Override
     public InputStream getInputStream() {
-      return child.getInputStream();
+      if (beforeStdout != null) beforeStdout.run();
+      return stdoutEof ? InputStream.nullInputStream() : child.getInputStream();
+    }
+
+    @Override
+    public long pid() {
+      if (beforePid != null) beforePid.run();
+      return child.pid();
     }
 
     @Override
@@ -779,7 +1417,7 @@ class LizzieShutdownTest {
     }
 
     @Override
-    public void close() {
+    public void close() throws Exception {
       Lizzie.config = previousConfig;
       Lizzie.frame = previousFrame;
       Lizzie.engineManager = previousEngineManager;
@@ -788,6 +1426,7 @@ class LizzieShutdownTest {
       Lizzie.board = previousBoard;
       // The injected exit callback leaves this JVM alive; later tests need a fresh shutdown fence.
       Lizzie.engineGame.resetForTest();
+      analysisField("resourcesShuttingDown").setBoolean(null, false);
     }
   }
 
