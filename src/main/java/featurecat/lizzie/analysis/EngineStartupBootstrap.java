@@ -11,18 +11,17 @@ import java.util.Locale;
 final class EngineStartupBootstrap {
   private EngineStartupBootstrap() {}
 
+  static EngineBootstrapFacts factsFor(String command, String purpose) {
+    return factsFor(command, purpose, EngineCommandVisibility.VISIBLE);
+  }
+
   /**
    * A hidden command shares only {@link EngineBootstrapFacts#forHiddenCommand}: KG-next's own names
    * for the engine type, source, backend and ONNX provider, and a marker for everything else.
    */
   static EngineBootstrapFacts factsFor(
       String command, String purpose, EngineCommandVisibility visibility) {
-    EngineBootstrapFacts facts = factsFor(command, purpose);
-    return visibility.isHidden() ? facts.forHiddenCommand() : facts;
-  }
-
-  static EngineBootstrapFacts factsFor(String command, String purpose) {
-    EngineBootstrapFacts parsed = EngineBootstrapFacts.fromCommand(command, purpose);
+    EngineBootstrapFacts parsed = EngineBootstrapFacts.fromCommand(command, purpose, visibility);
     try {
       List<String> parts = Utils.splitCommand(command == null ? "" : command);
       Path executable = KataGoRuntimeHelper.resolveCommandExecutable(parts);
@@ -51,6 +50,15 @@ final class EngineStartupBootstrap {
       }
       if (backend.equals(parsed.backend()) && onnxProvider.equals(parsed.onnxProvider())) {
         return parsed;
+      }
+      if (visibility.isHidden()) {
+        return EngineBootstrapFacts.forHiddenCommand(
+            parsed.engineType(),
+            parsed.version(),
+            parsed.purpose(),
+            parsed.source(),
+            backend,
+            onnxProvider);
       }
       return EngineBootstrapFacts.of(
           parsed.engineType(),

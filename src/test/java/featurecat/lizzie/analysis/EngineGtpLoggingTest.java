@@ -47,8 +47,8 @@ class EngineGtpLoggingTest {
   private static final String INFO_CANARY = "T03_INFO_CANARY";
   private static final String PRIVATE_MODEL = "PrivateModel-71.bin.gz";
   private static final String PRIVATE_CONFIG = "PrivateConfig-82.cfg";
-  private static final String PRIVATE_PROVIDER = "PrivateProvider-93";
-  private static final String PRIVATE_BACKEND = "privatemarker-64";
+  private static final String PRIVATE_PROVIDER = "_openvino_";
+  private static final String PRIVATE_BACKEND = "_opencl_";
 
   @TempDir Path tempDir;
   private Config previousConfig;
@@ -581,8 +581,7 @@ class EngineGtpLoggingTest {
       assertTrue(line.contains("onnxProvider=hidden-command"), line);
       assertTrue(line.contains("model=hidden-command config=hidden-command"), line);
     } else {
-      assertTrue(line.contains("backend=" + PRIVATE_BACKEND), line);
-      assertTrue(line.contains("onnxProvider=" + PRIVATE_PROVIDER), line);
+      assertTrue(line.contains("backend=opencl onnxProvider=openvino "), line);
       assertTrue(line.contains("model=" + PRIVATE_MODEL), line);
       assertTrue(line.contains("config=" + PRIVATE_CONFIG), line);
     }

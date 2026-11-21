@@ -57,6 +57,31 @@ class EngineStartupBootstrapTest {
   }
 
   @Test
+  void hiddenOverrideCannotImplyOnnxFromItsDisplaySpelling() {
+    String command =
+        quote(tempDir.resolve("katago")) + " gtp -override-config onnxProvider=_openvino_";
+
+    EngineBootstrapFacts facts =
+        EngineStartupBootstrap.factsFor(command, "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+
+    assertEquals("hidden-command", facts.onnxProvider());
+    assertEquals("unknown", facts.backend());
+  }
+
+  @Test
+  void runtimeMarkerCannotRestoreAnUnofficialHiddenBackend() throws Exception {
+    Path engine = touch(tempDir.resolve("katago.exe"));
+    Files.writeString(tempDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia_\n");
+    String command = quote(engine) + " gtp -override-config onnxProvider=OpenVINO";
+
+    EngineBootstrapFacts facts =
+        EngineStartupBootstrap.factsFor(command, "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+
+    assertEquals("hidden-command", facts.backend());
+    assertEquals("openvino", facts.onnxProvider());
+  }
+
+  @Test
   void onnxMarkerFromRuntimeHelperSetsBackendAndProvider() throws Exception {
     Path engine =
         touch(

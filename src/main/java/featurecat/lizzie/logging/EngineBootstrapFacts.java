@@ -1,6 +1,7 @@
 package featurecat.lizzie.logging;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.nio.charset.StandardCharsets;
@@ -124,14 +125,21 @@ public final class EngineBootstrapFacts {
    * the user hid. The other values come from the hidden command or its installation too (an {@code
    * onnxProvider=} override, a backend marker kept as written), so each is shared only when it is
    * one of KG-next's own names, written in KG-next's spelling; anything else becomes {@link
-   * #HIDDEN}. The purpose is the application's own.
+   * #HIDDEN}. Pass parsed values, not display tokens: formatting can discard characters. The
+   * purpose is the application's own.
    */
-  public EngineBootstrapFacts forHiddenCommand() {
+  public static EngineBootstrapFacts forHiddenCommand(
+      String engineType,
+      String version,
+      String purpose,
+      String source,
+      String backend,
+      String onnxProvider) {
     return new EngineBootstrapFacts(
         appName(engineType, APP_ENGINE_TYPES),
         // KG-next never names a version of its own here.
         appName(version, Set.of()),
-        purpose,
+        safePurpose(purpose),
         appName(source, APP_SOURCES),
         appName(backend, APP_BACKENDS),
         appName(onnxProvider, APP_ONNX_PROVIDERS),
@@ -149,15 +157,20 @@ public final class EngineBootstrapFacts {
   }
 
   public static EngineBootstrapFacts fromCommand(String command, String purpose) {
+    return fromCommand(command, purpose, EngineCommandVisibility.VISIBLE);
+  }
+
+  public static EngineBootstrapFacts fromCommand(
+      String command, String purpose, EngineCommandVisibility visibility) {
     try {
-      return parseCommand(command, purpose);
-    } catch (RuntimeException ignored) {
-      return unknown(purpose);
-    } catch (Error error) {
-      if (error instanceof VirtualMachineError) {
-        throw error;
+      return parseCommand(command, purpose, visibility);
+    } catch (RuntimeException | Error failure) {
+      if (failure instanceof VirtualMachineError fatal) {
+        throw fatal;
       }
-      return unknown(purpose);
+      return visibility.isHidden()
+          ? forHiddenCommand(UNKNOWN, UNKNOWN, purpose, SOURCE_USER_CONFIGURED, UNKNOWN, UNKNOWN)
+          : unknown(purpose);
     }
   }
 
@@ -209,15 +222,29 @@ public final class EngineBootstrapFacts {
     return line.toString();
   }
 
-  private static EngineBootstrapFacts parseCommand(String command, String purpose) {
+  private static EngineBootstrapFacts parseCommand(
+      String command, String purpose, EngineCommandVisibility visibility) {
     List<String> parts = Utils.splitCommand(command == null ? "" : command);
     boolean bundled = Config.isBundledKataGoCommand(command);
     String source = bundled ? SOURCE_BUNDLED : SOURCE_USER_CONFIGURED;
     Path executable = executablePath(parts);
-    String onnxProvider = resolveOnnxProvider(parts, command, executable);
-    String backend = resolveBackend(executable, onnxProvider);
+    String onnxProvider = commandOnnxProvider(parts, command, visibility);
+    String backend = resolveNvidiaBackendFromPath(executable);
+    if (onnxProvider == null || backend == null) {
+      String marker = classificationInput(readBackendMarker(executable), visibility);
+      if (onnxProvider == null) {
+        onnxProvider = isOnnxExecutionProvider(marker) ? marker : UNKNOWN;
+      }
+      if (backend == null) {
+        backend = resolveBackendFromMarker(marker, onnxProvider);
+      }
+    }
+    String engineType = inferEngineType(parts, bundled);
+    if (visibility.isHidden()) {
+      return forHiddenCommand(engineType, UNKNOWN, purpose, source, backend, onnxProvider);
+    }
     return new EngineBootstrapFacts(
-        inferEngineType(parts, bundled),
+        engineType,
         UNKNOWN,
         safePurpose(purpose),
         source,
@@ -255,14 +282,9 @@ public final class EngineBootstrapFacts {
     return UNKNOWN;
   }
 
-  private static String resolveBackend(Path executable, String onnxProvider) {
-    String nvidia = resolveNvidiaBackendFromPath(executable);
-    if (nvidia != null) {
-      return nvidia;
-    }
-    String marker = readBackendMarker(executable);
-    if (OPENCL_BACKEND.equals(marker)) {
-      return OPENCL_BACKEND;
+  private static String resolveBackendFromMarker(String marker, String onnxProvider) {
+    if (NVIDIA50_TRT_BACKEND.equals(marker)) {
+      return NVIDIA_TRT_BACKEND;
     }
     if (isOnnxExecutionProvider(marker)) {
       return ONNX_BACKEND;
@@ -277,8 +299,8 @@ public final class EngineBootstrapFacts {
   }
 
   /**
-   * Mirrors {@code KataGoRuntimeHelper.resolveNvidiaBackend} path and marker rules without loading
-   * that class from logging tests.
+   * Mirrors {@code KataGoRuntimeHelper.resolveNvidiaBackend}'s path rules without loading that
+   * class from logging tests.
    */
   private static String resolveNvidiaBackendFromPath(Path enginePath) {
     if (enginePath == null) {
@@ -299,36 +321,21 @@ public final class EngineBootstrapFacts {
     if (normalized.contains("/" + NVIDIA_ENGINE_DIR + "/")) {
       return NVIDIA_BACKEND;
     }
-    String marker = readBackendMarker(enginePath);
-    if (NVIDIA_TRT_BACKEND.equals(marker) || NVIDIA50_TRT_BACKEND.equals(marker)) {
-      return NVIDIA_TRT_BACKEND;
-    }
-    if (NVIDIA50_CUDA_BACKEND.equals(marker)) {
-      return NVIDIA50_CUDA_BACKEND;
-    }
-    if (NVIDIA_BACKEND.equals(marker)) {
-      return NVIDIA_BACKEND;
-    }
-    if (marker.startsWith("nvidia")) {
-      return marker;
-    }
     return null;
   }
 
-  private static String resolveOnnxProvider(List<String> parts, String command, Path executable) {
-    String fromOverride = overrideOnnxProvider(parts);
+  /** A provider specified by the command, or null if the installation marker should be used. */
+  private static String commandOnnxProvider(
+      List<String> parts, String command, EngineCommandVisibility visibility) {
+    String fromOverride = classificationInput(overrideOnnxProvider(parts), visibility);
     if (!UNKNOWN.equals(fromOverride)) {
       return fromOverride;
     }
     Matcher matcher = ONNX_PROVIDER.matcher(command == null ? "" : command);
     if (matcher.find()) {
-      return safeToken(matcher.group(1));
+      return classificationInput(matcher.group(1), visibility);
     }
-    String marker = readBackendMarker(executable);
-    if (isOnnxExecutionProvider(marker)) {
-      return marker;
-    }
-    return UNKNOWN;
+    return null;
   }
 
   private static String overrideOnnxProvider(List<String> parts) {
@@ -339,7 +346,7 @@ public final class EngineBootstrapFacts {
       Map<String, String> overrides = KataGoCommandSpec.parse(parts).effectiveOverrides();
       for (Map.Entry<String, String> entry : overrides.entrySet()) {
         if (entry.getKey() != null && "onnxprovider".equalsIgnoreCase(entry.getKey().trim())) {
-          return safeToken(entry.getValue());
+          return entry.getValue();
         }
       }
     } catch (RuntimeException ignored) {
@@ -362,10 +369,18 @@ public final class EngineBootstrapFacts {
       }
       String marker =
           Files.readString(markerPath, StandardCharsets.UTF_8).trim().toLowerCase(Locale.ROOT);
-      return marker.isEmpty() ? UNKNOWN : safeToken(marker);
+      return marker.isEmpty() ? UNKNOWN : marker;
     } catch (Exception ignored) {
       return UNKNOWN;
     }
+  }
+
+  private static String classificationInput(String raw, EngineCommandVisibility visibility) {
+    if (raw == null || raw.isEmpty()) {
+      return UNKNOWN;
+    }
+    // Display formatting can turn a custom value such as "_openvino_" into an application name.
+    return visibility.isHidden() ? raw : safeToken(raw);
   }
 
   private static boolean isOnnxExecutionProvider(String value) {

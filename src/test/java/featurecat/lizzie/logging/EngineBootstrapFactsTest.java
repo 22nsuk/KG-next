@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -144,16 +145,8 @@ class EngineBootstrapFactsTest {
   @Test
   void hiddenFactsKeepOnlyApplicationNamedClassifications() {
     EngineBootstrapFacts facts =
-        EngineBootstrapFacts.of(
-                "KaTaGo",
-                "PrivateVersion",
-                "MAIN_BOARD",
-                "BUNDLED",
-                "NVIDIA",
-                "DirectML",
-                "PrivateModel.bin.gz",
-                "PrivateConfig.cfg")
-            .forHiddenCommand();
+        EngineBootstrapFacts.forHiddenCommand(
+            "KaTaGo", "PrivateVersion", "MAIN_BOARD", "BUNDLED", "NVIDIA", "DirectML");
 
     assertEquals("katago", facts.engineType());
     assertEquals("bundled", facts.source());
@@ -169,16 +162,8 @@ class EngineBootstrapFactsTest {
   @Test
   void hiddenFactsRejectCustomClassificationsAndKeepUnknownExplicit() {
     EngineBootstrapFacts facts =
-        EngineBootstrapFacts.of(
-                "PrivateEngine",
-                "unknown",
-                "MAIN_BOARD",
-                "PrivateSource",
-                "nvidia-private",
-                "PrivateProvider",
-                "PrivateModel.bin.gz",
-                "PrivateConfig.cfg")
-            .forHiddenCommand();
+        EngineBootstrapFacts.forHiddenCommand(
+            "_katago_", "unknown", "MAIN_BOARD", "_bundled_", "nvidia-private", "PrivateProvider");
 
     assertEquals("hidden-command", facts.engineType());
     assertEquals("hidden-command", facts.source());
@@ -187,7 +172,8 @@ class EngineBootstrapFactsTest {
     assertEquals("unknown", facts.version());
     assertEquals("MAIN_BOARD", facts.purpose());
     assertFalse(facts.formatLogLine("").contains("Private"));
-    EngineBootstrapFacts unknown = EngineBootstrapFacts.unknown("MAIN_BOARD").forHiddenCommand();
+    EngineBootstrapFacts unknown =
+        EngineBootstrapFacts.fromCommand("", "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
     assertEquals("unknown", unknown.backend());
     assertEquals("unknown", unknown.onnxProvider());
   }
