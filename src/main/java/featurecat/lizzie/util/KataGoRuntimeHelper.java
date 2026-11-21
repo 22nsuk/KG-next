@@ -1,5 +1,12 @@
 package featurecat.lizzie.util;
 
+import static featurecat.lizzie.util.KataGoEngineLocation.ENGINE_BACKEND_MARKER_NAME;
+import static featurecat.lizzie.util.KataGoEngineLocation.NVIDIA50_CUDA_ENGINE_DIR;
+import static featurecat.lizzie.util.KataGoEngineLocation.NVIDIA50_TRT_ENGINE_DIR;
+import static featurecat.lizzie.util.KataGoEngineLocation.NVIDIA_CUDA13_ENGINE_DIR;
+import static featurecat.lizzie.util.KataGoEngineLocation.NVIDIA_ENGINE_DIR;
+import static featurecat.lizzie.util.KataGoEngineLocation.NVIDIA_TRT_ENGINE_DIR;
+
 import featurecat.lizzie.Config;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.AnalysisEngine;
@@ -99,11 +106,6 @@ public final class KataGoRuntimeHelper {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
           + "(KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36";
   private static final int HTTP_RANGE_NOT_SATISFIABLE = 416;
-  private static final String NVIDIA_ENGINE_DIR = "windows-x64-nvidia";
-  private static final String NVIDIA50_CUDA_ENGINE_DIR = "windows-x64-nvidia50-cuda";
-  private static final String NVIDIA_CUDA13_ENGINE_DIR = "windows-x64-nvidia-cuda13";
-  private static final String NVIDIA_TRT_ENGINE_DIR = "windows-x64-nvidia-tensorrt";
-  private static final String NVIDIA50_TRT_ENGINE_DIR = "windows-x64-nvidia50-trt";
   private static final String NVIDIA_BACKEND = "nvidia";
   private static final String NVIDIA50_CUDA_BACKEND = "nvidia50-cuda";
   private static final String NVIDIA_TRT_BACKEND = "nvidia-tensorrt";
@@ -113,10 +115,10 @@ public final class KataGoRuntimeHelper {
       KATAGO_ASSETS.asset("windows-nvidia");
   private static final KataGoAssetCatalog.Asset TENSORRT_KATAGO_ASSET_INFO =
       KATAGO_ASSETS.asset("windows-tensorrt");
-  static final String HUMAN_SL_CUDA_COMPANION_NAME = "katago-human-sl-cuda.exe";
+  static final String HUMAN_SL_CUDA_COMPANION_NAME =
+      KataGoEngineLocation.HUMAN_SL_CUDA_COMPANION_NAME;
   static final String HUMAN_SL_CUDA_COMPANION_SHA256 = NVIDIA_CUDA_ASSET.executableSha256();
   private static final String OPENCL_BACKEND = "opencl";
-  private static final String ENGINE_BACKEND_MARKER_NAME = "lizzieyzy-next-engine-backend.txt";
   private static final String NVIDIA_RUNTIME_ROOT = "nvidia-runtime";
   private static final String NVIDIA_RUNTIME_MANIFEST_NAME =
       "lizzieyzy-next-nvidia-runtime-manifest.txt";
@@ -1022,26 +1024,9 @@ public final class KataGoRuntimeHelper {
   }
 
   public static Path resolveCommandExecutable(List<String> commands) {
-    if (commands == null || commands.isEmpty()) {
-      return null;
-    }
-    String executable = commands.get(0);
-    if (executable == null || executable.trim().isEmpty()) {
-      return null;
-    }
-    Path resolved = Utils.resolveExistingExecutable(executable);
-    if (resolved != null) {
-      return resolved.toAbsolutePath().normalize();
-    }
-    try {
-      Path direct = Paths.get(executable);
-      if (!direct.isAbsolute()) {
-        direct = direct.toAbsolutePath();
-      }
-      return direct.normalize();
-    } catch (Exception e) {
-      return null;
-    }
+    return commands == null || commands.isEmpty()
+        ? null
+        : KataGoEngineLocation.configuredExecutable(commands.get(0));
   }
 
   public static boolean isNvidiaBundledPath(Path enginePath) {
@@ -1089,63 +1074,14 @@ public final class KataGoRuntimeHelper {
   }
 
   public static String resolveNvidiaBackend(Path enginePath) {
-    if (enginePath == null) {
-      return null;
-    }
-    Path fileName = enginePath.getFileName();
-    if (fileName != null && HUMAN_SL_CUDA_COMPANION_NAME.equalsIgnoreCase(fileName.toString())) {
-      return NVIDIA50_CUDA_BACKEND;
-    }
-    String normalized = enginePath.toAbsolutePath().normalize().toString().replace('\\', '/');
-    String normalizedLower = normalized.toLowerCase(Locale.ROOT);
-    if (normalizedLower.contains("/" + NVIDIA_TRT_ENGINE_DIR + "/")) {
-      return NVIDIA_TRT_BACKEND;
-    }
-    if (normalizedLower.contains("/" + NVIDIA50_TRT_ENGINE_DIR + "/")) {
-      return NVIDIA_TRT_BACKEND;
-    }
-    if (normalizedLower.contains("/" + NVIDIA50_CUDA_ENGINE_DIR + "/")) {
-      return NVIDIA50_CUDA_BACKEND;
-    }
-    if (normalizedLower.contains("/" + NVIDIA_ENGINE_DIR + "/")
-        || normalizedLower.contains("/" + NVIDIA_CUDA13_ENGINE_DIR + "/")) {
-      return NVIDIA_BACKEND;
-    }
-    String backendLower = readEngineBackendMarker(enginePath);
-    if (!backendLower.isEmpty()) {
-      if (NVIDIA_TRT_BACKEND.equals(backendLower) || NVIDIA50_TRT_BACKEND.equals(backendLower)) {
-        return NVIDIA_TRT_BACKEND;
-      }
-      if (NVIDIA50_CUDA_BACKEND.equals(backendLower)) {
-        return NVIDIA50_CUDA_BACKEND;
-      }
-      if (NVIDIA_BACKEND.equals(backendLower)) {
-        return NVIDIA_BACKEND;
-      }
-      if (backendLower.startsWith("nvidia")) {
-        return backendLower;
-      }
-    }
-    return null;
+    String backend = KataGoEngineLocation.nvidiaBackendFromPath(enginePath);
+    return backend != null
+        ? backend
+        : KataGoEngineLocation.nvidiaBackendFromMarker(readEngineBackendMarker(enginePath));
   }
 
   public static String readEngineBackendMarker(Path enginePath) {
-    if (enginePath == null) {
-      return "";
-    }
-    Path engineDir = enginePath.toAbsolutePath().normalize().getParent();
-    if (engineDir == null) {
-      return "";
-    }
-    Path markerPath = engineDir.resolve(ENGINE_BACKEND_MARKER_NAME);
-    if (!Files.isRegularFile(markerPath)) {
-      return "";
-    }
-    try {
-      return Files.readString(markerPath, StandardCharsets.UTF_8).trim().toLowerCase(Locale.ROOT);
-    } catch (IOException e) {
-      return "";
-    }
+    return KataGoEngineLocation.readBackendMarker(enginePath);
   }
 
   public static void ensureBundledRuntimeReady(Path enginePath, Window owner) throws IOException {

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 final class LoggingChildProcess {
@@ -19,6 +20,12 @@ final class LoggingChildProcess {
   static Result runWithTimeout(
       Path workDirectory, long timeoutMillis, Class<?> probe, String... extraVmAndArgs)
       throws Exception {
+    return runWithTimeout(workDirectory, timeoutMillis, Map.of(), probe, extraVmAndArgs);
+  }
+
+  static Result runWithTimeout(
+      Path workDirectory, long timeoutMillis, Map<String, String> environment, Class<?> probe,
+      String... extraVmAndArgs) throws Exception {
     String java =
         Path.of(
                 System.getProperty("java.home"),
@@ -45,7 +52,9 @@ final class LoggingChildProcess {
         command.add(extra);
       }
     }
-    Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+    ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+    builder.environment().putAll(environment);
+    Process process = builder.start();
     ByteArrayOutputStream captured = new ByteArrayOutputStream();
     Thread reader =
         new Thread(

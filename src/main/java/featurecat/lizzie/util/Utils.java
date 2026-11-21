@@ -275,7 +275,7 @@ public class Utils {
     if (direct != null) {
       return direct;
     }
-    return resolveExecutableFromPath(trimmed);
+    return resolveExecutableFromPath(trimmed, false);
   }
 
   public static boolean isJavaCommand(String executable) {
@@ -304,7 +304,7 @@ public class Utils {
     }
   }
 
-  private static Path resolveExecutableFromPath(String executable) {
+  static Path resolveExecutableFromPath(String executable, boolean requireExecutable) {
     String pathEnv = System.getenv("PATH");
     if (isBlank(pathEnv)) {
       return null;
@@ -346,7 +346,7 @@ public class Utils {
       if (!OsPlatform.isWindows() || hasExtension) {
         try {
           Path direct = toExistingPath(baseDir.resolve(executable).toString());
-          if (direct != null) {
+          if (direct != null && (!requireExecutable || Files.isExecutable(direct))) {
             return direct;
           }
         } catch (InvalidPathException | SecurityException e) {
@@ -357,7 +357,7 @@ public class Utils {
         for (String suffix : suffixes) {
           try {
             Path candidate = toExistingPath(baseDir.resolve(executable + suffix).toString());
-            if (candidate != null) {
+            if (candidate != null && (!requireExecutable || Files.isExecutable(candidate))) {
               return candidate;
             }
           } catch (InvalidPathException | SecurityException e) {

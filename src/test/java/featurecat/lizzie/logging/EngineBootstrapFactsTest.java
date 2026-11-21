@@ -5,15 +5,95 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
+import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.util.OsPlatform;
+import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class EngineBootstrapFactsTest {
   @TempDir Path tempDir;
+
+  @Test
+  void hiddenBootstrapUsesSameMarkerForPathAndAbsoluteCommands() throws Exception {
+    Path bin = Files.createDirectory(tempDir.resolve("engine bin"));
+    String name = "katago-path-probe";
+    Path engine = bin.resolve(name + (OsPlatform.isWindows() ? ".exe" : ""));
+    String path = bin.toString();
+    if (OsPlatform.isWindows()) {
+      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), engine);
+    } else {
+      Files.writeString(engine, "#!/bin/sh\nexit 0\n");
+      assertTrue(engine.toFile().setExecutable(true));
+      Path shadow = Files.createDirectory(tempDir.resolve("not executable"));
+      Files.createFile(shadow.resolve(name));
+      Files.writeString(shadow.resolve("lizzieyzy-next-engine-backend.txt"), "openvino\n");
+      path = shadow + File.pathSeparator + path;
+    }
+    String pathKey =
+        System.getenv().keySet().stream()
+            .filter("PATH"::equalsIgnoreCase)
+            .findFirst()
+            .orElse("PATH");
+    LoggingChildProcess.Result result =
+        LoggingChildProcess.runWithTimeout(
+            tempDir,
+            30_000,
+            Map.of(pathKey, path),
+            PathMarkerProbe.class,
+            engine.getFileName().toString(),
+            engine.toString());
+    assertEquals(0, result.exitCode(), result.output());
+    List<String> lines =
+        LoggingChildProcess.readLog(tempDir, "app.log").lines()
+            .filter(line -> line.contains("engine event=bootstrap "))
+            .toList();
+    List<String> expected =
+        List.of(
+            "cpu", "cpu", "rocm-gfx110x", "rocm-gfx110x",
+            "hidden-command", "hidden-command", "unknown");
+    assertEquals(expected.size(), lines.size(), lines::toString);
+    for (int i = 0; i < expected.size(); i++) {
+      String line = lines.get(i);
+      assertTrue(line.contains(" backend=" + expected.get(i) + " onnxProvider=unknown "), line);
+      assertTrue(line.contains("model=hidden-command config=hidden-command"), line);
+    }
+  }
+
+  public static final class PathMarkerProbe {
+    public static void main(String[] args) throws Exception {
+      LoggingRuntime runtime =
+          LoggingRuntime.initialize(new WorkDirectoryResolution(Path.of(args[0]), List.of()));
+      try {
+        Path engine = Path.of(args[2]);
+        for (String marker : List.of("cpu", "rocm-gfx110x", "rocm-gfx110x-private")) {
+          Files.writeString(
+              engine.resolveSibling("lizzieyzy-next-engine-backend.txt"), marker + "\n");
+          for (String executable : List.of(quote(engine), args[1])) {
+            recordBootstrap(executable);
+          }
+        }
+        recordBootstrap("./" + args[1]);
+      } finally {
+        runtime.shutdown();
+      }
+    }
+
+    private static void recordBootstrap(String executable) {
+      AnalysisResourceCoordinator.processStarted(
+          new Object(),
+          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+          executable + " gtp -model private.bin.gz -config private.cfg",
+          null,
+          EngineCommandVisibility.HIDDEN);
+    }
+  }
 
   @Test
   void userConfiguredCommandSanitizesPathsAndKeepsUnknownBackend() {
@@ -98,7 +178,8 @@ class EngineBootstrapFactsTest {
   @Test
   void missingBackendAndProviderStayExplicitlyUnknown() {
     EngineBootstrapFacts facts =
-        EngineBootstrapFacts.fromCommand("katago gtp -model model.bin.gz", "MAIN_BOARD");
+        EngineBootstrapFacts.fromCommand(
+            quote(tempDir.resolve("katago")) + " gtp -model model.bin.gz", "MAIN_BOARD");
 
     assertEquals("katago", facts.engineType());
     assertEquals(EngineBootstrapFacts.SOURCE_USER_CONFIGURED, facts.source());
