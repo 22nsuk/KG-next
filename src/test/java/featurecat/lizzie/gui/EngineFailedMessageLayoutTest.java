@@ -114,7 +114,8 @@ class EngineFailedMessageLayoutTest {
 
   @Test
   void cmdDiagnosticRejectsArgumentsThatCannotBeReproducedByCmd() {
-    for (String argument : List.of("a\"b", "a!b", "a\nb", "a\rb", "a\u0000b")) {
+    for (String argument : List.of(
+        "a\"b", "a!b", "a\nb", "a\rb", "a\u0000b", "<redacted>", "[redaction-failed]")) {
       assertNull(EngineFailedMessage.cmdDiagnosticBatchLine(
           List.of("katago.exe", argument), "katago.exe", EngineCommandVisibility.VISIBLE, true));
     }
@@ -122,6 +123,10 @@ class EngineFailedMessageLayoutTest {
         EngineFailedMessage.cmdDiagnosticBatchLine(
             List.of("katago.exe", "", " leading and trailing ", "C:\\model path\\"),
             "katago.exe", EngineCommandVisibility.VISIBLE, true));
+    String windowsPath = "C:\\runner\\new\\test\\katago.exe";
+    assertEquals(windowsPath + " gtp",
+        EngineFailedMessage.cmdDiagnosticBatchLine(
+            List.of(windowsPath, "gtp"), windowsPath + " gtp", EngineCommandVisibility.VISIBLE, true));
   }
 
   @Test

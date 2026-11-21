@@ -995,11 +995,18 @@ public class EngineFailedMessage extends JDialog {
     }
     String commandLine = line.toString();
     String original = String.join(" ", arguments);
-    return !commandLine.contains(REDACTED_VALUE)
-            && original.equals(redactSensitiveText(original))
-            && commandLine.equals(redactSensitiveText(commandLine))
+    return isSafeCmdDiagnosticText(original) && isSafeCmdDiagnosticText(commandLine)
         ? commandLine
         : null;
+  }
+
+  private static boolean isSafeCmdDiagnosticText(String text) {
+    String inspected = redactSensitiveText(text);
+    // The sanitizer also canonicalizes harmless path backslashes and encoded syntax. Only an
+    // actual redaction or an inconclusive inspection vetoes the original command. Never execute
+    // the canonicalized/partly redacted view instead of the encoded original arguments.
+    return !inspected.contains(REDACTED_VALUE)
+        && !inspected.contains(PersistenceSanitizer.FAILURE_MARKER);
   }
 
   static Rectangle calculateUsableBounds(Rectangle screenBounds, Insets insets) {
