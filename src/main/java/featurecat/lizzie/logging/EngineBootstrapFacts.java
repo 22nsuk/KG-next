@@ -62,7 +62,7 @@ public final class EngineBootstrapFacts {
   private static final Set<String> APP_ENGINE_TYPES = Set.of("katago", "leela");
   private static final Set<String> APP_SOURCES = Set.of(SOURCE_BUNDLED, SOURCE_USER_CONFIGURED);
   private static final String HUMAN_SL_CUDA_COMPANION_NAME = "katago-human-sl-cuda.exe";
-  private static final Pattern ONNX_PROVIDER =
+  private static final Pattern VISIBLE_ONNX_PROVIDER_HINT =
       Pattern.compile("(?i)(?:^|[,\\s])onnxProvider=([^,\\s\"]+)");
   private static final Pattern SAFE_TOKEN = Pattern.compile("[^A-Za-z0-9._+-]+");
 
@@ -337,9 +337,13 @@ public final class EngineBootstrapFacts {
     if (!UNKNOWN.equals(fromOverride)) {
       return fromOverride;
     }
-    Matcher matcher = ONNX_PROVIDER.matcher(command == null ? "" : command);
+    // Unstructured text can be a hidden filename, not a provider setting. Try the marker instead.
+    if (visibility.isHidden()) {
+      return null;
+    }
+    Matcher matcher = VISIBLE_ONNX_PROVIDER_HINT.matcher(command == null ? "" : command);
     if (matcher.find()) {
-      return classificationInput(matcher.group(1), visibility);
+      return safeToken(matcher.group(1));
     }
     return null;
   }

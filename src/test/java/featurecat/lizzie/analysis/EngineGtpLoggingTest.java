@@ -239,12 +239,46 @@ class EngineGtpLoggingTest {
   })
   void realStartFailureBootstrapHonorsCommandVisibilityWithDiagnosticsOff(
       boolean hidden, String marker, String expectedBackend) throws Exception {
+    String app = logFailedStart(privateLaunchCommand(marker), hidden);
+    assertLaunchBootstrap(app, hidden, expectedBackend);
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+    "true, , , unknown, unknown",
+    "true, openvino, , onnx, openvino",
+    "true, openvino, openvino-npu, onnx, openvino-npu",
+    "false, , , onnx, directml"
+  })
+  void bootstrapProviderEvidenceRespectsCommandVisibility(
+      boolean hidden, String marker, String override, String backend, String provider)
+      throws Exception {
+    if (marker != null) {
+      Files.writeString(tempDir.resolve("lizzieyzy-next-engine-backend.txt"), marker + "\n");
+    }
+    String configFile = "onnxProvider=directml";
+    String command =
+        "\"" + tempDir.resolve("katago") + "\" gtp -model model.bin.gz -config " + configFile;
+    if (override != null) {
+      command += " -override-config onnxProvider=" + override;
+    }
+    String app = logFailedStart(command, hidden);
+    String line = eventLine(app, "event=bootstrap");
+    assertNotNull(line, app);
+    assertTrue(line.contains(" backend=" + backend + " "), line);
+    assertTrue(line.contains(" onnxProvider=" + provider + " "), line);
+    if (hidden) {
+      assertFalse(line.contains(configFile), line);
+      assertTrue(line.contains("config=hidden-command"), line);
+    }
+  }
+
+  private String logFailedStart(String command, boolean hidden) throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
     Lizzie.config.uiConfig = new JSONObject();
     Lizzie.config.leelazConfig = new JSONObject();
     Lizzie.config.config = new JSONObject();
-    String command = privateLaunchCommand(marker);
     String saved = savedCommand(command, hidden);
     EngineData data = new EngineData();
     data.name = "Startup logging test";
@@ -271,9 +305,9 @@ class EngineGtpLoggingTest {
       assertEquals("process-create", attempt.snapshot().toJson().getString("phase"));
       awaitLogs(runtime);
       String app = readApp();
-      assertLaunchBootstrap(app, hidden, expectedBackend);
       assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
       assertFalse(app.contains("event=process-started"), app);
+      return app;
     } finally {
       firstLaunch.setBoolean(null, previousFirstLaunch);
       Lizzie.engineStartupStatus.ready();
