@@ -40,7 +40,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
-import org.junit.jupiter.params.provider.ValueSource;
 
 class EngineGtpLoggingTest {
   private static final String RAW_MOVE = "T03_RAW_MOVE";
@@ -226,15 +225,26 @@ class EngineGtpLoggingTest {
   }
 
   @ParameterizedTest
-  @ValueSource(booleans = {true, false})
-  void realStartFailureBootstrapHonorsCommandVisibilityWithDiagnosticsOff(boolean hidden)
-      throws Exception {
+  @CsvSource({
+    "false, _opencl_, opencl",
+    "true, _opencl_, hidden-command",
+    "true, cpu, cpu",
+    "true, rocm-gfx103x, rocm-gfx103x",
+    "true, rocm-gfx110x, rocm-gfx110x",
+    "true, rocm-gfx1151, rocm-gfx1151",
+    "true, rocm-gfx120x, rocm-gfx120x",
+    "true, _cpu_, hidden-command",
+    "true, rocm-gfx103x-private, hidden-command",
+    "true, rocm-gfx999x, hidden-command"
+  })
+  void realStartFailureBootstrapHonorsCommandVisibilityWithDiagnosticsOff(
+      boolean hidden, String marker, String expectedBackend) throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
     Lizzie.config.uiConfig = new JSONObject();
     Lizzie.config.leelazConfig = new JSONObject();
     Lizzie.config.config = new JSONObject();
-    String command = privateLaunchCommand();
+    String command = privateLaunchCommand(marker);
     String saved = savedCommand(command, hidden);
     EngineData data = new EngineData();
     data.name = "Startup logging test";
@@ -261,7 +271,7 @@ class EngineGtpLoggingTest {
       assertEquals("process-create", attempt.snapshot().toJson().getString("phase"));
       awaitLogs(runtime);
       String app = readApp();
-      assertLaunchBootstrap(app, hidden);
+      assertLaunchBootstrap(app, hidden, expectedBackend);
       assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
       assertFalse(app.contains("event=process-started"), app);
     } finally {
@@ -548,11 +558,15 @@ class EngineGtpLoggingTest {
   }
 
   private String privateLaunchCommand() throws Exception {
+    return privateLaunchCommand(PRIVATE_BACKEND);
+  }
+
+  private String privateLaunchCommand(String marker) throws Exception {
     Path executable = tempDir.resolve("PrivateLaunch-35").resolve("u7x");
     Files.createDirectories(executable.getParent());
     Files.writeString(
         executable.getParent().resolve("lizzieyzy-next-engine-backend.txt"),
-        PRIVATE_BACKEND + "\n",
+        marker + "\n",
         StandardCharsets.UTF_8);
     return "\""
         + executable.toAbsolutePath()
@@ -569,19 +583,23 @@ class EngineGtpLoggingTest {
   }
 
   private static void assertLaunchBootstrap(String app, boolean hidden) {
+    assertLaunchBootstrap(app, hidden, hidden ? "hidden-command" : "opencl");
+  }
+
+  private static void assertLaunchBootstrap(String app, boolean hidden, String expectedBackend) {
     String line = eventLine(app, "event=bootstrap");
     assertNotNull(line, app);
     assertNotNull(engineIdOnEventLine(app, "event=bootstrap"), app);
     assertTrue(line.contains("purpose=MAIN_BOARD"), line);
     assertTrue(line.contains("source=user-configured"), line);
     assertTrue(line.contains("engineType=unknown"), line);
+    assertTrue(line.contains(" backend=" + expectedBackend + " "), line);
     if (hidden) {
       assertNoPrivateLaunchValue(line);
-      assertTrue(line.contains("backend=hidden-command"), line);
       assertTrue(line.contains("onnxProvider=hidden-command"), line);
       assertTrue(line.contains("model=hidden-command config=hidden-command"), line);
     } else {
-      assertTrue(line.contains("backend=opencl onnxProvider=openvino "), line);
+      assertTrue(line.contains(" onnxProvider=openvino "), line);
       assertTrue(line.contains("model=" + PRIVATE_MODEL), line);
       assertTrue(line.contains("config=" + PRIVATE_CONFIG), line);
     }

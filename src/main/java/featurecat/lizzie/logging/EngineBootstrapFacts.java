@@ -2,6 +2,7 @@ package featurecat.lizzie.logging;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.util.KataGoExperimentalBackendInstaller.Backend;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.nio.charset.StandardCharsets;
@@ -41,7 +42,7 @@ public final class EngineBootstrapFacts {
   private static final String NVIDIA50_TRT_BACKEND = "nvidia50-trt";
   private static final String OPENCL_BACKEND = "opencl";
   private static final String ONNX_BACKEND = "onnx";
-  /** Backends KG-next names itself: its engine directories, its backend markers, ONNX. */
+  /** Only explicitly listed package and installer backends may identify a hidden command. */
   private static final Set<String> APP_BACKENDS =
       Set.of(
           NVIDIA_BACKEND,
@@ -49,7 +50,12 @@ public final class EngineBootstrapFacts {
           NVIDIA_TRT_BACKEND,
           NVIDIA50_TRT_BACKEND,
           OPENCL_BACKEND,
-          ONNX_BACKEND);
+          ONNX_BACKEND,
+          "cpu",
+          Backend.ROCM_GFX103X.marker(),
+          Backend.ROCM_GFX110X.marker(),
+          Backend.ROCM_GFX1151.marker(),
+          Backend.ROCM_GFX120X.marker());
   /** ONNX execution providers KG-next configures ({@code KataGoAutoSetupHelper}, installer). */
   private static final Set<String> APP_ONNX_PROVIDERS =
       Set.of("directml", "openvino", "openvino-npu");
