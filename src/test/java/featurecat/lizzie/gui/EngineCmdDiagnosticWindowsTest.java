@@ -69,11 +69,13 @@ class EngineCmdDiagnosticWindowsTest {
         builder.environment().put("KG_CMD_PROBE_OUTPUT", captured.toString());
         builder.environment().put("KG_CMD_SHADOW_OUTPUT", shadowMarker.toString());
         builder.environment().put("KG_CMD_EXPAND", "must-not-expand");
+        String pathKey = environmentKey(builder, "PATH");
         builder.environment().put(
-            "PATH", executable.getParent() + ";" + builder.environment().getOrDefault("PATH", ""));
+            pathKey, executable.getParent() + ";" + builder.environment().getOrDefault(pathKey, ""));
         // An extensionless batch command would choose the .cmd sibling first. The generated
-        // explicit .exe name must preserve ProcessBuilder's native-program selection.
-        builder.environment().put("PATHEXT", ".CMD;.EXE");
+        // explicit .exe name must preserve ProcessBuilder's native-program selection. Keep .COM
+        // so the UTF-8 prelude can still find Windows' chcp.com.
+        builder.environment().put(environmentKey(builder, "PATHEXT"), ".CMD;.COM;.EXE;.BAT");
         if (launch.equals("path") && expansion.equals("off")) {
           builder.command("cmd.exe", "/d", "/v:off", "/c", "CmdProbe");
           run(builder, directory.resolve("shadow-control.log"), 30);
@@ -97,6 +99,13 @@ class EngineCmdDiagnosticWindowsTest {
         assertFalse(Files.exists(directory.resolve("piped.txt")), "argument text created a pipeline");
       }
     }
+  }
+
+  private static String environmentKey(ProcessBuilder builder, String name) {
+    return builder.environment().keySet().stream()
+        .filter(key -> key.equalsIgnoreCase(name))
+        .findFirst()
+        .orElse(name);
   }
 
   private static void compileProbe(Path executable, Path log) throws Exception {
