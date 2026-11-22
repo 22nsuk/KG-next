@@ -10,6 +10,7 @@ import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.RemoteEngineData;
 import featurecat.lizzie.gui.WaitForAnalysis;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
@@ -417,7 +418,8 @@ public class AnalysisEngine {
         EngineObservation.restartInstance(
             this,
             launchPurpose,
-            EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+            EngineBootstrapFacts.fromCommand(
+                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(

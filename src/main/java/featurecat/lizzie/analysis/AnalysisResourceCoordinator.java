@@ -109,7 +109,7 @@ public final class AnalysisResourceCoordinator {
     if (process == null) {
       try {
         EngineBootstrapFacts facts =
-            EngineStartupBootstrap.factsFor(command, purposeName, visibility);
+            EngineBootstrapFacts.fromCommand(command, purposeName, visibility, false);
         EngineObservation.ensureStarted(owner, purposeName, facts);
         if (EngineObservation.engineDiagnosticsEnabled()) {
           EngineObservation.recordProcessDetails(
@@ -132,7 +132,7 @@ public final class AnalysisResourceCoordinator {
       REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
     }
     try {
-      EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, purposeName, visibility);
+      EngineBootstrapFacts facts = EngineBootstrapFacts.fromCommand(command, purposeName, visibility);
       String engineId =
           startupObserved
               ? EngineObservation.ensureStarted(owner, purposeName, facts)

@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
-import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.util.OsPlatform;
 import java.io.File;
@@ -86,12 +85,37 @@ class EngineBootstrapFactsTest {
     }
 
     private static void recordBootstrap(String executable) {
-      AnalysisResourceCoordinator.processStarted(
+      EngineObservation.restartInstance(
           new Object(),
-          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
-          executable + " gtp -model private.bin.gz -config private.cfg",
-          null,
-          EngineCommandVisibility.HIDDEN);
+          "MAIN_BOARD",
+          EngineBootstrapFacts.fromCommand(
+              executable + " gtp -model private.bin.gz -config private.cfg",
+              "MAIN_BOARD",
+              EngineCommandVisibility.HIDDEN));
+    }
+  }
+
+  @Test
+  void externalSshLauncherMarkerDoesNotIdentifyTheRemoteEngine() throws Exception {
+    Path ssh = Files.createFile(tempDir.resolve("ssh"));
+    Files.writeString(ssh.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.fromCommand(
+            quote(ssh) + " host katago gtp -override-config onnxProvider=openvino",
+            "MAIN_BOARD",
+            EngineCommandVisibility.HIDDEN);
+    assertEquals("onnx", facts.backend());
+    assertEquals("openvino", facts.onnxProvider());
+  }
+
+  @Test
+  void explicitJavaExecutableUsesItsOwnInstallationMarker() throws Exception {
+    Path java = Files.createFile(tempDir.resolve("java.exe"));
+    Files.writeString(java.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
+    for (EngineCommandVisibility visibility : EngineCommandVisibility.values()) {
+      EngineBootstrapFacts facts =
+          EngineBootstrapFacts.fromCommand(quote(java) + " -jar engine.jar", "OTHER", visibility);
+      assertEquals("cpu", facts.backend());
     }
   }
 

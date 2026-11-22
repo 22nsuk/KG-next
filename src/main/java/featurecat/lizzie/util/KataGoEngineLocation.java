@@ -40,8 +40,8 @@ public final class KataGoEngineLocation {
       return null;
     }
     String token = commands.get(0);
-    if (token == null || token.isBlank() || Utils.isJavaCommand(token)) {
-      return configuredExecutable(token);
+    if (token == null || token.isBlank()) {
+      return null;
     }
     Path direct = Path.of(token);
     // An explicit path is never a request to look for another installation on PATH.
@@ -49,9 +49,11 @@ public final class KataGoEngineLocation {
       return direct.toAbsolutePath().normalize();
     }
     // A bare POSIX command searches PATH, skipping files that cannot be executed.
-    return OsPlatform.isWindows()
-        ? Utils.resolveExistingExecutable(token)
-        : Utils.resolveExecutableFromPath(token, true);
+    boolean windows = OsPlatform.isWindows();
+    if (windows && Files.isRegularFile(direct)) {
+      return direct.toAbsolutePath().normalize();
+    }
+    return Utils.resolveExecutableFromPath(token, !windows);
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

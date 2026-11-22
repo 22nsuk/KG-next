@@ -13,6 +13,7 @@ import featurecat.lizzie.gui.EngineData;
 import featurecat.lizzie.gui.GtpConsolePane;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.logging.DiagnosticModule;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogStream;
 import featurecat.lizzie.logging.LoggingLimits;
@@ -187,10 +188,10 @@ class EngineGtpLoggingTest {
     assertTrue(app.contains("engineType=katago"), app);
     assertEquals(
         KataGoRuntimeHelper.resolveNvidiaBackend(enginePath),
-        EngineStartupBootstrap.factsFor(engine.engineCommand, "MAIN_BOARD").backend());
+        EngineBootstrapFacts.fromCommand(engine.engineCommand, "MAIN_BOARD").backend());
     assertEquals(
         "unknown",
-        EngineStartupBootstrap.factsFor(engine.engineCommand, "MAIN_BOARD").onnxProvider());
+        EngineBootstrapFacts.fromCommand(engine.engineCommand, "MAIN_BOARD").onnxProvider());
     assertTrue(app.contains("engine event=ready"), app);
     assertTrue(identity != null && app.contains("engine=" + identity), app);
     assertSameEngineIdentity(app, "event=bootstrap", "event=ready");
@@ -316,14 +317,18 @@ class EngineGtpLoggingTest {
 
   @ParameterizedTest
   @CsvSource({
-    "true, noteEngineStarted",
-    "false, noteEngineStarted",
-    "true, noteEngineFailed",
-    "false, noteEngineFailed"
+    "true,  false, noteEngineStarted, hidden-command",
+    "false, false, noteEngineStarted, opencl",
+    "true,  false, noteEngineFailed,  hidden-command",
+    "false, false, noteEngineFailed,  opencl",
+    "true,  true,  noteEngineStarted, unknown",
+    "false, true,  noteEngineFailed,  onnx"
   })
-  void fallbackBootstrapHonorsCommandVisibility(boolean hidden, String entry) throws Exception {
+  void fallbackBootstrapUsesOnlyLaunchEvidence(
+      boolean hidden, boolean javaSsh, String entry, String expectedBackend) throws Exception {
     LoggingRuntime runtime = startRuntime();
     Leelaz engine = prepareEngine();
+    engine.useJavaSSH = javaSsh;
     engine.setEngineCommand(savedCommand(privateLaunchCommand(), hidden));
     if (entry.equals("noteEngineFailed")) {
       Method fail = Leelaz.class.getDeclaredMethod(entry, String.class);
@@ -336,15 +341,20 @@ class EngineGtpLoggingTest {
     }
     awaitLogs(runtime);
     String app = readApp();
-    assertLaunchBootstrap(app, hidden);
+    assertLaunchBootstrap(app, hidden, expectedBackend);
     assertSameEngineIdentity(
         app, "event=bootstrap", entry.equals("noteEngineFailed") ? "event=failed" : "event=started");
   }
 
   @ParameterizedTest
-  @CsvSource({"true, true", "false, true", "true, false", "false, false"})
-  void processStartObservationHonorsCommandVisibility(boolean hidden, boolean local)
-      throws Exception {
+  @CsvSource({
+    "true,  true,  hidden-command",
+    "false, true,  opencl",
+    "true,  false, unknown",
+    "false, false, onnx"
+  })
+  void processStartObservationHonorsCommandVisibility(
+      boolean hidden, boolean local, String expectedBackend) throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults());
     String command = privateLaunchCommand();
@@ -375,7 +385,7 @@ class EngineGtpLoggingTest {
       assertNotNull(identity);
       awaitLogs(runtime);
       String app = readApp();
-      assertLaunchBootstrap(app, hidden);
+      assertLaunchBootstrap(app, hidden, expectedBackend);
       assertSameEngineIdentity(app, "event=bootstrap", "event=process-started");
       String processLine = eventLine(app, "event=process-started");
       assertNotNull(processLine, app);

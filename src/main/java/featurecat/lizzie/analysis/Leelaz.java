@@ -21,6 +21,7 @@ import featurecat.lizzie.gui.JFontLabel;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.Message;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -1365,11 +1366,7 @@ public class Leelaz {
                   ? "MAIN_BOARD"
                   : this == Lizzie.leelaz2 ? "COMPARE" : preload ? "PRELOAD" : "MAIN_BOARD";
       loggingEngineId =
-          EngineObservation.restartInstance(
-              this,
-              launchPurpose,
-              EngineStartupBootstrap.factsFor(
-                  engineCommand, launchPurpose, engineCommandVisibility));
+          EngineObservation.restartInstance(this, launchPurpose, bootstrapFacts(launchPurpose));
       startupDiagnosticAttempt =
           EngineStartupDiagnostics.getDefault()
               .begin(
@@ -4776,16 +4773,17 @@ public class Leelaz {
   }
 
 
+  private EngineBootstrapFacts bootstrapFacts(String purpose) {
+    return EngineBootstrapFacts.fromCommand(
+        engineCommand, purpose, engineCommandVisibility, !useJavaSSH);
+  }
+
   private void noteEngineStarted() {
     try {
       String id = EngineObservation.identityFor(this);
       if (id == null) {
         id =
-            EngineObservation.ensureStarted(
-                this,
-                "MAIN_BOARD",
-                EngineStartupBootstrap.factsFor(
-                    engineCommand, "MAIN_BOARD", engineCommandVisibility));
+            EngineObservation.ensureStarted(this, "MAIN_BOARD", bootstrapFacts("MAIN_BOARD"));
       }
       loggingEngineId = id;
     } catch (RuntimeException ignored) {
@@ -4809,9 +4807,7 @@ public class Leelaz {
       String id = EngineObservation.identityFor(this);
       if (id == null) {
         id = EngineObservation.mintIdentity(this);
-        EngineObservation.recordBootstrap(
-            id,
-            EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD", engineCommandVisibility));
+        EngineObservation.recordBootstrap(id, bootstrapFacts("MAIN_BOARD"));
       }
       loggingEngineId = id;
       try {
