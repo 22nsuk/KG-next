@@ -419,7 +419,7 @@ public class AnalysisEngine {
             this,
             launchPurpose,
             EngineBootstrapFacts.fromLaunch(
-                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal, commands));
+                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal, launchSpec));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
@@ -427,7 +427,6 @@ public class AnalysisEngine {
                 launchPurpose,
                 commands,
                 isLocal);
-    List<String> launchCommands = null;
     if (this.useRemoteCompute) {
       this.useJavaSSH = false;
       process = null;
@@ -507,7 +506,7 @@ public class AnalysisEngine {
           return;
         }
       }
-      launchCommands =
+      List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
@@ -535,6 +534,7 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
+      launchSpec = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
       initializeStreams();
       readerResources.modelIdentity =
           AnalysisModelIdentity.local(
@@ -549,7 +549,7 @@ public class AnalysisEngine {
         process,
         startupDiagnosticAttempt != null,
         EngineCommandVisibility.VISIBLE,
-        launchCommands);
+        launchSpec);
     readerResources.start();
   }
 

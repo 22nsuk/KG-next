@@ -449,6 +449,7 @@ public class Leelaz {
   /** Decided where {@link #setEngineCommand} decodes a user-hidden command. */
   private EngineCommandVisibility engineCommandVisibility = EngineCommandVisibility.VISIBLE;
   private List<String> commands;
+  private CommandLaunchHelper.LaunchSpec startupLaunch;
   private boolean directLocalSnapshotFileAccessForTest;
   //	private String currentWeightFile = "";
   //	private String currentWeight = "";
@@ -1357,6 +1358,7 @@ public class Leelaz {
     supportRootInfo = false;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
+    startupLaunch = launchSpec;
     commands = launchSpec.getCommandParts();
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       String launchPurpose =
@@ -1554,6 +1556,7 @@ public class Leelaz {
         process = processBuilder.start();
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
         recordUpdateEngineStartProcess(process);
+        startupLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
         AnalysisResourceCoordinator.processStarted(
             this,
             AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
@@ -1561,7 +1564,7 @@ public class Leelaz {
             process,
             startupDiagnosticAttempt != null,
             engineCommandVisibility,
-            launchCommands);
+            startupLaunch);
       } catch (IOException e) {
         // The JDK names the executable and working directory; a hidden command keeps neither.
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("process-create", e);
@@ -4776,7 +4779,7 @@ public class Leelaz {
 
   private EngineBootstrapFacts bootstrapFacts(String purpose) {
     return EngineBootstrapFacts.fromLaunch(
-        engineCommand, purpose, engineCommandVisibility, !useJavaSSH, commands);
+        engineCommand, purpose, engineCommandVisibility, !useJavaSSH, startupLaunch);
   }
 
   private void noteEngineStarted() {
@@ -23502,7 +23505,7 @@ public class Leelaz {
           process,
           false,
           engineCommandVisibility,
-          commands);
+          startupLaunch);
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {

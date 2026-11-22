@@ -3,6 +3,7 @@ package featurecat.lizzie.analysis;
 import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.PersistenceSanitizer;
+import featurecat.lizzie.util.CommandLaunchHelper.LaunchSpec;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -12,7 +13,6 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -101,7 +101,7 @@ public final class AnalysisResourceCoordinator {
       Process process,
       boolean startupObserved,
       EngineCommandVisibility visibility,
-      List<String> launchCommand) {
+      LaunchSpec launch) {
     if (process != null) {
       synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
@@ -135,7 +135,7 @@ public final class AnalysisResourceCoordinator {
     }
     try {
       EngineBootstrapFacts facts =
-          EngineBootstrapFacts.fromLaunch(command, purposeName, visibility, true, launchCommand);
+          EngineBootstrapFacts.fromLaunch(command, purposeName, visibility, true, launch);
       String engineId =
           startupObserved
               ? EngineObservation.ensureStarted(owner, purposeName, facts)

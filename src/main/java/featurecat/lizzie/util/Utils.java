@@ -306,7 +306,7 @@ public class Utils {
 
   private static Path resolveExecutableFromPath(String executable) {
     if (!OsPlatform.isWindows()) {
-      return findOnPath(List.of(executable), false);
+      return findOnPath(List.of(executable), null);
     }
     List<String> names = new ArrayList<>();
     if (executable.contains(".") && !executable.endsWith(".")) {
@@ -321,30 +321,36 @@ public class Utils {
     }
     if (suffixes.isEmpty()) suffixes = List.of(".exe", ".bat", ".cmd");
     for (String suffix : suffixes) names.add(executable + suffix);
-    return findOnPath(names, false);
+    return findOnPath(names, null);
   }
 
-  // Callers supply candidate filenames in launch order. Only shell-style lookup uses PATHEXT.
-  static Path findOnPath(List<String> names, boolean requireExecutable) {
+  // For a native Unix launch, relative and empty PATH entries are relative to the child cwd.
+  static Path findOnPath(List<String> names, Path unixChildDirectory) {
     String pathEnv = System.getenv("PATH");
-    if (isBlank(pathEnv)) return null;
-    for (String entry : pathEnv.split(File.pathSeparator)) {
-      if (isBlank(entry)) continue;
+    if (pathEnv == null) return null;
+    for (String entry : pathEnv.split(File.pathSeparator, -1)) {
+      if (unixChildDirectory == null && isBlank(entry)) continue;
       try {
-        Path directory = Paths.get(entry).toAbsolutePath().normalize();
+        Path directory =
+            unixChildDirectory == null
+                ? Paths.get(entry).toAbsolutePath().normalize()
+                : unixChildDirectory.resolve(entry).toAbsolutePath();
         if (!Files.isDirectory(directory)) continue;
         for (String name : names) {
           try {
-            Path candidate = directory.resolve(name).normalize();
+            Path candidate = directory.resolve(name);
             if (Files.isRegularFile(candidate)
-                && (!requireExecutable || Files.isExecutable(candidate))) {
-              return candidate;
+                && (unixChildDirectory == null || Files.isExecutable(candidate))) {
+              // A symlink followed by ".." must be traversed before simplifying the marker path.
+              return directory.equals(directory.normalize())
+                  ? candidate
+                  : directory.toRealPath().resolve(name);
             }
           } catch (InvalidPathException invalidName) {
             // Ignore a malformed PATHEXT suffix.
           }
         }
-      } catch (InvalidPathException | SecurityException ignored) {
+      } catch (InvalidPathException | IOException | SecurityException ignored) {
         // Continue searching the remaining PATH entries.
       }
     }

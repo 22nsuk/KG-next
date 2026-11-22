@@ -1,5 +1,6 @@
 package featurecat.lizzie.util;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -37,7 +38,7 @@ public final class KataGoEngineLocation {
     }
   }
 
-  public static Path bootstrapExecutable(List<String> commands) {
+  public static Path bootstrapExecutable(List<String> commands, File workingDirectory) {
     if (commands == null || commands.isEmpty()) {
       return null;
     }
@@ -53,11 +54,15 @@ public final class KataGoEngineLocation {
       return null;
     }
     // An explicit path is never a request to look for another installation on PATH.
+    if (!OsPlatform.isWindows()) {
+      Path childDirectory = workingDirectory == null ? Path.of("") : workingDirectory.toPath();
+      if (direct.isAbsolute() || direct.getParent() != null) {
+        return childDirectory.resolve(direct).toAbsolutePath();
+      }
+      return Utils.findOnPath(List.of(token), childDirectory);
+    }
     if (direct.isAbsolute() || direct.getParent() != null) {
       return direct.toAbsolutePath().normalize();
-    }
-    if (!OsPlatform.isWindows()) {
-      return Utils.findOnPath(List.of(token), true);
     }
     // CreateProcess searches native executable names, not the shell's PATHEXT alternatives.
     String name = token.contains(".") ? token : token + ".exe";
@@ -79,7 +84,7 @@ public final class KataGoEngineLocation {
       Path candidate = directory.resolve(name);
       if (Files.isRegularFile(candidate)) return candidate.toAbsolutePath().normalize();
     }
-    return Utils.findOnPath(List.of(name), false);
+    return Utils.findOnPath(List.of(name), null);
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

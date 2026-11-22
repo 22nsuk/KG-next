@@ -2,6 +2,7 @@ package featurecat.lizzie.logging;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.util.CommandLaunchHelper.LaunchSpec;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoEngineLocation;
 import featurecat.lizzie.util.KataGoExperimentalBackendInstaller.Backend;
@@ -171,15 +172,15 @@ public final class EngineBootstrapFacts {
     return fromLaunch(command, purpose, visibility, localLaunch, null);
   }
 
-  /** Keep saved option values for disclosure, and use the launcher's argv for installation facts. */
+  /** Use saved options for disclosure and the prepared launch for installation facts. */
   public static EngineBootstrapFacts fromLaunch(
       String command,
       String purpose,
       EngineCommandVisibility visibility,
       boolean localLaunch,
-      List<String> launchCommand) {
+      LaunchSpec launch) {
     try {
-      return parseCommand(command, purpose, visibility, localLaunch, launchCommand);
+      return parseCommand(command, purpose, visibility, localLaunch, launch);
     } catch (RuntimeException | Error failure) {
       if (failure instanceof VirtualMachineError fatal) {
         throw fatal;
@@ -243,14 +244,17 @@ public final class EngineBootstrapFacts {
       String purpose,
       EngineCommandVisibility visibility,
       boolean localLaunch,
-      List<String> launchCommand) {
+      LaunchSpec launch) {
     List<String> parts = Utils.splitCommand(command == null ? "" : command);
-    List<String> executableCommand = launchCommand != null ? launchCommand : parts;
+    List<String> executableCommand = launch != null ? launch.getCommandParts() : parts;
     boolean localEngine = localLaunch && !EngineThreadPolicy.isRemoteManaged(executableCommand);
     boolean bundled = localEngine && Config.isBundledKataGoCommand(command);
     String source = bundled ? SOURCE_BUNDLED : SOURCE_USER_CONFIGURED;
     Path executable =
-        localEngine ? KataGoEngineLocation.bootstrapExecutable(executableCommand) : null;
+        localEngine
+            ? KataGoEngineLocation.bootstrapExecutable(
+                executableCommand, launch == null ? null : launch.getWorkingDirectory())
+            : null;
     String onnxProvider = commandOnnxProvider(parts, command, visibility);
     String backend = KataGoEngineLocation.nvidiaBackendFromPath(executable);
     if (onnxProvider == null || backend == null) {

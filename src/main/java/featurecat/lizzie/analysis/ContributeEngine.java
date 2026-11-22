@@ -226,7 +226,7 @@ public class ContributeEngine {
             this,
             "CONTRIBUTE",
             EngineBootstrapFacts.fromLaunch(
-                engineCommand, "CONTRIBUTE", EngineCommandVisibility.VISIBLE, !useJavaSSH, commands));
+                engineCommand, "CONTRIBUTE", EngineCommandVisibility.VISIBLE, !useJavaSSH, launchSpec));
     EngineStartupDiagnostics.Attempt attempt =
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
@@ -274,7 +274,7 @@ public class ContributeEngine {
             process,
             true,
             EngineCommandVisibility.VISIBLE,
-            commands);
+            launchSpec);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);

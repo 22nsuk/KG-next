@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.OsPlatform;
 import java.io.File;
@@ -19,6 +20,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class EngineBootstrapFactsTest {
   @TempDir Path tempDir;
@@ -75,6 +78,56 @@ class EngineBootstrapFactsTest {
     }
   }
 
+  @ParameterizedTest
+  @EnabledOnOs(OS.LINUX)
+  @CsvSource({"bin:, opencl", ":bin, cpu", "missing:, cpu", "'', cpu", "link/../bin:, rocm-gfx110x"})
+  void bootstrapMatchesEngineStartedWithChildRelativePath(String path, String expected) throws Exception {
+    Path child = Files.createDirectory(tempDir.resolve("child"));
+    Files.createFile(child.resolve("gtp.cfg"));
+    writeProbeEngine(child, "cpu");
+    writeProbeEngine(Files.createDirectory(child.resolve("bin")), "opencl");
+    Path nested = Files.createDirectory(child.resolve("nested"));
+    Files.createSymbolicLink(child.resolve("link"), Files.createDirectory(nested.resolve("lib")));
+    writeProbeEngine(Files.createDirectory(nested.resolve("bin")), "rocm-gfx110x");
+
+    LoggingChildProcess.Result result =
+        LoggingChildProcess.runWithTimeout(
+            tempDir, 30_000, tempDir, Map.of("PATH", path), RelativePathProbe.class);
+    assertEquals(0, result.exitCode(), result.output());
+    String executed = Files.readString(child.resolve("executed-backend"));
+    assertEquals(expected, executed);
+    String line =
+        LoggingChildProcess.readLog(tempDir, "app.log").lines()
+            .filter(entry -> entry.contains("engine event=bootstrap "))
+            .findFirst()
+            .orElseThrow();
+    assertTrue(line.contains(" backend=" + executed + " "), line);
+  }
+
+  private static void writeProbeEngine(Path directory, String backend) throws Exception {
+    Path engine = directory.resolve("katago-path-probe");
+    Files.writeString(
+        engine,
+        "#!/bin/sh\nprintf %s " + backend + " > executed-backend\n"
+            + "read -r id command\nprintf '=%s false\\n\\n' \"$id\"\n");
+    assertTrue(engine.toFile().setExecutable(true));
+    Files.writeString(directory.resolve("lizzieyzy-next-engine-backend.txt"), backend);
+  }
+
+  public static final class RelativePathProbe {
+    public static void main(String[] args) throws Exception {
+      Path root = Path.of(args[0]);
+      LoggingRuntime runtime =
+          LoggingRuntime.initialize(new WorkDirectoryResolution(root, List.of()));
+      try {
+        new GtpConfigurationProbe()
+            .inspect("katago-path-probe gtp -config " + quote(root.resolve("child/gtp.cfg")));
+      } finally {
+        runtime.shutdown();
+      }
+    }
+  }
+
   public static final class PathMarkerProbe {
     public static void main(String[] args) throws Exception {
       LoggingRuntime runtime =
@@ -121,7 +174,7 @@ class EngineBootstrapFactsTest {
           expectedBackend,
           EngineBootstrapFacts.fromLaunch(
                   String.join(" ", arguments), "MAIN_BOARD", EngineCommandVisibility.VISIBLE,
-                  true, builder.command())
+                  true, launch)
               .backend());
     }
 

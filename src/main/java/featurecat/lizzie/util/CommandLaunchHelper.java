@@ -774,6 +774,11 @@ public final class CommandLaunchHelper {
       this.workingDirectory = workingDirectory;
     }
 
+    /** Capture the final command and directory after runtime-specific launch adjustments. */
+    public static LaunchSpec fromProcessBuilder(ProcessBuilder builder) {
+      return new LaunchSpec(List.copyOf(builder.command()), builder.directory());
+    }
+
     public List<String> getCommandParts() {
       return commandParts;
     }

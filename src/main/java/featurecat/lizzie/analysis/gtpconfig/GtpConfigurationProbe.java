@@ -408,7 +408,7 @@ public final class GtpConfigurationProbe {
           session.process,
           false,
           visibility,
-          builder.command());
+          launchSpec);
       session.recordStartedQuietly();
       return session;
     }

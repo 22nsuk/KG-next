@@ -199,7 +199,7 @@ public class HumanSlAnalysisRunner implements AutoCloseable {
           launchedProcess,
           false,
           EngineCommandVisibility.VISIBLE,
-          launchCommands);
+          CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder));
       return true;
     } catch (IOException e) {
       unavailableReason = withStartupDiagnostics(e.getLocalizedMessage());
