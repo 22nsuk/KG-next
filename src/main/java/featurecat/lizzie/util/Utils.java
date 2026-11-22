@@ -275,7 +275,7 @@ public class Utils {
     if (direct != null) {
       return direct;
     }
-    return resolveExecutableFromPath(trimmed, false);
+    return resolveExecutableFromPath(trimmed);
   }
 
   public static boolean isJavaCommand(String executable) {
@@ -304,66 +304,48 @@ public class Utils {
     }
   }
 
-  static Path resolveExecutableFromPath(String executable, boolean requireExecutable) {
-    String pathEnv = System.getenv("PATH");
-    if (isBlank(pathEnv)) {
-      return null;
+  private static Path resolveExecutableFromPath(String executable) {
+    if (!OsPlatform.isWindows()) {
+      return findOnPath(List.of(executable), false);
     }
-    List<String> suffixes = new ArrayList<String>();
-    if (OsPlatform.isWindows()) {
-      String pathext = System.getenv("PATHEXT");
-      if (!isBlank(pathext)) {
-        for (String ext : pathext.split(";")) {
-          String trimmed = ext == null ? "" : ext.trim();
-          if (!trimmed.isEmpty()) {
-            suffixes.add(trimmed.toLowerCase());
-          }
-        }
-      }
-      if (suffixes.isEmpty()) {
-        suffixes.add(".exe");
-        suffixes.add(".bat");
-        suffixes.add(".cmd");
-      }
-    } else {
-      suffixes.add("");
+    List<String> names = new ArrayList<>();
+    if (executable.contains(".") && !executable.endsWith(".")) {
+      names.add(executable);
     }
+    String pathext = System.getenv("PATHEXT");
+    List<String> suffixes = new ArrayList<>();
+    if (!isBlank(pathext)) {
+      for (String ext : pathext.split(";")) {
+        if (!ext.isBlank()) suffixes.add(ext.trim().toLowerCase());
+      }
+    }
+    if (suffixes.isEmpty()) suffixes = List.of(".exe", ".bat", ".cmd");
+    for (String suffix : suffixes) names.add(executable + suffix);
+    return findOnPath(names, false);
+  }
 
-    boolean hasExtension = executable.contains(".") && !executable.endsWith(".");
+  // Callers supply candidate filenames in launch order. Only shell-style lookup uses PATHEXT.
+  static Path findOnPath(List<String> names, boolean requireExecutable) {
+    String pathEnv = System.getenv("PATH");
+    if (isBlank(pathEnv)) return null;
     for (String entry : pathEnv.split(File.pathSeparator)) {
-      if (isBlank(entry)) {
-        continue;
-      }
-      Path baseDir;
+      if (isBlank(entry)) continue;
       try {
-        baseDir = Paths.get(entry).toAbsolutePath().normalize();
-      } catch (Exception e) {
-        continue;
-      }
-      if (!Files.isDirectory(baseDir)) {
-        continue;
-      }
-      if (!OsPlatform.isWindows() || hasExtension) {
-        try {
-          Path direct = toExistingPath(baseDir.resolve(executable).toString());
-          if (direct != null && (!requireExecutable || Files.isExecutable(direct))) {
-            return direct;
-          }
-        } catch (InvalidPathException | SecurityException e) {
-          continue;
-        }
-      }
-      if (OsPlatform.isWindows()) {
-        for (String suffix : suffixes) {
+        Path directory = Paths.get(entry).toAbsolutePath().normalize();
+        if (!Files.isDirectory(directory)) continue;
+        for (String name : names) {
           try {
-            Path candidate = toExistingPath(baseDir.resolve(executable + suffix).toString());
-            if (candidate != null && (!requireExecutable || Files.isExecutable(candidate))) {
+            Path candidate = directory.resolve(name).normalize();
+            if (Files.isRegularFile(candidate)
+                && (!requireExecutable || Files.isExecutable(candidate))) {
               return candidate;
             }
-          } catch (InvalidPathException | SecurityException e) {
-            continue;
+          } catch (InvalidPathException invalidName) {
+            // Ignore a malformed PATHEXT suffix.
           }
         }
+      } catch (InvalidPathException | SecurityException ignored) {
+        // Continue searching the remaining PATH entries.
       }
     }
     return null;

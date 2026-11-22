@@ -406,7 +406,9 @@ public final class GtpConfigurationProbe {
           AnalysisResourceCoordinator.Purpose.OTHER,
           engineCommand,
           session.process,
-          visibility);
+          false,
+          visibility,
+          builder.command());
       session.recordStartedQuietly();
       return session;
     }

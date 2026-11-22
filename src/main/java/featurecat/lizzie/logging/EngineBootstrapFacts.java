@@ -168,8 +168,18 @@ public final class EngineBootstrapFacts {
   /** Only a locally launched engine can be identified by markers on this machine. */
   public static EngineBootstrapFacts fromCommand(
       String command, String purpose, EngineCommandVisibility visibility, boolean localLaunch) {
+    return fromLaunch(command, purpose, visibility, localLaunch, null);
+  }
+
+  /** Keep saved option values for disclosure, and use the launcher's argv for installation facts. */
+  public static EngineBootstrapFacts fromLaunch(
+      String command,
+      String purpose,
+      EngineCommandVisibility visibility,
+      boolean localLaunch,
+      List<String> launchCommand) {
     try {
-      return parseCommand(command, purpose, visibility, localLaunch);
+      return parseCommand(command, purpose, visibility, localLaunch, launchCommand);
     } catch (RuntimeException | Error failure) {
       if (failure instanceof VirtualMachineError fatal) {
         throw fatal;
@@ -229,12 +239,18 @@ public final class EngineBootstrapFacts {
   }
 
   private static EngineBootstrapFacts parseCommand(
-      String command, String purpose, EngineCommandVisibility visibility, boolean localLaunch) {
+      String command,
+      String purpose,
+      EngineCommandVisibility visibility,
+      boolean localLaunch,
+      List<String> launchCommand) {
     List<String> parts = Utils.splitCommand(command == null ? "" : command);
-    boolean localEngine = localLaunch && !EngineThreadPolicy.isRemoteManaged(parts);
+    List<String> executableCommand = launchCommand != null ? launchCommand : parts;
+    boolean localEngine = localLaunch && !EngineThreadPolicy.isRemoteManaged(executableCommand);
     boolean bundled = localEngine && Config.isBundledKataGoCommand(command);
     String source = bundled ? SOURCE_BUNDLED : SOURCE_USER_CONFIGURED;
-    Path executable = localEngine ? KataGoEngineLocation.bootstrapExecutable(parts) : null;
+    Path executable =
+        localEngine ? KataGoEngineLocation.bootstrapExecutable(executableCommand) : null;
     String onnxProvider = commandOnnxProvider(parts, command, visibility);
     String backend = KataGoEngineLocation.nvidiaBackendFromPath(executable);
     if (onnxProvider == null || backend == null) {

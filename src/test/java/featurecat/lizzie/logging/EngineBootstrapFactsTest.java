@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
 import featurecat.lizzie.analysis.EngineCommandVisibility;
+import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.OsPlatform;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -30,6 +31,11 @@ class EngineBootstrapFactsTest {
     String path = bin.toString();
     if (OsPlatform.isWindows()) {
       Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "where.exe"), engine);
+      Path scripts = Files.createDirectory(tempDir.resolve("scripts"));
+      Files.writeString(scripts.resolve(name + ".cmd"), "@exit /b 23");
+      Files.writeString(scripts.resolve("lizzieyzy-next-engine-backend.txt"), "opencl");
+      Files.copy(engine, scripts.resolve("cmd.exe")); // PATH shadow of the system command interpreter
+      path = scripts + File.pathSeparator + path;
     } else {
       Files.writeString(engine, "#!/bin/sh\nexit 0\n");
       assertTrue(engine.toFile().setExecutable(true));
@@ -84,24 +90,39 @@ class EngineBootstrapFactsTest {
         }
         recordBootstrap("./" + args[1]);
         if (OsPlatform.isWindows()) {
-          // PATH has a different program (where.exe) under the same name.
+          String bareName = args[1].substring(0, args[1].length() - ".exe".length());
+          Files.writeString(engine.resolveSibling("lizzieyzy-next-engine-backend.txt"), "rocm-gfx110x");
+          assertNativeBackend(List.of(bareName, args[1]), 0, "rocm-gfx110x");
+          assertNativeBackend(List.of("cmd", "/d", "/c", "exit", "17"), 17, "unknown");
+          // Now put a different native program in the current directory.
           Path local = Path.of(args[0]).resolve(args[1]);
           Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), local);
           Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
-          String bareName = args[1].substring(0, args[1].length() - ".exe".length());
-          Process process = new ProcessBuilder(bareName, "/d", "/c", "exit", "17").start();
-          try {
-            assertTrue(process.waitFor(5, TimeUnit.SECONDS));
-            assertEquals(17, process.exitValue(), "Windows should start the local cmd.exe");
-          } finally {
-            if (process.isAlive()) process.destroyForcibly();
-          }
-          assertEquals(
-              "cpu", EngineBootstrapFacts.fromCommand(bareName + " gtp", "MAIN_BOARD").backend());
+          assertNativeBackend(List.of(bareName, "/d", "/c", "exit", "17"), 17, "cpu");
         }
       } finally {
         runtime.shutdown();
       }
+    }
+
+    private static void assertNativeBackend(
+        List<String> arguments, int expectedExit, String expectedBackend) throws Exception {
+      CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(arguments);
+      ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts());
+      CommandLaunchHelper.configureProcessBuilder(builder, launch);
+      Process process = builder.start();
+      try {
+        assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+        assertEquals(expectedExit, process.exitValue(), "unexpected native executable");
+      } finally {
+        if (process.isAlive()) process.destroyForcibly();
+      }
+      assertEquals(
+          expectedBackend,
+          EngineBootstrapFacts.fromLaunch(
+                  String.join(" ", arguments), "MAIN_BOARD", EngineCommandVisibility.VISIBLE,
+                  true, builder.command())
+              .backend());
     }
 
     private static void recordBootstrap(String executable) {

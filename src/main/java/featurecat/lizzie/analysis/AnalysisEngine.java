@@ -418,8 +418,8 @@ public class AnalysisEngine {
         EngineObservation.restartInstance(
             this,
             launchPurpose,
-            EngineBootstrapFacts.fromCommand(
-                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal));
+            EngineBootstrapFacts.fromLaunch(
+                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal, commands));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
@@ -427,6 +427,7 @@ public class AnalysisEngine {
                 launchPurpose,
                 commands,
                 isLocal);
+    List<String> launchCommands = null;
     if (this.useRemoteCompute) {
       this.useJavaSSH = false;
       process = null;
@@ -506,7 +507,7 @@ public class AnalysisEngine {
           return;
         }
       }
-      List<String> launchCommands =
+      launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
       ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
@@ -547,7 +548,8 @@ public class AnalysisEngine {
         engineCommand,
         process,
         startupDiagnosticAttempt != null,
-        EngineCommandVisibility.VISIBLE);
+        EngineCommandVisibility.VISIBLE,
+        launchCommands);
     readerResources.start();
   }
 

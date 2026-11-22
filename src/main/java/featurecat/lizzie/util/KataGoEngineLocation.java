@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
@@ -55,18 +56,30 @@ public final class KataGoEngineLocation {
     if (direct.isAbsolute() || direct.getParent() != null) {
       return direct.toAbsolutePath().normalize();
     }
-    boolean windows = OsPlatform.isWindows();
-    if (windows) {
-      // A native Windows launch can select a current-directory program with an implicit .exe.
-      if (Files.isRegularFile(direct)) {
-        return direct.toAbsolutePath().normalize();
-      }
-      Path withExe = Path.of(token + ".exe");
-      if (Files.isRegularFile(withExe)) {
-        return withExe.toAbsolutePath().normalize();
-      }
+    if (!OsPlatform.isWindows()) {
+      return Utils.findOnPath(List.of(token), true);
     }
-    return Utils.resolveExecutableFromPath(token, !windows);
+    // CreateProcess searches native executable names, not the shell's PATHEXT alternatives.
+    String name = token.contains(".") ? token : token + ".exe";
+    // CreateProcessW checks the parent image, native cwd and Windows directories before PATH.
+    List<Path> directories = new ArrayList<>();
+    ProcessHandle.current().info().command()
+        .map(Path::of)
+        .map(Path::getParent)
+        .ifPresent(directories::add);
+    directories.add(Path.of(""));
+    String windows = System.getenv("SystemRoot");
+    if (windows != null && !windows.isBlank()) {
+      Path root = Path.of(windows);
+      directories.add(root.resolve("System32"));
+      directories.add(root.resolve("System"));
+      directories.add(root);
+    }
+    for (Path directory : directories) {
+      Path candidate = directory.resolve(name);
+      if (Files.isRegularFile(candidate)) return candidate.toAbsolutePath().normalize();
+    }
+    return Utils.findOnPath(List.of(name), false);
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

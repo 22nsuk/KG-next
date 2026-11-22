@@ -240,7 +240,7 @@ class EngineGtpLoggingTest {
   })
   void realStartFailureBootstrapHonorsCommandVisibilityWithDiagnosticsOff(
       boolean hidden, String marker, String expectedBackend) throws Exception {
-    String app = logFailedStart(privateLaunchCommand(marker), hidden);
+    String app = logFailedStart(privateLaunchCommand(marker), hidden).app();
     assertLaunchBootstrap(app, hidden, expectedBackend);
   }
 
@@ -263,7 +263,7 @@ class EngineGtpLoggingTest {
     if (override != null) {
       command += " -override-config onnxProvider=" + override;
     }
-    String app = logFailedStart(command, hidden);
+    String app = logFailedStart(command, hidden).app();
     String line = eventLine(app, "event=bootstrap");
     assertNotNull(line, app);
     assertTrue(line.contains(" backend=" + backend + " "), line);
@@ -274,7 +274,27 @@ class EngineGtpLoggingTest {
     }
   }
 
-  private String logFailedStart(String command, boolean hidden) throws Exception {
+  @Test
+  void bootstrapUsesExecutableSelectedFromTheLaunchRoot() throws Exception {
+    String program = "katago-launch-root-probe.exe";
+    Files.createFile(tempDir.resolve(program)); // Selected by prepare(), then rejected at start.
+    Files.writeString(tempDir.resolve("lizzieyzy-next-engine-backend.txt"), "rocm-gfx110x");
+    String previous = System.setProperty("user.dir", tempDir.toString());
+    try {
+      FailedStart start = logFailedStart(program + " gtp -model test.bin.gz", false);
+      assertEquals(tempDir.resolve(program), Path.of(start.launch().getString("executable")));
+      String line = eventLine(start.app(), "event=bootstrap");
+      assertNotNull(line, start.app());
+      assertTrue(line.contains(" backend=rocm-gfx110x "), line);
+      assertTrue(line.contains(" model=test.bin.gz "), line);
+    } finally {
+      System.setProperty("user.dir", previous);
+    }
+  }
+
+  private record FailedStart(String app, JSONObject launch) {}
+
+  private FailedStart logFailedStart(String command, boolean hidden) throws Exception {
     LoggingRuntime runtime = startRuntime();
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(false));
     Lizzie.config.uiConfig = new JSONObject();
@@ -308,7 +328,7 @@ class EngineGtpLoggingTest {
       String app = readApp();
       assertSameEngineIdentity(app, "event=bootstrap", "event=failed");
       assertFalse(app.contains("event=process-started"), app);
-      return app;
+      return new FailedStart(app, attempt.snapshot().toJson().getJSONObject("launch"));
     } finally {
       firstLaunch.setBoolean(null, previousFirstLaunch);
       Lizzie.engineStartupStatus.ready();

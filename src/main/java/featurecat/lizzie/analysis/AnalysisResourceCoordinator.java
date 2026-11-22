@@ -12,6 +12,7 @@ import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -90,16 +91,17 @@ public final class AnalysisResourceCoordinator {
       String command,
       Process process,
       EngineCommandVisibility visibility) {
-    processStarted(owner, purpose, command, process, false, visibility);
+    processStarted(owner, purpose, command, process, false, visibility, null);
   }
 
-  static void processStarted(
+  public static void processStarted(
       Object owner,
       Purpose purpose,
       String command,
       Process process,
       boolean startupObserved,
-      EngineCommandVisibility visibility) {
+      EngineCommandVisibility visibility,
+      List<String> launchCommand) {
     if (process != null) {
       synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
@@ -132,7 +134,8 @@ public final class AnalysisResourceCoordinator {
       REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
     }
     try {
-      EngineBootstrapFacts facts = EngineBootstrapFacts.fromCommand(command, purposeName, visibility);
+      EngineBootstrapFacts facts =
+          EngineBootstrapFacts.fromLaunch(command, purposeName, visibility, true, launchCommand);
       String engineId =
           startupObserved
               ? EngineObservation.ensureStarted(owner, purposeName, facts)

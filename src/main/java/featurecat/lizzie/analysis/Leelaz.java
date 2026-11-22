@@ -1560,7 +1560,8 @@ public class Leelaz {
             engineCommand,
             process,
             startupDiagnosticAttempt != null,
-            engineCommandVisibility);
+            engineCommandVisibility,
+            launchCommands);
       } catch (IOException e) {
         // The JDK names the executable and working directory; a hidden command keeps neither.
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("process-create", e);
@@ -4774,8 +4775,8 @@ public class Leelaz {
 
 
   private EngineBootstrapFacts bootstrapFacts(String purpose) {
-    return EngineBootstrapFacts.fromCommand(
-        engineCommand, purpose, engineCommandVisibility, !useJavaSSH);
+    return EngineBootstrapFacts.fromLaunch(
+        engineCommand, purpose, engineCommandVisibility, !useJavaSSH, commands);
   }
 
   private void noteEngineStarted() {
@@ -23499,7 +23500,9 @@ public class Leelaz {
           AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
           engineCommand,
           process,
-          engineCommandVisibility);
+          false,
+          engineCommandVisibility,
+          commands);
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {
