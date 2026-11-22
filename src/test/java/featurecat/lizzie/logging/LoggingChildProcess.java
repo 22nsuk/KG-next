@@ -20,11 +20,15 @@ final class LoggingChildProcess {
   static Result runWithTimeout(
       Path workDirectory, long timeoutMillis, Class<?> probe, String... extraVmAndArgs)
       throws Exception {
-    return runWithTimeout(workDirectory, timeoutMillis, Map.of(), probe, extraVmAndArgs);
+    return runWithTimeout(workDirectory, timeoutMillis, null, Map.of(), probe, extraVmAndArgs);
   }
 
   static Result runWithTimeout(
-      Path workDirectory, long timeoutMillis, Map<String, String> environment, Class<?> probe,
+      Path workDirectory,
+      long timeoutMillis,
+      Path currentDirectory,
+      Map<String, String> environment,
+      Class<?> probe,
       String... extraVmAndArgs) throws Exception {
     String java =
         Path.of(
@@ -53,6 +57,7 @@ final class LoggingChildProcess {
       }
     }
     ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+    builder.directory(currentDirectory == null ? null : currentDirectory.toFile());
     builder.environment().putAll(environment);
     Process process = builder.start();
     ByteArrayOutputStream captured = new ByteArrayOutputStream();

@@ -13,7 +13,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 class EngineBootstrapFactsTest {
@@ -26,7 +29,7 @@ class EngineBootstrapFactsTest {
     Path engine = bin.resolve(name + (OsPlatform.isWindows() ? ".exe" : ""));
     String path = bin.toString();
     if (OsPlatform.isWindows()) {
-      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), engine);
+      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "where.exe"), engine);
     } else {
       Files.writeString(engine, "#!/bin/sh\nexit 0\n");
       assertTrue(engine.toFile().setExecutable(true));
@@ -44,6 +47,7 @@ class EngineBootstrapFactsTest {
         LoggingChildProcess.runWithTimeout(
             tempDir,
             30_000,
+            tempDir,
             Map.of(pathKey, path),
             PathMarkerProbe.class,
             engine.getFileName().toString(),
@@ -79,6 +83,22 @@ class EngineBootstrapFactsTest {
           }
         }
         recordBootstrap("./" + args[1]);
+        if (OsPlatform.isWindows()) {
+          // PATH has a different program (where.exe) under the same name.
+          Path local = Path.of(args[0]).resolve(args[1]);
+          Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), local);
+          Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
+          String bareName = args[1].substring(0, args[1].length() - ".exe".length());
+          Process process = new ProcessBuilder(bareName, "/d", "/c", "exit", "17").start();
+          try {
+            assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+            assertEquals(17, process.exitValue(), "Windows should start the local cmd.exe");
+          } finally {
+            if (process.isAlive()) process.destroyForcibly();
+          }
+          assertEquals(
+              "cpu", EngineBootstrapFacts.fromCommand(bareName + " gtp", "MAIN_BOARD").backend());
+        }
       } finally {
         runtime.shutdown();
       }
@@ -93,6 +113,23 @@ class EngineBootstrapFactsTest {
               "MAIN_BOARD",
               EngineCommandVisibility.HIDDEN));
     }
+  }
+
+  @Test
+  @EnabledOnOs(OS.WINDOWS)
+  void invalidExecutablePathPreservesIndependentCommandFacts() {
+    String command = "C:\\eng?nes\\katago.exe gtp -model net.bin.gz -config gtp.cfg";
+    EngineBootstrapFacts visible = EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD");
+    assertEquals("unknown", visible.backend());
+    assertEquals("katago", visible.engineType());
+    assertEquals("net.bin.gz", visible.model());
+    assertEquals("gtp.cfg", visible.config());
+
+    EngineBootstrapFacts hidden =
+        EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+    assertEquals("katago", hidden.engineType());
+    assertEquals("hidden-command", hidden.model());
+    assertEquals("hidden-command", hidden.config());
   }
 
   @Test

@@ -3,6 +3,7 @@ package featurecat.lizzie.util;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Locale;
@@ -43,15 +44,27 @@ public final class KataGoEngineLocation {
     if (token == null || token.isBlank()) {
       return null;
     }
-    Path direct = Path.of(token);
+    Path direct;
+    try {
+      direct = Path.of(token);
+    } catch (InvalidPathException invalid) {
+      // The remaining command arguments can still provide independent startup facts.
+      return null;
+    }
     // An explicit path is never a request to look for another installation on PATH.
     if (direct.isAbsolute() || direct.getParent() != null) {
       return direct.toAbsolutePath().normalize();
     }
-    // A bare POSIX command searches PATH, skipping files that cannot be executed.
     boolean windows = OsPlatform.isWindows();
-    if (windows && Files.isRegularFile(direct)) {
-      return direct.toAbsolutePath().normalize();
+    if (windows) {
+      // A native Windows launch can select a current-directory program with an implicit .exe.
+      if (Files.isRegularFile(direct)) {
+        return direct.toAbsolutePath().normalize();
+      }
+      Path withExe = Path.of(token + ".exe");
+      if (Files.isRegularFile(withExe)) {
+        return withExe.toAbsolutePath().normalize();
+      }
     }
     return Utils.resolveExecutableFromPath(token, !windows);
   }
