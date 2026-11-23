@@ -80,7 +80,7 @@ class EngineBootstrapFactsTest {
   }
 
   @ParameterizedTest
-  @EnabledOnOs(OS.LINUX)
+  @EnabledOnOs({OS.LINUX, OS.MAC})
   @CsvSource({
     "bin:,         katago-path-probe,                   opencl,       unknown",
     ":bin,         katago-path-probe,                   cpu,          unknown",
@@ -94,7 +94,7 @@ class EngineBootstrapFactsTest {
     "denied:bin,   katago-path-probe,                   opencl,       unknown",
     "working:bin,  katago-path-probe,                   cpu,          unknown"
   })
-  void linuxBootstrapReportsOnlyIdentifiableInstallations(
+  void unixBootstrapReportsOnlyIdentifiableInstallations(
       String path, String program, String expectedEngine, String expectedBackend) throws Exception {
     Path child = Files.createDirectory(tempDir.resolve("child"));
     Files.createFile(child.resolve("gtp.cfg"));

@@ -342,6 +342,8 @@ jobs:
         run: >-
           python3 scripts/run_local_ci.py --profile portable --group native-clipboard
           --require-clean --summary-dir target/local-ci/native-clipboard
+      - name: Verify engine startup logging on macOS
+        run: mvn -B -ntp -Dtest=EngineBootstrapFactsTest,EngineGtpLoggingTest#bundledBootstrapUsesFinalDirectoryForRelativePath test
       - name: Upload clipboard evidence
         if: always()
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6

@@ -1358,8 +1358,18 @@ public class Leelaz {
     supportRootInfo = false;
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
-    startupLaunch = launchSpec;
     commands = launchSpec.getCommandParts();
+    boolean remoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
+    this.useRemoteCompute = remoteCompute;
+    boolean isLocal = !useJavaSSH && !remoteCompute;
+    Path engineExecutable = null;
+    ProcessBuilder processBuilder = null;
+    startupLaunch = launchSpec;
+    if (isLocal) {
+      engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
+      processBuilder = KataGoRuntimeHelper.prepareEngineProcessBuilder(launchSpec, engineExecutable);
+      startupLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
+    }
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       String launchPurpose =
           engineGameStartupTransaction != null
@@ -1375,7 +1385,7 @@ public class Leelaz {
                   loggingEngineId,
                   launchPurpose,
                   commands,
-                  !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand),
+                  isLocal,
                   engineCommandVisibility);
     }
     rememberKataGoThreadLaunchOverride(commands);
@@ -1401,8 +1411,7 @@ public class Leelaz {
     isDownWithError = false;
     openClFp32CompatibilityActive = false;
     openClCompatibilityRecoveryAttempted.set(false);
-    this.useRemoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(this.engineCommand);
-    if (this.useRemoteCompute) {
+    if (remoteCompute) {
       process = null;
       this.javaSSHClosed = false;
       this.isSSH = false;
@@ -1433,7 +1442,7 @@ public class Leelaz {
         }
         throw e;
       }
-    } else if (this.useJavaSSH) {
+    } else if (!isLocal) {
       process = null;
       this.javaSSH = new SSHController(this, this.ip, this.port);
       recordUpdateEngineStartJavaSsh(this.javaSSH);
@@ -1466,7 +1475,6 @@ public class Leelaz {
         started = false;
         return;
       }
-      Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       boolean bundledCommand = Config.isBundledKataGoCommand(engineCommand);
       boolean nvidiaBundled = KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable);
       long startupToken = 0L;
@@ -1546,10 +1554,9 @@ public class Leelaz {
             "BundledEngineStartup.status.openclCompatibility",
             "Using stable NVIDIA OpenCL compatibility mode...");
       }
-      ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
+      processBuilder.command(launchCommands);
       modelLaunchCommands = List.copyOf(launchCommands);
-      CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
-      KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
+      KataGoRuntimeHelper.configureEngineEnvironment(processBuilder, launchSpec, engineExecutable);
       processBuilder.redirectErrorStream(false);
       if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(processBuilder);
       try {

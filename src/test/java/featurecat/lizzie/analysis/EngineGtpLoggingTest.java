@@ -16,6 +16,7 @@ import featurecat.lizzie.logging.DiagnosticModule;
 import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogStream;
+import featurecat.lizzie.logging.LoggingChildProcess;
 import featurecat.lizzie.logging.LoggingLimits;
 import featurecat.lizzie.logging.LoggingRuntime;
 import featurecat.lizzie.logging.LoggingSettings;
@@ -33,11 +34,14 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -289,6 +293,71 @@ class EngineGtpLoggingTest {
       assertTrue(line.contains(" model=test.bin.gz "), line);
     } finally {
       System.setProperty("user.dir", previous);
+    }
+  }
+
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void bundledBootstrapUsesFinalDirectoryForRelativePath() throws Exception {
+    LoggingChildProcess.Result result =
+        LoggingChildProcess.runWithTimeout(
+            tempDir, 30_000, tempDir, Map.of("PATH", "engines/katago/bin"), BundledDirectoryProbe.class);
+    assertEquals(0, result.exitCode(), result.output());
+  }
+
+  public static final class BundledDirectoryProbe {
+    public static void main(String[] args) throws Exception {
+      EngineGtpLoggingTest test = new EngineGtpLoggingTest();
+      test.tempDir = Path.of(args[0]);
+      Path study = Files.createDirectory(test.tempDir.resolve("study"));
+      Path config = Files.createFile(study.resolve("gtp.cfg"));
+      String command = "katago gtp -config \"" + config + "\"";
+      for (Path directory : List.of(study, test.tempDir)) {
+        Path bin = Files.createDirectories(directory.resolve("engines/katago/bin"));
+        Files.writeString(bin.resolve("lizzieyzy-next-engine-backend.txt"),
+            directory.equals(study) ? "cpu" : "opencl");
+        Path engine = Files.writeString(bin.resolve("katago"), "#!/missing-interpreter\n");
+        assertTrue(engine.toFile().setExecutable(true));
+      }
+      try {
+        // The first observation survives a process-create failure and retains the hiding policy.
+        FailedStart start = test.logFailedStart(command, true);
+        String bootstrap = eventLine(start.app(), "event=bootstrap");
+        assertTrue(bootstrap.contains(" backend=opencl "), bootstrap);
+        assertTrue(bootstrap.contains("config=hidden-command"), bootstrap);
+
+        // A real analysis child records its cwd independently of the startup log.
+        for (Path directory : List.of(study, test.tempDir)) {
+          String backend = directory.equals(study) ? "cpu" : "opencl";
+          Files.writeString(
+              directory.resolve("engines/katago/bin/katago"),
+              "#!/bin/sh\nprintf '%s\\n' " + backend + " \"$PWD\" > \"$3.started\"\nread -r done\n");
+        }
+        Lizzie.config.analysisEngineCommand = command.replace(" gtp ", " analysis ");
+        Lizzie.config.analysisReuseCurrentEngine = false;
+        AnalysisEngine analysis = new AnalysisEngine(true);
+        try {
+          Process process = analysis.process;
+          assertNotNull(process);
+          process.getOutputStream().write('\n');
+          process.getOutputStream().flush();
+          assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+          assertEquals(0, process.exitValue());
+          List<String> actual = Files.readAllLines(study.resolve("gtp.cfg.started"));
+          assertEquals("opencl", actual.get(0));
+          assertTrue(Files.isSameFile(test.tempDir, Path.of(actual.get(1))));
+          awaitLogs(LoggingRuntime.current().orElseThrow());
+          List<String> events = test.readApp().lines()
+              .filter(line -> line.contains("event=bootstrap ") && line.contains("purpose=PRELOADED_QUICK_ANALYSIS "))
+              .toList();
+          assertEquals(1, events.size(), events::toString);
+          assertTrue(events.get(0).contains(" backend=opencl "), events.get(0));
+        } finally {
+          analysis.shutdown();
+        }
+      } finally {
+        test.tearDown();
+      }
     }
   }
 

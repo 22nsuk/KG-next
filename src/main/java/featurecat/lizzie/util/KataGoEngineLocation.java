@@ -106,8 +106,7 @@ public final class KataGoEngineLocation {
       Path candidate = childDirectory.resolve(entry).resolve(name);
       if (!Files.isRegularFile(candidate) || !Files.isExecutable(candidate)) continue;
       Path executable = unixInstallationPath(candidate);
-      if (!OsPlatform.isLinux()) return executable;
-      // Linux can skip an executable at launch. Only attribute markers to a unique installation.
+      // Unix can skip an executable at launch. Only attribute markers to a unique installation.
       if (installation == null) {
         installation = executable;
       } else if (!Files.isSameFile(installation.getParent(), executable.getParent())) {

@@ -1710,17 +1710,37 @@ public final class KataGoRuntimeHelper {
     }
   }
 
+  /** Fix the child directory before bootstrap and keep this builder through process creation. */
+  public static ProcessBuilder prepareEngineProcessBuilder(
+      CommandLaunchHelper.LaunchSpec launch, Path enginePath) {
+    ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts());
+    builder.directory(launch.getWorkingDirectory());
+    configureBundledWorkingDirectory(builder, enginePath);
+    return builder;
+  }
+
+  /** Apply registry and runtime environment settings after engine preflight. */
+  public static void configureEngineEnvironment(
+      ProcessBuilder builder, CommandLaunchHelper.LaunchSpec launch, Path enginePath) {
+    CommandLaunchHelper.configureProcessEnvironment(builder, launch);
+    configureBundledEnvironment(builder, enginePath);
+  }
+
   public static void configureBundledProcessBuilder(
       ProcessBuilder processBuilder, Path enginePath) {
-    if (processBuilder == null || enginePath == null) {
-      return;
+    if (processBuilder == null) return;
+    configureBundledWorkingDirectory(processBuilder, enginePath);
+    configureBundledEnvironment(processBuilder, enginePath);
+  }
+
+  private static void configureBundledWorkingDirectory(ProcessBuilder builder, Path enginePath) {
+    if (Lizzie.config != null && Config.isBundledKataGoExecutable(enginePath)) {
+      builder.directory(Lizzie.config.getRuntimeWorkDirectory());
     }
-    if (!Config.isBundledKataGoExecutable(enginePath)) {
-      return;
-    }
-    if (Lizzie.config != null) {
-      processBuilder.directory(Lizzie.config.getRuntimeWorkDirectory());
-    }
+  }
+
+  private static void configureBundledEnvironment(ProcessBuilder processBuilder, Path enginePath) {
+    if (!Config.isBundledKataGoExecutable(enginePath)) return;
     Path engineDir = enginePath.getParent();
     if (engineDir == null) {
       return;

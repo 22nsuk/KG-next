@@ -183,6 +183,10 @@ public final class CommandLaunchHelper {
     if (workingDirectory != null) {
       processBuilder.directory(workingDirectory);
     }
+    configureProcessEnvironment(processBuilder, launchSpec);
+  }
+
+  static void configureProcessEnvironment(ProcessBuilder processBuilder, LaunchSpec launchSpec) {
     if (!OsPlatform.isWindows()) {
       return;
     }
@@ -190,7 +194,7 @@ public final class CommandLaunchHelper {
         processBuilder.environment(),
         buildWindowsPath(
             launchSpec.getCommandParts(),
-            workingDirectory,
+            launchSpec.getWorkingDirectory(),
             processBuilder.environment(),
             System.getenv(),
             getWindowsRegistryPath(MACHINE_ENVIRONMENT_KEY),

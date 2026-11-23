@@ -10,8 +10,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-final class LoggingChildProcess {
-  record Result(int exitCode, String output) {}
+public final class LoggingChildProcess {
+  public record Result(int exitCode, String output) {}
 
   static Result run(Path workDirectory, Class<?> probe, String... extraVmAndArgs) throws Exception {
     return runWithTimeout(workDirectory, 120_000L, probe, extraVmAndArgs);
@@ -23,7 +23,7 @@ final class LoggingChildProcess {
     return runWithTimeout(workDirectory, timeoutMillis, null, Map.of(), probe, extraVmAndArgs);
   }
 
-  static Result runWithTimeout(
+  public static Result runWithTimeout(
       Path workDirectory,
       long timeoutMillis,
       Path currentDirectory,

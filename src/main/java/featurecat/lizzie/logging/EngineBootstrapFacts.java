@@ -257,9 +257,9 @@ public final class EngineBootstrapFacts {
                 executableCommand, launch == null ? null : launch.getWorkingDirectory())
             : null;
     String onnxProvider = commandOnnxProvider(parts, command, visibility);
-    // A configured provider alone cannot identify which local Linux installation ran.
+    // A configured provider alone cannot identify which local Unix installation ran.
     String backend =
-        localEngine && OsPlatform.isLinux() && executable == null
+        localEngine && !OsPlatform.isWindows() && executable == null
             ? UNKNOWN
             : KataGoEngineLocation.nvidiaBackendFromPath(executable);
     if (onnxProvider == null || backend == null) {
