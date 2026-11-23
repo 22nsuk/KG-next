@@ -82,26 +82,33 @@ class EngineBootstrapFactsTest {
   @ParameterizedTest
   @EnabledOnOs(OS.LINUX)
   @CsvSource({
-    "bin:,          katago-path-probe,                 opencl",
-    ":bin,          katago-path-probe,                 cpu",
-    "missing:,      katago-path-probe,                 cpu",
-    "'',            katago-path-probe,                 cpu",
-    "link/../bin:,  katago-path-probe,                 rocm-gfx110x",
-    "bin,           child/link/../bin/katago-path-probe, rocm-gfx110x",
-    "stale:bin,     katago-path-probe,                 opencl",
-    "working:bin,   katago-path-probe,                 cpu"
+    "bin:,         katago-path-probe,                   opencl,       unknown",
+    ":bin,         katago-path-probe,                   cpu,          unknown",
+    "missing:,     katago-path-probe,                   cpu,          cpu",
+    "'',           katago-path-probe,                   cpu,          cpu",
+    "bin:bin:alias, katago-path-probe,                  opencl,       opencl",
+    "link/../bin,  katago-path-probe,                   rocm-gfx110x, rocm-gfx110x",
+    "link/../bin:, katago-path-probe,                   rocm-gfx110x, unknown",
+    "bin,          child/link/../bin/katago-path-probe, rocm-gfx110x, rocm-gfx110x",
+    "stale:bin,    katago-path-probe,                   opencl,       unknown",
+    "denied:bin,   katago-path-probe,                   opencl,       unknown",
+    "working:bin,  katago-path-probe,                   cpu,          unknown"
   })
-  void bootstrapMatchesEngineStartedOnLinux(String path, String program, String expected)
-      throws Exception {
+  void linuxBootstrapReportsOnlyIdentifiableInstallations(
+      String path, String program, String expectedEngine, String expectedBackend) throws Exception {
     Path child = Files.createDirectory(tempDir.resolve("child"));
     Files.createFile(child.resolve("gtp.cfg"));
     writeProbeEngine(child, "cpu", "/bin/sh");
     writeProbeEngine(Files.createDirectory(child.resolve("bin")), "opencl", "/bin/sh");
+    Files.createSymbolicLink(child.resolve("alias"), Path.of("bin"));
     Path nested = Files.createDirectory(child.resolve("nested"));
     Files.createSymbolicLink(child.resolve("link"), Files.createDirectory(nested.resolve("lib")));
     writeProbeEngine(Files.createDirectory(nested.resolve("bin")), "rocm-gfx110x", "/bin/sh");
 
     writeProbeEngine(Files.createDirectory(child.resolve("stale")), "cpu", "./missing-sh -e");
+    Path deniedInterpreter = Files.createFile(child.resolve("denied-sh"));
+    assertFalse(Files.isExecutable(deniedInterpreter));
+    writeProbeEngine(Files.createDirectory(child.resolve("denied")), "cpu", "./denied-sh");
     Files.createSymbolicLink(child.resolve("local-sh"), Path.of("/bin/sh"));
     writeProbeEngine(Files.createDirectory(child.resolve("working")), "cpu", "./local-sh -e");
 
@@ -110,14 +117,16 @@ class EngineBootstrapFactsTest {
         LoggingChildProcess.runWithTimeout(
             tempDir, 30_000, tempDir, Map.of("PATH", path), RelativePathProbe.class, executable);
     assertEquals(0, result.exitCode(), result.output());
-    String executed = Files.readString(child.resolve("gtp.cfg.started"));
-    assertEquals(expected, executed);
+    assertEquals(
+        List.of(expectedEngine, expectedEngine, expectedEngine),
+        Files.readAllLines(child.resolve("gtp.cfg.started")));
     List<String> lines =
         LoggingChildProcess.readLog(tempDir, "app.log").lines()
             .filter(entry -> entry.contains("engine event=bootstrap "))
             .toList();
-    assertEquals(2, lines.size(), lines::toString);
-    for (String line : lines) assertTrue(line.contains(" backend=" + executed + " "), line);
+    assertEquals(3, lines.size(), lines::toString);
+    for (String line : lines) assertTrue(line.contains(" backend=" + expectedBackend + " "), line);
+    assertTrue(lines.get(2).contains("onnxProvider=openvino"), lines.get(2));
     assertTrue(lines.get(1).contains("config=hidden-command"), lines.get(1));
   }
 
@@ -126,7 +135,7 @@ class EngineBootstrapFactsTest {
     Path engine = directory.resolve("katago-path-probe");
     Files.writeString(
         engine,
-        "#!" + interpreter + "\nprintf %s " + backend + " > \"$3.started\"\n"
+        "#!" + interpreter + "\nprintf '%s\\n' " + backend + " >> \"$3.started\"\n"
             + "read -r id command\nprintf '=%s false\\n\\n' \"$id\"\n");
     assertTrue(engine.toFile().setExecutable(true));
     Files.writeString(directory.resolve("lizzieyzy-next-engine-backend.txt"), backend);
@@ -142,6 +151,7 @@ class EngineBootstrapFactsTest {
         GtpConfigurationProbe probe = new GtpConfigurationProbe();
         probe.inspect(command);
         probe.inspect("encryption||" + Utils.doEncrypt2(command));
+        probe.inspect(command + " -override-config onnxProvider=openvino");
       } finally {
         runtime.shutdown();
       }

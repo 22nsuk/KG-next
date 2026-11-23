@@ -2,7 +2,6 @@ package featurecat.lizzie.util;
 
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -10,8 +9,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /** Engine installation lookup shared by launch and logging, independent of the runtime catalog. */
 public final class KataGoEngineLocation {
@@ -22,11 +19,6 @@ public final class KataGoEngineLocation {
   static final String NVIDIA50_TRT_ENGINE_DIR = "windows-x64-nvidia50-trt";
   static final String HUMAN_SL_CUDA_COMPANION_NAME = "katago-human-sl-cuda.exe";
   static final String ENGINE_BACKEND_MARKER_NAME = "lizzieyzy-next-engine-backend.txt";
-
-  // Linux binfmt_script reads the interpreter name from the first BINPRM_BUF_SIZE bytes.
-  private static final int LINUX_EXEC_HEADER_SIZE = 256;
-  private static final Pattern LINUX_INTERPRETER =
-      Pattern.compile("^#![ \\t]*([^ \\t\\n\\x00]+)[ \\t\\n\\x00]");
 
   private KataGoEngineLocation() {}
 
@@ -109,30 +101,20 @@ public final class KataGoEngineLocation {
   private static Path findUnixBootstrapExecutable(Path name, Path childDirectory) throws IOException {
     String path = System.getenv("PATH");
     if (path == null) return null;
+    Path installation = null;
     for (String entry : path.split(File.pathSeparator, -1)) {
       Path candidate = childDirectory.resolve(entry).resolve(name);
       if (!Files.isRegularFile(candidate) || !Files.isExecutable(candidate)) continue;
-      // A missing shebang interpreter makes exec return ENOENT and the JVM try the next entry.
-      if ("Linux".equals(System.getProperty("os.name"))
-          && hasMissingLinuxInterpreter(candidate, childDirectory)) continue;
-      return unixInstallationPath(candidate);
+      Path executable = unixInstallationPath(candidate);
+      if (!OsPlatform.isLinux()) return executable;
+      // Linux can skip an executable at launch. Only attribute markers to a unique installation.
+      if (installation == null) {
+        installation = executable;
+      } else if (!Files.isSameFile(installation.getParent(), executable.getParent())) {
+        return null;
+      }
     }
-    return null;
-  }
-
-  private static boolean hasMissingLinuxInterpreter(Path candidate, Path childDirectory)
-      throws IOException {
-    byte[] header = new byte[LINUX_EXEC_HEADER_SIZE];
-    try (InputStream stream = Files.newInputStream(candidate)) {
-      stream.readNBytes(header, 0, header.length);
-    }
-    if (header[0] != '#' || header[1] != '!') return false;
-    Matcher interpreter = LINUX_INTERPRETER.matcher(new String(header, StandardCharsets.UTF_8));
-    if (!interpreter.find()) return false;
-    String name = interpreter.group(1);
-    // Lossy decoding cannot establish that the actual filename is missing.
-    if (name.indexOf('\uFFFD') >= 0) throw new IOException("Undecodable script interpreter");
-    return Files.notExists(childDirectory.resolve(name));
+    return installation;
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

@@ -6,6 +6,7 @@ import featurecat.lizzie.util.CommandLaunchHelper.LaunchSpec;
 import featurecat.lizzie.util.EngineThreadPolicy;
 import featurecat.lizzie.util.KataGoEngineLocation;
 import featurecat.lizzie.util.KataGoExperimentalBackendInstaller.Backend;
+import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import featurecat.lizzie.util.katago.tuning.KataGoCommandSpec;
 import java.nio.file.Path;
@@ -256,7 +257,11 @@ public final class EngineBootstrapFacts {
                 executableCommand, launch == null ? null : launch.getWorkingDirectory())
             : null;
     String onnxProvider = commandOnnxProvider(parts, command, visibility);
-    String backend = KataGoEngineLocation.nvidiaBackendFromPath(executable);
+    // A configured provider alone cannot identify which local Linux installation ran.
+    String backend =
+        localEngine && OsPlatform.isLinux() && executable == null
+            ? UNKNOWN
+            : KataGoEngineLocation.nvidiaBackendFromPath(executable);
     if (onnxProvider == null || backend == null) {
       String rawMarker = KataGoEngineLocation.readBackendMarker(executable);
       String marker = classificationInput(rawMarker, visibility);
