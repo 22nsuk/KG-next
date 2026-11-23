@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 public final class LoggingChildProcess {
   public record Result(int exitCode, String output) {}
@@ -20,14 +21,14 @@ public final class LoggingChildProcess {
   static Result runWithTimeout(
       Path workDirectory, long timeoutMillis, Class<?> probe, String... extraVmAndArgs)
       throws Exception {
-    return runWithTimeout(workDirectory, timeoutMillis, null, Map.of(), probe, extraVmAndArgs);
+    return runWithTimeout(workDirectory, timeoutMillis, null, env -> {}, probe, extraVmAndArgs);
   }
 
   public static Result runWithTimeout(
       Path workDirectory,
       long timeoutMillis,
       Path currentDirectory,
-      Map<String, String> environment,
+      Consumer<Map<String, String>> configureEnvironment,
       Class<?> probe,
       String... extraVmAndArgs) throws Exception {
     String java =
@@ -58,7 +59,7 @@ public final class LoggingChildProcess {
     }
     ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
     builder.directory(currentDirectory == null ? null : currentDirectory.toFile());
-    builder.environment().putAll(environment);
+    configureEnvironment.accept(builder.environment());
     Process process = builder.start();
     ByteArrayOutputStream captured = new ByteArrayOutputStream();
     Thread reader =

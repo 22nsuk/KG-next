@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -34,7 +35,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.json.JSONObject;
@@ -55,6 +55,7 @@ class EngineGtpLoggingTest {
   private static final String PRIVATE_BACKEND = "_opencl_";
 
   @TempDir Path tempDir;
+  private LoggingRuntime fixtureRuntime;
   private Config previousConfig;
   private Leelaz previousLeelaz;
   private GtpConsolePane previousConsole;
@@ -63,7 +64,8 @@ class EngineGtpLoggingTest {
 
   @AfterEach
   void tearDown() {
-    LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
+    if (fixtureRuntime == null) return;
+    fixtureRuntime.shutdown();
     Lizzie.config = previousConfig;
     Lizzie.leelaz = previousLeelaz;
     Lizzie.gtpConsole = previousConsole;
@@ -301,7 +303,11 @@ class EngineGtpLoggingTest {
   void bundledBootstrapUsesFinalDirectoryForRelativePath() throws Exception {
     LoggingChildProcess.Result result =
         LoggingChildProcess.runWithTimeout(
-            tempDir, 30_000, tempDir, Map.of("PATH", "engines/katago/bin"), BundledDirectoryProbe.class);
+            tempDir,
+            30_000,
+            tempDir,
+            env -> env.put("PATH", "engines/katago/bin"),
+            BundledDirectoryProbe.class);
     assertEquals(0, result.exitCode(), result.output());
   }
 
@@ -362,6 +368,18 @@ class EngineGtpLoggingTest {
   }
 
   private record FailedStart(String app, JSONObject launch) {}
+
+  @Test
+  void childOnlyFixtureCleanupPreservesAnExistingRuntimeAndGlobals() throws Exception {
+    LoggingRuntime runtime = startRuntime();
+    Config config = Lizzie.config;
+    new EngineGtpLoggingTest().tearDown();
+    assertSame(config, Lizzie.config);
+    String id = EngineObservation.restartInstance(new Object(), "MAIN_BOARD");
+    awaitLogs(runtime);
+    String app = readApp();
+    assertTrue(app.contains("engine=" + id), app);
+  }
 
   private FailedStart logFailedStart(String command, boolean hidden) throws Exception {
     LoggingRuntime runtime = startRuntime();
@@ -617,11 +635,7 @@ class EngineGtpLoggingTest {
 
   @Test
   void stalledTraceQueueDoesNotBlockCommandSend() throws Exception {
-    LoggingRuntime runtime =
-        LoggingRuntime.initialize(
-            new WorkDirectoryResolution(tempDir, List.of()),
-            new LoggingLimits(32, 1, 1, 1, 7, 10_000, 1_000));
-    installGlobals();
+    LoggingRuntime runtime = startRuntime(new LoggingLimits(32, 1, 1, 1, 7, 10_000, 1_000));
     runtime.applySettings(LoggingSettings.defaults().withDiagnosticsEnabled(true));
     runtime.startFullTrace(EnumSet.of(TraceScope.ENGINE_GTP));
     CountDownLatch gate = new CountDownLatch(1);
@@ -652,24 +666,22 @@ class EngineGtpLoggingTest {
   }
 
   private LoggingRuntime startRuntime() throws Exception {
-    LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
-    LoggingRuntime runtime =
-        LoggingRuntime.initialize(
-            new WorkDirectoryResolution(tempDir, List.of()),
-            new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 256_000));
-    installGlobals();
-    return runtime;
+    return startRuntime(new LoggingLimits(64, 32, 32, 32, 7, 1_000_000, 256_000));
   }
 
-  private void installGlobals() throws Exception {
+  private LoggingRuntime startRuntime(LoggingLimits limits) throws Exception {
     previousConfig = Lizzie.config;
     previousLeelaz = Lizzie.leelaz;
     previousConsole = Lizzie.gtpConsole;
     previousBoard = Lizzie.board;
     previousFrame = Lizzie.frame;
+    LoggingRuntime.current().ifPresent(LoggingRuntime::shutdown);
+    fixtureRuntime =
+        LoggingRuntime.initialize(new WorkDirectoryResolution(tempDir, List.of()), limits);
     Lizzie.config = ConfigTestHelper.createForTests(tempDir);
     Lizzie.gtpConsole = null;
     Lizzie.frame = allocate(LizzieFrame.class);
+    return fixtureRuntime;
   }
 
   private Leelaz prepareEngine() throws Exception {

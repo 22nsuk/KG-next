@@ -53,14 +53,10 @@ public final class KataGoEngineLocation {
       // The remaining command arguments can still provide independent startup facts.
       return null;
     }
-    // An explicit path is never a request to look for another installation on PATH.
     if (!OsPlatform.isWindows()) {
       Path childDirectory = workingDirectory == null ? Path.of("") : workingDirectory.toPath();
       try {
-        if (direct.isAbsolute() || direct.getParent() != null) {
-          return unixInstallationPath(childDirectory.resolve(direct));
-        }
-        return findUnixBootstrapExecutable(direct, childDirectory);
+        return unixBootstrapExecutable(token, direct, childDirectory);
       } catch (IOException | InvalidPathException | SecurityException unavailable) {
         return null;
       }
@@ -98,13 +94,23 @@ public final class KataGoEngineLocation {
     return absolute.getParent().toRealPath().resolve(absolute.getFileName());
   }
 
-  private static Path findUnixBootstrapExecutable(Path name, Path childDirectory) throws IOException {
+  private static Path unixBootstrapExecutable(String token, Path program, Path childDirectory)
+      throws IOException {
+    // Path drops trailing slashes. exec receives the verbatim operand, which must name a file.
+    if (token.endsWith("/") || program.endsWith(".") || program.endsWith("..")) return null;
+    if (token.indexOf('/') >= 0) {
+      Path configured = childDirectory.resolve(program);
+      return Files.isDirectory(configured) ? null : unixInstallationPath(configured);
+    }
+
     String path = System.getenv("PATH");
-    if (path == null) return null;
+    // With PATH unset, both libc and OpenJDK search these system directories on our Unix targets.
+    // OpenJDK can additionally search the child cwd when passing an explicit environment.
+    String searchPath = path == null ? "/bin:/usr/bin" : path;
     Path installation = null;
-    for (String entry : path.split(File.pathSeparator, -1)) {
-      Path candidate = childDirectory.resolve(entry).resolve(name);
-      if (!Files.isRegularFile(candidate) || !Files.isExecutable(candidate)) continue;
+    for (String entry : searchPath.split(File.pathSeparator, -1)) {
+      Path candidate = childDirectory.resolve(entry).resolve(program);
+      if (!isExecutableFile(candidate)) continue;
       Path executable = unixInstallationPath(candidate);
       // Unix can skip an executable at launch. Only attribute markers to a unique installation.
       if (installation == null) {
@@ -113,7 +119,17 @@ public final class KataGoEngineLocation {
         return null;
       }
     }
+    if (path == null
+        && installation != null
+        && isExecutableFile(childDirectory.resolve(program))
+        && !Files.isSameFile(installation.getParent(), childDirectory.toAbsolutePath())) {
+      return null;
+    }
     return installation;
+  }
+
+  private static boolean isExecutableFile(Path path) {
+    return Files.isRegularFile(path) && Files.isExecutable(path);
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

@@ -2,6 +2,8 @@ package featurecat.lizzie.logging;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -11,11 +13,11 @@ import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.OsPlatform;
 import featurecat.lizzie.util.Utils;
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -32,21 +34,21 @@ class EngineBootstrapFactsTest {
     Path bin = Files.createDirectory(tempDir.resolve("engine bin"));
     String name = "katago-path-probe";
     Path engine = bin.resolve(name + (OsPlatform.isWindows() ? ".exe" : ""));
-    String path = bin.toString();
+    String searchPath;
     if (OsPlatform.isWindows()) {
       Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "where.exe"), engine);
       Path scripts = Files.createDirectory(tempDir.resolve("scripts"));
       Files.writeString(scripts.resolve(name + ".cmd"), "@exit /b 23");
       Files.writeString(scripts.resolve("lizzieyzy-next-engine-backend.txt"), "opencl");
       Files.copy(engine, scripts.resolve("cmd.exe")); // PATH shadow of the system command interpreter
-      path = scripts + File.pathSeparator + path;
+      searchPath = scripts + File.pathSeparator + bin;
     } else {
       Files.writeString(engine, "#!/bin/sh\nexit 0\n");
       assertTrue(engine.toFile().setExecutable(true));
       Path shadow = Files.createDirectory(tempDir.resolve("not executable"));
       Files.createFile(shadow.resolve(name));
       Files.writeString(shadow.resolve("lizzieyzy-next-engine-backend.txt"), "openvino\n");
-      path = shadow + File.pathSeparator + path;
+      searchPath = shadow + File.pathSeparator + bin;
     }
     String pathKey =
         System.getenv().keySet().stream()
@@ -58,7 +60,7 @@ class EngineBootstrapFactsTest {
             tempDir,
             30_000,
             tempDir,
-            Map.of(pathKey, path),
+            env -> env.put(pathKey, searchPath),
             PathMarkerProbe.class,
             engine.getFileName().toString(),
             engine.toString());
@@ -115,7 +117,8 @@ class EngineBootstrapFactsTest {
     String executable = program.contains("/") ? tempDir.resolve(program).toString() : program;
     LoggingChildProcess.Result result =
         LoggingChildProcess.runWithTimeout(
-            tempDir, 30_000, tempDir, Map.of("PATH", path), RelativePathProbe.class, executable);
+            tempDir, 30_000, tempDir, env -> env.put("PATH", path),
+            RelativePathProbe.class, executable);
     assertEquals(0, result.exitCode(), result.output());
     assertEquals(
         List.of(expectedEngine, expectedEngine, expectedEngine),
@@ -182,6 +185,16 @@ class EngineBootstrapFactsTest {
           Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), local);
           Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
           assertNativeBackend(List.of(bareName, "/d", "/c", "exit", "17"), 17, "cpu");
+        } else {
+          // Both the cwd and PATH have a marker. Directory operands cannot launch either engine.
+          Files.writeString(Path.of(args[0], "lizzieyzy-next-engine-backend.txt"), "cpu");
+          for (String token : List.of(args[1] + "/", args[2] + "/", ".", "..", args[2] + "/.")) {
+            assertThrows(IOException.class, () -> new ProcessBuilder(token).start(), token);
+            assertEquals(
+                "unknown",
+                EngineBootstrapFacts.fromCommand("\"" + token + "\"", "MAIN_BOARD").backend(),
+                token);
+          }
         }
       } finally {
         runtime.shutdown();
@@ -216,6 +229,40 @@ class EngineBootstrapFactsTest {
               executable + " gtp -model private.bin.gz -config private.cfg",
               "MAIN_BOARD",
               EngineCommandVisibility.HIDDEN));
+    }
+  }
+
+  @Test
+  @EnabledOnOs({OS.LINUX, OS.MAC})
+  void unsetPathIdentifiesOnlyAnUnambiguousSystemInstallation() throws Exception {
+    LoggingChildProcess.Result result =
+        LoggingChildProcess.runWithTimeout(
+            tempDir, 30_000, tempDir, env -> env.remove("PATH"), UnsetPathProbe.class);
+    assertEquals(0, result.exitCode(), result.output());
+  }
+
+  public static final class UnsetPathProbe {
+    public static void main(String[] args) throws Exception {
+      assertNull(System.getenv("PATH"));
+      // "true" is available on the system default path on Linux and macOS.
+      Process system = new ProcessBuilder("true").start();
+      assertTrue(system.waitFor(5, TimeUnit.SECONDS));
+      assertEquals(0, system.exitValue());
+      String command = "true gtp -override-config onnxProvider=openvino";
+      for (EngineCommandVisibility visibility : EngineCommandVisibility.values()) {
+        assertEquals(
+            "onnx", EngineBootstrapFacts.fromCommand(command, "OTHER", visibility).backend());
+      }
+
+      Path local = Files.writeString(Path.of(args[0], "true"), "#!/bin/sh\nexit 23\n");
+      assertTrue(local.toFile().setExecutable(true));
+      Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
+      for (EngineCommandVisibility visibility : EngineCommandVisibility.values()) {
+        EngineBootstrapFacts ambiguous =
+            EngineBootstrapFacts.fromCommand(command, "OTHER", visibility);
+        assertEquals("unknown", ambiguous.backend());
+        assertEquals("openvino", ambiguous.onnxProvider());
+      }
     }
   }
 
