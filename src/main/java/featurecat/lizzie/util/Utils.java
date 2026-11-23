@@ -306,7 +306,7 @@ public class Utils {
 
   private static Path resolveExecutableFromPath(String executable) {
     if (!OsPlatform.isWindows()) {
-      return findOnPath(List.of(executable), null);
+      return findOnPath(List.of(executable));
     }
     List<String> names = new ArrayList<>();
     if (executable.contains(".") && !executable.endsWith(".")) {
@@ -321,36 +321,26 @@ public class Utils {
     }
     if (suffixes.isEmpty()) suffixes = List.of(".exe", ".bat", ".cmd");
     for (String suffix : suffixes) names.add(executable + suffix);
-    return findOnPath(names, null);
+    return findOnPath(names);
   }
 
-  // For a native Unix launch, relative and empty PATH entries are relative to the child cwd.
-  static Path findOnPath(List<String> names, Path unixChildDirectory) {
+  static Path findOnPath(List<String> names) {
     String pathEnv = System.getenv("PATH");
     if (pathEnv == null) return null;
     for (String entry : pathEnv.split(File.pathSeparator, -1)) {
-      if (unixChildDirectory == null && isBlank(entry)) continue;
+      if (isBlank(entry)) continue;
       try {
-        Path directory =
-            unixChildDirectory == null
-                ? Paths.get(entry).toAbsolutePath().normalize()
-                : unixChildDirectory.resolve(entry).toAbsolutePath();
+        Path directory = Paths.get(entry).toAbsolutePath().normalize();
         if (!Files.isDirectory(directory)) continue;
         for (String name : names) {
           try {
             Path candidate = directory.resolve(name);
-            if (Files.isRegularFile(candidate)
-                && (unixChildDirectory == null || Files.isExecutable(candidate))) {
-              // A symlink followed by ".." must be traversed before simplifying the marker path.
-              return directory.equals(directory.normalize())
-                  ? candidate
-                  : directory.toRealPath().resolve(name);
-            }
+            if (Files.isRegularFile(candidate)) return candidate;
           } catch (InvalidPathException invalidName) {
             // Ignore a malformed PATHEXT suffix.
           }
         }
-      } catch (InvalidPathException | IOException | SecurityException ignored) {
+      } catch (InvalidPathException | SecurityException ignored) {
         // Continue searching the remaining PATH entries.
       }
     }

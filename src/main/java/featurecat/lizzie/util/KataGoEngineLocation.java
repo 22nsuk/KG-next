@@ -2,6 +2,7 @@ package featurecat.lizzie.util;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
@@ -9,6 +10,8 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /** Engine installation lookup shared by launch and logging, independent of the runtime catalog. */
 public final class KataGoEngineLocation {
@@ -19,6 +22,11 @@ public final class KataGoEngineLocation {
   static final String NVIDIA50_TRT_ENGINE_DIR = "windows-x64-nvidia50-trt";
   static final String HUMAN_SL_CUDA_COMPANION_NAME = "katago-human-sl-cuda.exe";
   static final String ENGINE_BACKEND_MARKER_NAME = "lizzieyzy-next-engine-backend.txt";
+
+  // Linux binfmt_script reads the interpreter name from the first BINPRM_BUF_SIZE bytes.
+  private static final int LINUX_EXEC_HEADER_SIZE = 256;
+  private static final Pattern LINUX_INTERPRETER =
+      Pattern.compile("^#![ \\t]*([^ \\t\\n\\x00]+)[ \\t\\n\\x00]");
 
   private KataGoEngineLocation() {}
 
@@ -56,10 +64,14 @@ public final class KataGoEngineLocation {
     // An explicit path is never a request to look for another installation on PATH.
     if (!OsPlatform.isWindows()) {
       Path childDirectory = workingDirectory == null ? Path.of("") : workingDirectory.toPath();
-      if (direct.isAbsolute() || direct.getParent() != null) {
-        return childDirectory.resolve(direct).toAbsolutePath();
+      try {
+        if (direct.isAbsolute() || direct.getParent() != null) {
+          return unixInstallationPath(childDirectory.resolve(direct));
+        }
+        return findUnixBootstrapExecutable(direct, childDirectory);
+      } catch (IOException | InvalidPathException | SecurityException unavailable) {
+        return null;
       }
-      return Utils.findOnPath(List.of(token), childDirectory);
     }
     if (direct.isAbsolute() || direct.getParent() != null) {
       return direct.toAbsolutePath().normalize();
@@ -84,7 +96,43 @@ public final class KataGoEngineLocation {
       Path candidate = directory.resolve(name);
       if (Files.isRegularFile(candidate)) return candidate.toAbsolutePath().normalize();
     }
-    return Utils.findOnPath(List.of(name), null);
+    return Utils.findOnPath(List.of(name));
+  }
+
+  private static Path unixInstallationPath(Path executable) throws IOException {
+    Path absolute = executable.toAbsolutePath();
+    if (absolute.equals(absolute.normalize())) return absolute;
+    // Let the filesystem traverse symlinks before "..", retaining the configured executable name.
+    return absolute.getParent().toRealPath().resolve(absolute.getFileName());
+  }
+
+  private static Path findUnixBootstrapExecutable(Path name, Path childDirectory) throws IOException {
+    String path = System.getenv("PATH");
+    if (path == null) return null;
+    for (String entry : path.split(File.pathSeparator, -1)) {
+      Path candidate = childDirectory.resolve(entry).resolve(name);
+      if (!Files.isRegularFile(candidate) || !Files.isExecutable(candidate)) continue;
+      // A missing shebang interpreter makes exec return ENOENT and the JVM try the next entry.
+      if ("Linux".equals(System.getProperty("os.name"))
+          && hasMissingLinuxInterpreter(candidate, childDirectory)) continue;
+      return unixInstallationPath(candidate);
+    }
+    return null;
+  }
+
+  private static boolean hasMissingLinuxInterpreter(Path candidate, Path childDirectory)
+      throws IOException {
+    byte[] header = new byte[LINUX_EXEC_HEADER_SIZE];
+    try (InputStream stream = Files.newInputStream(candidate)) {
+      stream.readNBytes(header, 0, header.length);
+    }
+    if (header[0] != '#' || header[1] != '!') return false;
+    Matcher interpreter = LINUX_INTERPRETER.matcher(new String(header, StandardCharsets.UTF_8));
+    if (!interpreter.find()) return false;
+    String name = interpreter.group(1);
+    // Lossy decoding cannot establish that the actual filename is missing.
+    if (name.indexOf('\uFFFD') >= 0) throw new IOException("Undecodable script interpreter");
+    return Files.notExists(childDirectory.resolve(name));
   }
 
   public static String nvidiaBackendFromPath(Path executable) {

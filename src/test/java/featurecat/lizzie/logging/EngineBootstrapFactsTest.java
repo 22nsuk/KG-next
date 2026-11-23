@@ -9,6 +9,7 @@ import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.analysis.gtpconfig.GtpConfigurationProbe;
 import featurecat.lizzie.util.CommandLaunchHelper;
 import featurecat.lizzie.util.OsPlatform;
+import featurecat.lizzie.util.Utils;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -80,35 +81,52 @@ class EngineBootstrapFactsTest {
 
   @ParameterizedTest
   @EnabledOnOs(OS.LINUX)
-  @CsvSource({"bin:, opencl", ":bin, cpu", "missing:, cpu", "'', cpu", "link/../bin:, rocm-gfx110x"})
-  void bootstrapMatchesEngineStartedWithChildRelativePath(String path, String expected) throws Exception {
+  @CsvSource({
+    "bin:,          katago-path-probe,                 opencl",
+    ":bin,          katago-path-probe,                 cpu",
+    "missing:,      katago-path-probe,                 cpu",
+    "'',            katago-path-probe,                 cpu",
+    "link/../bin:,  katago-path-probe,                 rocm-gfx110x",
+    "bin,           child/link/../bin/katago-path-probe, rocm-gfx110x",
+    "stale:bin,     katago-path-probe,                 opencl",
+    "working:bin,   katago-path-probe,                 cpu"
+  })
+  void bootstrapMatchesEngineStartedOnLinux(String path, String program, String expected)
+      throws Exception {
     Path child = Files.createDirectory(tempDir.resolve("child"));
     Files.createFile(child.resolve("gtp.cfg"));
-    writeProbeEngine(child, "cpu");
-    writeProbeEngine(Files.createDirectory(child.resolve("bin")), "opencl");
+    writeProbeEngine(child, "cpu", "/bin/sh");
+    writeProbeEngine(Files.createDirectory(child.resolve("bin")), "opencl", "/bin/sh");
     Path nested = Files.createDirectory(child.resolve("nested"));
     Files.createSymbolicLink(child.resolve("link"), Files.createDirectory(nested.resolve("lib")));
-    writeProbeEngine(Files.createDirectory(nested.resolve("bin")), "rocm-gfx110x");
+    writeProbeEngine(Files.createDirectory(nested.resolve("bin")), "rocm-gfx110x", "/bin/sh");
 
+    writeProbeEngine(Files.createDirectory(child.resolve("stale")), "cpu", "./missing-sh -e");
+    Files.createSymbolicLink(child.resolve("local-sh"), Path.of("/bin/sh"));
+    writeProbeEngine(Files.createDirectory(child.resolve("working")), "cpu", "./local-sh -e");
+
+    String executable = program.contains("/") ? tempDir.resolve(program).toString() : program;
     LoggingChildProcess.Result result =
         LoggingChildProcess.runWithTimeout(
-            tempDir, 30_000, tempDir, Map.of("PATH", path), RelativePathProbe.class);
+            tempDir, 30_000, tempDir, Map.of("PATH", path), RelativePathProbe.class, executable);
     assertEquals(0, result.exitCode(), result.output());
-    String executed = Files.readString(child.resolve("executed-backend"));
+    String executed = Files.readString(child.resolve("gtp.cfg.started"));
     assertEquals(expected, executed);
-    String line =
+    List<String> lines =
         LoggingChildProcess.readLog(tempDir, "app.log").lines()
             .filter(entry -> entry.contains("engine event=bootstrap "))
-            .findFirst()
-            .orElseThrow();
-    assertTrue(line.contains(" backend=" + executed + " "), line);
+            .toList();
+    assertEquals(2, lines.size(), lines::toString);
+    for (String line : lines) assertTrue(line.contains(" backend=" + executed + " "), line);
+    assertTrue(lines.get(1).contains("config=hidden-command"), lines.get(1));
   }
 
-  private static void writeProbeEngine(Path directory, String backend) throws Exception {
+  private static void writeProbeEngine(Path directory, String backend, String interpreter)
+      throws Exception {
     Path engine = directory.resolve("katago-path-probe");
     Files.writeString(
         engine,
-        "#!/bin/sh\nprintf %s " + backend + " > executed-backend\n"
+        "#!" + interpreter + "\nprintf %s " + backend + " > \"$3.started\"\n"
             + "read -r id command\nprintf '=%s false\\n\\n' \"$id\"\n");
     assertTrue(engine.toFile().setExecutable(true));
     Files.writeString(directory.resolve("lizzieyzy-next-engine-backend.txt"), backend);
@@ -120,8 +138,10 @@ class EngineBootstrapFactsTest {
       LoggingRuntime runtime =
           LoggingRuntime.initialize(new WorkDirectoryResolution(root, List.of()));
       try {
-        new GtpConfigurationProbe()
-            .inspect("katago-path-probe gtp -config " + quote(root.resolve("child/gtp.cfg")));
+        String command = "\"" + args[1] + "\" gtp -config " + quote(root.resolve("child/gtp.cfg"));
+        GtpConfigurationProbe probe = new GtpConfigurationProbe();
+        probe.inspect(command);
+        probe.inspect("encryption||" + Utils.doEncrypt2(command));
       } finally {
         runtime.shutdown();
       }
