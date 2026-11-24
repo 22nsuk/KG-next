@@ -332,16 +332,22 @@ public class Utils {
       try {
         Path directory = Paths.get(entry).toAbsolutePath().normalize();
         if (!Files.isDirectory(directory)) continue;
-        for (String name : names) {
-          try {
-            Path candidate = directory.resolve(name);
-            if (Files.isRegularFile(candidate)) return candidate;
-          } catch (InvalidPathException invalidName) {
-            // Ignore a malformed PATHEXT suffix.
-          }
-        }
+        Path candidate = findInDirectory(directory, names);
+        if (candidate != null) return candidate;
       } catch (InvalidPathException | SecurityException ignored) {
         // Continue searching the remaining PATH entries.
+      }
+    }
+    return null;
+  }
+
+  static Path findInDirectory(Path directory, List<String> names) {
+    for (String name : names) {
+      try {
+        Path candidate = directory.resolve(name);
+        if (Files.isRegularFile(candidate)) return candidate;
+      } catch (InvalidPathException invalidName) {
+        // A malformed PATHEXT entry must not hide later candidates.
       }
     }
     return null;

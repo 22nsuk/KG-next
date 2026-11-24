@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -61,11 +62,31 @@ public final class KataGoEngineLocation {
         return null;
       }
     }
-    if (direct.isAbsolute() || direct.getParent() != null) {
-      return direct.toAbsolutePath().normalize();
+    Path selected = windowsBootstrapExecutable(direct);
+    if (selected == null) return null;
+    try {
+      // Classify the installed filename (including Win32 aliases), keeping its installation directory.
+      return selected.toRealPath(LinkOption.NOFOLLOW_LINKS);
+    } catch (IOException | SecurityException unavailable) {
+      // Startup failures can still report markers beside the explicitly configured path.
+      return selected;
     }
-    // CreateProcess searches native executable names, not the shell's PATHEXT alternatives.
-    String name = token.contains(".") ? token : token + ".exe";
+  }
+
+  private static Path windowsBootstrapExecutable(Path program) {
+    if (program.getFileName() == null) return null;
+    String leaf = program.getFileName().toString();
+    String nativeName = leaf.contains(".") ? leaf : leaf + ".exe";
+    List<String> names = List.of(nativeName);
+    if (program.getRoot() != null || program.getParent() != null) {
+      Path explicit = program.toAbsolutePath().normalize();
+      if (explicit.getParent() == null) return null;
+      // A qualified operand tries the exact file before the default .exe, in this directory only.
+      Path found =
+          Utils.findInDirectory(
+              explicit.getParent(), leaf.equals(nativeName) ? names : List.of(leaf, nativeName));
+      return found != null ? found : explicit;
+    }
     // CreateProcessW checks the parent image, native cwd and Windows directories before PATH.
     List<Path> directories = new ArrayList<>();
     ProcessHandle.current().info().command()
@@ -81,10 +102,10 @@ public final class KataGoEngineLocation {
       directories.add(root);
     }
     for (Path directory : directories) {
-      Path candidate = directory.resolve(name);
-      if (Files.isRegularFile(candidate)) return candidate.toAbsolutePath().normalize();
+      Path candidate = Utils.findInDirectory(directory, names);
+      if (candidate != null) return candidate.toAbsolutePath().normalize();
     }
-    return Utils.findOnPath(List.of(name));
+    return Utils.findOnPath(names);
   }
 
   private static Path unixInstallationPath(Path executable) throws IOException {

@@ -185,6 +185,7 @@ class EngineBootstrapFactsTest {
           Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), local);
           Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
           assertNativeBackend(List.of(bareName, "/d", "/c", "exit", "17"), 17, "cpu");
+          checkQualifiedWindowsCompanion(local);
         } else {
           // Both the cwd and PATH have a marker. Directory operands cannot launch either engine.
           Files.writeString(Path.of(args[0], "lizzieyzy-next-engine-backend.txt"), "cpu");
@@ -201,6 +202,22 @@ class EngineBootstrapFactsTest {
       }
     }
 
+    private static void checkQualifiedWindowsCompanion(Path commandInterpreter) throws Exception {
+      Path installation = Path.of("bundle.v1 with spaces", "windows-x64-nvidia-tensorrt");
+      Files.createDirectories(installation);
+      Path stem = installation.resolve("katago-human-sl-cuda");
+      Path exe = Files.copy(commandInterpreter, installation.resolve("katago-human-sl-cuda.exe"));
+      for (String operand :
+          List.of(stem.toAbsolutePath().toString(), stem.toString(), exe.toString(), exe + ".")) {
+        assertNativeBackend(List.of(operand, "/d", "/c", "exit", "37"), 37, "nvidia50-cuda");
+      }
+
+      // A qualified name can instead select an exact extensionless file, even beside the .exe.
+      Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "where.exe"), stem);
+      assertNativeBackend(
+          List.of(stem.toString(), "/q", "absent-pr213-probe-file"), 1, "nvidia-tensorrt");
+    }
+
     private static void assertNativeBackend(
         List<String> arguments, int expectedExit, String expectedBackend) throws Exception {
       CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(arguments);
@@ -213,12 +230,14 @@ class EngineBootstrapFactsTest {
       } finally {
         if (process.isAlive()) process.destroyForcibly();
       }
-      assertEquals(
-          expectedBackend,
-          EngineBootstrapFacts.fromLaunch(
-                  String.join(" ", arguments), "MAIN_BOARD", EngineCommandVisibility.VISIBLE,
-                  true, launch)
-              .backend());
+      String command =
+          "\"" + arguments.get(0) + "\" " + String.join(" ", arguments.subList(1, arguments.size()));
+      for (EngineCommandVisibility visibility : EngineCommandVisibility.values()) {
+        assertEquals(
+            expectedBackend,
+            EngineBootstrapFacts.fromLaunch(command, "MAIN_BOARD", visibility, true, launch).backend(),
+            command);
+      }
     }
 
     private static void recordBootstrap(String executable) {
