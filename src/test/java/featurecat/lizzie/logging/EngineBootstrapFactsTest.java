@@ -18,6 +18,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -50,17 +51,12 @@ class EngineBootstrapFactsTest {
       Files.writeString(shadow.resolve("lizzieyzy-next-engine-backend.txt"), "openvino\n");
       searchPath = shadow + File.pathSeparator + bin;
     }
-    String pathKey =
-        System.getenv().keySet().stream()
-            .filter("PATH"::equalsIgnoreCase)
-            .findFirst()
-            .orElse("PATH");
     LoggingChildProcess.Result result =
         LoggingChildProcess.runWithTimeout(
             tempDir,
             30_000,
             tempDir,
-            env -> env.put(pathKey, searchPath),
+            env -> setPath(env, searchPath),
             PathMarkerProbe.class,
             engine.getFileName().toString(),
             engine.toString());
@@ -78,6 +74,51 @@ class EngineBootstrapFactsTest {
       String line = lines.get(i);
       assertTrue(line.contains(" backend=" + expected.get(i) + " onnxProvider=unknown "), line);
       assertTrue(line.contains("model=hidden-command config=hidden-command"), line);
+    }
+  }
+
+  private static void setPath(Map<String, String> env, String path) {
+    if (OsPlatform.isWindows()) env.keySet().removeIf("PATH"::equalsIgnoreCase);
+    env.put("PATH", path);
+  }
+
+  @ParameterizedTest
+  @EnabledOnOs(OS.WINDOWS)
+  @CsvSource({
+    ",  bin,   17, cpu",
+    "0, bin,    2, opencl",
+    "1, .;bin, 17, cpu",
+    "1, bin;.,  2, opencl",
+    "1, ;bin,  17, cpu",
+    "'', bin,   2, opencl",
+    "1, missing;, absent, unknown"
+  })
+  void windowsBareNameHonorsCurrentDirectoryPolicy(
+      String policy, String path, String expectedExit, String expectedBackend) throws Exception {
+    Path system = Path.of(System.getenv("SystemRoot"), "System32");
+    Path bin = Files.createDirectory(tempDir.resolve("bin"));
+    Files.copy(system.resolve("cmd.exe"), tempDir.resolve("katago-probe.exe"));
+    Files.copy(system.resolve("where.exe"), bin.resolve("katago-probe.exe"));
+    Files.writeString(tempDir.resolve("lizzieyzy-next-engine-backend.txt"), "cpu");
+    Files.writeString(bin.resolve("lizzieyzy-next-engine-backend.txt"), "opencl");
+    LoggingChildProcess.Result result =
+        LoggingChildProcess.runWithTimeout(
+            tempDir, 30_000, tempDir,
+            env -> {
+              setPath(env, path);
+              String key = "NoDefaultCurrentDirectoryInExePath";
+              env.keySet().removeIf(key::equalsIgnoreCase);
+              if (policy != null) env.put(key, policy);
+            },
+            WindowsSearchProbe.class, expectedExit, expectedBackend);
+    assertEquals(0, result.exitCode(), result.output());
+  }
+
+  public static final class WindowsSearchProbe {
+    public static void main(String[] args) throws Exception {
+      PathMarkerProbe.assertNativeBackend(
+          List.of("katago-probe", "/d", "/c", "exit", "17"),
+          "absent".equals(args[1]) ? null : Integer.valueOf(args[1]), args[2]);
     }
   }
 
@@ -180,12 +221,7 @@ class EngineBootstrapFactsTest {
           Files.writeString(engine.resolveSibling("lizzieyzy-next-engine-backend.txt"), "rocm-gfx110x");
           assertNativeBackend(List.of(bareName, args[1]), 0, "rocm-gfx110x");
           assertNativeBackend(List.of("cmd", "/d", "/c", "exit", "17"), 17, "unknown");
-          // Now put a different native program in the current directory.
-          Path local = Path.of(args[0]).resolve(args[1]);
-          Files.copy(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"), local);
-          Files.writeString(local.resolveSibling("lizzieyzy-next-engine-backend.txt"), "cpu");
-          assertNativeBackend(List.of(bareName, "/d", "/c", "exit", "17"), 17, "cpu");
-          checkQualifiedWindowsCompanion(local);
+          checkQualifiedWindowsCompanion(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"));
         } else {
           // Both the cwd and PATH have a marker. Directory operands cannot launch either engine.
           Files.writeString(Path.of(args[0], "lizzieyzy-next-engine-backend.txt"), "cpu");
@@ -219,16 +255,20 @@ class EngineBootstrapFactsTest {
     }
 
     private static void assertNativeBackend(
-        List<String> arguments, int expectedExit, String expectedBackend) throws Exception {
+        List<String> arguments, Integer expectedExit, String expectedBackend) throws Exception {
       CommandLaunchHelper.LaunchSpec launch = CommandLaunchHelper.prepare(arguments);
       ProcessBuilder builder = new ProcessBuilder(launch.getCommandParts());
       CommandLaunchHelper.configureProcessBuilder(builder, launch);
-      Process process = builder.start();
-      try {
-        assertTrue(process.waitFor(5, TimeUnit.SECONDS));
-        assertEquals(expectedExit, process.exitValue(), "unexpected native executable");
-      } finally {
-        if (process.isAlive()) process.destroyForcibly();
+      if (expectedExit == null) {
+        assertThrows(IOException.class, builder::start);
+      } else {
+        Process process = builder.start();
+        try {
+          assertTrue(process.waitFor(5, TimeUnit.SECONDS));
+          assertEquals(expectedExit.intValue(), process.exitValue(), "unexpected native executable");
+        } finally {
+          if (process.isAlive()) process.destroyForcibly();
+        }
       }
       String command =
           "\"" + arguments.get(0) + "\" " + String.join(" ", arguments.subList(1, arguments.size()));

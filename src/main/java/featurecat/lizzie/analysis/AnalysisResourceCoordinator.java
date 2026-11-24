@@ -102,48 +102,39 @@ public final class AnalysisResourceCoordinator {
       boolean startupObserved,
       EngineCommandVisibility visibility,
       LaunchSpec launch) {
+    long pid = -1L;
     if (process != null) {
       synchronized (ACTIVE_LOCAL_COMPUTE_PROCESSES) {
         ACTIVE_LOCAL_COMPUTE_PROCESSES.add(process);
       }
+      pid = processId(process);
+      synchronized (REGISTERED_PROCESSES) {
+        ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
+        if (registered != null && registered.process == process) {
+          return;
+        }
+        REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
+      }
     }
     String purposeName = normalizedPurpose(purpose).name();
-    if (process == null) {
-      try {
-        EngineBootstrapFacts facts =
-            EngineBootstrapFacts.fromCommand(command, purposeName, visibility, false);
-        EngineObservation.ensureStarted(owner, purposeName, facts);
-        if (EngineObservation.engineDiagnosticsEnabled()) {
-          EngineObservation.recordProcessDetails(
-              EngineObservation.identityFor(owner),
-              "process-started",
-              purposeName,
-              -1L,
-              diagnosticCommand(command, visibility));
-        }
-      } catch (RuntimeException ignored) {
-      }
-      return;
-    }
-    long pid = processId(process);
-    synchronized (REGISTERED_PROCESSES) {
-      ProcessRegistration registered = REGISTERED_PROCESSES.get(owner);
-      if (registered != null && registered.process == process) {
-        return;
-      }
-      REGISTERED_PROCESSES.put(owner, new ProcessRegistration(process, pid));
-    }
     try {
-      EngineBootstrapFacts facts =
-          EngineBootstrapFacts.fromLaunch(command, purposeName, visibility, true, launch);
-      String engineId =
-          startupObserved
-              ? EngineObservation.ensureStarted(owner, purposeName, facts)
-              : EngineObservation.restartInstance(owner, purposeName, facts);
-      EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
+      boolean reuseStartup = startupObserved || process == null;
+      String engineId = reuseStartup ? EngineObservation.identityFor(owner) : null;
+      if (engineId == null) {
+        EngineBootstrapFacts facts =
+            EngineBootstrapFacts.fromLaunch(command, purposeName, visibility, process != null, launch);
+        engineId =
+            reuseStartup
+                ? EngineObservation.ensureStarted(owner, purposeName, facts)
+                : EngineObservation.restartInstance(owner, purposeName, facts);
+      }
+      if (process != null) {
+        EngineObservation.markStartupStage(engineId, EngineObservation.STAGE_PROCESS_STARTED);
+      }
       if (EngineObservation.engineDiagnosticsEnabled()) {
         EngineObservation.recordProcessDetails(
-            engineId, "process-started", purposeName, pid, diagnosticCommand(command, visibility));
+            process == null ? EngineObservation.identityFor(owner) : engineId,
+            "process-started", purposeName, pid, diagnosticCommand(command, visibility));
       }
     } catch (RuntimeException ignored) {
     }

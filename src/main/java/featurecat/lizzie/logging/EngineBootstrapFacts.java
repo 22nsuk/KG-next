@@ -164,13 +164,7 @@ public final class EngineBootstrapFacts {
 
   public static EngineBootstrapFacts fromCommand(
       String command, String purpose, EngineCommandVisibility visibility) {
-    return fromCommand(command, purpose, visibility, true);
-  }
-
-  /** Only a locally launched engine can be identified by markers on this machine. */
-  public static EngineBootstrapFacts fromCommand(
-      String command, String purpose, EngineCommandVisibility visibility, boolean localLaunch) {
-    return fromLaunch(command, purpose, visibility, localLaunch, null);
+    return fromLaunch(command, purpose, visibility, true, null);
   }
 
   /** Use saved options for disclosure and the prepared launch for installation facts. */

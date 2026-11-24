@@ -93,7 +93,10 @@ public final class KataGoEngineLocation {
         .map(Path::of)
         .map(Path::getParent)
         .ifPresent(directories::add);
-    directories.add(Path.of(""));
+    // For a bare name, the variable's presence suppresses only the implicit cwd entry.
+    if (System.getenv("NoDefaultCurrentDirectoryInExePath") == null) {
+      directories.add(Path.of(""));
+    }
     String windows = System.getenv("SystemRoot");
     if (windows != null && !windows.isBlank()) {
       Path root = Path.of(windows);
@@ -105,7 +108,7 @@ public final class KataGoEngineLocation {
       Path candidate = Utils.findInDirectory(directory, names);
       if (candidate != null) return candidate.toAbsolutePath().normalize();
     }
-    return Utils.findOnPath(names);
+    return Utils.findOnPath(names, true);
   }
 
   private static Path unixInstallationPath(Path executable) throws IOException {

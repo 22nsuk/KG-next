@@ -306,7 +306,7 @@ public class Utils {
 
   private static Path resolveExecutableFromPath(String executable) {
     if (!OsPlatform.isWindows()) {
-      return findOnPath(List.of(executable));
+      return findOnPath(List.of(executable), false);
     }
     List<String> names = new ArrayList<>();
     if (executable.contains(".") && !executable.endsWith(".")) {
@@ -321,13 +321,17 @@ public class Utils {
     }
     if (suffixes.isEmpty()) suffixes = List.of(".exe", ".bat", ".cmd");
     for (String suffix : suffixes) names.add(executable + suffix);
-    return findOnPath(names);
+    return findOnPath(names, false);
   }
 
-  static Path findOnPath(List<String> names) {
+  static Path findOnPath(List<String> names, boolean windowsNativeSearch) {
     String pathEnv = System.getenv("PATH");
     if (pathEnv == null) return null;
-    for (String entry : pathEnv.split(File.pathSeparator, -1)) {
+    String[] entries = pathEnv.split(File.pathSeparator, -1);
+    for (int i = 0; i < entries.length; i++) {
+      String entry = entries[i];
+      // Win32 searches the cwd for an empty component before a semicolon, not after the last one.
+      if (windowsNativeSearch && entry.isEmpty() && i + 1 < entries.length) entry = ".";
       if (isBlank(entry)) continue;
       try {
         Path directory = Paths.get(entry).toAbsolutePath().normalize();
