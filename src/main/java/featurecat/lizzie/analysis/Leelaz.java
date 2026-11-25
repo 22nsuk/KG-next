@@ -454,7 +454,8 @@ public class Leelaz {
   //	private String currentWeightFile = "";
   //	private String currentWeight = "";
   // public boolean switching = false;
-  private int currentEngineN = -1;
+  // Catalog refresh rebinds this from the selection thread while workers read it.
+  private volatile int currentEngineN = -1;
   private ScheduledExecutorService executor;
   private ScheduledExecutorService executorErr;
   ArrayList<Double> tempcount = new ArrayList<Double>();
@@ -1203,8 +1204,7 @@ public class Leelaz {
 
   public String getEngineName(int index) {
     if (index < 0) return Lizzie.resourceBundle.getString("Menu.noEngine");
-    ArrayList<EngineData> engineData = Utils.getEngineData();
-    EngineData data = engineData.get(index);
+    EngineData data = savedCatalogEntry(Utils.getEngineData(), index, savedEntryId);
     String rawName = data.name;
     currentEnginename = deriveDisplayName(rawName, data.commands);
     oriEnginename = currentEnginename;
@@ -1217,6 +1217,20 @@ public class Leelaz {
         RemoteComputeConfig.compactDisplayNameForCommand(data.commands, currentEnginename)
             .replaceAll(" ", "");
     return currentEnginename;
+  }
+
+  /**
+   * The saved entry that names this engine. A start captures its slot before it reads the saved
+   * catalog, and a refresh in between may move or shorten the list, so the entry's id wins over the
+   * slot. Without a saved id the slot alone selects the entry.
+   */
+  static EngineData savedCatalogEntry(List<EngineData> catalog, int index, String entryId) {
+    if (entryId != null && !entryId.isBlank()) {
+      for (EngineData data : catalog) {
+        if (entryId.equals(data.id)) return data;
+      }
+    }
+    return catalog.get(index);
   }
 
   /**
@@ -10528,7 +10542,7 @@ public class Leelaz {
           recentStderrLines,
           "Remote session retired; rebuilding with a fresh token and full board replay");
       if (Lizzie.engineManager != null) {
-        Lizzie.engineManager.restartUnresponsiveRemoteEngine(this, currentEngineN);
+        Lizzie.engineManager.restartUnresponsiveRemoteEngine(this);
       }
       return null;
     }
@@ -24393,6 +24407,16 @@ public class Leelaz {
 
   public int currentEngineN() {
     return currentEngineN;
+  }
+
+  /**
+   * A catalog refresh kept this entry at a new index. Slot-bearing runtime state follows it so
+   * labels, recovery and tool output keep naming the same entry; an unassigned slot stays unset.
+   */
+  void rebindCatalogSlot(int index) {
+    if (currentEngineN >= 0) currentEngineN = index;
+    BenchmarkExecution execution = currentBenchmarkExecution;
+    if (execution != null) execution.rebindSlot(index);
   }
 
   private long beginBundledStartup(Path engineExecutable) {

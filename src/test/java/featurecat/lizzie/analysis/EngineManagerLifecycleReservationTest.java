@@ -4817,7 +4817,7 @@ class EngineManagerLifecycleReservationTest {
       EngineManager.isEmpty = false;
       EngineManager.currentEngineNo = 0;
 
-      manager.restartUnresponsiveRemoteEngine(engine, 0);
+      manager.restartUnresponsiveRemoteEngine(engine);
 
       assertTrue(engine.restartCompleted.await(2, TimeUnit.SECONDS));
       assertEquals(1, engine.restartCount);
@@ -4843,7 +4843,7 @@ class EngineManagerLifecycleReservationTest {
       EngineManager.isEmpty = false;
       EngineManager.currentEngineNo = 0;
 
-      manager.restartUnresponsiveRemoteEngine(engine, 0);
+      manager.restartUnresponsiveRemoteEngine(engine);
 
       assertTrue(engine.restartCompleted.await(2, TimeUnit.SECONDS));
       assertEquals(1, engine.restartCount);

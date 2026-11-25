@@ -6469,7 +6469,7 @@ class EngineManagerEngineGameStateMachineTest {
     black.enableDeferredRecoveryStart = true;
     black.sendDeferredRecoveryBootstrapStateCommand = true;
 
-    manager.restartUnresponsiveRemoteEngine(black, 0);
+    manager.restartUnresponsiveRemoteEngine(black);
 
     assertTrue(manager.stageEntered(EngineManager.DeferredEngineGameRecoveryStage.START));
     assertEquals(EngineManager.EngineGamePhase.FAILED, failed.phase());
@@ -6663,7 +6663,7 @@ class EngineManagerEngineGameStateMachineTest {
         new Thread(
             () -> {
               try {
-                manager.restartUnresponsiveRemoteEngine(black, 0);
+                manager.restartUnresponsiveRemoteEngine(black);
               } catch (Throwable failure) {
                 requestFailure.set(failure);
               }
@@ -6767,7 +6767,7 @@ class EngineManagerEngineGameStateMachineTest {
     Board foregroundBoard = Lizzie.board;
     double foregroundKomi = foregroundBoard.getHistory().getGameInfo().getKomi();
 
-    manager.restartUnresponsiveRemoteEngine(black, 0);
+    manager.restartUnresponsiveRemoteEngine(black);
     assertTrue(manager.stageEntered(EngineManager.DeferredEngineGameRecoveryStage.START));
     manager.releaseStage(EngineManager.DeferredEngineGameRecoveryStage.START);
     assertTrue(manager.recoveryFinished.await(2, TimeUnit.SECONDS));
@@ -6801,7 +6801,7 @@ class EngineManagerEngineGameStateMachineTest {
     frame.isShowingHeatmap = true;
     frame.isShowingPolicy = true;
 
-    manager.restartUnresponsiveRemoteEngine(black, 0);
+    manager.restartUnresponsiveRemoteEngine(black);
     assertTrue(manager.stageEntered(EngineManager.DeferredEngineGameRecoveryStage.START));
     manager.releaseStage(EngineManager.DeferredEngineGameRecoveryStage.START);
     assertTrue(manager.stageEntered(EngineManager.DeferredEngineGameRecoveryStage.READINESS));
