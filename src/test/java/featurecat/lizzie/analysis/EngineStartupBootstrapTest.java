@@ -27,7 +27,7 @@ class EngineStartupBootstrapTest {
                 .resolve("katago.exe"));
     String command = quote(engine) + " gtp -model kata1.bin.gz -config gtp.cfg";
 
-    EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, "MAIN_BOARD");
+    EngineBootstrapFacts facts = EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD");
 
     assertEquals("katago", facts.engineType());
     assertEquals(EngineBootstrapFacts.SOURCE_BUNDLED, facts.source());
@@ -46,7 +46,7 @@ class EngineStartupBootstrapTest {
         "\"C:\\\\Users\\\\Player\\\\secret\\\\katago.exe\" gtp "
             + "-model \"C:\\\\Users\\\\Player\\\\secret\\\\net.bin.gz\"";
 
-    EngineBootstrapFacts facts = EngineStartupBootstrap.factsFor(command, "MAIN_BOARD");
+    EngineBootstrapFacts facts = EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD");
 
     assertEquals("katago", facts.engineType());
     assertEquals(EngineBootstrapFacts.SOURCE_USER_CONFIGURED, facts.source());
@@ -54,6 +54,31 @@ class EngineStartupBootstrapTest {
     assertEquals("unknown", facts.onnxProvider());
     assertEquals("net.bin.gz", facts.model());
     assertNotEquals("Player", facts.model());
+  }
+
+  @Test
+  void hiddenOverrideCannotImplyOnnxFromItsDisplaySpelling() {
+    String command =
+        quote(tempDir.resolve("katago")) + " gtp -override-config onnxProvider=_openvino_";
+
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+
+    assertEquals("hidden-command", facts.onnxProvider());
+    assertEquals("unknown", facts.backend());
+  }
+
+  @Test
+  void runtimeMarkerCannotRestoreAnUnofficialHiddenBackend() throws Exception {
+    Path engine = touch(tempDir.resolve("katago.exe"));
+    Files.writeString(tempDir.resolve("lizzieyzy-next-engine-backend.txt"), "nvidia_\n");
+    String command = quote(engine) + " gtp -override-config onnxProvider=OpenVINO";
+
+    EngineBootstrapFacts facts =
+        EngineBootstrapFacts.fromCommand(command, "MAIN_BOARD", EngineCommandVisibility.HIDDEN);
+
+    assertEquals("hidden-command", facts.backend());
+    assertEquals("openvino", facts.onnxProvider());
   }
 
   @Test
@@ -71,7 +96,7 @@ class EngineStartupBootstrapTest {
         StandardCharsets.UTF_8);
 
     EngineBootstrapFacts facts =
-        EngineStartupBootstrap.factsFor(quote(engine) + " gtp -model m.bin.gz", "MAIN_BOARD");
+        EngineBootstrapFacts.fromCommand(quote(engine) + " gtp -model m.bin.gz", "MAIN_BOARD");
 
     assertEquals("onnx", facts.backend());
     assertEquals("directml", facts.onnxProvider());

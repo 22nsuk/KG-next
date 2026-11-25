@@ -10,6 +10,7 @@ import featurecat.lizzie.gui.EngineFailedMessage;
 import featurecat.lizzie.gui.EngineFailedMessage.DiagnosticActionResult;
 import featurecat.lizzie.gui.RemoteEngineData;
 import featurecat.lizzie.gui.WaitForAnalysis;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.LogCategories;
 import featurecat.lizzie.rules.Board;
@@ -401,15 +402,24 @@ public class AnalysisEngine {
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
-    this.useRemoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
-    if (this.useRemoteCompute) {
+    boolean remoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
+    this.useRemoteCompute = remoteCompute;
+    if (remoteCompute) {
       this.useJavaSSH = false;
     }
-    boolean isLocal = !this.useRemoteCompute && !this.useJavaSSH;
+    boolean isLocal = !remoteCompute && !useJavaSSH;
     if (isLocal && KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       process = null;
       isLoaded = false;
       return;
+    }
+    Path engineExecutable = null;
+    ProcessBuilder processBuilder = null;
+    CommandLaunchHelper.LaunchSpec observedLaunch = launchSpec;
+    if (isLocal) {
+      engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
+      processBuilder = KataGoRuntimeHelper.prepareEngineProcessBuilder(launchSpec, engineExecutable);
+      observedLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
     }
     startupDiagnosticAttempt = null;
     String launchPurpose = purpose == null ? "OTHER" : purpose.name();
@@ -417,7 +427,8 @@ public class AnalysisEngine {
         EngineObservation.restartInstance(
             this,
             launchPurpose,
-            EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+            EngineBootstrapFacts.fromLaunch(
+                engineCommand, launchPurpose, EngineCommandVisibility.VISIBLE, isLocal, observedLaunch));
     startupDiagnosticAttempt =
         EngineStartupDiagnostics.getDefault()
             .begin(
@@ -425,7 +436,7 @@ public class AnalysisEngine {
                 launchPurpose,
                 commands,
                 isLocal);
-    if (this.useRemoteCompute) {
+    if (remoteCompute) {
       this.useJavaSSH = false;
       process = null;
       try {
@@ -448,7 +459,7 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-    } else if (this.useJavaSSH) {
+    } else if (!isLocal) {
       this.javaSSH = new AnalysisEngineSSHController(this, this.ip, this.port, this.isPreLoad);
       boolean loginStatus = false;
       if (this.useKeyGen) {
@@ -479,7 +490,6 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
-      Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       if (Config.isBundledKataGoCommand(engineCommand)) {
         try {
           KataGoRuntimeHelper.ensureBundledRuntimeReady(
@@ -507,9 +517,8 @@ public class AnalysisEngine {
       List<String> launchCommands =
           KataGoRuntimeHelper.prepareBundledLaunchCommand(
               commands, engineExecutable, KataGoRuntimeHelper.LaunchPurpose.ANALYSIS);
-      ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
-      CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
-      KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
+      processBuilder.command(launchCommands);
+      KataGoRuntimeHelper.configureEngineEnvironment(processBuilder, launchSpec, engineExecutable);
       // KataGo can write diagnostic fragments while another thread emits a JSON result.
       // Merging these pipes can prefix/corrupt a response and leave the curve waiting forever.
       processBuilder.redirectErrorStream(false);
@@ -532,6 +541,7 @@ public class AnalysisEngine {
         isLoaded = false;
         return;
       }
+      observedLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
       initializeStreams();
       readerResources.modelIdentity =
           AnalysisModelIdentity.local(
@@ -540,7 +550,13 @@ public class AnalysisEngine {
     }
     isNormalEnd = false;
     AnalysisResourceCoordinator.processStarted(
-        this, purpose, engineCommand, process, startupDiagnosticAttempt != null);
+        this,
+        purpose,
+        engineCommand,
+        process,
+        startupDiagnosticAttempt != null,
+        EngineCommandVisibility.VISIBLE,
+        observedLaunch);
     readerResources.start();
   }
 

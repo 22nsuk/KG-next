@@ -305,65 +305,53 @@ public class Utils {
   }
 
   private static Path resolveExecutableFromPath(String executable) {
-    String pathEnv = System.getenv("PATH");
-    if (isBlank(pathEnv)) {
-      return null;
+    if (!OsPlatform.isWindows()) {
+      return findOnPath(List.of(executable), false);
     }
-    List<String> suffixes = new ArrayList<String>();
-    if (OsPlatform.isWindows()) {
-      String pathext = System.getenv("PATHEXT");
-      if (!isBlank(pathext)) {
-        for (String ext : pathext.split(";")) {
-          String trimmed = ext == null ? "" : ext.trim();
-          if (!trimmed.isEmpty()) {
-            suffixes.add(trimmed.toLowerCase());
-          }
-        }
-      }
-      if (suffixes.isEmpty()) {
-        suffixes.add(".exe");
-        suffixes.add(".bat");
-        suffixes.add(".cmd");
-      }
-    } else {
-      suffixes.add("");
+    List<String> names = new ArrayList<>();
+    if (executable.contains(".") && !executable.endsWith(".")) {
+      names.add(executable);
     }
+    String pathext = System.getenv("PATHEXT");
+    List<String> suffixes = new ArrayList<>();
+    if (!isBlank(pathext)) {
+      for (String ext : pathext.split(";")) {
+        if (!ext.isBlank()) suffixes.add(ext.trim().toLowerCase());
+      }
+    }
+    if (suffixes.isEmpty()) suffixes = List.of(".exe", ".bat", ".cmd");
+    for (String suffix : suffixes) names.add(executable + suffix);
+    return findOnPath(names, false);
+  }
 
-    boolean hasExtension = executable.contains(".") && !executable.endsWith(".");
-    for (String entry : pathEnv.split(File.pathSeparator)) {
-      if (isBlank(entry)) {
-        continue;
-      }
-      Path baseDir;
+  static Path findOnPath(List<String> names, boolean windowsNativeSearch) {
+    String pathEnv = System.getenv("PATH");
+    if (pathEnv == null) return null;
+    String[] entries = pathEnv.split(File.pathSeparator, -1);
+    for (int i = 0; i < entries.length; i++) {
+      String entry = entries[i];
+      // Win32 searches the cwd for an empty component before a semicolon, not after the last one.
+      if (windowsNativeSearch && entry.isEmpty() && i + 1 < entries.length) entry = ".";
+      if (isBlank(entry)) continue;
       try {
-        baseDir = Paths.get(entry).toAbsolutePath().normalize();
-      } catch (Exception e) {
-        continue;
+        Path directory = Paths.get(entry).toAbsolutePath().normalize();
+        if (!Files.isDirectory(directory)) continue;
+        Path candidate = findInDirectory(directory, names);
+        if (candidate != null) return candidate;
+      } catch (InvalidPathException | SecurityException ignored) {
+        // Continue searching the remaining PATH entries.
       }
-      if (!Files.isDirectory(baseDir)) {
-        continue;
-      }
-      if (!OsPlatform.isWindows() || hasExtension) {
-        try {
-          Path direct = toExistingPath(baseDir.resolve(executable).toString());
-          if (direct != null) {
-            return direct;
-          }
-        } catch (InvalidPathException | SecurityException e) {
-          continue;
-        }
-      }
-      if (OsPlatform.isWindows()) {
-        for (String suffix : suffixes) {
-          try {
-            Path candidate = toExistingPath(baseDir.resolve(executable + suffix).toString());
-            if (candidate != null) {
-              return candidate;
-            }
-          } catch (InvalidPathException | SecurityException e) {
-            continue;
-          }
-        }
+    }
+    return null;
+  }
+
+  static Path findInDirectory(Path directory, List<String> names) {
+    for (String name : names) {
+      try {
+        Path candidate = directory.resolve(name);
+        if (Files.isRegularFile(candidate)) return candidate;
+      } catch (InvalidPathException invalidName) {
+        // A malformed PATHEXT entry must not hide later candidates.
       }
     }
     return null;

@@ -115,7 +115,7 @@ public final class KataGoExperimentalBackendInstaller {
       return installDir;
     }
 
-    String marker() {
+    public String marker() {
       return marker;
     }
   }

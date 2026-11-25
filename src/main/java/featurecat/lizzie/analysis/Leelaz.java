@@ -21,6 +21,7 @@ import featurecat.lizzie.gui.JFontLabel;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.Message;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
@@ -448,6 +449,7 @@ public class Leelaz {
   /** Decided where {@link #setEngineCommand} decodes a user-hidden command. */
   private EngineCommandVisibility engineCommandVisibility = EngineCommandVisibility.VISIBLE;
   private List<String> commands;
+  private CommandLaunchHelper.LaunchSpec startupLaunch;
   private boolean directLocalSnapshotFileAccessForTest;
   //	private String currentWeightFile = "";
   //	private String currentWeight = "";
@@ -1357,6 +1359,17 @@ public class Leelaz {
     CommandLaunchHelper.LaunchSpec launchSpec =
         CommandLaunchHelper.prepare(Utils.splitCommand(engineCommand));
     commands = launchSpec.getCommandParts();
+    boolean remoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand);
+    this.useRemoteCompute = remoteCompute;
+    boolean isLocal = !useJavaSSH && !remoteCompute;
+    Path engineExecutable = null;
+    ProcessBuilder processBuilder = null;
+    startupLaunch = launchSpec;
+    if (isLocal) {
+      engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
+      processBuilder = KataGoRuntimeHelper.prepareEngineProcessBuilder(launchSpec, engineExecutable);
+      startupLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
+    }
     if (!KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
       String launchPurpose =
           engineGameStartupTransaction != null
@@ -1365,15 +1378,14 @@ public class Leelaz {
                   ? "MAIN_BOARD"
                   : this == Lizzie.leelaz2 ? "COMPARE" : preload ? "PRELOAD" : "MAIN_BOARD";
       loggingEngineId =
-          EngineObservation.restartInstance(
-              this, launchPurpose, EngineStartupBootstrap.factsFor(engineCommand, launchPurpose));
+          EngineObservation.restartInstance(this, launchPurpose, bootstrapFacts(launchPurpose));
       startupDiagnosticAttempt =
           EngineStartupDiagnostics.getDefault()
               .begin(
                   loggingEngineId,
                   launchPurpose,
                   commands,
-                  !useJavaSSH && !RemoteComputeConfig.isRemoteComputeEngineCommand(engineCommand),
+                  isLocal,
                   engineCommandVisibility);
     }
     rememberKataGoThreadLaunchOverride(commands);
@@ -1399,8 +1411,7 @@ public class Leelaz {
     isDownWithError = false;
     openClFp32CompatibilityActive = false;
     openClCompatibilityRecoveryAttempted.set(false);
-    this.useRemoteCompute = RemoteComputeConfig.isRemoteComputeEngineCommand(this.engineCommand);
-    if (this.useRemoteCompute) {
+    if (remoteCompute) {
       process = null;
       this.javaSSHClosed = false;
       this.isSSH = false;
@@ -1431,7 +1442,7 @@ public class Leelaz {
         }
         throw e;
       }
-    } else if (this.useJavaSSH) {
+    } else if (!isLocal) {
       process = null;
       this.javaSSH = new SSHController(this, this.ip, this.port);
       recordUpdateEngineStartJavaSsh(this.javaSSH);
@@ -1464,7 +1475,6 @@ public class Leelaz {
         started = false;
         return;
       }
-      Path engineExecutable = KataGoRuntimeHelper.resolveCommandExecutable(commands);
       boolean bundledCommand = Config.isBundledKataGoCommand(engineCommand);
       boolean nvidiaBundled = KataGoRuntimeHelper.isNvidiaBundledPath(engineExecutable);
       long startupToken = 0L;
@@ -1544,19 +1554,24 @@ public class Leelaz {
             "BundledEngineStartup.status.openclCompatibility",
             "Using stable NVIDIA OpenCL compatibility mode...");
       }
-      ProcessBuilder processBuilder = new ProcessBuilder(launchCommands);
+      processBuilder.command(launchCommands);
       modelLaunchCommands = List.copyOf(launchCommands);
-      CommandLaunchHelper.configureProcessBuilder(processBuilder, launchSpec);
-      KataGoRuntimeHelper.configureBundledProcessBuilder(processBuilder, engineExecutable);
+      KataGoRuntimeHelper.configureEngineEnvironment(processBuilder, launchSpec, engineExecutable);
       processBuilder.redirectErrorStream(false);
       if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.capture(processBuilder);
       try {
         process = processBuilder.start();
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.attachProcess(process);
         recordUpdateEngineStartProcess(process);
+        startupLaunch = CommandLaunchHelper.LaunchSpec.fromProcessBuilder(processBuilder);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process,
-            startupDiagnosticAttempt != null);
+            this,
+            AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+            engineCommand,
+            process,
+            startupDiagnosticAttempt != null,
+            engineCommandVisibility,
+            startupLaunch);
       } catch (IOException e) {
         // The JDK names the executable and working directory; a hidden command keeps neither.
         if (startupDiagnosticAttempt != null) startupDiagnosticAttempt.fail("process-create", e);
@@ -4769,13 +4784,17 @@ public class Leelaz {
   }
 
 
+  private EngineBootstrapFacts bootstrapFacts(String purpose) {
+    return EngineBootstrapFacts.fromLaunch(
+        engineCommand, purpose, engineCommandVisibility, !useJavaSSH, startupLaunch);
+  }
+
   private void noteEngineStarted() {
     try {
       String id = EngineObservation.identityFor(this);
       if (id == null) {
         id =
-            EngineObservation.ensureStarted(
-                this, "MAIN_BOARD", EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+            EngineObservation.ensureStarted(this, "MAIN_BOARD", bootstrapFacts("MAIN_BOARD"));
       }
       loggingEngineId = id;
     } catch (RuntimeException ignored) {
@@ -4799,8 +4818,7 @@ public class Leelaz {
       String id = EngineObservation.identityFor(this);
       if (id == null) {
         id = EngineObservation.mintIdentity(this);
-        EngineObservation.recordBootstrap(
-            id, EngineStartupBootstrap.factsFor(engineCommand, "MAIN_BOARD"));
+        EngineObservation.recordBootstrap(id, bootstrapFacts("MAIN_BOARD"));
       }
       loggingEngineId = id;
       try {
@@ -23488,7 +23506,13 @@ public class Leelaz {
     }
     if (this == Lizzie.leelaz && Lizzie.frame != null) {
       AnalysisResourceCoordinator.processStarted(
-          this, AnalysisResourceCoordinator.Purpose.MAIN_BOARD, engineCommand, process);
+          this,
+          AnalysisResourceCoordinator.Purpose.MAIN_BOARD,
+          engineCommand,
+          process,
+          false,
+          engineCommandVisibility,
+          startupLaunch);
       Lizzie.frame.onMainEnginePonder();
     }
     if (Lizzie.frame.isKeepingForce || LizzieFrame.isKeepForcing) {

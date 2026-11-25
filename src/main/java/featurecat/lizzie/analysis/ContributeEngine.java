@@ -6,6 +6,7 @@ import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.gui.RemoteEngineData;
 import featurecat.lizzie.gui.SgfSaveCoordinator;
+import featurecat.lizzie.logging.EngineBootstrapFacts;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ExportSanitizer;
 import featurecat.lizzie.rules.Board;
@@ -222,7 +223,10 @@ public class ContributeEngine {
     }
     String engineId =
         EngineObservation.restartInstance(
-            this, "CONTRIBUTE", EngineStartupBootstrap.factsFor(engineCommand, "CONTRIBUTE"));
+            this,
+            "CONTRIBUTE",
+            EngineBootstrapFacts.fromLaunch(
+                engineCommand, "CONTRIBUTE", EngineCommandVisibility.VISIBLE, !useJavaSSH, launchSpec));
     EngineStartupDiagnostics.Attempt attempt =
         EngineStartupDiagnostics.getDefault()
             .begin(engineId, "CONTRIBUTE", commands, !this.useJavaSSH);
@@ -264,7 +268,13 @@ public class ContributeEngine {
         launch.process = process;
         attempt.attachProcess(process);
         AnalysisResourceCoordinator.processStarted(
-            this, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, process, true);
+            this,
+            AnalysisResourceCoordinator.Purpose.OTHER,
+            engineCommand,
+            process,
+            true,
+            EngineCommandVisibility.VISIBLE,
+            launchSpec);
       } catch (IOException e) {
         launch.error = e.toString();
         attempt.fail("process-create", launch.error);

@@ -7,10 +7,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
-final class LoggingChildProcess {
-  record Result(int exitCode, String output) {}
+public final class LoggingChildProcess {
+  public record Result(int exitCode, String output) {}
 
   static Result run(Path workDirectory, Class<?> probe, String... extraVmAndArgs) throws Exception {
     return runWithTimeout(workDirectory, 120_000L, probe, extraVmAndArgs);
@@ -19,6 +21,16 @@ final class LoggingChildProcess {
   static Result runWithTimeout(
       Path workDirectory, long timeoutMillis, Class<?> probe, String... extraVmAndArgs)
       throws Exception {
+    return runWithTimeout(workDirectory, timeoutMillis, null, env -> {}, probe, extraVmAndArgs);
+  }
+
+  public static Result runWithTimeout(
+      Path workDirectory,
+      long timeoutMillis,
+      Path currentDirectory,
+      Consumer<Map<String, String>> configureEnvironment,
+      Class<?> probe,
+      String... extraVmAndArgs) throws Exception {
     String java =
         Path.of(
                 System.getProperty("java.home"),
@@ -45,7 +57,10 @@ final class LoggingChildProcess {
         command.add(extra);
       }
     }
-    Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+    ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
+    builder.directory(currentDirectory == null ? null : currentDirectory.toFile());
+    configureEnvironment.accept(builder.environment());
+    Process process = builder.start();
     ByteArrayOutputStream captured = new ByteArrayOutputStream();
     Thread reader =
         new Thread(

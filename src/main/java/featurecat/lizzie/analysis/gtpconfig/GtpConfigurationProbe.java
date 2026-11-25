@@ -1,6 +1,7 @@
 package featurecat.lizzie.analysis.gtpconfig;
 
 import featurecat.lizzie.analysis.AnalysisResourceCoordinator;
+import featurecat.lizzie.analysis.EngineCommandVisibility;
 import featurecat.lizzie.logging.EngineObservation;
 import featurecat.lizzie.logging.ObservationText;
 import featurecat.lizzie.util.CommandLaunchHelper;
@@ -384,7 +385,12 @@ public final class GtpConfigurationProbe {
       if (KataGoRuntimeHelper.isBenchmarkEngineSyncSuppressed()) {
         throw new IOException("KataGo tuning is using the local compute device");
       }
-      if (engineCommand.startsWith("encryption||")) {
+      // Keep the saved command's visibility when handing its decoded text to startup observation.
+      EngineCommandVisibility visibility =
+          engineCommand.startsWith("encryption||")
+              ? EngineCommandVisibility.HIDDEN
+              : EngineCommandVisibility.VISIBLE;
+      if (visibility.isHidden()) {
         engineCommand = Utils.doDecrypt2(engineCommand.substring("encryption||".length()));
       }
       CommandLaunchHelper.LaunchSpec launchSpec =
@@ -396,7 +402,13 @@ public final class GtpConfigurationProbe {
       CommandLaunchHelper.configureProcessBuilder(builder, launchSpec);
       ProcessSession session = new ProcessSession(builder.start(), timeout);
       AnalysisResourceCoordinator.processStarted(
-          session, AnalysisResourceCoordinator.Purpose.OTHER, engineCommand, session.process);
+          session,
+          AnalysisResourceCoordinator.Purpose.OTHER,
+          engineCommand,
+          session.process,
+          false,
+          visibility,
+          launchSpec);
       session.recordStartedQuietly();
       return session;
     }
