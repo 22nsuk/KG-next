@@ -12,6 +12,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.WeakHashMap;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntUnaryOperator;
 
 /** Linked list data structure to store board history */
 public class BoardHistoryList {
@@ -330,6 +331,191 @@ public class BoardHistoryList {
     return copy;
   }
 
+  /** Replays a starting-position edit privately; an illegal continuation rejects the whole edit. */
+  BoardHistoryList editStartingStone(
+      int x, int y, Stone replacement, TrialNumbering trialNumbering) {
+    BoardHistoryNode root = getStart();
+    if (!root.getData().isSnapshotNode()
+        || x < 0 || y < 0
+        || x >= root.getData().zobrist.width() || y >= root.getData().zobrist.height()
+        || (replacement != Stone.EMPTY && replacement != Stone.BLACK && replacement != Stone.WHITE)) {
+      return null;
+    }
+    boolean noCapture = Lizzie.config.noCapture;
+    boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
+    TrialNumbering normalization =
+        trialNumbering != null && trialNumbering.root.get() == root ? trialNumbering : null;
+    BoardHistoryList[] result = new BoardHistoryList[1];
+    BoardHistoryNode.runWithoutGlobalMoveSideEffects(false,
+        () -> result[0] = replayStartingStoneEdit(
+            root, x, y, replacement, noCapture, canSuicidal, normalization));
+    return result[0];
+  }
+
+  private record StartingEditNode(BoardHistoryNode source, BoardHistoryNode parent) {}
+
+  private BoardHistoryList replayStartingStoneEdit(
+      BoardHistoryNode root, int x, int y, Stone replacement,
+      boolean noCapture, boolean canSuicidal, TrialNumbering trialNumbering) {
+    BoardHistoryList rebuilt = new BoardHistoryList(null);
+    rebuilt.gameInfo = gameInfo;
+    rebuilt.sessionRulesTarget = sessionRulesTarget;
+    BoardHistoryNode selected = null;
+    ArrayDeque<StartingEditNode> pending = new ArrayDeque<>();
+    pending.add(new StartingEditNode(root, null));
+    while (!pending.isEmpty()) {
+      StartingEditNode entry = pending.removeFirst();
+      BoardHistoryNode source = entry.source();
+      BoardHistoryNode parent = entry.parent();
+      BoardData original = source.getData();
+      BoardData data = original.clone();
+      int[] inheritedMoveNumbers = parent == null ? null : parent.getData().moveNumberList;
+      if (parent == null) {
+        replaceSetupStone(data, data.zobrist.index(x, y), replacement);
+      } else if (original.isSnapshotNode()) {
+        BoardData oldParent = source.previous().orElseThrow().getData();
+        data.stones = parent.getData().stones.clone();
+        data.zobrist = parent.getData().zobrist.clone();
+        data.blackCaptures += parent.getData().blackCaptures - oldParent.blackCaptures;
+        data.whiteCaptures += parent.getData().whiteCaptures - oldParent.whiteCaptures;
+        for (int index = 0; index < data.stones.length; index++) {
+          int px = index / data.zobrist.height();
+          int py = index % data.zobrist.height();
+          if (original.stones[index] != oldParent.stones[index]
+              || hasSetupPropertyAt(original, px, py)) {
+            replaceSetupStone(data, index, original.stones[index]);
+          }
+        }
+      } else {
+        rebuilt.head = parent;
+        BoardData played = rebuilt.replayStartingEditAction(original, noCapture, canSuicidal);
+        if (played == null) return null;
+        data.stones = played.stones;
+        data.zobrist = played.zobrist;
+        data.blackCaptures = played.blackCaptures;
+        data.whiteCaptures = played.whiteCaptures;
+        // Action replay also owns branch-number resets for stones that now survive a capture.
+        inheritedMoveNumbers = played.moveNumberList;
+        if (source.hasRemovedStone() || (source.extraStones != null && !source.extraStones.isEmpty())) {
+          // Older in-place edits can attach setup changes to an action. Compare with the old
+          // action's result so a manual removal is not confused with a capture changed by this edit.
+          BoardHistoryList before =
+              new BoardHistoryList(source.previous().orElseThrow().getData().clone());
+          BoardData oldPlayed = before.replayStartingEditAction(original, noCapture, canSuicidal);
+          if (oldPlayed == null) return null;
+          for (int index = 0; index < data.stones.length; index++) {
+            if (original.stones[index] != oldPlayed.stones[index]) {
+              replaceSetupStone(data, index, original.stones[index]);
+            }
+          }
+        }
+      }
+      if (parent != null) {
+        for (int index = 0; index < data.stones.length; index++) {
+          if (data.stones[index] == Stone.EMPTY) data.moveNumberList[index] = 0;
+          else if (data.stones[index] != original.stones[index]) {
+            data.moveNumberList[index] = inheritedMoveNumbers[index];
+          }
+        }
+      }
+      if (trialNumbering != null) {
+        BoardData oldParent = source.previous().map(BoardHistoryNode::getData).orElse(null);
+        trialNumbering.normalizeMoveNumber(source, data,
+            parent == null ? null : parent.getData(), oldParent == null ? 0 : oldParent.moveNumber);
+        if (parent != null) {
+          TrialNumbering.normalizeMoveNumberGrid(
+              data, parent.getData(), original.moveNumber, index -> oldParent.moveNumberList[index]);
+        }
+      }
+      if (data.isMoveNode()) {
+        int[] move = data.lastMove.orElseThrow();
+        int index = data.zobrist.index(move[0], move[1]);
+        if (data.stones[index] == data.lastMoveColor
+            && data.stones[index] != original.stones[index]) {
+          // A formerly suicidal move can survive after the setup edit; it owns its new label.
+          data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
+        }
+      }
+      data.clearAnalysisPayloadState();
+      BoardHistoryNode copied = source.copyForRestore(data);
+      copied.nodeInfo = new NodeInfo();
+      copied.nodeInfoMain = new NodeInfo();
+      copied.nodeInfo2 = new NodeInfo();
+      copied.nodeInfoMain2 = new NodeInfo();
+      copied.analyzed = false;
+      copied.diffAnalyzed = false;
+      copied.isBest = false;
+      if (parent != null) copied.reparentAsLastVariationOf(parent);
+      if (source == head) selected = copied;
+      for (BoardHistoryNode child : source.getVariations()) {
+        pending.addLast(new StartingEditNode(child, copied));
+      }
+    }
+    rebuilt.head = selected;
+    return rebuilt;
+  }
+
+  private BoardData replayStartingEditAction(
+      BoardData action, boolean noCapture, boolean canSuicidal) {
+    BoardHistoryNode parent = head;
+    boolean parentBlackToPlay = parent.getData().blackToPlay;
+    try {
+      if (action.isMoveNode()) {
+        int[] move = action.lastMove.orElseThrow();
+        if (parent.getData().stones[action.zobrist.index(move[0], move[1])] != Stone.EMPTY) {
+          return null;
+        }
+        // A new branch preserves duplicate SGF variations. Check occupancy above because legacy
+        // new-branch placement otherwise permits replacing the stone at this point.
+        place(move[0], move[1], action.lastMoveColor,
+            true, false, false, noCapture, canSuicidal);
+      } else {
+        pass(action.lastMoveColor, true, action.dummy, false);
+      }
+      if (head == parent) return null;
+      BoardData played = head.getData();
+      parent.variations.remove(parent.variations.size() - 1);
+      return played;
+    } finally {
+      parent.getData().blackToPlay = parentBlackToPlay;
+      head = parent;
+    }
+  }
+
+  private static void replaceSetupStone(BoardData data, int index, Stone replacement) {
+    Stone previous = data.stones[index];
+    if (previous == replacement) return;
+    int x = index / data.zobrist.height();
+    int y = index % data.zobrist.height();
+    if (previous != Stone.EMPTY) data.zobrist.toggleStone(x, y, previous);
+    if (replacement != Stone.EMPTY) data.zobrist.toggleStone(x, y, replacement);
+    data.stones[index] = replacement;
+    data.moveNumberList[index] = 0;
+  }
+
+  /** Includes explicit no-op setup declarations, which still replace an inherited root stone. */
+  static boolean hasSetupPropertyAt(BoardData data, int x, int y) {
+    Stone stone = data.stones[data.zobrist.index(x, y)];
+    String key = stone == Stone.BLACK ? "AB" : stone == Stone.WHITE ? "AW" : "AE";
+    for (String value : data.getPropertyValues(key)) {
+      String[] range = value.trim().split(":", -1);
+      if (range.length > 2) continue;
+      int[] first = SgfDocument.convertSgfPosToCoord(
+          range[0], data.zobrist.width(), data.zobrist.height());
+      int[] last = range.length == 1 ? first : SgfDocument.convertSgfPosToCoord(
+          range[1], data.zobrist.width(), data.zobrist.height());
+      if (first != null && last != null
+          && first[0] >= 0 && first[1] >= 0 && last[0] >= 0 && last[1] >= 0
+          && first[0] < data.zobrist.width() && last[0] < data.zobrist.width()
+          && first[1] < data.zobrist.height() && last[1] < data.zobrist.height()
+          && x >= Math.min(first[0], last[0]) && x <= Math.max(first[0], last[0])
+          && y >= Math.min(first[1], last[1]) && y <= Math.max(first[1], last[1])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Numbering conventions that cannot be inferred after the trial anchor is reset to zero. */
   static final class TrialNumbering {
     private final WeakReference<BoardHistoryNode> root;
@@ -351,6 +537,36 @@ public class BoardHistoryList {
                 child.getData().moveNumber - node.getData().moveNumber);
             pending.add(child);
           }
+        }
+      }
+    }
+
+    private void normalizeMoveNumber(
+        BoardHistoryNode original, BoardData data, BoardData parent, int oldParentNumber) {
+      if (parent == null) {
+        data.moveNumber = rootMoveNumber;
+        return;
+      }
+      int increment = data.isHistoryActionNode() ? 1 : 0;
+      if (data.dummy) {
+        increment = dummyIncrements.getOrDefault(original, data.moveNumber == oldParentNumber ? 0 : 1);
+      }
+      data.moveNumber = parent.moveNumber + increment;
+    }
+
+    static void normalizeMoveNumberGrid(
+        BoardData data, BoardData parent, int originalMoveNumber, IntUnaryOperator oldParentNumberAt) {
+      int moveIndex = data.isMoveNode()
+          ? data.zobrist.index(data.lastMove.orElseThrow()[0], data.lastMove.get()[1]) : -1;
+      for (int index = 0; index < data.moveNumberList.length; index++) {
+        int number = data.moveNumberList[index];
+        // Keep hidden labels and MN overrides; normalize only trial-relative own/inherited labels.
+        if (number == 0) continue;
+        if (index == moveIndex && (number < 0 || originalMoveNumber != data.moveNumber)) {
+          data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
+        } else if (number == oldParentNumberAt.applyAsInt(index)
+            && data.stones[index] == parent.stones[index]) {
+          data.moveNumberList[index] = parent.moveNumberList[index];
         }
       }
     }
@@ -397,16 +613,11 @@ public class BoardHistoryList {
         BoardHistoryNode parent = nodes.get(entry.parentIndex()).node();
         node.reparentAsLastVariationOf(parent);
         if (normalizeTrial) {
-          int increment = metadata.isHistoryActionNode() ? 1 : 0;
-          if (metadata.dummy) {
-            int oldParentNumber = nodes.get(entry.parentIndex()).originalMoveNumber();
-            increment = trialNumbering.dummyIncrements.getOrDefault(entry.node(),
-                originalMoveNumber == oldParentNumber ? 0 : 1);
-          }
-          metadata.moveNumber = parent.getData().moveNumber + increment;
+          trialNumbering.normalizeMoveNumber(entry.node(), metadata, parent.getData(),
+              nodes.get(entry.parentIndex()).originalMoveNumber());
         }
       } else if (normalizeTrial) {
-        metadata.moveNumber = trialNumbering.rootMoveNumber;
+        trialNumbering.normalizeMoveNumber(entry.node(), metadata, null, 0);
       }
       nodes.add(new BoardHistorySnapshot.NodeSnapshot(
           node, position, entry.parentIndex(), originalMoveNumber));

@@ -104,6 +104,7 @@ public final class OfflineBoardAcceptanceTest {
                 () -> verifySaveAnalysisState(work));
           });
       verifySuccessfulSaves(work);
+      verifyStartingPositionEdits(work);
       Files.writeString(result, "PASS");
       exit = 0;
     } catch (Throwable failure) {
@@ -137,6 +138,68 @@ public final class OfflineBoardAcceptanceTest {
       assertDoesNotThrow(() -> { item.doClick(); }, key);
       assertNull(Lizzie.leelaz);
     }
+  }
+
+  private static void verifyStartingPositionEdits(Path work) throws Exception {
+    java.awt.Robot robot = new java.awt.Robot();
+    SwingUtilities.invokeAndWait(() -> {
+      assertTrue(SGFParser.loadFromString("(;SZ[5]PL[W]AB[aa][cc]AW[ee])"));
+      assertTrue(Lizzie.frame.convertCurrentPositionToStartingPositionCommand());
+      RightClickMenu2 menu = new RightClickMenu2();
+      menu.setCoords(new int[] {0, 0});
+      findMenuItem(menu.getComponents(), "RightClickMenu2.deleteone").doClick(0);
+      assertEquals(Stone.EMPTY, Lizzie.board.getStones()[0]);
+      assertEquals(Stone.BLACK, Lizzie.board.getStones()[12]);
+      assertEquals(Stone.WHITE, Lizzie.board.getStones()[24]);
+      Lizzie.board.cleanedit();
+      assertEquals(Stone.BLACK, Lizzie.board.getStones()[0]);
+      findMenuItem(menu.getComponents(), "RightClickMenu2.switchone").doClick(0);
+      assertEquals(Stone.WHITE, Lizzie.board.getStones()[0]);
+      assertEquals(Stone.BLACK, Lizzie.board.getStones()[12]);
+      assertEquals(Stone.WHITE, Lizzie.board.getStones()[24]);
+    });
+    robot.waitForIdle();
+    javax.imageio.ImageIO.write(robot.createScreenCapture(Lizzie.frame.getBounds()), "png",
+        work.resolve("starting-position-edited.png").toFile());
+
+    SwingUtilities.invokeAndWait(() -> {
+      assertTrue(SGFParser.loadFromString("(;SZ[5]AB[ba]AW[ab];B[aa])"));
+      Lizzie.board.getHistory().setHead(Lizzie.board.getHistory().getStart());
+      var original = Lizzie.board.getHistory();
+      var captured = new java.util.concurrent.atomic.AtomicBoolean();
+      var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+      javax.swing.Timer closeMessage = new javax.swing.Timer(50, event -> {
+        for (java.awt.Window window : java.awt.Window.getWindows()) {
+          if (!(window instanceof HtmlMessage message) || !message.isShowing()) continue;
+          try {
+            assertEquals(Lizzie.frame, message.getOwner());
+            javax.swing.JTextPane text = (javax.swing.JTextPane) message.getContentPane()
+                .getComponent(0);
+            assertEquals(Lizzie.resourceBundle.getString("Board.startingPositionEditInvalidContinuation"),
+                text.getDocument().getText(0, text.getDocument().getLength()).trim());
+            javax.imageio.ImageIO.write(robot.createScreenCapture(message.getBounds()), "png",
+                work.resolve("starting-position-edit-rejected.png").toFile());
+            captured.set(true);
+          } catch (Throwable error) {
+            failure.set(error);
+          } finally {
+            message.dispose();
+            ((javax.swing.Timer) event.getSource()).stop();
+          }
+        }
+      });
+      closeMessage.start();
+      try {
+        RightClickMenu2 menu = new RightClickMenu2();
+        menu.setCoords(new int[] {1, 0});
+        findMenuItem(menu.getComponents(), "RightClickMenu2.switchone").doClick(0);
+        if (failure.get() != null) throw new AssertionError("Edit rejection dialog", failure.get());
+        assertTrue(captured.get(), "Invalid continuation must explain why the edit was rejected");
+        assertEquals(original, Lizzie.board.getHistory(), "Rejected edit must keep the whole game");
+      } finally {
+        closeMessage.stop();
+      }
+    });
   }
 
   private static void verifyCancelledOfflineSave(Runnable save) {

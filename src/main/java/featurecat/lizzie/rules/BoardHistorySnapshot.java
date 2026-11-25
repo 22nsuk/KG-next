@@ -77,20 +77,8 @@ final class BoardHistorySnapshot {
       restoreMoveInfoNumber(parentNode.nodeInfo2, data, entry.originalMoveNumber());
       restoreMoveInfoNumber(parentNode.nodeInfoMain2, data, entry.originalMoveNumber());
     }
-    int moveIndex = data.isMoveNode()
-        ? data.zobrist.index(data.lastMove.orElseThrow()[0], data.lastMove.get()[1]) : -1;
-    for (int i = 0; i < data.moveNumberList.length; i++) {
-      int number = data.moveNumberList[i];
-      // Zeroes hide old stones on a new branch or after setup edits. Preserve MN overrides;
-      // only replace the trial's relative own count and inherited negative/relative labels.
-      if (number == 0) continue;
-      if (i == moveIndex && (number < 0 || entry.originalMoveNumber() != data.moveNumber)) {
-        data.moveNumberList[i] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
-      } else if (number == parent.position().moveNumberAt(i)
-          && data.stones[i] == parentData.stones[i]) {
-        data.moveNumberList[i] = parentData.moveNumberList[i];
-      }
-    }
+    BoardHistoryList.TrialNumbering.normalizeMoveNumberGrid(
+        data, parentData, entry.originalMoveNumber(), parent.position()::moveNumberAt);
   }
 
   private static void restoreMoveInfoNumber(NodeInfo info, BoardData move, int originalMoveNumber) {

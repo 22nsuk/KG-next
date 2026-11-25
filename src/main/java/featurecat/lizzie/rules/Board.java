@@ -5198,9 +5198,12 @@ public class Board {
 
   private synchronized GameStateSnapshot captureEditState() {
     // Undo/redo exits trial mode; its saved positions must use ordinary move numbering.
+    return new GameStateSnapshot(this, editTrialNumbering(), false);
+  }
+
+  private BoardHistoryList.TrialNumbering editTrialNumbering() {
     GameStateSnapshot trial = Lizzie.frame == null ? null : Lizzie.frame.getTrialSnapshot();
-    return new GameStateSnapshot(this,
-        trial == null || !Lizzie.frame.isTrying ? null : trial.trialNumbering, false);
+    return trial == null || !Lizzie.frame.isTrying ? null : trial.trialNumbering;
   }
 
   /** Adopts the saved cursor and tree locally; the caller owns confirmed engine synchronization. */
@@ -6858,6 +6861,10 @@ public class Board {
   }
 
   public void editMove(int[] coords, boolean isSwitch, boolean isDelete) {
+    if ((isSwitch || isDelete) && isStartingSetupStone(coords)) {
+      editStartingSetupStone(coords, isSwitch);
+      return;
+    }
     GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
     boolean oriPlaySound = Lizzie.config.playSound;
     Lizzie.config.playSound = false;
@@ -6952,6 +6959,62 @@ public class Board {
     }
     Lizzie.config.playSound = oriPlaySound;
     Lizzie.board.getHistory().setGameInfo(gameInfo);
+  }
+
+  private boolean isStartingSetupStone(int[] coords) {
+    if (!isValid(coords) || history == null) return false;
+    BoardHistoryNode root = history.getStart();
+    int index = getIndex(coords[0], coords[1]);
+    Stone stone = root.getData().stones[index];
+    if (!root.getData().isSnapshotNode() || !(stone.isBlack() || stone.isWhite())) return false;
+    // A later move or setup declaration at the same point owns its own edit. Do not
+    // mistake a reused coordinate (or an MN display override) for a starting stone.
+    for (BoardHistoryNode node = history.getCurrentHistoryNode(); node != root;
+        node = node.previous().orElseThrow()) {
+      BoardData data = node.getData();
+      if (data.stones[index] != stone || matchesHistoryMoveCoord(data, coords)
+          || BoardHistoryList.hasSetupPropertyAt(data, coords[0], coords[1])) return false;
+    }
+    return true;
+  }
+
+  private void editStartingSetupStone(int[] coords, boolean recolor) {
+    boolean resumeAnalysis = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
+    Stone replacement = recolor ? history.getData().stones[getIndex(coords[0], coords[1])].opposite()
+        : Stone.EMPTY;
+    BoardHistoryList edited =
+        history.editStartingStone(coords[0], coords[1], replacement, editTrialNumbering());
+    if (edited == null) {
+      Utils.showMsg(Lizzie.resourceBundle.getString("Board.startingPositionEditInvalidContinuation"));
+      return;
+    }
+    // Keep the existing complete undo snapshot; neither an SGF round trip nor a list of
+    // ordinary moves can represent every starting position and its annotations.
+    saveListForEdit();
+    boolean keepSetupMode = setupMode && EngineManager.isEmpty;
+    replaceHistory(edited, () -> {
+      setupMode = keepSetupMode;
+      hasStartStone = false;
+      startStonelist = new ArrayList<>();
+      forceRefresh = true;
+      forceRefresh2 = true;
+      clearTsumegoStatus();
+      requireEngineAlignment();
+      if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
+    });
+    if (LizzieFrame.boardRenderer != null) LizzieFrame.boardRenderer.clearAfterMove();
+    if (LizzieFrame.boardRenderer2 != null) LizzieFrame.boardRenderer2.clearAfterMove();
+    LizzieFrame.forceRecreate = true;
+    setMovelistAll();
+    if (Lizzie.frame != null) {
+      Lizzie.frame.clearTryPlay();
+      Lizzie.frame.redrawTree = true;
+      Lizzie.frame.clearKataEstimate();
+      // The existing coordinator confirms the edited position before resuming analysis.
+      // Engine I/O must remain outside the board monitor.
+      Lizzie.frame.synchronizeRestoredGame(resumeAnalysis);
+      Lizzie.frame.refresh();
+    }
   }
 
   public String moveListToString(ArrayList<Movelist> moveList) {

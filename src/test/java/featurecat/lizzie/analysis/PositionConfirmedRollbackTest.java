@@ -15,6 +15,7 @@ import featurecat.lizzie.gui.BoardRenderer;
 import featurecat.lizzie.gui.BottomToolbar;
 import featurecat.lizzie.gui.LizzieFrame;
 import featurecat.lizzie.gui.Menu;
+import featurecat.lizzie.gui.RightClickMenu2;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
@@ -1267,6 +1268,52 @@ class PositionConfirmedRollbackTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void startingStoneEditDuringTrialRestoresOrdinaryMoveNumbers(boolean recolor) throws Exception {
+    try (Harness harness = Harness.open()) {
+      harness.frame.readBoard = null;
+      harness.engine.started = false;
+      harness.engine.isLoaded = false;
+      EngineManager.isEmpty = true;
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19]PL[B]AB[aa]AW[ee];B[cc];W[dd])", true);
+      while (history.next().isPresent()) {}
+      harness.board.setHistory(history);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        harness.frame.tryPlay(false);
+        assertEquals(0, harness.board.getData().moveNumber);
+        harness.board.place(1, 2, Stone.BLACK);
+      });
+      assertEquals(-1, harness.board.getData().moveNumberList[Board.getIndex(1, 2)]);
+      Stone[] before = harness.board.getData().stones.clone();
+      Stone[] after = before.clone();
+      after[Board.getIndex(0, 0)] = recolor ? Stone.WHITE : Stone.EMPTY;
+      javax.swing.SwingUtilities.invokeAndWait(
+          () -> harness.board.editMove(new int[] {0, 0}, recolor, !recolor));
+
+      for (int operation = 0; operation < 3; operation++) {
+        if (operation > 0) {
+          javax.swing.SwingUtilities.invokeAndWait(
+              operation == 1 ? harness.board::cleanedit : harness.board::reedit);
+        }
+        assertFalse(harness.frame.isTrying);
+        assertNull(harness.frame.getTrialSnapshot());
+        assertArrayEquals(operation == 1 ? before : after, harness.board.getData().stones);
+        BoardHistoryNode node = harness.board.getHistory().getStart();
+        for (int number = 0; number <= 3; number++) {
+          assertEquals(number, node.getData().moveNumber);
+          if (number < 3) node = node.next().orElseThrow();
+        }
+        assertSame(node, harness.board.getHistory().getCurrentHistoryNode());
+        assertEquals(1, node.getData().moveNumberList[Board.getIndex(2, 2)]);
+        assertEquals(2, node.getData().moveNumberList[Board.getIndex(3, 3)]);
+        assertEquals(3, node.getData().moveNumberList[Board.getIndex(1, 2)]);
+      }
+    }
+  }
+
   @Test
   void pausedTrialUndoRedoKeepsAnalyzedMoveInProblemList() throws Exception {
     featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
@@ -1525,6 +1572,76 @@ class PositionConfirmedRollbackTest {
     } finally {
       LizzieFrame.winrateGraph = previousGraph;
       LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+  void startingStoneMenuEditAndUndoRedoConfirmExactEnginePosition(
+      boolean recolor, boolean paused) throws Exception {
+    int[] previousCoords = RightClickMenu2.coords;
+    try (Harness harness = Harness.open()) {
+      harness.frame.readBoard = null;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19]PL[B]AB[aa][cc]AW[bb];B[dd])", true);
+      history.next();
+      harness.board.setHistory(history);
+      assertTrue(harness.board.convertCurrentPositionToStartingPosition());
+      Stone[] before = harness.board.getData().stones.clone();
+      Stone[] after = before.clone();
+      after[Board.getIndex(0, 0)] = recolor ? Stone.WHITE : Stone.EMPTY;
+      harness.engine.commandLists.add("loadsgf");
+      SnapshotTrackingLeelaz enginePosition = SnapshotTrackingLeelaz.create();
+      ExactSnapshotRestoreProtocolFixture.Transport output =
+          installPositionTransport(harness.engine, enginePosition, "name");
+      Field pauseField = LizzieFrame.class.getDeclaredField("userAnalysisPaused");
+      pauseField.setAccessible(true);
+      pauseField.setBoolean(harness.frame, paused);
+      harness.frame.userAnalysisPaused = paused;
+      if (!paused) {
+        harness.engine.ponder();
+        awaitRawCommand(output, "kata-analyze", 0);
+      }
+
+      for (int operation = 0; operation < 3; operation++) {
+        if (operation == 0) {
+          javax.swing.SwingUtilities.invokeAndWait(() -> {
+            RightClickMenu2 menu = new RightClickMenu2();
+            menu.setCoords(new int[] {0, 0});
+            String label = Lizzie.resourceBundle.getString(
+                recolor ? "RightClickMenu2.switchone" : "RightClickMenu2.deleteone");
+            javax.swing.JMenuItem action = null;
+            for (java.awt.Component component : menu.getComponents()) {
+              if (component instanceof javax.swing.JMenuItem item
+                  && item.getText().equals(label)) action = item;
+            }
+            assertNotNull(action, "the ordinary stone context menu must expose the edit");
+            action.doClick(0);
+          });
+        } else {
+          javax.swing.SwingUtilities.invokeAndWait(
+              operation == 1 ? harness.board::cleanedit : harness.board::reedit);
+        }
+        String fence = awaitRawCommand(output, "name", operation);
+        assertArrayEquals(operation == 1 ? before : after, harness.board.getData().stones);
+        assertPosition(enginePosition, harness.board.getData(), BOARD_SIZE, BOARD_SIZE);
+        assertEquals(operation + 1, payloadCount(output, "loadsgf"));
+        assertTrue(harness.board.isEngineAlignmentPending());
+        assertEquals(paused ? 0 : operation + 1, payloadCount(output, "kata-analyze"),
+            "editing and undo/redo must not analyze before the engine confirms the new position");
+        if (operation == 0) {
+          harness.engine.parseAnalysisLineForTest(info(100, 0.7));
+          assertNoAnalysis(harness.board.getData());
+        }
+        acknowledge(harness.engine, fence);
+        awaitHistoryRestoreCompletion(harness.board);
+        if (!paused) awaitRawCommand(output, "kata-analyze", operation + 1);
+        assertEquals(paused ? 0 : operation + 2, payloadCount(output, "kata-analyze"));
+        assertEquals(paused, pauseField.getBoolean(harness.frame));
+        assertEquals(paused, harness.frame.isUserAnalysisPaused());
+      }
+    } finally {
+      RightClickMenu2.coords = previousCoords;
     }
   }
 

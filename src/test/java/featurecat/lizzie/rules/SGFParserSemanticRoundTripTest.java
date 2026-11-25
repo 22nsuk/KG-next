@@ -134,6 +134,210 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+  void singleStartingStoneEditPreservesPositionUndoAndSavedSgf(
+      boolean convertedPosition, boolean recolor) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      String metadata =
+          "SZ[5]KM[6.5]RU[Japanese]PB[Black player]PW[White player]RE[W+R]"
+              + "C[starting position]XX[keep me]";
+      String setup =
+          "AB[aa]" + (convertedPosition ? "" : "[ad]") + "[cc][ee]AW[bc][cb][cd][dc]";
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;" + metadata + (convertedPosition ? "PL[B]" : "PL[W]") + setup
+              + (convertedPosition ? ";B[ad]" : "") + ")"));
+      Board board = Lizzie.board;
+      if (convertedPosition) {
+        board.nextMove(false);
+        assertTrue(board.convertCurrentPositionToStartingPosition());
+      }
+      assertFalse(board.isSetupMode(), "ordinary context-menu editing remains available");
+      BoardHistoryList before = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      BoardHistoryList expected = SGFParser.parseSgf(
+          "(;" + metadata + "PL[W]AB[ad][cc][ee]AW[bc][cb][cd][dc]"
+              + (recolor ? "[aa]" : "") + ")", true);
+
+      board.editMove(new int[] {0, 0}, recolor, !recolor);
+
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertEquals(expected.getData().zobrist, board.getData().zobrist);
+      assertEquals(Stone.BLACK, board.getData().stones[Board.getIndex(2, 2)],
+          "a setup stone with no liberties must not be captured while reconstructing the position");
+      assertStartingPositionMetadata(board);
+      board.cleanedit();
+      assertTreeSemanticsEqual(before, board.getHistory());
+      assertStartingPositionMetadata(board);
+      board.reedit();
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertStartingPositionMetadata(board);
+
+      Path saved = tempDirectory.resolve("starting-position.sgf");
+      SGFParser.save(board, saved.toString());
+      assertTrue(SGFParser.load(saved.toString(), false, false));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertStartingPositionMetadata(board);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void startingStoneEditRetainsLegalContinuationsAndSelectedVariation(boolean recolor)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      String continuations =
+          "(;W[cc]C[main]TR[cc];C[note]XX[transparent];B[]C[pass])"
+              + "(;W[dd]C[side]LB[dd:S];AB[cd]AW[bd]AE[ee]PL[B]C[setup];B[ed]C[tail])";
+      String prefix = "(;SZ[5]PL[W]KM[6.5]C[starting position]XX[keep me]";
+      assertTrue(SGFParser.loadFromStringforedit(
+          prefix + "AB[aa][ee]AW[bb]" + continuations + ")"));
+      Board board = Lizzie.board;
+      board.moveToAnyPosition(board.getHistory().getStart().getVariation(1).orElseThrow()
+          .next().orElseThrow().next().orElseThrow());
+      BoardHistoryList before = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      BoardHistoryList expected = SGFParser.parseSgf(
+          prefix + "AB[ee]AW[bb]" + (recolor ? "[aa]" : "")
+              + continuations + ")", true);
+
+      board.editMove(new int[] {0, 0}, recolor, !recolor);
+
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertSame(board.getHistory().getStart().getVariation(1).orElseThrow()
+          .next().orElseThrow().next().orElseThrow(), board.getHistory().getCurrentHistoryNode());
+      assertEquals("cc", board.getHistory().getStart().getVariation(0).orElseThrow()
+          .getData().getProperty("TR"));
+      assertEquals("dd:S", board.getHistory().getStart().getVariation(1).orElseThrow()
+          .getData().getProperty("LB"));
+      assertEquals("B", board.getHistory().getStart().getVariation(1).orElseThrow()
+          .next().orElseThrow().getData().getProperty("PL"));
+      board.cleanedit();
+      assertTreeSemanticsEqual(before, board.getHistory());
+      assertSame(board.getHistory().getStart().getVariation(1).orElseThrow()
+          .next().orElseThrow().next().orElseThrow(), board.getHistory().getCurrentHistoryNode());
+      board.reedit();
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertSame(board.getHistory().getStart().getVariation(1).orElseThrow()
+          .next().orElseThrow().next().orElseThrow(), board.getHistory().getCurrentHistoryNode());
+      assertTreeSemanticsEqual(expected, SGFParser.parseSgf(SGFParser.saveToString(false), true));
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void startingStoneEditRecalculatesCapturesInFollowingMoves(boolean recolor) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]PL[B]AB[ba]AW[aa];B[ab];W[ee])"));
+      Board board = Lizzie.board;
+      board.nextMove(false);
+      board.nextMove(false);
+      assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(1, board.getData().blackCaptures);
+      BoardHistoryList expected = SGFParser.parseSgf(
+          "(;SZ[5]PL[B]AW[aa]" + (recolor ? "[ba]" : "") + ";B[ab];W[ee])", true);
+
+      board.editMove(new int[] {1, 0}, recolor, !recolor);
+
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertEquals(Stone.WHITE, board.getData().stones[Board.getIndex(0, 0)],
+          "the old capture no longer occurs after the surrounding setup stone changes");
+      assertEquals(0, board.getData().blackCaptures);
+      assertEquals(2, board.getData().moveNumber);
+      assertTreeSemanticsEqual(expected, SGFParser.parseSgf(SGFParser.saveToString(false), true));
+    }
+  }
+
+  @Test
+  void startingStoneEditNumbersARecordedMoveThatNoLongerSelfCaptures() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(3)) {
+      Lizzie.leelaz.canSuicidal = true;
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[3]PL[B]AB[bb]AW[ba][ab][cb][ac][cc];B[bc])"));
+      Board board = Lizzie.board;
+      board.nextMove(false);
+      assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(1, 1)]);
+      assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(1, 2)]);
+      BoardHistoryList expected = SGFParser.parseSgf(
+          "(;SZ[3]PL[B]AB[bb]AW[ba][ab][cb][cc];B[bc])", true);
+
+      board.editMove(new int[] {0, 2}, false, true);
+
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertEquals(Stone.BLACK, board.getData().stones[Board.getIndex(1, 1)]);
+      assertEquals(Stone.BLACK, board.getData().stones[Board.getIndex(1, 2)]);
+      assertEquals(0, board.getData().whiteCaptures);
+      assertEquals(0, board.getData().moveNumberList[Board.getIndex(1, 1)]);
+      assertEquals(1, board.getData().moveNumberList[Board.getIndex(1, 2)]);
+      assertEquals(1, board.moveNumberByCoord(new int[] {1, 2}),
+          "the surviving recorded move must remain editable as move 1, not as a setup stone");
+    }
+  }
+
+  @Test
+  void startingStoneEditKeepsAnEarlierSurvivingMoveUnnumberedInASideVariation() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.newMoveNumberInBranch = true;
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AW[ba];B[aa](;W[ee])(;W[ab]))"));
+      Board board = Lizzie.board;
+      board.moveToAnyPosition(board.getHistory().getStart().next().orElseThrow()
+          .getVariation(1).orElseThrow());
+      assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(1, board.getData().moveNumberList[Board.getIndex(0, 1)]);
+      BoardHistoryList expected = SGFParser.parseSgf(
+          "(;SZ[5];B[aa](;W[ee])(;W[ab]))", true);
+
+      board.editMove(new int[] {1, 0}, false, true);
+
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertEquals(Stone.BLACK, board.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(0, board.getData().moveNumberList[Board.getIndex(0, 0)],
+          "the side variation hides move numbers inherited from its parent");
+      assertEquals(1, board.getData().moveNumberList[Board.getIndex(0, 1)]);
+      assertEquals(1, board.moveNumberByCoord(new int[] {0, 0}),
+          "editing the surviving ancestor stone must still target its original move");
+    }
+  }
+
+  private static void assertStartingPositionMetadata(Board board) {
+    assertEquals("Black player", board.getHistory().getGameInfo().getPlayerBlack());
+    assertEquals("White player", board.getHistory().getGameInfo().getPlayerWhite());
+    assertEquals("W+R", board.getHistory().getGameInfo().getResult());
+    assertEquals("Japanese", board.getHistory().getStart().getData().getProperty("RU"));
+    assertEquals("keep me", board.getHistory().getStart().getData().getProperty("XX"));
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void illegalStartingStoneEditPreservesTreeAndPreviousUndoOrRedo(boolean hasRedo)
+      throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]PL[B]AB[ba]AW[ab];B[aa]C[original])"));
+      Board board = Lizzie.board;
+      board.nextMove(false);
+      board.saveListForEdit();
+      board.getData().comment = "previous edit";
+      if (hasRedo) board.cleanedit();
+      BoardHistoryList before = board.getHistory();
+      BoardHistoryNode selected = before.getCurrentHistoryNode();
+      String saved = SGFParser.saveToString(false);
+
+      // Turning ba white would make the retained black aa move suicidal.
+      board.editMove(new int[] {1, 0}, true, false);
+
+      assertSame(before, board.getHistory());
+      assertSame(selected, board.getHistory().getCurrentHistoryNode());
+      assertEquals(saved, SGFParser.saveToString(false));
+      assertEquals(!hasRedo, board.canUndoEdit());
+      assertEquals(hasRedo, board.canRedoEdit());
+      if (hasRedo) board.reedit();
+      else board.cleanedit();
+      assertEquals(hasRedo ? "previous edit" : "original", board.getData().comment);
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"", "PL[B]", "PL[W]"})
   void editUndoRedoPreservesIndependentInitialSetupAndResolvedTurn(String player) throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
