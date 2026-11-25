@@ -33,6 +33,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -59,7 +60,6 @@ import org.json.JSONTokener;
 public class SGFParser {
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
-  private static final String alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
 
   // static boolean oriEmpty = false;
@@ -443,10 +443,6 @@ public class SGFParser {
 
   public static String passPos() {
     return "";
-    //    (Board.boardWidth <= 51 && Board.boardHeight <= 51)
-    //        ? String.format(
-    //            "%c%c", alphabet.charAt(Board.boardWidth), alphabet.charAt(Board.boardHeight))
-    //        : "";
   }
 
   public static boolean isPassPos(String pos) {
@@ -578,6 +574,7 @@ public class SGFParser {
     BoardHistoryList history = prepared.history;
     int width = history.getData().zobrist.width();
     int height = history.getData().zobrist.height();
+    boolean canSuicidal = options.canSuicidal(document, cancellation);
 
     int subTreeDepth = 0;
     // Save the variation step count
@@ -667,7 +664,7 @@ public class SGFParser {
               history.pass(color, newBranch, false);
             } else {
               history.place(move[0], move[1], color, newBranch, false, false,
-                  options.noCapture(), options.canSuicidal());
+                  options.noCapture(), canSuicidal);
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -1239,20 +1236,8 @@ public class SGFParser {
       return data.komi == -999 ? komi : data.komi;
     }
 
-    String asCoord(int index) {
-      return SGFParser.asCoord(index / boardHeight, index % boardHeight, boardWidth, boardHeight);
-    }
-
     String asCoord(int[] coord) {
-      return SGFParser.asCoord(coord[0], coord[1], boardWidth, boardHeight);
-    }
-
-    int[] parseCoord(String value) {
-      return convertSgfPosToCoord(value, boardWidth, boardHeight);
-    }
-
-    boolean isOnBoard(int[] coord) {
-      return coord[0] >= 0 && coord[0] < boardWidth && coord[1] >= 0 && coord[1] < boardHeight;
+      return SgfDocument.asCoord(coord[0], coord[1], boardWidth, boardHeight);
     }
 
     void clearLoadingAfterSerializationFailure() {
@@ -1665,43 +1650,7 @@ public class SGFParser {
       rootData.setProperty("RE", Escaping(result));
       rootData.setProperty("SZ", boardSizeTag);
       rootData.setProperty("CA", "UTF-8");
-      if (rootData.isSnapshotNode()) {
-        builder.append(materializedRootSnapshotProperties(rootData, history.getStones(), saveContext));
-      } else {
-        builder.append(rootData.propertiesString());
-        if (handicap != 0) {
-          builder.append("AB");
-          Stone[] stones = history.getStones();
-          for (int i = 0; i < stones.length; i++) {
-            Stone stone = stones[i];
-            if (stone.isBlack()) {
-              // i = x * Board.BOARD_SIZE + y;
-              builder.append('[').append(saveContext.asCoord(i)).append(']');
-            }
-          }
-        } else {
-          // Process the AW/AB stone
-          Stone[] stones = history.getStones();
-          StringBuilder abStone = new StringBuilder();
-          StringBuilder awStone = new StringBuilder();
-          for (int i = 0; i < stones.length; i++) {
-            Stone stone = stones[i];
-            if (stone.isBlack() || stone.isWhite()) {
-              if (stone.isBlack()) {
-                abStone.append('[').append(saveContext.asCoord(i)).append(']');
-              } else {
-                awStone.append('[').append(saveContext.asCoord(i)).append(']');
-              }
-            }
-          }
-          if (abStone.length() > 0) {
-            builder.append("AB").append(abStone);
-          }
-          if (awStone.length() > 0) {
-            builder.append("AW").append(awStone);
-          }
-        }
-      }
+      builder.append(materializedRootSetupProperties(rootData, saveContext));
 
       // The AW/AB Comment
       if (!stripRootMetadata && !history.getData().comment.isEmpty()) {
@@ -1887,15 +1836,8 @@ public class SGFParser {
       return builder;
     }
     BoardData data = node.getData();
-    if (data.isSnapshotNode() && node.previous().isPresent()) {
-      builder.append(";");
-      builder.append(materializedSetupProperties(node, saveContext));
-      appendSerializedComment(builder, node, forUpload, true, saveContext);
-      return builder;
-    }
-    if (shouldSerializeSetupSnapshot(data)) {
-      builder.append(";");
-      builder.append(data.propertiesString());
+    if (data.isSnapshotNode() && (node.previous().isPresent() || hasRootSetupStoneProperties(data))) {
+      builder.append(';').append(materializedSetupProperties(node, saveContext));
       appendSerializedComment(builder, node, forUpload, true, saveContext);
       return builder;
     }
@@ -1929,27 +1871,19 @@ public class SGFParser {
     return builder;
   }
 
-  private static boolean shouldSerializeSetupSnapshot(BoardData data) {
-    if (!data.isSnapshotNode()) {
-      return false;
-    }
-    Map<String, List<String>> properties = data.getProperties();
-    return properties.containsKey("AB")
-        || properties.containsKey("AW")
-        || properties.containsKey("AE");
-  }
-
-  private static String materializedRootSnapshotProperties(
-      BoardData rootData, Stone[] stones, SaveContext saveContext) {
-    Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
-    Map<String, List<String>> rootSetup =
-        collectCurrentRootSetup(stones, rootData.blackToPlay, saveContext);
+  private static String materializedRootSetupProperties(BoardData rootData, SaveContext saveContext) {
+    int width = saveContext.boardWidth();
+    int height = saveContext.boardHeight();
+    BitSet points = SnapshotSetup.points(rootData, null, width, height);
+    Map<String, List<String>> rootSetup = SnapshotSetup.properties(rootData, points, width, height);
+    addProperty(rootSetup, "PL", rootData.blackToPlay ? "B" : "W");
+    Map<String, List<String>> properties = new LinkedHashMap<>();
     boolean setupInserted = false;
     for (Map.Entry<String, List<String>> entry : rootData.getProperties().entrySet()) {
       String key = entry.getKey();
-      if (isRootSetupSerializationProperty(key)) {
+      if (isSetupSerializationProperty(key)) {
         if (!setupInserted) {
-          addProperties(properties, rootSetup);
+          properties.putAll(rootSetup);
           setupInserted = true;
         }
         continue;
@@ -1957,108 +1891,35 @@ public class SGFParser {
       addPropertyValues(properties, key, entry.getValue());
     }
     if (!setupInserted) {
-      addProperties(properties, rootSetup);
+      properties.putAll(rootSetup);
     }
     return propertiesString(properties);
   }
 
-  private static Map<String, List<String>> collectCurrentRootSetup(
-      Stone[] stones, boolean blackToPlay, SaveContext saveContext) {
-    Map<String, List<String>> setup = new LinkedHashMap<String, List<String>>();
-    for (int index = 0; index < stones.length; index++) {
-      Stone stone = stones[index];
-      if (stone.isBlack()) {
-        addSetupProperty(setup, "AB", saveContext.asCoord(index));
-      } else if (stone.isWhite()) {
-        addSetupProperty(setup, "AW", saveContext.asCoord(index));
-      }
-    }
-    addProperty(setup, "PL", blackToPlay ? "B" : "W");
-    return setup;
-  }
-
-  private static boolean isRootSetupSerializationProperty(String key) {
+  private static boolean isSetupSerializationProperty(String key) {
     return "AB".equals(key) || "AW".equals(key) || "AE".equals(key) || "PL".equals(key);
   }
 
   private static String materializedSetupProperties(BoardHistoryNode node, SaveContext saveContext) {
-    Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
     BoardData data = node.getData();
+    BoardData parent = node.previous().map(BoardHistoryNode::getData).orElse(null);
+    int width = saveContext.boardWidth();
+    int height = saveContext.boardHeight();
+    BitSet points = parent == null
+        ? SnapshotSetup.declaredPoints(data, width, height)
+        : SnapshotSetup.points(data, parent, width, height);
+    Map<String, List<String>> properties = new LinkedHashMap<>();
     addProperty(properties, "PL", data.blackToPlay ? "B" : "W");
-    appendSetupStoneDelta(properties, node, saveContext);
+    // FF[4] AB and AW overwrite the inherited stone. Each point has one final declaration.
+    properties.putAll(SnapshotSetup.properties(data, points, width, height));
     data.getProperties()
         .forEach(
             (key, value) -> {
-              if ("PL".equals(key)) {
-                return;
+              if (!isSetupSerializationProperty(key)) {
+                addPropertyValues(properties, key, value);
               }
-              if (isSetupStoneProperty(key)) {
-                addSemanticallyMatchingSetupValues(properties, node, key, value, saveContext);
-                return;
-              }
-              addPropertyValues(properties, key, value);
             });
     return propertiesString(properties);
-  }
-
-  private static void appendSetupStoneDelta(
-      Map<String, List<String>> properties, BoardHistoryNode node, SaveContext saveContext) {
-    Stone[] currentStones = node.getData().stones;
-    Stone[] previousStones = node.previous().get().getData().stones;
-    // Older readers only add stones to empty points. Emit all removals before either color.
-    Map<String, List<String>> additions = new LinkedHashMap<>();
-    for (int index = 0; index < currentStones.length; index++) {
-      Stone currentStone = currentStones[index];
-      Stone previousStone = previousStones[index];
-      if (currentStone == previousStone) {
-        continue;
-      }
-      String point = saveContext.asCoord(index);
-      if (!previousStone.isEmpty()) {
-        addSetupProperty(properties, "AE", point);
-      }
-      if (currentStone.isBlack()) {
-        addSetupProperty(additions, "AB", point);
-      } else if (currentStone.isWhite()) {
-        addSetupProperty(additions, "AW", point);
-      }
-    }
-    properties.putAll(additions);
-  }
-
-  private static void addSemanticallyMatchingSetupValues(
-      Map<String, List<String>> properties, BoardHistoryNode node, String key, List<String> rawValues,
-      SaveContext saveContext) {
-    if (rawValues == null) return;
-    for (String value : rawValues) {
-      String point = value.trim();
-      int[] coord = saveContext.parseCoord(point);
-      if (coord == null || !saveContext.isOnBoard(coord)) continue;
-      // Even when the parent already has this color, the declaration owns the point on replay.
-      Stone stone = node.getData().stones[coord[0] * saveContext.boardHeight() + coord[1]];
-      boolean matches = switch (key) {
-        case "AB" -> stone.isBlack();
-        case "AW" -> stone.isWhite();
-        case "AE" -> stone.isEmpty();
-        default -> false;
-      };
-      if (matches) {
-        addSetupProperty(properties, key, point);
-      }
-    }
-  }
-
-  private static void addSetupProperty(Map<String, List<String>> properties, String key, String value) {
-    if (value == null || value.isEmpty()) {
-      return;
-    }
-    if (!properties.getOrDefault(key, List.of()).contains(value)) {
-      addProperty(properties, key, value);
-    }
-  }
-
-  private static boolean isSetupStoneProperty(String key) {
-    return "AB".equals(key) || "AW".equals(key) || "AE".equals(key);
   }
 
   private static void appendSerializedComment(
@@ -4193,6 +4054,11 @@ public class SGFParser {
   public record ParseOptions(
       boolean readKomi, boolean noCapture, boolean canSuicidal, boolean newMoveNumberInBranch,
       int limitBranchLength, int maxSuggestions, double defaultKomi) {
+    private boolean canSuicidal(SgfDocument document, SgfCancellation cancellation) {
+      return BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
+          .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
+    }
+
     public static ParseOptions capture() {
       var config = Lizzie.config;
       return capture(config == null || config.readKomi);
@@ -4201,9 +4067,10 @@ public class SGFParser {
     /** Captures a per-import komi choice without temporarily changing the live preference. */
     public static ParseOptions capture(boolean readKomi) {
       var config = Lizzie.config;
+      var engine = Lizzie.leelaz;
       return new ParseOptions(
           readKomi, config != null && config.noCapture,
-          Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal,
+          engine != null && engine.canSuicidal,
           config != null && config.newMoveNumberInBranch,
           config == null ? 0 : config.limitBranchLength,
           config != null && config.limitMaxSuggestion > 0 && !config.showNoSuggCircle
@@ -4300,6 +4167,7 @@ public class SGFParser {
 
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
+    boolean canSuicidal = options.canSuicidal(document, SgfCancellation.NONE);
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, BoardHistoryNode> subTreeStepMap = new HashMap<Integer, BoardHistoryNode>();
@@ -4385,7 +4253,8 @@ public class SGFParser {
               history.pass(color, newBranch, false);
 
             } else {
-              history.place(move[0], move[1], color, newBranch, false, false, options.noCapture(), options.canSuicidal());
+              history.place(move[0], move[1], color, newBranch, false, false,
+                  options.noCapture(), canSuicidal);
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -4607,6 +4476,8 @@ public class SGFParser {
     if (value == null) return -1;
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
+    boolean noCapture = Lizzie.config.noCapture;
+    boolean canSuicidal = history.allowsSuicideForReplay();
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, Integer> subTreeStepMap = new HashMap<Integer, Integer>();
@@ -4722,7 +4593,7 @@ public class SGFParser {
             if (move == null) {
               history.pass(color, newBranch, false);
             } else {
-              history.place(move[0], move[1], color, newBranch);
+              history.place(move[0], move[1], color, newBranch, false, false, noCapture, canSuicidal);
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -5466,15 +5337,7 @@ public class SGFParser {
   }
 
   public static String asCoord(int[] c) {
-    return asCoord(c[0], c[1], Board.boardWidth, Board.boardHeight);
-  }
-
-  private static String asCoord(int x, int y, int boardWidth, int boardHeight) {
-    if (boardHeight >= 52 || boardWidth >= 52) {
-      return x + "_" + y;
-    } else {
-      return new String(new char[] {alphabet.charAt(x), alphabet.charAt(y)});
-    }
+    return SgfDocument.asCoord(c[0], c[1], Board.boardWidth, Board.boardHeight);
   }
 }
 

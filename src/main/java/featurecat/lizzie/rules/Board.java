@@ -1125,13 +1125,8 @@ public class Board {
       if (existing == color) {
         return true;
       }
-      if (!existing.isEmpty()) {
-        data.stones[index] = Stone.EMPTY;
-        data.zobrist.toggleStone(x, y, existing);
-      }
-      data.stones[index] = color;
-      data.zobrist.toggleStone(x, y, color);
-      invalidateSetupAnalysis(root);
+      data.replaceSetupStone(index, color);
+      finishRootSetupEdit(root);
       advanceContextRevision();
       Lizzie.frame.refresh();
       return true;
@@ -1154,9 +1149,8 @@ public class Board {
       if (existing.isEmpty()) {
         return true;
       }
-      data.stones[index] = Stone.EMPTY;
-      data.zobrist.toggleStone(x, y, existing);
-      invalidateSetupAnalysis(root);
+      data.replaceSetupStone(index, Stone.EMPTY);
+      finishRootSetupEdit(root);
       advanceContextRevision();
       Lizzie.frame.refresh();
       return true;
@@ -1177,14 +1171,11 @@ public class Board {
         if (existing.isEmpty()) {
           continue;
         }
-        int x = index / boardHeight;
-        int y = index % boardHeight;
-        data.stones[index] = Stone.EMPTY;
-        data.zobrist.toggleStone(x, y, existing);
+        data.replaceSetupStone(index, Stone.EMPTY);
         changed = true;
       }
       if (changed) {
-        invalidateSetupAnalysis(root);
+        finishRootSetupEdit(root);
         advanceContextRevision();
         Lizzie.frame.refresh();
       }
@@ -1204,19 +1195,17 @@ public class Board {
         return true;
       }
       data.blackToPlay = blackToPlay;
-      invalidateSetupAnalysis(root);
+      finishRootSetupEdit(root);
       advanceContextRevision();
       Lizzie.frame.refresh();
       return true;
     }
   }
 
-  private void invalidateSetupAnalysis(BoardHistoryNode root) {
-    root.getData().clearAnalysisPayloadState();
-    root.nodeInfo = new NodeInfo();
-    root.nodeInfoMain = new NodeInfo();
-    root.nodeInfo2 = new NodeInfo();
-    root.nodeInfoMain2 = new NodeInfo();
+  private void finishRootSetupEdit(BoardHistoryNode root) {
+    BoardData data = root.getData();
+    root.updateSetupMetadata(null, SnapshotSetup.points(data, null));
+    root.clearAnalysisAfterSetupEdit();
   }
 
   /** Returns whether any variation in the current tree contains a real move or pass. */
@@ -1273,9 +1262,10 @@ public class Board {
               50,
               0);
       startingPosition.setProperties(oldRoot.getData().getProperties());
-      startingPosition.comment = oldRoot.getData().comment;
+      startingPosition.setAuthoredComment(oldRoot.getData().authoredComment());
 
       BoardHistoryList converted = new BoardHistoryList(startingPosition);
+      converted.getStart().updateSetupMetadata(null, SnapshotSetup.points(startingPosition, null));
       converted.setGameInfo(gameInfo);
       converted.restoreSessionRulesTarget(history.captureSessionRules());
       setHistory(converted);
@@ -6861,9 +6851,12 @@ public class Board {
   }
 
   public void editMove(int[] coords, boolean isSwitch, boolean isDelete) {
-    if ((isSwitch || isDelete) && isStartingSetupStone(coords)) {
-      editStartingSetupStone(coords, isSwitch);
-      return;
+    if ((isSwitch || isDelete) && history != null && isValid(coords)) {
+      BoardHistoryNode owner = history.setupStoneOwner(coords[0], coords[1]);
+      if (owner != null) {
+        editSetupStone(owner, coords, isSwitch);
+        return;
+      }
     }
     GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
     boolean oriPlaySound = Lizzie.config.playSound;
@@ -6961,29 +6954,12 @@ public class Board {
     Lizzie.board.getHistory().setGameInfo(gameInfo);
   }
 
-  private boolean isStartingSetupStone(int[] coords) {
-    if (!isValid(coords) || history == null) return false;
-    BoardHistoryNode root = history.getStart();
-    int index = getIndex(coords[0], coords[1]);
-    Stone stone = root.getData().stones[index];
-    if (!root.getData().isSnapshotNode() || !(stone.isBlack() || stone.isWhite())) return false;
-    // A later move or setup declaration at the same point owns its own edit. Do not
-    // mistake a reused coordinate (or an MN display override) for a starting stone.
-    for (BoardHistoryNode node = history.getCurrentHistoryNode(); node != root;
-        node = node.previous().orElseThrow()) {
-      BoardData data = node.getData();
-      if (data.stones[index] != stone || matchesHistoryMoveCoord(data, coords)
-          || BoardHistoryList.hasSetupPropertyAt(data, coords[0], coords[1])) return false;
-    }
-    return true;
-  }
-
-  private void editStartingSetupStone(int[] coords, boolean recolor) {
+  private void editSetupStone(BoardHistoryNode owner, int[] coords, boolean recolor) {
     boolean resumeAnalysis = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
     Stone replacement = recolor ? history.getData().stones[getIndex(coords[0], coords[1])].opposite()
         : Stone.EMPTY;
     BoardHistoryList edited =
-        history.editStartingStone(coords[0], coords[1], replacement, editTrialNumbering());
+        history.editSetupStone(owner, coords[0], coords[1], replacement, editTrialNumbering());
     if (edited == null) {
       Utils.showMsg(Lizzie.resourceBundle.getString("Board.startingPositionEditInvalidContinuation"));
       return;

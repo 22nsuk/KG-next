@@ -4,6 +4,7 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -95,6 +96,39 @@ public class BoardHistoryNode {
     stone.y = y;
     stone.isBlack = isBlack;
     extraStones.add(stone);
+  }
+
+  void clearAnalysisAfterSetupEdit() {
+    data.setAuthoredComment(data.authoredComment());
+    data.clearAnalysisPayloadState();
+    nodeInfo = new NodeInfo();
+    nodeInfoMain = new NodeInfo();
+    nodeInfo2 = new NodeInfo();
+    nodeInfoMain2 = new NodeInfo();
+    analyzed = false;
+    diffAnalyzed = false;
+    isBest = false;
+  }
+
+  /** Keep SGF declarations and legacy engine navigation metadata aligned with this snapshot. */
+  void updateSetupMetadata(BoardData parent, BitSet points) {
+    var props = data.getProperties();
+    props.remove("AB");
+    props.remove("AW");
+    props.remove("AE");
+    props.putAll(SnapshotSetup.properties(data, points, data.zobrist.width(), data.zobrist.height()));
+    props.put("PL", List.of(data.blackToPlay ? "B" : "W"));
+
+    extraStones = null;
+    hasRemovedStone = false;
+    int height = data.zobrist.height();
+    for (int i = points.nextSetBit(0); i >= 0; i = points.nextSetBit(i + 1)) {
+      Stone inherited = parent == null ? Stone.EMPTY : parent.stones[i];
+      Stone stone = data.stones[i];
+      if (stone == inherited) continue;
+      if (!inherited.isEmpty()) hasRemovedStone = true;
+      if (!stone.isEmpty()) addExtraStones(i / height, i % height, stone.isBlack());
+    }
   }
 
   public synchronized void undoExtraStones() {

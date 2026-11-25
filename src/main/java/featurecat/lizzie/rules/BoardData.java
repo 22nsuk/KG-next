@@ -1449,6 +1449,17 @@ public class BoardData implements Cloneable {
     return this.lastMove.map(m -> (m[0] == coord[0] && m[1] == coord[1])).orElse(false);
   }
 
+  void replaceSetupStone(int index, Stone replacement) {
+    Stone previous = stones[index];
+    if (previous == replacement) return;
+    int x = index / zobrist.height();
+    int y = index % zobrist.height();
+    if (previous != Stone.EMPTY) zobrist.toggleStone(x, y, previous);
+    if (replacement != Stone.EMPTY) zobrist.toggleStone(x, y, replacement);
+    stones[index] = replacement;
+    moveNumberList[index] = 0;
+  }
+
   public void tryToClearBestMoves() {
     clearAnalysisPayloadState();
   }

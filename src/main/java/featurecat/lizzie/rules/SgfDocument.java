@@ -68,6 +68,19 @@ public final class SgfDocument {
   public int height() { return height; }
   boolean multiGo() { return multiGo; }
 
+  /** Last scalar value in the first node, regardless of its order among that node's properties. */
+  String rootProperty(String name, SgfCancellation cancellation) {
+    int i = 1; // parseNormalized always starts with OPEN and tolerates a missing initial semicolon.
+    if (i < events.size() && events.get(i).kind() == ';') i++;
+    Event match = null;
+    for (; i < events.size() && events.get(i).kind() == 'P'; i++) {
+      cancellation.checkEvery(i);
+      Event property = events.get(i);
+      if (name.equals(property.name())) match = property;
+    }
+    return match == null ? null : match.legacyValue(cancellation);
+  }
+
   /** Applies the existing KG input tolerance and preserves ordered syntax without global state. */
   public static SgfDocument parse(String input) {
     return parseNormalized(normalizeInput(input));
@@ -153,7 +166,7 @@ public final class SgfDocument {
     return name.equals("AB") || name.equals("AW") || name.equals("AE");
   }
 
-  private static String asCoord(int x, int y, int width, int height) {
+  static String asCoord(int x, int y, int width, int height) {
     return width >= 52 || height >= 52 ? x + "_" + y
         : new String(new char[] {alphabet.charAt(x), alphabet.charAt(y)});
   }
@@ -283,7 +296,7 @@ public final class SgfDocument {
     return points.toString();
   }
 
-  private static int[] setupRangeEndpoint(String value, int width, int height) {
+  static int[] setupRangeEndpoint(String value, int width, int height) {
     int[] point;
     if (width >= 52 || height >= 52) {
       String[] axes = value.trim().split("_", -1);

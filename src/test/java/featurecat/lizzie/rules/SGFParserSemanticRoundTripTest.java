@@ -203,6 +203,67 @@ class SGFParserSemanticRoundTripTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editsSetupOnItsOwnVariationAndRetainsRootAndSiblings(boolean recolor) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String sgf = "(;SZ[5]C[game](;AB[aa][cc]AW[ee]C[setup];W[bd])(;AB[aa];W[bc]))";
+      assertTrue(SGFParser.loadFromStringforedit(sgf));
+      Board board = fixture.board();
+      BoardHistoryNode root = board.getHistory().getStart();
+      root.getVariation(1).orElseThrow().getData().setPlayouts(100);
+      board.moveToAnyPosition(root.getVariation(0).orElseThrow().next().orElseThrow());
+
+      board.editMove(new int[] {0, 0}, recolor, !recolor);
+
+      String setup = recolor ? "AB[cc]AW[aa][ee]" : "AB[cc]AW[ee]";
+      BoardHistoryList expected = SGFParser.parseSgf(sgf.replace("AB[aa][cc]AW[ee]", setup), true);
+      assertTreeSemanticsEqual(expected, board.getHistory());
+      assertEquals(100, board.getHistory().getStart().getVariation(1).orElseThrow()
+          .getData().getPlayouts());
+      assertArrayEquals(new int[] {1, 3}, board.getData().lastMove.orElseThrow());
+      assertTreeSemanticsEqual(expected, SGFParser.parseSgf(SGFParser.saveToString(false), true));
+      board.cleanedit();
+      assertTreeSemanticsEqual(SGFParser.parseSgf(sgf, true), board.getHistory());
+      board.reedit();
+      assertTreeSemanticsEqual(expected, board.getHistory());
+    }
+  }
+
+  @Test
+  void editingALaterSetupDeclarationAtAMoveCoordinateKeepsOriginalMove() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5];B[cc];AB[cc]C[diagram])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      board.editMove(new int[] {2, 2}, true, false);
+      int cc = Board.getIndex(2, 2);
+      assertEquals(Stone.WHITE, board.getData().stones[cc]);
+      assertEquals(0, board.getData().moveNumberList[cc]);
+      BoardData move = board.getHistory().getEnd().previous().orElseThrow().getData();
+      assertEquals(Stone.BLACK, move.stones[cc]);
+      assertEquals(1, move.moveNumberList[cc]);
+      assertEquals("diagram", board.getData().comment);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"HA[2]PL[W]AB[aa][cc]AW[ee]", "HA[2];PL[W]AB[aa][cc]AW[ee]"})
+  void editedHandicapIsRecognizedBeforeAndAfterSave(String setup) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]" + setup + ";W[bd])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      board.editMove(new int[] {4, 4}, false, true);
+      for (BoardHistoryList history : List.of(board.getHistory(),
+          SGFParser.parseSgf(SGFParser.saveToString(false), true))) {
+        BoardHistoryNode handicap = history.getEnd().previous().orElseThrow();
+        assertTrue(InitialHandicapSetup.isInitialHandicap(handicap, 2, SIZE, SIZE));
+        assertEquals(Stone.EMPTY, handicap.getData().stones[Board.getIndex(4, 4)]);
+      }
+    }
+  }
+
   @Test
   void repeatedStartingEditsKeepDescendantSetupAcrossReopen() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {

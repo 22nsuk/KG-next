@@ -6,6 +6,7 @@ import featurecat.lizzie.analysis.KataGoRules;
 import java.lang.ref.WeakReference;
 import java.util.ArrayDeque;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -204,8 +205,8 @@ public class BoardHistoryList {
               SessionRulesSource.EXTERNAL_IMPORT,
               revision);
     } else {
-      Optional<KataGoRules> parsed = KataGoRules.parse(rawDeclaration);
-      if (parsed.isPresent() && parsed.get().hasRequiredFields()) {
+      Optional<KataGoRules> parsed = parseDeclaredRules(rawDeclaration);
+      if (parsed.isPresent()) {
         sessionRulesTarget =
             new SessionRulesTarget(
                 SessionRulesKind.VALID,
@@ -224,6 +225,10 @@ public class BoardHistoryList {
       }
     }
     return sessionRulesTarget;
+  }
+
+  static Optional<KataGoRules> parseDeclaredRules(String declaration) {
+    return KataGoRules.parse(declaration).filter(KataGoRules::hasRequiredFields);
   }
 
   /** Publishes a successful manual selection as a valid target at a newer revision. */
@@ -331,64 +336,94 @@ public class BoardHistoryList {
     return copy;
   }
 
-  /** Replays a starting-position edit privately; an illegal continuation rejects the whole edit. */
-  BoardHistoryList editStartingStone(
-      int x, int y, Stone replacement, TrialNumbering trialNumbering) {
+  boolean allowsSuicideForReplay() {
+    SessionRulesTarget target = captureSessionRules();
+    // Detached and unsynchronized imports can retain RU without publishing a session target.
+    Optional<KataGoRules> rules = target.source() == SessionRulesSource.NONE
+        ? parseDeclaredRules(getStart().getData().getProperty("RU")) : target.parsedRules();
+    var engine = Lizzie.leelaz;
+    return rules.map(rule -> rule.bool(KataGoRules.SUICIDE))
+        .orElse(engine != null && engine.canSuicidal);
+  }
+
+  /** Walk the selected variation back to the setup declaration or move that owns this stone. */
+  BoardHistoryNode setupStoneOwner(int x, int y) {
+    int index = getIndex(x, y);
+    Stone stone = head.getData().stones[index];
+    int[] point = {x, y};
+    if (stone != Stone.BLACK && stone != Stone.WHITE) return null;
+    for (BoardHistoryNode node = head; node != null; node = node.previous().orElse(null)) {
+      BoardData data = node.getData();
+      if (data.stones[index] != stone) return null;
+      BoardData parent = node.previous().map(BoardHistoryNode::getData).orElse(null);
+      if (data.isSnapshotNode() && SnapshotSetup.points(data, parent).get(index)) return node;
+      if (data.isMoveNode() && data.isSameCoord(point)) return null;
+    }
+    return null;
+  }
+
+  /** Replays a setup edit on a private tree; an illegal continuation rejects the whole edit. */
+  BoardHistoryList editSetupStone(
+      BoardHistoryNode owner, int x, int y, Stone replacement, TrialNumbering trialNumbering) {
     BoardHistoryNode root = getStart();
-    if (!root.getData().isSnapshotNode()
+    if (!owner.getData().isSnapshotNode()
         || x < 0 || y < 0
         || x >= root.getData().zobrist.width() || y >= root.getData().zobrist.height()
         || (replacement != Stone.EMPTY && replacement != Stone.BLACK && replacement != Stone.WHITE)) {
       return null;
     }
     boolean noCapture = Lizzie.config.noCapture;
-    boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
+    boolean canSuicidal = allowsSuicideForReplay();
     TrialNumbering normalization =
         trialNumbering != null && trialNumbering.root.get() == root ? trialNumbering : null;
     BoardHistoryList[] result = new BoardHistoryList[1];
     BoardHistoryNode.runWithoutGlobalMoveSideEffects(false,
-        () -> result[0] = replayStartingStoneEdit(
-            root, x, y, replacement, noCapture, canSuicidal, normalization));
+        () -> result[0] = replaySetupStoneEdit(
+            root, owner, x, y, replacement, noCapture, canSuicidal, normalization));
     return result[0];
   }
 
-  private record StartingEditNode(BoardHistoryNode source, BoardHistoryNode parent) {}
+  private record SetupEditNode(BoardHistoryNode source, BoardHistoryNode parent, boolean affected) {}
 
-  private BoardHistoryList replayStartingStoneEdit(
-      BoardHistoryNode root, int x, int y, Stone replacement,
+  private BoardHistoryList replaySetupStoneEdit(
+      BoardHistoryNode root, BoardHistoryNode owner, int x, int y, Stone replacement,
       boolean noCapture, boolean canSuicidal, TrialNumbering trialNumbering) {
     BoardHistoryList rebuilt = new BoardHistoryList(null);
     rebuilt.gameInfo = gameInfo;
     rebuilt.sessionRulesTarget = sessionRulesTarget;
     BoardHistoryNode selected = null;
-    ArrayDeque<StartingEditNode> pending = new ArrayDeque<>();
-    pending.add(new StartingEditNode(root, null));
+    ArrayDeque<SetupEditNode> pending = new ArrayDeque<>();
+    pending.add(new SetupEditNode(root, null, root == owner));
     while (!pending.isEmpty()) {
-      StartingEditNode entry = pending.removeFirst();
+      SetupEditNode entry = pending.removeFirst();
       BoardHistoryNode source = entry.source();
       BoardHistoryNode parent = entry.parent();
       BoardData original = source.getData();
       BoardData data = original.clone();
       int[] inheritedMoveNumbers = parent == null ? null : parent.getData().moveNumberList;
-      if (parent == null) {
-        replaceSetupStone(data, data.zobrist.index(x, y), replacement);
-      } else if (original.isSnapshotNode()) {
-        BoardData oldParent = source.previous().orElseThrow().getData();
-        data.stones = parent.getData().stones.clone();
-        data.zobrist = parent.getData().zobrist.clone();
-        data.blackCaptures += parent.getData().blackCaptures - oldParent.blackCaptures;
-        data.whiteCaptures += parent.getData().whiteCaptures - oldParent.whiteCaptures;
-        for (int index = 0; index < data.stones.length; index++) {
-          int px = index / data.zobrist.height();
-          int py = index % data.zobrist.height();
-          if (original.stones[index] != oldParent.stones[index]
-              || hasSetupPropertyAt(original, px, py)) {
-            replaceSetupStone(data, index, original.stones[index]);
+      BitSet setup = null;
+      if (entry.affected() && original.isSnapshotNode()) {
+        BoardData oldParent = source.previous().map(BoardHistoryNode::getData).orElse(null);
+        setup = SnapshotSetup.points(original, oldParent);
+        if (source == owner) {
+          int index = data.zobrist.index(x, y);
+          data.replaceSetupStone(index, replacement);
+          // Removing a setup on an already-empty parent also removes its declaration.
+          setup.set(index, replacement != Stone.EMPTY
+              || (oldParent != null && oldParent.stones[index] != Stone.EMPTY));
+        } else {
+          BoardData newParent = parent.getData();
+          data.stones = newParent.stones.clone();
+          data.zobrist = newParent.zobrist.clone();
+          data.blackCaptures += newParent.blackCaptures - oldParent.blackCaptures;
+          data.whiteCaptures += newParent.whiteCaptures - oldParent.whiteCaptures;
+          for (int index = setup.nextSetBit(0); index >= 0; index = setup.nextSetBit(index + 1)) {
+            data.replaceSetupStone(index, original.stones[index]);
           }
         }
-      } else {
+      } else if (entry.affected()) {
         rebuilt.head = parent;
-        BoardData played = rebuilt.replayStartingEditAction(original, noCapture, canSuicidal);
+        BoardData played = rebuilt.replayActionForSetupEdit(original, noCapture, canSuicidal);
         if (played == null) return null;
         data.stones = played.stones;
         data.zobrist = played.zobrist;
@@ -401,19 +436,22 @@ public class BoardHistoryList {
           // action's result so a manual removal is not confused with a capture changed by this edit.
           BoardHistoryList before =
               new BoardHistoryList(source.previous().orElseThrow().getData().clone());
-          BoardData oldPlayed = before.replayStartingEditAction(original, noCapture, canSuicidal);
+          BoardData oldPlayed = before.replayActionForSetupEdit(original, noCapture, canSuicidal);
           if (oldPlayed == null) return null;
           for (int index = 0; index < data.stones.length; index++) {
             if (original.stones[index] != oldPlayed.stones[index]) {
-              replaceSetupStone(data, index, original.stones[index]);
+              data.replaceSetupStone(index, original.stones[index]);
             }
           }
         }
       }
-      if (parent != null) {
+      if (entry.affected() && parent != null) {
         for (int index = 0; index < data.stones.length; index++) {
           if (data.stones[index] == Stone.EMPTY) data.moveNumberList[index] = 0;
-          else if (data.stones[index] != original.stones[index]) {
+          else if (setup != null && setup.get(index) && data.stones[index] != parent.getData().stones[index]) {
+            // A setup replacement has no move number, even when it covers a numbered stone.
+            data.moveNumberList[index] = 0;
+          } else if (data.stones[index] != original.stones[index]) {
             data.moveNumberList[index] = inheritedMoveNumbers[index];
           }
         }
@@ -436,27 +474,24 @@ public class BoardHistoryList {
           data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
         }
       }
-      data.setAuthoredComment(data.authoredComment());
-      data.clearAnalysisPayloadState();
       BoardHistoryNode copied = source.copyForRestore(data);
-      copied.nodeInfo = new NodeInfo();
-      copied.nodeInfoMain = new NodeInfo();
-      copied.nodeInfo2 = new NodeInfo();
-      copied.nodeInfoMain2 = new NodeInfo();
-      copied.analyzed = false;
-      copied.diffAnalyzed = false;
-      copied.isBest = false;
+      if (entry.affected()) {
+        if (setup != null) copied.updateSetupMetadata(parent == null ? null : parent.getData(), setup);
+        copied.clearAnalysisAfterSetupEdit();
+      } else {
+        copied.materializeRestoreNodeInfo();
+      }
       if (parent != null) copied.reparentAsLastVariationOf(parent);
       if (source == head) selected = copied;
       for (BoardHistoryNode child : source.getVariations()) {
-        pending.addLast(new StartingEditNode(child, copied));
+        pending.addLast(new SetupEditNode(child, copied, entry.affected() || child == owner));
       }
     }
     rebuilt.head = selected;
     return rebuilt;
   }
 
-  private BoardData replayStartingEditAction(
+  private BoardData replayActionForSetupEdit(
       BoardData action, boolean noCapture, boolean canSuicidal) {
     BoardHistoryNode parent = head;
     boolean parentBlackToPlay = parent.getData().blackToPlay;
@@ -481,40 +516,6 @@ public class BoardHistoryList {
       parent.getData().blackToPlay = parentBlackToPlay;
       head = parent;
     }
-  }
-
-  private static void replaceSetupStone(BoardData data, int index, Stone replacement) {
-    Stone previous = data.stones[index];
-    if (previous == replacement) return;
-    int x = index / data.zobrist.height();
-    int y = index % data.zobrist.height();
-    if (previous != Stone.EMPTY) data.zobrist.toggleStone(x, y, previous);
-    if (replacement != Stone.EMPTY) data.zobrist.toggleStone(x, y, replacement);
-    data.stones[index] = replacement;
-    data.moveNumberList[index] = 0;
-  }
-
-  /** Includes explicit no-op setup declarations, which still replace an inherited root stone. */
-  static boolean hasSetupPropertyAt(BoardData data, int x, int y) {
-    Stone stone = data.stones[data.zobrist.index(x, y)];
-    String key = stone == Stone.BLACK ? "AB" : stone == Stone.WHITE ? "AW" : "AE";
-    for (String value : data.getPropertyValues(key)) {
-      String[] range = value.trim().split(":", -1);
-      if (range.length > 2) continue;
-      int[] first = SgfDocument.convertSgfPosToCoord(
-          range[0], data.zobrist.width(), data.zobrist.height());
-      int[] last = range.length == 1 ? first : SgfDocument.convertSgfPosToCoord(
-          range[1], data.zobrist.width(), data.zobrist.height());
-      if (first != null && last != null
-          && first[0] >= 0 && first[1] >= 0 && last[0] >= 0 && last[1] >= 0
-          && first[0] < data.zobrist.width() && last[0] < data.zobrist.width()
-          && first[1] < data.zobrist.height() && last[1] < data.zobrist.height()
-          && x >= Math.min(first[0], last[0]) && x <= Math.max(first[0], last[0])
-          && y >= Math.min(first[1], last[1]) && y <= Math.max(first[1], last[1])) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /** Numbering conventions that cannot be inferred after the trial anchor is reset to zero. */

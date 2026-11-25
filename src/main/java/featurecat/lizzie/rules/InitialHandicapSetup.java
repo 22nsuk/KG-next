@@ -17,7 +17,7 @@ import java.util.Map;
  *       conflicting declarations, capped at GTP area - 1.</li>
  *   <li>The board at the node has exactly HA unique valid black stones and zero white stones.</li>
  *   <li>No AW or AE properties exist on the node.</li>
- *   <li>Explicit PL must be 'W' if present (PL[B] is rejected).</li>
+ *   <li>The closest explicit PL on the setup or its ancestors must be 'W' if present.</li>
  *   <li>Any explicit AB coordinates must be unique, within bounds, and match black stones.</li>
  * </ul>
  *
@@ -50,6 +50,7 @@ public final class InitialHandicapSetup {
     }
 
     int resolvedHandicap = declaredHandicap;
+    String effectivePlayer = data.getProperty("PL");
 
     // Check explicit HA on target node if present
     String nodeHaStr = data.getProperty("HA");
@@ -84,9 +85,8 @@ public final class InitialHandicapSetup {
         if (currProps.containsKey("AB") || currProps.containsKey("AW") || currProps.containsKey("AE")) {
           return false;
         }
-        String currPl = currData.getProperty("PL");
-        if (currPl != null && !currPl.trim().isEmpty() && !"W".equalsIgnoreCase(currPl.trim())) {
-          return false;
+        if (effectivePlayer == null || effectivePlayer.isBlank()) {
+          effectivePlayer = currData.getProperty("PL");
         }
         String currHaStr = currData.getProperty("HA");
         if (currHaStr != null) {
@@ -106,16 +106,13 @@ public final class InitialHandicapSetup {
       return false;
     }
 
-    // Check node properties: no AW/AE, and explicit PL must be 'W' if present
     Map<String, List<String>> nodeProps = data.getProperties();
-    if (nodeProps != null) {
-      if (nodeProps.containsKey("AW") || nodeProps.containsKey("AE")) {
-        return false;
-      }
-      String pl = data.getProperty("PL");
-      if (pl != null && !pl.trim().isEmpty() && !"W".equalsIgnoreCase(pl.trim())) {
-        return false;
-      }
+    if (nodeProps != null && (nodeProps.containsKey("AW") || nodeProps.containsKey("AE"))) {
+      return false;
+    }
+    if (effectivePlayer != null && !effectivePlayer.isBlank()
+        && !"W".equalsIgnoreCase(effectivePlayer.trim())) {
+      return false;
     }
 
     // Check stones on node: exactly resolvedHandicap black stones, zero white stones
