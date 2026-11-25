@@ -3629,7 +3629,7 @@ class BoardNodeKindHistoryPipelineTest {
 
       String exportedSetup = generateNode(setupNode);
       assertEquals(
-          ";PL[W]AB[aa]AE[bb]AW[cc]",
+          ";PL[W]AE[bb]AB[aa]AW[cc]",
           exportedSetup,
           "setup export should deduplicate AB/AW/AE by semantic stone set.");
 

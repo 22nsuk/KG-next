@@ -181,6 +181,55 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
+  @CsvSource({
+      "AW[cc],AB[cc],false,BLACK",
+      "AB[cc],AW[aa][cc],true,WHITE",
+      "AB[cc],AB[aa][cc],true,BLACK"
+  })
+  void startingEditPreservesDeclaredSetupColorThroughSave(
+      String root, String setup, boolean recolor, Stone expected) throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]" + root + ";B[ee];" + setup + ")"));
+      Board board = Lizzie.board;
+      int cc = Board.getIndex(2, 2);
+      board.editMove(new int[] {2, 2}, recolor, !recolor);
+      Stone editedRoot = recolor ? Stone.WHITE : Stone.EMPTY;
+      assertEquals(editedRoot, board.getHistory().getStart().getData().stones[cc]);
+      assertEquals(expected, board.getHistory().getEnd().getData().stones[cc]);
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      assertEquals(editedRoot, reopened.getStart().getData().stones[cc]);
+      assertArrayEquals(
+          board.getHistory().getEnd().getData().stones, reopened.getEnd().getData().stones);
+    }
+  }
+
+  @Test
+  void repeatedStartingEditsKeepDescendantSetupAcrossReopen() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[aa][cc];B[ee];AB[cc])"));
+      Board board = Lizzie.board;
+      board.editMove(new int[] {0, 0}, false, true);
+      assertTrue(SGFParser.loadFromStringforedit(SGFParser.saveToString(false)));
+      board.editMove(new int[] {2, 2}, false, true);
+      int cc = Board.getIndex(2, 2);
+      assertEquals(Stone.EMPTY, board.getHistory().getStart().getData().stones[cc]);
+      assertEquals(Stone.BLACK, board.getHistory().getEnd().getData().stones[cc]);
+    }
+  }
+
+  @Test
+  void startingEditSavesOnlyAuthoredCommentFromAnalyzedNode() throws Exception {
+    try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[aa];B[ee]C[author note])"));
+      Board board = Lizzie.board;
+      board.getHistory().getEnd().getData().setGeneratedComment(() -> "old analysis + author note");
+      board.editMove(new int[] {0, 0}, false, true);
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      assertEquals("author note", reopened.getEnd().getData().comment);
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void startingStoneEditRetainsLegalContinuationsAndSelectedVariation(boolean recolor)
       throws Exception {

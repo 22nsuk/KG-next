@@ -2005,69 +2005,47 @@ public class SGFParser {
       Map<String, List<String>> properties, BoardHistoryNode node, SaveContext saveContext) {
     Stone[] currentStones = node.getData().stones;
     Stone[] previousStones = node.previous().get().getData().stones;
+    // Older readers only add stones to empty points. Emit all removals before either color.
+    Map<String, List<String>> additions = new LinkedHashMap<>();
     for (int index = 0; index < currentStones.length; index++) {
       Stone currentStone = currentStones[index];
       Stone previousStone = previousStones[index];
       if (currentStone == previousStone) {
         continue;
       }
+      String point = saveContext.asCoord(index);
       if (!previousStone.isEmpty()) {
-        addSetupProperty(properties, "AE", saveContext.asCoord(index));
+        addSetupProperty(properties, "AE", point);
       }
       if (currentStone.isBlack()) {
-        addSetupProperty(properties, "AB", saveContext.asCoord(index));
+        addSetupProperty(additions, "AB", point);
       } else if (currentStone.isWhite()) {
-        addSetupProperty(properties, "AW", saveContext.asCoord(index));
+        addSetupProperty(additions, "AW", point);
       }
     }
+    properties.putAll(additions);
   }
 
   private static void addSemanticallyMatchingSetupValues(
       Map<String, List<String>> properties, BoardHistoryNode node, String key, List<String> rawValues,
       SaveContext saveContext) {
-    if (rawValues == null || rawValues.isEmpty()) {
-      return;
-    }
-    Stone[] currentStones = node.getData().stones;
-    Stone[] previousStones = node.previous().get().getData().stones;
-    boolean keepExplicitRemovedStoneMetadata = node.hasRemovedStone();
+    if (rawValues == null) return;
     for (String value : rawValues) {
-      String normalizedValue = value.trim();
-      int[] coord = saveContext.parseCoord(normalizedValue);
-      if (!matchesMaterializedSetupSemantics(
-          key, coord, currentStones, previousStones, keepExplicitRemovedStoneMetadata, saveContext)) {
-        continue;
+      String point = value.trim();
+      int[] coord = saveContext.parseCoord(point);
+      if (coord == null || !saveContext.isOnBoard(coord)) continue;
+      // Even when the parent already has this color, the declaration owns the point on replay.
+      Stone stone = node.getData().stones[coord[0] * saveContext.boardHeight() + coord[1]];
+      boolean matches = switch (key) {
+        case "AB" -> stone.isBlack();
+        case "AW" -> stone.isWhite();
+        case "AE" -> stone.isEmpty();
+        default -> false;
+      };
+      if (matches) {
+        addSetupProperty(properties, key, point);
       }
-      addSetupProperty(properties, key, normalizedValue);
     }
-  }
-
-  private static boolean matchesMaterializedSetupSemantics(
-      String key,
-      int[] coord,
-      Stone[] currentStones,
-      Stone[] previousStones,
-      boolean keepExplicitRemovedStoneMetadata,
-      SaveContext saveContext) {
-    if (coord == null || !saveContext.isOnBoard(coord)) {
-      return false;
-    }
-    int index = coord[0] * saveContext.boardHeight() + coord[1];
-    Stone currentStone = currentStones[index];
-    Stone previousStone = previousStones[index];
-    if ("AB".equals(key)) {
-      return currentStone != previousStone && currentStone.isBlack();
-    }
-    if ("AW".equals(key)) {
-      return currentStone != previousStone && currentStone.isWhite();
-    }
-    if (!"AE".equals(key) || !currentStone.isEmpty()) {
-      return false;
-    }
-    if (currentStone != previousStone) {
-      return true;
-    }
-    return keepExplicitRemovedStoneMetadata;
   }
 
   private static void addSetupProperty(Map<String, List<String>> properties, String key, String value) {
@@ -3908,7 +3886,13 @@ public class SGFParser {
 
   private static void addExtraStoneOnNode(
       BoardHistoryList history, BoardHistoryNode target, int x, int y, Stone color) {
-    runOnNode(history, target, () -> history.addExtraStone(x, y, color));
+    runOnNode(history, target, () -> {
+      if (!history.isValid(x, y)) return;
+      Stone previous = history.getStones()[history.getIndex(x, y)];
+      if (previous == color) return;
+      if (previous != Stone.EMPTY) removeStoneWithoutRefresh(history, x, y);
+      history.addExtraStone(x, y, color);
+    });
   }
 
   private static void removeStoneOnNode(

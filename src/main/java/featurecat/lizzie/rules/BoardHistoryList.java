@@ -436,6 +436,7 @@ public class BoardHistoryList {
           data.moveNumberList[index] = data.moveMNNumber >= 0 ? data.moveMNNumber : data.moveNumber;
         }
       }
+      data.setAuthoredComment(data.authoredComment());
       data.clearAnalysisPayloadState();
       BoardHistoryNode copied = source.copyForRestore(data);
       copied.nodeInfo = new NodeInfo();
