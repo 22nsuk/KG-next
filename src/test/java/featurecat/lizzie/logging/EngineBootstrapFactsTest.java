@@ -119,6 +119,8 @@ class EngineBootstrapFactsTest {
       PathMarkerProbe.assertNativeBackend(
           List.of("katago-probe", "/d", "/c", "exit", "17"),
           "absent".equals(args[1]) ? null : Integer.valueOf(args[1]), args[2]);
+      PathMarkerProbe.assertNativeBackend(
+          List.of("missing\\..\\katago-probe", "/d", "/c", "exit", "17"), 17, "cpu");
     }
   }
 
@@ -220,6 +222,16 @@ class EngineBootstrapFactsTest {
           String bareName = args[1].substring(0, args[1].length() - ".exe".length());
           Files.writeString(engine.resolveSibling("lizzieyzy-next-engine-backend.txt"), "rocm-gfx110x");
           assertNativeBackend(List.of(bareName, args[1]), 0, "rocm-gfx110x");
+          Files.writeString(Path.of("lizzieyzy-next-engine-backend.txt"), "cpu");
+          for (String token : List.of("missing\\..\\" + args[1], args[1] + "\\.")) {
+            assertNativeBackend(List.of(token, args[1]), 0, "rocm-gfx110x");
+          }
+          // A leading ".\" pins a missing executable to the cwd, even with a copy on PATH.
+          assertNativeBackend(List.of(".\\" + args[1], args[1]), null, "cpu");
+          Path nested = Files.createDirectory(engine.getParent().resolve("nested"));
+          Files.copy(engine, nested.resolve(args[1]));
+          Files.writeString(nested.resolve("lizzieyzy-next-engine-backend.txt"), "opencl");
+          assertNativeBackend(List.of("nested\\" + bareName, args[1]), 0, "opencl");
           assertNativeBackend(List.of("cmd", "/d", "/c", "exit", "17"), 17, "unknown");
           checkQualifiedWindowsCompanion(Path.of(System.getenv("SystemRoot"), "System32", "cmd.exe"));
         } else {

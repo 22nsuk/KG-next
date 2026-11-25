@@ -77,16 +77,18 @@ public final class KataGoEngineLocation {
     if (program.getFileName() == null) return null;
     String leaf = program.getFileName().toString();
     String nativeName = leaf.contains(".") ? leaf : leaf + ".exe";
-    List<String> names = List.of(nativeName);
-    if (program.getRoot() != null || program.getParent() != null) {
+    if (program.getRoot() != null || program.startsWith(".") || program.startsWith("..")) {
       Path explicit = program.toAbsolutePath().normalize();
       if (explicit.getParent() == null) return null;
-      // A qualified operand tries the exact file before the default .exe, in this directory only.
+      // A rooted or explicitly relative operand stays in its configured directory.
       Path found =
           Utils.findInDirectory(
-              explicit.getParent(), leaf.equals(nativeName) ? names : List.of(leaf, nativeName));
+              explicit.getParent(),
+              leaf.equals(nativeName) ? List.of(leaf) : List.of(leaf, nativeName));
       return found != null ? found : explicit;
     }
+    // CreateProcessW searches the entire relative operand, including any subdirectories.
+    List<String> names = List.of(program.resolveSibling(nativeName).normalize().toString());
     // CreateProcessW checks the parent image, native cwd and Windows directories before PATH.
     List<Path> directories = new ArrayList<>();
     ProcessHandle.current().info().command()
@@ -94,7 +96,8 @@ public final class KataGoEngineLocation {
         .map(Path::getParent)
         .ifPresent(directories::add);
     // For a bare name, the variable's presence suppresses only the implicit cwd entry.
-    if (System.getenv("NoDefaultCurrentDirectoryInExePath") == null) {
+    if (program.getParent() != null
+        || System.getenv("NoDefaultCurrentDirectoryInExePath") == null) {
       directories.add(Path.of(""));
     }
     String windows = System.getenv("SystemRoot");
