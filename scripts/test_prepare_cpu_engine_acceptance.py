@@ -307,6 +307,7 @@ class CpuAcceptanceProvisionerTest(unittest.TestCase):
 
         probe = """
 import json, sys, time, urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from scripts import prepare_cpu_engine_acceptance as provisioner
 # Exercise only HTTP failures with cached fixtures on every CI host.
@@ -316,12 +317,24 @@ provisioner.DOWNLOAD_DEADLINE_SECONDS = 0.5
 # Initialize urllib (including its default TLS context) before measuring HTTP.
 # This loopback fixture must not depend on the host's proxy configuration.
 urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
+timings = {}
+
+@contextmanager
+def timed_open(url):
+    http_started = time.monotonic()
+    timings["setup_elapsed"] = http_started - started
+    try:
+        with provisioner.open_url(url) as response:
+            yield response
+    finally:
+        timings["http_elapsed"] = time.monotonic() - http_started
+
 started = time.monotonic()
 try:
-    provisioner.prepare(Path(sys.argv[1]), catalog_path=Path(sys.argv[2]))
+    provisioner.prepare(Path(sys.argv[1]), catalog_path=Path(sys.argv[2]), opener=timed_open)
 except provisioner.ProvisioningError as failure:
-    print(json.dumps({"failed": True, "elapsed": time.monotonic() - started,
-                      "error": str(failure), "cause": type(failure.__cause__).__name__}))
+    print(json.dumps({"failed": True, **timings, "error": str(failure),
+                      "cause": type(failure.__cause__).__name__}))
 else:
     print(json.dumps({"failed": False}))
 """
@@ -355,7 +368,7 @@ else:
                     self.assertTrue(requested.is_set(), "download did not reach the HTTP peer")
                     observed = json.loads(result.stdout)
                     self.assertTrue(observed["failed"])
-                    self.assertLess(observed["elapsed"], 3, f"HTTP deadline was not enforced: {observed}")
+                    self.assertLess(observed["http_elapsed"], 3, f"HTTP deadline was not enforced: {observed}")
                     if mode == "stall":
                         self.assertEqual("TimeoutError", observed["cause"], observed)
                     else:

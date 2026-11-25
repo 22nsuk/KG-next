@@ -62,6 +62,11 @@ import org.junit.jupiter.api.Test;
  * board fence and the captured ponder disposition complete.
  */
 class LeelazAutomaticRestartConvergenceTest {
+  // Liveness bound for waits on the background restart thread: reaching startEngine and sending
+  // the first board fence. That path does synchronous file work (startup diagnostics resolve the
+  // engine executable through PATH; the frozen restore writes a temporary SGF), which exceeded
+  // 2 s on a loaded CI runner. The waits still return as soon as the step happens.
+  private static final long RESTART_PIPELINE_SECONDS = 10;
 
   @Test
   void localAutomaticRestartConvergesWithNavigationDuringRestore() throws Exception {
@@ -112,7 +117,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(mirror, 2, 2, TimeUnit.SECONDS),
           "the captured mirror must execute the frozen and catch-up routes");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the stable convergence");
       assertTrue(
           waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS),
@@ -182,7 +187,7 @@ class LeelazAutomaticRestartConvergenceTest {
       manager.restartUnresponsiveRemoteEngine(engine, 0);
 
       assertTrue(
-          engine.startCompleted.await(2, TimeUnit.SECONDS),
+          engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the remote engine restart must reach the startup phase");
       assertTrue(
           board.previousMove(false), "navigation during delayed readiness must stay available");
@@ -192,7 +197,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(engine, 2, 2, TimeUnit.SECONDS),
           "the stale frozen route must be followed by one catch-up route");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the remote convergence");
       assertEquals(0, engine.analyzeCount.get(), "no analysis before the remote board fence");
       assertEquals(0, engine.readyCount.get(), "ready must wait for the remote board fence");
@@ -275,11 +280,11 @@ class LeelazAutomaticRestartConvergenceTest {
 
       EngineManager manager = new EngineManager(List.of(engine));
       manager.restartUnresponsiveRemoteEngine(engine, 0);
-      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       assertTrue(board.previousMove(false));
       engine.publishReady();
       assertTrue(waitForLoadSgfCount(engine, 2, 2, TimeUnit.SECONDS));
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       String lifecycleFenceResponse = numberedResponseFor(engine.transport.rawCommands(), "name");
 
       engine.blockThirdLoadSgf = true;
@@ -341,8 +346,9 @@ class LeelazAutomaticRestartConvergenceTest {
       });
       assertThrows(java.util.concurrent.ExecutionException.class,
           () -> prepared.execute(successor -> CompletableFuture.completedFuture(null)).get(2, TimeUnit.SECONDS));
-      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
+          () -> "replacement engine did not start; restore " + restored);
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       assertFalse(restored.isDone());
       invokeFenceResponse(engine);
       long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
@@ -419,8 +425,9 @@ class LeelazAutomaticRestartConvergenceTest {
       } finally {
         primary.unlock();
       }
-      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
+          () -> "replacement engine did not start; restore " + restored);
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       invokeFenceResponse(engine);
       restored.get(3, TimeUnit.SECONDS);
       assertFalse(holdsEngine, "restore must not invert the primary-before-engine lock order");
@@ -450,8 +457,9 @@ class LeelazAutomaticRestartConvergenceTest {
         callbacks.incrementAndGet();
         return CompletableFuture.completedFuture(null);
       });
-      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
+          () -> "replacement engine did not start; restore " + restored);
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       invokeFenceResponse(engine);
       assertThrows(java.util.concurrent.ExecutionException.class, () -> restored.get(3, TimeUnit.SECONDS));
       assertEquals(0, callbacks.get());
@@ -478,8 +486,9 @@ class LeelazAutomaticRestartConvergenceTest {
         policy.put("source", "BENCHMARK").put("katago-benchmark-threads", 6);
         return CompletableFuture.completedFuture(null);
       });
-      assertTrue(engine.startCompleted.await(2, TimeUnit.SECONDS));
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
+          () -> "replacement engine did not start; restore " + restored);
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       invokeFenceResponse(engine);
       assertThrows(java.util.concurrent.ExecutionException.class, () -> restored.get(3, TimeUnit.SECONDS));
       assertEquals(true, privateField(Leelaz.class, engine, "threadPolicyReloadPending"));
@@ -512,7 +521,7 @@ class LeelazAutomaticRestartConvergenceTest {
       CountDownLatch completed = new CountDownLatch(1);
       attempt.restartClosedEngine(0, completed::countDown);
 
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       assertEquals(0, engine.readyCount.get(), "ready must wait for the board fence");
       assertNull(
           engine.beginEngineModeReservation(),
@@ -593,7 +602,7 @@ class LeelazAutomaticRestartConvergenceTest {
           },
           detail -> failureCount.incrementAndGet());
 
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       assertDoesNotThrow(() -> invokeFenceResponse(engine));
 
       assertTrue(completed.await(1, TimeUnit.SECONDS));
@@ -673,7 +682,7 @@ class LeelazAutomaticRestartConvergenceTest {
           },
           detail -> failureCount.incrementAndGet());
 
-      assertTrue(waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS));
+      assertTrue(waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS));
       assertTrue(waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS));
       assertDoesNotThrow(() -> invokeFenceResponse(engine));
       enqueueTrackedCommandWithoutSending(
@@ -807,7 +816,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(engine, 2, 2, TimeUnit.SECONDS),
           "frozen route plus one catch-up route must both execute");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the OpenCL convergence");
       assertEquals(0, engine.analyzeCount.get(), "no analysis before the OpenCL board fence");
       assertEquals(0, engine.readyCount.get(), "ready must wait for the OpenCL board fence");
@@ -1092,7 +1101,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(engine, 3, 2, TimeUnit.SECONDS),
           "a third round must execute before the board fence");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the third convergent round");
       assertEquals(0, engine.readyCount.get(), "ready must wait for the board fence");
       assertEquals(0, engine.analyzeCount.get(), "no analysis before the board fence");
@@ -1166,7 +1175,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(mirror, 2, 2, TimeUnit.SECONDS),
           "the catch-up must stay on the originally captured mirror");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the convergence");
       assertTrue(
           waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS),
@@ -1296,7 +1305,7 @@ class LeelazAutomaticRestartConvergenceTest {
       attempt.restartClosedEngine(0, completed::countDown);
 
       assertTrue(
-          engine.startCompleted.await(2, TimeUnit.SECONDS),
+          engine.startCompleted.await(RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the root-replay restart must reach the startup phase");
       assertTrue(
           board.previousMove(false),
@@ -1311,7 +1320,7 @@ class LeelazAutomaticRestartConvergenceTest {
           engine.loadSgfCount.get(),
           "the root route must not use loadsgf for the frozen or catch-up rounds");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the root convergence");
       assertEquals(0, engine.readyCount.get(), "ready must wait for the board fence");
       assertEquals(0, engine.analyzeCount.get(), "no analysis before the board fence");
@@ -1368,7 +1377,7 @@ class LeelazAutomaticRestartConvergenceTest {
           "the captured 13x13 frame must be reconciled on the captured mirror before the root"
               + " replay");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the root replay convergence");
       assertTrue(
           waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS),
@@ -1455,7 +1464,7 @@ class LeelazAutomaticRestartConvergenceTest {
           waitForLoadSgfCount(engine, 2, 2, TimeUnit.SECONDS),
           "the first owner must still converge with one catch-up route");
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the board fence must follow the first owner's convergence");
       assertTrue(
           waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS),
@@ -1510,7 +1519,7 @@ class LeelazAutomaticRestartConvergenceTest {
       successorAttempt.restartClosedEngine(0, completed::countDown);
 
       assertTrue(
-          waitForRawCommandPrefix(engine.transport, "name", 2, TimeUnit.SECONDS),
+          waitForRawCommandPrefix(engine.transport, "name", RESTART_PIPELINE_SECONDS, TimeUnit.SECONDS),
           "the successor attempt must reach the final board fence");
       assertTrue(
           waitForRawCommandPrefix(mirror.transport, "name", 2, TimeUnit.SECONDS),
