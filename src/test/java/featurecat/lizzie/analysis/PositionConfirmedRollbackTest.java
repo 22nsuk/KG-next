@@ -2823,6 +2823,38 @@ class PositionConfirmedRollbackTest {
     }
   }
 
+  @Test
+  void rotatingEditedSetupRestoresExactDiagramAndSelectedMoveToEngine() throws Exception {
+    var previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      harness.frame.readBoard = null;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]PL[W]AB[ab][ba][cb][bc][ee]AW[bb](;W[ad])(;W[dd]))", true);
+      history.setHead(history.getStart().getVariation(1).orElseThrow());
+      harness.board.setHistory(history);
+      harness.engine.commandLists.add("loadsgf");
+      SnapshotTrackingLeelaz enginePosition = SnapshotTrackingLeelaz.create();
+      var output = installPositionTransport(harness.engine, enginePosition, "");
+      javax.swing.SwingUtilities.invokeAndWait(
+          () -> harness.board.editMove(new int[] {4, 4}, false, true));
+      awaitHistoryRestoreCompletion(harness.board);
+      javax.swing.SwingUtilities.invokeAndWait(() -> harness.board.SpinAndMirror(1));
+      awaitHistoryRestoreCompletion(harness.board);
+
+      BoardData expected = SGFParser.parseSgf(
+          "(;SZ[5]PL[W]AB[da][eb][dc][cb]AW[db];W[bd])", true).getEnd().getData();
+      assertArrayEquals(expected.stones, harness.board.getData().stones);
+      assertPosition(enginePosition, expected, 5, 5);
+      assertEquals(2, payloadCount(output, "loadsgf"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
   private static void startPonder(Harness harness) throws Exception {
     harness.engine.ponder();
     acknowledge(harness.engine, awaitRawCommand(harness.transport, "kata-analyze", 0));

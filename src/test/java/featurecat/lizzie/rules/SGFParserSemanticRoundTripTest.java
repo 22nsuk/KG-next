@@ -358,6 +358,29 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @Test
+  void survivingMoveKeepsItsNumberThroughRedundantSetupAndLaterActions() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AW[ba];B[aa]MN[7];W[ab];AB[aa];W[];B[ee])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      board.editMove(new int[] {1, 0}, false, true);
+
+      int aa = Board.getIndex(0, 0);
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      for (BoardHistoryList history : List.of(board.getHistory(), reopened)) {
+        BoardHistoryNode node = history.getStart();
+        assertEquals(Stone.EMPTY, node.getData().stones[Board.getIndex(1, 0)]);
+        for (int i = 0; i < 5; i++) {
+          node = node.next().orElseThrow();
+          assertEquals(Stone.BLACK, node.getData().stones[aa]);
+          assertEquals(7, node.getData().moveNumberList[aa], "lost move number at node " + i);
+        }
+      }
+    }
+  }
+
+  @Test
   void startingStoneEditNumbersARecordedMoveThatNoLongerSelfCaptures() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(3)) {
       Lizzie.leelaz.canSuicidal = true;

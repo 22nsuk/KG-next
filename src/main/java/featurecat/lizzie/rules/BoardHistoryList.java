@@ -398,23 +398,26 @@ public class BoardHistoryList {
       SetupEditNode entry = pending.removeFirst();
       BoardHistoryNode source = entry.source();
       BoardHistoryNode parent = entry.parent();
+      BoardData oldParent = source.previous().map(BoardHistoryNode::getData).orElse(null);
+      BoardData newParent = parent == null ? null : parent.getData();
       BoardData original = source.getData();
       BoardData data = original.clone();
-      int[] inheritedMoveNumbers = parent == null ? null : parent.getData().moveNumberList;
       BitSet setup = null;
       if (entry.affected() && original.isSnapshotNode()) {
-        BoardData oldParent = source.previous().map(BoardHistoryNode::getData).orElse(null);
         setup = SnapshotSetup.points(original, oldParent);
         if (source == owner) {
           int index = data.zobrist.index(x, y);
           data.replaceSetupStone(index, replacement);
+          if (oldParent != null && replacement == oldParent.stones[index]) {
+            data.moveNumberList[index] = oldParent.moveNumberList[index];
+          }
           // Removing a setup on an already-empty parent also removes its declaration.
           setup.set(index, replacement != Stone.EMPTY
               || (oldParent != null && oldParent.stones[index] != Stone.EMPTY));
         } else {
-          BoardData newParent = parent.getData();
           data.stones = newParent.stones.clone();
           data.zobrist = newParent.zobrist.clone();
+          data.moveNumberList = newParent.moveNumberList.clone();
           data.blackCaptures += newParent.blackCaptures - oldParent.blackCaptures;
           data.whiteCaptures += newParent.whiteCaptures - oldParent.whiteCaptures;
           for (int index = setup.nextSetBit(0); index >= 0; index = setup.nextSetBit(index + 1)) {
@@ -429,13 +432,21 @@ public class BoardHistoryList {
         data.zobrist = played.zobrist;
         data.blackCaptures = played.blackCaptures;
         data.whiteCaptures = played.whiteCaptures;
-        // Action replay also owns branch-number resets for stones that now survive a capture.
-        inheritedMoveNumbers = played.moveNumberList;
+        for (int index = 0; index < data.stones.length; index++) {
+          if (data.stones[index] == Stone.EMPTY) {
+            data.moveNumberList[index] = 0;
+          } else if (data.stones[index] != original.stones[index]
+              || (original.stones[index] == oldParent.stones[index]
+                  && original.moveNumberList[index] == oldParent.moveNumberList[index]
+                  && newParent.moveNumberList[index] != oldParent.moveNumberList[index])) {
+            // Follow changed inherited labels through actions, including branch-number resets.
+            data.moveNumberList[index] = played.moveNumberList[index];
+          }
+        }
         if (source.hasRemovedStone() || (source.extraStones != null && !source.extraStones.isEmpty())) {
           // Older in-place edits can attach setup changes to an action. Compare with the old
           // action's result so a manual removal is not confused with a capture changed by this edit.
-          BoardHistoryList before =
-              new BoardHistoryList(source.previous().orElseThrow().getData().clone());
+          BoardHistoryList before = new BoardHistoryList(oldParent.clone());
           BoardData oldPlayed = before.replayActionForSetupEdit(original, noCapture, canSuicidal);
           if (oldPlayed == null) return null;
           for (int index = 0; index < data.stones.length; index++) {
@@ -445,24 +456,12 @@ public class BoardHistoryList {
           }
         }
       }
-      if (entry.affected() && parent != null) {
-        for (int index = 0; index < data.stones.length; index++) {
-          if (data.stones[index] == Stone.EMPTY) data.moveNumberList[index] = 0;
-          else if (setup != null && setup.get(index) && data.stones[index] != parent.getData().stones[index]) {
-            // A setup replacement has no move number, even when it covers a numbered stone.
-            data.moveNumberList[index] = 0;
-          } else if (data.stones[index] != original.stones[index]) {
-            data.moveNumberList[index] = inheritedMoveNumbers[index];
-          }
-        }
-      }
       if (trialNumbering != null) {
-        BoardData oldParent = source.previous().map(BoardHistoryNode::getData).orElse(null);
         trialNumbering.normalizeMoveNumber(source, data,
-            parent == null ? null : parent.getData(), oldParent == null ? 0 : oldParent.moveNumber);
+            newParent, oldParent == null ? 0 : oldParent.moveNumber);
         if (parent != null) {
           TrialNumbering.normalizeMoveNumberGrid(
-              data, parent.getData(), original.moveNumber, index -> oldParent.moveNumberList[index]);
+              data, newParent, original.moveNumber, index -> oldParent.moveNumberList[index]);
         }
       }
       if (data.isMoveNode()) {
@@ -476,7 +475,7 @@ public class BoardHistoryList {
       }
       BoardHistoryNode copied = source.copyForRestore(data);
       if (entry.affected()) {
-        if (setup != null) copied.updateSetupMetadata(parent == null ? null : parent.getData(), setup);
+        if (setup != null) copied.updateSetupMetadata(newParent, setup);
         copied.clearAnalysisAfterSetupEdit();
       } else {
         copied.materializeRestoreNodeInfo();

@@ -360,7 +360,7 @@ public class SGFParser {
     if (komi == null) {
       return Optional.empty();
     }
-    if (rootKomi != null && isKgNextSgf(rootProperties)) {
+    if (rootKomi != null && isKgNextSgf(getOrDefault(rootProperties, "AP", null))) {
       // Our writer stores KM in points. A retained legacy KO must not override it.
       komi = rootKomi;
     } else {
@@ -402,8 +402,7 @@ public class SGFParser {
     return rootPropertyContains(rootProperties, "AP", "foxwq");
   }
 
-  private static boolean isKgNextSgf(Map<String, List<String>> rootProperties) {
-    String application = getOrDefault(rootProperties, "AP", null);
+  private static boolean isKgNextSgf(String application) {
     return application != null
         && (application.equals("KG-next") || application.startsWith("KG-next:"));
   }
@@ -4055,6 +4054,8 @@ public class SGFParser {
       boolean readKomi, boolean noCapture, boolean canSuicidal, boolean newMoveNumberInBranch,
       int limitBranchLength, int maxSuggestions, double defaultKomi) {
     private boolean canSuicidal(SgfDocument document, SgfCancellation cancellation) {
+      // Our saves preserve the original RU even when manual rules allowed a recorded self-capture.
+      if (isKgNextSgf(document.rootProperty("AP", cancellation))) return true;
       return BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
           .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
     }

@@ -58,6 +58,29 @@ class BoardHistoryListSessionRulesTest {
   }
 
   @Test
+  void manualRulesEditRoundTripsSelfCaptureAndCommentWithOriginalDeclaration() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      assertTrue(SGFParser.loadFromString(
+          "(;SZ[5]PL[B]RU[Japanese]AB[aa][ba]AW[bb][ac];B[ab]C[keep])", false));
+      Board board = fixture.board();
+      board.getHistory().publishManualRules(KataGoRules.parse("New Zealand").orElseThrow());
+      board.editMove(new int[] {1, 0}, true, false);
+      assertBlackSelfCapture(board.getHistory());
+
+      String saved = SGFParser.saveToString(false);
+      Lizzie.setPrimaryEngine(null);
+      assertTrue(SGFParser.loadFromString(saved, false));
+      for (var history : List.of(board.getHistory(), SGFParser.parseSgf(saved, true))) {
+        assertEquals("Japanese", history.getStart().getData().getProperty("RU"));
+        assertBlackSelfCapture(history);
+        assertEquals("keep", history.getStart().next().orElseThrow().getData().comment);
+      }
+      assertEquals(KataGoRules.Summary.JAPANESE,
+          SGFParser.adoptCurrentHistoryExternalRules().parsedRules().orElseThrow().summary());
+    }
+  }
+
+  @Test
   void manualRulesOverrideBothRootDeclarationAndEngineDuringEdit() throws Exception {
     try (var fixture = RulesLayerTestHarness.open()) {
       assertTrue(SGFParser.loadFromString(
@@ -79,6 +102,7 @@ class BoardHistoryListSessionRulesTest {
   @ParameterizedTest
   @CsvSource({
       "RU[Japanese],true,false,false",
+      "AP[KG-next-fork]RU[Japanese],true,false,false",
       "RU[unrecognized],true,false,true",
       "RU[unrecognized],false,false,false",
       "RU[Japanese],false,true,true"
@@ -88,7 +112,7 @@ class BoardHistoryListSessionRulesTest {
     try (var fixture = RulesLayerTestHarness.open()) {
       Lizzie.leelaz.canSuicidal = engineSuicide;
       Lizzie.config.noCapture = noCapture;
-      String sgf = "(;SZ[5]PL[B]AB[aa]AW[ba][bb][ac]" + rules + ";B[ab]RU[NZ])";
+      String sgf = "(;SZ[5]PL[B]AB[aa]AW[ba][bb][ac]" + rules + ";B[ab]RU[NZ]AP[KG-next])";
       assertTrue(SGFParser.loadFromString(sgf, false));
       for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(sgf, true))) {
         var move = history.getStart().next();

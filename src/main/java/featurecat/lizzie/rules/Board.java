@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -1206,6 +1207,20 @@ public class Board {
     BoardData data = root.getData();
     root.updateSetupMetadata(null, SnapshotSetup.points(data, null));
     root.clearAnalysisAfterSetupEdit();
+    if (hasStartStone) rebuildStartStoneList(data);
+  }
+
+  /** Legacy move-list consumers need the occupied root points after an edit to its setup. */
+  private void rebuildStartStoneList(BoardData root) {
+    startStonelist = new ArrayList<>();
+    for (int index = 0; index < root.stones.length; index++) {
+      Stone stone = root.stones[index];
+      if (stone == Stone.BLACK || stone == Stone.WHITE) {
+        int height = root.zobrist.height();
+        setStartListStone(new int[] {index / height, index % height}, stone.isBlack());
+      }
+    }
+    hasStartStone = !startStonelist.isEmpty();
   }
 
   /** Returns whether any variation in the current tree contains a real move or pass. */
@@ -2461,38 +2476,10 @@ public class Board {
     } else {
       int[] n = lastMove.get();
       move.isblack = isBlack;
-      switch (type) {
-        case 0: // 不改变
-          move.x = n[0];
-          move.y = n[1];
-          break;
-        case 1: // 向右旋转
-          move.x = boardWidth - 1 - n[1];
-          move.y = n[0];
-          break;
-        case 2: // 向左旋转
-          move.x = n[1];
-          move.y = boardHeight - 1 - n[0];
-          break;
-        case 3: // 水平翻转
-          move.x = boardWidth - 1 - n[0];
-          move.y = n[1];
-          break;
-        case 4: // 垂直翻转
-          move.x = n[0];
-          move.y = boardHeight - 1 - n[1];
-          break;
-        case 6: // 交换黑白
-          move.x = n[0];
-          move.y = n[1];
-          move.isblack = !isBlack;
-          break;
-        default: // 不改变
-          move.x = -n[0];
-          move.y = n[1];
-      }
-      //        move.x = boardWidth - 1 - n[0];
-      //        move.y = n[1];
+      int[] point = transformCoords(n[0], n[1], type);
+      move.x = point[0];
+      move.y = point[1];
+      if (type == 6) move.isblack = !isBlack;
       move.ispass = false;
       move.previous = list;
     }
@@ -2500,6 +2487,17 @@ public class Board {
     if (currentPosition) move.currentPosition = true;
     list.variations.add(move);
     return move;
+  }
+
+  private static int[] transformCoords(int x, int y, int type) {
+    return switch (type) {
+      case 0, 6 -> new int[] {x, y};
+      case 1 -> new int[] {boardWidth - 1 - y, x};
+      case 2 -> new int[] {y, boardHeight - 1 - x};
+      case 3 -> new int[] {boardWidth - 1 - x, y};
+      case 4 -> new int[] {x, boardHeight - 1 - y};
+      default -> new int[] {-x, y};
+    };
   }
 
   public Stone getstonestat(int coords[]) {
@@ -6584,24 +6582,7 @@ public class Board {
   //  }
 
   public void exchangeBlackWhite() {
-    AllMovelist listHead = Lizzie.board.getAllMovelist(6);
-    double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
-    int startMoveNumber = 0;
-    if (hasStartStone) startMoveNumber += startStonelist.size();
-    File tempfile = null;
-    String playerTitle = Lizzie.frame.playerTitle;
-    if (LizzieFrame.curFile != null) {
-      tempfile = LizzieFrame.curFile;
-    }
-    Lizzie.board.clear(false);
-    Lizzie.board.playAllMovelist(listHead, startMoveNumber);
-    setKomi(komi);
-    if (tempfile != null) {
-      LizzieFrame.curFile = tempfile;
-      LizzieFrame.fileNameTitle = LizzieFrame.curFile.getName();
-    }
-    Lizzie.frame.playerTitle = playerTitle;
-    Lizzie.frame.refresh();
+    transformBoard(6);
   }
 
   public void SpinAndMirror(int type) {
@@ -6614,24 +6595,123 @@ public class Board {
       Utils.showMsg(Lizzie.resourceBundle.getString("SpinAndMirror.inGameError"));
       return;
     }
-    AllMovelist listHead = Lizzie.board.getAllMovelist(type);
-    double komi = Lizzie.board.getHistory().getGameInfo().getKomi();
-    int startMoveNumber = 0;
-    if (hasStartStone) startMoveNumber += startStonelist.size();
-    File tempfile = null;
+    transformBoard(type);
+  }
+
+  private void transformBoard(int type) {
+    BoardHistoryNode root = history.getStart();
+    File file = LizzieFrame.curFile;
     String playerTitle = Lizzie.frame.playerTitle;
-    if (LizzieFrame.curFile != null) {
-      tempfile = LizzieFrame.curFile;
+    if (hasSetupToTransform(root)) {
+      boolean resume = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
+      boolean hadStartList = hasStartStone;
+      BoardHistoryList transformed = transformSetupHistory(root, type);
+      clearWithoutPrimaryEngineForwarding();
+      replaceHistory(transformed, () -> {
+        if (hadStartList) rebuildStartStoneList(transformed.getStart().getData());
+        requireEngineAlignment();
+      });
+      transformed.getGameInfo().refreshKomiDisplay();
+      Lizzie.frame.synchronizeRestoredGame(resume);
+    } else {
+      AllMovelist moves = getAllMovelist(type);
+      double komi = history.getGameInfo().getKomi();
+      int startMoveNumber = hasStartStone ? startStonelist.size() : 0;
+      clear(false);
+      playAllMovelist(moves, startMoveNumber);
+      setKomi(komi);
     }
-    Lizzie.board.clear(false);
-    Lizzie.board.playAllMovelist(listHead, startMoveNumber);
-    setKomi(komi);
-    if (tempfile != null) {
-      LizzieFrame.curFile = tempfile;
-      LizzieFrame.fileNameTitle = LizzieFrame.curFile.getName();
+    if (file != null) {
+      LizzieFrame.curFile = file;
+      LizzieFrame.fileNameTitle = file.getName();
     }
     Lizzie.frame.playerTitle = playerTitle;
     Lizzie.frame.refresh();
+  }
+
+  private boolean hasSetupToTransform(BoardHistoryNode root) {
+    BoardData data = root.getData();
+    if (data.isSnapshotNode()) {
+      if (Arrays.stream(data.stones).anyMatch(s -> !s.isEmpty())) return true;
+      if (hasStartStone) return false; // Legacy list-only root, replay its configured prefix.
+      if (!data.blackToPlay || !data.getPropertyValues("PL").isEmpty()) return true;
+    }
+    ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>(root.getVariations());
+    while (!pending.isEmpty()) {
+      BoardHistoryNode next = pending.removeFirst();
+      if (next.getData().isSnapshotNode()) return true;
+      pending.addAll(next.getVariations());
+    }
+    return false;
+  }
+
+  /** Move the recorded positions as a tree. Setup points and legal self-captures cannot be
+   * reconstructed by replaying ordinary placements under the currently running engine's rules. */
+  private BoardHistoryList transformSetupHistory(BoardHistoryNode root, int type) {
+    BoardHistoryList result = new BoardHistoryList(null);
+    boolean exchange = type == 6;
+    if (exchange) {
+      // A color-swapped diagram no longer represents the original players, result or handicap.
+      result.getGameInfo().setKomiNoMenu(history.getGameInfo().getKomi());
+    } else {
+      GameInfo info = history.getGameInfo().copyForSave();
+      info.clearEngineGameHistory();
+      result.setGameInfo(info);
+    }
+    result.restoreSessionRulesTarget(history.captureSessionRules());
+    int[] destinations = new int[root.getData().stones.length];
+    for (int index = 0; index < destinations.length; index++) {
+      int[] point = transformCoords(index / boardHeight, index % boardHeight, type);
+      destinations[index] = getIndex(point[0], point[1]);
+    }
+    record Pending(BoardHistoryNode source, BoardHistoryNode parent) {}
+    ArrayDeque<Pending> pending = new ArrayDeque<>();
+    pending.add(new Pending(root, null));
+    while (!pending.isEmpty()) {
+      Pending next = pending.removeFirst();
+      BoardHistoryNode source = next.source();
+      BoardData original = source.getData();
+      BoardData data = original.clone();
+      BoardData parent = source.previous().map(BoardHistoryNode::getData).orElse(null);
+      BitSet declared = data.isSnapshotNode() ? SnapshotSetup.points(original, parent) : null;
+      BitSet transformedPoints = new BitSet();
+      data.zobrist = new Zobrist(boardWidth, boardHeight);
+      for (int index = 0; index < original.stones.length; index++) {
+        int dest = destinations[index];
+        Stone stone = exchange ? original.stones[index].opposite() : original.stones[index];
+        data.stones[dest] = stone;
+        data.moveNumberList[dest] = original.moveNumberList[index];
+        if (!stone.isEmpty()) data.zobrist.toggleStone(dest / boardHeight, dest % boardHeight, stone);
+        if (declared != null && declared.get(index)) transformedPoints.set(dest);
+      }
+      data.lastMove = original.lastMove.map(p -> transformCoords(p[0], p[1], type));
+      if (exchange) {
+        data.lastMoveColor = data.lastMoveColor.opposite();
+        data.blackToPlay = !data.blackToPlay;
+        data.blackCaptures = original.whiteCaptures;
+        data.whiteCaptures = original.blackCaptures;
+      }
+      // Coordinate-dependent raw properties and analysis describe the old orientation.
+      // Keep the game rules, geometry and authored move numbering used when reopening the SGF.
+      data.getProperties().keySet().retainAll(List.of("RU", "SZ", "MN", "N", "PL"));
+      if (!data.getPropertyValues("PL").isEmpty()) data.setProperty("PL", data.blackToPlay ? "B" : "W");
+      BoardHistoryNode copied = source.copyForRestore(data);
+      copied.clearAnalysisAfterSetupEdit();
+      if (declared != null) {
+        copied.updateSetupMetadata(next.parent() == null ? null : next.parent().getData(), transformedPoints);
+      } else if (copied.extraStones != null) {
+        for (ExtraStones extra : copied.extraStones) {
+          int[] p = transformCoords(extra.x, extra.y, type);
+          extra.x = p[0];
+          extra.y = p[1];
+          if (exchange) extra.isBlack = !extra.isBlack;
+        }
+      }
+      if (next.parent() != null) copied.reparentAsLastVariationOf(next.parent());
+      if (source == history.getCurrentHistoryNode()) result.setHead(copied);
+      for (BoardHistoryNode child : source.getVariations()) pending.addLast(new Pending(child, copied));
+    }
+    return result;
   }
 
   public void gotoAnyMoveByCoords(int[] coords) {
@@ -6968,10 +7048,10 @@ public class Board {
     // ordinary moves can represent every starting position and its annotations.
     saveListForEdit();
     boolean keepSetupMode = setupMode && EngineManager.isEmpty;
+    boolean rebuildRootList = hasStartStone && owner == history.getStart();
     replaceHistory(edited, () -> {
       setupMode = keepSetupMode;
-      hasStartStone = false;
-      startStonelist = new ArrayList<>();
+      if (rebuildRootList) rebuildStartStoneList(edited.getStart().getData());
       forceRefresh = true;
       forceRefresh2 = true;
       clearTsumegoStatus();
