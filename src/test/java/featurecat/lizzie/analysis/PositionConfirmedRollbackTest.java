@@ -1271,7 +1271,11 @@ class PositionConfirmedRollbackTest {
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void startingStoneEditDuringTrialRestoresOrdinaryMoveNumbers(boolean recolor) throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
     try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
       harness.frame.readBoard = null;
       harness.engine.started = false;
       harness.engine.isLoaded = false;
@@ -1311,6 +1315,9 @@ class PositionConfirmedRollbackTest {
         assertEquals(2, node.getData().moveNumberList[Board.getIndex(3, 3)]);
         assertEquals(3, node.getData().moveNumberList[Board.getIndex(1, 2)]);
       }
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
     }
   }
 
