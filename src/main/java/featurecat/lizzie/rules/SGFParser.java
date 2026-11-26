@@ -3996,13 +3996,13 @@ public class SGFParser {
     double snapshotWinrate = transferLeadingMoveMetadata ? current.winrate : 50;
     BoardData snapshot =
         BoardData.snapshot(
-            current.stones.clone(),
+            current.stones,
             Optional.empty(),
             Stone.EMPTY,
             current.blackToPlay,
-            current.zobrist.clone(),
+            current.zobrist,
             current.moveNumber,
-            current.moveNumberList.clone(),
+            current.moveNumberList,
             current.blackCaptures,
             current.whiteCaptures,
             snapshotWinrate,
@@ -4011,7 +4011,12 @@ public class SGFParser {
       clearPrimaryAnalysisPayload(snapshot);
       clearSecondaryAnalysisPayload(snapshot);
     }
-    snapshot.moveMNNumber = current.moveMNNumber;
+    // addOrGoto handles implicit forks. An explicitly appended branch supplies its own numbering.
+    if (newBranch && BoardHistoryNode.startsBranchNumberingAtOne()) {
+      snapshot.clearInheritedMoveNumbers();
+    } else {
+      snapshot.moveMNNumber = current.moveMNNumber;
+    }
     history.addOrGoto(snapshot, newBranch);
     if (transferLeadingMoveMetadata) {
       moveLeadingSetupMetadataToSnapshot(history, analysisImport);

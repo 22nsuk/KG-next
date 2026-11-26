@@ -412,7 +412,7 @@ public class BoardHistoryList {
           int index = data.zobrist.index(x, y);
           data.replaceSetupStone(index, replacement);
           if (oldParent != null && replacement == oldParent.stones[index]) {
-            data.moveNumberList[index] = oldParent.moveNumberList[index];
+            data.inheritMoveNumber(oldParent, index);
           }
           // Removing a setup on an already-empty parent also removes its declaration.
           setup.set(index, replacement != Stone.EMPTY
@@ -514,7 +514,7 @@ public class BoardHistoryList {
               && original.moveNumberList[i] == oldParent.moveNumberList[i]
               && newParent.moveNumberList[i] != oldParent.moveNumberList[i])) {
         // Follow changed inherited labels through actions, including branch-number resets.
-        edited.moveNumberList[i] = edited.hidesInheritedMoveNumbers ? 0 : newParent.moveNumberList[i];
+        edited.inheritMoveNumber(newParent, i);
       }
       if (original.stones[i] != recorded.stones[i]) edited.replaceSetupStone(i, original.stones[i]);
     }
@@ -1337,49 +1337,7 @@ public class BoardHistoryList {
   }
 
   public int sync(BoardHistoryList newList) {
-    int diffMoveNo = -1;
-
-    BoardHistoryNode node = this.getCurrentHistoryNode();
-    BoardHistoryNode prev = node.previous().map(p -> p).orElse(null);
-    // From begin
-    while (prev != null) {
-      node = prev;
-      prev = node.previous().map(p -> p).orElse(null);
-    }
-    // Compare
-    BoardHistoryNode newNode = newList.getCurrentHistoryNode();
-    BoardHistoryNode newPrev = newNode.previous().map(p -> p).orElse(null);
-    while (newPrev != null) {
-      newNode = newPrev;
-      newPrev = newNode.previous().map(p -> p).orElse(null);
-    }
-
-    while (newNode != null) {
-      if (node == null) {
-        // Add
-        prev.addOrGoto(newNode.getData().clone());
-        node = prev.next().map(n -> n).orElse(null);
-        if (diffMoveNo < 0) {
-          diffMoveNo = newNode.getData().moveNumber;
-        }
-        node.sync(newNode);
-        break;
-      } else {
-        if (!node.compare(newNode)) {
-          if (diffMoveNo < 0) {
-            diffMoveNo = newNode.getData().moveNumber;
-          }
-          node.sync(newNode);
-          break;
-        }
-        node.syncVariations(newNode);
-      }
-      prev = node;
-      node = node.next(true).map(n -> n).orElse(null);
-      newNode = newNode.next(true).map(n -> n).orElse(null);
-    }
-
-    return diffMoveNo;
+    return getStart().syncSubtree(newList.getStart());
   }
 
   public String getCurrentTurnPlayerShortName() {

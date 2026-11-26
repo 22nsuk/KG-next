@@ -2,6 +2,7 @@ package featurecat.lizzie.rules;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
@@ -884,39 +885,67 @@ public class BoardHistoryNode {
     return moves;
   }
 
-  public void sync(BoardHistoryNode node) {
-    if (node == null) return;
+  private record SyncPair(BoardHistoryNode target, BoardHistoryNode source) {}
 
-    BoardHistoryNode cur = this;
-    // Compare
-    while (node != null && cur != null) {
-      if (!cur.compare(node)) {
-        BoardData sData = cur.getData();
-        sData.sync(node.getData());
-        cur.extraStones = cloneExtraStones(node.extraStones);
-        cur.hasRemovedStone = node.hasRemovedStone;
-        if (sData.getPlayouts() > 0 && !sData.isSnapshotNode()) {
-          BoardHistoryNode commentSource = cur;
-          sData.setGeneratedComment(() -> SGFParser.formatComment(commentSource));
-        }
-      }
-      cur.syncVariationsFrom(node);
-      cur = cur.next(true).map(n -> n).orElse(null);
-      node = node.next(true).map(n -> n).orElse(null);
-    }
+  public void sync(BoardHistoryNode source) {
+    if (source != null) syncSubtree(source);
   }
 
-  public void syncVariations(BoardHistoryNode node) {
-    if (node == null) return;
-    syncVariationsFrom(node);
+  int syncSubtree(BoardHistoryNode source) {
+    var pending = new ArrayDeque<SyncPair>();
+    pending.add(new SyncPair(this, source));
+    return syncPending(pending);
+  }
+
+  public void syncVariations(BoardHistoryNode source) {
+    if (source == null) return;
+    var pending = new ArrayDeque<SyncPair>();
+    enqueueVariations(source, pending);
+    syncPending(pending);
+  }
+
+  // Detect and apply each change on the same visit so callers can act on descendant changes.
+  private static int syncPending(ArrayDeque<SyncPair> pending) {
+    int firstChangedMove = -1;
+    while (!pending.isEmpty()) {
+      SyncPair pair = pending.removeFirst();
+      BoardHistoryNode target = pair.target();
+      BoardHistoryNode source = pair.source();
+      if (target.syncNode(source)) {
+        int move = source.data.moveNumber;
+        if (firstChangedMove < 0 || move < firstChangedMove) firstChangedMove = move;
+      }
+      target.enqueueVariations(source, pending);
+    }
+    return firstChangedMove;
+  }
+
+  private boolean syncNode(BoardHistoryNode source) {
+    if (matchesPositionAndMetadata(source)) {
+      if (data.hasSameReplayMetadata(source.data)) return false;
+      // Display numbers and the policy for a future replay do not replace local position analysis.
+      data.copyReplayMetadataFrom(source.data);
+    } else {
+      data.sync(source.data);
+      extraStones = cloneExtraStones(source.extraStones);
+      hasRemovedStone = source.hasRemovedStone;
+      if (data.getPlayouts() > 0 && !data.isSnapshotNode()) {
+        data.setGeneratedComment(() -> SGFParser.formatComment(this));
+      }
+    }
+    return true;
   }
 
   public boolean compare(BoardHistoryNode node) {
-    BoardData sData = this.getData();
-    BoardData dData = node.getData();
-    return matchesChildState(sData, dData)
+    return matchesPositionAndMetadata(node) && data.hasSameReplayMetadata(node.data);
+  }
+
+  private boolean matchesPositionAndMetadata(BoardHistoryNode node) {
+    return matchesChildState(data, node.data)
+        && data.blackCaptures == node.data.blackCaptures
+        && data.whiteCaptures == node.data.whiteCaptures
         && hasEquivalentMetadata(node)
-        && this.numberOfChildren() == node.numberOfChildren();
+        && numberOfChildren() == node.numberOfChildren();
   }
 
   public void resetMoveNumberList() {
@@ -1150,17 +1179,12 @@ public class BoardHistoryNode {
     return addOrGoto(sourceChild.getData().clone(), index > 0);
   }
 
-  private void syncVariationsFrom(BoardHistoryNode sourceNode) {
-    int sourceChildren = sourceNode.numberOfChildren();
-    for (int i = 0; i < sourceChildren; i++) {
-      Optional<BoardHistoryNode> sourceChild = sourceNode.getVariation(i);
-      if (!sourceChild.isPresent()) {
-        continue;
-      }
-      BoardHistoryNode child = ensureVariation(i, sourceChild.get());
-      child.sync(sourceChild.get());
+  private void enqueueVariations(BoardHistoryNode source, ArrayDeque<SyncPair> pending) {
+    for (int i = 0; i < source.variations.size(); i++) {
+      BoardHistoryNode child = source.variations.get(i);
+      pending.addLast(new SyncPair(ensureVariation(i, child), child));
     }
-    trimVariationsToSize(sourceChildren);
+    trimVariationsToSize(source.variations.size());
   }
 
   private void trimVariationsToSize(int expectedSize) {

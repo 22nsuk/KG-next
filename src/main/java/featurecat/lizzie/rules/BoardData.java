@@ -282,6 +282,10 @@ public class BoardData implements Cloneable {
   // A branch numbering reset also applies to inherited stones exposed by an edit.
   boolean hidesInheritedMoveNumbers;
 
+  void inheritMoveNumber(BoardData parent, int index) {
+    moveNumberList[index] = hidesInheritedMoveNumbers ? 0 : parent.moveNumberList[index];
+  }
+
   void clearInheritedMoveNumbers() {
     if (moveNumberList == null) moveNumberList = new int[stones.length];
     else Arrays.fill(moveNumberList, 0);
@@ -1661,14 +1665,25 @@ public class BoardData implements Cloneable {
     }
   }
 
+  boolean hasSameReplayMetadata(BoardData other) {
+    return playedWithoutCaptures == other.playedWithoutCaptures
+        && hidesInheritedMoveNumbers == other.hidesInheritedMoveNumbers
+        && moveMNNumber == other.moveMNNumber
+        && Arrays.equals(moveNumberList, other.moveNumberList);
+  }
+
+  void copyReplayMetadataFrom(BoardData other) {
+    playedWithoutCaptures = other.playedWithoutCaptures;
+    hidesInheritedMoveNumbers = other.hidesInheritedMoveNumbers;
+    moveMNNumber = other.moveMNNumber;
+    moveNumberList = copyIntArray(other.moveNumberList);
+  }
+
   private void copyCoreStateFrom(BoardData data) {
     this.nodeKind = data.getNodeKind();
-    this.playedWithoutCaptures = data.playedWithoutCaptures;
-    this.hidesInheritedMoveNumbers = data.hidesInheritedMoveNumbers;
-    this.moveMNNumber = data.moveMNNumber;
+    copyReplayMetadataFrom(data);
     this.moveNumber = data.moveNumber;
     this.lastMove = copyLastMove(data.lastMove);
-    this.moveNumberList = copyIntArray(data.moveNumberList);
     this.blackToPlay = data.blackToPlay;
     this.dummy = data.dummy;
     this.lastMoveColor = data.lastMoveColor;
