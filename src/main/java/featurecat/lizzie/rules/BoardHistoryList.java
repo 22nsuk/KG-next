@@ -427,6 +427,7 @@ public class BoardHistoryList {
         if (parent != null) {
           TrialNumbering.normalizeMoveNumberGrid(
               data, newParent, original.moveNumber, index -> oldParent.moveNumberList[index]);
+          parent.renumberCachedChildMove(data, original.moveNumber);
         }
       }
       if (data.isMoveNode()) {
@@ -666,13 +667,13 @@ public class BoardHistoryList {
     head = head.addOrGoto(data, newBranch, changeMove, tsumego);
   }
 
-  Optional<BoardData> nextByMoveIdentity(BoardData data) {
+  Optional<BoardData> nextByMoveIdentity(BoardData data, boolean forwardSetup) {
     Optional<BoardHistoryNode> n = head.findDirectChildByMoveIdentity(data);
     if (n.isPresent()) {
-      if (head.hasRemovedStone()) head.clearAndSyncBoard(true);
+      if (forwardSetup && head.hasRemovedStone()) head.clearAndSyncBoard(true);
       if (Lizzie.leelaz != null) Lizzie.leelaz.clearBestMoves();
       head = n.get();
-      head.placeExtraStones();
+      if (forwardSetup) head.placeExtraStones();
     }
     return n.map(BoardHistoryNode::getData);
   }

@@ -484,6 +484,12 @@ public class SGFParser {
     return SgfDocument.convertSgfPosToCoord(pos, width, height);
   }
 
+  private static int[] decodeMove(String value, int width, int height) {
+    // Historical SGF uses tt for a pass on boards up to 19x19.
+    if (width <= 19 && height <= 19 && "tt".equals(value)) return null;
+    return convertSgfPosToCoord(value, width, height);
+  }
+
   private static PreparedGame parse(String value) {
     PreparedGame prepared = prepareFileGame(parseLoadDocument(value), ParseOptions.capture());
     if (prepared != null) applyPreparedGame(prepared);
@@ -577,6 +583,8 @@ public class SGFParser {
     int width = history.getData().zobrist.width();
     int height = history.getData().zobrist.height();
     ImportMoves importMoves = options.importMoves(document, cancellation);
+    var events = importMoves.eventsForBuild(
+        document, Set.of("PB", "PW", "RE", "KM", "KO", "DZ"), cancellation);
 
     int subTreeDepth = 0;
     // Save the variation step count
@@ -607,8 +615,8 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
     boolean currentNodeHasDummy = false;
-    for (int eventIndex = 0; eventIndex < document.events().size(); eventIndex++) {
-      SgfDocument.Event event = document.events().get(eventIndex);
+    for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
+      SgfDocument.Event event = events.get(eventIndex);
       cancellation.check();
       switch (event.kind()) {
         case '(':
@@ -656,12 +664,16 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = convertSgfPosToCoord(tagContent, width, height);
+            int[] move = decodeMove(tagContent, width, height);
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
-            importMoves.play(history, move, color, newBranch, eventIndex);
+            if (!importMoves.play(history, move, color, newBranch, eventIndex)) {
+              pendingNodeMetadata.clear();
+              eventIndex = endOfRejectedVariation(document, eventIndex, cancellation) - 1;
+              break;
+            }
             currentNodeHasMove = true;
             if (newBranch) {
               processPendingPros(history, pendingProps);
@@ -678,9 +690,6 @@ public class SGFParser {
               target.getData().comment = tagContent;
             }
           } else if (isAnalysisTag(tag)) {
-            if (isSecondaryEngineAnalysisTag(tag)) {
-              prepared.extraMode2 = true;
-            }
             if (shouldBufferNodeMetadata(currentNodeHasMove, currentNodeHasSetupSnapshot)) {
               bufferNodeAnalysis(pendingNodeMetadata, tag, tagContent);
             } else {
@@ -918,6 +927,7 @@ public class SGFParser {
     gameInfo.setResultNoUI(result);
     gameInfo.setDate(decodeGameInfoText(getOrDefault(gameProperties, "DT", null), cancellation));
     gameInfo.setHandicap(parseHandicapProperty(getOrDefault(gameProperties, "HA", null)));
+    prepared.extraMode2 = analysisImport.hasSecondaryTag;
     prepared.rewindStart = history.getCurrentHistoryNode();
     // Preserve the live rewind's move markers without navigation or engine/UI side effects.
     do {
@@ -4061,8 +4071,57 @@ public class SGFParser {
     return text.toString();
   }
 
+  // Leave the closing event for the normal parser to restore the variation's original parent.
+  private static int endOfRejectedVariation(
+      SgfDocument document, int moveIndex, SgfCancellation cancellation) {
+    int nested = 0;
+    for (int i = moveIndex + 1; i < document.events().size(); i++) {
+      cancellation.checkEvery(i);
+      char kind = document.events().get(i).kind();
+      if (kind == '(') nested++;
+      if (kind == ')') {
+        if (nested == 0) return i;
+        nested--;
+      }
+    }
+    return document.events().size();
+  }
+
   private record ImportMoves(boolean defaultNoCapture, boolean canSuicidal, boolean savedByKgNext,
       BitSet recordedNoCapture) {
+    // Apply game-wide fields only after the move in their node has been accepted. The readers
+    // have different legacy game-info fields. Keep the other tags in order and all events
+    // within their original node so the capture-mode mask and subtree boundaries still apply.
+    List<SgfDocument.Event> eventsForBuild(
+        SgfDocument document, Set<String> gameFields, SgfCancellation cancellation) {
+      List<SgfDocument.Event> source = document.events();
+      if (!savedByKgNext) return source;
+      List<SgfDocument.Event> ordered = source;
+      int firstField = -1;
+      for (int i = 0; i < source.size(); i++) {
+        cancellation.checkEvery(i);
+        var event = source.get(i);
+        if (event.kind() != 'P') {
+          firstField = -1;
+        } else if (gameFields.contains(event.name())) {
+          if (firstField < 0) firstField = i;
+        } else if (firstField >= 0 && ("B".equals(event.name()) || "W".equals(event.name()))) {
+          if (ordered == source) ordered = new ArrayList<>(source);
+          int dest = firstField;
+          for (int p = firstField; p <= i; p++) {
+            cancellation.checkEvery(p);
+            if (!gameFields.contains(source.get(p).name())) ordered.set(dest++, source.get(p));
+          }
+          for (int p = firstField; p < i; p++) {
+            cancellation.checkEvery(p);
+            if (gameFields.contains(source.get(p).name())) ordered.set(dest++, source.get(p));
+          }
+          firstField = -1;
+        }
+      }
+      return ordered;
+    }
+
     boolean consumesCaptureMode(String tag) {
       return recordedNoCapture != null && NO_CAPTURE_MOVE.equals(tag);
     }
@@ -4084,19 +4143,22 @@ public class SGFParser {
       return parent.next(true).filter(BoardHistoryNode::isEndDummay).isPresent();
     }
 
-    void play(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
+    // A rejected recorded action has no history node to own its payload or its continuation.
+    boolean play(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
       if (move == null) {
         if (savedByKgNext) history.passFromRecord(color, newBranch);
         else history.pass(color, newBranch, false);
-        return;
+        return true;
       }
       boolean noCapture =
           recordedNoCapture == null ? defaultNoCapture : recordedNoCapture.get(eventIndex);
       if (savedByKgNext) {
+        BoardHistoryNode parent = history.getCurrentHistoryNode();
         history.placeRecordedMove(move[0], move[1], color, newBranch, noCapture, canSuicidal);
-      } else {
-        history.place(move[0], move[1], color, newBranch, false, false, noCapture, canSuicidal);
+        return history.getCurrentHistoryNode() != parent;
       }
+      history.place(move[0], move[1], color, newBranch, false, false, noCapture, canSuicidal);
+      return true;
     }
   }
 
@@ -4225,6 +4287,8 @@ public class SGFParser {
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
     ImportMoves importMoves = options.importMoves(document, SgfCancellation.NONE);
+    var events = importMoves.eventsForBuild(
+        document, Set.of("PB", "PW", "RE", "KM", "HA"), SgfCancellation.NONE);
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, BoardHistoryNode> subTreeStepMap = new HashMap<Integer, BoardHistoryNode>();
@@ -4255,8 +4319,8 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     boolean currentNodeHasDummy = false;
     // Support unicode characters (UTF-8)
-    for (int eventIndex = 0; eventIndex < document.events().size(); eventIndex++) {
-      SgfDocument.Event event = document.events().get(eventIndex);
+    for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
+      SgfDocument.Event event = events.get(eventIndex);
       switch (event.kind()) {
         case '(':
           flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
@@ -4300,12 +4364,16 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = convertSgfPosToCoord(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
+            int[] move = decodeMove(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
-            importMoves.play(history, move, color, newBranch, eventIndex);
+            if (!importMoves.play(history, move, color, newBranch, eventIndex)) {
+              pendingNodeMetadata.clear();
+              eventIndex = endOfRejectedVariation(document, eventIndex, SgfCancellation.NONE) - 1;
+              break;
+            }
             currentNodeHasMove = true;
             if (newBranch) {
               processPendingPros(history, pendingProps);
@@ -4639,7 +4707,7 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = convertSgfPosToCoord(tagContent);
+            int[] move = decodeMove(tagContent, Board.boardWidth, Board.boardHeight);
             // Save the step count
             subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
@@ -4859,6 +4927,7 @@ public class SGFParser {
     private final ParseOptions options;
     private final SgfCancellation cancellation;
     private final BoardData.AnalysisStrings analysisStrings = new BoardData.AnalysisStrings();
+    private boolean hasSecondaryTag;
 
     private AnalysisImport() { this(ParseOptions.capture()); }
 
@@ -4886,6 +4955,7 @@ public class SGFParser {
       if (target == null) {
         return;
       }
+      if (isSecondaryEngineAnalysisTag(tag)) hasSecondaryTag = true;
       if ("KGP".equals(tag)) {
         target.addProperty(tag, tagContent);
         restoreAnalysisMetadata(target,

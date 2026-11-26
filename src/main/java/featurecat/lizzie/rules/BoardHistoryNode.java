@@ -441,6 +441,21 @@ public class BoardHistoryNode {
     if (nodeInfoMain2 == null) nodeInfoMain2 = new NodeInfo();
   }
 
+  /** Keep copied move analysis aligned with a renumbered child while preserving branch selection. */
+  void renumberCachedChildMove(BoardData move, int originalMoveNumber) {
+    if (!move.isMoveNode() || move.moveNumber == originalMoveNumber) return;
+    renumberMoveInfo(nodeInfo, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfoMain, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfo2, move, originalMoveNumber);
+    renumberMoveInfo(nodeInfoMain2, move, originalMoveNumber);
+  }
+
+  private static void renumberMoveInfo(NodeInfo info, BoardData move, int originalMoveNumber) {
+    if (info != null && info.describesMove(move, originalMoveNumber)) {
+      info.moveNum = move.moveNumber;
+    }
+  }
+
   private static NodeInfo copyNodeInfo(NodeInfo source, boolean deferEmpty) {
     if (deferEmpty && (source == null || isDefaultNodeInfo(source))) return null;
     return copyNodeInfo(source);

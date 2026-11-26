@@ -2552,7 +2552,8 @@ public class Board {
       newState.moveMNNumber = parent.nextMoveMNNumber(newBranch);
       boolean previousBlackToPlay = history.isBlacksTurn();
       // Reuse later pass variations without replacing their comments or analysis.
-      if (!newBranch && !dummy && history.nextByMoveIdentity(newState).isPresent()) {
+      if (!newBranch && !dummy
+          && history.nextByMoveIdentity(newState, shouldForwardHistoryNavigationToPrimaryEngine()).isPresent()) {
         // Preserve addOrGoto's clock reset using the turn before history advanced.
         if ((Lizzie.frame.isPlayingAgainstLeelaz || Lizzie.frame.isAnaPlayingAgainstLeelaz)
             && Lizzie.frame.playerIsBlack == previousBlackToPlay)
@@ -2658,7 +2659,6 @@ public class Board {
               + " "
               + localMovePlaceState(forSync));
     }
-    boolean noCheckSuiKo = false;
     LizzieFrame.boardRenderer.removedrawmovestone();
     Lizzie.frame.suggestionclick = LizzieFrame.outOfBoundCoordinate;
     synchronized (this) {
@@ -2720,57 +2720,10 @@ public class Board {
       }
       if (Lizzie.leelaz != null) updateWinrate();
       if (engineGamePlaying()) SGFParser.appendTime();
-      // modifyStart();
-      if (!forSync
+      boolean atLiveRecordEnd = !forSync
           && !Lizzie.frame.bothSync
           && (LizzieFrame.urlSgf || Lizzie.frame.syncBoard)
-          && Lizzie.board.getHistory().getCurrentHistoryNode()
-              == Lizzie.board.getHistory().getMainEnd()) {
-        //      newBranch = true;
-        //      //  changeMove=true;
-        boolean hasVairation = false;
-        BoardHistoryNode node = Lizzie.board.getHistory().getCurrentHistoryNode();
-        for (int i = 0; i < node.variations.size(); i++) {
-          Optional<int[]> nodeCoords = node.variations.get(i).getData().lastMove;
-
-          if (nodeCoords.isPresent()) {
-            int[] coords = nodeCoords.get();
-            if (coords[0] == x && coords[1] == y) {
-              hasVairation = true;
-              // changeMove=false;
-            }
-          }
-        }
-        if (!hasVairation) {
-          boolean isEmpty = EngineManager.isEmpty;
-          EngineManager.isEmpty = true;
-          Lizzie.board.pass(color, false, true);
-          Lizzie.board.previousMove(false);
-          Lizzie.board.getHistory().place(x, y, color, true);
-          noCheckSuiKo = true;
-          EngineManager.isEmpty = isEmpty;
-          if (Lizzie.leelaz != null) Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
-          // modifyEnd(false);
-          clearAfterMove();
-          if (shouldLogLocalMovePlace) {
-            logLocalMovePlace(
-                "place return urlSgf-syncBoard-variation x="
-                    + x
-                    + " y="
-                    + y
-                    + " color="
-                    + color
-                    + " "
-                    + localMovePlaceState(forSync));
-          }
-          return;
-          // Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
-        }
-      }
-      //      try {
-      //        mvnumber[getIndex(x, y)] = history.getCurrentHistoryNode().getData().moveNumber + 1;
-      //      } catch (Exception ex) {
-      //      }
+          && history.getCurrentHistoryNode() == history.getMainEnd();
       double nextWinrate = -100;
       if (history.getData().winrate >= 0) nextWinrate = 100 - history.getData().winrate;
 
@@ -2825,7 +2778,8 @@ public class Board {
       }
       BoardData parent = history.getData();
       int moveNumber = parent.moveNumber + 1;
-      int moveMNNumber = parent.nextMoveMNNumber(newBranch);
+      boolean appendVariation = newBranch || atLiveRecordEnd;
+      int moveMNNumber = parent.nextMoveMNNumber(appendVariation);
       // Detach the parent once, then mutate only this unpublished candidate. Rejected moves
       // discard it without changing the parent or any existing variation.
       BoardData newState =
@@ -2844,7 +2798,7 @@ public class Board {
       newState.moveMNNumber = moveMNNumber;
       Stone[] stones = newState.stones;
       int[] moveNumberList = newState.moveNumberList;
-      if (newBranch && history.getNext(true).isPresent()) {
+      if (atLiveRecordEnd || (newBranch && history.getNext(true).isPresent())) {
         newState.clearInheritedMoveNumbers();
       }
       if (Lizzie.frame.isTrying) moveNumberList[Board.getIndex(x, y)] = -moveNumber;
@@ -2859,53 +2813,33 @@ public class Board {
 
       newState.dummy = false;
       // don't make this coordinate if it is suicidal or violates superko
-      if (!noCheckSuiKo) {
-        if (history.violatesKoRule(newState)) {
-          // modifyEnd();
-          if (shouldLogLocalMovePlace) {
-            logLocalMovePlace(
-                "place return ko-rule x="
-                    + x
-                    + " y="
-                    + y
-                    + " color="
-                    + color
-                    + " "
-                    + localMovePlaceState(forSync));
-          }
-          return;
+      if (history.violatesKoRule(newState)) {
+        if (shouldLogLocalMovePlace) {
+          logLocalMovePlace(
+              "place return ko-rule x="
+                  + x
+                  + " y="
+                  + y
+                  + " color="
+                  + color
+                  + " "
+                  + localMovePlaceState(forSync));
         }
-        if (Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal) {
-          if (selfCaptured == 1) {
-            //   modifyEnd();
-            if (shouldLogLocalMovePlace) {
-              logLocalMovePlace(
-                  "place return suicide-canSuicidal x="
-                      + x
-                      + " y="
-                      + y
-                      + " color="
-                      + color
-                      + " "
-                      + localMovePlaceState(forSync));
-            }
-            return;
-          }
-        } else if (selfCaptured > 0) {
-          //   modifyEnd();
-          if (shouldLogLocalMovePlace) {
-            logLocalMovePlace(
-                "place return suicide x="
-                    + x
-                    + " y="
-                    + y
-                    + " color="
-                    + color
-                    + " "
-                    + localMovePlaceState(forSync));
-          }
-          return;
+        return;
+      }
+      if (selfCaptured == 1 || (selfCaptured > 0 && (Lizzie.leelaz == null || !Lizzie.leelaz.canSuicidal))) {
+        if (shouldLogLocalMovePlace) {
+          logLocalMovePlace(
+              "place return suicide x="
+                  + x
+                  + " y="
+                  + y
+                  + " color="
+                  + color
+                  + " "
+                  + localMovePlaceState(forSync));
         }
+        return;
       }
       // update history with this coordinate
       // update leelaz with board position
@@ -2928,9 +2862,14 @@ public class Board {
       }
       boolean previousBlackToPlay = getData().blackToPlay;
       boolean usedExistingVariation =
-          !newBranch && !forSync && history.nextByMoveIdentity(newState).isPresent();
+          !newBranch && !forSync
+              && history.nextByMoveIdentity(newState, shouldForwardHistoryNavigationToPrimaryEngine()).isPresent();
       if (!usedExistingVariation) {
-        history.addOrGoto(newState, newBranch);
+        if (atLiveRecordEnd && history.getCurrentHistoryNode().numberOfChildren() == 0) {
+          // Reserve the main line for the next remote move without playing a pass on the engine.
+          history.pass(color, false, true, false, true);
+        }
+        history.addOrGoto(newState, appendVariation);
       } else {
         clearAfterMove();
       }

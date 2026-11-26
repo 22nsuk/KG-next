@@ -1382,11 +1382,7 @@ class PositionConfirmedRollbackTest {
     featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
     BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
     try (Harness harness = Harness.open()) {
-      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
-      LizzieFrame.boardRenderer = new SilentBoardRenderer();
-      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
-      setField(harness.frame, "problemListListeners", new ArrayList<>());
-      harness.frame.userAnalysisPaused = true;
+      initializePausedTrialProblemList(harness);
       harness.engine.commandLists.add("loadsgf");
       ExactSnapshotRestoreProtocolFixture.Transport output =
           ExactSnapshotRestoreProtocolFixture.install(
@@ -1448,6 +1444,123 @@ class PositionConfirmedRollbackTest {
       LizzieFrame.winrateGraph = previousGraph;
       LizzieFrame.boardRenderer = previousRenderer;
     }
+  }
+
+  @Test
+  void setupEditDuringTrialKeepsUnchangedVariationsInProblemList() throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      initializePausedTrialProblemList(harness);
+      harness.frame.readBoard = null;
+      harness.engine.started = false;
+      harness.engine.isLoaded = false;
+      EngineManager.isEmpty = true;
+      Lizzie.config.matchAiMoves = 2;
+      Lizzie.config.matchAiPercentsPlayouts = 50;
+
+      Board board = harness.board;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19];B[cc](;W[dd])(;AW[aa]PL[B];B[ee]))", true);
+      BoardHistoryNode fork = history.getStart().next().orElseThrow();
+      BoardHistoryNode anchor = fork.next().orElseThrow();
+      BoardHistoryNode editedVariation = fork.getVariation(1).orElseThrow().next().orElseThrow();
+      history.setHead(anchor);
+      board.setHistory(history);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        harness.frame.tryPlay(false);
+        board.place(1, 2, Stone.BLACK);
+        BoardHistoryNode main = history.getCurrentHistoryNode();
+        history.setHead(anchor);
+        board.place(2, 1, Stone.BLACK, true);
+        BoardHistoryNode branch = history.getCurrentHistoryNode();
+        for (BoardHistoryNode node : List.of(anchor, main, branch, editedVariation)) {
+          BoardData data = node.getData();
+          data.setPlayouts(200);
+          data.setPlayouts2(200);
+          data.winrate = node == anchor ? 50 : 60;
+          data.winrate2 = node == anchor ? 50 : 65;
+        }
+        anchor.getData().bestMoves = List.of(
+            trialAnalysisCandidate(2, 1, 100), trialAnalysisCandidate(1, 2, 60));
+        anchor.getData().bestMoves2 = List.of(
+            trialAnalysisCandidate(1, 2, 100), trialAnalysisCandidate(2, 1, 45));
+        board.updateMovelist(main);
+        board.updateMovelist2(main);
+        // Publish the branch's evaluation even though the two moves have equal visits.
+        anchor.getData().playoutsChanged = true;
+        anchor.nodeInfo2.playouts = 0;
+        board.updateMovelist(branch);
+        board.updateMovelist2(branch);
+        assertEquals(1, anchor.nodeInfoMain.moveNum);
+        assertTrue(anchor.nodeInfoMain.analyzed);
+        assertFalse(anchor.getData().playoutsChanged);
+
+        history.setHead(editedVariation);
+        board.editMove(new int[] {0, 0}, true, false);
+
+        for (int operation = 0; operation < 3; operation++) {
+          if (operation == 1) board.cleanedit();
+          if (operation == 2) board.reedit();
+          assertFalse(harness.frame.isTrying);
+          assertEquals(operation == 1 ? Stone.WHITE : Stone.BLACK,
+              board.getData().stones[Board.getIndex(0, 0)]);
+          assertEquals(operation == 1 ? 200 : 0, board.getData().getPlayouts());
+          assertEquals(operation == 1 ? 200 : 0, board.getData().getPlayouts2());
+
+          BoardHistoryNode restoredAnchor =
+              board.getHistory().getStart().next().orElseThrow().next().orElseThrow();
+          BoardHistoryNode restoredMain = restoredAnchor.next().orElseThrow();
+          BoardHistoryNode restoredBranch = restoredAnchor.getVariation(1).orElseThrow();
+          for (BoardHistoryNode node : List.of(restoredMain, restoredBranch)) {
+            assertEquals(3, node.getData().moveNumber);
+            assertEquals(200, node.getData().getPlayouts());
+            assertEquals(200, node.getData().getPlayouts2());
+          }
+          board.updateMovelist(restoredMain);
+          board.updateMovelist2(restoredMain);
+          harness.frame.refreshProblemListSnapshot();
+          var problems = harness.frame.getProblemListSnapshot();
+          assertEquals(1, problems.analyzedMoves);
+          assertEquals(2, problems.totalMoves);
+          assertEquals(3, problems.blackEntries.get(0).moveNumber);
+          assertEquals(10, problems.blackEntries.get(0).winrateLossAbs);
+
+          for (var info : List.of(restoredAnchor.nodeInfo, restoredAnchor.nodeInfoMain,
+              restoredAnchor.nodeInfo2, restoredAnchor.nodeInfoMain2)) {
+            assertEquals(3, info.moveNum);
+            assertEquals(200, info.playouts);
+            assertTrue(info.analyzed);
+          }
+          assertArrayEquals(new int[] {1, 2}, restoredAnchor.nodeInfoMain.coords);
+          assertArrayEquals(new int[] {1, 2}, restoredAnchor.nodeInfoMain2.coords);
+          assertArrayEquals(new int[] {2, 1}, restoredAnchor.nodeInfo.coords);
+          assertArrayEquals(new int[] {2, 1}, restoredAnchor.nodeInfo2.coords);
+          assertTrue(restoredAnchor.nodeInfo.isBest);
+          assertTrue(restoredAnchor.nodeInfoMain.isMatchAi);
+          assertTrue(restoredAnchor.nodeInfoMain2.isBest);
+          assertFalse(restoredAnchor.nodeInfo2.isMatchAi);
+        }
+      });
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  private static void initializePausedTrialProblemList(Harness harness) throws Exception {
+    LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+    LizzieFrame.boardRenderer = new SilentBoardRenderer();
+    setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+    setField(harness.frame, "problemListListeners", new ArrayList<>());
+    harness.frame.userAnalysisPaused = true;
+  }
+
+  private static MoveData trialAnalysisCandidate(int x, int y, int visits) {
+    MoveData candidate = new MoveData();
+    candidate.coordinate = Board.convertCoordinatesToName(x, y);
+    candidate.playouts = visits;
+    return candidate;
   }
 
   @ParameterizedTest
@@ -2919,6 +3032,64 @@ class PositionConfirmedRollbackTest {
       assertPosition(enginePosition, harness.board.getData(), 5, 5);
       assertEquals(1, payloadCount(output, noCapture ? "play B A4" : "play W C3"));
     } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void localVariationAtLiveEndOnlyFeedsAnAlignedEngine(boolean urlGame) throws Exception {
+    boolean previousUrlSgf = LizzieFrame.urlSgf;
+    var previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      harness.frame.readBoard = null;
+      // The one-way board also re-enters a variation below a snapshot with a removal.
+      String liveEndSetup = urlGame ? "" : ";AE[cc]PL[B]";
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AB[ab]AW[aa][ba][ed][de];W[cc]" + liveEndSetup + ")", true);
+      history.setHead(history.getEnd());
+      harness.board.setHistory(history);
+      harness.engine.commandLists.add("loadsgf");
+      var output = installPositionTransport(harness.engine, SnapshotTrackingLeelaz.create(), "");
+      LizzieFrame.urlSgf = urlGame;
+      harness.frame.syncBoard = !urlGame;
+      harness.frame.bothSync = false;
+      javax.swing.SwingUtilities.invokeAndWait(
+          () -> harness.board.editMove(new int[] {1, 0}, true, false));
+      drainKifuWorker(harness.frame);
+      assertTrue(harness.board.isEngineAlignmentPending());
+
+      history = harness.board.getHistory();
+      BoardHistoryNode liveEnd = history.getMainEnd();
+      harness.board.place(3, 3, Stone.BLACK);
+      BoardHistoryNode variation = history.getCurrentHistoryNode();
+      assertSame(liveEnd, variation.previous().orElseThrow());
+      assertSame(liveEnd, history.getMainEnd());
+      assertEquals(Stone.BLACK, variation.getData().stones[Board.getIndex(3, 3)]);
+      assertTrue(harness.board.isEngineAlignmentPending());
+      // Re-entering the same variation must preserve its identity and stay local as well.
+      assertTrue(harness.board.previousMove(false));
+      harness.board.place(3, 3, Stone.BLACK);
+      assertSame(variation, history.getCurrentHistoryNode());
+      assertEquals(0, payloadCount(output, "play"));
+
+      javax.swing.SwingUtilities.invokeAndWait(harness.board::cleanedit);
+      awaitHistoryRestoreCompletion(harness.board);
+      int previousPlays = payloadCount(output, "play");
+      liveEnd = harness.board.getHistory().getMainEnd();
+      harness.board.place(4, 4, Stone.BLACK); // Single-stone suicide.
+      assertSame(liveEnd, harness.board.getHistory().getCurrentHistoryNode());
+      assertEquals(0, liveEnd.numberOfChildren());
+      assertEquals(previousPlays, payloadCount(output, "play"));
+      harness.board.place(3, 3, Stone.BLACK);
+      assertEquals(previousPlays + 1, payloadCount(output, "play"));
+      assertEquals(1, payloadCount(output, "play B D2"));
+    } finally {
+      LizzieFrame.urlSgf = previousUrlSgf;
       LizzieFrame.winrateGraph = previousGraph;
       LizzieFrame.boardRenderer = previousRenderer;
     }

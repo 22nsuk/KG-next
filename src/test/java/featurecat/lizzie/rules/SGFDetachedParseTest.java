@@ -206,6 +206,20 @@ class SGFDetachedParseTest {
   }
 
   @Test
+  void legacyPassInRecordedGameKeepsItsCommentAndContinuation() throws Exception {
+    try (var harness = RulesLayerTestHarness.open(19)) {
+      String saved = "(;SZ[19]AP[KG-next];B[tt]C[pass];W[aa])";
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      for (var history : java.util.List.of(harness.board().getHistory(), SGFParser.parseSgf(saved, true, OPTIONS))) {
+        var pass = history.getStart().next().orElseThrow();
+        assertTrue(pass.getData().isPassNode());
+        assertEquals("pass", pass.getData().comment);
+        assertArrayEquals(new int[] {0, 0}, pass.next().orElseThrow().getData().lastMove.orElseThrow());
+      }
+    }
+  }
+
+  @Test
   void ttRemainsARealCoordinateOnLargerBoards() throws Exception {
     try (var harness = RulesLayerTestHarness.open(19)) {
       var history = SGFParser.parseSgf("(;SZ[20:21];B[tt];W[])", true, OPTIONS);

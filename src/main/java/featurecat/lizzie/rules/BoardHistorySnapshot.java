@@ -1,7 +1,6 @@
 package featurecat.lizzie.rules;
 
 import featurecat.lizzie.analysis.MoveData;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -57,8 +56,8 @@ final class BoardHistorySnapshot {
 
   private static void restoreMatch(NodeInfo branch, NodeInfo main, BoardData move,
       List<MoveData> candidates, int count, double percent) {
-    boolean branchMatches = describesMove(branch, move, move.moveNumber);
-    boolean mainMatches = describesMove(main, move, move.moveNumber);
+    boolean branchMatches = branch.describesMove(move, move.moveNumber);
+    boolean mainMatches = main.describesMove(move, move.moveNumber);
     if (!branchMatches && !mainMatches) return;
     MoveMatch match = MoveMatch.evaluate(move, candidates, count, percent);
     if (branchMatches) match.applyTo(branch);
@@ -67,29 +66,9 @@ final class BoardHistorySnapshot {
 
   private static void restoreOrdinaryNumbering(NodeSnapshot entry, NodeSnapshot parent) {
     BoardData data = entry.node().getData();
-    BoardData parentData = parent.node().getData();
-    if (data.isMoveNode() && entry.originalMoveNumber() != data.moveNumber) {
-      // These parent-owned caches describe a child move. Renumber only matching entries,
-      // preserving branch selection and analysis even when no new visits trigger a refresh.
-      BoardHistoryNode parentNode = parent.node();
-      restoreMoveInfoNumber(parentNode.nodeInfo, data, entry.originalMoveNumber());
-      restoreMoveInfoNumber(parentNode.nodeInfoMain, data, entry.originalMoveNumber());
-      restoreMoveInfoNumber(parentNode.nodeInfo2, data, entry.originalMoveNumber());
-      restoreMoveInfoNumber(parentNode.nodeInfoMain2, data, entry.originalMoveNumber());
-    }
+    BoardHistoryNode parentNode = parent.node();
+    parentNode.renumberCachedChildMove(data, entry.originalMoveNumber());
     BoardHistoryList.TrialNumbering.normalizeMoveNumberGrid(
-        data, parentData, entry.originalMoveNumber(), parent.position()::moveNumberAt);
-  }
-
-  private static void restoreMoveInfoNumber(NodeInfo info, BoardData move, int originalMoveNumber) {
-    if (describesMove(info, move, originalMoveNumber)) {
-      info.moveNum = move.moveNumber;
-    }
-  }
-
-  private static boolean describesMove(NodeInfo info, BoardData move, int moveNumber) {
-    return info.moveNum == moveNumber
-        && info.isBlack == !move.blackToPlay
-        && Arrays.equals(info.coords, move.lastMove.orElseThrow());
+        data, parentNode.getData(), entry.originalMoveNumber(), parent.position()::moveNumberAt);
   }
 }

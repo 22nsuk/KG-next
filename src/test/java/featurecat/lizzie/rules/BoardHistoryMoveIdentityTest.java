@@ -72,7 +72,7 @@ class BoardHistoryMoveIdentityTest {
 
       BoardData clickedMove = moveData(0, 0, Stone.BLACK, false, 0, 0);
 
-      assertTrue(history.nextByMoveIdentity(clickedMove).isPresent());
+      assertTrue(history.nextByMoveIdentity(clickedMove, false).isPresent());
       assertSame(existingVariation, history.getCurrentHistoryNode());
       assertEquals(2, root.numberOfChildren(), "clicking an existing variation must not duplicate it.");
       assertEquals(
@@ -91,10 +91,10 @@ class BoardHistoryMoveIdentityTest {
           .reparentAsLastVariationOf(root);
 
       assertFalse(
-          history.nextByMoveIdentity(moveData(0, 0, Stone.BLACK, false, 0, 0)).isPresent(),
+          history.nextByMoveIdentity(moveData(0, 0, Stone.BLACK, false, 0, 0), false).isPresent(),
           "same coordinate should not match when capture totals differ.");
       assertFalse(
-          history.nextByMoveIdentity(moveData(0, 0, Stone.WHITE, true, 1, 0)).isPresent(),
+          history.nextByMoveIdentity(moveData(0, 0, Stone.WHITE, true, 1, 0), false).isPresent(),
           "same coordinate should not match when the played color differs.");
       assertSame(root, history.getCurrentHistoryNode());
       assertEquals(1, root.numberOfChildren());
@@ -111,7 +111,7 @@ class BoardHistoryMoveIdentityTest {
       BoardHistoryNode passVariation = new BoardHistoryNode(existingPass);
       passVariation.reparentAsLastVariationOf(root);
 
-      assertTrue(history.nextByMoveIdentity(passData(Stone.BLACK, false, 0, 0)).isPresent());
+      assertTrue(history.nextByMoveIdentity(passData(Stone.BLACK, false, 0, 0), false).isPresent());
       assertSame(passVariation, history.getCurrentHistoryNode());
       assertEquals("existing pass variation", history.getData().comment);
     }

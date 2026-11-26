@@ -629,17 +629,40 @@ class SGFParserSemanticRoundTripTest {
     }
   }
 
-  @Test
-  void kgNextVariationRejectsAnOccupiedPoint() throws Exception {
+  @ParameterizedTest
+  @CsvSource({"1, false", "1, true", "2, false", "2, true"})
+  void rejectedRecordedMoveDiscardsItsPayloadAndDescendants(int earlierSiblings, boolean payloadBeforeMove)
+      throws Exception {
     try (var fixture = RulesLayerTestHarness.open(SIZE)) {
-      String saved = "(;SZ[5]AP[KG-next];B[aa](;W[bb])(;W[aa]))";
+      String rejected = "C[rejected\\];(;W[ee\\])]LB[dd:bad]LZ[KataGo 25 900]"
+          + "LZ2[Second 45 500]PB[bad]KM[40]";
+      String action = payloadBeforeMove ? rejected + "W[aa]" : "W[aa]" + rejected;
+      String siblings = earlierSiblings == 1 ? "(;W[bb])" : "(;W[bb])(;W[bc])";
+      String saved = "(;SZ[5]AP[KG-next];PB[Black]KM[6.5]B[aa]C[parent]LB[aa:keep]LZ[KataGo 50 100]"
+          + siblings + "(;" + action + ";B[cc](;W[dd])(;W[de]))"
+          + "(;W[bd]C[sibling];B[ee]))";
       assertTrue(SGFParser.loadFromStringforedit(saved));
       for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(saved, true))) {
+        assertEquals("Black", history.getGameInfo().getPlayerBlack());
+        assertEquals(6.5, history.getGameInfo().getKomi());
         BoardHistoryNode fork = history.getStart().next().orElseThrow();
-        assertEquals(1, fork.numberOfChildren());
-        BoardData validMove = fork.next().orElseThrow().getData();
-        assertArrayEquals(new int[] {1, 1}, validMove.lastMove.orElseThrow());
-        assertEquals(Stone.BLACK, validMove.stones[Board.getIndex(0, 0)]);
+        assertEquals("parent", fork.getData().comment);
+        assertEquals(List.of("aa:keep"), fork.getData().getProperties().get("LB"));
+        assertEquals(100, fork.getData().getPlayouts());
+        assertEquals(0, fork.getData().getPlayouts2());
+        assertEquals(earlierSiblings + 1, fork.numberOfChildren());
+        for (int i = 0; i < earlierSiblings; i++) {
+          var child = fork.getVariation(i).orElseThrow();
+          assertArrayEquals(new int[] {1, i + 1}, child.getData().lastMove.orElseThrow());
+          assertEquals(Stone.BLACK, child.getData().stones[Board.getIndex(0, 0)]);
+          assertEquals(0, child.numberOfChildren());
+        }
+        var sibling = fork.getVariation(earlierSiblings).orElseThrow();
+        assertArrayEquals(new int[] {1, 3}, sibling.getData().lastMove.orElseThrow());
+        assertEquals(1, sibling.numberOfChildren());
+        assertEquals("sibling", sibling.getData().comment);
+        assertArrayEquals(
+            new int[] {4, 4}, sibling.next().orElseThrow().getData().lastMove.orElseThrow());
       }
     }
   }
