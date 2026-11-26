@@ -594,6 +594,54 @@ public class BoardHistoryNode {
     }
   }
 
+  void applyMoveNumber(int moveNumber) {
+    applyMoveNumber(moveNumber, false);
+  }
+
+  void reapplyAuthoredMoveNumber() {
+    String authoredNumber = data.getProperty("MN");
+    if (authoredNumber != null) applyMoveNumber(Integer.parseInt(authoredNumber), true);
+  }
+
+  private void applyMoveNumber(int moveNumber, boolean replaySgfOrder) {
+    if (!data.isMoveNode()) return;
+    BitSet laterPlacements = new BitSet(data.stones.length);
+    for (BoardHistoryNode node = this; node != null; node = node.numberingPredecessor(replaySgfOrder)) {
+      node.markSetupChanges(laterPlacements);
+      BoardData played = node.data;
+      if (!played.isMoveNode()) continue;
+      boolean renumber = node == this || played.moveNumber >= moveNumber;
+      if (node != this && renumber) moveNumber = moveNumber > 1 ? moveNumber - 1 : 0;
+      int[] point = played.lastMove.orElseThrow();
+      int index = data.zobrist.index(point[0], point[1]);
+      if (renumber && !laterPlacements.get(index) && data.stones[index] == played.lastMoveColor) {
+        data.moveNumberList[index] = moveNumber;
+      }
+      // An earlier stone cannot take the label of a more recent occupant of the same point.
+      laterPlacements.set(index);
+    }
+  }
+
+  private BoardHistoryNode numberingPredecessor(boolean replaySgfOrder) {
+    BoardHistoryNode parent = previous.orElse(null);
+    if (parent == null || !parent.hasVariations()) return parent;
+    // At the first continuation, SGF has yet to read any later siblings.
+    return replaySgfOrder && parent.variations.get(0) == this ? parent : null;
+  }
+
+  private void markSetupChanges(BitSet laterPlacements) {
+    if (data.isSnapshotNode()) {
+      BoardHistoryNode parent = previous.orElse(null);
+      if (parent == null) return;
+      for (int index = 0; index < data.stones.length; index++) {
+        // A same-color redeclaration leaves the inherited stone in place.
+        if (data.stones[index] != parent.data.stones[index]) laterPlacements.set(index);
+      }
+    } else if (extraStones != null) {
+      for (ExtraStones stone : extraStones) laterPlacements.set(data.zobrist.index(stone.x, stone.y));
+    }
+  }
+
   public void resetMoveNumberList(int start) {
     BoardData data = this.getData();
     int[] moveNumberList = data.moveNumberList;

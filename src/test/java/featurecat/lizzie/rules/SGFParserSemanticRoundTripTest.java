@@ -709,6 +709,147 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @Test
+  void startingStoneEditUsesExplicitMoveNumberForRestoredStones() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AB[aa][bb][bc];B[ee];W[ac];B[de];W[ab];B[ad]MN[2])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      int ab = Board.getIndex(0, 1);
+      int ac = Board.getIndex(0, 2);
+      int ad = Board.getIndex(0, 3);
+      assertEquals(Stone.EMPTY, board.getData().stones[ab]);
+      assertEquals(Stone.EMPTY, board.getData().stones[ac]);
+
+      board.editMove(new int[] {0, 0}, false, true);
+
+      BoardData edited = board.getData();
+      BoardData reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true).getEnd().getData();
+      assertEquals(Stone.WHITE, edited.stones[ab]);
+      assertEquals(Stone.WHITE, edited.stones[ac]);
+      assertEquals(1, reopened.moveNumberList[ab]);
+      assertEquals(0, reopened.moveNumberList[ac]);
+      assertEquals(2, edited.moveNumberList[ad]);
+      assertArrayEquals(reopened.moveNumberList, edited.moveNumberList);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void startingStoneEditUsesExplicitNumbersWithinTheirVariations(boolean restart) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AP[KG-next]AB[aa][bb][bc];B[ee];W[ac];B[de]"
+              + "(;W[ab];B[ad]MN[2];W[ce])(;W[ab];B[ad]MN[2];W[ce])(;W[ed]))"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      board.editMove(new int[] {0, 0}, false, true);
+
+      int ab = Board.getIndex(0, 1);
+      int ac = Board.getIndex(0, 2);
+      int ad = Board.getIndex(0, 3);
+      int ce = Board.getIndex(2, 4);
+      int de = Board.getIndex(3, 4);
+      int ed = Board.getIndex(4, 3);
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      for (BoardHistoryList history : List.of(board.getHistory(), reopened)) {
+        BoardHistoryNode fork = history.getStart().next().orElseThrow()
+            .next().orElseThrow().next().orElseThrow();
+        assertEquals(2, fork.getData().moveNumberList[ac]);
+        assertEquals(3, fork.getData().moveNumberList[de]);
+        assertEquals(3, fork.numberOfChildren());
+        for (int branch = 0; branch < 2; branch++) {
+          BoardHistoryNode numbered = fork.getVariation(branch).orElseThrow().next().orElseThrow();
+          boolean keepPrefix = branch == 1 && !restart;
+          for (BoardHistoryNode node : List.of(numbered, numbered.next().orElseThrow())) {
+            BoardData data = node.getData();
+            assertEquals(Stone.WHITE, data.stones[ab]);
+            assertEquals(Stone.WHITE, data.stones[ac]);
+            assertEquals(1, data.moveNumberList[ab]);
+            assertEquals(keepPrefix ? 2 : 0, data.moveNumberList[ac]);
+            assertEquals(2, data.moveNumberList[ad]);
+            assertEquals(keepPrefix ? 3 : 0, data.moveNumberList[de]);
+          }
+          assertEquals(3, numbered.next().orElseThrow().getData().moveNumberList[ce]);
+        }
+        BoardData unnumbered = fork.getVariation(2).orElseThrow().getData();
+        assertEquals(restart ? 0 : 2, unnumbered.moveNumberList[ac]);
+        assertEquals(restart ? 0 : 3, unnumbered.moveNumberList[de]);
+        assertEquals(restart ? 1 : 4, unnumbered.moveNumberList[ed]);
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "W[ab]MN[2], WHITE, 2",
+      "W[ab];B[ed]MN[3], WHITE, 2",
+      "AW[ab];W[ed]MN[3], WHITE, 0",
+      "W[ed]MN[3], EMPTY, 0"
+  })
+  void explicitMoveNumberLabelsOnlyTheSurvivingMove(
+      String continuation, Stone abStone, int abNumber) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AB[aa][bb][bc][ca];B[ee];W[ac];B[de];W[ab];B[ad];" + continuation + ")"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      BoardData before = board.getData();
+      board.editMove(new int[] {2, 0}, false, true);
+      BoardData edited = board.getData();
+      BoardData reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true).getEnd().getData();
+
+      int ab = Board.getIndex(0, 1);
+      int ca = Board.getIndex(2, 0);
+      assertEquals(Stone.BLACK, before.stones[ca]);
+      assertEquals(Stone.EMPTY, edited.stones[ca]);
+      for (BoardData data : List.of(before, edited, reopened)) {
+        assertEquals(abStone, data.stones[ab]);
+        assertEquals(abNumber, data.moveNumberList[ab]);
+      }
+    }
+  }
+
+  @Test
+  void explicitMoveNumberIsRemovedWhenAnEditedCaptureMakesASetupActive() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AW[aa]AB[bb][bc];B[ee];W[ac];B[de];W[ab];B[ad];AW[ab];W[ed]MN[3])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      int ab = Board.getIndex(0, 1);
+      int ed = Board.getIndex(4, 3);
+      assertEquals(1, board.getData().moveNumberList[ab]);
+
+      board.editMove(new int[] {0, 0}, true, false);
+
+      BoardData reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true).getEnd().getData();
+      for (BoardData data : List.of(board.getData(), reopened)) {
+        assertEquals(Stone.WHITE, data.stones[ab]);
+        assertEquals(0, data.moveNumberList[ab]);
+        assertEquals(3, data.moveNumberList[ed]);
+      }
+    }
+  }
+
+  @Test
+  void manualMoveNumberStopsAtAnExistingMainLineFork() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      BoardHistoryList history =
+          SGFParser.parseSgf("(;SZ[5]AP[KG-next];B[ee];W[ac](;B[de];W[ab])(;B[ed]))", true);
+      history.setHead(history.getEnd());
+      history.moveNumber(2);
+
+      int[] numbers = history.getMoveNumberList();
+      assertEquals(2, numbers[Board.getIndex(0, 1)]);
+      assertEquals(1, numbers[Board.getIndex(3, 4)]);
+      assertEquals(2, numbers[Board.getIndex(0, 2)]);
+      assertEquals(1, numbers[Board.getIndex(4, 4)]);
+    }
+  }
+
+  @Test
   void startingStoneEditNumbersARecordedMoveThatNoLongerSelfCaptures() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(3)) {
       Lizzie.leelaz.canSuicidal = true;

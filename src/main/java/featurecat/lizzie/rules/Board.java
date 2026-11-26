@@ -1016,24 +1016,8 @@ public class Board {
    *
    * @param moveNumber the move number of stone
    */
-  public void moveNumber(int moveNumber) {
-    synchronized (this) {
-      BoardData data = history.getData();
-      if (data.isMoveNode()) {
-        int[] moveNumberList = history.getMoveNumberList();
-        moveNumberList[Board.getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
-        Optional<BoardHistoryNode> node = history.getCurrentHistoryNode().previous();
-        while (node.isPresent() && node.get().numberOfChildren() <= 1) {
-          BoardData nodeData = node.get().getData();
-          if (nodeData.isMoveNode() && nodeData.moveNumber >= moveNumber) {
-            moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-            moveNumberList[Board.getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
-                moveNumber;
-          }
-          node = node.get().previous();
-        }
-      }
-    }
+  public synchronized void moveNumber(int moveNumber) {
+    history.moveNumber(moveNumber);
   }
 
   /**
@@ -1298,13 +1282,8 @@ public class Board {
    * @param key
    * @param value
    */
-  public void addNodeProperty(String key, String value) {
-    synchronized (this) {
-      history.getData().addProperty(key, value);
-      if ("MN".equals(key)) {
-        moveNumber(Integer.parseInt(value));
-      }
-    }
+  public synchronized void addNodeProperty(String key, String value) {
+    history.addNodeProperty(key, value);
   }
 
   /**
@@ -5322,12 +5301,17 @@ public class Board {
 
   private void replaceHistory(BoardHistoryList newList, Runnable updateMetadata) {
     synchronized (this) {
-      movelistRefreshEpoch++;
-      history = newList;
-      setupMode = false;
+      installHistory(newList);
       updateMetadata.run();
     }
     notifyReadBoardHistoryOverwritten();
+  }
+
+  /** Called under the Board monitor, before notifying readers of the completed replacement. */
+  private void installHistory(BoardHistoryList newList) {
+    movelistRefreshEpoch++;
+    history = newList;
+    setupMode = false;
   }
 
   private static void syncBoardDimensionsWithHistory(BoardHistoryList historyList) {
@@ -6602,21 +6586,9 @@ public class Board {
   }
 
   private void transformBoard(int type) {
-    BoardHistoryNode root = history.getStart();
     File file = LizzieFrame.curFile;
     String playerTitle = Lizzie.frame.playerTitle;
-    if (hasSetupToTransform(root)) {
-      boolean resume = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-      boolean hadStartList = hasStartStone;
-      BoardHistoryList transformed = transformSetupHistory(root, type);
-      clearWithoutPrimaryEngineForwarding();
-      replaceHistory(transformed, () -> {
-        if (hadStartList) rebuildStartStoneList(transformed.getStart().getData());
-        requireEngineAlignment();
-      });
-      transformed.getGameInfo().refreshKomiDisplay();
-      Lizzie.frame.synchronizeRestoredGame(resume);
-    } else {
+    if (!transformSetupBoard(type)) {
       AllMovelist moves = getAllMovelist(type);
       double komi = history.getGameInfo().getKomi();
       int startMoveNumber = hasStartStone ? startStonelist.size() : 0;
@@ -6630,6 +6602,29 @@ public class Board {
     }
     Lizzie.frame.playerTitle = playerTitle;
     Lizzie.frame.refresh();
+  }
+
+  private boolean transformSetupBoard(int type) {
+    EngineForwardingPlan cleared;
+    BoardHistoryList transformed;
+    boolean resume = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
+    synchronized (this) {
+      synchronized (history) {
+        BoardHistoryNode root = history.getStart();
+        if (!hasSetupToTransform(root)) return false;
+        boolean hadStartList = hasStartStone;
+        transformed = transformSetupHistory(root, type);
+        cleared = clearBoardState(false);
+        installHistory(transformed);
+        if (hadStartList) rebuildStartStoneList(transformed.getStart().getData());
+        requireEngineAlignment();
+      }
+    }
+    // The clear plan notifies ReadBoard once, with the final history already installed.
+    cleared.runDeferredActions();
+    transformed.getGameInfo().refreshKomiDisplay();
+    Lizzie.frame.synchronizeRestoredGame(resume);
+    return true;
   }
 
   private boolean hasSetupToTransform(BoardHistoryNode root) {
@@ -6947,13 +6942,7 @@ public class Board {
   }
 
   public void editMove(int[] coords, boolean isSwitch, boolean isDelete) {
-    if ((isSwitch || isDelete) && history != null && isValid(coords)) {
-      BoardHistoryNode owner = history.setupStoneOwner(coords[0], coords[1]);
-      if (owner != null) {
-        editSetupStone(owner, coords, isSwitch);
-        return;
-      }
-    }
+    if ((isSwitch || isDelete) && tryEditSetupStone(coords, isSwitch)) return;
     GameInfo gameInfo = Lizzie.board.getHistory().getGameInfo();
     boolean oriPlaySound = Lizzie.config.playSound;
     Lizzie.config.playSound = false;
@@ -7050,30 +7039,40 @@ public class Board {
     Lizzie.board.getHistory().setGameInfo(gameInfo);
   }
 
-  private void editSetupStone(BoardHistoryNode owner, int[] coords, boolean recolor) {
+  private boolean tryEditSetupStone(int[] coords, boolean recolor) {
     boolean resumeAnalysis = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-    Stone replacement = recolor ? history.getData().stones[getIndex(coords[0], coords[1])].opposite()
-        : Stone.EMPTY;
-    BoardHistoryList edited =
-        history.editSetupStone(owner, coords[0], coords[1], replacement, editTrialNumbering());
+    BoardHistoryList edited;
+    // Web trial moves and SGF snapshots share these monitors. Copy, undo capture and publication
+    // must see the same tree, including variations added without moving the desktop cursor.
+    synchronized (this) {
+      if (history == null || !isValid(coords)) return false;
+      synchronized (history) {
+        int x = coords[0];
+        int y = coords[1];
+        BoardHistoryNode owner = history.setupStoneOwner(x, y);
+        if (owner == null) return false;
+        Stone replacement = recolor ? history.getData().stones[getIndex(x, y)].opposite() : Stone.EMPTY;
+        edited = history.editSetupStone(owner, x, y, replacement, editTrialNumbering());
+        if (edited != null) {
+          saveListForEdit();
+          boolean keepSetupMode = setupMode && EngineManager.isEmpty;
+          boolean rebuildRootList = hasStartStone && owner == history.getStart();
+          installHistory(edited);
+          setupMode = keepSetupMode;
+          if (rebuildRootList) rebuildStartStoneList(edited.getStart().getData());
+          forceRefresh = true;
+          forceRefresh2 = true;
+          clearTsumegoStatus();
+          requireEngineAlignment();
+          if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
+        }
+      }
+    }
     if (edited == null) {
       Utils.showMsg(Lizzie.resourceBundle.getString("Board.startingPositionEditInvalidContinuation"));
-      return;
+      return true;
     }
-    // Keep the existing complete undo snapshot; neither an SGF round trip nor a list of
-    // ordinary moves can represent every starting position and its annotations.
-    saveListForEdit();
-    boolean keepSetupMode = setupMode && EngineManager.isEmpty;
-    boolean rebuildRootList = hasStartStone && owner == history.getStart();
-    replaceHistory(edited, () -> {
-      setupMode = keepSetupMode;
-      if (rebuildRootList) rebuildStartStoneList(edited.getStart().getData());
-      forceRefresh = true;
-      forceRefresh2 = true;
-      clearTsumegoStatus();
-      requireEngineAlignment();
-      if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
-    });
+    notifyReadBoardHistoryOverwritten();
     if (LizzieFrame.boardRenderer != null) LizzieFrame.boardRenderer.clearAfterMove();
     if (LizzieFrame.boardRenderer2 != null) LizzieFrame.boardRenderer2.clearAfterMove();
     LizzieFrame.forceRecreate = true;
@@ -7087,6 +7086,7 @@ public class Board {
       Lizzie.frame.synchronizeRestoredGame(resumeAnalysis);
       Lizzie.frame.refresh();
     }
+    return true;
   }
 
   public String moveListToString(ArrayList<Movelist> moveList) {

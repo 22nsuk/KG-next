@@ -10,6 +10,7 @@ import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.RulesLayerTestHarness;
 import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.gui.VariationTreeTrialCapture;
@@ -38,6 +39,55 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class WebTrialRecordPreservationTest {
   @TempDir Path directory;
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void setupEditKeepsWebMoveCommittedWhileEditorWaitsForBoard(boolean mirror) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5]AB[aa];W[ee])", true);
+      board.setHistory(history);
+      BoardHistoryNode anchor = history.getEnd();
+      history.setHead(anchor);
+      WebBoardManager manager = new WebBoardManager(new WebTrialTestFixture.Events());
+      manager.setDesktopRefresherForTest(() -> {});
+      assertTrue(manager.enterTrial("owner", anchor));
+
+      FutureTask<Void> edit = new FutureTask<>(() -> {
+        if (mirror) board.SpinAndMirror(3);
+        else board.editMove(new int[] {0, 0}, false, true);
+        return null;
+      });
+      Thread editor = new Thread(edit, "test-desktop-setup-edit");
+      editor.setDaemon(true);
+      try {
+        synchronized (board) {
+          editor.start();
+          awaitBlockedOn(editor, board, edit);
+          manager.applyTrialMove("owner", 1, 2);
+          assertEquals(2, anchor.numberOfChildren());
+        }
+        edit.get(5, TimeUnit.SECONDS);
+        manager.applyTrialMove("owner", 3, 3);
+        assertEquals(0, anchor.getVariation(1).orElseThrow().numberOfChildren(),
+            "a command from the replaced history cannot extend the old web variation");
+        manager.exitTrial("owner");
+        for (BoardHistoryList result : List.of(board.getHistory(),
+            SGFParser.parseSgf(save(board, false, false), true))) {
+          BoardHistoryNode edited = result.getStart().next().orElseThrow();
+          assertEquals(Stone.EMPTY, edited.getData().stones[Board.getIndex(0, 0)]);
+          assertEquals(mirror ? Stone.BLACK : Stone.EMPTY,
+              edited.getData().stones[Board.getIndex(4, 0)]);
+          assertEquals(2, edited.numberOfChildren(), "the accepted web variation survives the edit");
+          assertArrayEquals(new int[] {mirror ? 3 : 1, 2},
+              edited.getVariation(1).orElseThrow().getData().lastMove.orElseThrow());
+        }
+      } finally {
+        editor.join(5000);
+        manager.stop();
+      }
+    }
+  }
 
   @ParameterizedTest
   @ValueSource(strings = {

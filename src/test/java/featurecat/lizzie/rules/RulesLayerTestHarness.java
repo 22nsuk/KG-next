@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
  * Minimal headless fixture for Board / SGFParser rules tests. Stubs GUI and engine callbacks so
  * play, capture, history jumps, parse, and save can run without a window, network, or KataGo.
  */
-final class RulesLayerTestHarness implements AutoCloseable {
+public final class RulesLayerTestHarness implements AutoCloseable {
   private final TrackingBoard ownedBoard;
   private final int previousBoardWidth;
   private final int previousBoardHeight;
@@ -73,7 +73,7 @@ final class RulesLayerTestHarness implements AutoCloseable {
     this.previousEngineFollowController = previousEngineFollowController;
   }
 
-  static RulesLayerTestHarness open() throws Exception {
+  public static RulesLayerTestHarness open() throws Exception {
     return open(5);
   }
 

@@ -293,21 +293,7 @@ public class BoardHistoryList {
 
   public void moveNumber(int moveNumber) {
     synchronized (this) {
-      BoardData data = this.getData();
-      if (data.isMoveNode()) {
-        int[] moveNumberList = this.getMoveNumberList();
-        moveNumberList[getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
-        Optional<BoardHistoryNode> node = this.getCurrentHistoryNode().previous();
-        while (node.isPresent() && node.get().numberOfChildren() <= 1) {
-          BoardData nodeData = node.get().getData();
-          if (nodeData.isMoveNode() && nodeData.moveNumber >= moveNumber) {
-            moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-            moveNumberList[getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
-                moveNumber;
-          }
-          node = node.get().previous();
-        }
-      }
+      head.applyMoveNumber(moveNumber);
     }
   }
 
@@ -456,6 +442,7 @@ public class BoardHistoryList {
       if (setup != null) copied.updateSetupMetadata(newParent, setup);
       if (!entry.affected()) copied.materializeRestoreNodeInfo();
       if (parent != null) copied.reparentAsLastVariationOf(parent);
+      if (entry.affected() && data.isMoveNode()) copied.reapplyAuthoredMoveNumber();
       if (source == owner) copiedOwner = copied;
       if (source == head) selected = copied;
       for (BoardHistoryNode child : source.getVariations()) {
@@ -506,10 +493,13 @@ public class BoardHistoryList {
       if (edited.stones[point] == Stone.EMPTY
           && !sameRecordedSelfCapture(point, oldParent, recorded, newParent, edited)) return false;
     }
+    // Rebuild the labels underneath an explicit MN before replaying it on the edited position.
+    // Otherwise its old override could survive even when a setup now owns that point.
+    boolean replayMoveNumber = edited.isMoveNode() && edited.getProperty("MN") != null;
     for (int i = 0; i < edited.stones.length; i++) {
       if (edited.stones[i] == Stone.EMPTY) {
         edited.moveNumberList[i] = 0;
-      } else if (edited.stones[i] != original.stones[i]
+      } else if (replayMoveNumber || edited.stones[i] != original.stones[i]
           || (original.stones[i] == oldParent.stones[i]
               && original.moveNumberList[i] == oldParent.moveNumberList[i]
               && newParent.moveNumberList[i] != oldParent.moveNumberList[i])) {
