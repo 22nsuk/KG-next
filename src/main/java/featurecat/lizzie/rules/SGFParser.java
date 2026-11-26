@@ -660,13 +660,8 @@ public class SGFParser {
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
-            boolean newBranch = importMoves.startsVariation(
-                history.getCurrentHistoryNode(), color, move, eventIndex);
-            if (move == null) {
-              history.pass(color, newBranch, false);
-            } else {
-              importMoves.place(history, move, color, newBranch, eventIndex);
-            }
+            boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
+            importMoves.play(history, move, color, newBranch, eventIndex);
             currentNodeHasMove = true;
             if (newBranch) {
               processPendingPros(history, pendingProps);
@@ -703,7 +698,7 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch =
-                    history.getCurrentHistoryNode().hasVariations();
+                    importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                 appendSetupSnapshot(
                     history, newBranch, pendingProps,
                     currentNodeHasMove, analysisImport);
@@ -727,7 +722,7 @@ public class SGFParser {
             } else {
               if (addPassForMove) {
                 boolean newBranch =
-                    history.getCurrentHistoryNode().hasVariations();
+                    importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                 appendSetupSnapshot(
                     history, newBranch, pendingProps,
                     currentNodeHasMove, analysisImport);
@@ -805,7 +800,7 @@ public class SGFParser {
                 // remove a stone
                 if (addPassForMove) {
                   boolean newBranch =
-                      history.getCurrentHistoryNode().hasVariations();
+                      importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                   appendSetupSnapshot(
                       history, newBranch, pendingProps,
                       currentNodeHasMove, analysisImport);
@@ -856,7 +851,7 @@ public class SGFParser {
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
                   boolean newBranch =
-                      history.getCurrentHistoryNode().hasVariations();
+                      importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                   appendSetupSnapshot(
                       history, newBranch, pendingProps,
                       currentNodeHasMove, analysisImport);
@@ -4067,18 +4062,29 @@ public class SGFParser {
       return recordedNoCapture != null && NO_CAPTURE_MOVE.equals(tag);
     }
 
-    boolean startsVariation(BoardHistoryNode parent, Stone color, int[] move, int eventIndex) {
-      if (parent.numberOfChildren() != 1) return parent.hasVariations();
-      BoardHistoryNode first = parent.getVariations().get(0);
-      if (first.isEndDummay()) return true;
-      // Merge a common move prefix only when it will replay the same way after a setup edit.
-      BoardData action = first.getData();
-      return recordedNoCapture != null && move != null && action.isMoveNode()
-          && action.lastMoveColor == color && action.isSameCoord(move)
-          && action.playedWithoutCaptures != recordedNoCapture.get(eventIndex);
+    boolean startsActionVariation(BoardHistoryNode parent) {
+      // KG-next writes sibling variations as separate subtrees. Reusing a child by move identity
+      // would overwrite its metadata and attach the next subtree's continuation to it.
+      if (savedByKgNext) return parent.numberOfChildren() > 0;
+      return parent.hasVariations() || hasTerminalDummy(parent);
     }
 
-    void place(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
+    boolean startsSetupVariation(BoardHistoryNode parent) {
+      // Setup declarations distinguish loaded snapshots from a newly appended snapshot.
+      // A terminal dummy in a KG-next record owns its own subtree.
+      return parent.hasVariations() || (savedByKgNext && hasTerminalDummy(parent));
+    }
+
+    private static boolean hasTerminalDummy(BoardHistoryNode parent) {
+      return parent.next(true).filter(BoardHistoryNode::isEndDummay).isPresent();
+    }
+
+    void play(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
+      if (move == null) {
+        if (savedByKgNext) history.passFromRecord(color, newBranch);
+        else history.pass(color, newBranch, false);
+        return;
+      }
       boolean noCapture =
           recordedNoCapture == null ? defaultNoCapture : recordedNoCapture.get(eventIndex);
       if (savedByKgNext) {
@@ -4293,14 +4299,8 @@ public class SGFParser {
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
-            boolean newBranch = importMoves.startsVariation(
-                history.getCurrentHistoryNode(), color, move, eventIndex);
-            if (move == null) {
-              history.pass(color, newBranch, false);
-
-            } else {
-              importMoves.place(history, move, color, newBranch, eventIndex);
-            }
+            boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
+            importMoves.play(history, move, color, newBranch, eventIndex);
             currentNodeHasMove = true;
             if (newBranch) {
               processPendingPros(history, pendingProps);
@@ -4330,7 +4330,8 @@ public class SGFParser {
               applyRootSetupProperty(history, tag, tagContent, move, color);
             } else {
               if (addPassForMove) {
-                boolean newBranch = history.getCurrentHistoryNode().hasVariations();
+                boolean newBranch =
+                    importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                 appendSetupSnapshot(
                     history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
@@ -4349,7 +4350,8 @@ public class SGFParser {
               applyRootPlayerProperty(history, tagContent);
             } else {
               if (addPassForMove) {
-                boolean newBranch = history.getCurrentHistoryNode().hasVariations();
+                boolean newBranch =
+                    importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                 appendSetupSnapshot(
                     history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                 addPassForMove = false;
@@ -4400,7 +4402,8 @@ public class SGFParser {
               if ("AE".equals(tag)) {
                 // remove a stone
                 if (addPassForMove) {
-                  boolean newBranch = history.getCurrentHistoryNode().hasVariations();
+                  boolean newBranch =
+                      importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                   appendSetupSnapshot(
                       history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;
@@ -4436,7 +4439,8 @@ public class SGFParser {
                 applyRootSetupProperty(history, tag, tagContent, move, Stone.EMPTY, false);
               } else if ("AE".equals(tag)) {
                 if (addPassForMove) {
-                  boolean newBranch = history.getCurrentHistoryNode().hasVariations();
+                  boolean newBranch =
+                      importMoves.startsSetupVariation(history.getCurrentHistoryNode());
                   appendSetupSnapshot(
                       history, newBranch, pendingProps, currentNodeHasMove, analysisImport);
                   addPassForMove = false;

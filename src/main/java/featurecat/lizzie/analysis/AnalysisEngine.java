@@ -2120,12 +2120,13 @@ public class AnalysisEngine {
 
   private boolean sendRequest(
       BoardHistoryNode analyzeNode, int maxVisits, boolean includeOwnership) {
-    if (shutdownRequested) {
+    BoardHistoryNode snapshotAnchor = analyzeNode.findEngineSnapshotAnchor();
+    if (shutdownRequested || isUnplayableAnchor(snapshotAnchor)) {
       requestDispatchFailed = true;
       return false;
     }
     if (useRemoteCompute) {
-      return sendRemoteGtpRequest(analyzeNode, maxVisits);
+      return sendRemoteGtpRequest(analyzeNode, maxVisits, snapshotAnchor);
     }
     JSONObject request = new JSONObject();
     int requestId = globalID++;
@@ -2134,7 +2135,6 @@ public class AnalysisEngine {
     request.put("includePVVisits", Lizzie.config.showPvVisits);
     request.put("includeOwnership", includeOwnership);
     request.put("includeMovesOwnership", includeOwnership && Lizzie.config.useMovesOwnership);
-    BoardHistoryNode snapshotAnchor = findSnapshotAnchor(analyzeNode);
     BoardHistoryNode initialStateAnchor = resolveInitialStateAnchor(snapshotAnchor);
     ArrayList<String[]> moveList = collectHistoryActions(analyzeNode, snapshotAnchor);
     ArrayList<String[]> initialStoneList = collectInitialStones(initialStateAnchor);
@@ -2190,14 +2190,15 @@ public class AnalysisEngine {
     return false;
   }
 
-  private boolean sendRemoteGtpRequest(BoardHistoryNode analyzeNode) {
-    return sendRemoteGtpRequest(analyzeNode, targetAnalysisVisits());
+  static boolean isUnplayableAnchor(BoardHistoryNode anchor) {
+    return anchor != null && anchor.getData().retainsUncapturedStones();
   }
 
-  private boolean sendRemoteGtpRequest(BoardHistoryNode analyzeNode, int targetVisits) {
+  private boolean sendRemoteGtpRequest(
+      BoardHistoryNode analyzeNode, int targetVisits, BoardHistoryNode snapshotAnchor) {
     int requestId =
-        enqueueRemoteGtpRequest(
-            analyzeNode, Math.max(1, targetVisits), buildRemoteGtpSetupCommands(analyzeNode));
+        enqueueRemoteGtpRequest(analyzeNode, Math.max(1, targetVisits),
+            buildRemoteGtpSetupCommands(analyzeNode, snapshotAnchor));
     if (remoteGtpActiveJob == null && !remoteGtpWaitingForStopAck) {
       if (!startNextRemoteGtpJob()) {
         analyzeMap.remove(requestId);
@@ -2232,11 +2233,14 @@ public class AnalysisEngine {
         break;
       }
       List<String> commands =
-          previousQueuedNode == null
-              ? buildRemoteGtpSetupCommands(selectedNode)
-              : buildRemoteGtpIncrementalCommands(previousQueuedNode, selectedNode);
+          buildRemoteGtpIncrementalCommands(previousQueuedNode, selectedNode);
       if (commands == null) {
-        commands = buildRemoteGtpSetupCommands(selectedNode);
+        BoardHistoryNode snapshotAnchor = selectedNode.findEngineSnapshotAnchor();
+        if (isUnplayableAnchor(snapshotAnchor)) {
+          requestDispatchFailed = true;
+          break;
+        }
+        commands = buildRemoteGtpSetupCommands(selectedNode, snapshotAnchor);
       }
       captureRequestPosition(selectedNode);
       enqueueRemoteGtpRequest(selectedNode, Math.max(1, targetVisits), commands);
@@ -2607,7 +2611,8 @@ public class AnalysisEngine {
     finishFailedRequestDispatch(!silentProgress);
   }
 
-  private List<String> buildRemoteGtpSetupCommands(BoardHistoryNode analyzeNode) {
+  private List<String> buildRemoteGtpSetupCommands(
+      BoardHistoryNode analyzeNode, BoardHistoryNode snapshotAnchor) {
     List<String> commands = new ArrayList<String>();
     int boardWidth =
         explicitRequestTargetVisits > 0 && requestBoardWidth > 0
@@ -2628,7 +2633,6 @@ public class AnalysisEngine {
     }
     commands.add("komi " + komi);
     commands.add("kata-set-rules " + remoteGtpRules());
-    BoardHistoryNode snapshotAnchor = findSnapshotAnchor(analyzeNode);
     BoardHistoryNode initialStateAnchor = resolveInitialStateAnchor(snapshotAnchor);
     StringBuilder position = new StringBuilder("set_position");
     for (String[] stone : collectInitialStones(initialStateAnchor)) {
@@ -2678,7 +2682,7 @@ public class AnalysisEngine {
         return null;
       }
       current = current.next().get();
-      if (isSnapshotAnchor(current)) {
+      if (current.requiresEngineSnapshot()) {
         return null;
       }
       BoardData data = current.getData();
@@ -2890,45 +2894,6 @@ public class AnalysisEngine {
       return root.getData().blackToPlay ? "B" : "W";
     }
     return null;
-  }
-
-  static BoardHistoryNode findSnapshotAnchor(BoardHistoryNode analyzeNode) {
-    BoardHistoryNode current = analyzeNode;
-    while (true) {
-      if (isSnapshotAnchor(current)) {
-        return current;
-      }
-      if (!current.previous().isPresent()) {
-        return null;
-      }
-      current = current.previous().get();
-    }
-  }
-
-  private static boolean isSnapshotAnchor(BoardHistoryNode node) {
-    if (!node.getData().isSnapshotNode()) {
-      return false;
-    }
-    if (node.previous().isPresent()) {
-      return true;
-    }
-    BoardData data = node.getData();
-    if (data.moveNumber > 0 || data.lastMove.isPresent()) {
-      return true;
-    }
-    if (!data.blackToPlay) {
-      return true;
-    }
-    for (Stone stone : data.stones) {
-      if (stone.isBlack() || stone.isWhite()) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private static ArrayList<String[]> collectHistoryActions(BoardHistoryNode analyzeNode) {
-    return collectHistoryActions(analyzeNode, findSnapshotAnchor(analyzeNode));
   }
 
   static ArrayList<String[]> collectHistoryActions(

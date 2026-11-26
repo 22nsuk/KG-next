@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Config;
@@ -2879,6 +2880,81 @@ class PositionConfirmedRollbackTest {
   }
 
   @Test
+  void recoloringSetupBlocksAnUnreplayableCaptureAndUndoRestoresAnalysisAlignment()
+      throws Exception {
+    var previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      harness.frame.readBoard = null;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AP[KG-next]KGCM[1]AW[aa][ba];B[ab]KGNC[1])", true);
+      history.setHead(history.getEnd());
+      harness.board.setHistory(history);
+      harness.engine.commandLists.add("loadsgf");
+      var enginePosition = SnapshotTrackingLeelaz.create();
+      var output = installPositionTransport(harness.engine, enginePosition, "");
+      javax.swing.SwingUtilities.invokeAndWait(
+          () -> harness.board.editMove(new int[] {1, 0}, true, false));
+      drainKifuWorker(harness.frame);
+      assertNotNull(harness.frame.positionSyncFailure);
+      assertTrue(ExactSnapshotEngineRestore.isPermanentPositionRestoreFailure(
+          harness.frame.positionSyncFailure));
+      assertTrue(harness.board.isEngineAlignmentPending());
+      assertEquals(Stone.WHITE, harness.board.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(Stone.BLACK, harness.board.getData().stones[Board.getIndex(1, 0)]);
+      assertTrue(harness.board.previousMove(false));
+      assertTrue(harness.board.nextMove(false));
+      harness.engine.ponder();
+      assertEquals(0, payloadCount(output, "play B A4"));
+      assertEquals(0, payloadCount(output, "kata-analyze"));
+      javax.swing.SwingUtilities.invokeAndWait(harness.board::cleanedit);
+      awaitHistoryRestoreCompletion(harness.board);
+      assertEquals(Stone.WHITE, harness.board.getData().stones[Board.getIndex(1, 0)]);
+      assertPosition(enginePosition, harness.board.getData(), 5, 5);
+      assertEquals(1, payloadCount(output, "play B A4"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @Test
+  void enteringAnUnreplayableMoveAfterAnAlignedRootEditKeepsLaterPlayLocal() throws Exception {
+    var previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      harness.frame.readBoard = null;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AP[KG-next]KGCM[1]AW[aa][ba];B[ab]KGNC[1])", true);
+      history.setHead(history.getStart());
+      harness.board.setHistory(history);
+      harness.engine.commandLists.add("loadsgf");
+      var output = installPositionTransport(harness.engine, SnapshotTrackingLeelaz.create(), "");
+      javax.swing.SwingUtilities.invokeAndWait(
+          () -> harness.board.editMove(new int[] {1, 0}, true, false));
+      awaitHistoryRestoreCompletion(harness.board);
+      assertEquals(1, payloadCount(output, "loadsgf"));
+      var failure = assertThrows(ExactSnapshotEngineRestore.Failure.class,
+          () -> harness.board.nextMove(false));
+      assertTrue(ExactSnapshotEngineRestore.isPermanentPositionRestoreFailure(failure));
+      assertTrue(harness.board.isEngineAlignmentPending());
+      harness.engine.ponder();
+      harness.board.pass(Stone.WHITE);
+      harness.board.place(3, 3, Stone.BLACK);
+      assertEquals(3, harness.board.getData().moveNumber);
+      assertEquals(0, payloadCount(output, "play"));
+      assertEquals(0, payloadCount(output, "kata-analyze"));
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
+  @Test
   void rotatingEditedSetupRestoresExactDiagramAndSelectedMoveToEngine() throws Exception {
     var previousGraph = LizzieFrame.winrateGraph;
     BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
@@ -3577,6 +3653,12 @@ class PositionConfirmedRollbackTest {
     private boolean userAnalysisPaused;
     private volatile int rulesFailurePromptCount;
     private int rulesFailureChoice;
+    private volatile RuntimeException positionSyncFailure;
+
+    @Override
+    protected void showPositionSyncFailure(RuntimeException failure) {
+      positionSyncFailure = failure;
+    }
 
     @Override
     protected boolean confirmStartingPositionConversion() {

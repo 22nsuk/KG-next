@@ -15,13 +15,16 @@ public class AnalysisRequestBuilder {
       boolean includePVVisits,
       boolean includeOwnership,
       boolean includeMovesOwnership) {
+    BoardHistoryNode snapshotAnchor = analyzeNode.findEngineSnapshotAnchor();
+    if (AnalysisEngine.isUnplayableAnchor(snapshotAnchor)) {
+      throw new IllegalArgumentException(ExactSnapshotEngineRestore.ZERO_LIBERTY_POSITION_DETAIL);
+    }
     JSONObject request = new JSONObject();
     request.put("id", id);
     request.put("maxVisits", maxVisits);
     request.put("includePVVisits", includePVVisits);
     request.put("includeOwnership", includeOwnership);
     request.put("includeMovesOwnership", includeMovesOwnership);
-    BoardHistoryNode snapshotAnchor = AnalysisEngine.findSnapshotAnchor(analyzeNode);
     BoardHistoryNode initialStateAnchor = AnalysisEngine.resolveInitialStateAnchor(snapshotAnchor);
     ArrayList<String[]> initialStoneList = AnalysisEngine.collectInitialStones(initialStateAnchor);
     if (!initialStoneList.isEmpty()) {

@@ -49,6 +49,12 @@ public class BoardHistoryNode {
     return DETACHED_BRANCH_NUMBERING.get() != null;
   }
 
+  static boolean startsBranchNumberingAtOne() {
+    Boolean detachedBranchNumbering = DETACHED_BRANCH_NUMBERING.get();
+    return detachedBranchNumbering != null
+        ? detachedBranchNumbering : Lizzie.config.newMoveNumberInBranch;
+  }
+
   /** Initializes a new list node */
   public BoardHistoryNode(BoardData data) {
     this(data, true);
@@ -292,10 +298,9 @@ public class BoardHistoryNode {
     if (!this.previous.isPresent() && !tsumego) {
       data.moveMNNumber = 1;
     }
-    if ((suppressSideEffects ? DETACHED_BRANCH_NUMBERING.get() : Lizzie.config.newMoveNumberInBranch)
-        && !variations.isEmpty() && !changeMove) {
+    if (startsBranchNumberingAtOne() && !variations.isEmpty() && !changeMove) {
       if (!newBranch) {
-        data.moveNumberList = new int[data.stones.length];
+        data.clearInheritedMoveNumbers();
         data.moveMNNumber = -1;
       }
       if (data.moveMNNumber == -1) {
@@ -354,7 +359,7 @@ public class BoardHistoryNode {
       data.moveMNNumber = 1;
     }
     if (frozenNewMoveNumberInBranch && !variations.isEmpty()) {
-      data.moveNumberList = new int[Board.boardWidth * Board.boardHeight];
+      data.clearInheritedMoveNumbers();
       data.moveMNNumber = -1;
       if (data.moveNumberList != null && data.lastMove.isPresent()) {
         int[] move = data.lastMove.get();
@@ -592,6 +597,7 @@ public class BoardHistoryNode {
     BoardData data = this.getData();
     int[] moveNumberList = data.moveNumberList;
     data.moveMNNumber = start;
+    data.hidesInheritedMoveNumbers = start <= 1;
     if (data.isMoveNode() && !data.dummy) {
       int[] move = data.lastMove.get();
       moveNumberList[data.zobrist.index(move[0], move[1])] = start;
@@ -914,25 +920,21 @@ public class BoardHistoryNode {
   }
 
   public void resetMoveNumberList() {
-    // TODO Auto-generated method stub
-    if (!this.previous.isPresent()) return;
-    boolean isNewBranch =
-        this.previous.get().variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
-    BoardHistoryNode preNode = this.previous().get();
-    this.getData().moveNumber = preNode.getData().moveNumber + 1;
-    this.getData().moveMNNumber =
-        preNode.getData().moveMNNumber > -1 && !isNewBranch
-            ? preNode.getData().moveMNNumber + 1
-            : 1;
-    this.getData().moveNumberList =
-        isNewBranch
-            ? new int[Board.boardWidth * Board.boardHeight]
-            : this.previous.get().getData().moveNumberList.clone();
-    if (getData().isMoveNode())
-      this.getData()
-              .moveNumberList[
-              Board.getIndex(this.getData().lastMove.get()[0], this.getData().lastMove.get()[1])] =
-          isNewBranch ? 1 : this.getData().moveMNNumber;
+    if (previous.isEmpty()) return;
+    BoardHistoryNode parent = previous.get();
+    boolean restart = parent.variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
+    data.moveNumber = parent.data.moveNumber + 1;
+    data.moveMNNumber = parent.data.moveMNNumber > -1 && !restart ? parent.data.moveMNNumber + 1 : 1;
+    if (restart) {
+      data.clearInheritedMoveNumbers();
+    } else {
+      data.moveNumberList = parent.data.moveNumberList.clone();
+      data.hidesInheritedMoveNumbers = false;
+    }
+    if (data.isMoveNode()) {
+      int[] move = data.lastMove.orElseThrow();
+      data.moveNumberList[data.zobrist.index(move[0], move[1])] = data.moveMNNumber;
+    }
     if (this.numberOfChildren() >= 1) this.variations.get(0).resetMoveNumberList();
   }
 
@@ -942,6 +944,26 @@ public class BoardHistoryNode {
 
   public boolean hasRemovedStone() {
     return hasRemovedStone;
+  }
+
+  /** A stored action that an engine cannot reproduce by sending its move alone. */
+  public boolean requiresEngineSnapshot() {
+    return data != null
+        && (data.isSnapshotNode() || hasRemovedStone() || data.retainsUncapturedStones());
+  }
+
+  public BoardHistoryNode findEngineSnapshotAnchor() {
+    for (BoardHistoryNode node = this; node != null; node = node.previous().orElse(null)) {
+      if (!node.requiresEngineSnapshot()) continue;
+      BoardData position = node.getData();
+      if (node.previous().isEmpty() && !node.hasRemovedStone() && position.moveNumber == 0
+          && position.lastMove.isEmpty() && position.blackToPlay
+          && Arrays.stream(position.stones).allMatch(Stone::isEmpty)) {
+        return null;
+      }
+      return node;
+    }
+    return null;
   }
 
   boolean hasSetupEdits() {

@@ -2083,7 +2083,7 @@ public class Board {
 
   private boolean forwardCurrentPositionToPrimaryEngineIncrementally(
       BoardData previousPosition, int previousBoardWidth, int previousBoardHeight) {
-    if (previousPosition == null || !isPrimaryEngineReady()) {
+    if (previousPosition == null || !isPrimaryEngineReady() || isEngineAlignmentPending()) {
       return false;
     }
     if (previousBoardWidth != boardWidth || previousBoardHeight != boardHeight) {
@@ -2100,6 +2100,10 @@ public class Board {
     }
     BoardHistoryNode previousNode = currentHistory.getCurrentHistoryNode().previous().orElse(null);
     if (previousNode == null || !matchesEnginePosition(previousPosition, previousNode.getData())) {
+      return false;
+    }
+    BoardHistoryNode current = currentHistory.getCurrentHistoryNode();
+    if (current.requiresEngineSnapshot()) {
       return false;
     }
     syncPrimaryEngineKomiToCurrentGame();
@@ -2537,12 +2541,11 @@ public class Board {
         // redo's
         history.next();
         if (Lizzie.config.playSound) Utils.playVoiceFile();
-        if (!engineGamePlaying() && (Lizzie.leelaz == null || !Lizzie.leelaz.isInputCommand))
+        boolean forwardPass = canForwardRecordedMove() && !Lizzie.leelaz.isInputCommand;
+        if (forwardPass && !engineGamePlaying())
           feedEngineForMainlineMove(color, "pass");
 
-        if (Lizzie.leelaz != null
-            && !Lizzie.leelaz.isInputCommand
-            && Lizzie.frame.isPlayingAgainstLeelaz
+        if (forwardPass && Lizzie.frame.isPlayingAgainstLeelaz
             && Lizzie.frame.playerIsBlack != getData().blackToPlay)
           Lizzie.leelaz.genmove((history.isBlacksTurn() ? "b" : "w"));
         clearAfterMove();
@@ -2564,7 +2567,7 @@ public class Board {
               0,
               0);
       if (newBranch && history.getNext(true).isPresent()) {
-        Arrays.fill(newState.moveNumberList, 0);
+        newState.clearInheritedMoveNumbers();
       }
       newState.dummy = dummy;
       newState.moveMNNumber = parent.nextMoveMNNumber(newBranch);
@@ -2578,12 +2581,11 @@ public class Board {
         clearAfterMove();
       } else history.addOrGoto(newState, newBranch);
       // update leelaz with pass
-      if (Lizzie.leelaz != null && !Lizzie.leelaz.isInputCommand && !engineGamePlaying())
+      boolean forwardPass = canForwardRecordedMove() && !Lizzie.leelaz.isInputCommand;
+      if (forwardPass && !engineGamePlaying())
         feedEngineForMainlineMove(color, "pass");
 
-      if (Lizzie.leelaz != null
-          && !Lizzie.leelaz.isInputCommand
-          && Lizzie.frame.isPlayingAgainstLeelaz
+      if (forwardPass && Lizzie.frame.isPlayingAgainstLeelaz
           && Lizzie.frame.playerIsBlack != getData().blackToPlay)
         Lizzie.leelaz.genmove((history.isBlacksTurn() ? "b" : "w"));
 
@@ -2808,15 +2810,15 @@ public class Board {
         else history.next();
         updateIsBest();
         if (Lizzie.config.playSound) Utils.playVoiceFile();
-        // should be opposite from the bottom case
-        if (Lizzie.leelaz != null
+        boolean forwardMove = canForwardRecordedMove();
+        if (forwardMove
             && Lizzie.frame.isPlayingAgainstLeelaz
             && Lizzie.frame.playerIsBlack != getData().blackToPlay) {
           if (!Lizzie.leelaz.isInputCommand) {
             Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
             Lizzie.leelaz.genmove((Lizzie.board.getData().blackToPlay ? "b" : "w"));
           }
-        } else if (Lizzie.leelaz != null
+        } else if (forwardMove
             && !isCollectingReadBoardSync()
             && !Lizzie.frame.isPlayingAgainstLeelaz
             && !Lizzie.leelaz.isInputCommand
@@ -2862,19 +2864,14 @@ public class Board {
               0);
       newState.moveMNNumber = moveMNNumber;
       Stone[] stones = newState.stones;
-      Zobrist zobrist = newState.zobrist;
       int[] moveNumberList = newState.moveNumberList;
       if (newBranch && history.getNext(true).isPresent()) {
-        Arrays.fill(moveNumberList, 0);
+        newState.clearInheritedMoveNumbers();
       }
       if (Lizzie.frame.isTrying) moveNumberList[Board.getIndex(x, y)] = -moveNumber;
       else moveNumberList[Board.getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
 
-      // set the stone at (x, y) to color
-      stones[getIndex(x, y)] = color;
-      zobrist.toggleStone(x, y, color);
-
-      int selfCaptured = newState.applyMoveCaptures(Lizzie.config.noCapture);
+      int selfCaptured = newState.applyMoveToPosition(Lizzie.config.noCapture);
       for (int i = 0; i < Board.boardWidth * Board.boardHeight; i++) {
         if (stones[i].equals(Stone.EMPTY)) {
           moveNumberList[i] = 0;
@@ -2959,21 +2956,22 @@ public class Board {
         clearAfterMove();
       }
       boolean needGenmove = false;
-      if (Lizzie.leelaz != null
+      boolean forwardMove = canForwardRecordedMove();
+      if (forwardMove
           && forManual
           && !Lizzie.frame.isPlayingAgainstLeelaz
           && !Lizzie.leelaz.isInputCommand) {
         String move = convertCoordinatesToName(x, y);
         Lizzie.engineManager.playEngineGameManualMove(
             previousBlackToPlay, color, move, color.isWhite());
-      } else if (Lizzie.leelaz != null
+      } else if (forwardMove
           && Lizzie.frame.isPlayingAgainstLeelaz
           && !Lizzie.leelaz.isInputCommand
           && Lizzie.frame.playerIsBlack == previousBlackToPlay
           && !isEngineFollowTrialActive()) {
         Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y), true, color.isWhite());
         needGenmove = true;
-      } else if (Lizzie.leelaz != null
+      } else if (forwardMove
           && !isCollectingReadBoardSync()
           && !Lizzie.frame.isPlayingAgainstLeelaz
           && !Lizzie.leelaz.isInputCommand
@@ -3002,6 +3000,17 @@ public class Board {
       if (Lizzie.config.playSound) Utils.playVoiceFile();
       if (!forSync) Lizzie.frame.refreshAfterMove();
     }
+  }
+
+  private boolean canForwardRecordedMove() {
+    if (Lizzie.leelaz == null || isEngineAlignmentPending()) return false;
+    BoardHistoryNode node = history.getCurrentHistoryNode();
+    if (engineGamePlaying() || !node.requiresEngineSnapshot()) return true;
+    if (shouldForwardHistoryNavigationToPrimaryEngine() && !isEngineFollowTrialActive()
+        && !Lizzie.leelaz.isInputCommand) {
+      restoreHistoryNodeExact(node);
+    }
+    return false;
   }
 
   private void sendReadBoardPlaceIfAllowed(
@@ -4131,6 +4140,16 @@ public class Board {
         && isPrimaryEngineReady();
   }
 
+  private Optional<ExactSnapshotEngineRestore.PreparedRestore> prepareEngineHistoryRestore(
+      Leelaz.ExactSnapshotRestoreAdmission admission, BoardHistoryNode target) {
+    var prepared = ExactSnapshotEngineRestore.prepare(admission, target);
+    if (target == history.getCurrentHistoryNode()
+        && prepared.isPresent() && prepared.get().retainsUncapturedStones()) {
+      requireEngineAlignment();
+    }
+    return prepared;
+  }
+
   private HistoryNavigationRestore prepareHistoryNavigationRestore(boolean stepIn) {
     Leelaz engine = Lizzie.leelaz;
     return prepareHistoryNavigationRestore(
@@ -4155,7 +4174,7 @@ public class Board {
     Leelaz.ExactSnapshotRestoreAdmission admission =
         engine.captureHistoryNavigationExactSnapshotRestoreAdmission(mirrorEngine);
     Optional<ExactSnapshotEngineRestore.PreparedRestore> preparedRestore =
-        ExactSnapshotEngineRestore.prepare(admission, targetNode);
+        prepareEngineHistoryRestore(admission, targetNode);
     if (stepIn) {
       ExactSnapshotEngineRestore.PreparedRestore exactRestore = preparedRestore.orElseThrow();
       return new HistoryNavigationRestore(
@@ -4251,9 +4270,7 @@ public class Board {
       }
       if (Lizzie.config.playSound) Utils.playVoiceFile(history.getCurrentHistoryNode());
       advanceContextRevision();
-      boolean needSync =
-          history.getCurrentHistoryNode().hasRemovedStone()
-              || history.getCurrentHistoryNode().getData().isSnapshotNode();
+      boolean needSync = history.getCurrentHistoryNode().requiresEngineSnapshot();
       if (!needSync && shouldForwardHistoryNavigationToPrimaryEngine() && data.get().isMoveNode()) {
         int[] lastMove = data.get().lastMove.get();
         String name = convertCoordinatesToName(lastMove[0], lastMove[1]);
@@ -4370,7 +4387,7 @@ public class Board {
       if (!submitOrdinaryEngineForwarding(engine, () -> true)) return;
       boolean resumePonder = engine.isPondering();
       ExactSnapshotEngineRestore.PreparedRestore exact =
-          ExactSnapshotEngineRestore.prepare(
+          prepareEngineHistoryRestore(
                   engine.captureHistoryNavigationExactSnapshotRestoreAdmission(mirror), node)
               .orElseThrow();
       restore =
@@ -4409,7 +4426,7 @@ public class Board {
       Optional<ExactSnapshotEngineRestore.PreparedRestore> exact =
           fromRoot
               ? Optional.empty()
-              : ExactSnapshotEngineRestore.prepare(
+              : prepareEngineHistoryRestore(
                   engine.captureBoardSyncExactSnapshotRestoreAdmission(mirror),
                   history.getCurrentHistoryNode());
       Runnable commands;
@@ -4611,7 +4628,7 @@ public class Board {
         notifyReadBoardLocalHistoryNavigation();
         BoardData currentData = history.getData();
         boolean forward = shouldForwardHistoryNavigationToPrimaryEngine();
-        if (forward && currentData.isSnapshotNode()) {
+        if (forward && history.getCurrentHistoryNode().requiresEngineSnapshot()) {
           history.getCurrentHistoryNode().clearAndSyncBoard(true);
         } else if (forward && currentData.isMoveNode()) {
           int[] lastMove = currentData.lastMove.get();
@@ -4961,7 +4978,7 @@ public class Board {
 
   private static boolean crossesSnapshotBoundary(BoardHistoryNode node, int steps) {
     for (int index = 0; index < steps; index++) {
-      if (node.getData().isSnapshotNode() || node.hasRemovedStone()) return true;
+      if (node.requiresEngineSnapshot()) return true;
       node = node.previous().orElseThrow();
     }
     return false;
@@ -5765,8 +5782,7 @@ public class Board {
       BoardData currentData = history.getData();
       boolean isPass = isKnownPass(currentData);
       boolean isHistoryAction = isHistoryAction(currentData);
-      boolean needSync =
-          history.getCurrentHistoryNode().hasRemovedStone() || currentData.isSnapshotNode();
+      boolean needSync = history.getCurrentHistoryNode().requiresEngineSnapshot();
       if (history.getCurrentHistoryNode().next().isPresent())
         updateIsBest(history.getCurrentHistoryNode().next().get());
       if (history.getPrevious().isEmpty()) {

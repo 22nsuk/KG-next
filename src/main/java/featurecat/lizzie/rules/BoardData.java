@@ -279,6 +279,14 @@ public class BoardData implements Cloneable {
   private BoardNodeKind nodeKind;
   // A move keeps the capture policy used when it was played, even if the UI option changes.
   boolean playedWithoutCaptures;
+  // A branch numbering reset also applies to inherited stones exposed by an edit.
+  boolean hidesInheritedMoveNumbers;
+
+  void clearInheritedMoveNumbers() {
+    if (moveNumberList == null) moveNumberList = new int[stones.length];
+    else Arrays.fill(moveNumberList, 0);
+    hidesInheritedMoveNumbers = true;
+  }
 
   // Ordered raw SGF values. Replace lists on updates so captured values stay stable.
   private Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
@@ -1247,6 +1255,7 @@ public class BoardData implements Cloneable {
         forSave ? null : moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
     data.moveMNNumber = moveMNNumber;
     data.playedWithoutCaptures = playedWithoutCaptures;
+    data.hidesInheritedMoveNumbers = hidesInheritedMoveNumbers;
     data.dummy = dummy;
     data.verify = verify;
     data.copyAnalysisStateFrom(this, true, forSave);
@@ -1452,26 +1461,39 @@ public class BoardData implements Cloneable {
     return this.lastMove.map(m -> (m[0] == coord[0] && m[1] == coord[1])).orElse(false);
   }
 
-  /** Resolve chains after placing a stone on a private move candidate. Returns self-captures. */
-  public int applyMoveCaptures() {
-    return applyMoveCaptures(false);
-  }
-
-  int applyMoveCaptures(boolean noCapture) {
-    playedWithoutCaptures = noCapture;
-    if (noCapture) return 0;
+  /** Apply this move to its private copy of the parent position. Returns the self-capture count. */
+  public int applyMoveToPosition(boolean noCapture) {
     int[] move = lastMove.orElseThrow();
     int x = move[0];
     int y = move[1];
-    Stone opponent = lastMoveColor.opposite();
-    int captured = Board.removeDeadChain(x + 1, y, opponent, stones, zobrist)
-        + Board.removeDeadChain(x, y + 1, opponent, stones, zobrist)
-        + Board.removeDeadChain(x - 1, y, opponent, stones, zobrist)
-        + Board.removeDeadChain(x, y - 1, opponent, stones, zobrist);
+    stones[zobrist.index(x, y)] = lastMoveColor;
+    zobrist.toggleStone(x, y, lastMoveColor);
+    playedWithoutCaptures = noCapture;
+    if (noCapture) return 0;
+    int captured = removeAdjacentDeadChains(x, y, lastMoveColor.opposite(), stones, zobrist);
     int selfCaptured = Board.removeDeadChain(x, y, lastMoveColor, stones, zobrist);
     blackCaptures += lastMoveColor.isBlack() ? captured : selfCaptured;
     whiteCaptures += lastMoveColor.isBlack() ? selfCaptured : captured;
     return selfCaptured;
+  }
+
+  /** Would a Go play at this coordinate remove stones that the recorded move retained? */
+  public boolean retainsUncapturedStones() {
+    if (!playedWithoutCaptures || !isMoveNode()) return false;
+    int[] move = lastMove.orElseThrow();
+    Stone[] testStones = stones.clone();
+    Zobrist testHash = zobrist.clone();
+    return removeAdjacentDeadChains(move[0], move[1], lastMoveColor.opposite(),
+            testStones, testHash) > 0
+        || Board.removeDeadChain(move[0], move[1], lastMoveColor, testStones, testHash) > 0;
+  }
+
+  private static int removeAdjacentDeadChains(
+      int x, int y, Stone opponent, Stone[] stones, Zobrist zobrist) {
+    return Board.removeDeadChain(x + 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y + 1, opponent, stones, zobrist)
+        + Board.removeDeadChain(x - 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y - 1, opponent, stones, zobrist);
   }
 
   boolean capturedSingleOpponentSince(BoardData parent) {
@@ -1642,6 +1664,7 @@ public class BoardData implements Cloneable {
   private void copyCoreStateFrom(BoardData data) {
     this.nodeKind = data.getNodeKind();
     this.playedWithoutCaptures = data.playedWithoutCaptures;
+    this.hidesInheritedMoveNumbers = data.hidesInheritedMoveNumbers;
     this.moveMNNumber = data.moveMNNumber;
     this.moveNumber = data.moveNumber;
     this.lastMove = copyLastMove(data.lastMove);

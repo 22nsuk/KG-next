@@ -930,9 +930,7 @@ public class WebBoardManager {
             parentData.whiteCaptures,
             0,
             0);
-    newData.stones[idx] = color;
-    newData.zobrist.toggleStone(x, y, color);
-    int suicidalStones = newData.applyMoveCaptures();
+    int suicidalStones = newData.applyMoveToPosition(false);
     boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
     if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return false;
     if (newData.moveNumberList != null) {

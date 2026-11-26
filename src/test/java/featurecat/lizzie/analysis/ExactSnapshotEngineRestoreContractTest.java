@@ -44,6 +44,55 @@ class ExactSnapshotEngineRestoreContractTest {
   private static final String AUTO_ID_RESPONSE = "__auto-id-response__";
 
   @Test
+  void retainedCaptureBlocksRestoreUntilAnIndependentSetup() throws Exception {
+    try (TestHarness harness = TestHarness.open(false)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[3]AP[KG-next]KGCM[1]AB[ba]AW[aa][bb];B[ab]KGNC[1];W[ca];AE[ab]PL[B];B[cc])",
+          true);
+      BoardHistoryNode retained = history.getStart().next().orElseThrow();
+      BoardHistoryNode later = retained.next().orElseThrow();
+      assertEquals(Stone.WHITE, retained.getData().stones[Board.getIndex(0, 0)]);
+      // White then captures ba, giving aa a liberty. Its move history is still unplayable.
+      assertEquals(Stone.EMPTY, later.getData().stones[Board.getIndex(1, 0)]);
+      Leelaz engine = new Leelaz("");
+      engine.useJavaSSH = true;
+      ExactSnapshotRestoreProtocolFixture.Transport transport =
+          ExactSnapshotRestoreProtocolFixture.install(
+              engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      engine.advertiseCommandsForTest(List.of("set_position"));
+      for (BoardHistoryNode target : List.of(retained, later)) {
+        ExactSnapshotEngineRestore.PreparedRestore prepared = ExactSnapshotEngineRestore.prepare(
+            engine.captureBoardSyncExactSnapshotRestoreAdmission(), target).orElseThrow();
+        ExactSnapshotEngineRestore.Failure failure =
+            assertThrows(ExactSnapshotEngineRestore.Failure.class, prepared::execute);
+        assertTrue(ExactSnapshotEngineRestore.isPermanentPositionRestoreFailure(failure));
+        assertTrue(transport.commands().isEmpty());
+      }
+      ExactSnapshotEngineRestore.freezeHistoryPosition(history.getEnd(), 0, 7.5)
+          .prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission()).execute();
+      assertEquals(List.of("clear_board", "boardsize 3", "komi 7.5",
+              "set_position W A3 W B2 W C3", "play B C1"), transport.commands());
+    }
+  }
+
+  @Test
+  void aNoCaptureMoveWithAnUnrelatedDeadGroupKeepsItsOrdinaryTail() throws Exception {
+    try (TestHarness harness = TestHarness.open(false)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[3]AP[KG-next]KGCM[1]AB[ba][ab]AW[aa];B[cc]KGNC[1])", true);
+      Leelaz engine = new Leelaz("");
+      engine.useJavaSSH = true;
+      var transport = ExactSnapshotRestoreProtocolFixture.install(
+          engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
+      engine.advertiseCommandsForTest(List.of("set_position"));
+      ExactSnapshotEngineRestore.freezeHistoryPosition(history.getEnd(), 0, 7.5)
+          .prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission()).execute();
+      assertEquals(List.of("clear_board", "boardsize 3", "komi 7.5",
+              "set_position B A2 B B3 W A3", "play B C1"), transport.commands());
+    }
+  }
+
+  @Test
   void frozenHistoryKeepsCapturedRectangularDimensions() throws Exception {
     try (TestHarness harness = TestHarness.open(false)) {
       Board.boardWidth = 4;

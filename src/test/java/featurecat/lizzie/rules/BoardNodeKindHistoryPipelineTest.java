@@ -12,7 +12,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 import featurecat.lizzie.Config;
 import featurecat.lizzie.ExtraMode;
 import featurecat.lizzie.Lizzie;
-import featurecat.lizzie.analysis.AnalysisEngine;
+import featurecat.lizzie.analysis.AnalysisRequestBuilder;
 import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.ExactSnapshotRestoreProtocolFixture;
 import featurecat.lizzie.analysis.KataGoRules;
@@ -349,22 +349,11 @@ class BoardNodeKindHistoryPipelineTest {
       BoardHistoryNode pass = snapshot.add(new BoardHistoryNode(passNode(Stone.BLACK, false, 2)));
       BoardHistoryNode move = pass.add(new BoardHistoryNode(moveNode(0, 0, Stone.WHITE, true, 3)));
 
-      BoardHistoryNode anchor =
-          (BoardHistoryNode)
-              requireMethod(AnalysisEngine.class, "findSnapshotAnchor", BoardHistoryNode.class)
-                  .invoke(null, move);
-      @SuppressWarnings("unchecked")
-      List<String[]> moves =
-          (List<String[]>)
-              requireMethod(AnalysisEngine.class, "collectHistoryActions", BoardHistoryNode.class)
-                  .invoke(null, move);
-
-      assertTrue(anchor.getData().isSnapshotNode(), "analysis scan should anchor on the snapshot.");
-      assertEquals(2, moves.size(), "analysis scan should skip snapshots and keep both actions.");
-      assertArrayEquals(
-          new String[] {"B", "pass"}, moves.get(0), "first action should be the real pass.");
-      assertArrayEquals(
-          new String[] {"W", "A3"}, moves.get(1), "second action should be the real move.");
+      assertSame(snapshot, move.findEngineSnapshotAnchor());
+      Lizzie.config.analysisSpecificRules = "";
+      var request = AnalysisRequestBuilder.buildRequest("scan", move, 10, false, false, false);
+      assertEquals(List.of(List.of("B", "pass"), List.of("W", "A3")),
+          request.getJSONArray("moves").toList());
     } finally {
       env.close();
     }

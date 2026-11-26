@@ -486,9 +486,9 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"KG-next, KGCM[1], WHITE", "KG-next, '', EMPTY", "Other, KGCM[1], EMPTY"})
+  @CsvSource({"KG-next, KGCM[1], WHITE, 2", "KG-next, '', EMPTY, 2", "Other, KGCM[1], EMPTY, 1"})
   void onlyMarkedKgNextGamesReadCaptureOverridesOnTheirOwnVariation(
-      String producer, String marker, Stone expected) throws Exception {
+      String producer, String marker, Stone expected, int variationCount) throws Exception {
     try (var fixture = RulesLayerTestHarness.open(SIZE)) {
       String sgf = "(;SZ[5]AP[" + producer + "]" + marker + "AB[ba]AW[aa]"
           + "(;KGNC[1]B[ab])(;B[ab]C[KGNC]))";
@@ -496,12 +496,108 @@ class SGFParserSemanticRoundTripTest {
       for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(sgf, true))) {
         BoardHistoryNode root = history.getStart();
         int aa = Board.getIndex(0, 0);
+        assertEquals(variationCount, root.numberOfChildren());
         assertEquals(expected, root.getVariation(0).orElseThrow().getData().stones[aa]);
-        if (expected == Stone.WHITE) {
+        if (variationCount == 2) {
           assertEquals(Stone.EMPTY, root.getVariation(1).orElseThrow().getData().stones[aa]);
-        } else {
-          assertEquals(1, root.numberOfChildren(), "identical prefixes with the same mode merge");
         }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editedRecordKeepsSeparateBranchesWithTheSameMoveOrPass(boolean pass) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[ee];B[aa])"));
+      Board board = fixture.board();
+      BoardHistoryList live = board.getHistory();
+      BoardHistoryNode fork = live.getEnd();
+      for (int i = 0; i < 2; i++) {
+        live.setHead(fork);
+        if (pass) live.pass(Stone.WHITE, i > 0);
+        else live.place(1, 1, Stone.WHITE, i > 0);
+        live.getData().comment = i == 0 ? "first" : "second";
+        live.place(2 + i, 2 + i, Stone.BLACK);
+      }
+
+      board.editMove(new int[] {4, 4}, false, true);
+      BoardHistoryList edited = board.getHistory();
+      BoardHistoryNode editedFork = edited.getStart().next().orElseThrow();
+      assertEquals(Stone.EMPTY, edited.getStart().getData().stones[Board.getIndex(4, 4)]);
+      assertEquals(2, editedFork.numberOfChildren());
+      assertEquals("first", editedFork.getVariation(0).orElseThrow().getData().comment);
+      assertEquals("second", editedFork.getVariation(1).orElseThrow().getData().comment);
+
+      String saved = SGFParser.saveToString(false);
+      assertTreeSemanticsEqual(edited, SGFParser.parseSgf(saved, true));
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      assertTreeSemanticsEqual(edited, board.getHistory());
+
+      Path file = Files.writeString(tempDirectory.resolve("identical-siblings.sgf"), saved);
+      assertTrue(SGFParser.load(file.toString(), false, false));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      assertTreeSemanticsEqual(edited, board.getHistory());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "W[cc], false, 3", "W[], false, 3", "PL[B]AB[cc], false, 2",
+      "W[cc], true, 2", "W[], true, 2", "PL[B]AB[cc], true, 2"
+  })
+  void reopeningKgNextRespectsBranchNumbering(
+      String branchStart, boolean startFromOne, int continuationNumber) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.newMoveNumberInBranch = startFromOne;
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5];B[aa](;W[bb])(;" + branchStart + ";B[dd]))"));
+      BoardHistoryList source = fixture.board().getHistory();
+      String saved = SGFParser.saveToString(false);
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      var options = SGFParser.ParseOptions.capture();
+      Lizzie.config.newMoveNumberInBranch = !startFromOne;
+      BoardHistoryList detached = SGFParser.parseSgf(saved, true, options);
+
+      for (var history : List.of(source, fixture.board().getHistory(), detached)) {
+        BoardData continuation = history.getStart().next().orElseThrow()
+            .getVariation(1).orElseThrow().next().orElseThrow().getData();
+        assertEquals(startFromOne ? 0 : 1, continuation.moveNumberList[Board.getIndex(0, 0)]);
+        assertEquals(continuationNumber, continuation.moveNumberList[Board.getIndex(3, 3)]);
+      }
+    }
+  }
+
+  @Test
+  void kgNextSetupVariationKeepsAnEarlierDummy() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String saved = "(;SZ[5]AP[KG-next];B[aa](;DD[true]C[dummy])"
+          + "(;PL[W]AB[bb]C[setup];W[cc]))";
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      BoardHistoryList live = fixture.board().getHistory();
+      BoardHistoryNode fork = live.getStart().next().orElseThrow();
+      assertEquals(2, fork.numberOfChildren());
+      BoardData dummy = fork.getVariation(0).orElseThrow().getData();
+      assertTrue(dummy.dummy);
+      assertEquals("dummy", dummy.comment);
+      BoardData setup = fork.getVariation(1).orElseThrow().getData();
+      assertTrue(setup.isSnapshotNode());
+      assertEquals("setup", setup.comment);
+      assertTreeSemanticsEqual(live, SGFParser.parseSgf(SGFParser.saveToString(false), true));
+    }
+  }
+
+  @Test
+  void kgNextVariationRejectsAnOccupiedPoint() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String saved = "(;SZ[5]AP[KG-next];B[aa](;W[bb])(;W[aa]))";
+      assertTrue(SGFParser.loadFromStringforedit(saved));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(saved, true))) {
+        BoardHistoryNode fork = history.getStart().next().orElseThrow();
+        assertEquals(1, fork.numberOfChildren());
+        BoardData validMove = fork.next().orElseThrow().getData();
+        assertArrayEquals(new int[] {1, 1}, validMove.lastMove.orElseThrow());
+        assertEquals(Stone.BLACK, validMove.stones[Board.getIndex(0, 0)]);
       }
     }
   }
@@ -555,27 +651,34 @@ class SGFParserSemanticRoundTripTest {
     }
   }
 
-  @Test
-  void startingStoneEditKeepsAnEarlierSurvivingMoveUnnumberedInASideVariation() throws Exception {
+  @ParameterizedTest
+  @CsvSource({"false, false", "true, false", "true, true"})
+  void startingStoneEditKeepsBranchNumberingAfterReopen(boolean startFromOne, boolean promote)
+      throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
-      Lizzie.config.newMoveNumberInBranch = true;
+      Lizzie.config.newMoveNumberInBranch = startFromOne;
       assertTrue(SGFParser.loadFromStringforedit(
-          "(;SZ[5]AW[ba];B[aa](;W[ee])(;W[ab]))"));
+          "(;SZ[5]AW[ba][dd];B[aa](;W[ee])(;W[ab]))"));
       Board board = Lizzie.board;
-      board.moveToAnyPosition(board.getHistory().getStart().next().orElseThrow()
-          .getVariation(1).orElseThrow());
+      board.editMove(new int[] {3, 3}, false, true);
+      assertTrue(SGFParser.loadFromStringforedit(SGFParser.saveToString(false)));
+      BoardHistoryNode fork = board.getHistory().getStart().next().orElseThrow();
+      BoardHistoryNode variation = fork.getVariation(1).orElseThrow();
+      if (promote) fork.moveChildUp(variation);
+      boolean restart = startFromOne && !promote;
+      board.moveToAnyPosition(variation);
       assertEquals(Stone.EMPTY, board.getData().stones[Board.getIndex(0, 0)]);
-      assertEquals(1, board.getData().moveNumberList[Board.getIndex(0, 1)]);
+      assertEquals(restart ? 1 : 2, board.getData().moveNumberList[Board.getIndex(0, 1)]);
       BoardHistoryList expected = SGFParser.parseSgf(
-          "(;SZ[5];B[aa](;W[ee])(;W[ab]))", true);
+          promote ? "(;SZ[5];B[aa](;W[ab])(;W[ee]))" : "(;SZ[5];B[aa](;W[ee])(;W[ab]))", true);
 
       board.editMove(new int[] {1, 0}, false, true);
 
       assertTreeSemanticsEqual(expected, board.getHistory());
       assertEquals(Stone.BLACK, board.getData().stones[Board.getIndex(0, 0)]);
-      assertEquals(0, board.getData().moveNumberList[Board.getIndex(0, 0)],
-          "the side variation hides move numbers inherited from its parent");
-      assertEquals(1, board.getData().moveNumberList[Board.getIndex(0, 1)]);
+      assertEquals(restart ? 0 : 1, board.getData().moveNumberList[Board.getIndex(0, 0)],
+          "the surviving ancestor's label follows the opened variation's numbering");
+      assertEquals(restart ? 1 : 2, board.getData().moveNumberList[Board.getIndex(0, 1)]);
       assertEquals(1, board.moveNumberByCoord(new int[] {0, 0}),
           "editing the surviving ancestor stone must still target its original move");
     }

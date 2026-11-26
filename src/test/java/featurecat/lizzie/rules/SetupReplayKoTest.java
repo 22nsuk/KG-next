@@ -2,7 +2,9 @@ package featurecat.lizzie.rules;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.KataGoRules;
+import featurecat.lizzie.analysis.Leelaz;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -38,6 +40,26 @@ class SetupReplayKoTest {
       assertEquals("current", selected.getData().comment);
       board.cleanedit();
       assertEquals("previous edit", board.getHistory().getData().comment);
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"'', false", "RU[Japanese], true"})
+  void confirmedEngineKoAppliesOnlyWithoutADeclaredRule(String declaration, boolean legal)
+      throws Exception {
+    try (var env = RulesLayerTestHarness.open(13)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[13]PL[B]" + declaration + SETUP + MOVES + ")", true);
+      env.board().setHistory(history);
+      SGFParser.adoptCurrentHistoryExternalRules();
+      KataGoRules positional = KataGoRules.parse("Tromp-Taylor").orElseThrow();
+      Lizzie.setPrimaryEngine(new Leelaz("") {
+        @Override
+        public KataGoRules currentConfirmedRules() {
+          return positional;
+        }
+      });
+      assertEquals(legal, recolor(history) != null);
     }
   }
 

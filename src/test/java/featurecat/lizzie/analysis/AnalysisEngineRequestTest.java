@@ -3543,6 +3543,25 @@ class AnalysisEngineRequestTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void analysisRejectsDescendantsOfAnUnreplayableCapture(boolean remote) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[3]AP[KG-next]KGCM[1]AB[ba]AW[aa][bb];B[ab]KGNC[1];W[ca])", true);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      setField(AnalysisEngine.class, engine, "useRemoteCompute", remote);
+      BoardHistoryNode end = history.getEnd();
+      assertEquals(Stone.EMPTY, end.getData().stones[Board.getIndex(1, 0)]);
+      assertFalse(engine.sendRequest(end));
+      assertTrue(engine.sentCommands.isEmpty());
+      assertEquals(0, engine.pendingRequestCount());
+      assertThrows(IllegalArgumentException.class,
+          () -> AnalysisRequestBuilder.buildRequest("test", end, 1, false, false, false));
+    }
+  }
+
   @Test
   void remoteGtpSnapshotUsesStaticSetPositionBeforeReplayingLaterActions() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {
