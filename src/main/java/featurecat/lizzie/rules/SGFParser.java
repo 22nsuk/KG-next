@@ -646,7 +646,7 @@ public class SGFParser {
           String tagContent = event.legacyValue(cancellation);
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
-            appendDummyPlaceholder(history);
+            appendDummyPlaceholder(history, analysisImport.options);
             currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
@@ -671,7 +671,7 @@ public class SGFParser {
             }
             currentNodeHasMove = true;
             if (newBranch) {
-              processPendingPros(history, pendingProps);
+              finishParsedMoveVariation(history, parent, pendingProps, analysisImport.options);
             }
             flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {
@@ -3595,6 +3595,15 @@ public class SGFParser {
     return sb.toString();
   }
 
+  private static void finishParsedMoveVariation(
+      BoardHistoryList history, BoardHistoryNode parent, Map<String, List<String>> pendingProps,
+      ParseOptions options) {
+    BoardHistoryNode child = history.getCurrentHistoryNode();
+    // Forcing a distinct SGF sibling does not itself restart its display numbering.
+    if (child != parent) child.rebuildDisplayNumbers(options.newMoveNumberInBranch());
+    processPendingPros(history, pendingProps);
+  }
+
   private static void processPendingPros(BoardHistoryList history, Map<String, List<String>> props) {
     props.forEach((key, values) -> values.forEach(value -> history.addNodeProperty(key, value)));
   }
@@ -4160,8 +4169,11 @@ public class SGFParser {
       clearPrimaryAnalysisPayload(snapshot);
       clearSecondaryAnalysisPayload(snapshot);
     }
-    snapshot.moveMNNumber = current.moveMNNumber;
     history.addOrGoto(snapshot, newBranch);
+    BoardHistoryNode node = history.getCurrentHistoryNode();
+    if (node.getData() == snapshot) {
+      node.rebuildDisplayNumbers(analysisImport.options.newMoveNumberInBranch());
+    }
     if (transferLeadingMoveMetadata) {
       moveLeadingSetupMetadataToSnapshot(history, analysisImport);
     }
@@ -4307,8 +4319,9 @@ public class SGFParser {
   // DD is a terminal placeholder, not a modifier on the next real B/W action.
   // It does not complete currentNodeHasMove: same-node payload stays buffered for a real action,
   // or is flushed to the dummy only when the SGF node ends without one.
-  private static void appendDummyPlaceholder(BoardHistoryList history) {
+  private static void appendDummyPlaceholder(BoardHistoryList history, ParseOptions options) {
     history.pass(history.isBlacksTurn() ? Stone.BLACK : Stone.WHITE, true, true);
+    history.getCurrentHistoryNode().rebuildDisplayNumbers(options.newMoveNumberInBranch());
   }
 
   private static BoardHistoryList parseValue(
@@ -4380,7 +4393,7 @@ public class SGFParser {
           String tagContent = event.legacyValue();
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
-            appendDummyPlaceholder(history);
+            appendDummyPlaceholder(history, analysisImport.options);
             currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
             if (currentNodeHasDummy) {
@@ -4405,7 +4418,7 @@ public class SGFParser {
             }
             currentNodeHasMove = true;
             if (newBranch) {
-              processPendingPros(history, pendingProps);
+              finishParsedMoveVariation(history, parent, pendingProps, analysisImport.options);
             }
             flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {
@@ -4719,7 +4732,7 @@ public class SGFParser {
           String tagContent = tagContentBuilder.toString();
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
-            appendDummyPlaceholder(history);
+            appendDummyPlaceholder(history, analysisImport.options);
             subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             currentNodeHasDummy = true;
           } else if (tag.equals("B") || tag.equals("W")) {
@@ -4734,6 +4747,7 @@ public class SGFParser {
             // Save the step count
             subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
+            BoardHistoryNode parent = history.getCurrentHistoryNode();
             boolean newBranch = (subTreeStepMap.get(subTreeDepth) == 1);
             if (move == null) {
               history.pass(color, newBranch, false);
@@ -4742,7 +4756,7 @@ public class SGFParser {
             }
             currentNodeHasMove = true;
             if (newBranch) {
-              processPendingPros(history, pendingProps);
+              finishParsedMoveVariation(history, parent, pendingProps, analysisImport.options);
             }
             flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
           } else if (tag.equals("C")) {

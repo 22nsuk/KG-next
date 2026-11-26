@@ -285,24 +285,8 @@ public class BoardHistoryList {
     }
   }
 
-  public void moveNumber(int moveNumber) {
-    synchronized (this) {
-      BoardData data = this.getData();
-      if (data.isMoveNode()) {
-        int[] moveNumberList = this.getMoveNumberList();
-        moveNumberList[getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
-        Optional<BoardHistoryNode> node = this.getCurrentHistoryNode().previous();
-        while (node.isPresent() && node.get().numberOfChildren() <= 1) {
-          BoardData nodeData = node.get().getData();
-          if (nodeData.isMoveNode() && nodeData.moveNumber >= moveNumber) {
-            moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-            moveNumberList[getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
-                moveNumber;
-          }
-          node = node.get().previous();
-        }
-      }
-    }
+  public synchronized void moveNumber(int moveNumber) {
+    head.applyMoveNumber(moveNumber);
   }
 
   public void toBranchTop() {
@@ -707,7 +691,7 @@ public class BoardHistoryList {
    * @return length of current branch
    */
   public int currentBranchLength() {
-    return getMoveNumber() + head.getDepth();
+    return getEnd().getData().moveNumber;
   }
 
   /**
@@ -716,7 +700,7 @@ public class BoardHistoryList {
    * @return length of main trunk
    */
   public int mainTrunkLength() {
-    return root().getDepth();
+    return getMainEnd().getData().moveNumber;
   }
 
   public BoardHistoryNode getStart() {
@@ -1091,16 +1075,16 @@ public class BoardHistoryList {
   }
 
   public boolean goToMoveNumber(int moveNumber, boolean withinBranch) {
-    int delta = moveNumber - this.getMoveNumber();
+    boolean forward = moveNumber > getMoveNumber();
     boolean moved = false;
-    for (int i = 0; i < Math.abs(delta); i++) {
-      if (withinBranch && delta < 0) {
+    while (forward ? getMoveNumber() < moveNumber : getMoveNumber() > moveNumber) {
+      if (withinBranch && !forward) {
         BoardHistoryNode currentNode = this.getCurrentHistoryNode();
         if (!currentNode.isFirstChild()) {
           break;
         }
       }
-      if (!(delta > 0 ? next().isPresent() : previous().isPresent())) {
+      if (!(forward ? next().isPresent() : previous().isPresent())) {
         break;
       }
       moved = true;
