@@ -4,6 +4,8 @@ import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.Leelaz;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.BitSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -517,12 +519,7 @@ public class BoardHistoryNode {
     if (index <= 0) {
       return;
     }
-    BoardHistoryNode previousSibling = variations.get(index - 1);
-    variations.set(index - 1, child);
-    variations.set(index, previousSibling);
-    if ((index - 1) == 0) {
-      child.swapMoveNumberList(previousSibling);
-    }
+    swapVariations(index - 1, index);
   }
 
   public void moveChildDown(BoardHistoryNode child) {
@@ -530,27 +527,88 @@ public class BoardHistoryNode {
     if (index < 0 || index >= variations.size() - 1) {
       return;
     }
-    BoardHistoryNode nextSibling = variations.get(index + 1);
-    variations.set(index + 1, child);
-    variations.set(index, nextSibling);
-    if (index == 0) {
-      nextSibling.swapMoveNumberList(child);
+    swapVariations(index, index + 1);
+  }
+
+  boolean promoteVariation(BoardHistoryNode child) {
+    int index = findDirectChildIndex(child);
+    if (index <= 0) return false;
+    swapVariations(0, index);
+    return true;
+  }
+
+  private void swapVariations(int first, int second) {
+    Collections.swap(variations, first, second);
+    if (first == 0) {
+      boolean restart = Lizzie.config.newMoveNumberInBranch;
+      variations.get(first).rebuildVariationNumbers(restart);
+      variations.get(second).rebuildVariationNumbers(restart);
     }
   }
 
-  public void swapMoveNumberList(BoardHistoryNode child) {
-    int childStart = child.getData().moveMNNumber;
-    child.resetMoveNumberListBranch(this.getData().moveMNNumber);
-    this.resetMoveNumberListBranch(childStart);
+  // Sibling order changes the displayed branch numbers. The recorded positions and their
+  // absolute move numbers (including setup, sync and trial anchors) belong to the same parents.
+  private void rebuildVariationNumbers(boolean restartBranches) {
+    // Other side variations keep the numbering they were created with. A nested promotion
+    // processes its own two lines when their order changes.
+    for (BoardHistoryNode node = this; node != null; node = node.next(true).orElse(null)) {
+      node.rebuildDisplayNumbers(restartBranches);
+    }
   }
 
-  public void resetMoveNumberListBranch(int start) {
-    this.resetMoveNumberList(start);
-    BoardHistoryNode node = this;
-    while (node.next().isPresent()) {
-      node = node.next().get();
-      start++;
-      node.resetMoveNumberList(start);
+  void rebuildDisplayNumbers(boolean restartBranches) {
+    BoardHistoryNode parentNode = previous.orElseThrow();
+    BoardData parent = parentNode.data;
+    boolean restart = restartBranches && parentNode.variations.get(0) != this;
+    String explicitNumber = data.getProperty("MN");
+    if (explicitNumber == null) {
+      int base = parent.moveMNNumber >= 0 ? parent.moveMNNumber : parent.moveNumber;
+      data.moveMNNumber = (restart ? 0 : base) + (data.isHistoryActionNode() && !data.dummy ? 1 : 0);
+    }
+
+    int[] numbers = data.moveNumberList;
+    int moveIndex = data.isMoveNode() && !data.dummy
+        ? data.zobrist.index(data.lastMove.get()[0], data.lastMove.get()[1]) : -1;
+    for (int i = 0; i < numbers.length; i++) {
+      if (i == moveIndex && data.stones[i] != Stone.EMPTY) {
+        if (numbers[i] >= 0) numbers[i] = data.moveMNNumber;
+      } else {
+        numbers[i] = !restart && data.stones[i] != Stone.EMPTY && data.stones[i] == parent.stones[i]
+            ? parent.moveNumberList[i] : 0;
+      }
+    }
+    // A remove and re-add can produce the same color at the same intersection.
+    if (extraStones != null) {
+      for (ExtraStones stone : extraStones) {
+        numbers[data.zobrist.index(stone.x, stone.y)] = 0;
+      }
+    }
+    if (explicitNumber != null && moveIndex >= 0 && numbers[moveIndex] >= 0) {
+      applyMoveNumber(data.moveMNNumber);
+    }
+  }
+
+  // SGF MN on a move can also relabel earlier stones in this unbranched sequence.
+  void applyMoveNumber(int number) {
+    if (!data.isMoveNode()) return;
+    int[] move = data.lastMove.orElseThrow();
+    int index = data.zobrist.index(move[0], move[1]);
+    if (data.stones[index] != Stone.EMPTY) data.moveNumberList[index] = number;
+    BitSet labeled = new BitSet();
+    labeled.set(index);
+    for (BoardHistoryNode node = previous.orElse(null);
+        node != null && !node.hasVariations(); node = node.previous.orElse(null)) {
+      BoardData earlier = node.data;
+      if (!earlier.isHistoryActionNode() || earlier.dummy || earlier.moveNumber < number) continue;
+      number = number > 1 ? number - 1 : 0;
+      if (earlier.isMoveNode()) {
+        int[] at = earlier.lastMove.orElseThrow();
+        int point = data.zobrist.index(at[0], at[1]);
+        if (!labeled.get(point) && data.moveNumberList[point] > 0) {
+          data.moveNumberList[point] = number;
+          labeled.set(point);
+        }
+      }
     }
   }
 
@@ -763,8 +821,7 @@ public class BoardHistoryNode {
    * @return move number of node, 0 if node not a child of branch
    */
   public int moveNumberInBranch() {
-    Optional<BoardHistoryNode> top = firstParentWithVariations();
-    return top.isPresent() ? top.get().moveNumberOfNode() + top.get().depthOfNode(this) : 0;
+    return firstParentWithVariations().isPresent() ? data.moveNumber : 0;
   }
 
   /**
@@ -773,7 +830,7 @@ public class BoardHistoryNode {
    * @return move number of node
    */
   public int moveNumberOfNode() {
-    return isMainTrunk() ? getData().moveNumber : moveNumberInBranch();
+    return data.moveNumber;
   }
 
   public boolean isCurTrunk() {
@@ -877,29 +934,6 @@ public class BoardHistoryNode {
     return matchesChildState(sData, dData)
         && hasEquivalentMetadata(node)
         && this.numberOfChildren() == node.numberOfChildren();
-  }
-
-  public void resetMoveNumberList() {
-    // TODO Auto-generated method stub
-    if (!this.previous.isPresent()) return;
-    boolean isNewBranch =
-        this.previous.get().variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
-    BoardHistoryNode preNode = this.previous().get();
-    this.getData().moveNumber = preNode.getData().moveNumber + 1;
-    this.getData().moveMNNumber =
-        preNode.getData().moveMNNumber > -1 && !isNewBranch
-            ? preNode.getData().moveMNNumber + 1
-            : 1;
-    this.getData().moveNumberList =
-        isNewBranch
-            ? new int[Board.boardWidth * Board.boardHeight]
-            : this.previous.get().getData().moveNumberList.clone();
-    if (getData().isMoveNode())
-      this.getData()
-              .moveNumberList[
-              Board.getIndex(this.getData().lastMove.get()[0], this.getData().lastMove.get()[1])] =
-          isNewBranch ? 1 : this.getData().moveMNNumber;
-    if (this.numberOfChildren() >= 1) this.variations.get(0).resetMoveNumberList();
   }
 
   public void setRemovedStone() {

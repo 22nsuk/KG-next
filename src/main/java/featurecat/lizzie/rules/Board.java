@@ -1015,24 +1015,8 @@ public class Board {
    *
    * @param moveNumber the move number of stone
    */
-  public void moveNumber(int moveNumber) {
-    synchronized (this) {
-      BoardData data = history.getData();
-      if (data.isMoveNode()) {
-        int[] moveNumberList = history.getMoveNumberList();
-        moveNumberList[Board.getIndex(data.lastMove.get()[0], data.lastMove.get()[1])] = moveNumber;
-        Optional<BoardHistoryNode> node = history.getCurrentHistoryNode().previous();
-        while (node.isPresent() && node.get().numberOfChildren() <= 1) {
-          BoardData nodeData = node.get().getData();
-          if (nodeData.isMoveNode() && nodeData.moveNumber >= moveNumber) {
-            moveNumber = (moveNumber > 1) ? moveNumber - 1 : 0;
-            moveNumberList[Board.getIndex(nodeData.lastMove.get()[0], nodeData.lastMove.get()[1])] =
-                moveNumber;
-          }
-          node = node.get().previous();
-        }
-      }
-    }
+  public synchronized void moveNumber(int moveNumber) {
+    history.moveNumber(moveNumber);
   }
 
   /**
@@ -3501,68 +3485,35 @@ public class Board {
   }
 
   public int moveNumberByCoord(int[] coord) {
-    int moveNumber = 0;
-    if (Board.isValid(coord)) {
-      int index = Board.getIndex(coord[0], coord[1]);
-      if (Lizzie.board.getHistory().getStones()[index] != Stone.EMPTY) {
-        BoardHistoryNode cur = Lizzie.board.getHistory().getCurrentHistoryNode();
-        moveNumber = cur.getData().moveNumberList[index];
-        if (!cur.isMainTrunk()) {
-          if (moveNumber > 0) {
-            moveNumber = cur.getData().moveNumber - cur.getData().moveMNNumber + moveNumber;
-          } else {
-            BoardHistoryNode p = cur.firstParentWithVariations().orElse(cur);
-            while (p != cur && moveNumber == 0) {
-              moveNumber = p.getData().moveNumberList[index];
-              if (moveNumber > 0) {
-                BoardHistoryNode topOfTop = p.firstParentWithVariations().orElse(p);
-                if (topOfTop != p) {
-                  moveNumber = p.getData().moveNumber - p.getData().moveMNNumber + moveNumber;
-                }
-              } else {
-                cur = p;
-                p = cur.firstParentWithVariations().orElse(cur);
-              }
-            }
-          }
-        } else if (cur.getData().moveMNNumber > 0)
-          return moveNumber + cur.getData().moveNumber - cur.getData().moveMNNumber;
-      }
-    }
-    return moveNumber;
+    return Board.isValid(coord) ? moveNumberAt(coord, 0) : 0;
   }
 
   public int moveNumberByXY(int x, int y) {
-    int moveNumber = -1;
-    int coord[] = {x, y};
-    if (Board.isValid(coord)) {
-      int index = Board.getIndex(coord[0], coord[1]);
-      if (Lizzie.board.getHistory().getStones()[index] != Stone.EMPTY) {
-        BoardHistoryNode cur = Lizzie.board.getHistory().getCurrentHistoryNode();
-        moveNumber = cur.getData().moveNumberList[index];
-        if (!cur.isMainTrunk()) {
-          if (moveNumber > 0) {
-            moveNumber = cur.getData().moveNumber - cur.getData().moveMNNumber + moveNumber;
-          } else {
-            BoardHistoryNode p = cur.firstParentWithVariations().orElse(cur);
-            while (p != cur && moveNumber == 0) {
-              moveNumber = p.getData().moveNumberList[index];
-              if (moveNumber > 0) {
-                BoardHistoryNode topOfTop = p.firstParentWithVariations().orElse(p);
-                if (topOfTop != p) {
-                  moveNumber = p.getData().moveNumber - p.getData().moveMNNumber + moveNumber;
-                }
-              } else {
-                cur = p;
-                p = cur.firstParentWithVariations().orElse(cur);
-              }
-            }
-          }
-        } else if (cur.getData().moveMNNumber > 0)
-          return moveNumber + cur.getData().moveNumber - cur.getData().moveMNNumber;
+    return Board.isValid(x, y) ? moveNumberAt(new int[] {x, y}, -1) : -1;
+  }
+
+  private int moveNumberAt(int[] coord, int emptyPoint) {
+    int index = Board.getIndex(coord[0], coord[1]);
+    BoardHistoryNode node = history.getCurrentHistoryNode();
+    Stone stone = node.getData().stones[index];
+    if (stone == Stone.EMPTY) return emptyPoint;
+
+    // MN can change at a setup node. A single offset cannot map every displayed label back
+    // to its move, and a setup stone may occupy a point played earlier in the game.
+    while (true) {
+      BoardData data = node.getData();
+      if (data.isMoveNode() && !data.dummy && data.isSameCoord(coord)) {
+        return data.moveNumberList[index] < 0 ? data.moveNumberList[index] : data.moveNumber;
       }
+      if (node.extraStones != null) {
+        for (ExtraStones setup : node.extraStones) {
+          if (setup.x == coord[0] && setup.y == coord[1]) return 0;
+        }
+      }
+      if (node.previous().isEmpty()) return data.moveNumberList[index];
+      node = node.previous().get();
+      if (node.getData().stones[index] != stone) return 0;
     }
-    return moveNumber;
   }
 
   /**
@@ -4559,15 +4510,13 @@ public class Board {
 
   /** Go to move number by back routing from children when in branch */
   public void goToMoveNumberByBackChildren(int moveNumber) {
-    int delta = moveNumber - history.getMoveNumber();
-    for (int i = 0; i < Math.abs(delta); i++) {
+    boolean forward = moveNumber > history.getMoveNumber();
+    while (forward ? history.getMoveNumber() < moveNumber : history.getMoveNumber() > moveNumber) {
       BoardHistoryNode currentNode = history.getCurrentHistoryNode();
-      if (currentNode.hasVariations() && delta > 0) {
-        nextMove(currentNode.getFromBackChildren());
-      } else {
-        if (!(delta > 0 ? nextMove(false) : previousMove(false))) {
-          break;
-        }
+      if (forward && currentNode.hasVariations()) {
+        if (!nextMove(currentNode.getFromBackChildren())) break;
+      } else if (!(forward ? nextMove(false) : previousMove(false))) {
+        break;
       }
     }
     clearAfterMove();
@@ -4596,21 +4545,19 @@ public class Board {
       LizzieFrame.boardRenderer.clearBranch();
       if (Lizzie.config.isDoubleEngineMode()) LizzieFrame.boardRenderer2.clearBranch();
     }
-    int delta = moveNumber - history.getMoveNumber();
+    boolean forward = moveNumber > history.getMoveNumber();
     boolean moved = false;
-    for (int i = 0; i < Math.abs(delta); i++) {
-      if (withinBranch && delta < 0) {
+    while (forward ? history.getMoveNumber() < moveNumber : history.getMoveNumber() > moveNumber) {
+      if (withinBranch && !forward) {
         BoardHistoryNode currentNode = history.getCurrentHistoryNode();
         if (!currentNode.isFirstChild()) {
           break;
         }
       }
-      if (!(delta > 0 ? nextMove(false) : previousMove(false))) {
+      if (!(forward ? nextMove(false) : previousMove(false))) {
         break;
       }
-      if (!moved) {
-        moved = true;
-      }
+      moved = true;
     }
     if (moved) {
       clearAfterMove();
@@ -5428,27 +5375,14 @@ public class Board {
     return false;
   }
 
-  public boolean setAsMainBranch() {
+  public synchronized boolean setAsMainBranch() {
     if (history.getCurrentHistoryNode().isMainTrunk()) {
       Lizzie.board.clearNodeInfo(Lizzie.board.getHistory().getStart());
       setMovelistAll();
       return false;
     }
     BoardHistoryNode topNode = history.getCurrentHistoryNode().topOfFatherBranch();
-    BoardHistoryNode mainNode = history.getCurrentHistoryNode().topOfFatherBranch2();
-    BoardHistoryNode oldFirstVar = mainNode.variations.get(0);
-    for (int i = 0; i < mainNode.variations.size(); i++) {
-      if (mainNode.variations.get(i) == topNode) {
-        mainNode.variations.remove(i);
-        mainNode.variations.add(i, oldFirstVar);
-        mainNode.variations.remove(0);
-        mainNode.variations.add(0, topNode);
-        oldFirstVar.resetMoveNumberList();
-        topNode.resetMoveNumberList();
-        return true;
-      }
-    }
-    return false;
+    return topNode.previous().orElseThrow().promoteVariation(topNode);
   }
 
   public void copyNodeInfoToMain(BoardHistoryNode node) {

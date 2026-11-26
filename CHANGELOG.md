@@ -25,6 +25,8 @@ All notable maintenance updates to this fork are documented here.
 
 - Re-enter an existing pass variation after stepping back, preserving its comments, analysis and continuation instead of creating a duplicate branch.
 
+- Preserve move numbers when promoting or reordering SGF variations with setup stones. Moves and passes advance the count, and setup stones stay unnumbered after saving and reopening the game.
+
 - Keep variation move numbers continuous through passes, including SGF loading, so coordinate-based move lookup selects the correct move after a pass.
 
 - Preserve ReadBoard's JSON and two legacy user configuration files when activating an update, after confirming the old helper has exited. Abort before replacement if settings cannot be copied; attempt backup restoration independently of staging cleanup and retain all failure details.
