@@ -2879,8 +2879,9 @@ class PositionConfirmedRollbackTest {
     }
   }
 
-  @Test
-  void recoloringSetupBlocksAnUnreplayableCaptureAndUndoRestoresAnalysisAlignment()
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void recoloringSetupBlocksAnUnrepresentablePositionAndUndoRestoresAnalysisAlignment(boolean noCapture)
       throws Exception {
     var previousGraph = LizzieFrame.winrateGraph;
     BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
@@ -2889,7 +2890,8 @@ class PositionConfirmedRollbackTest {
       LizzieFrame.boardRenderer = new SilentBoardRenderer();
       harness.frame.readBoard = null;
       BoardHistoryList history = SGFParser.parseSgf(
-          "(;SZ[5]AP[KG-next]KGCM[1]AW[aa][ba];B[ab]KGNC[1])", true);
+          noCapture ? "(;SZ[5]AP[KG-next]KGCM[1]AW[aa][ba];B[ab]KGNC[1])"
+              : "(;SZ[5]AB[ab]AW[aa][ba];W[cc])", true);
       history.setHead(history.getEnd());
       harness.board.setHistory(history);
       harness.engine.commandLists.add("loadsgf");
@@ -2904,16 +2906,18 @@ class PositionConfirmedRollbackTest {
       assertTrue(harness.board.isEngineAlignmentPending());
       assertEquals(Stone.WHITE, harness.board.getData().stones[Board.getIndex(0, 0)]);
       assertEquals(Stone.BLACK, harness.board.getData().stones[Board.getIndex(1, 0)]);
+      assertThrows(IllegalArgumentException.class, () -> AnalysisRequestBuilder.buildRequest(
+          "edited", harness.board.getHistory().getCurrentHistoryNode(), 10, false, false, false));
       assertTrue(harness.board.previousMove(false));
       assertTrue(harness.board.nextMove(false));
       harness.engine.ponder();
-      assertEquals(0, payloadCount(output, "play B A4"));
+      assertEquals(0, payloadCount(output, noCapture ? "play B A4" : "play W C3"));
       assertEquals(0, payloadCount(output, "kata-analyze"));
       javax.swing.SwingUtilities.invokeAndWait(harness.board::cleanedit);
       awaitHistoryRestoreCompletion(harness.board);
       assertEquals(Stone.WHITE, harness.board.getData().stones[Board.getIndex(1, 0)]);
       assertPosition(enginePosition, harness.board.getData(), 5, 5);
-      assertEquals(1, payloadCount(output, "play B A4"));
+      assertEquals(1, payloadCount(output, noCapture ? "play B A4" : "play W C3"));
     } finally {
       LizzieFrame.winrateGraph = previousGraph;
       LizzieFrame.boardRenderer = previousRenderer;
@@ -2963,7 +2967,7 @@ class PositionConfirmedRollbackTest {
       LizzieFrame.boardRenderer = new SilentBoardRenderer();
       harness.frame.readBoard = null;
       BoardHistoryList history = SGFParser.parseSgf(
-          "(;SZ[5]PL[W]AB[ab][ba][cb][bc][ee]AW[bb](;W[ad])(;W[dd]))", true);
+          "(;SZ[5]PL[W]AB[ab][ba][cb][ee]AW[bb](;W[ad])(;W[dd]))", true);
       history.setHead(history.getStart().getVariation(1).orElseThrow());
       harness.board.setHistory(history);
       harness.engine.commandLists.add("loadsgf");
@@ -2976,7 +2980,7 @@ class PositionConfirmedRollbackTest {
       awaitHistoryRestoreCompletion(harness.board);
 
       BoardData expected = SGFParser.parseSgf(
-          "(;SZ[5]PL[W]AB[da][eb][dc][cb]AW[db];W[bd])", true).getEnd().getData();
+          "(;SZ[5]PL[W]AB[da][eb][dc]AW[db];W[bd])", true).getEnd().getData();
       assertArrayEquals(expected.stones, harness.board.getData().stones);
       assertPosition(enginePosition, expected, 5, 5);
       assertEquals(2, payloadCount(output, "loadsgf"));

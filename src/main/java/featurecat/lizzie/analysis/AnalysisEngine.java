@@ -1646,12 +1646,15 @@ public class AnalysisEngine {
     while (!stack.isEmpty()) {
       BoardHistoryNode cur = stack.pop();
       if (shouldAnalyzeBranchNode(cur)) {
-        if (!sendRequest(cur)) break;
+        if (queueRequest(cur, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate) < 0) break;
       }
       if (cur.numberOfChildren() >= 1) {
         for (int i = cur.numberOfChildren() - 1; i >= 0; i--)
           stack.push(cur.getVariations().get(i));
       }
+    }
+    if (useRemoteCompute) {
+      startQueuedRemoteGtpBatch();
     }
     showRequestProgressOrContinueBatch(showProgressDialog);
   }
@@ -1865,7 +1868,7 @@ public class AnalysisEngine {
           requestDispatchFailed = true;
           break;
         }
-        if (!sendRequest(node, explicitRequestTargetVisits, explicitRequestOwnershipRequested))
+        if (queueRequest(node, explicitRequestTargetVisits, explicitRequestOwnershipRequested) < 0)
           break;
       }
     }
@@ -2115,18 +2118,31 @@ public class AnalysisEngine {
   }
 
   public boolean sendRequest(BoardHistoryNode analyzeNode) {
-    return sendRequest(analyzeNode, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate);
+    int requestId =
+        queueRequest(analyzeNode, targetAnalysisVisits(), Lizzie.config.showKataGoEstimate);
+    if (requestId < 0) return false;
+    if (useRemoteCompute
+        && remoteGtpActiveJob == null
+        && !remoteGtpWaitingForStopAck
+        && !startNextRemoteGtpJob()) {
+      analyzeMap.remove(requestId);
+      requestDispatchFailed = true;
+      return false;
+    }
+    return true;
   }
 
-  private boolean sendRequest(
+  // JSON requests enter the engine's queue directly. GTP searches start after batch admission.
+  private int queueRequest(
       BoardHistoryNode analyzeNode, int maxVisits, boolean includeOwnership) {
     BoardHistoryNode snapshotAnchor = analyzeNode.findEngineSnapshotAnchor();
     if (shutdownRequested || isUnplayableAnchor(snapshotAnchor)) {
       requestDispatchFailed = true;
-      return false;
+      return -1;
     }
     if (useRemoteCompute) {
-      return sendRemoteGtpRequest(analyzeNode, maxVisits, snapshotAnchor);
+      return enqueueRemoteGtpRequest(
+          analyzeNode, maxVisits, buildRemoteGtpSetupCommands(analyzeNode, snapshotAnchor));
     }
     JSONObject request = new JSONObject();
     int requestId = globalID++;
@@ -2174,7 +2190,7 @@ public class AnalysisEngine {
     request.put("overrideSettings", overrideSettings);
     if (shutdownRequested) {
       requestDispatchFailed = true;
-      return false;
+      return -1;
     }
     analyzeMap.put(requestId, analyzeNode);
     requestProvenance()
@@ -2182,31 +2198,25 @@ public class AnalysisEngine {
             requestId,
             captureRequestProvenance(request.get("rules").toString(), request.getDouble("komi")));
     if (!shutdownRequested && sendCommand(request.toString()) && !requestDispatchFailed) {
-      return true;
+      return requestId;
     }
     analyzeMap.remove(requestId);
     requestProvenance().remove(requestId);
     requestDispatchFailed = true;
-    return false;
+    return -1;
   }
 
   static boolean isUnplayableAnchor(BoardHistoryNode anchor) {
-    return anchor != null && anchor.getData().retainsUncapturedStones();
-  }
-
-  private boolean sendRemoteGtpRequest(
-      BoardHistoryNode analyzeNode, int targetVisits, BoardHistoryNode snapshotAnchor) {
-    int requestId =
-        enqueueRemoteGtpRequest(analyzeNode, Math.max(1, targetVisits),
-            buildRemoteGtpSetupCommands(analyzeNode, snapshotAnchor));
-    if (remoteGtpActiveJob == null && !remoteGtpWaitingForStopAck) {
-      if (!startNextRemoteGtpJob()) {
-        analyzeMap.remove(requestId);
-        requestDispatchFailed = true;
-        return false;
-      }
+    BoardHistoryNode initial = resolveInitialStateAnchor(anchor);
+    if (initial != null) {
+      return EngineSetup.hasGroupWithoutLiberty(initial.getData().stones, Board.boardWidth, Board.boardHeight);
     }
-    return true;
+    if (!Lizzie.board.hasStartStone) return false;
+    EngineSetup setup = new EngineSetup(Board.boardWidth, Board.boardHeight);
+    for (Movelist move : Lizzie.board.startStonelist) {
+      if (!move.ispass && !setup.add(move.x, move.y, move.isblack)) return true;
+    }
+    return setup.hasGroupWithoutLiberty();
   }
 
   private void enqueueRemoteGtpMainlineRequests(
@@ -2230,7 +2240,7 @@ public class AnalysisEngine {
     for (BoardHistoryNode selectedNode : orderedNodes) {
       if (shutdownRequested || !requestStillTargetsCurrentGame()) {
         requestDispatchFailed = true;
-        break;
+        return;
       }
       List<String> commands =
           buildRemoteGtpIncrementalCommands(previousQueuedNode, selectedNode);
@@ -2238,7 +2248,7 @@ public class AnalysisEngine {
         BoardHistoryNode snapshotAnchor = selectedNode.findEngineSnapshotAnchor();
         if (isUnplayableAnchor(snapshotAnchor)) {
           requestDispatchFailed = true;
-          break;
+          return;
         }
         commands = buildRemoteGtpSetupCommands(selectedNode, snapshotAnchor);
       }
@@ -2246,6 +2256,11 @@ public class AnalysisEngine {
       enqueueRemoteGtpRequest(selectedNode, Math.max(1, targetVisits), commands);
       previousQueuedNode = selectedNode;
     }
+    startQueuedRemoteGtpBatch();
+  }
+
+  private void startQueuedRemoteGtpBatch() {
+    if (requestDispatchFailed) return;
     if (shutdownRequested
         || (!remoteGtpQueue().isEmpty() && !startNextRemoteGtpJob())) {
       requestDispatchFailed = true;

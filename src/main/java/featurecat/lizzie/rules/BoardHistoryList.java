@@ -911,12 +911,20 @@ public class BoardHistoryList {
   }
 
   /** Test a detached candidate without moving the real history cursor. */
-  public static boolean violatesKoRule(BoardHistoryNode parent, BoardData data) {
-    // Match the existing desktop rule: the candidate may not repeat the previous position.
-    return parent
-        .previous()
-        .map(p -> p != null && data.zobrist.equals(p.getData().zobrist))
-        .orElse(false);
+  public static boolean violatesKoRule(BoardHistoryNode parent, BoardData move) {
+    while (parent.isRedundantPlayerSnapshot() || parent.isUnplayedPlaceholder()) {
+      parent = parent.previous().orElseThrow();
+    }
+    BoardData last = parent.getData();
+    if (!last.isMoveNode() || parent.hasSetupEdits() || last.lastMoveColor == move.lastMoveColor) {
+      return false;
+    }
+    boolean changedTurn = (last.lastMoveColor.isBlack() ? "B" : "W")
+        .equalsIgnoreCase(last.getProperty("PL"));
+    return !changedTurn && parent.previous().map(node -> {
+      BoardData prior = node.getData();
+      return last.capturedSingleOpponentSince(prior) && move.zobrist.equals(prior.zobrist);
+    }).orElse(false);
   }
 
   /**
@@ -1142,19 +1150,6 @@ public class BoardHistoryList {
     place(x, y, color, newBranch, false, false, noCapture, canSuicidal, ActionMode.RECORD, false);
   }
 
-  private static boolean violatesRecordedKo(BoardHistoryNode parent, BoardData move) {
-    BoardData last = parent.getData();
-    if (!last.isMoveNode() || parent.hasSetupEdits() || last.lastMoveColor == move.lastMoveColor) {
-      return false;
-    }
-    boolean changedTurn = (last.lastMoveColor.isBlack() ? "B" : "W")
-        .equalsIgnoreCase(last.getProperty("PL"));
-    return !changedTurn && parent.previous().map(node -> {
-      BoardData prior = node.getData();
-      return last.capturedSingleOpponentSince(prior) && move.zobrist.equals(prior.zobrist);
-    }).orElse(false);
-  }
-
   private enum ActionMode {
     NORMAL, ENGINE_GAME, RECORD;
 
@@ -1238,8 +1233,7 @@ public class BoardHistoryList {
         }
       }
 
-      if (mode == ActionMode.RECORD
-          ? violatesRecordedKo(curNode, newState) : violatesKoRule(curNode, newState)) return;
+      if (violatesKoRule(curNode, newState)) return;
       if (selfCaptured == 1 || (selfCaptured > 0 && !canSuicidal)) return;
 
       // update history with this coordinate

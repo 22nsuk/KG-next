@@ -1,5 +1,6 @@
 package featurecat.lizzie.analysis.remote;
 
+import featurecat.lizzie.analysis.EngineSetup;
 import featurecat.lizzie.analysis.GtpCommandText;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.logging.NetworkEndpointCategory;
@@ -18,10 +19,8 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.CompletionStage;
@@ -617,16 +616,20 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
       throw new IllegalArgumentException("invalid set_position command");
     }
     List<Move> position = new ArrayList<>();
-    Set<String> occupied = new HashSet<>();
+    EngineSetup setup = new EngineSetup(boardWidth, boardHeight);
     for (int i = 1; i < tokens.length; i += 2) {
       String color = normalizeColor(tokens[i]);
       String point = tokens[i + 1].toUpperCase(Locale.ROOT);
-      if (color.isEmpty() || !isBoardPoint(point) || !occupied.add(point)) {
+      if (color.isEmpty() || !isBoardPoint(point)) {
+        throw new IllegalArgumentException("invalid set_position command");
+      }
+      int[] coords = pointCoordinates(point);
+      if (!setup.add(coords[0], coords[1], color.equals("B"))) {
         throw new IllegalArgumentException("invalid set_position command");
       }
       position.add(new Move(color, point));
     }
-    if (containsZeroLibertyGroup(position)) {
+    if (setup.hasGroupWithoutLiberty()) {
       throw new IllegalArgumentException("invalid set_position command");
     }
     return position;
@@ -656,15 +659,17 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     int[] size = parseSnapshotBoardSize(matcher.group(1));
     Double snapshotKomi = matcher.group(2) == null ? null : Double.valueOf(matcher.group(2));
     List<Move> stones = new ArrayList<>();
-    Set<String> occupied = new HashSet<>();
+    EngineSetup setup = new EngineSetup(size[0], size[1]);
     Matcher stoneMatcher = SNAPSHOT_STONE_PATTERN.matcher(matcher.group(4));
     while (stoneMatcher.find()) {
-      String point = snapshotPoint(stoneMatcher.group(2), size[0], size[1]);
-      if (!occupied.add(point)) {
+      int[] coords = snapshotCoordinates(stoneMatcher.group(2), size[0], size[1]);
+      boolean black = "AB".equals(stoneMatcher.group(1));
+      if (!setup.add(coords[0], coords[1], black)) {
         throw new IllegalArgumentException("invalid loadsgf snapshot");
       }
-      stones.add(new Move("AB".equals(stoneMatcher.group(1)) ? "B" : "W", point));
+      stones.add(new Move(black ? "B" : "W", snapshotPoint(coords[0], coords[1], size[0], size[1])));
     }
+    if (setup.hasGroupWithoutLiberty()) throw new IllegalArgumentException("invalid loadsgf snapshot");
     return new SnapshotPosition(size[0], size[1], snapshotKomi, matcher.group(3), stones);
   }
 
@@ -681,7 +686,7 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     return new int[] {width, height};
   }
 
-  private String snapshotPoint(String value, int width, int height) {
+  private int[] snapshotCoordinates(String value, int width, int height) {
     int x;
     int y;
     if (width >= 52 || height >= 52) {
@@ -701,59 +706,15 @@ public class KataGoAnalysisWebSocketTransport implements EngineTransport {
     if (x < 0 || x >= width || y < 0 || y >= height) {
       throw new IllegalArgumentException("invalid loadsgf coordinate");
     }
+    return new int[] {x, y};
+  }
+
+  private String snapshotPoint(int x, int y, int width, int height) {
     if (width > 25 || height > 25) {
       return "(" + x + "," + y + ")";
     }
     char column = (char) ('A' + x + (x >= 8 ? 1 : 0));
     return String.valueOf(column) + (height - y);
-  }
-
-  private boolean containsZeroLibertyGroup(List<Move> position) {
-    String[][] colors = new String[boardWidth][boardHeight];
-    for (Move stone : position) {
-      int[] coordinates = pointCoordinates(stone.point);
-      colors[coordinates[0]][coordinates[1]] = stone.color;
-    }
-    boolean[][] visited = new boolean[boardWidth][boardHeight];
-    int[][] directions = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
-    for (int x = 0; x < boardWidth; x++) {
-      for (int y = 0; y < boardHeight; y++) {
-        if (colors[x][y] == null || visited[x][y]) {
-          continue;
-        }
-        String color = colors[x][y];
-        boolean hasLiberty = false;
-        ArrayDeque<Integer> group = new ArrayDeque<>();
-        group.addLast(y * boardWidth + x);
-        visited[x][y] = true;
-        while (!group.isEmpty()) {
-          int point = group.removeFirst();
-          int pointX = point % boardWidth;
-          int pointY = point / boardWidth;
-          for (int[] direction : directions) {
-            int adjacentX = pointX + direction[0];
-            int adjacentY = pointY + direction[1];
-            if (adjacentX < 0
-                || adjacentX >= boardWidth
-                || adjacentY < 0
-                || adjacentY >= boardHeight) {
-              continue;
-            }
-            String adjacentColor = colors[adjacentX][adjacentY];
-            if (adjacentColor == null) {
-              hasLiberty = true;
-            } else if (color.equals(adjacentColor) && !visited[adjacentX][adjacentY]) {
-              visited[adjacentX][adjacentY] = true;
-              group.addLast(adjacentY * boardWidth + adjacentX);
-            }
-          }
-        }
-        if (!hasLiberty) {
-          return true;
-        }
-      }
-    }
-    return false;
   }
 
   private int[] pointCoordinates(String point) {

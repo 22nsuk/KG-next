@@ -3562,6 +3562,49 @@ class AnalysisEngineRequestTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(strings = {"range", "missing", "wholeGame", "branches"})
+  void remoteBatchWithALaterUnplayablePositionFailsBeforeStartingASearch(String batch)
+      throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      BoardHistoryList history =
+          SGFParser.parseSgf(
+              "(;SZ[3]AP[KG-next]KGCM[1]AB[ba]AW[aa][bb];W[cc];B[ab]KGNC[1])", true);
+      BoardHistoryNode firstMove = history.getStart().next().get();
+      history.setHead(firstMove);
+      boardWithHistory(history);
+      TrackingAnalysisEngine engine = TrackingAnalysisEngine.create();
+      engine.useRemoteCompute = true;
+      AtomicInteger failures = new AtomicInteger();
+      AtomicInteger completions = new AtomicInteger();
+      engine.setFailureCallback(restore -> failures.incrementAndGet());
+      engine.setCompletionCallback(restore -> completions.incrementAndGet());
+      switch (batch) {
+        case "range" -> engine.startRequest(1, -1, false);
+        case "missing" -> assertEquals(-1, engine.startRequestMissingMainline(false));
+        case "wholeGame" -> assertEquals(
+            -1, engine.startWholeGameRequest(List.of(firstMove, history.getEnd()), 1, false));
+        case "branches" -> engine.startRequestAllBranches(false);
+        default -> throw new AssertionError(batch);
+      }
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+
+      assertTrue(engine.sentCommands.isEmpty(), engine.sentCommands::toString);
+      assertEquals(0, engine.pendingRequestCount());
+      assertFalse(engine.hasRequestLifecycleInProgress());
+      assertEquals(1, failures.get());
+      assertEquals(0, completions.get());
+
+      history.getEnd().getData().setPlayouts(AnalysisEngine.targetAnalysisVisits());
+      engine.startRequestAllBranches(false);
+      assertEquals(1, engine.pendingRequestCount());
+      assertNumberedAnalyzeCommand(
+          lastCommand(engine.sentCommands), "kata-analyze B 1 maxmoves 1 rootInfo true");
+      completeRemoteGtpSearch(engine, AnalysisEngine.targetAnalysisVisits(), 60.0, 1.0);
+      assertFalse(engine.hasRequestLifecycleInProgress());
+    }
+  }
+
   @Test
   void remoteGtpSnapshotUsesStaticSetPositionBeforeReplayingLaterActions() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {

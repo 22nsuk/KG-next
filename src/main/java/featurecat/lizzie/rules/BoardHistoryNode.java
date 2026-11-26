@@ -946,10 +946,44 @@ public class BoardHistoryNode {
     return hasRemovedStone;
   }
 
-  /** A stored action that an engine cannot reproduce by sending its move alone. */
+  /** SGF can retain a node for its comment or markup after its last setup point was erased. */
+  boolean isRedundantPlayerSnapshot() {
+    if (!data.isSnapshotNode() || previous.isEmpty() || hasSetupEdits()) return false;
+    BoardHistoryNode parent = previous.get();
+    // An externally observed snapshot may have an unknown intervening history, even when its
+    // stones match. Only an explicit, unchanged PL with no setup declaration is transparent.
+    var properties = data.getProperties();
+    return (data.blackToPlay ? "B" : "W").equalsIgnoreCase(data.getProperty("PL"))
+        && data.blackToPlay == parent.blackToPlayAfterHistory()
+        && !properties.containsKey("AB") && !properties.containsKey("AW")
+        && !properties.containsKey("AE")
+        && data.stones != null && Arrays.equals(data.stones, parent.data.stones);
+  }
+
+  boolean isUnplayedPlaceholder() {
+    if (!data.isPassNode() || !data.dummy || hasSetupEdits() || previous.isEmpty()) return false;
+    String player = data.getProperty("PL");
+    return !("B".equalsIgnoreCase(player) || "W".equalsIgnoreCase(player))
+        || "B".equalsIgnoreCase(player) == previous.get().blackToPlayAfterHistory();
+  }
+
+  private boolean blackToPlayAfterHistory() {
+    BoardHistoryNode node = this;
+    // A dummy's display turn reflects its synthetic pass color; no pass was actually played.
+    while (node.data.isPassNode() && node.data.dummy && node.previous.isPresent()) {
+      String player = node.data.getProperty("PL");
+      if ("B".equalsIgnoreCase(player)) return true;
+      if ("W".equalsIgnoreCase(player)) return false;
+      node = node.previous.get();
+    }
+    return node.data.blackToPlay;
+  }
+
+  /** A stored position that requires a new engine history instead of incremental navigation. */
   public boolean requiresEngineSnapshot() {
     return data != null
-        && (data.isSnapshotNode() || hasRemovedStone() || data.retainsUncapturedStones());
+        && ((data.isSnapshotNode() && !isRedundantPlayerSnapshot())
+            || hasRemovedStone() || data.retainsUncapturedStones());
   }
 
   public BoardHistoryNode findEngineSnapshotAnchor() {

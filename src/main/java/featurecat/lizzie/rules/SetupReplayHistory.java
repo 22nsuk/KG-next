@@ -175,9 +175,7 @@ final class SetupReplayHistory {
     BoardData parent = node.previous().orElseThrow().getData();
     if (data.isSnapshotNode()) {
       // A redundant PL alone does not interrupt play. Explicit placements do, even when idempotent.
-      if (data.blackToPlay == prior.blackToPlay && SnapshotSetup.points(data, parent).isEmpty()) {
-        return prior;
-      }
+      if (node.isRedundantPlayerSnapshot()) return prior;
       return new State(data.blackToPlay, rulesHaveButton, prior.segment + 1, null);
     }
     boolean placeholder = data.isPassNode() && data.dummy;

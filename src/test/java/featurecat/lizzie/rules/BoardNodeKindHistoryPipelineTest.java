@@ -4546,7 +4546,7 @@ class BoardNodeKindHistoryPipelineTest {
     try {
       activatePrimaryEngine(engine);
       BoardHistoryList history =
-          SGFParser.parseSgf("(;SZ[3]AB[aa]PL[W];W[bb];B[cc];AE[aa]AB[ba])", false);
+          SGFParser.parseSgf("(;SZ[3]AB[aa]PL[W];W[bb];B[cc];PL[W];AE[aa]AB[ba])", false);
       while (history.next().isPresent()) {}
       BoardHistoryNode laterSnapshot = history.getCurrentHistoryNode();
       laterSnapshot.addExtraStones(2, 0, true);
@@ -4573,6 +4573,15 @@ class BoardNodeKindHistoryPipelineTest {
       assertSame(target, Lizzie.board.getHistory().getCurrentHistoryNode());
       assertArrayEquals(target.getData().stones, engine.copyStones());
       assertEquals(target.getData().blackToPlay, engine.isBlackToPlay());
+      assertTrue(commands.contains("play B C1"), "the redundant PL must retain the last move");
+
+      commands.clear();
+      assertTrue(Lizzie.board.previousMove(false));
+      assertTrue(Lizzie.board.nextMove(false));
+      assertSame(target, Lizzie.board.getHistory().getCurrentHistoryNode());
+      assertFalse(commands.stream().anyMatch(command ->
+          command.equals("undo") || command.equals("clear_board") || command.startsWith("play ")
+              || command.startsWith("loadsgf ")), commands.toString());
     } finally {
       env.close();
     }

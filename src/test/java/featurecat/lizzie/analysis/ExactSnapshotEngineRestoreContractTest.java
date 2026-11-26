@@ -76,7 +76,7 @@ class ExactSnapshotEngineRestoreContractTest {
   }
 
   @Test
-  void aNoCaptureMoveWithAnUnrelatedDeadGroupKeepsItsOrdinaryTail() throws Exception {
+  void inBandRestoreRejectsUnrepresentableSetupBeforeSendingAnyPartOfItsTail() throws Exception {
     try (TestHarness harness = TestHarness.open(false)) {
       BoardHistoryList history = SGFParser.parseSgf(
           "(;SZ[3]AP[KG-next]KGCM[1]AB[ba][ab]AW[aa];B[cc]KGNC[1])", true);
@@ -85,10 +85,13 @@ class ExactSnapshotEngineRestoreContractTest {
       var transport = ExactSnapshotRestoreProtocolFixture.install(
           engine, command -> ExactSnapshotRestoreProtocolFixture.Response.success());
       engine.advertiseCommandsForTest(List.of("set_position"));
-      ExactSnapshotEngineRestore.freezeHistoryPosition(history.getEnd(), 0, 7.5)
-          .prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission()).execute();
-      assertEquals(List.of("clear_board", "boardsize 3", "komi 7.5",
-              "set_position B A2 B B3 W A3", "play B C1"), transport.commands());
+      var prepared = ExactSnapshotEngineRestore.freezeHistoryPosition(history.getEnd(), 0, 7.5)
+          .prepare(engine.captureBoardSyncExactSnapshotRestoreAdmission());
+      assertFalse(history.getEnd().getData().retainsUncapturedStones(),
+          "the ordinary tail is playable on its own");
+      var failure = assertThrows(ExactSnapshotEngineRestore.Failure.class, prepared::execute);
+      assertTrue(ExactSnapshotEngineRestore.isPermanentPositionRestoreFailure(failure));
+      assertTrue(transport.commands().isEmpty());
     }
   }
 

@@ -3,8 +3,10 @@ package featurecat.lizzie.rules;
 import static org.junit.jupiter.api.Assertions.*;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.analysis.AnalysisRequestBuilder;
 import featurecat.lizzie.analysis.KataGoRules;
 import featurecat.lizzie.analysis.Leelaz;
+import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
@@ -15,6 +17,69 @@ class SetupReplayKoTest {
       "AB[aa][ca][ab][cb][fb][ec][gc][fd][ia][ka][ib][kb][ja]"
           + "AW[bb][ac][cc][bd][ba][ea][ga][eb][gb][fa][jb][ic][kc][jd]";
   private static final String MOVES = ";B[bc];W[fc];B[jc];W[bb];B[fb];W[jb]";
+  private static final String SINGLE_KO =
+      "(;SZ[5]RU[Japanese]PL[B]AB[aa][ca][ab][cb][ba]AW[bb][ac][cc][bd];B[bc]";
+
+  @Test
+  void erasingLastSetupPointKeepsCaptureThroughPlayUndoAndSgf() throws Exception {
+    try (var env = RulesLayerTestHarness.open()) {
+      Board board = env.board();
+      BoardHistoryList history = SGFParser.parseSgf(SINGLE_KO + ";AW[ee]C[note]TR[bb])", true);
+      history.setHead(history.getStart().getLast());
+      board.setHistory(history);
+      Lizzie.config.analysisSpecificRules = "";
+      board.editMove(new int[] {4, 4}, false, true);
+      assertEquals(Stone.EMPTY, env.stoneAt(4, 4));
+      assertCaptureStillBinds(board);
+
+      board.cleanedit();
+      assertEquals(Stone.WHITE, env.stoneAt(4, 4));
+      assertSame(env.current(), env.current().findEngineSnapshotAnchor());
+      board.reedit();
+      assertCaptureStillBinds(board);
+
+      String saved = SGFParser.saveToString(false);
+      BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+      reopened.setHead(reopened.getStart().getLast());
+      board.setHistory(reopened);
+      assertCaptureStillBinds(board);
+    }
+  }
+
+  private static void assertCaptureStillBinds(Board board) {
+    BoardHistoryList history = board.getHistory();
+    BoardHistoryNode selected = history.getCurrentHistoryNode();
+    assertEquals("note", selected.getData().comment);
+    assertEquals("bb", selected.getData().getProperty("TR"));
+    assertEquals(1, selected.getData().blackCaptures);
+    assertFalse(selected.getData().blackToPlay);
+    board.place(1, 1, Stone.WHITE);
+    assertSame(selected, history.getCurrentHistoryNode(), "immediate recapture must be rejected");
+    assertSame(history.getStart(), selected.findEngineSnapshotAnchor());
+    var request = AnalysisRequestBuilder.buildRequest("ko", selected, 10, false, false, false);
+    assertEquals(List.of(List.of("B", "B3")), request.getJSONArray("moves").toList());
+    assertEquals("B", request.getString("initialPlayer"));
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      ";PL[W];PL[W]|false", ";DD[true];PL[W]|false", ";DD[true];PL[B]|true",
+      ";PL[W]AB[ba]|true", ";PL[W]AE[ee]|true", ";PL[B];PL[W]|true", ";W[];B[]|true"
+  })
+  void onlyRealSetupOrPassAllowsRecapture(String between, boolean legal) throws Exception {
+    try (var env = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = SGFParser.parseSgf(SINGLE_KO + between + ")", true);
+      history.setHead(history.getStart().getLast());
+      env.board().setHistory(history);
+      BoardHistoryNode before = env.current();
+      history.place(1, 1, Stone.WHITE);
+      assertEquals(legal, before != env.current());
+      // SGF imports apply the same rule when deciding which recorded moves to admit.
+      BoardHistoryList loaded = SGFParser.parseSgf(SINGLE_KO + between + ";W[bb])", true);
+      assertEquals(legal,
+          RulesLayerTestHarness.sameLastMove(loaded.getStart().getLast().getData(), 1, 1));
+    }
+  }
 
   @Test
   void illegalSideVariationRejectsLiveEditAndKeepsExistingUndo() throws Exception {

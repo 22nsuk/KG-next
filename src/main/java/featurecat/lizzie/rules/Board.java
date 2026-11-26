@@ -4144,7 +4144,7 @@ public class Board {
       Leelaz.ExactSnapshotRestoreAdmission admission, BoardHistoryNode target) {
     var prepared = ExactSnapshotEngineRestore.prepare(admission, target);
     if (target == history.getCurrentHistoryNode()
-        && prepared.isPresent() && prepared.get().retainsUncapturedStones()) {
+        && prepared.isPresent() && prepared.get().hasUnsupportedSetup()) {
       requireEngineAlignment();
     }
     return prepared;

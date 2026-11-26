@@ -155,6 +155,28 @@ class AnalysisRequestBuilderTest {
     }
   }
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void refusesAnAnalysisStartThatWouldRemoveAGroup(boolean configuredStart) throws Exception {
+    try (TestEnvironment env = TestEnvironment.open()) {
+      Stone[] diagram = stones(placement(0, 0, Stone.WHITE), placement(1, 0, Stone.BLACK),
+          placement(0, 1, Stone.BLACK));
+      BoardHistoryList history = new BoardHistoryList(configuredStart
+          ? BoardData.empty(BOARD_SIZE, BOARD_SIZE)
+          : snapshotNode(diagram, Optional.empty(), Stone.EMPTY, true, 0));
+      boardWithHistory(history);
+      if (configuredStart) {
+        Lizzie.board.hasStartStone = true;
+        Lizzie.board.startStonelist.add(startStone(0, 0, false));
+        Lizzie.board.startStonelist.add(startStone(1, 0, true));
+        Lizzie.board.startStonelist.add(startStone(0, 1, true));
+      }
+      history.add(passNode(history.getData().stones, Stone.BLACK, false, 1));
+      assertThrows(IllegalArgumentException.class, () -> AnalysisRequestBuilder.buildRequest(
+          "dead-setup", history.getCurrentHistoryNode(), 10, false, false, false));
+    }
+  }
+
   @Test
   void historyMovesAndPassesAreSerializedInPlayOrder() throws Exception {
     try (TestEnvironment env = TestEnvironment.open()) {

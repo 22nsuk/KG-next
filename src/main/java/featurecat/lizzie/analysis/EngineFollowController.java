@@ -138,7 +138,7 @@ public class EngineFollowController {
       return null;
     }
     if (ExactSnapshotEngineRestore.ZERO_LIBERTY_POSITION_DETAIL.equals(detail)) {
-      return Lizzie.resourceBundle.getString("EngineFollow.positionRestore.retainedCapture");
+      return Lizzie.resourceBundle.getString("EngineFollow.positionRestore.zeroLiberties");
     }
     return MessageFormat.format(
         Lizzie.resourceBundle.getString("EngineFollow.snapshotPreparationFailed"),

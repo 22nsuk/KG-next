@@ -216,7 +216,7 @@ public final class ExactSnapshotEngineRestore {
   private static Completion execute(RestorePlan plan) {
     RestoreLifecycle lifecycle = null;
     try {
-      if (plan.snapshotData.retainsUncapturedStones()) {
+      if (plan.unsupportedSetup) {
         throw new Failure(FailureCategory.SNAPSHOT_PREPARATION, ZERO_LIBERTY_POSITION_DETAIL);
       }
       List<Leelaz> remoteTargets = new ArrayList<>();
@@ -827,8 +827,8 @@ public final class ExactSnapshotEngineRestore {
     }
 
     /** The owner must keep ordinary forwarding gated even if navigation supersedes this restore. */
-    public boolean retainsUncapturedStones() {
-      return plan.snapshotData.retainsUncapturedStones();
+    public boolean hasUnsupportedSetup() {
+      return plan.unsupportedSetup;
     }
 
     public Completion execute() {
@@ -859,6 +859,7 @@ public final class ExactSnapshotEngineRestore {
     private final Leelaz.ExactSnapshotRestoreAdmission admission;
     private final boolean initialHandicap;
     private final boolean emptyOrigin;
+    private final boolean unsupportedSetup;
 
     private RestorePlan(
         Leelaz engine,
@@ -882,6 +883,12 @@ public final class ExactSnapshotEngineRestore {
       this.preclear = admission.preclear();
       this.initialHandicap = initialHandicap;
       this.emptyOrigin = emptyOrigin;
+      // Native loadsgf can install a static diagram on engines that support it. KataGo and
+      // set_position require liberties; a suppressed capture also loses the original move history.
+      this.unsupportedSetup = this.snapshotData.stones != null
+          && EngineSetup.hasGroupWithoutLiberty(this.snapshotData.stones, boardWidth, boardHeight)
+          && (this.snapshotData.retainsUncapturedStones() || targetEngines.stream()
+              .anyMatch(target -> target.isKatago || target.requiresInBandSnapshotRestore(admission)));
     }
 
     private static Optional<RestorePlan> capture(
