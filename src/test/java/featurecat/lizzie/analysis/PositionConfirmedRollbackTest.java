@@ -1321,6 +1321,61 @@ class PositionConfirmedRollbackTest {
     }
   }
 
+  @ParameterizedTest
+  @CsvSource({"1,16,1", "2,2,17", "3,17,2", "4,1,16", "6,1,2"})
+  void transformingSetupDuringTrialRestoresOrdinaryMoveNumbers(int transform, int x, int y)
+      throws Exception {
+    featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;
+    BoardRenderer previousRenderer = LizzieFrame.boardRenderer;
+    try (Harness harness = Harness.open()) {
+      LizzieFrame.winrateGraph = allocate(featurecat.lizzie.gui.WinrateGraph.class);
+      LizzieFrame.boardRenderer = new SilentBoardRenderer();
+      setField(LizzieFrame.toolbar, "tryPlay", new javax.swing.JButton());
+      harness.frame.readBoard = null;
+      harness.engine.started = false;
+      harness.engine.isLoaded = false;
+      EngineManager.isEmpty = true;
+      Lizzie.config.newMoveNumberInBranch = false;
+      Board board = harness.board;
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[19]AB[aa]AW[ee];B[cc](;W[nn]MN[9])(;W[dd]))", true);
+      history.setHead(history.getStart().next().orElseThrow().getVariation(1).orElseThrow());
+      board.setHistory(history);
+      javax.swing.SwingUtilities.invokeAndWait(() -> {
+        harness.frame.tryPlay(false);
+        board.place(1, 2, Stone.BLACK);
+        assertEquals(-1, board.getData().moveNumberList[Board.getIndex(1, 2)]);
+        BoardHistoryNode trialMove = history.getCurrentHistoryNode();
+        board.pass(Stone.WHITE);
+        history.setHead(trialMove);
+        if (transform == 6) board.exchangeBlackWhite();
+        else board.SpinAndMirror(transform);
+      });
+
+      assertFalse(harness.frame.isTrying);
+      assertNull(harness.frame.getTrialSnapshot());
+      BoardHistoryNode first = board.getHistory().getStart().next().orElseThrow();
+      BoardData otherBranch = first.getVariation(0).orElseThrow().getData();
+      assertEquals("9", otherBranch.getProperty("MN"));
+      int[] otherMove = otherBranch.lastMove.orElseThrow();
+      assertEquals(9, otherBranch.moveNumberList[Board.getIndex(otherMove[0], otherMove[1])]);
+      BoardHistoryNode anchor = first.getVariation(1).orElseThrow();
+      BoardHistoryNode selected = anchor.next().orElseThrow();
+      assertEquals(2, anchor.getData().moveNumber);
+      assertSame(selected, board.getHistory().getCurrentHistoryNode());
+      assertArrayEquals(new int[] {x, y}, selected.getData().lastMove.orElseThrow());
+      assertEquals(3, selected.getData().moveNumber);
+      assertEquals(3, selected.getData().moveNumberList[Board.getIndex(x, y)]);
+      BoardData pass = selected.next().orElseThrow().getData();
+      assertTrue(pass.isPassNode());
+      assertEquals(4, pass.moveNumber);
+      assertEquals(3, pass.moveNumberList[Board.getIndex(x, y)]);
+    } finally {
+      LizzieFrame.winrateGraph = previousGraph;
+      LizzieFrame.boardRenderer = previousRenderer;
+    }
+  }
+
   @Test
   void pausedTrialUndoRedoKeepsAnalyzedMoveInProblemList() throws Exception {
     featurecat.lizzie.gui.WinrateGraph previousGraph = LizzieFrame.winrateGraph;

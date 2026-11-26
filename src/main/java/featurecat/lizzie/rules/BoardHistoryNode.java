@@ -944,6 +944,10 @@ public class BoardHistoryNode {
     return hasRemovedStone;
   }
 
+  boolean hasSetupEdits() {
+    return hasRemovedStone() || (extraStones != null && !extraStones.isEmpty());
+  }
+
   public void clearAndSyncBoard(boolean stepIn) {
     if (stepIn) {
       Lizzie.board.restoreHistoryNodeExact(this);

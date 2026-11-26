@@ -916,52 +916,31 @@ public class WebBoardManager {
 
     Stone color = parentData.blackToPlay ? Stone.BLACK : Stone.WHITE;
 
-    // 用 BoardData.move(...) 工厂构造，保证 nodeKind=MOVE、moveNumberList、zobrist 等渲染必须字段齐全
-    Stone[] newStones = parentData.stones.clone();
-    newStones[idx] = color;
-    featurecat.lizzie.rules.Zobrist newZobrist =
-        parentData.zobrist == null ? null : parentData.zobrist.clone();
-    if (newZobrist != null) newZobrist.toggleStone(x, y, color);
-
-    // 提子：移除四邻方向上对方的死子链（与 Board.place 主流程一致）
-    int capturedStones = 0;
-    Stone opp = color.opposite();
-    capturedStones += Board.removeDeadChain(x + 1, y, opp, newStones, newZobrist);
-    capturedStones += Board.removeDeadChain(x, y + 1, opp, newStones, newZobrist);
-    capturedStones += Board.removeDeadChain(x - 1, y, opp, newStones, newZobrist);
-    capturedStones += Board.removeDeadChain(x, y - 1, opp, newStones, newZobrist);
-    // 自杀手禁手：上面提子后，如果新落子链自身仍无气，拒绝该落子
-    int suicidalStones = Board.removeDeadChain(x, y, color, newStones, newZobrist);
-    boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
-    if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return false;
-
     int newMoveNumber = parentData.moveNumber + 1;
-    int[] newMoveNumberList =
-        parentData.moveNumberList == null ? null : parentData.moveNumberList.clone();
-    if (newMoveNumberList != null) {
-      newMoveNumberList[idx] = newMoveNumber;
-      // 提子位置上的旧编号要清掉
-      for (int i = 0; i < newStones.length; i++) {
-        if (newStones[i] == Stone.EMPTY) newMoveNumberList[i] = 0;
-      }
-    }
-
-    int newBlackCaptures = parentData.blackCaptures + (color.isBlack() ? capturedStones : 0);
-    int newWhiteCaptures = parentData.whiteCaptures + (color.isWhite() ? capturedStones : 0);
-
     BoardData newData =
         BoardData.move(
-            newStones,
+            parentData.stones,
             new int[] {x, y},
             color,
             !parentData.blackToPlay,
-            newZobrist,
+            parentData.zobrist,
             newMoveNumber,
-            newMoveNumberList,
-            newBlackCaptures,
-            newWhiteCaptures,
+            parentData.moveNumberList,
+            parentData.blackCaptures,
+            parentData.whiteCaptures,
             0,
             0);
+    newData.stones[idx] = color;
+    newData.zobrist.toggleStone(x, y, color);
+    int suicidalStones = newData.applyMoveCaptures();
+    boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
+    if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return false;
+    if (newData.moveNumberList != null) {
+      newData.moveNumberList[idx] = newMoveNumber;
+      for (int i = 0; i < newData.stones.length; i++) {
+        if (newData.stones[i] == Stone.EMPTY) newData.moveNumberList[i] = 0;
+      }
+    }
     // 试下分支没有引擎分析（默认 bestMoves 即空、playouts=0）
 
     if (BoardHistoryList.violatesKoRule(parent, newData)) return false;

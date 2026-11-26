@@ -1449,6 +1449,28 @@ public class BoardData implements Cloneable {
     return this.lastMove.map(m -> (m[0] == coord[0] && m[1] == coord[1])).orElse(false);
   }
 
+  /** Resolve chains after placing a stone on a private move candidate. Returns self-captures. */
+  public int applyMoveCaptures() {
+    int[] move = lastMove.orElseThrow();
+    int x = move[0];
+    int y = move[1];
+    Stone opponent = lastMoveColor.opposite();
+    int captured = Board.removeDeadChain(x + 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y + 1, opponent, stones, zobrist)
+        + Board.removeDeadChain(x - 1, y, opponent, stones, zobrist)
+        + Board.removeDeadChain(x, y - 1, opponent, stones, zobrist);
+    int selfCaptured = Board.removeDeadChain(x, y, lastMoveColor, stones, zobrist);
+    blackCaptures += lastMoveColor.isBlack() ? captured : selfCaptured;
+    whiteCaptures += lastMoveColor.isBlack() ? selfCaptured : captured;
+    return selfCaptured;
+  }
+
+  boolean capturedSingleOpponentSince(BoardData parent) {
+    int captures = lastMoveColor.isBlack()
+        ? blackCaptures - parent.blackCaptures : whiteCaptures - parent.whiteCaptures;
+    return captures == 1;
+  }
+
   void replaceSetupStone(int index, Stone replacement) {
     Stone previous = stones[index];
     if (previous == replacement) return;

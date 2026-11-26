@@ -32,7 +32,10 @@ class BoardHistoryListSessionRulesTest {
       assertEquals(
           Stone.EMPTY, board.getHistory().getStart().getData().stones[Board.getIndex(4, 4)]);
       assertBlackSelfCapture(board.getHistory());
-      assertBlackSelfCapture(SGFParser.parseSgf(SGFParser.saveToString(false), true));
+      assertEquals(2, board.getHistory().getEnd().getData().whiteCaptures);
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      assertBlackSelfCapture(reopened);
+      assertEquals(2, reopened.getEnd().getData().whiteCaptures);
     }
   }
 
@@ -61,7 +64,7 @@ class BoardHistoryListSessionRulesTest {
   void manualRulesEditRoundTripsSelfCaptureAndCommentWithOriginalDeclaration() throws Exception {
     try (var fixture = RulesLayerTestHarness.open()) {
       assertTrue(SGFParser.loadFromString(
-          "(;SZ[5]PL[B]RU[Japanese]AB[aa][ba]AW[bb][ac];B[ab]C[keep])", false));
+          "(;SZ[5]PL[B]RU[Japanese]AB[aa][ba][ee]AW[bb][ac];B[ab]C[keep])", false));
       Board board = fixture.board();
       board.getHistory().publishManualRules(KataGoRules.parse("New Zealand").orElseThrow());
       board.editMove(new int[] {1, 0}, true, false);
@@ -77,6 +80,42 @@ class BoardHistoryListSessionRulesTest {
       }
       assertEquals(KataGoRules.Summary.JAPANESE,
           SGFParser.adoptCurrentHistoryExternalRules().parsedRules().orElseThrow().summary());
+      board.editMove(new int[] {4, 4}, false, true);
+      assertEquals(Stone.EMPTY, board.getHistory().getStart().getData().stones[Board.getIndex(4, 4)]);
+      assertBlackSelfCapture(board.getHistory());
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      assertBlackSelfCapture(reopened);
+      assertEquals("keep", reopened.getEnd().getData().comment);
+      assertEquals(2, reopened.getEnd().getData().whiteCaptures);
+    }
+  }
+
+  @Test
+  void recordedSelfCaptureCannotAuthorizeRemovingAnAdditionalStone() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      assertTrue(SGFParser.loadFromString(
+          "(;SZ[5]AP[KG-next]RU[Japanese]AB[aa]AW[ba][ca][bb][ac];B[ab])", false));
+      Board board = fixture.board();
+      BoardHistoryList before = board.getHistory();
+      assertBlackSelfCapture(before);
+      board.editMove(new int[] {1, 0}, true, false);
+      assertSame(before, board.getHistory());
+      assertFalse(board.canUndoEdit());
+    }
+  }
+
+  @Test
+  void recordedMovesStillRejectImmediateKoRecapture() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      String sgf = "(;SZ[5]AP[KG-next]PL[B]AB[bc][dc][cd]AW[cc][bb][db][ca];B[cb];W[cc])";
+      assertTrue(SGFParser.loadFromString(sgf, false));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(sgf, true))) {
+        BoardData end = history.getEnd().getData();
+        assertEquals(1, end.moveNumber);
+        assertEquals(1, end.blackCaptures);
+        assertEquals(Stone.BLACK, end.stones[Board.getIndex(2, 1)]);
+        assertEquals(Stone.EMPTY, end.stones[Board.getIndex(2, 2)]);
+      }
     }
   }
 

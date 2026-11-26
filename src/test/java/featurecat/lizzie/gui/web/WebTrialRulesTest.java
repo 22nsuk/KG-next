@@ -105,6 +105,8 @@ class WebTrialRulesTest {
         assertNotSame(f.anchor, f.display.get());
         assertEquals(Stone.EMPTY, f.display.get().getData().stones[Board.getIndex(1, 1)]);
         assertEquals(Stone.EMPTY, f.display.get().getData().stones[Board.getIndex(2, 1)]);
+        assertEquals(2, f.display.get().getData().whiteCaptures);
+        assertEquals(0, f.display.get().getData().blackCaptures);
       } else {
         assertSame(f.anchor, f.display.get());
         assertTrue(f.events.publications.isEmpty());

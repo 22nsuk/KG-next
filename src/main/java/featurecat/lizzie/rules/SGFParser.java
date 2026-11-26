@@ -573,7 +573,7 @@ public class SGFParser {
     BoardHistoryList history = prepared.history;
     int width = history.getData().zobrist.width();
     int height = history.getData().zobrist.height();
-    boolean canSuicidal = options.canSuicidal(document, cancellation);
+    ImportMoves importMoves = options.importMoves(document, cancellation);
 
     int subTreeDepth = 0;
     // Save the variation step count
@@ -662,8 +662,7 @@ public class SGFParser {
             if (move == null) {
               history.pass(color, newBranch, false);
             } else {
-              history.place(move[0], move[1], color, newBranch, false, false,
-                  options.noCapture(), canSuicidal);
+              importMoves.place(history, move, color, newBranch);
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -4049,15 +4048,28 @@ public class SGFParser {
     return text.toString();
   }
 
+  private record ImportMoves(boolean noCapture, boolean canSuicidal, boolean savedByKgNext) {
+    void place(BoardHistoryList history, int[] move, Stone color, boolean newBranch) {
+      if (savedByKgNext) {
+        history.placeRecordedMove(move[0], move[1], color, newBranch, noCapture, canSuicidal);
+      } else {
+        history.place(move[0], move[1], color, newBranch, false, false, noCapture, canSuicidal);
+      }
+    }
+  }
+
   /** Options captured by the requester; a detached import never consults changing UI settings. */
   public record ParseOptions(
       boolean readKomi, boolean noCapture, boolean canSuicidal, boolean newMoveNumberInBranch,
       int limitBranchLength, int maxSuggestions, double defaultKomi) {
-    private boolean canSuicidal(SgfDocument document, SgfCancellation cancellation) {
+    private ImportMoves importMoves(SgfDocument document, SgfCancellation cancellation) {
       // Our saves preserve the original RU even when manual rules allowed a recorded self-capture.
-      if (isKgNextSgf(document.rootProperty("AP", cancellation))) return true;
-      return BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
+      if (isKgNextSgf(document.rootProperty("AP", cancellation))) {
+        return new ImportMoves(noCapture, true, true);
+      }
+      boolean suicide = BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
           .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
+      return new ImportMoves(noCapture, suicide, false);
     }
 
     public static ParseOptions capture() {
@@ -4168,7 +4180,7 @@ public class SGFParser {
 
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
-    boolean canSuicidal = options.canSuicidal(document, SgfCancellation.NONE);
+    ImportMoves importMoves = options.importMoves(document, SgfCancellation.NONE);
     int subTreeDepth = 0;
     // Save the variation step count
     Map<Integer, BoardHistoryNode> subTreeStepMap = new HashMap<Integer, BoardHistoryNode>();
@@ -4254,8 +4266,7 @@ public class SGFParser {
               history.pass(color, newBranch, false);
 
             } else {
-              history.place(move[0], move[1], color, newBranch, false, false,
-                  options.noCapture(), canSuicidal);
+              importMoves.place(history, move, color, newBranch);
             }
             currentNodeHasMove = true;
             if (newBranch) {

@@ -116,6 +116,23 @@ class BoardPlayCaptureHistoryRegressionTest {
   }
 
   @Test
+  void whiteSelfCaptureCreditsBlackAndLeavesParentUnchanged() throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
+      Board board = env.board();
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]PL[W]AW[aa]AB[ba][bb][ac])"));
+      BoardData parent = board.getData();
+      Lizzie.leelaz.canSuicidal = true;
+      board.place(0, 1, Stone.WHITE);
+      assertTrue(board.getData().isMoveNode());
+      assertEquals(Stone.EMPTY, env.stoneAt(0, 0));
+      assertEquals(Stone.EMPTY, env.stoneAt(0, 1));
+      assertEquals(2, board.getData().blackCaptures);
+      assertEquals(0, board.getData().whiteCaptures);
+      assertEquals(0, parent.blackCaptures);
+    }
+  }
+
+  @Test
   void suicidalFillIsRejected() throws Exception {
     try (RulesLayerTestHarness env = RulesLayerTestHarness.open(SIZE)) {
       Board board = env.board();

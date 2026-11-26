@@ -2874,26 +2874,13 @@ public class Board {
       stones[getIndex(x, y)] = color;
       zobrist.toggleStone(x, y, color);
 
-      // remove enemy stones
-      int capturedStones = 0;
-      int isSuicidal = 0;
-      if (!Lizzie.config.noCapture) {
-        capturedStones += removeDeadChain(x + 1, y, color.opposite(), stones, zobrist);
-        capturedStones += removeDeadChain(x, y + 1, color.opposite(), stones, zobrist);
-        capturedStones += removeDeadChain(x - 1, y, color.opposite(), stones, zobrist);
-        capturedStones += removeDeadChain(x, y - 1, color.opposite(), stones, zobrist);
-
-        // check to see if the player made a suicidal coordinate
-        isSuicidal = removeDeadChain(x, y, color, stones, zobrist);
-      }
+      int selfCaptured = Lizzie.config.noCapture ? 0 : newState.applyMoveCaptures();
       for (int i = 0; i < Board.boardWidth * Board.boardHeight; i++) {
         if (stones[i].equals(Stone.EMPTY)) {
           moveNumberList[i] = 0;
         }
       }
 
-      if (color.isBlack()) newState.blackCaptures += capturedStones;
-      else newState.whiteCaptures += capturedStones;
       newState.dummy = false;
       // don't make this coordinate if it is suicidal or violates superko
       if (!noCheckSuiKo) {
@@ -2913,7 +2900,7 @@ public class Board {
           return;
         }
         if (Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal) {
-          if (isSuicidal == 1) {
+          if (selfCaptured == 1) {
             //   modifyEnd();
             if (shouldLogLocalMovePlace) {
               logLocalMovePlace(
@@ -2928,7 +2915,7 @@ public class Board {
             }
             return;
           }
-        } else if (isSuicidal > 0) {
+        } else if (selfCaptured > 0) {
           //   modifyEnd();
           if (shouldLogLocalMovePlace) {
             logLocalMovePlace(
@@ -6659,10 +6646,12 @@ public class Board {
       result.setGameInfo(info);
     }
     result.restoreSessionRulesTarget(history.captureSessionRules());
-    int[] destinations = new int[root.getData().stones.length];
-    for (int index = 0; index < destinations.length; index++) {
+    BoardHistoryList.TrialNumbering trial = editTrialNumbering();
+    boolean normalizeTrial = trial != null && trial.appliesTo(root);
+    int[] sourceIndices = new int[root.getData().stones.length];
+    for (int index = 0; index < sourceIndices.length; index++) {
       int[] point = transformCoords(index / boardHeight, index % boardHeight, type);
-      destinations[index] = getIndex(point[0], point[1]);
+      sourceIndices[getIndex(point[0], point[1])] = index;
     }
     record Pending(BoardHistoryNode source, BoardHistoryNode parent) {}
     ArrayDeque<Pending> pending = new ArrayDeque<>();
@@ -6673,11 +6662,12 @@ public class Board {
       BoardData original = source.getData();
       BoardData data = original.clone();
       BoardData parent = source.previous().map(BoardHistoryNode::getData).orElse(null);
+      BoardData transformedParent = next.parent() == null ? null : next.parent().getData();
       BitSet declared = data.isSnapshotNode() ? SnapshotSetup.points(original, parent) : null;
       BitSet transformedPoints = new BitSet();
       data.zobrist = new Zobrist(boardWidth, boardHeight);
-      for (int index = 0; index < original.stones.length; index++) {
-        int dest = destinations[index];
+      for (int dest = 0; dest < sourceIndices.length; dest++) {
+        int index = sourceIndices[dest];
         Stone stone = exchange ? original.stones[index].opposite() : original.stones[index];
         data.stones[dest] = stone;
         data.moveNumberList[dest] = original.moveNumberList[index];
@@ -6691,6 +6681,15 @@ public class Board {
         data.blackCaptures = original.whiteCaptures;
         data.whiteCaptures = original.blackCaptures;
       }
+      if (normalizeTrial) {
+        trial.normalizeMoveNumber(
+            source, data, transformedParent, parent == null ? 0 : parent.moveNumber);
+        if (transformedParent != null) {
+          BoardHistoryList.TrialNumbering.normalizeMoveNumberGrid(
+              data, transformedParent, original.moveNumber,
+              dest -> parent.moveNumberList[sourceIndices[dest]]);
+        }
+      }
       // Coordinate-dependent raw properties and analysis describe the old orientation.
       // Keep the game rules, geometry and authored move numbering used when reopening the SGF.
       data.getProperties().keySet().retainAll(List.of("RU", "SZ", "MN", "N", "PL"));
@@ -6698,7 +6697,7 @@ public class Board {
       BoardHistoryNode copied = source.copyForRestore(data);
       copied.clearAnalysisAfterSetupEdit();
       if (declared != null) {
-        copied.updateSetupMetadata(next.parent() == null ? null : next.parent().getData(), transformedPoints);
+        copied.updateSetupMetadata(transformedParent, transformedPoints);
       } else if (copied.extraStones != null) {
         for (ExtraStones extra : copied.extraStones) {
           int[] p = transformCoords(extra.x, extra.y, type);
