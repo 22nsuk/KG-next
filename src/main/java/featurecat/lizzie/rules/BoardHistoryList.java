@@ -379,16 +379,15 @@ public class BoardHistoryList {
         || (replacement != Stone.EMPTY && replacement != Stone.BLACK && replacement != Stone.WHITE)) {
       return null;
     }
-    boolean noCapture = Lizzie.config.noCapture;
     Optional<KataGoRules> rules = rulesForReplay();
     boolean canSuicidal = allowsSuicideForReplay(rules);
-    SetupReplayKo ko = new SetupReplayKo(rules.orElse(null));
+    SetupReplayHistory replayHistory = new SetupReplayHistory(rules.orElse(null));
     TrialNumbering normalization =
         trialNumbering != null && trialNumbering.appliesTo(root) ? trialNumbering : null;
     BoardHistoryList[] result = new BoardHistoryList[1];
     BoardHistoryNode.runWithoutGlobalMoveSideEffects(false,
         () -> result[0] = replaySetupStoneEdit(
-            root, owner, x, y, replacement, noCapture, canSuicidal, ko, normalization));
+            root, owner, x, y, replacement, canSuicidal, replayHistory, normalization));
     return result[0];
   }
 
@@ -396,7 +395,7 @@ public class BoardHistoryList {
 
   private BoardHistoryList replaySetupStoneEdit(
       BoardHistoryNode root, BoardHistoryNode owner, int x, int y, Stone replacement,
-      boolean noCapture, boolean canSuicidal, SetupReplayKo ko, TrialNumbering trialNumbering) {
+      boolean canSuicidal, SetupReplayHistory replayHistory, TrialNumbering trialNumbering) {
     BoardHistoryList rebuilt = new BoardHistoryList(null);
     rebuilt.gameInfo = gameInfo;
     rebuilt.sessionRulesTarget = sessionRulesTarget;
@@ -436,16 +435,16 @@ public class BoardHistoryList {
         }
       } else if (entry.affected()) {
         rebuilt.head = parent;
-        BoardData played = rebuilt.replayActionForSetupEdit(original, noCapture);
+        BoardData played = rebuilt.replayActionForSetupEdit(original);
         if (played == null) return null;
         BoardData recorded = original;
         boolean hasSetup = source.hasSetupEdits();
         if (hasSetup) {
           // Compare the two actions before applying any setup attached by older in-place edits.
           BoardHistoryList before = new BoardHistoryList(oldParent.clone());
-          recorded = before.replayActionForSetupEdit(original, noCapture);
+          recorded = before.replayActionForSetupEdit(original);
           if (recorded == null) return null;
-          ko.recordActionBeforeSetup(source, recorded, played);
+          replayHistory.recordActionBeforeSetup(source, recorded, played);
         }
         if (!canSuicidal && played.isMoveNode()) {
           int[] move = played.lastMove.orElseThrow();
@@ -496,12 +495,8 @@ public class BoardHistoryList {
         }
       }
       BoardHistoryNode copied = source.copyForRestore(data);
-      if (entry.affected()) {
-        if (setup != null) copied.updateSetupMetadata(newParent, setup);
-        copied.clearAnalysisAfterSetupEdit();
-      } else {
-        copied.materializeRestoreNodeInfo();
-      }
+      if (setup != null) copied.updateSetupMetadata(newParent, setup);
+      if (!entry.affected()) copied.materializeRestoreNodeInfo();
       if (parent != null) copied.reparentAsLastVariationOf(parent);
       if (source == owner) copiedOwner = copied;
       if (source == head) selected = copied;
@@ -509,8 +504,13 @@ public class BoardHistoryList {
         pending.addLast(new SetupEditNode(child, copied, entry.affected() || child == owner));
       }
     }
-    if (copiedOwner == null || ko.introducesRepetition(owner, copiedOwner)) return null;
+    if (copiedOwner == null
+        || !replayHistory.validateContinuations(owner, copiedOwner, gameInfo.getHandicap())) {
+      return null;
+    }
     rebuilt.head = selected;
+    // Future opens of this edited tree must replay even a mixture of Go and no-capture moves.
+    rebuilt.getStart().getData().setProperty(SGFParser.RECORDED_CAPTURE_MODES, "1");
     return rebuilt;
   }
 
@@ -527,7 +527,7 @@ public class BoardHistoryList {
     return true;
   }
 
-  private BoardData replayActionForSetupEdit(BoardData action, boolean noCapture) {
+  private BoardData replayActionForSetupEdit(BoardData action) {
     BoardHistoryNode parent = head;
     boolean parentBlackToPlay = parent.getData().blackToPlay;
     try {
@@ -539,7 +539,7 @@ public class BoardHistoryList {
         // A new branch preserves duplicate SGF variations. Check occupancy above because legacy
         // new-branch placement otherwise permits replacing the stone at this point.
         place(move[0], move[1], action.lastMoveColor,
-            true, false, false, noCapture, true, PlacementMode.SETUP_REPLAY, false);
+            true, false, false, action.playedWithoutCaptures, true, PlacementMode.SETUP_REPLAY, false);
       } else {
         pass(action.lastMoveColor, true, action.dummy, false);
       }
@@ -1245,7 +1245,7 @@ public class BoardHistoryList {
       stones[getIndex(x, y)] = color;
       zobrist.toggleStone(x, y, color);
 
-      int selfCaptured = noCapture ? 0 : newState.applyMoveCaptures();
+      int selfCaptured = newState.applyMoveCaptures(noCapture);
       for (int i = 0; i < getData().stones.length; i++) {
         if (stones[i].equals(Stone.EMPTY)) {
           moveNumberList[i] = 0;

@@ -358,6 +358,155 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @Test
+  void analysisSurvivesOnlyOnTheVariationWithTheSameIndependentSetup() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String analysis = "LZ[KataGo 45 4000]LZ2[Second 55 2000]";
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[aa];B[ee]" + analysis
+          + "(;AB[aa][bc]C[anchor]" + analysis + ";W[dd]" + analysis + ")"
+          + "(;AB[bc]" + analysis + ";W[dd]" + analysis + "))"));
+      Board board = fixture.board();
+      BoardData anchor = board.getHistory().getStart().next().orElseThrow()
+          .getVariation(0).orElseThrow().getData();
+      assertEquals(4000, anchor.getPlayouts());
+      anchor.setGeneratedComment(() -> "difference from old parent");
+      board.editMove(new int[] {0, 0}, false, true);
+      for (BoardHistoryList history : List.of(board.getHistory(),
+          SGFParser.parseSgf(SGFParser.saveToString(false), true))) {
+        BoardHistoryNode root = history.getStart();
+        assertEquals(Stone.EMPTY, root.getData().stones[Board.getIndex(0, 0)]);
+        BoardHistoryNode split = root.next().orElseThrow();
+        assertEquals(0, split.getData().getPlayouts());
+        for (int variation = 0; variation < 2; variation++) {
+          BoardHistoryNode setup = split.getVariation(variation).orElseThrow();
+          if (variation == 0) assertEquals("anchor", setup.getData().authoredComment());
+          for (var node : List.of(setup, setup.next().orElseThrow())) {
+            assertEquals(variation == 0 ? 4000 : 0, node.getData().getPlayouts());
+            assertEquals(variation == 0 ? 2000 : 0, node.getData().getPlayouts2());
+          }
+        }
+      }
+    }
+  }
+
+  @Test
+  void matchingSetupStonesWithDifferentPrisonersStillInvalidateAnalysis() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]AB[ba]AW[aa];B[ab];AE[aa][ba]AB[cc];W[dd]LZ[KataGo 45 4000])"));
+      Board board = fixture.board();
+      BoardData before = board.getHistory().getEnd().getData();
+      assertEquals(4000, before.getPlayouts());
+      assertEquals(1, before.blackCaptures);
+      board.editMove(new int[] {1, 0}, false, true);
+      BoardData after = board.getHistory().getEnd().getData();
+      assertArrayEquals(before.stones, after.stones);
+      assertEquals(0, after.blackCaptures);
+      assertEquals(0, after.getPlayouts());
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void setupReplayKeepsEachMovesCaptureModeAfterTheOptionChanges(boolean firstNoCapture)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.noCapture = firstNoCapture;
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[ba][ed][cc]AW[aa][ee];B[ab])"));
+      Board board = fixture.board();
+      board.moveToAnyPosition(board.getHistory().getEnd());
+      Lizzie.config.noCapture = !firstNoCapture;
+      board.place(3, 4, Stone.BLACK);
+      BoardData recorded = board.getData();
+      assertEquals(2, recorded.moveNumber);
+      assertEquals(firstNoCapture ? Stone.WHITE : Stone.EMPTY, recorded.stones[Board.getIndex(0, 0)]);
+      assertEquals(firstNoCapture ? Stone.EMPTY : Stone.WHITE, recorded.stones[Board.getIndex(4, 4)]);
+      assertEquals(1, recorded.blackCaptures);
+      board.editMove(new int[] {2, 2}, false, true);
+      String saved = SGFParser.saveToString(false);
+      BoardHistoryList reopened = SGFParser.parseSgf(saved, true);
+      assertTreeSemanticsEqual(board.getHistory(), reopened);
+      assertEquals(recorded.stones[Board.getIndex(4, 4)],
+          reopened.getEnd().getData().stones[Board.getIndex(4, 4)]);
+      board.cleanedit();
+      board.reedit();
+      // A second edit after undo/redo exercises the independent history copies as well.
+      Lizzie.config.noCapture = firstNoCapture;
+      board.editMove(new int[] {1, 0}, true, false);
+      BoardData edited = board.getData();
+      assertEquals(Stone.EMPTY, edited.stones[Board.getIndex(2, 2)]);
+      assertEquals(Stone.WHITE, edited.stones[Board.getIndex(1, 0)]);
+      assertEquals(Stone.WHITE, edited.stones[Board.getIndex(0, 0)]);
+      assertEquals(recorded.stones[Board.getIndex(4, 4)], edited.stones[Board.getIndex(4, 4)]);
+      assertEquals(firstNoCapture ? 1 : 0, edited.blackCaptures);
+      Path file = tempDirectory.resolve("mixed-captures.sgf");
+      SGFParser.save(board, file.toString());
+      assertTrue(SGFParser.load(file.toString(), false, false));
+      javax.swing.SwingUtilities.invokeAndWait(() -> {});
+      BoardData loaded = board.getHistory().getEnd().getData();
+      assertArrayEquals(edited.stones, loaded.stones);
+      assertEquals(edited.blackCaptures, loaded.blackCaptures);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void unrelatedRootEditPreservesCapturedStonesAndPrisonersOnReopen(boolean noCapture)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      Lizzie.config.noCapture = noCapture;
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[ba][ee]AW[aa];B[ab])"));
+      Board board = fixture.board();
+      Lizzie.config.noCapture = !noCapture;
+      board.editMove(new int[] {4, 4}, false, true);
+      for (var history : List.of(board.getHistory(),
+          SGFParser.parseSgf(SGFParser.saveToString(false), true))) {
+        BoardData end = history.getEnd().getData();
+        assertEquals(Stone.EMPTY, end.stones[Board.getIndex(4, 4)]);
+        assertEquals(noCapture ? Stone.WHITE : Stone.EMPTY, end.stones[Board.getIndex(0, 0)]);
+        assertEquals(noCapture ? 0 : 1, end.blackCaptures);
+      }
+    }
+  }
+
+  @Test
+  void changedHandicapRestoreInvalidatesAnalysisEvenWithTheSameSetupStones() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      assertTrue(SGFParser.loadFromStringforedit(
+          "(;SZ[5]HA[2]PL[W]AB[aa];AB[aa][cc]PL[W];W[dd]LZ[KataGo 45 4000])"));
+      Board board = fixture.board();
+      BoardHistoryNode before = board.getHistory().getStart().next().orElseThrow();
+      assertFalse(InitialHandicapSetup.isInitialHandicap(before, 2, SIZE, SIZE));
+      assertEquals(4000, before.next().orElseThrow().getData().getPlayouts());
+      board.editMove(new int[] {0, 0}, false, true);
+      BoardHistoryNode after = board.getHistory().getStart().next().orElseThrow();
+      assertTrue(InitialHandicapSetup.isInitialHandicap(after, 2, SIZE, SIZE));
+      assertArrayEquals(before.getData().stones, after.getData().stones);
+      assertEquals(0, after.next().orElseThrow().getData().getPlayouts());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"KG-next, KGCM[1], WHITE", "KG-next, '', EMPTY", "Other, KGCM[1], EMPTY"})
+  void onlyMarkedKgNextGamesReadCaptureOverridesOnTheirOwnVariation(
+      String producer, String marker, Stone expected) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String sgf = "(;SZ[5]AP[" + producer + "]" + marker + "AB[ba]AW[aa]"
+          + "(;KGNC[1]B[ab])(;B[ab]C[KGNC]))";
+      assertTrue(SGFParser.loadFromString(sgf, false));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(sgf, true))) {
+        BoardHistoryNode root = history.getStart();
+        int aa = Board.getIndex(0, 0);
+        assertEquals(expected, root.getVariation(0).orElseThrow().getData().stones[aa]);
+        if (expected == Stone.WHITE) {
+          assertEquals(Stone.EMPTY, root.getVariation(1).orElseThrow().getData().stones[aa]);
+        } else {
+          assertEquals(1, root.numberOfChildren(), "identical prefixes with the same mode merge");
+        }
+      }
+    }
+  }
+
+  @Test
   void survivingMoveKeepsItsNumberThroughRedundantSetupAndLaterActions() throws Exception {
     try (var fixture = RulesLayerTestHarness.open(SIZE)) {
       assertTrue(SGFParser.loadFromStringforedit(

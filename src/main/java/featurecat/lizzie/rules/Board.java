@@ -2874,7 +2874,7 @@ public class Board {
       stones[getIndex(x, y)] = color;
       zobrist.toggleStone(x, y, color);
 
-      int selfCaptured = Lizzie.config.noCapture ? 0 : newState.applyMoveCaptures();
+      int selfCaptured = newState.applyMoveCaptures(Lizzie.config.noCapture);
       for (int i = 0; i < Board.boardWidth * Board.boardHeight; i++) {
         if (stones[i].equals(Stone.EMPTY)) {
           moveNumberList[i] = 0;
@@ -6692,7 +6692,8 @@ public class Board {
       }
       // Coordinate-dependent raw properties and analysis describe the old orientation.
       // Keep the game rules, geometry and authored move numbering used when reopening the SGF.
-      data.getProperties().keySet().retainAll(List.of("RU", "SZ", "MN", "N", "PL"));
+      data.getProperties().keySet().retainAll(
+          List.of("RU", "SZ", "MN", "N", "PL", SGFParser.RECORDED_CAPTURE_MODES));
       if (!data.getPropertyValues("PL").isEmpty()) data.setProperty("PL", data.blackToPlay ? "B" : "W");
       BoardHistoryNode copied = source.copyForRestore(data);
       copied.clearAnalysisAfterSetupEdit();

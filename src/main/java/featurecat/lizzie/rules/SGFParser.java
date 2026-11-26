@@ -58,6 +58,9 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 public class SGFParser {
+  // In a KG-next record with KGCM[1], ordinary moves capture unless their node has KGNC[1].
+  static final String RECORDED_CAPTURE_MODES = "KGCM";
+  private static final String NO_CAPTURE_MOVE = "KGNC";
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
@@ -604,7 +607,8 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
     boolean currentNodeHasDummy = false;
-    for (SgfDocument.Event event : document.events()) {
+    for (int eventIndex = 0; eventIndex < document.events().size(); eventIndex++) {
+      SgfDocument.Event event = document.events().get(eventIndex);
       cancellation.check();
       switch (event.kind()) {
         case '(':
@@ -640,6 +644,7 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue(cancellation);
+          if (importMoves.consumesCaptureMode(tag)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -655,14 +660,12 @@ public class SGFParser {
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
-            BoardHistoryNode parent = history.getCurrentHistoryNode();
-            boolean newBranch =
-                parent.hasVariations()
-                    || parent.next(true).map(BoardHistoryNode::isEndDummay).orElse(false);
+            boolean newBranch = importMoves.startsVariation(
+                history.getCurrentHistoryNode(), color, move, eventIndex);
             if (move == null) {
               history.pass(color, newBranch, false);
             } else {
-              importMoves.place(history, move, color, newBranch);
+              importMoves.place(history, move, color, newBranch, eventIndex);
             }
             currentNodeHasMove = true;
             if (newBranch) {
@@ -1648,6 +1651,7 @@ public class SGFParser {
       rootData.setProperty("RE", Escaping(result));
       rootData.setProperty("SZ", boardSizeTag);
       rootData.setProperty("CA", "UTF-8");
+      boolean recordedCaptureModes = "1".equals(rootData.getProperty(RECORDED_CAPTURE_MODES));
       builder.append(materializedRootSetupProperties(rootData, saveContext));
 
       // The AW/AB Comment
@@ -1696,7 +1700,7 @@ public class SGFParser {
           continue;
         }
         if (cur != rootNode) {
-          builder = generateNode(saveContext, cur, forUpload, builder);
+          builder = generateNode(saveContext, cur, forUpload, builder, recordedCaptureModes);
         }
         if (mainTrunkOnly && !captureBranchOnly) {
           BoardHistoryNode next = selectedBranch.getOrDefault(cur, cur.next().orElse(null));
@@ -1824,11 +1828,12 @@ public class SGFParser {
               "", boardSize[0], boardSize[1],
               SaveOptions.capture(LizzieFrame.isSavingRaw, LizzieFrame.isSavingRawComment), "");
     }
-    return generateNode(saveContext, node, forUpload, builder);
+    return generateNode(saveContext, node, forUpload, builder, false);
   }
 
   private static StringBuilder generateNode(
-      SaveContext saveContext, BoardHistoryNode node, boolean forUpload, StringBuilder builder)
+      SaveContext saveContext, BoardHistoryNode node, boolean forUpload, StringBuilder builder,
+      boolean recordedCaptureModes)
       throws IOException {
     if (node == null) {
       return builder;
@@ -1858,7 +1863,15 @@ public class SGFParser {
       }
 
       // Node properties
-      builder.append(data.propertiesString());
+      Map<String, List<String>> properties = data.getProperties();
+      if (recordedCaptureModes && data.isMoveNode()) {
+        if (properties.containsKey(NO_CAPTURE_MOVE)) {
+          properties = new LinkedHashMap<>(properties);
+          properties.remove(NO_CAPTURE_MOVE);
+        }
+        if (data.playedWithoutCaptures) builder.append(NO_CAPTURE_MOVE).append("[1]");
+      }
+      builder.append(propertiesString(properties));
 
       if (forUpload) {
         builder.append(String.format(Locale.ENGLISH, "FIT[%s]", getMatchValue(node)));
@@ -3475,7 +3488,7 @@ public class SGFParser {
       case "AP", "CA", "FF", "GM", "ST", "SZ",
           "AN", "BR", "BT", "CP", "DT", "EV", "GN", "GC", "ON", "OT", "PB", "PC",
           "PW", "RE", "RO", "RU", "SO", "TM", "US", "WR", "WT", "HA", "KM",
-          "DZ", "KO" -> true;
+          "DZ", "KO", RECORDED_CAPTURE_MODES -> true;
       default -> false;
     };
   }
@@ -4048,8 +4061,26 @@ public class SGFParser {
     return text.toString();
   }
 
-  private record ImportMoves(boolean noCapture, boolean canSuicidal, boolean savedByKgNext) {
-    void place(BoardHistoryList history, int[] move, Stone color, boolean newBranch) {
+  private record ImportMoves(boolean defaultNoCapture, boolean canSuicidal, boolean savedByKgNext,
+      BitSet recordedNoCapture) {
+    boolean consumesCaptureMode(String tag) {
+      return recordedNoCapture != null && NO_CAPTURE_MOVE.equals(tag);
+    }
+
+    boolean startsVariation(BoardHistoryNode parent, Stone color, int[] move, int eventIndex) {
+      if (parent.numberOfChildren() != 1) return parent.hasVariations();
+      BoardHistoryNode first = parent.getVariations().get(0);
+      if (first.isEndDummay()) return true;
+      // Merge a common move prefix only when it will replay the same way after a setup edit.
+      BoardData action = first.getData();
+      return recordedNoCapture != null && move != null && action.isMoveNode()
+          && action.lastMoveColor == color && action.isSameCoord(move)
+          && action.playedWithoutCaptures != recordedNoCapture.get(eventIndex);
+    }
+
+    void place(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
+      boolean noCapture =
+          recordedNoCapture == null ? defaultNoCapture : recordedNoCapture.get(eventIndex);
       if (savedByKgNext) {
         history.placeRecordedMove(move[0], move[1], color, newBranch, noCapture, canSuicidal);
       } else {
@@ -4065,11 +4096,13 @@ public class SGFParser {
     private ImportMoves importMoves(SgfDocument document, SgfCancellation cancellation) {
       // Our saves preserve the original RU even when manual rules allowed a recorded self-capture.
       if (isKgNextSgf(document.rootProperty("AP", cancellation))) {
-        return new ImportMoves(noCapture, true, true);
+        BitSet recorded = "1".equals(document.rootProperty(RECORDED_CAPTURE_MODES, cancellation))
+            ? document.nodesWithProperty(NO_CAPTURE_MOVE, "1", cancellation) : null;
+        return new ImportMoves(noCapture, true, true, recorded);
       }
       boolean suicide = BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
           .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
-      return new ImportMoves(noCapture, suicide, false);
+      return new ImportMoves(noCapture, suicide, false, null);
     }
 
     public static ParseOptions capture() {
@@ -4211,7 +4244,8 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     boolean currentNodeHasDummy = false;
     // Support unicode characters (UTF-8)
-    for (SgfDocument.Event event : document.events()) {
+    for (int eventIndex = 0; eventIndex < document.events().size(); eventIndex++) {
+      SgfDocument.Event event = document.events().get(eventIndex);
       switch (event.kind()) {
         case '(':
           flushPendingNodeMetadataToCurrentNode(history, pendingNodeMetadata);
@@ -4243,6 +4277,7 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue();
+          if (importMoves.consumesCaptureMode(tag)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -4258,15 +4293,13 @@ public class SGFParser {
             // Save the step count
             //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
-            BoardHistoryNode parent = history.getCurrentHistoryNode();
-            boolean newBranch =
-                parent.hasVariations()
-                    || parent.next(true).map(BoardHistoryNode::isEndDummay).orElse(false);
+            boolean newBranch = importMoves.startsVariation(
+                history.getCurrentHistoryNode(), color, move, eventIndex);
             if (move == null) {
               history.pass(color, newBranch, false);
 
             } else {
-              importMoves.place(history, move, color, newBranch);
+              importMoves.place(history, move, color, newBranch, eventIndex);
             }
             currentNodeHasMove = true;
             if (newBranch) {

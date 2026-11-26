@@ -1,6 +1,7 @@
 package featurecat.lizzie.rules;
 
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -79,6 +80,26 @@ public final class SgfDocument {
       if (name.equals(property.name())) match = property;
     }
     return match == null ? null : match.legacyValue(cancellation);
+  }
+
+  /** Event indexes in nodes with this scalar value, independent of property order. */
+  BitSet nodesWithProperty(String name, String value, SgfCancellation cancellation) {
+    BitSet matchingEvents = new BitSet();
+    int start = 0;
+    boolean matches = false;
+    for (int i = 0; i < events.size(); i++) {
+      cancellation.checkEvery(i);
+      Event event = events.get(i);
+      if (event.kind() != 'P') {
+        if (matches) matchingEvents.set(start, i);
+        start = i + 1;
+        matches = false;
+      } else if (name.equals(event.name())) {
+        matches = value.equals(event.rawValue());
+      }
+    }
+    if (matches) matchingEvents.set(start, events.size());
+    return matchingEvents;
   }
 
   /** Applies the existing KG input tolerance and preserves ordered syntax without global state. */

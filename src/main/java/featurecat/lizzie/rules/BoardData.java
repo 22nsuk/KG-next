@@ -277,6 +277,8 @@ public class BoardData implements Cloneable {
   //	public boolean commented2=true;
 
   private BoardNodeKind nodeKind;
+  // A move keeps the capture policy used when it was played, even if the UI option changes.
+  boolean playedWithoutCaptures;
 
   // Ordered raw SGF values. Replace lists on updates so captured values stay stable.
   private Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
@@ -1244,6 +1246,7 @@ public class BoardData implements Cloneable {
         nodeKind, stones, lastMove, lastMoveColor, blackToPlay, forSave ? null : zobrist, moveNumber,
         forSave ? null : moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
     data.moveMNNumber = moveMNNumber;
+    data.playedWithoutCaptures = playedWithoutCaptures;
     data.dummy = dummy;
     data.verify = verify;
     data.copyAnalysisStateFrom(this, true, forSave);
@@ -1451,6 +1454,12 @@ public class BoardData implements Cloneable {
 
   /** Resolve chains after placing a stone on a private move candidate. Returns self-captures. */
   public int applyMoveCaptures() {
+    return applyMoveCaptures(false);
+  }
+
+  int applyMoveCaptures(boolean noCapture) {
+    playedWithoutCaptures = noCapture;
+    if (noCapture) return 0;
     int[] move = lastMove.orElseThrow();
     int x = move[0];
     int y = move[1];
@@ -1632,6 +1641,7 @@ public class BoardData implements Cloneable {
 
   private void copyCoreStateFrom(BoardData data) {
     this.nodeKind = data.getNodeKind();
+    this.playedWithoutCaptures = data.playedWithoutCaptures;
     this.moveMNNumber = data.moveMNNumber;
     this.moveNumber = data.moveNumber;
     this.lastMove = copyLastMove(data.lastMove);

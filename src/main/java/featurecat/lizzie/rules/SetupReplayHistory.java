@@ -2,21 +2,22 @@ package featurecat.lizzie.rules;
 
 import featurecat.lizzie.analysis.KataGoRules;
 import java.util.ArrayDeque;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
 import java.util.Map;
 import java.util.Set;
 
-/** Checks whether a setup edit makes a played move repeat a new ancestor on its own variation. */
-final class SetupReplayKo {
+/** Compares each edited variation's play history with its original for ko and analysis reuse. */
+final class SetupReplayHistory {
   private enum Ko { SIMPLE, POSITIONAL, SITUATIONAL, SPIGHT }
 
   private final Ko ko;
   private final boolean rulesHaveButton;
   private final Map<BoardHistoryNode, Played> actionsBeforeSetup = new IdentityHashMap<>();
 
-  SetupReplayKo(KataGoRules rules) {
+  SetupReplayHistory(KataGoRules rules) {
     ko = switch (rules == null ? "" : rules.string(KataGoRules.KO)) {
       case "POSITIONAL" -> Ko.POSITIONAL;
       case "SITUATIONAL" -> Ko.SITUATIONAL;
@@ -44,6 +45,7 @@ final class SetupReplayKo {
     State editedState;
     Position addedOriginal;
     Position addedEdit;
+    boolean sameAnalysisHistory;
     int nextChild;
 
     Frame(BoardHistoryNode original, BoardHistoryNode edited) {
@@ -52,7 +54,8 @@ final class SetupReplayKo {
     }
   }
 
-  boolean introducesRepetition(BoardHistoryNode owner, BoardHistoryNode copiedOwner) {
+  /** Reject newly illegal moves and retain analysis whose inputs still match on the private copy. */
+  boolean validateContinuations(BoardHistoryNode owner, BoardHistoryNode copiedOwner, int handicap) {
     // Erasing the only setup point can expose positions before the owner.
     ArrayDeque<Frame> prefix = new ArrayDeque<>();
     for (BoardHistoryNode original = owner, edited = copiedOwner; original != null;
@@ -69,6 +72,7 @@ final class SetupReplayKo {
 
     // Push/pop indexes only the active path without copying a history at each fork.
     ArrayDeque<Frame> path = new ArrayDeque<>();
+    copiedOwner.clearAnalysisAfterSetupEdit();
     path.push(parent);
     while (!path.isEmpty()) {
       parent = path.peek();
@@ -83,12 +87,50 @@ final class SetupReplayKo {
         int child = parent.nextChild++;
         Frame next = new Frame(parent.original.getVariations().get(child),
             parent.edited.getVariations().get(child));
-        if (introducesKo(parent, next, history)) return true;
+        if (introducesKo(parent, next, history)) return false;
         remember(parent, next, history);
+        next.sameAnalysisHistory = sameAnalysisHistory(parent, next, handicap);
+        if (next.sameAnalysisHistory) {
+          next.edited.materializeRestoreNodeInfo();
+          if (!parent.sameAnalysisHistory) {
+            // A generated score difference at the anchor can still refer to its changed parent.
+            BoardData data = next.edited.getData();
+            data.setAuthoredComment(data.authoredComment());
+          }
+        } else {
+          next.edited.clearAnalysisAfterSetupEdit();
+        }
         path.push(next);
       }
     }
-    return false;
+    return true;
+  }
+
+  private static boolean sameAnalysisHistory(Frame parent, Frame node, int handicap) {
+    BoardData original = node.original.getData();
+    BoardData edited = node.edited.getData();
+    // Equal stones after ordinary moves can carry different ko bans and engine move histories.
+    // A non-root setup starts an independent engine position once both ko histories reset.
+    boolean originalReset = node.originalState.segment != parent.originalState.segment;
+    boolean editedReset = node.editedState.segment != parent.editedState.segment;
+    if (originalReset != editedReset
+        || !(parent.sameAnalysisHistory || (original.isSnapshotNode() && originalReset))
+        || original.blackToPlay != edited.blackToPlay
+        || original.blackCaptures != edited.blackCaptures
+        || original.whiteCaptures != edited.whiteCaptures
+        || !Arrays.equals(original.stones, edited.stones)) {
+      return false;
+    }
+    if (!original.isSnapshotNode() || original.blackToPlay || !originalReset) return true;
+    // An initial handicap places stones on an empty board. A run of PL-only snapshots cannot
+    // create one. Avoid walking the ancestry for each of those nodes.
+    if (Arrays.equals(original.stones, parent.original.getData().stones)
+        && Arrays.equals(edited.stones, parent.edited.getData().stones)) return true;
+    // GTP restore also checks the anchor's ancestry before selecting set_free_handicap.
+    int width = original.zobrist.width();
+    int height = original.zobrist.height();
+    return InitialHandicapSetup.isInitialHandicap(node.original, handicap, width, height)
+        == InitialHandicapSetup.isInitialHandicap(node.edited, handicap, width, height);
   }
 
   private boolean introducesKo(Frame parent, Frame node, Map<Position, Set<Position>> history) {
