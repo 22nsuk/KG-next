@@ -268,8 +268,9 @@ No throughput improvement is claimed. File-save serialization and disk I/O run
 on the worker; tree capture remains on its requesting owner. The detached save
 input carries the board, rules and formatting values needed after capture.
 
-Save-only `BoardData` copies omit the move-number display grid, ko-detection
-hash and out-of-range display candidates. They are private serialization inputs,
+Save-only nodes omit the ko-detection hash and out-of-range display candidates.
+Only a numbered snapshot root retains a detached move-number grid so the reader
+can recover the known numbers of its starting stones. These copies are private serialization inputs,
 not playable positions; ordinary `clone`, `sync` and analysis-adoption copies
 retain their existing semantics. Stones remain detached at every node because
 root setup and mid-tree setup deltas read both the node and its parent.

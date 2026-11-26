@@ -119,6 +119,9 @@ public class BoardHistoryNode {
 
   /** Keep SGF declarations and legacy engine navigation metadata aligned with this snapshot. */
   void updateSetupMetadata(BoardData parent, BitSet points) {
+    // A snapshot's last move is an observation about a stone, not an action to replay.
+    data.lastMove = data.lastMoveOnBoard(data.zobrist.width(), data.zobrist.height());
+    if (data.lastMove.isEmpty()) data.lastMoveColor = Stone.EMPTY;
     var props = data.getProperties();
     props.remove("AB");
     props.remove("AW");
@@ -191,11 +194,20 @@ public class BoardHistoryNode {
     child.previous = Optional.of(this);
   }
 
-  public BoardHistoryNode addAtLast(BoardData data) {
-    if (!this.previous.isPresent()) {
-      data.moveMNNumber = 1;
+  private void initializeRootChildNumber(BoardData child, boolean restartNumbering) {
+    if (previous.isPresent()) return;
+    if (data.moveNumber == 0) {
+      child.moveMNNumber = 1;
+    } else if (!restartNumbering && child.moveMNNumber == -1) {
+      // An observed midgame root has no preceding action nodes to supply a display number.
+      child.moveMNNumber = child.moveNumber;
     }
-    if (Lizzie.config.newMoveNumberInBranch && !variations.isEmpty()) {
+  }
+
+  public BoardHistoryNode addAtLast(BoardData data) {
+    boolean restartNumbering = Lizzie.config.newMoveNumberInBranch && !variations.isEmpty();
+    initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
       if (data.moveMNNumber == -1) {
         data.moveMNNumber = data.dummy ? 0 : 1;
       }
@@ -296,10 +308,9 @@ public class BoardHistoryNode {
       }
     }
 
-    if (!this.previous.isPresent() && !tsumego) {
-      data.moveMNNumber = 1;
-    }
-    if (startsBranchNumberingAtOne() && !variations.isEmpty() && !changeMove) {
+    boolean restartNumbering = startsBranchNumberingAtOne() && !variations.isEmpty() && !changeMove;
+    if (!tsumego) initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
       if (!newBranch) {
         data.clearInheritedMoveNumbers();
         data.moveMNNumber = -1;
@@ -356,10 +367,9 @@ public class BoardHistoryNode {
         return variation;
       }
     }
-    if (!previous.isPresent()) {
-      data.moveMNNumber = 1;
-    }
-    if (frozenNewMoveNumberInBranch && !variations.isEmpty()) {
+    boolean restartNumbering = frozenNewMoveNumberInBranch && !variations.isEmpty();
+    initializeRootChildNumber(data, restartNumbering);
+    if (restartNumbering) {
       data.clearInheritedMoveNumbers();
       data.moveMNNumber = -1;
       if (data.moveNumberList != null && data.lastMove.isPresent()) {
@@ -410,7 +420,7 @@ public class BoardHistoryNode {
 
   /** Detached node for saving; callers reconnect only detached parents/children. */
   BoardHistoryNode copyForSave() {
-    return copyMetadata(data.copyForSave(), false);
+    return copyMetadata(data.copyForSave(previous.isEmpty()), false);
   }
 
   BoardHistoryNode copyForRestore(BoardData copiedData) {
@@ -1016,7 +1026,11 @@ public class BoardHistoryNode {
     BoardHistoryNode parent = previous.get();
     boolean restart = parent.variations.get(0) != this && Lizzie.config.newMoveNumberInBranch;
     data.moveNumber = parent.data.moveNumber + 1;
-    data.moveMNNumber = parent.data.moveMNNumber > -1 && !restart ? parent.data.moveMNNumber + 1 : 1;
+    data.moveMNNumber = parent.data.nextMoveMNNumber(restart);
+    if (data.moveMNNumber == -1) {
+      parent.initializeRootChildNumber(data, restart);
+      if (data.moveMNNumber == -1) data.moveMNNumber = 1;
+    }
     if (restart) {
       data.clearInheritedMoveNumbers();
     } else {

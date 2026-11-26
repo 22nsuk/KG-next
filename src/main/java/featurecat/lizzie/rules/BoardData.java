@@ -446,6 +446,13 @@ public class BoardData implements Cloneable {
     return getNodeKind() == BoardNodeKind.PASS;
   }
 
+  /** Coordinate that can be marked on this position, including an observed snapshot marker. */
+  public Optional<int[]> lastMoveOnBoard(int width, int height) {
+    return lastMove.filter(p -> p.length == 2 && p[0] >= 0 && p[0] < width && p[1] >= 0 && p[1] < height
+        && (lastMoveColor == Stone.BLACK || lastMoveColor == Stone.WHITE)
+        && stones[p[0] * height + p[1]] == lastMoveColor);
+  }
+
   /** The next move or pass inherits this variation's number unless it starts a new branch. */
   int nextMoveMNNumber(boolean newBranch) {
     return moveMNNumber > -1 && !newBranch ? moveMNNumber + 1 : -1;
@@ -1268,11 +1275,14 @@ public class BoardData implements Cloneable {
   }
 
   /**
-   * Private serialization input, never a playable position: omit the display move-number grid and
-   * position hash. Keep stones for root/setup deltas and detach candidates still edited by renderers.
+   * Private serialization input. Only an observed root needs its stone numbers persisted;
+   * other nodes rebuild theirs during replay. Keep stones for setup deltas and omit the hash.
    */
-  synchronized BoardData copyForSave() {
+  synchronized BoardData copyForSave(boolean root) {
     BoardData copy = copy(true);
+    if (root && isSnapshotNode() && moveNumber > 0) {
+      copy.moveNumberList = copyIntArray(moveNumberList);
+    }
     detachSaveMoves(copy.bestMoves);
     detachSaveMoves(copy.bestMoves2);
     return copy;

@@ -15,7 +15,7 @@ class BoardDataSaveCopyTest {
     double[] ownership = {-0.0, 0.25, -0.5};
     source.estimateArray = BoardData.compactEstimateArray(ownership, ownership.length);
     source.estimateArray2 = BoardData.compactEstimateArray(Arrays.asList(null, 0.5));
-    BoardData save = source.copyForSave();
+    BoardData save = source.copyForSave(true);
     BoardData playable = source.clone();
 
     ownership[1] = 1.0;
@@ -39,7 +39,7 @@ class BoardDataSaveCopyTest {
     var backing = new ArrayList<>(Arrays.asList(-0.0, null, 0.25));
     source.estimateArray = Collections.unmodifiableList(backing);
     source.estimateArray2 = backing;
-    BoardData save = source.copyForSave();
+    BoardData save = source.copyForSave(true);
     backing.set(0, 1.0);
     backing.clear();
     assertEquals(Arrays.asList(-0.0, null, 0.25), save.estimateArray);

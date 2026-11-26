@@ -18,6 +18,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.BoardNodeKind;
 import featurecat.lizzie.rules.Movelist;
+import featurecat.lizzie.rules.RulesLayerTestHarness;
 import featurecat.lizzie.rules.Stone;
 import featurecat.lizzie.rules.Zobrist;
 import java.io.BufferedOutputStream;
@@ -35,6 +36,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ReadBoardSyncDecisionTest {
   private static final int BOARD_SIZE = 3;
@@ -73,6 +76,59 @@ class ReadBoardSyncDecisionTest {
           "first sync rollback without history should refresh immediately.");
       assertStaticSnapshotRoot(harness.board, target, lastMove, Stone.BLACK, 1);
     }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void editingMarkedReadBoardStoneKeepsBoardAndSyncBaselineConsistent(boolean recolor)
+      throws Exception {
+    Stone[] observed = stones(placement(0, 0, Stone.BLACK), placement(1, 1, Stone.BLACK));
+    int[] marker = {1, 1};
+    try (SyncHarness sync = SyncHarness.create(true, emptyHistory())) {
+      armFoxMoveNumber(sync.readBoard, 42);
+      sync.readBoard.parseLine("lastMoveSource foxCornerFlip");
+      sync.sync(snapshot(observed, Optional.of(marker), Stone.BLACK));
+      assertStaticSnapshotRoot(sync.board, observed, marker, Stone.BLACK, 42);
+      try (var ignored = RulesLayerTestHarness.open()) {
+        Board board = Lizzie.board;
+        board.setHistory(sync.board.getHistory());
+        board.editMove(marker, recolor, !recolor);
+        BoardData edited = board.getData();
+        assertEquals(42, edited.moveNumber);
+        assertFalse(edited.blackToPlay);
+        assertTrue(edited.lastMove.isEmpty());
+        assertEquals(Stone.EMPTY, edited.lastMoveColor);
+        Stone[] expected = observed.clone();
+        expected[Board.getIndex(1, 1)] = recolor ? Stone.WHITE : Stone.EMPTY;
+        assertArrayEquals(expected, edited.stones);
+        assertArrayEquals(snapshot(expected, Optional.empty(), Stone.EMPTY),
+            syncCodes(sync.readBoard, board.getHistory().getStart()));
+        board.cleanedit();
+        assertArrayEquals(marker, board.getData().lastMove.orElseThrow());
+        assertEquals(Stone.BLACK, board.getData().lastMoveColor);
+        board.reedit();
+        assertTrue(board.getData().lastMove.isEmpty());
+      }
+    }
+  }
+
+  @Test
+  void syncBaselineDoesNotRecreateASelfCapturedMove() throws Exception {
+    int[] lastMove = {1, 0};
+    Stone[] position = stones(placement(2, 2, Stone.WHITE));
+    try (SyncHarness sync = SyncHarness.create(false, emptyHistory())) {
+      // A legal multi-stone suicide keeps its MOVE coordinate even after the stones are removed.
+      BoardHistoryNode node = new BoardHistoryNode(createFixtureData(
+          position, Optional.of(lastMove), Stone.BLACK, false, 5, BoardNodeKind.MOVE));
+      assertArrayEquals(snapshot(position, Optional.empty(), Stone.EMPTY), syncCodes(sync.readBoard, node));
+      assertArrayEquals(lastMove, node.getData().lastMove.orElseThrow());
+    }
+  }
+
+  private static int[] syncCodes(ReadBoard reader, BoardHistoryNode node) throws Exception {
+    Method method = ReadBoard.class.getDeclaredMethod("snapshotCodesForNode", BoardHistoryNode.class);
+    method.setAccessible(true);
+    return (int[]) method.invoke(reader, node);
   }
 
   @Test

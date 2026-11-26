@@ -15,6 +15,46 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 class PassVariationNumberingTest {
   @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void promotingAVariationFromAnObservedRootKeepsItsAbsoluteNumber(boolean restart)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      BoardHistoryList history = env.board().getHistory();
+      BoardHistoryNode root = history.getStart();
+      root.getData().moveNumber = 42;
+      history.pass(Stone.BLACK);
+      history.setHead(root);
+      history.place(2, 2, Stone.BLACK, true);
+      assertTrue(env.board().setAsMainBranch());
+      assertEquals(43, history.getData().moveNumberList[Board.getIndex(2, 2)]);
+      assertEquals(43, env.board().moveNumberByXY(2, 2));
+      assertEquals(restart ? 1 : 43, root.getVariation(1).orElseThrow().getData().moveMNNumber);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {"normal", "append", "engine-game"})
+  void firstPassAfterObservedRootContinuesItsMoveCount(String entrypoint) throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      BoardHistoryList history = env.board().getHistory();
+      history.getData().moveNumber = 42;
+      switch (entrypoint) {
+        case "normal" -> history.pass(Stone.BLACK);
+        case "append" -> {
+          history.pass(Stone.BLACK, false, false, false, true);
+          history.next().orElseThrow();
+        }
+        case "engine-game" -> history.passForEngineGame(Stone.BLACK, true);
+        default -> throw new IllegalArgumentException(entrypoint);
+      }
+      history.place(1, 1, Stone.WHITE);
+      assertEquals(44, history.getData().moveNumberList[Board.getIndex(1, 1)]);
+      assertEquals(44, env.board().moveNumberByXY(1, 1));
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {"normal", "branch", "dummy", "append", "engine-game",
       "board", "board-branch", "board-dummy"})
   void newPassOwnsItsPositionState(String entrypoint) throws Exception {

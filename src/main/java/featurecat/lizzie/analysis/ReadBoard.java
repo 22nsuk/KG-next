@@ -5332,13 +5332,10 @@ public class ReadBoard implements ReadBoardTrackingEligibilityAdapter.Eligibilit
             snapshotCodeForStone(data.stones[Board.getIndex(x, y)]);
       }
     }
-    if (data.lastMove.isPresent() && data.lastMoveColor != null && !data.lastMoveColor.isEmpty()) {
-      int[] coords = data.lastMove.get();
+    data.lastMoveOnBoard(Board.boardWidth, Board.boardHeight).ifPresent(coords -> {
       int snapshotIndex = coords[1] * Board.boardWidth + coords[0];
-      if (snapshotIndex >= 0 && snapshotIndex < snapshotCodes.length) {
-        snapshotCodes[snapshotIndex] = data.lastMoveColor.isBlack() ? 3 : 4;
-      }
-    }
+      snapshotCodes[snapshotIndex] = data.lastMoveColor == Stone.BLACK ? 3 : 4;
+    });
     return snapshotCodes;
   }
 

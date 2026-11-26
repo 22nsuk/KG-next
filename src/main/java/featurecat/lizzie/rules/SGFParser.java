@@ -652,6 +652,11 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue(cancellation);
+          if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
+              && SgfRootPosition.PROPERTY.equals(tag) && SgfRootPosition.ownsValue(tagContent)) {
+            pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
+            break;
+          }
           if (importMoves.consumesCaptureMode(tag)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
@@ -1897,6 +1902,13 @@ public class SGFParser {
     boolean setupInserted = false;
     for (Map.Entry<String, List<String>> entry : rootData.getProperties().entrySet()) {
       String key = entry.getKey();
+      if (SgfRootPosition.PROPERTY.equals(key)) {
+        // AP is rewritten on export. A foreign producer's lookalike must never become active.
+        for (String value : entry.getValue()) {
+          if (!SgfRootPosition.ownsValue(value)) addProperty(properties, key, value);
+        }
+        continue;
+      }
       if (isSetupSerializationProperty(key)) {
         if (!setupInserted) {
           properties.putAll(rootSetup);
@@ -1909,6 +1921,8 @@ public class SGFParser {
     if (!setupInserted) {
       properties.putAll(rootSetup);
     }
+    String observedPosition = SgfRootPosition.encode(rootData, width, height);
+    if (observedPosition != null) addProperty(properties, SgfRootPosition.PROPERTY, observedPosition);
     return propertiesString(properties);
   }
 
@@ -3456,6 +3470,7 @@ public class SGFParser {
 
   private static final class PendingNodeMetadata {
     private final AnalysisImport analysisImport;
+    private SgfRootPosition rootPosition;
     private String comment;
     private final Map<String, List<String>> properties = new LinkedHashMap<String, List<String>>();
     private final List<PendingAnalysisPayload> analysisPayloads =
@@ -3466,10 +3481,11 @@ public class SGFParser {
     }
 
     private boolean isEmpty() {
-      return comment == null && properties.isEmpty() && analysisPayloads.isEmpty();
+      return rootPosition == null && comment == null && properties.isEmpty() && analysisPayloads.isEmpty();
     }
 
     private void clear() {
+      rootPosition = null;
       comment = null;
       properties.clear();
       analysisPayloads.clear();
@@ -3539,6 +3555,10 @@ public class SGFParser {
       PendingNodeMetadata pendingNodeMetadata) {
     if (pendingNodeMetadata == null || pendingNodeMetadata.isEmpty()) {
       return;
+    }
+    if (pendingNodeMetadata.rootPosition != null && target.previous().isEmpty()
+        && target.getData().isSnapshotNode()) {
+      pendingNodeMetadata.rootPosition.restore(target.getData(), pendingNodeMetadata.analysisImport.cancellation);
     }
     if (pendingNodeMetadata.comment != null) {
       target.getData().comment = pendingNodeMetadata.comment;
@@ -4352,6 +4372,11 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue();
+          if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
+              && SgfRootPosition.PROPERTY.equals(tag) && SgfRootPosition.ownsValue(tagContent)) {
+            pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
+            break;
+          }
           if (importMoves.consumesCaptureMode(tag)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {

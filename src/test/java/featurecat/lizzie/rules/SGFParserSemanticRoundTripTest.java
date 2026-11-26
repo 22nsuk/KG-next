@@ -30,6 +30,101 @@ class SGFParserSemanticRoundTripTest {
   private static final int SIZE = 5;
   @TempDir Path tempDirectory;
 
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void observedRootKeepsCountsMarkerAndNumberedStonesAcrossSetupEdit(boolean deleteMarker)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      Board board = fixture.board();
+      assertTrue(SGFParser.loadFromStringforedit("(;SZ[5]AB[aa][bb]AW[ee]PL[W]LB[ee:note])"));
+      BoardData observed = board.getData();
+      observed.moveNumber = 42;
+      observed.blackCaptures = 4;
+      observed.whiteCaptures = 3;
+      observed.lastMove = Optional.of(new int[] {1, 1});
+      observed.lastMoveColor = Stone.BLACK;
+      int aa = Board.getIndex(0, 0), bb = Board.getIndex(1, 1), ee = Board.getIndex(4, 4);
+      observed.moveNumberList[aa] = 12;
+      observed.moveNumberList[bb] = 42;
+      observed.moveNumberList[ee] = 20;
+      // Reopen the unedited record first to catch a stale serialized payload after a later edit.
+      assertTrue(SGFParser.loadFromStringforedit(SGFParser.saveToString(false)));
+      board.editMove(deleteMarker ? new int[] {1, 1} : new int[] {0, 0}, false, true);
+      board.place(2, 2, Stone.WHITE);
+      board.pass(Stone.BLACK);
+      board.moveToAnyPosition(board.getHistory().getStart());
+      board.getHistory().pass(Stone.WHITE, true);
+
+      for (int round = 0; round < 2; round++) {
+        String saved = SGFParser.saveToString(false);
+        BoardHistoryList detached = SGFParser.parseSgf(saved, true);
+        assertTrue(SGFParser.loadFromStringforedit(saved));
+        for (var history : List.of(detached, board.getHistory())) {
+          BoardHistoryNode root = history.getStart();
+          BoardData data = root.getData();
+          assertTrue(data.isSnapshotNode());
+          assertFalse(data.blackToPlay);
+          assertEquals(42, data.moveNumber);
+          assertEquals(4, data.blackCaptures);
+          assertEquals(3, data.whiteCaptures);
+          assertEquals("ee:note", data.getProperty("LB"));
+          assertEquals(deleteMarker ? 12 : 0, data.moveNumberList[aa]);
+          assertEquals(deleteMarker ? 0 : 42, data.moveNumberList[bb]);
+          assertEquals(20, data.moveNumberList[ee]);
+          if (deleteMarker) {
+            assertTrue(data.lastMove.isEmpty());
+            assertEquals(Stone.EMPTY, data.lastMoveColor);
+          } else {
+            assertArrayEquals(new int[] {1, 1}, data.lastMove.orElseThrow());
+            assertEquals(Stone.BLACK, data.lastMoveColor);
+          }
+          assertEquals(2, root.numberOfChildren());
+          BoardHistoryNode move = root.getVariation(0).orElseThrow();
+          assertEquals(43, move.getData().moveNumber);
+          assertEquals(43, move.getData().moveNumberList[Board.getIndex(2, 2)]);
+          assertEquals(20, move.getData().moveNumberList[ee]);
+          assertEquals(44, move.next().orElseThrow().getData().moveNumber);
+          BoardData pass = root.getVariation(1).orElseThrow().getData();
+          assertTrue(pass.isPassNode());
+          assertEquals(43, pass.moveNumber);
+          assertEquals(4, pass.blackCaptures);
+          assertEquals(3, pass.whiteCaptures);
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(strings = {
+      "AP[other]KGRP[KG-next/1 42 3 2 Bbb Bbb:42]",
+      "AP[KG-next]KGRP[KG-next/1 2147483647 3 2 Bbb Bbb:42]",
+      "AP[KG-next]KGRP[KG-next/1 42 2147483648 2 Bbb Bbb:42]",
+      "AP[KG-next]KGRP[KG-next/1 42 3 2 Bbb Bbb:42 Waa:1]",
+      "AP[KG-next]KGRP[KG-next/1 42 3 2 Bbb Bbb:42 Bbb:2]"
+  })
+  void foreignOrDamagedRootPayloadCannotPartiallyOverrideStandardSetup(String extension)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String sgf = "(;SZ[5]" + extension + "AB[bb]PL[W];W[cc])";
+      for (int round = 0; round < 2; round++) {
+        BoardHistoryList detached = SGFParser.parseSgf(sgf, true);
+        assertTrue(SGFParser.loadFromStringforedit(sgf));
+        for (var history : List.of(detached, fixture.board().getHistory())) {
+          BoardData root = history.getStart().getData();
+          assertEquals(0, root.moveNumber);
+          assertEquals(0, root.blackCaptures);
+          assertEquals(0, root.whiteCaptures);
+          assertTrue(root.lastMove.isEmpty());
+          assertEquals(Stone.BLACK, root.stones[Board.getIndex(1, 1)]);
+          assertEquals(0, root.moveNumberList[Board.getIndex(1, 1)]);
+          assertFalse(root.blackToPlay);
+          assertEquals(1, history.getEnd().getData().moveNumber);
+        }
+        sgf = SGFParser.saveToString(false);
+      }
+    }
+  }
+
   @Test
   void editUndoRedoAtRootPreservesAnalyzedMoveMetadataImmediately() throws Exception {
     try (RulesLayerTestHarness ignored = RulesLayerTestHarness.open(SIZE)) {
