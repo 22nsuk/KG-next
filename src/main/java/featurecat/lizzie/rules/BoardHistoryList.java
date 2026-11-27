@@ -468,7 +468,7 @@ public class BoardHistoryList {
     }
     rebuilt.head = selected;
     // Future opens of this edited tree must replay even a mixture of Go and no-capture moves.
-    rebuilt.getStart().getData().setProperty(SGFParser.RECORDED_CAPTURE_MODES, "1");
+    rebuilt.getStart().getData().recordsCaptureModes = true;
     return rebuilt;
   }
 

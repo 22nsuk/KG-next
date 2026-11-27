@@ -58,9 +58,6 @@ import org.json.JSONObject;
 import org.json.JSONTokener;
 
 public class SGFParser {
-  // In a KG-next record with KGCM[1], ordinary moves capture unless their node has KGNC[1].
-  static final String RECORDED_CAPTURE_MODES = "KGCM";
-  private static final String NO_CAPTURE_MOVE = "KGNC";
   // The same ASCII whitespace set as the legacy regex \s, including vertical tab.
   private static final String SGF_WHITESPACE = " \t\n\r\f\u000B";
   private static final String[] markupProps = new String[] {"LB", "CR", "SQ", "MA", "TR"};
@@ -486,7 +483,7 @@ public class SGFParser {
 
   private static int[] decodeMove(String value, int width, int height) {
     // Historical SGF uses tt for a pass on boards up to 19x19.
-    if (width <= 19 && height <= 19 && "tt".equals(value)) return null;
+    if (SgfDocument.isPassPoint(value, width, height)) return null;
     return convertSgfPosToCoord(value, width, height);
   }
 
@@ -583,6 +580,7 @@ public class SGFParser {
     int width = history.getData().zobrist.width();
     int height = history.getData().zobrist.height();
     ImportMoves importMoves = options.importMoves(document, cancellation);
+    history.getData().recordsCaptureModes = importMoves.captureModes.recorded();
     var events = importMoves.eventsForBuild(
         document, Set.of("PB", "PW", "RE", "KM", "KO", "DZ"), cancellation);
 
@@ -657,7 +655,7 @@ public class SGFParser {
             pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
             break;
           }
-          if (importMoves.consumesCaptureMode(tag)) break;
+          if (importMoves.captureModes.ownedProperties().contains(event)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -669,14 +667,11 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = decodeMove(tagContent, width, height);
-            // Save the step count
-            //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
-            if (!importMoves.play(history, move, color, newBranch, eventIndex)) {
+            if (!importMoves.play(history, event, tagContent, color, newBranch)) {
               pendingNodeMetadata.clear();
-              eventIndex = endOfRejectedVariation(document, eventIndex, cancellation) - 1;
+              eventIndex = endOfRejectedVariation(events, eventIndex, cancellation) - 1;
               break;
             }
             currentNodeHasMove = true;
@@ -1661,7 +1656,7 @@ public class SGFParser {
       rootData.setProperty("RE", Escaping(result));
       rootData.setProperty("SZ", boardSizeTag);
       rootData.setProperty("CA", "UTF-8");
-      boolean recordedCaptureModes = "1".equals(rootData.getProperty(RECORDED_CAPTURE_MODES));
+      boolean recordedCaptureModes = rootData.recordsCaptureModes;
       builder.append(materializedRootSetupProperties(rootData, saveContext));
 
       // The AW/AB Comment
@@ -1875,11 +1870,8 @@ public class SGFParser {
       // Node properties
       Map<String, List<String>> properties = data.getProperties();
       if (recordedCaptureModes && data.isMoveNode()) {
-        if (properties.containsKey(NO_CAPTURE_MOVE)) {
-          properties = new LinkedHashMap<>(properties);
-          properties.remove(NO_CAPTURE_MOVE);
-        }
-        if (data.playedWithoutCaptures) builder.append(NO_CAPTURE_MOVE).append("[1]");
+        properties = SgfCaptureModes.withFlag(
+            properties, SgfCaptureModes.MOVE_FLAG, data.playedWithoutCaptures);
       }
       builder.append(propertiesString(properties));
 
@@ -1923,7 +1915,8 @@ public class SGFParser {
     }
     String observedPosition = SgfRootPosition.encode(rootData, width, height);
     if (observedPosition != null) addProperty(properties, SgfRootPosition.PROPERTY, observedPosition);
-    return propertiesString(properties);
+    return propertiesString(SgfCaptureModes.withFlag(
+        properties, SgfCaptureModes.ROOT_FLAG, rootData.recordsCaptureModes));
   }
 
   private static boolean isSetupSerializationProperty(String key) {
@@ -3509,7 +3502,7 @@ public class SGFParser {
       case "AP", "CA", "FF", "GM", "ST", "SZ",
           "AN", "BR", "BT", "CP", "DT", "EV", "GN", "GC", "ON", "OT", "PB", "PC",
           "PW", "RE", "RO", "RU", "SO", "TM", "US", "WR", "WT", "HA", "KM",
-          "DZ", "KO", RECORDED_CAPTURE_MODES -> true;
+          "DZ", "KO", SgfCaptureModes.ROOT_FLAG -> true;
       default -> false;
     };
   }
@@ -4029,7 +4022,7 @@ public class SGFParser {
             current.stones,
             Optional.empty(),
             Stone.EMPTY,
-            current.blackToPlay,
+            history.getCurrentHistoryNode().blackToPlayAfterHistory(),
             current.zobrist,
             current.moveNumber,
             current.moveNumberList,
@@ -4093,57 +4086,77 @@ public class SGFParser {
 
   // Leave the closing event for the normal parser to restore the variation's original parent.
   private static int endOfRejectedVariation(
-      SgfDocument document, int moveIndex, SgfCancellation cancellation) {
+      List<SgfDocument.Event> events, int moveIndex, SgfCancellation cancellation) {
     int nested = 0;
-    for (int i = moveIndex + 1; i < document.events().size(); i++) {
+    for (int i = moveIndex + 1; i < events.size(); i++) {
       cancellation.checkEvery(i);
-      char kind = document.events().get(i).kind();
+      char kind = events.get(i).kind();
       if (kind == '(') nested++;
       if (kind == ')') {
         if (nested == 0) return i;
         nested--;
       }
     }
-    return document.events().size();
+    return events.size();
   }
 
   private record ImportMoves(boolean defaultNoCapture, boolean canSuicidal, boolean savedByKgNext,
-      BitSet recordedNoCapture) {
-    // Apply game-wide fields only after the move in their node has been accepted. The readers
-    // have different legacy game-info fields. Keep the other tags in order and all events
-    // within their original node so the capture-mode mask and subtree boundaries still apply.
+      SgfCaptureModes captureModes) {
+    // Prepare each recorded node before either reader applies its properties. A malformed move
+    // rejects its entire variation, including setup and annotations appearing before the move.
     List<SgfDocument.Event> eventsForBuild(
         SgfDocument document, Set<String> gameFields, SgfCancellation cancellation) {
-      List<SgfDocument.Event> source = document.events();
+      var source = document.events();
       if (!savedByKgNext) return source;
-      List<SgfDocument.Event> ordered = source;
-      int firstField = -1;
-      for (int i = 0; i < source.size(); i++) {
+      List<SgfDocument.Event> result = null;
+      int copied = 0;
+      for (int i = 0; i < source.size();) {
         cancellation.checkEvery(i);
-        var event = source.get(i);
-        if (event.kind() != 'P') {
-          firstField = -1;
-        } else if (gameFields.contains(event.name())) {
-          if (firstField < 0) firstField = i;
-        } else if (firstField >= 0 && ("B".equals(event.name()) || "W".equals(event.name()))) {
-          if (ordered == source) ordered = new ArrayList<>(source);
-          int dest = firstField;
-          for (int p = firstField; p <= i; p++) {
-            cancellation.checkEvery(p);
-            if (!gameFields.contains(source.get(p).name())) ordered.set(dest++, source.get(p));
+        if (source.get(i).kind() != 'P') {
+          i++;
+          continue;
+        }
+        int nodeStart = i;
+        int firstField = -1;
+        int move = -1;
+        boolean malformed = false;
+        while (i < source.size() && source.get(i).kind() == 'P') {
+          cancellation.checkEvery(i);
+          var event = source.get(i++);
+          if (gameFields.contains(event.name()) && firstField < 0) firstField = i - 1;
+          if ("B".equals(event.name()) || "W".equals(event.name())) {
+            move = i - 1;
+            String point = event.legacyValue(cancellation);
+            if (!SgfDocument.isPassPoint(point, document.width(), document.height())
+                && SgfDocument.parseBoardPoint(point, document.width(), document.height()) == null) {
+              malformed = true;
+              break;
+            }
           }
-          for (int p = firstField; p < i; p++) {
+        }
+        if (malformed) {
+          if (result == null) result = new ArrayList<>();
+          result.addAll(source.subList(copied, nodeStart));
+          i = endOfRejectedVariation(source, move, cancellation);
+          copied = i;
+        } else if (firstField >= 0 && firstField < move) {
+          // Delay game-wide metadata until the move passes the board's legality check.
+          if (result == null) result = new ArrayList<>(source.size());
+          result.addAll(source.subList(copied, firstField));
+          for (int p = firstField; p <= move; p++) {
             cancellation.checkEvery(p);
-            if (gameFields.contains(source.get(p).name())) ordered.set(dest++, source.get(p));
+            if (!gameFields.contains(source.get(p).name())) result.add(source.get(p));
           }
-          firstField = -1;
+          for (int p = firstField; p < move; p++) {
+            cancellation.checkEvery(p);
+            if (gameFields.contains(source.get(p).name())) result.add(source.get(p));
+          }
+          copied = move + 1;
         }
       }
-      return ordered;
-    }
-
-    boolean consumesCaptureMode(String tag) {
-      return recordedNoCapture != null && NO_CAPTURE_MOVE.equals(tag);
+      if (result == null) return source;
+      result.addAll(source.subList(copied, source.size()));
+      return result;
     }
 
     boolean startsActionVariation(BoardHistoryNode parent) {
@@ -4164,14 +4177,17 @@ public class SGFParser {
     }
 
     // A rejected recorded action has no history node to own its payload or its continuation.
-    boolean play(BoardHistoryList history, int[] move, Stone color, boolean newBranch, int eventIndex) {
+    boolean play(BoardHistoryList history, SgfDocument.Event event, String point, Stone color,
+        boolean newBranch) {
+      var board = history.getData().zobrist;
+      int[] move = decodeMove(point, board.width(), board.height());
       if (move == null) {
         if (savedByKgNext) history.passFromRecord(color, newBranch);
         else history.pass(color, newBranch, false);
         return true;
       }
       boolean noCapture =
-          recordedNoCapture == null ? defaultNoCapture : recordedNoCapture.get(eventIndex);
+          captureModes.recorded() ? captureModes.noCaptureMoves().contains(event) : defaultNoCapture;
       if (savedByKgNext) {
         BoardHistoryNode parent = history.getCurrentHistoryNode();
         history.placeRecordedMove(move[0], move[1], color, newBranch, noCapture, canSuicidal);
@@ -4189,13 +4205,11 @@ public class SGFParser {
     private ImportMoves importMoves(SgfDocument document, SgfCancellation cancellation) {
       // Our saves preserve the original RU even when manual rules allowed a recorded self-capture.
       if (isKgNextSgf(document.rootProperty("AP", cancellation))) {
-        BitSet recorded = "1".equals(document.rootProperty(RECORDED_CAPTURE_MODES, cancellation))
-            ? document.nodesWithProperty(NO_CAPTURE_MOVE, "1", cancellation) : null;
-        return new ImportMoves(noCapture, true, true, recorded);
+        return new ImportMoves(noCapture, true, true, SgfCaptureModes.read(document, cancellation));
       }
       boolean suicide = BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
           .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
-      return new ImportMoves(noCapture, suicide, false, null);
+      return new ImportMoves(noCapture, suicide, false, SgfCaptureModes.UNMARKED);
     }
 
     public static ParseOptions capture() {
@@ -4307,6 +4321,7 @@ public class SGFParser {
     BoardHistoryNode importParent = history.getCurrentHistoryNode();
     int existingChildren = importParent.numberOfChildren();
     ImportMoves importMoves = options.importMoves(document, SgfCancellation.NONE);
+    if (!isBranch) history.getData().recordsCaptureModes = importMoves.captureModes.recorded();
     var events = importMoves.eventsForBuild(
         document, Set.of("PB", "PW", "RE", "KM", "HA"), SgfCancellation.NONE);
     int subTreeDepth = 0;
@@ -4377,7 +4392,7 @@ public class SGFParser {
             pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
             break;
           }
-          if (importMoves.consumesCaptureMode(tag)) break;
+          if (importMoves.captureModes.ownedProperties().contains(event)) break;
           // We got tag, we can parse this tag now.
           if (tag.equals("DD") && "true".equals(tagContent)) {
             appendDummyPlaceholder(history);
@@ -4389,14 +4404,11 @@ public class SGFParser {
             }
             moveStart = true;
             addPassForMove = !currentNodeHasSetupSnapshot;
-            int[] move = decodeMove(tagContent, history.getData().zobrist.width(), history.getData().zobrist.height());
-            // Save the step count
-            //  subTreeStepMap.put(subTreeDepth, subTreeStepMap.get(subTreeDepth) + 1);
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
-            if (!importMoves.play(history, move, color, newBranch, eventIndex)) {
+            if (!importMoves.play(history, event, tagContent, color, newBranch)) {
               pendingNodeMetadata.clear();
-              eventIndex = endOfRejectedVariation(document, eventIndex, SgfCancellation.NONE) - 1;
+              eventIndex = endOfRejectedVariation(events, eventIndex, SgfCancellation.NONE) - 1;
               break;
             }
             currentNodeHasMove = true;

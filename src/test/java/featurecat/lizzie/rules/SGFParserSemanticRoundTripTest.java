@@ -623,6 +623,59 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"custom, false", "1, false", "1, true", "KG-next/plain, true"})
+  void foreignCapturePropertiesSurviveSavingAndEditing(String value, boolean noCapture) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;SZ[5]AP[Other]KGCM[1]AB[ba][ee]AW[aa];B[ab]KGNC[" + value + "])";
+      Board board = fixture.board();
+      for (boolean edited : List.of(false, true)) {
+        Lizzie.config.noCapture = noCapture;
+        assertTrue(SGFParser.loadFromStringforedit(game));
+        if (edited) board.editMove(new int[] {4, 4}, false, true);
+        String saved = SGFParser.saveToString(false);
+        assertTrue(saved.contains("KGNC[" + value + "]"), saved);
+        Lizzie.config.noCapture = !noCapture;
+        boolean reopenedWithoutCaptures = edited ? noCapture : !noCapture;
+        assertTrue(SGFParser.loadFromStringforedit(saved));
+        for (var reopened : List.of(board.getHistory(), SGFParser.parseSgf(saved, true))) {
+          var root = reopened.getStart().getData();
+          assertEquals(List.of("1"), root.getPropertyValues("KGCM"));
+          assertEquals(edited ? Stone.EMPTY : Stone.BLACK, root.stones[Board.getIndex(4, 4)]);
+          var move = reopened.getEnd().getData();
+          assertEquals(List.of(value), move.getPropertyValues("KGNC"));
+          assertEquals(reopenedWithoutCaptures ? Stone.WHITE : Stone.EMPTY,
+              move.stones[Board.getIndex(0, 0)]);
+          assertEquals(reopenedWithoutCaptures ? 0 : 1, move.blackCaptures);
+        }
+        assertTrue(SGFParser.saveToString(false).contains("KGNC[" + value + "]"));
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({
+      "5, a, dd, ''", "5, aaa, dd, ''", "5, zz, dd, PL[W]", "5, a, dd, AB[bb]C[before]",
+      "52, bogus, 3_3, ''", "52, 0_0_, 3_3, PL[W]"
+  })
+  void malformedRecordedCoordinatesDiscardOnlyTheirVariation(
+      int size, String bad, String good, String leadingProperties) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(size)) {
+      String game = "(;AP[KG-next]SZ[" + size + "](;" + leadingProperties
+          + "B[" + bad + "]C[invalid];W[" + good
+          + "])(;B[" + good + "]C[valid]))";
+      assertTrue(SGFParser.loadFromStringforedit(game));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+        var root = history.getStart();
+        assertEquals(1, root.numberOfChildren());
+        var child = root.getVariation(0).orElseThrow();
+        assertEquals("valid", child.getData().comment);
+        assertArrayEquals(new int[] {3, 3}, child.getData().lastMove.orElseThrow());
+      }
+      assertFalse(SGFParser.saveToString(false).contains("invalid"));
+    }
+  }
+
+  @ParameterizedTest
   @CsvSource({"KG-next, KGCM[1], WHITE, 2", "KG-next, '', EMPTY, 2", "Other, KGCM[1], EMPTY, 1"})
   void onlyMarkedKgNextGamesReadCaptureOverridesOnTheirOwnVariation(
       String producer, String marker, Stone expected, int variationCount) throws Exception {

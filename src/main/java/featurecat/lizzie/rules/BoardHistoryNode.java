@@ -1086,13 +1086,17 @@ public class BoardHistoryNode {
         || "B".equalsIgnoreCase(player) == previous.get().blackToPlayAfterHistory();
   }
 
-  private boolean blackToPlayAfterHistory() {
+  /** Side to play after this path, independent of the first child's preferred display turn. */
+  boolean blackToPlayAfterHistory() {
     BoardHistoryNode node = this;
-    // A dummy's display turn reflects its synthetic pass color; no pass was actually played.
-    while (node.data.isPassNode() && node.data.dummy && node.previous.isPresent()) {
+    while (node.previous.isPresent() && node.data.isHistoryActionNode()) {
       String player = node.data.getProperty("PL");
       if ("B".equalsIgnoreCase(player)) return true;
       if ("W".equalsIgnoreCase(player)) return false;
+      if (!node.data.isPassNode() || !node.data.dummy) {
+        return node.data.lastMoveColor == Stone.WHITE;
+      }
+      // An annotation placeholder has no played action of its own.
       node = node.previous.get();
     }
     return node.data.blackToPlay;

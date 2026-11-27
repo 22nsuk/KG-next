@@ -20,6 +20,67 @@ class SetupReplayKoTest {
   private static final String SINGLE_KO =
       "(;SZ[5]RU[Japanese]PL[B]AB[aa][ca][ab][cb][ba]AW[bb][ac][cc][bd];B[bc]";
 
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "B[aa]|(;B[bb])(;PL[B])|1", "B[aa]|(;PL[B])(;B[bb])|0",
+      "B[]|(;B[bb])(;PL[B])|1", "B[]|(;PL[B])(;B[bb])|0"
+  })
+  void branchPlayerSnapshotUsesThePlayedTurn(String action, String branches, int selected)
+      throws Exception {
+    try (var env = RulesLayerTestHarness.open()) {
+      Lizzie.config.analysisSpecificRules = "";
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];" + action + branches + ")", true);
+      env.board().setHistory(history);
+      BoardHistoryNode branch = history.getStart().next().orElseThrow()
+          .getVariation(selected).orElseThrow();
+      var request = AnalysisRequestBuilder.buildRequest("branch", branch, 10, false, false, false);
+      assertEquals(List.of(), request.getJSONArray("moves").toList());
+      assertEquals("B", request.getString("initialPlayer"));
+      if (action.equals("B[aa]")) {
+        assertEquals(List.of(List.of("B", "A5")), request.getJSONArray("initialStones").toList());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "(;B[bb])(;AW[dd])|1", "(;AW[dd])(;B[bb])|0"
+  })
+  void setupOnlySiblingInheritsThePlayedTurn(String branches, int selected) throws Exception {
+    try (var env = RulesLayerTestHarness.open()) {
+      Lizzie.config.analysisSpecificRules = "";
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[aa]" + branches + ")", true);
+      env.board().setHistory(history);
+      BoardHistoryNode setup = history.getStart().next().orElseThrow()
+          .getVariation(selected).orElseThrow();
+      var request = AnalysisRequestBuilder.buildRequest("setup", setup, 10, false, false, false);
+      assertEquals("W", request.getString("initialPlayer"));
+      assertEquals(List.of(List.of("B", "A5"), List.of("W", "D2")),
+          request.getJSONArray("initialStones").toList());
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "(;B[ee])(;PL[W])|1", "(;PL[W])(;B[ee])|0",
+      "(;B[])(;DD[true];PL[W]C[note])|1"
+  })
+  void branchPlayerSnapshotPreservesImmediateKo(String branches, int selected) throws Exception {
+    try (var env = RulesLayerTestHarness.open()) {
+      Lizzie.config.analysisSpecificRules = "";
+      BoardHistoryList history = SGFParser.parseSgf(SINGLE_KO + branches + ")", true);
+      BoardHistoryNode branch = history.getStart().next().orElseThrow()
+          .getVariation(selected).orElseThrow();
+      if (branch.getData().dummy) branch = branch.next().orElseThrow();
+      history.setHead(branch);
+      env.board().setHistory(history);
+      var request = AnalysisRequestBuilder.buildRequest("branch-ko", branch, 10, false, false, false);
+      history.place(1, 1, Stone.WHITE);
+      assertSame(branch, history.getCurrentHistoryNode(), "immediate recapture must be rejected");
+      assertEquals(List.of(List.of("B", "B3")), request.getJSONArray("moves").toList());
+    }
+  }
+
   @Test
   void erasingLastSetupPointKeepsCaptureThroughPlayUndoAndSgf() throws Exception {
     try (var env = RulesLayerTestHarness.open()) {

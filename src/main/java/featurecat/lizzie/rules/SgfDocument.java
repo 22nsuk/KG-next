@@ -1,7 +1,6 @@
 package featurecat.lizzie.rules;
 
 import java.util.ArrayList;
-import java.util.BitSet;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -71,6 +70,11 @@ public final class SgfDocument {
 
   /** Last scalar value in the first node, regardless of its order among that node's properties. */
   String rootProperty(String name, SgfCancellation cancellation) {
+    Event property = rootPropertyEvent(name, cancellation);
+    return property == null ? null : property.legacyValue(cancellation);
+  }
+
+  Event rootPropertyEvent(String name, SgfCancellation cancellation) {
     int i = 1; // parseNormalized always starts with OPEN and tolerates a missing initial semicolon.
     if (i < events.size() && events.get(i).kind() == ';') i++;
     Event match = null;
@@ -79,27 +83,7 @@ public final class SgfDocument {
       Event property = events.get(i);
       if (name.equals(property.name())) match = property;
     }
-    return match == null ? null : match.legacyValue(cancellation);
-  }
-
-  /** Event indexes in nodes with this scalar value, independent of property order. */
-  BitSet nodesWithProperty(String name, String value, SgfCancellation cancellation) {
-    BitSet matchingEvents = new BitSet();
-    int start = 0;
-    boolean matches = false;
-    for (int i = 0; i < events.size(); i++) {
-      cancellation.checkEvery(i);
-      Event event = events.get(i);
-      if (event.kind() != 'P') {
-        if (matches) matchingEvents.set(start, i);
-        start = i + 1;
-        matches = false;
-      } else if (name.equals(event.name())) {
-        matches = value.equals(event.rawValue());
-      }
-    }
-    if (matches) matchingEvents.set(start, events.size());
-    return matchingEvents;
+    return match;
   }
 
   /** Applies the existing KG input tolerance and preserves ordered syntax without global state. */
@@ -302,8 +286,8 @@ public final class SgfDocument {
     }
     String[] ends = value.split(":", -1);
     if (ends.length != 2) return null;
-    int[] first = setupRangeEndpoint(ends[0], width, height);
-    int[] last = setupRangeEndpoint(ends[1], width, height);
+    int[] first = parseBoardPoint(ends[0], width, height);
+    int[] last = parseBoardPoint(ends[1], width, height);
     if (first == null || last == null || first[0] > last[0] || first[1] > last[1]) {
       return null;
     }
@@ -317,7 +301,11 @@ public final class SgfDocument {
     return points.toString();
   }
 
-  static int[] setupRangeEndpoint(String value, int width, int height) {
+  static boolean isPassPoint(String value, int width, int height) {
+    return value.isEmpty() || (width <= 19 && height <= 19 && "tt".equals(value));
+  }
+
+  static int[] parseBoardPoint(String value, int width, int height) {
     int[] point;
     if (width >= 52 || height >= 52) {
       String[] axes = value.trim().split("_", -1);

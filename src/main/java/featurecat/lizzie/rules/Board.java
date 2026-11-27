@@ -6647,7 +6647,7 @@ public class Board {
       // Coordinate-dependent raw properties and analysis describe the old orientation.
       // Keep the game rules, geometry and authored move numbering used when reopening the SGF.
       data.getProperties().keySet().retainAll(
-          List.of("RU", "SZ", "MN", "N", "PL", SGFParser.RECORDED_CAPTURE_MODES));
+          List.of("RU", "SZ", "MN", "N", "PL", SgfCaptureModes.ROOT_FLAG));
       if (!data.getPropertyValues("PL").isEmpty()) data.setProperty("PL", data.blackToPlay ? "B" : "W");
       BoardHistoryNode copied = source.copyForRestore(data);
       copied.clearAnalysisAfterSetupEdit();

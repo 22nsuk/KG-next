@@ -39,8 +39,8 @@ final class SnapshotSetup {
       BitSet points, BoardData data, String key, String value, int width, int height) {
     String[] ends = value.split(":", -1);
     if (ends.length > 2) return;
-    int[] first = SgfDocument.setupRangeEndpoint(ends[0], width, height);
-    int[] last = ends.length == 1 ? first : SgfDocument.setupRangeEndpoint(ends[1], width, height);
+    int[] first = SgfDocument.parseBoardPoint(ends[0], width, height);
+    int[] last = ends.length == 1 ? first : SgfDocument.parseBoardPoint(ends[1], width, height);
     if (first == null || last == null) return;
     for (int x = first[0]; x <= last[0]; x++) {
       for (int y = first[1]; y <= last[1]; y++) {

@@ -222,11 +222,13 @@ class SGFDetachedParseTest {
   @Test
   void ttRemainsARealCoordinateOnLargerBoards() throws Exception {
     try (var harness = RulesLayerTestHarness.open(19)) {
-      var history = SGFParser.parseSgf("(;SZ[20:21];B[tt];W[])", true, OPTIONS);
-      var move = history.getStart().next().orElseThrow();
-      assertArrayEquals(new int[] {19, 19}, move.getData().lastMove.orElseThrow());
-      assertEquals(Stone.BLACK, move.getData().stones[19 * 21 + 19]);
-      assertTrue(move.next().orElseThrow().getData().isPassNode());
+      for (String producer : java.util.List.of("", "AP[KG-next]")) {
+        var history = SGFParser.parseSgf("(;SZ[20:21]" + producer + ";B[tt];W[])", true, OPTIONS);
+        var move = history.getStart().next().orElseThrow();
+        assertArrayEquals(new int[] {19, 19}, move.getData().lastMove.orElseThrow());
+        assertEquals(Stone.BLACK, move.getData().stones[19 * 21 + 19]);
+        assertTrue(move.next().orElseThrow().getData().isPassNode());
+      }
     }
   }
 

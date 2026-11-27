@@ -78,7 +78,7 @@ record SgfRootPosition(String value, int eventCount) {
 
   private static int[] stonePoint(BoardData data, String token) {
     if (token.isEmpty() || (token.charAt(0) != 'B' && token.charAt(0) != 'W')) return null;
-    int[] point = SgfDocument.setupRangeEndpoint(
+    int[] point = SgfDocument.parseBoardPoint(
         token.substring(1), data.zobrist.width(), data.zobrist.height());
     Stone color = token.charAt(0) == 'B' ? Stone.BLACK : Stone.WHITE;
     return point != null && data.stones[data.zobrist.index(point[0], point[1])] == color ? point : null;

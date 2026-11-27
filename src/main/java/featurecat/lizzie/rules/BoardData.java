@@ -279,6 +279,7 @@ public class BoardData implements Cloneable {
   private BoardNodeKind nodeKind;
   // A move keeps the capture policy used when it was played, even if the UI option changes.
   boolean playedWithoutCaptures;
+  boolean recordsCaptureModes; // Root provenance, independent of opaque SGF property values.
   // A branch numbering reset also applies to inherited stones exposed by an edit.
   boolean hidesInheritedMoveNumbers;
 
@@ -1266,6 +1267,7 @@ public class BoardData implements Cloneable {
         forSave ? null : moveNumberList, blackCaptures, whiteCaptures, winrate, playouts);
     data.moveMNNumber = moveMNNumber;
     data.playedWithoutCaptures = playedWithoutCaptures;
+    data.recordsCaptureModes = recordsCaptureModes;
     data.hidesInheritedMoveNumbers = hidesInheritedMoveNumbers;
     data.dummy = dummy;
     data.verify = verify;
@@ -1676,13 +1678,15 @@ public class BoardData implements Cloneable {
   }
 
   boolean hasSameReplayMetadata(BoardData other) {
-    return playedWithoutCaptures == other.playedWithoutCaptures
+    return recordsCaptureModes == other.recordsCaptureModes
+        && playedWithoutCaptures == other.playedWithoutCaptures
         && hidesInheritedMoveNumbers == other.hidesInheritedMoveNumbers
         && moveMNNumber == other.moveMNNumber
         && Arrays.equals(moveNumberList, other.moveNumberList);
   }
 
   void copyReplayMetadataFrom(BoardData other) {
+    recordsCaptureModes = other.recordsCaptureModes;
     playedWithoutCaptures = other.playedWithoutCaptures;
     hidesInheritedMoveNumbers = other.hidesInheritedMoveNumbers;
     moveMNNumber = other.moveMNNumber;
