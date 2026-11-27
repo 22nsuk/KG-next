@@ -53,7 +53,7 @@ public class BoardHistoryNode {
   static boolean startsBranchNumberingAtOne() {
     Boolean detachedBranchNumbering = DETACHED_BRANCH_NUMBERING.get();
     return detachedBranchNumbering != null
-        ? detachedBranchNumbering : Lizzie.config.newMoveNumberInBranch;
+        ? detachedBranchNumbering : Lizzie.config != null && Lizzie.config.newMoveNumberInBranch;
   }
 
   /** Initializes a new list node */
@@ -201,6 +201,19 @@ public class BoardHistoryNode {
     } else if (!restartNumbering && child.moveMNNumber == -1) {
       // An observed midgame root has no preceding action nodes to supply a display number.
       child.moveMNNumber = child.moveNumber;
+    }
+  }
+
+  /** Number a newly played move before captures remove labels. A reserved main line counts as a fork. */
+  public void initializePlayedMoveNumber(BoardData move, boolean startsVariation) {
+    boolean restart = startsVariation && startsBranchNumberingAtOne();
+    move.moveMNNumber = restart ? 1 : data.nextMoveMNNumber(false);
+    if (restart) move.clearInheritedMoveNumbers();
+    else if (move.moveMNNumber == -1) initializeRootChildNumber(move, false);
+    if (move.moveNumberList != null) {
+      int[] point = move.lastMove.orElseThrow();
+      move.moveNumberList[move.zobrist.index(point[0], point[1])] =
+          move.moveMNNumber >= 0 ? move.moveMNNumber : move.moveNumber;
     }
   }
 

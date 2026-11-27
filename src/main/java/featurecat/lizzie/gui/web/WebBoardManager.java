@@ -2,6 +2,7 @@ package featurecat.lizzie.gui.web;
 
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.analysis.EngineFollowController;
+import featurecat.lizzie.analysis.EngineManager;
 import featurecat.lizzie.analysis.Leelaz;
 import featurecat.lizzie.gui.Menu;
 import featurecat.lizzie.rules.Board;
@@ -10,6 +11,7 @@ import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
 import featurecat.lizzie.rules.Stone;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.net.BindException;
 import java.net.Inet4Address;
 import java.net.InetAddress;
@@ -179,6 +181,8 @@ public class WebBoardManager {
         javax.swing.SwingUtilities.invokeLater(() -> Lizzie.frame.refresh());
       };
   private volatile TrialSession activeSession;
+  // Exit/expiry can finish between history publication and the desktop restore notification.
+  private WeakReference<BoardHistoryList> historyAwaitingTrialHandback = new WeakReference<>(null);
 
   private volatile EngineFollowController engineController;
   private volatile java.util.function.BooleanSupplier desktopPlayingProbe = () -> false;
@@ -656,6 +660,7 @@ public class WebBoardManager {
               || (capturedBoard != null
                   && (Lizzie.board != capturedBoard
                       || capturedBoard.getHistory() != session.sourceHistory
+                      || (!EngineManager.isEmpty && capturedBoard.isEngineAlignmentPending())
                       || !belongsToHistory(session.sourceHistory, anchor)
                       || (capturedServer != null
                           && session.sourceHistory.getCurrentHistoryNode() != anchor)))) {
@@ -723,8 +728,35 @@ public class WebBoardManager {
     transitionTrial(session -> true, this::endTrial);
   }
 
+  /** Called under the source history monitor when copying a game that will outlive this trial. */
+  public BoardHistoryNode unusedTrialPlaceholder(BoardHistoryList history) {
+    TrialSession s = activeSession;
+    if (s == null || s.sourceHistory != history || s.mainlineDummy == null) return null;
+    BoardHistoryNode dummy = s.mainlineDummy;
+    return s.anchorNode.variations.size() == 1 && s.anchorNode.variations.get(0) == dummy
+        && dummy.isEndDummay() && history.getCurrentHistoryNode() != dummy ? dummy : null;
+  }
+
+  /** Release the old display and order the desktop restore after any in-flight trial commands. */
+  public boolean deferRestoreUntilTrialExit(BoardHistoryList history, Runnable restoreOnEdt) {
+    synchronized (trialTransitionLock) {
+      transitionTrial(
+          session -> session.sourceBoard != null && !validTrialBoard(session),
+          this::endTrial);
+      boolean replaced = history != null && historyAwaitingTrialHandback.get() == history;
+      historyAwaitingTrialHandback.clear();
+      EngineFollowController controller = engineController;
+      if (activeSession == null && controller != null
+          && (replaced || controller.isTrialActive())) {
+        controller.afterPendingCommands(() -> javax.swing.SwingUtilities.invokeLater(restoreOnEdt));
+        return true;
+      }
+      return false;
+    }
+  }
+
   private enum TrialChange {
-    NONE, ACTIVITY, DISPLAY, EXIT
+    NONE, ACTIVITY, DISPLAY, EXIT, REPLACED
   }
 
   private void transitionTrial(
@@ -736,13 +768,13 @@ public class WebBoardManager {
           () -> activeSession == session && authorized.test(session)
               ? update.apply(session) : TrialChange.NONE);
       // Keep callbacks in transition order, but never let them retain Board/history or manager.
-      if (change == TrialChange.EXIT) {
+      if (change == TrialChange.EXIT || change == TrialChange.REPLACED) {
         cancelIdleTimer(session);
         applyOverrideAndRefresh(null);
         EngineFollowController controller = engineController;
         if (controller != null) {
-          BoardHistoryNode tail = mainlineTailSupplier.get();
-          if (tail != null) controller.onTrialExit(tail);
+          // On history restore, the desktop coordinator owns the final rules, position and ponder.
+          controller.onTrialExit(change == TrialChange.REPLACED ? null : mainlineTailSupplier.get());
         }
         publishTrialState();
       } else {
@@ -781,6 +813,13 @@ public class WebBoardManager {
   private TrialChange endTrial(TrialSession session) {
     cleanupMainlineDummy(session);
     activeSession = null;
+    // Exit or idle expiry may win after the edit commits, before its GUI notification runs.
+    Board board = session.sourceBoard;
+    if (board != null && board == Lizzie.board && board.getHistory() != session.sourceHistory
+        && board.isEngineAlignmentPending()) {
+      historyAwaitingTrialHandback = new WeakReference<>(board.getHistory());
+      return TrialChange.REPLACED;
+    }
     return TrialChange.EXIT;
   }
 
@@ -841,8 +880,12 @@ public class WebBoardManager {
   }
 
   public void trialNavigate(String clientId, String direction) {
-    transitionTrial(session -> session.ownerClientId.equals(clientId),
+    navigateTrial(clientId,
         session -> trialNavigate(session, direction));
+  }
+
+  private void navigateTrial(String clientId, Function<TrialSession, TrialChange> update) {
+    transitionTrial(session -> session.ownerClientId.equals(clientId) && validTrialBoard(session), update);
   }
 
   private TrialChange trialNavigate(TrialSession s, String direction) {
@@ -869,7 +912,7 @@ public class WebBoardManager {
   }
 
   public void trialNavigateForward(String clientId, int childIndex) {
-    transitionTrial(session -> session.ownerClientId.equals(clientId),
+    navigateTrial(clientId,
         session -> trialNavigateForward(session, childIndex));
   }
 
@@ -882,7 +925,7 @@ public class WebBoardManager {
   }
 
   public void trialReset(String clientId) {
-    transitionTrial(session -> session.ownerClientId.equals(clientId), WebBoardManager::trialReset);
+    navigateTrial(clientId, WebBoardManager::trialReset);
   }
 
   private static TrialChange trialReset(TrialSession s) {
@@ -930,11 +973,11 @@ public class WebBoardManager {
             parentData.whiteCaptures,
             0,
             0);
+    parent.initializePlayedMoveNumber(newData, !parent.variations.isEmpty());
     int suicidalStones = newData.applyMoveToPosition(false);
     boolean canSuicidal = Lizzie.leelaz != null && Lizzie.leelaz.canSuicidal;
     if (suicidalStones > 0 && (!canSuicidal || suicidalStones == 1)) return false;
     if (newData.moveNumberList != null) {
-      newData.moveNumberList[idx] = newMoveNumber;
       for (int i = 0; i < newData.stones.length; i++) {
         if (newData.stones[i] == Stone.EMPTY) newData.moveNumberList[i] = 0;
       }

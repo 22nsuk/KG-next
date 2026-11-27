@@ -5312,6 +5312,22 @@ public class LizzieFrame extends JFrame {
 
   /** Internal history restoration keeps the pause policy and never starts file-open analysis. */
   public void synchronizeRestoredGame(boolean resumeAnalysis) {
+    Board board = Lizzie.board;
+    BoardHistoryList history = board == null ? null : board.getHistory();
+    Leelaz engine = Lizzie.leelaz;
+    if (Lizzie.webBoardManager != null
+        && Lizzie.webBoardManager.deferRestoreUntilTrialExit(history, () -> {
+          if (Lizzie.board != board || (board != null && board.getHistory() != history)) return;
+          // A trial replay can temporarily stop ponder while the desktop captures its edit.
+          scheduleRestoredGameSync(resumeAnalysis
+              || (engine != null && engine == Lizzie.leelaz && engine.isPondering()));
+        })) {
+      return;
+    }
+    scheduleRestoredGameSync(resumeAnalysis);
+  }
+
+  private void scheduleRestoredGameSync(boolean resumeAnalysis) {
     scheduleEngineSyncAndResumeAfterKifuLoad(
         0,
         resumeAnalysis

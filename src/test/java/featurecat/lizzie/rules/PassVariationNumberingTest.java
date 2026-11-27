@@ -9,11 +9,48 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import featurecat.lizzie.Lizzie;
+import featurecat.lizzie.gui.LizzieFrame;
+import java.util.List;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class PassVariationNumberingTest {
+  @ParameterizedTest
+  @CsvSource({"true,true", "true,false", "false,true", "false,false"})
+  void localVariationsAtLiveEndKeepTheirNumbersAcrossSave(boolean urlGame, boolean restart)
+      throws Exception {
+    try (RulesLayerTestHarness env = RulesLayerTestHarness.open()) {
+      Lizzie.config.newMoveNumberInBranch = restart;
+      Board board = env.board();
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[5];B[aa]MN[20])", true);
+      history.setHead(history.getMainEnd());
+      board.setHistory(history);
+      LizzieFrame.urlSgf = urlGame;
+      Lizzie.frame.syncBoard = !urlGame;
+
+      BoardHistoryNode fork = env.current();
+      board.place(1, 1, Stone.WHITE);
+      board.pass(Stone.BLACK);
+      board.place(3, 3, Stone.WHITE);
+      history.setHead(fork);
+      board.place(2, 2, Stone.WHITE);
+      assertSame(fork, history.getMainEnd());
+
+      BoardHistoryList reopened = SGFParser.parseSgf(SGFParser.saveToString(false), true);
+      for (BoardHistoryList record : List.of(history, reopened)) {
+        BoardHistoryNode parent = record.getStart().next().orElseThrow();
+        BoardHistoryNode first = parent.getVariation(1).orElseThrow();
+        BoardHistoryNode second = parent.getVariation(2).orElseThrow();
+        assertEquals(restart ? 0 : 20, first.getData().moveNumberList[Board.getIndex(0, 0)]);
+        assertEquals(restart ? 1 : 21, first.getData().moveNumberList[Board.getIndex(1, 1)]);
+        assertEquals(restart ? 1 : 21, second.getData().moveNumberList[Board.getIndex(2, 2)]);
+        BoardData afterPass = first.next().orElseThrow().next().orElseThrow().getData();
+        assertEquals(restart ? 3 : 23, afterPass.moveNumberList[Board.getIndex(3, 3)]);
+      }
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {true, false})
   void promotingAVariationFromAnObservedRootKeepsItsAbsoluteNumber(boolean restart)

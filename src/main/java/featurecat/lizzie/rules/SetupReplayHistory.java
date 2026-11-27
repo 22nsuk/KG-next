@@ -6,8 +6,10 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 /** Compares each edited variation's play history with its original for ko and analysis reuse. */
 final class SetupReplayHistory {
@@ -55,7 +57,8 @@ final class SetupReplayHistory {
   }
 
   /** Reject newly illegal moves and retain analysis whose inputs still match on the private copy. */
-  boolean validateContinuations(BoardHistoryNode owner, BoardHistoryNode copiedOwner, int handicap) {
+  boolean validateContinuations(BoardHistoryNode owner, BoardHistoryNode copiedOwner, int handicap,
+      Function<BoardHistoryNode, List<BoardHistoryNode>> children) {
     // Erasing the only setup point can expose positions before the owner.
     ArrayDeque<Frame> prefix = new ArrayDeque<>();
     for (BoardHistoryNode original = owner, edited = copiedOwner; original != null;
@@ -76,7 +79,8 @@ final class SetupReplayHistory {
     path.push(parent);
     while (!path.isEmpty()) {
       parent = path.peek();
-      if (parent.nextChild == parent.original.numberOfChildren()) {
+      List<BoardHistoryNode> originalChildren = children.apply(parent.original);
+      if (parent.nextChild == originalChildren.size()) {
         path.pop();
         if (parent.addedEdit != null) {
           Set<Position> originals = history.get(parent.addedEdit);
@@ -85,8 +89,7 @@ final class SetupReplayHistory {
         }
       } else {
         int child = parent.nextChild++;
-        Frame next = new Frame(parent.original.getVariations().get(child),
-            parent.edited.getVariations().get(child));
+        Frame next = new Frame(originalChildren.get(child), parent.edited.getVariations().get(child));
         if (introducesKo(parent, next, history)) return false;
         remember(parent, next, history);
         next.sameAnalysisHistory = sameAnalysisHistory(parent, next, handicap);

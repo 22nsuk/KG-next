@@ -61,13 +61,19 @@ public class EngineFollowController {
     executor.submit(() -> forceResync(node));
   }
 
+  /** A null target hands position restoration to the desktop after the pending trial commands. */
   public void onTrialExit(BoardHistoryNode mainlineTail) {
     executor.submit(
         () -> {
-          forceResync(mainlineTail);
+          if (mainlineTail == null) currentEngineNode = null;
+          else forceResync(mainlineTail);
           trialActive = false;
           Menu.requestBreadthAdmissionRefresh();
         });
+  }
+
+  public void afterPendingCommands(Runnable action) {
+    executor.execute(action);
   }
 
   /** Queues a final root-position resync when starting-position setup mode exits. */

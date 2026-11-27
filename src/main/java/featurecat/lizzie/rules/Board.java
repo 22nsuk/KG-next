@@ -2778,8 +2778,6 @@ public class Board {
       }
       BoardData parent = history.getData();
       int moveNumber = parent.moveNumber + 1;
-      boolean appendVariation = newBranch || atLiveRecordEnd;
-      int moveMNNumber = parent.nextMoveMNNumber(appendVariation);
       // Detach the parent once, then mutate only this unpublished candidate. Rejected moves
       // discard it without changing the parent or any existing variation.
       BoardData newState =
@@ -2795,14 +2793,19 @@ public class Board {
               parent.whiteCaptures,
               nextWinrate,
               0);
-      newState.moveMNNumber = moveMNNumber;
       Stone[] stones = newState.stones;
       int[] moveNumberList = newState.moveNumberList;
-      if (atLiveRecordEnd || (newBranch && history.getNext(true).isPresent())) {
-        newState.clearInheritedMoveNumbers();
+      int index = getIndex(x, y);
+      if (newBranch) {
+        // Explicit branches discard the source sequence even when branch numbering is continuous.
+        if (atLiveRecordEnd || history.getNext(true).isPresent()) {
+          newState.clearInheritedMoveNumbers();
+        }
+        moveNumberList[index] = moveNumber;
+      } else {
+        history.getCurrentHistoryNode().initializePlayedMoveNumber(newState, atLiveRecordEnd);
       }
-      if (Lizzie.frame.isTrying) moveNumberList[Board.getIndex(x, y)] = -moveNumber;
-      else moveNumberList[Board.getIndex(x, y)] = moveMNNumber > -1 ? moveMNNumber : moveNumber;
+      if (Lizzie.frame.isTrying) moveNumberList[index] = -moveNumber;
 
       int selfCaptured = newState.applyMoveToPosition(Lizzie.config.noCapture);
       for (int i = 0; i < Board.boardWidth * Board.boardHeight; i++) {
@@ -2869,7 +2872,7 @@ public class Board {
           // Reserve the main line for the next remote move without playing a pass on the engine.
           history.pass(color, false, true, false, true);
         }
-        history.addOrGoto(newState, appendVariation);
+        history.addOrGoto(newState, newBranch || atLiveRecordEnd);
       } else {
         clearAfterMove();
       }
@@ -6606,6 +6609,7 @@ public class Board {
     record Pending(BoardHistoryNode source, BoardHistoryNode parent) {}
     ArrayDeque<Pending> pending = new ArrayDeque<>();
     pending.add(new Pending(root, null));
+    var children = history.childrenForRestore();
     while (!pending.isEmpty()) {
       Pending next = pending.removeFirst();
       BoardHistoryNode source = next.source();
@@ -6659,7 +6663,7 @@ public class Board {
       }
       if (next.parent() != null) copied.reparentAsLastVariationOf(next.parent());
       if (source == history.getCurrentHistoryNode()) result.setHead(copied);
-      for (BoardHistoryNode child : source.getVariations()) pending.addLast(new Pending(child, copied));
+      for (BoardHistoryNode child : children.apply(source)) pending.addLast(new Pending(child, copied));
     }
     return result;
   }

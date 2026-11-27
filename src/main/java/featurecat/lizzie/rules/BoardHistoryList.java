@@ -13,6 +13,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.WeakHashMap;
 import java.util.function.BooleanSupplier;
+import java.util.function.Function;
 import java.util.function.IntUnaryOperator;
 
 /** Linked list data structure to store board history */
@@ -361,6 +362,16 @@ public class BoardHistoryList {
 
   private record SetupEditNode(BoardHistoryNode source, BoardHistoryNode parent, boolean affected) {}
 
+  /** Child view shared by edit replay, validation and restore copies. Ordinary SGF saves keep the live tree. */
+  Function<BoardHistoryNode, List<BoardHistoryNode>> childrenForRestore() {
+    var manager = Lizzie.webBoardManager;
+    BoardHistoryNode placeholder = manager == null ? null : manager.unusedTrialPlaceholder(this);
+    if (placeholder == null) return BoardHistoryNode::getVariations;
+    // An unused session reservation is its parent's only child.
+    BoardHistoryNode anchor = placeholder.previous().orElseThrow();
+    return node -> node == anchor ? List.of() : node.getVariations();
+  }
+
   /** Replays a setup edit on a private tree; an illegal continuation rejects the whole edit. */
   BoardHistoryList editSetupStone(
       BoardHistoryNode owner, int x, int y, Stone replacement, TrialNumbering trialNumbering) {
@@ -379,6 +390,7 @@ public class BoardHistoryList {
     BoardHistoryList rebuilt = new BoardHistoryList(null);
     rebuilt.gameInfo = gameInfo;
     rebuilt.sessionRulesTarget = sessionRulesTarget;
+    var children = childrenForRestore();
     BoardHistoryNode copiedOwner = null;
     BoardHistoryNode selected = null;
     ArrayDeque<SetupEditNode> pending = new ArrayDeque<>();
@@ -446,12 +458,12 @@ public class BoardHistoryList {
       if (entry.affected() && data.isMoveNode()) copied.reapplyAuthoredMoveNumber();
       if (source == owner) copiedOwner = copied;
       if (source == head) selected = copied;
-      for (BoardHistoryNode child : source.getVariations()) {
+      for (BoardHistoryNode child : children.apply(source)) {
         pending.addLast(new SetupEditNode(child, copied, entry.affected() || child == owner));
       }
     }
     if (copiedOwner == null
-        || !replayHistory.validateContinuations(owner, copiedOwner, gameInfo.getHandicap())) {
+        || !replayHistory.validateContinuations(owner, copiedOwner, gameInfo.getHandicap(), children)) {
       return null;
     }
     rebuilt.head = selected;
@@ -596,11 +608,11 @@ public class BoardHistoryList {
       root = getStart();
       copy.gameInfo = gameInfo.copyForSave();
       copy.sessionRulesTarget = sessionRulesTarget;
+      var children = childrenForRestore();
       structure.add(new RestoreStructure(root, -1));
       for (int index = 0; index < structure.size(); index++) {
-        List<BoardHistoryNode> children = structure.get(index).node().getVariations();
-        for (int child = 0; child < children.size(); child++) {
-          structure.add(new RestoreStructure(children.get(child), index));
+        for (BoardHistoryNode child : children.apply(structure.get(index).node())) {
+          structure.add(new RestoreStructure(child, index));
         }
       }
     }

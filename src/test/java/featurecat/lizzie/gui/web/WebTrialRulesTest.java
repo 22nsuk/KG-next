@@ -2,17 +2,48 @@ package featurecat.lizzie.gui.web;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import featurecat.lizzie.ConfigTestHelper;
 import featurecat.lizzie.Lizzie;
 import featurecat.lizzie.rules.Board;
 import featurecat.lizzie.rules.BoardData;
 import featurecat.lizzie.rules.BoardHistoryList;
 import featurecat.lizzie.rules.BoardHistoryNode;
+import featurecat.lizzie.rules.SGFParser;
 import featurecat.lizzie.rules.Stone;
+import java.nio.file.Path;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class WebTrialRulesTest {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void persistedTrialMovesFollowTheRecordsNumbering(boolean restart, @TempDir Path directory)
+      throws Exception {
+    try (WebTrialTestFixture f = new WebTrialTestFixture(false)) {
+      Lizzie.config = ConfigTestHelper.createForTests(directory);
+      Lizzie.config.newMoveNumberInBranch = restart;
+      BoardHistoryList history = SGFParser.parseSgf("(;SZ[19];B[aa]MN[20])", true);
+      history.setHead(history.getEnd());
+      f.board.setHistory(history);
+      f.enter();
+      f.send(f.owner, "trial_move", "x", 1, "y", 1);
+      f.send(f.owner, "trial_move", "x", 2, "y", 2);
+      f.send(f.owner, "exit_trial");
+
+      String saved = SGFParser.saveToString(false);
+      for (BoardHistoryList record : List.of(history, SGFParser.parseSgf(saved, true))) {
+        BoardData tail =
+            record.getMainEnd().getVariation(1).orElseThrow().next().orElseThrow().getData();
+        assertEquals(restart ? 0 : 20, tail.moveNumberList[Board.getIndex(0, 0)]);
+        assertEquals(restart ? 1 : 21, tail.moveNumberList[Board.getIndex(1, 1)]);
+        assertEquals(restart ? 2 : 22, tail.moveNumberList[Board.getIndex(2, 2)]);
+      }
+    }
+  }
+
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
   void replayMatchesColorAndPreservesOriginalContinuation(boolean sameColor) throws Exception {
