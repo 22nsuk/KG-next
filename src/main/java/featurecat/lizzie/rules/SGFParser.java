@@ -613,6 +613,7 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     // Support unicode characters (UTF-8)
     boolean currentNodeHasDummy = false;
+    RecordedNodeStart recordedNode = null;
     for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
       SgfDocument.Event event = events.get(eventIndex);
       cancellation.check();
@@ -648,6 +649,9 @@ public class SGFParser {
           if (subTreeDepth > 1 && !isMultiGo) {
             break;
           }
+          if (importMoves.savedByKgNext() && events.get(eventIndex - 1).kind() != 'P') {
+            recordedNode = new RecordedNodeStart(history, moveStart, analysisImport);
+          }
           String tag = event.name();
           String tagContent = event.legacyValue(cancellation);
           if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
@@ -670,6 +674,8 @@ public class SGFParser {
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
             if (!importMoves.play(history, event, tagContent, color, newBranch)) {
+              recordedNode.discard(history, allowRootSetupOnCurrentNode, gameProperties, analysisImport);
+              moveStart = recordedNode.movesStarted();
               pendingNodeMetadata.clear();
               eventIndex = endOfRejectedVariation(events, eventIndex, cancellation) - 1;
               break;
@@ -4100,6 +4106,36 @@ public class SGFParser {
     return events.size();
   }
 
+  /** A recorded SGF node can append several history nodes before its final move is checked. */
+  private record RecordedNodeStart(BoardHistoryNode parent, int childCount, boolean blackToPlay,
+      boolean movesStarted, boolean hadSecondaryAnalysis) {
+    RecordedNodeStart(BoardHistoryList history, boolean movesStarted, AnalysisImport analysis) {
+      this(history.getCurrentHistoryNode(), history.getCurrentHistoryNode().numberOfChildren(),
+          history.getData().blackToPlay, movesStarted, analysis.hasSecondaryTag);
+    }
+
+    void discard(BoardHistoryList history, boolean root, Map<String, List<String>> gameProperties,
+        AnalysisImport analysis) {
+      analysis.hasSecondaryTag = hadSecondaryAnalysis;
+      List<BoardHistoryNode> appended =
+          parent.getVariations().subList(childCount, parent.numberOfChildren());
+      analysis.forgetDiscarded(appended);
+      appended.clear();
+      if (root) {
+        // Both full readers start on an empty root and apply root setup in place.
+        BoardData old = parent.getData();
+        BoardData empty = BoardData.empty(old.zobrist.width(), old.zobrist.height());
+        empty.recordsCaptureModes = old.recordsCaptureModes;
+        history.setHead(new BoardHistoryNode(empty));
+        gameProperties.clear();
+      } else {
+        // A first action can also change its parent's display turn.
+        parent.getData().blackToPlay = blackToPlay;
+        history.setHead(parent);
+      }
+    }
+  }
+
   private record ImportMoves(boolean defaultNoCapture, boolean canSuicidal, boolean savedByKgNext,
       SgfCaptureModes captureModes) {
     // Prepare each recorded node before either reader applies its properties. A malformed move
@@ -4167,9 +4203,7 @@ public class SGFParser {
     }
 
     boolean startsSetupVariation(BoardHistoryNode parent) {
-      // Setup declarations distinguish loaded snapshots from a newly appended snapshot.
-      // A terminal dummy in a KG-next record owns its own subtree.
-      return parent.hasVariations() || (savedByKgNext && hasTerminalDummy(parent));
+      return savedByKgNext ? parent.numberOfChildren() > 0 : parent.hasVariations();
     }
 
     private static boolean hasTerminalDummy(BoardHistoryNode parent) {
@@ -4354,6 +4388,7 @@ public class SGFParser {
     boolean parsedKomiTag = false;
     boolean currentNodeHasDummy = false;
     // Support unicode characters (UTF-8)
+    RecordedNodeStart recordedNode = null;
     for (int eventIndex = 0; eventIndex < events.size(); eventIndex++) {
       SgfDocument.Event event = events.get(eventIndex);
       switch (event.kind()) {
@@ -4385,6 +4420,9 @@ public class SGFParser {
           if (subTreeDepth > 1 && !isMultiGo) {
             break;
           }
+          if (importMoves.savedByKgNext() && events.get(eventIndex - 1).kind() != 'P') {
+            recordedNode = new RecordedNodeStart(history, moveStart, analysisImport);
+          }
           String tag = event.name();
           String tagContent = event.legacyValue();
           if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
@@ -4407,6 +4445,8 @@ public class SGFParser {
             Stone color = tag.equals("B") ? Stone.BLACK : Stone.WHITE;
             boolean newBranch = importMoves.startsActionVariation(history.getCurrentHistoryNode());
             if (!importMoves.play(history, event, tagContent, color, newBranch)) {
+              recordedNode.discard(history, allowRootSetupOnCurrentNode, gameProperties, analysisImport);
+              moveStart = recordedNode.movesStarted();
               pendingNodeMetadata.clear();
               eventIndex = endOfRejectedVariation(events, eventIndex, SgfCancellation.NONE) - 1;
               break;
@@ -4981,6 +5021,18 @@ public class SGFParser {
         Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<BoardData> secondaryReplacements =
         Collections.newSetFromMap(new IdentityHashMap<>());
+
+    private void forgetDiscarded(List<BoardHistoryNode> nodes) {
+      if (nodes.isEmpty() || (primaryReplacements.isEmpty() && secondaryReplacements.isEmpty())) return;
+      ArrayDeque<BoardHistoryNode> pending = new ArrayDeque<>(nodes);
+      while (!pending.isEmpty()) {
+        cancellation.check();
+        BoardHistoryNode node = pending.removeLast();
+        primaryReplacements.remove(node.getData());
+        secondaryReplacements.remove(node.getData());
+        pending.addAll(node.getVariations());
+      }
+    }
 
     private void moveToSnapshot(BoardData source, BoardData snapshot) {
       if (primaryReplacements.remove(source)) primaryReplacements.add(snapshot);

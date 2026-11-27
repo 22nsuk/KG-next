@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -622,6 +623,24 @@ class SGFParserSemanticRoundTripTest {
     }
   }
 
+  @Test
+  void ambiguousTrialCaptureFlagsUpgradeWithoutChangingThePosition() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;SZ[5]AP[KG-next: next-dev]KGCM[1]AB[ba]AW[aa];B[ab]KGNC[1])";
+      for (int round = 0; round < 2; round++) {
+        assertTrue(SGFParser.loadFromStringforedit(game));
+        for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+          assertEquals(Stone.WHITE, history.getEnd().getData().stones[Board.getIndex(0, 0)]);
+          assertEquals(0, history.getEnd().getData().blackCaptures);
+          assertTrue(history.getStart().getData().getPropertyValues("KGCM").isEmpty());
+        }
+        game = SGFParser.saveToString(false);
+        assertTrue(game.contains("KGCM[KG-next/1][1]"), game);
+        assertTrue(game.contains("KGNC[1]"), game);
+      }
+    }
+  }
+
   @ParameterizedTest
   @CsvSource({"custom, false", "1, false", "1, true", "KG-next/plain, true"})
   void foreignCapturePropertiesSurviveSavingAndEditing(String value, boolean noCapture) throws Exception {
@@ -811,6 +830,78 @@ class SGFParserSemanticRoundTripTest {
         assertEquals("sibling", sibling.getData().comment);
         assertArrayEquals(
             new int[] {4, 4}, sibling.next().orElseThrow().getData().lastMove.orElseThrow());
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource(delimiter = '|', value = {
+      "PL[B]|''", "AB[cc]PL[B]|(;PL[W]C[keep])", "DD[true]|(;DD[true]C[keep])",
+      "B[dd]PL[B]|(;W[ee]C[keep])"
+  })
+  void rejectedMixedNodeDiscardsOnlyItsOwnChanges(String prefix, String earlier)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;AP[KG-next]SZ[5];B[aa]C[parent]" + earlier + "(;" + prefix
+          + "C[rejected]LB[cc:bad]LZ2[Second 45 500]W[aa];B[cd])(;W[bb]C[valid]))";
+      assertTrue(SGFParser.loadFromStringforedit(game));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+        var parent = history.getStart().next().orElseThrow();
+        assertEquals("parent", parent.getData().comment);
+        assertEquals(earlier.isEmpty() ? 1 : 2, parent.numberOfChildren());
+        if (!earlier.isEmpty()) assertEquals("keep", parent.getVariation(0).orElseThrow().getData().comment);
+        var valid = parent.getVariation(parent.numberOfChildren() - 1).orElseThrow();
+        assertEquals("valid", valid.getData().comment);
+        assertEquals(Stone.EMPTY, valid.getData().stones[Board.getIndex(2, 2)]);
+        assertEquals(0, valid.numberOfChildren());
+      }
+    }
+  }
+
+  @Test
+  void rejectedFirstChildRestoresTheParentsDisplayedTurn() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;AP[KG-next]SZ[5];B[aa](;B[dd]W[aa])(;PL[W]C[valid]))";
+      assertTrue(SGFParser.loadFromStringforedit(game));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+        var parent = history.getStart().next().orElseThrow();
+        assertFalse(parent.getData().blackToPlay);
+        assertEquals(1, parent.numberOfChildren());
+        assertEquals("valid", parent.next().orElseThrow().getData().comment);
+      }
+    }
+  }
+
+  @Test
+  void acceptedMoveUsesSetupEarlierInItsNode() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;AP[KG-next]SZ[5];B[aa](;AE[aa]W[aa]C[valid])(;W[bb]))";
+      assertTrue(SGFParser.loadFromStringforedit(game));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+        var parent = history.getStart().next().orElseThrow();
+        assertEquals(2, parent.numberOfChildren());
+        var setup = parent.getVariation(0).orElseThrow();
+        assertEquals(Stone.EMPTY, setup.getData().stones[Board.getIndex(0, 0)]);
+        var move = setup.next().orElseThrow().getData();
+        assertEquals(Stone.WHITE, move.stones[Board.getIndex(0, 0)]);
+        assertEquals(Stone.BLACK, parent.getVariation(1).orElseThrow().getData().stones[Board.getIndex(0, 0)]);
+      }
+    }
+  }
+
+  @Test
+  void rejectedRootMoveDiscardsItsSetupAndGameFields() throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String game = "(;AP[KG-next]SZ[5]DT[2020-01-01]AB[aa]PL[W]C[bad]PB[bad]W[aa];B[bb])";
+      assertTrue(SGFParser.loadFromStringforedit(game));
+      for (var history : List.of(fixture.board().getHistory(), SGFParser.parseSgf(game, true))) {
+        var root = history.getStart();
+        assertEquals(0, root.numberOfChildren());
+        assertEquals(Stone.EMPTY, root.getData().stones[Board.getIndex(0, 0)]);
+        assertNull(root.getData().getProperty("DT"));
+        assertNull(root.getData().getProperty("PL"));
+        assertTrue(root.getData().blackToPlay);
+        assertNotEquals("bad", history.getGameInfo().getPlayerBlack());
       }
     }
   }

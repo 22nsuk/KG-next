@@ -7,13 +7,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/** KG-next owns only the final capture flag in a property. Earlier values belong to the source. */
+/** Keeps the KG-next capture suffix separate from opaque SGF values on the same property. */
 record SgfCaptureModes(boolean recorded, Set<SgfDocument.Event> ownedProperties,
     Set<SgfDocument.Event> noCaptureMoves) {
   static final String ROOT_FLAG = "KGCM";
   static final String MOVE_FLAG = "KGNC";
   static final SgfCaptureModes UNMARKED = new SgfCaptureModes(false, Set.of(), Set.of());
   private static final String ON = "1";
+  private static final String VERSION = "KG-next/1";
   // A literal trailing flag needs a neutral final value when AP is rewritten on save.
   private static final String LITERAL = "KG-next/plain";
 
@@ -25,6 +26,8 @@ record SgfCaptureModes(boolean recorded, Set<SgfDocument.Event> ownedProperties,
       boolean enabled) {
     if (!enabled && !isFlag(SGFParser.getOrDefault(properties, key, null))) return properties;
     var result = new LinkedHashMap<>(properties);
+    // Keep the final 1 readable by trial builds that predate the version suffix.
+    if (enabled && ROOT_FLAG.equals(key)) SGFParser.addProperty(result, key, VERSION);
     SGFParser.addProperty(result, key, enabled ? ON : LITERAL);
     return result;
   }
@@ -52,6 +55,9 @@ record SgfCaptureModes(boolean recorded, Set<SgfDocument.Event> ownedProperties,
         }
         move = null;
         flag = null;
+      } else if (event == rootFlag && i > 0) {
+        var version = events.get(i - 1);
+        if (ROOT_FLAG.equals(version.name()) && VERSION.equals(version.rawValue())) owned.add(version);
       } else if ("B".equals(event.name()) || "W".equals(event.name())) {
         move = event;
       } else if (MOVE_FLAG.equals(event.name())) {
