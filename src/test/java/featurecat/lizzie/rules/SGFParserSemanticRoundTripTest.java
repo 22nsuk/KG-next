@@ -96,6 +96,46 @@ class SGFParserSemanticRoundTripTest {
   }
 
   @ParameterizedTest
+  @CsvSource({"false, false", "true, false", "true, true"})
+  void foreignRootPositionValuesSurviveRepeatedSaves(boolean edit, boolean observed) throws Exception {
+    try (var fixture = RulesLayerTestHarness.open(SIZE)) {
+      String lookalike = "KG-next/1 42 3 2 Bbb Bbb:42";
+      List<String> original = edit
+          ? List.of("first", lookalike, "KG-next/1 plain", lookalike, "last")
+          : List.of(lookalike);
+      String sgf = "(;SZ[5]AP[Other]AB[bb][ee]KGRP[" + String.join("][", original)
+          + "]" + (observed ? ")" : ";W[cc]KGRP[" + lookalike + "])");
+      assertTrue(SGFParser.loadFromStringforedit(sgf));
+      Board board = fixture.board();
+      if (edit) board.editMove(new int[] {4, 4}, false, true);
+      if (observed) {
+        BoardData root = board.getHistory().getStart().getData();
+        root.moveNumber = 10;
+        root.blackCaptures = 1;
+        root.moveNumberList[Board.getIndex(1, 1)] = 8;
+        board.place(2, 2, Stone.WHITE);
+        board.getData().addProperty("KGRP", lookalike);
+      }
+      for (int round = 0; round < 2; round++) {
+        String saved = SGFParser.saveToString(false);
+        assertTrue(SGFParser.loadFromStringforedit(saved));
+        for (var history : List.of(board.getHistory(), SGFParser.parseSgf(saved, true))) {
+          BoardData root = history.getStart().getData();
+          assertEquals(original, root.getPropertyValues("KGRP"));
+          assertEquals(observed ? 10 : 0, root.moveNumber);
+          assertEquals(observed ? 1 : 0, root.blackCaptures);
+          assertEquals(observed ? 8 : 0, root.moveNumberList[Board.getIndex(1, 1)]);
+          assertTrue(root.lastMove.isEmpty());
+          assertEquals(edit ? Stone.EMPTY : Stone.BLACK, root.stones[Board.getIndex(4, 4)]);
+          BoardData move = history.getEnd().getData();
+          assertEquals(observed ? 11 : 1, move.moveNumber);
+          assertEquals(List.of(lookalike), move.getPropertyValues("KGRP"));
+        }
+      }
+    }
+  }
+
+  @ParameterizedTest
   @ValueSource(strings = {
       "AP[other]KGRP[KG-next/1 42 3 2 Bbb Bbb:42]",
       "AP[KG-next]KGRP[KG-next/1 2147483647 3 2 Bbb Bbb:42]",

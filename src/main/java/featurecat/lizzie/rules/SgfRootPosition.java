@@ -1,17 +1,34 @@
 package featurecat.lizzie.rules;
 
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /** ReadBoard can observe a position and its counters without having the preceding moves. */
 record SgfRootPosition(String value, int eventCount) {
   static final String PROPERTY = "KGRP";
   private static final String VERSION = "KG-next/1 ";
+  private static final String PLAIN = VERSION + "plain";
 
-  static boolean ownsValue(String value) {
+  static SgfDocument.Event lastPayload(SgfDocument document, SgfCancellation cancellation) {
+    return document.rootPropertyEvent(PROPERTY, SgfRootPosition::hasVersion, cancellation);
+  }
+
+  private static boolean hasVersion(String value) {
     return value.startsWith(VERSION);
   }
 
-  static String encode(BoardData data, int width, int height) {
+  static void appendTo(Map<String, List<String>> properties, BoardData data, int width, int height) {
+    String payload = encode(data, width, height);
+    // Export changes AP to KG-next. A trailing neutral payload keeps earlier values opaque.
+    if (payload == null
+        && data.getPropertyValues(PROPERTY).stream().anyMatch(SgfRootPosition::hasVersion)) {
+      payload = PLAIN;
+    }
+    if (payload != null) SGFParser.addProperty(properties, PROPERTY, payload);
+  }
+
+  private static String encode(BoardData data, int width, int height) {
     if (!data.isSnapshotNode()) return null;
     String marker = data.lastMoveOnBoard(width, height)
         .map(point -> (data.lastMoveColor == Stone.BLACK ? "B" : "W")
@@ -36,7 +53,7 @@ record SgfRootPosition(String value, int eventCount) {
 
   /** Validate against the completed setup before publishing any part of the private payload. */
   void restore(BoardData data, SgfCancellation cancellation) {
-    if (value.length() > 64L + 36L * data.stones.length) return;
+    if (PLAIN.equals(value) || value.length() > 64L + 36L * data.stones.length) return;
     String[] fields = value.split(" ", -1);
     if (fields.length < 5 || fields.length - 5 > data.stones.length) return;
     try {

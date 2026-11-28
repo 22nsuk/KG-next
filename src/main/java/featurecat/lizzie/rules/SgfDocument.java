@@ -2,6 +2,7 @@ package featurecat.lizzie.rules;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -75,13 +76,17 @@ public final class SgfDocument {
   }
 
   Event rootPropertyEvent(String name, SgfCancellation cancellation) {
+    return rootPropertyEvent(name, value -> true, cancellation);
+  }
+
+  Event rootPropertyEvent(String name, Predicate<String> acceptsValue, SgfCancellation cancellation) {
     int i = 1; // parseNormalized always starts with OPEN and tolerates a missing initial semicolon.
     if (i < events.size() && events.get(i).kind() == ';') i++;
     Event match = null;
     for (; i < events.size() && events.get(i).kind() == 'P'; i++) {
       cancellation.checkEvery(i);
       Event property = events.get(i);
-      if (name.equals(property.name())) match = property;
+      if (name.equals(property.name()) && acceptsValue.test(property.rawValue())) match = property;
     }
     return match;
   }

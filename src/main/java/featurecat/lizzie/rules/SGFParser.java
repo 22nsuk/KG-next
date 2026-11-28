@@ -654,8 +654,7 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue(cancellation);
-          if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
-              && SgfRootPosition.PROPERTY.equals(tag) && SgfRootPosition.ownsValue(tagContent)) {
+          if (allowRootSetupOnCurrentNode && event == importMoves.rootPositionProperty()) {
             pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
             break;
           }
@@ -1900,13 +1899,6 @@ public class SGFParser {
     boolean setupInserted = false;
     for (Map.Entry<String, List<String>> entry : rootData.getProperties().entrySet()) {
       String key = entry.getKey();
-      if (SgfRootPosition.PROPERTY.equals(key)) {
-        // AP is rewritten on export. A foreign producer's lookalike must never become active.
-        for (String value : entry.getValue()) {
-          if (!SgfRootPosition.ownsValue(value)) addProperty(properties, key, value);
-        }
-        continue;
-      }
       if (isSetupSerializationProperty(key)) {
         if (!setupInserted) {
           properties.putAll(rootSetup);
@@ -1919,8 +1911,7 @@ public class SGFParser {
     if (!setupInserted) {
       properties.putAll(rootSetup);
     }
-    String observedPosition = SgfRootPosition.encode(rootData, width, height);
-    if (observedPosition != null) addProperty(properties, SgfRootPosition.PROPERTY, observedPosition);
+    SgfRootPosition.appendTo(properties, rootData, width, height);
     return propertiesString(SgfCaptureModes.withFlag(
         properties, SgfCaptureModes.ROOT_FLAG, rootData.recordsCaptureModes));
   }
@@ -4137,7 +4128,7 @@ public class SGFParser {
   }
 
   private record ImportMoves(boolean defaultNoCapture, boolean canSuicidal, boolean savedByKgNext,
-      SgfCaptureModes captureModes) {
+      SgfCaptureModes captureModes, SgfDocument.Event rootPositionProperty) {
     // Prepare each recorded node before either reader applies its properties. A malformed move
     // rejects its entire variation, including setup and annotations appearing before the move.
     List<SgfDocument.Event> eventsForBuild(
@@ -4239,11 +4230,12 @@ public class SGFParser {
     private ImportMoves importMoves(SgfDocument document, SgfCancellation cancellation) {
       // Our saves preserve the original RU even when manual rules allowed a recorded self-capture.
       if (isKgNextSgf(document.rootProperty("AP", cancellation))) {
-        return new ImportMoves(noCapture, true, true, SgfCaptureModes.read(document, cancellation));
+        return new ImportMoves(noCapture, true, true, SgfCaptureModes.read(document, cancellation),
+            SgfRootPosition.lastPayload(document, cancellation));
       }
       boolean suicide = BoardHistoryList.parseDeclaredRules(document.rootProperty("RU", cancellation))
           .map(rules -> rules.bool(KataGoRules.SUICIDE)).orElse(canSuicidal);
-      return new ImportMoves(noCapture, suicide, false, SgfCaptureModes.UNMARKED);
+      return new ImportMoves(noCapture, suicide, false, SgfCaptureModes.UNMARKED, null);
     }
 
     public static ParseOptions capture() {
@@ -4425,8 +4417,7 @@ public class SGFParser {
           }
           String tag = event.name();
           String tagContent = event.legacyValue();
-          if (allowRootSetupOnCurrentNode && importMoves.savedByKgNext()
-              && SgfRootPosition.PROPERTY.equals(tag) && SgfRootPosition.ownsValue(tagContent)) {
+          if (allowRootSetupOnCurrentNode && event == importMoves.rootPositionProperty()) {
             pendingNodeMetadata.rootPosition = new SgfRootPosition(tagContent, events.size());
             break;
           }
