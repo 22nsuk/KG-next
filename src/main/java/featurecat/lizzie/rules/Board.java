@@ -810,11 +810,11 @@ public class Board {
     }
   }
 
-  public ArrayList<Movelist> saveListForEdit() {
+  public synchronized ArrayList<Movelist> saveListForEdit() {
     return saveListForEdit(captureEditState());
   }
 
-  private ArrayList<Movelist> saveListForEdit(GameStateSnapshot snapshot) {
+  private synchronized ArrayList<Movelist> saveListForEdit(GameStateSnapshot snapshot) {
     stateBeforeEdit = snapshot;
     tempmovelist = getmovelistWithOutStartStone();
     tempallmovelist = getallmovelist();
@@ -823,56 +823,57 @@ public class Board {
     return tempmovelist;
   }
 
-  public void cleanedittemp() {
+  public synchronized void cleanedittemp() {
     stateBeforeEdit = null;
     stateAfterEdit = null;
     tempmovelist2 = new ArrayList<Movelist>();
     tempmovelist = new ArrayList<Movelist>();
   }
 
-  public void clearEditStuff() {
+  public synchronized void clearEditStuff() {
     stateAfterEdit = null;
     stateBeforeEdit = null;
     tempmovelist.clear();
     tempmovelist2.clear();
   }
 
-  public boolean canUndoEdit() {
+  public synchronized boolean canUndoEdit() {
     return stateBeforeEdit != null;
   }
 
-  public boolean canRedoEdit() {
+  public synchronized boolean canRedoEdit() {
     return stateAfterEdit != null;
   }
 
   public void cleanedit() {
-    if (!canUndoEdit()) return;
-    GameStateSnapshot after = restoreEditState(stateBeforeEdit);
-    stateBeforeEdit = null;
-    stateAfterEdit = after;
-    tempmovelist = new ArrayList<>();
+    restoreEditState(false);
   }
 
   public void reedit() {
-    if (!canRedoEdit()) return;
-    GameStateSnapshot before = restoreEditState(stateAfterEdit);
-    stateAfterEdit = null;
-    stateBeforeEdit = before;
-    tempmovelist2 = new ArrayList<>();
+    restoreEditState(true);
   }
 
-  private GameStateSnapshot restoreEditState(GameStateSnapshot target) {
-    GameStateSnapshot current = captureEditState();
+  private void restoreEditState(boolean redo) {
     boolean resumeAnalysis = Lizzie.leelaz != null && Lizzie.leelaz.isPondering();
-    // Move edits have always kept the currently selected game info and session rules. Apply
-    // that policy before publishing the history or starting an asynchronous engine restore.
-    target.history.keepCurrentGameInfoAndRules(history);
-    restoreGameState(target);
+    GameInfo info;
+    synchronized (this) {
+      GameStateSnapshot target = redo ? stateAfterEdit : stateBeforeEdit;
+      if (target == null) return;
+      // A web move accepted before this swap must be in the return snapshot. Once the
+      // replacement is installed, requests carrying the previous history are rejected.
+      GameStateSnapshot current = captureEditState();
+      target.history.keepCurrentGameInfoAndRules(history);
+      info = installGameState(target);
+      stateBeforeEdit = redo ? current : null;
+      stateAfterEdit = redo ? null : current;
+      if (redo) tempmovelist2 = new ArrayList<>();
+      else tempmovelist = new ArrayList<>();
+    }
+    refreshRestoredGame(info);
     if (Lizzie.frame != null) {
       Lizzie.frame.clearTryPlay();
       Lizzie.frame.synchronizeRestoredGame(resumeAnalysis);
     }
-    return current;
   }
 
   public void resetlistforeditmode() {
@@ -2727,55 +2728,6 @@ public class Board {
       double nextWinrate = -100;
       if (history.getData().winrate >= 0) nextWinrate = 100 - history.getData().winrate;
 
-      // A replay must match both the coordinate and the requested color.
-      Optional<int[]> nextLast =
-          history.getNext().filter(next -> next.lastMoveColor == color).flatMap(n -> n.lastMove);
-      if (nextLast.isPresent()
-          && nextLast.get()[0] == x
-          && nextLast.get()[1] == y
-          && !newBranch
-          && Lizzie.frame.blackorwhite == 0) {
-        // this is the next coordinate in history. Just increment history so that we
-        // don't erase the
-        // redo's
-        if (isCollectingReadBoardSync()) history.nextVariationWithoutEngineSync(0);
-        else history.next();
-        updateIsBest();
-        if (Lizzie.config.playSound) Utils.playVoiceFile();
-        boolean forwardMove = canForwardRecordedMove();
-        if (forwardMove
-            && Lizzie.frame.isPlayingAgainstLeelaz
-            && Lizzie.frame.playerIsBlack != getData().blackToPlay) {
-          if (!Lizzie.leelaz.isInputCommand) {
-            Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
-            Lizzie.leelaz.genmove((Lizzie.board.getData().blackToPlay ? "b" : "w"));
-          }
-        } else if (forwardMove
-            && !isCollectingReadBoardSync()
-            && !Lizzie.frame.isPlayingAgainstLeelaz
-            && !Lizzie.leelaz.isInputCommand
-            && !engineGamePlaying()) {
-          Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
-        }
-        //  modifyEnd(false);
-        clearAfterMove();
-        if (sendReadBoardPlaceOnHistoryNext) {
-          sendReadBoardPlaceIfAllowed(x, y, color, forSync, shouldLogLocalMovePlace);
-        }
-        if (shouldLogLocalMovePlace) {
-          logLocalMovePlace(
-              "place return history-next x="
-                  + x
-                  + " y="
-                  + y
-                  + " color="
-                  + color
-                  + " "
-                  + localMovePlaceState(forSync));
-        }
-        Lizzie.frame.refreshAfterMove();
-        return;
-      }
       BoardData parent = history.getData();
       int moveNumber = parent.moveNumber + 1;
       // Detach the parent once, then mutate only this unpublished candidate. Rejected moves
@@ -2842,6 +2794,47 @@ public class Board {
                   + " "
                   + localMovePlaceState(forSync));
         }
+        return;
+      }
+      if (!newBranch && Lizzie.frame.blackorwhite == 0
+          && history.getNext()
+              .filter(next -> BoardHistoryNode.matchesPlayedAction(next, newState)).isPresent()) {
+        if (isCollectingReadBoardSync()) history.nextVariationWithoutEngineSync(0);
+        else history.next();
+        updateIsBest();
+        if (Lizzie.config.playSound) Utils.playVoiceFile();
+        boolean forwardMove = canForwardRecordedMove();
+        if (forwardMove
+            && Lizzie.frame.isPlayingAgainstLeelaz
+            && Lizzie.frame.playerIsBlack != getData().blackToPlay) {
+          if (!Lizzie.leelaz.isInputCommand) {
+            Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
+            Lizzie.leelaz.genmove((Lizzie.board.getData().blackToPlay ? "b" : "w"));
+          }
+        } else if (forwardMove
+            && !isCollectingReadBoardSync()
+            && !Lizzie.frame.isPlayingAgainstLeelaz
+            && !Lizzie.leelaz.isInputCommand
+            && !engineGamePlaying()) {
+          Lizzie.leelaz.playMove(color, convertCoordinatesToName(x, y));
+        }
+        //  modifyEnd(false);
+        clearAfterMove();
+        if (sendReadBoardPlaceOnHistoryNext) {
+          sendReadBoardPlaceIfAllowed(x, y, color, forSync, shouldLogLocalMovePlace);
+        }
+        if (shouldLogLocalMovePlace) {
+          logLocalMovePlace(
+              "place return history-next x="
+                  + x
+                  + " y="
+                  + y
+                  + " color="
+                  + color
+                  + " "
+                  + localMovePlaceState(forSync));
+        }
+        Lizzie.frame.refreshAfterMove();
         return;
       }
       // update history with this coordinate
@@ -5109,7 +5102,7 @@ public class Board {
     return before;
   }
 
-  private synchronized GameStateSnapshot captureEditState() {
+  private GameStateSnapshot captureEditState() {
     // Undo/redo exits trial mode; its saved positions must use ordinary move numbering.
     return new GameStateSnapshot(this, editTrialNumbering(), false);
   }
@@ -5121,41 +5114,53 @@ public class Board {
 
   /** Adopts the saved cursor and tree locally; the caller owns confirmed engine synchronization. */
   public void restoreGameState(GameStateSnapshot snapshot) {
+    GameInfo info;
+    synchronized (this) {
+      info = installGameState(snapshot);
+    }
+    refreshRestoredGame(info);
+  }
+
+  /** Consumes the snapshot under the Board monitor, before notifying any observers. */
+  private GameInfo installGameState(GameStateSnapshot snapshot) {
     if (snapshot == null || snapshot.owner != this || snapshot.history == null) {
       throw new IllegalArgumentException("Game snapshot is consumed or belongs to another board");
     }
     BoardHistoryList restored = snapshot.history.restore(
         snapshot.isPkBoard, Lizzie.config.matchAiMoves, Lizzie.config.matchAiPercentsPlayouts);
-    replaceHistory(restored, () -> {
-      boardWidth = restored.getData().zobrist.width();
-      boardHeight = restored.getData().zobrist.height();
-      Zobrist.restoreTables(snapshot.zobristTables);
-      analysisMode = snapshot.analysisMode;
-      // A foreground engine may have started since this offline edit/trial was captured.
-      setupMode = snapshot.setupMode && EngineManager.isEmpty;
-      hasBigBranch = snapshot.hasBigBranch;
-      neverPassedInGame = snapshot.neverPassedInGame;
-      isPkBoard = snapshot.isPkBoard;
-      isGameBoard = snapshot.isGameBoard;
-      isPkBoardKataB = snapshot.isPkBoardKataB;
-      isPkBoardKataW = snapshot.isPkBoardKataW;
-      isKataBoard = snapshot.isKataBoard;
-      hasStartStone = snapshot.hasStartStone;
-      startStonelist = snapshot.startStones;
-      isExtremlySmallBoard = boardWidth < 4;
-      forceRefresh = true;
-      forceRefresh2 = true;
-      clearTsumegoStatus();
-      requireEngineAlignment();
-      // Limit-stop and explicit-resume exceptions belong to the previous position, not the
-      // saved game. Reset them before notifying observers or resuming confirmed analysis.
-      if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
-      snapshot.history = null;
-    });
+    installHistory(restored);
+    boardWidth = restored.getData().zobrist.width();
+    boardHeight = restored.getData().zobrist.height();
+    Zobrist.restoreTables(snapshot.zobristTables);
+    analysisMode = snapshot.analysisMode;
+    // A foreground engine may have started since this offline edit/trial was captured.
+    setupMode = snapshot.setupMode && EngineManager.isEmpty;
+    hasBigBranch = snapshot.hasBigBranch;
+    neverPassedInGame = snapshot.neverPassedInGame;
+    isPkBoard = snapshot.isPkBoard;
+    isGameBoard = snapshot.isGameBoard;
+    isPkBoardKataB = snapshot.isPkBoardKataB;
+    isPkBoardKataW = snapshot.isPkBoardKataW;
+    isKataBoard = snapshot.isKataBoard;
+    hasStartStone = snapshot.hasStartStone;
+    startStonelist = snapshot.startStones;
+    isExtremlySmallBoard = boardWidth < 4;
+    forceRefresh = true;
+    forceRefresh2 = true;
+    clearTsumegoStatus();
+    requireEngineAlignment();
+    // Limit-stop and explicit-resume exceptions belong to the previous position, not the
+    // saved game. Reset them before notifying observers or resuming confirmed analysis.
+    if (Lizzie.leelaz != null) Lizzie.leelaz.clearPonderLimit();
+    snapshot.history = null;
+    return restored.getGameInfo();
+  }
+
+  private void refreshRestoredGame(GameInfo info) {
+    notifyReadBoardHistoryOverwritten();
     if (LizzieFrame.boardRenderer != null) LizzieFrame.boardRenderer.clearAfterMove();
     if (LizzieFrame.boardRenderer2 != null) LizzieFrame.boardRenderer2.clearAfterMove();
     LizzieFrame.forceRecreate = true;
-    GameInfo info = restored.getGameInfo();
     info.refreshKomiDisplay();
     if (Lizzie.frame != null) {
       Lizzie.frame.redrawTree = true;

@@ -401,12 +401,13 @@ public class BoardHistoryNode {
     return node;
   }
 
-  Optional<BoardHistoryNode> findDirectChildByMoveIdentity(BoardData candidate) {
+  /** Find a recorded action that produces this position and will replay with the same capture policy. */
+  public Optional<BoardHistoryNode> findDirectChildByMoveIdentity(BoardData candidate) {
     if (candidate == null || !candidate.isHistoryActionNode()) {
       return Optional.empty();
     }
     for (BoardHistoryNode variation : variations) {
-      if (matchesMoveIdentity(variation.getData(), candidate)) {
+      if (matchesPlayedAction(variation.getData(), candidate)) {
         return Optional.of(variation);
       }
     }
@@ -1014,9 +1015,9 @@ public class BoardHistoryNode {
   }
 
   private boolean matchesPositionAndMetadata(BoardHistoryNode node) {
-    return matchesChildState(data, node.data)
-        && data.blackCaptures == node.data.blackCaptures
-        && data.whiteCaptures == node.data.whiteCaptures
+    return data.moveNumber == node.data.moveNumber
+        && Objects.equals(data.comment, node.data.comment)
+        && matchesNodePosition(data, node.data)
         && hasEquivalentMetadata(node)
         && numberOfChildren() == node.numberOfChildren();
   }
@@ -1208,26 +1209,14 @@ public class BoardHistoryNode {
     return Arrays.equals(leftMove.get(), rightMove.get());
   }
 
-  private static boolean matchesChildState(BoardData existing, BoardData candidate) {
-    return Arrays.equals(existing.stones, candidate.stones)
-        && sameLastMove(existing.lastMove, candidate.lastMove)
-        && existing.getNodeKind() == candidate.getNodeKind()
-        && existing.dummy == candidate.dummy
-        && existing.moveNumber == candidate.moveNumber
-        && existing.blackToPlay == candidate.blackToPlay
-        && existing.lastMoveColor == candidate.lastMoveColor
-        && Objects.equals(existing.comment, candidate.comment);
+  static boolean matchesPlayedAction(BoardData existing, BoardData candidate) {
+    // A later setup edit can make the capture policy observable even when today's stones match.
+    return existing.playedWithoutCaptures == candidate.playedWithoutCaptures
+        && matchesNodePosition(existing, candidate);
   }
 
-  private static boolean matchesVariationIdentity(
-      BoardHistoryNode existingChild, BoardData candidate) {
-    return matchesVariationIdentity(existingChild, candidate, false, null);
-  }
-
-  private static boolean matchesMoveIdentity(BoardData existing, BoardData candidate) {
-    return existing.isHistoryActionNode()
-        && candidate.isHistoryActionNode()
-        && existing.getNodeKind() == candidate.getNodeKind()
+  private static boolean matchesNodePosition(BoardData existing, BoardData candidate) {
+    return existing.getNodeKind() == candidate.getNodeKind()
         && existing.dummy == candidate.dummy
         && sameLastMove(existing.lastMove, candidate.lastMove)
         && existing.blackToPlay == candidate.blackToPlay
@@ -1237,25 +1226,14 @@ public class BoardHistoryNode {
         && Arrays.equals(existing.stones, candidate.stones);
   }
 
-  private static boolean matchesVariationIdentity(
-      BoardHistoryNode existingChild,
-      BoardData candidate,
-      boolean candidateHasRemovedStone,
-      ArrayList<ExtraStones> candidateExtraStones) {
-    BoardData existingData = existingChild.data;
-    if (!matchesChildState(existingData, candidate)) {
-      return false;
-    }
-    if (!existingData.isSnapshotNode() || !candidate.isSnapshotNode()) {
-      return true;
-    }
-    return hasSameSnapshotMetadataSignature(
-        existingData,
-        existingChild.hasRemovedStone,
-        existingChild.extraStones,
-        candidate,
-        candidateHasRemovedStone,
-        candidateExtraStones);
+  private static boolean matchesVariationIdentity(BoardHistoryNode child, BoardData candidate) {
+    BoardData existing = child.data;
+    if (existing.moveNumber != candidate.moveNumber
+        || !Objects.equals(existing.comment, candidate.comment)) return false;
+    if (!candidate.isSnapshotNode()) return matchesPlayedAction(existing, candidate);
+    return matchesNodePosition(existing, candidate)
+        && hasSameSnapshotMetadataSignature(
+            existing, child.hasRemovedStone, child.extraStones, candidate, false, null);
   }
 
   private void alignParentTurnStateWithFirstActionChild(BoardData childData) {

@@ -220,6 +220,52 @@ class WebTrialRecordPreservationTest {
 
   @ParameterizedTest
   @ValueSource(booleans = {false, true})
+  void editRestoreKeepsAcceptedWebMovesAndRejectsRequestsForTheReplacedTree(boolean redo)
+      throws Exception {
+    try (var fixture = RulesLayerTestHarness.open()) {
+      Board board = Lizzie.board;
+      board.saveListForEdit();
+      if (redo) board.cleanedit();
+      WebBoardManager manager = new WebBoardManager(new WebTrialTestFixture.Events());
+      manager.setDesktopRefresherForTest(() -> {});
+      FutureTask<Void> lateMove = new FutureTask<>(() -> manager.applyTrialMove("owner", 2, 2), null);
+      Thread web = new Thread(lateMove, "test-trial-move-during-edit-restore");
+      web.setDaemon(true);
+      AtomicBoolean startLateMove = new AtomicBoolean();
+      BoardHistoryList live = new BoardHistoryList(BoardData.empty(5, 5)) {
+        @Override public featurecat.lizzie.analysis.GameInfo getGameInfo() {
+          if (startLateMove.compareAndSet(true, false)) {
+            // Undo/redo carries over the live game info after capturing its return snapshot.
+            web.start();
+            awaitBlockedOn(web, board, lateMove);
+          }
+          return super.getGameInfo();
+        }
+      };
+      try {
+        board.setHistory(live);
+        assertTrue(manager.enterTrial("owner", live.getStart()));
+        manager.applyTrialMove("owner", 1, 1);
+        BoardHistoryNode accepted = live.getStart().getVariation(1).orElseThrow();
+        startLateMove.set(true);
+        if (redo) board.reedit();
+        else board.cleanedit();
+        lateMove.get(5, TimeUnit.SECONDS);
+        assertTrue(accepted.getVariations().isEmpty());
+        if (redo) board.cleanedit();
+        else board.reedit();
+        BoardHistoryNode restored = board.getHistory().getStart().getVariation(1).orElseThrow();
+        assertArrayEquals(new int[] {1, 1}, restored.getData().lastMove.orElseThrow());
+        assertTrue(restored.getVariations().isEmpty());
+      } finally {
+        web.join(5000);
+        manager.stop();
+      }
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
   void setupEditKeepsWebMoveCommittedWhileEditorWaitsForBoard(boolean mirror) throws Exception {
     try (var fixture = RulesLayerTestHarness.open()) {
       Board board = Lizzie.board;

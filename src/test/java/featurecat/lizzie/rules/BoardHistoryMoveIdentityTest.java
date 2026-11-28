@@ -6,9 +6,11 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import featurecat.lizzie.Lizzie;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class BoardHistoryMoveIdentityTest {
   private static final int BOARD_SIZE = 3;
@@ -79,6 +81,55 @@ class BoardHistoryMoveIdentityTest {
           "existing SGF variation comment",
           history.getData().comment,
           "entering the existing branch should preserve its original node data.");
+    }
+  }
+
+  @ParameterizedTest
+  @CsvSource({"true, false", "false, false", "true, true", "false, true"})
+  void placingAMoveSelectsTheSiblingWithTheRequestedCaptureResult(
+      boolean desktop, boolean noCapture) throws Exception {
+    try (var env = RulesLayerTestHarness.open(5)) {
+      String capture = "(;B[ab]C[capture])";
+      String retained = "(;B[ab]KGNC[1]C[retain])";
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AP[KG-next]KGCM[1]PL[B]AB[ba]AW[aa]"
+              + (noCapture ? capture + retained : retained + capture) + ")", true);
+      history.toStart();
+      env.board().setHistory(history);
+      BoardHistoryNode root = history.getStart();
+      BoardHistoryNode expected = root.getVariation(1).orElseThrow();
+      Lizzie.config.noCapture = noCapture;
+      Lizzie.leelaz = null;
+      if (desktop) env.board().place(0, 1, Stone.BLACK);
+      else history.place(0, 1, Stone.BLACK);
+      assertSame(expected, history.getCurrentHistoryNode());
+      assertEquals(2, root.numberOfChildren());
+      assertEquals(noCapture ? "retain" : "capture", expected.getData().comment);
+      assertEquals(noCapture ? Stone.WHITE : Stone.EMPTY,
+          expected.getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(noCapture ? 0 : 1, expected.getData().blackCaptures);
+    }
+  }
+
+  @ParameterizedTest
+  @ValueSource(booleans = {true, false})
+  void newMoveRetainsItsCapturePolicyWhenASetupEditCanChangeItsResult(boolean desktop)
+      throws Exception {
+    try (var env = RulesLayerTestHarness.open(5)) {
+      BoardHistoryList history = SGFParser.parseSgf(
+          "(;SZ[5]AP[KG-next]KGCM[1]AW[aa][ba];B[ab]KGNC[1])", true);
+      history.toStart();
+      Board board = env.board();
+      board.setHistory(history);
+      if (desktop) board.place(0, 1, Stone.BLACK);
+      else history.place(0, 1, Stone.BLACK);
+      // The two actions look identical until ba is recolored and aa loses its last liberty.
+      assertEquals(2, history.getStart().numberOfChildren());
+      board.editMove(new int[] {1, 0}, true, false);
+      BoardHistoryNode root = board.getHistory().getStart();
+      assertEquals(Stone.WHITE, root.getVariation(0).orElseThrow().getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(Stone.EMPTY, root.getVariation(1).orElseThrow().getData().stones[Board.getIndex(0, 0)]);
+      assertEquals(1, board.getData().blackCaptures);
     }
   }
 

@@ -683,7 +683,9 @@ public class BoardHistoryList {
     Optional<BoardHistoryNode> n = head.findDirectChildByMoveIdentity(data);
     if (n.isPresent()) {
       if (forwardSetup && head.hasRemovedStone()) head.clearAndSyncBoard(true);
-      if (Lizzie.leelaz != null) Lizzie.leelaz.clearBestMoves();
+      if (!BoardHistoryNode.suppressGlobalMoveSideEffects() && Lizzie.leelaz != null) {
+        Lizzie.leelaz.clearBestMoves();
+      }
       head = n.get();
       if (forwardSetup) head.placeExtraStones();
     }
@@ -1184,23 +1186,6 @@ public class BoardHistoryList {
       double nextWinrate = -100;
       if (curNode.getData().winrate >= 0) nextWinrate = 100 - curNode.getData().winrate;
 
-      // A replay must match both the coordinate and the requested color.
-      if (!engineGamePure && !addLast) {
-        Optional<int[]> nextLast =
-            this.getNext().filter(next -> next.lastMoveColor == color).flatMap(n -> n.lastMove);
-        if (nextLast.isPresent()
-            && nextLast.get()[0] == x
-            && nextLast.get()[1] == y
-            && !newBranch
-            && !changeMove) {
-          // this is the next coordinate in history. Just increment history so that we
-          // don't erase the
-          // redo's
-          this.next();
-          //   Lizzie.board.modifyEnd();
-          return;
-        }
-      }
       BoardData parent = curNode.getData();
       int moveNumber = parent.moveNumber + 1;
       boolean restartNumbering = mode.restartsNumbering(newBranch);
@@ -1244,7 +1229,7 @@ public class BoardHistoryList {
         head.getLast().addAtLast(newState);
       } else if (engineGamePure) {
         this.head = this.head.addOrGotoForEngineGame(newState, frozenNewMoveNumberInBranch);
-      } else {
+      } else if (newBranch || changeMove || nextByMoveIdentity(newState, false).isEmpty()) {
         this.addOrGoto(newState, newBranch, changeMove);
       }
       //   Lizzie.board.modifyEnd();

@@ -986,14 +986,10 @@ public class WebBoardManager {
 
     if (BoardHistoryList.violatesKoRule(parent, newData)) return false;
 
-    // 复用同位置子节点（跳过 dummy 占位）
-    for (BoardHistoryNode existing : parent.variations) {
-      BoardData ed = existing.getData();
-      if (ed.dummy || !ed.isMoveNode() || ed.lastMoveColor != color) continue;
-      if (ed.lastMove.isPresent() && ed.lastMove.get()[0] == x && ed.lastMove.get()[1] == y) {
-        s.displayNode = existing;
-        return true;
-      }
+    Optional<BoardHistoryNode> existing = parent.findDirectChildByMoveIdentity(newData);
+    if (existing.isPresent()) {
+      s.displayNode = existing.get();
+      return true;
     }
 
     BoardHistoryNode child = new BoardHistoryNode(newData);
